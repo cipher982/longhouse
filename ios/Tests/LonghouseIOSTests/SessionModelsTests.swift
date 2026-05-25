@@ -808,7 +808,7 @@ struct SessionModelsTests {
     }
 
     @Test
-    func sessionDetailPrefersRuntimeFactsOverRuntimeDisplay() throws {
+    func sessionDetailPrefersRuntimeDisplayOverRuntimeFacts() throws {
         let jsonString = """
         {
           "id": "session-facts-detail",
@@ -866,8 +866,8 @@ struct SessionModelsTests {
         let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: Data(jsonString.utf8))
 
         #expect(detail.runtimePhaseLabel == "Using Shell")
-        #expect(detail.runtimeHeadline == "Using Shell")
-        #expect(detail.runtimeDetail == nil)
+        #expect(detail.runtimeHeadline == "Working")
+        #expect(detail.runtimeDetail == "Using Shell")
         #expect(detail.runtimeTone == "running")
         #expect(detail.isSessionExecuting)
 
@@ -877,9 +877,10 @@ struct SessionModelsTests {
         )
         let noPhaseDetail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: Data(noPhaseJson.utf8))
 
-        #expect(noPhaseDetail.runtimePhaseState == "unknown")
-        #expect(noPhaseDetail.runtimePhaseLabel == "No live signal")
-        #expect(!noPhaseDetail.isSessionExecuting)
+        #expect(noPhaseDetail.runtimePhaseState == "running")
+        #expect(noPhaseDetail.runtimePhaseLabel == "Using Shell")
+        #expect(noPhaseDetail.runtimeHeadline == "Working")
+        #expect(noPhaseDetail.isSessionExecuting)
     }
 
     @Test
@@ -1156,7 +1157,7 @@ struct SessionModelsTests {
     }
 
     @Test
-    func runtimeFactsOverrideTimelineStatusInference() {
+    func runtimeDisplayOverridesRuntimeFactsPresentation() {
         let managedPhase = SessionSummary(
             id: "session-fact-phase",
             title: "Managed phase",
@@ -1198,9 +1199,9 @@ struct SessionModelsTests {
 
         #expect(managedPhase.managementLabel == "Managed")
         #expect(managedPhase.timelineStatusLabel == "No live signal")
-        #expect(managedPhase.displayPhaseLabel == "Using Codex")
+        #expect(managedPhase.displayPhaseLabel == "Using Shell")
         #expect(managedPhase.timelineStatusTone == "inactive")
-        #expect(!managedPhase.isExecuting)
+        #expect(managedPhase.isExecuting)
     }
 
     @Test
@@ -1342,7 +1343,7 @@ struct SessionModelsTests {
         #expect(terminalDisconnected.timelineStatusTone == "inactive")
         #expect(terminalDisconnected.displayPhaseLabel == "Closed")
         #expect(!terminalDisconnected.isExecuting)
-        #expect(!unknownWithClosedLegacy.isClosed)
+        #expect(unknownWithClosedLegacy.isClosed)
         #expect(unknownWithClosedLegacy.timelineStatusLabel == "No live signal")
     }
 

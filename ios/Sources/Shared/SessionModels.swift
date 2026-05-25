@@ -319,43 +319,44 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var isClosed: Bool {
-        if let runtimeFacts { return runtimeFacts.lifecycle.state == "closed" }
         if runtimeDisplay?.lifecycle == "closed" { return true }
+        if runtimeDisplay?.lifecycle != nil { return false }
+        if let runtimeFacts { return runtimeFacts.lifecycle.state == "closed" }
         if runtimeDisplay?.lifecycle == nil && status == "completed" { return true }
         return false
     }
 
     private var effectiveRuntimeState: String? {
         if runtimeDisplay?.state == transcriptSyncState { return transcriptSyncState }
-        if runtimeFacts != nil { return nil }
         if let runtimeDisplay { return runtimeDisplay.state }
+        if runtimeFacts != nil { return nil }
         return presenceState
     }
     var isBlocked: Bool { !isClosed && effectiveRuntimeState == "blocked" }
     var isUserActive: Bool { userState == nil || userState == "active" }
     var needsAttention: Bool {
-        if runtimeFacts != nil { return false }
         if isClosed || !isUserActive { return false }
         if let runtimeDisplay { return runtimeDisplay.needsAttention }
+        if runtimeFacts != nil { return false }
         return isBlocked
     }
     var isExecuting: Bool {
-        if runtimeFacts != nil { return false }
         if isClosed { return false }
         if let runtimeDisplay { return runtimeDisplay.isExecuting }
+        if runtimeFacts != nil { return false }
         return presenceState == "thinking" || presenceState == "running"
     }
     var isIdle: Bool {
-        if runtimeFacts != nil { return false }
         if isClosed { return true }
         if let runtimeDisplay { return runtimeDisplay.isIdle }
+        if runtimeFacts != nil { return false }
         return presenceState == "idle" || status == "idle"
     }
     var runtimeTone: String {
         if runtimeDisplay?.state == transcriptSyncState { return runtimeDisplay?.tone ?? "active" }
-        if let factStatus = sessionFactStatus(runtimeFacts) { return factStatus.tone }
         if isClosed { return "idle" }
         if let tone = runtimeDisplay?.tone { return tone }
+        if let factStatus = sessionFactStatus(runtimeFacts) { return factStatus.tone }
         switch presenceState {
         case "running": return "running"
         case "thinking": return "thinking"
@@ -414,14 +415,14 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
            !phaseLabel.isEmpty {
             return RuntimeDisplayText.canonicalDisplayText(phaseLabel)
         }
-        if let factStatus = sessionFactStatus(runtimeFacts) {
-            return factStatus.label
-        }
         if isClosed {
             return "Closed"
         }
         if let phaseLabel = runtimeDisplay?.phaseLabel.trimmingCharacters(in: .whitespacesAndNewlines), !phaseLabel.isEmpty {
             return RuntimeDisplayText.canonicalDisplayText(phaseLabel)
+        }
+        if let factStatus = sessionFactStatus(runtimeFacts) {
+            return factStatus.label
         }
         if let displayPhase = displayPhase?.trimmingCharacters(in: .whitespacesAndNewlines), !displayPhase.isEmpty {
             return RuntimeDisplayText.canonicalDisplayText(displayPhase)
@@ -707,8 +708,9 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var isClosed: Bool {
-        if let runtimeFacts { return runtimeFacts.lifecycle.state == "closed" }
         if runtimeDisplay?.lifecycle == "closed" { return true }
+        if runtimeDisplay?.lifecycle != nil { return false }
+        if let runtimeFacts { return runtimeFacts.lifecycle.state == "closed" }
         if runtimeDisplay?.lifecycle == nil && status == "completed" { return true }
         return false
     }
@@ -754,11 +756,11 @@ struct SessionDetail: Codable, Identifiable, Sendable {
 
     var runtimePhaseState: String {
         if runtimeDisplay?.state == transcriptSyncState { return transcriptSyncState }
+        if let runtimeDisplay { return runtimeDisplay.state ?? "idle" }
         if let runtimeFacts {
             let kind = runtimeFacts.phase.kind?.trimmingCharacters(in: .whitespacesAndNewlines)
             return kind?.isEmpty == false ? kind! : "unknown"
         }
-        if let runtimeDisplay { return runtimeDisplay.state ?? "idle" }
         return presenceState ?? status ?? "idle"
     }
 
@@ -768,11 +770,11 @@ struct SessionDetail: Codable, Identifiable, Sendable {
            !phaseLabel.isEmpty {
             return RuntimeDisplayText.canonicalDisplayText(phaseLabel)
         }
-        if let factStatus = sessionFactStatus(runtimeFacts) {
-            return factStatus.label
-        }
         if let phaseLabel = runtimeDisplay?.phaseLabel.trimmingCharacters(in: .whitespacesAndNewlines), !phaseLabel.isEmpty {
             return RuntimeDisplayText.canonicalDisplayText(phaseLabel)
+        }
+        if let factStatus = sessionFactStatus(runtimeFacts) {
+            return factStatus.label
         }
         if let displayPhase = displayPhase?.trimmingCharacters(in: .whitespacesAndNewlines), !displayPhase.isEmpty {
             return RuntimeDisplayText.canonicalDisplayText(displayPhase)
@@ -854,11 +856,11 @@ struct SessionDetail: Codable, Identifiable, Sendable {
            !headline.isEmpty {
             return RuntimeDisplayText.canonicalDisplayText(headline)
         }
-        if let factStatus = sessionFactStatus(runtimeFacts) {
-            return factStatus.label
-        }
         if let headline = runtimeDisplay?.headline.trimmingCharacters(in: .whitespacesAndNewlines), !headline.isEmpty {
             return RuntimeDisplayText.canonicalDisplayText(headline)
+        }
+        if let factStatus = sessionFactStatus(runtimeFacts) {
+            return factStatus.label
         }
         if isControlOffline || isReadOnly { return runtimeCapabilityLabel }
         if isSessionExecuting { return "Working" }
@@ -872,11 +874,11 @@ struct SessionDetail: Codable, Identifiable, Sendable {
            !detail.isEmpty {
             return RuntimeDisplayText.canonicalDisplayText(detail)
         }
-        if runtimeFacts != nil {
-            return nil
-        }
         if let detail = runtimeDisplay?.detail?.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty {
             return RuntimeDisplayText.canonicalDisplayText(detail)
+        }
+        if runtimeFacts != nil {
+            return nil
         }
         if isControlOffline || isReadOnly {
             return controlHealthMessage
@@ -892,8 +894,8 @@ struct SessionDetail: Codable, Identifiable, Sendable {
 
     var runtimeTone: String {
         if runtimeDisplay?.state == transcriptSyncState { return runtimeDisplay?.tone ?? "active" }
-        if let factStatus = sessionFactStatus(runtimeFacts) { return factStatus.tone }
         if let tone = runtimeDisplay?.tone { return tone }
+        if let factStatus = sessionFactStatus(runtimeFacts) { return factStatus.tone }
         switch runtimePhaseState {
         case "running": return "running"
         case "thinking": return "thinking"
@@ -905,10 +907,8 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var isSessionExecuting: Bool {
-        if runtimeFacts != nil {
-            return runtimePhaseState == "running" || runtimePhaseState == "thinking"
-        }
-        return runtimeDisplay?.isExecuting == true || runtimePhaseState == "running" || runtimePhaseState == "thinking"
+        if let runtimeDisplay { return runtimeDisplay.isExecuting }
+        return runtimePhaseState == "running" || runtimePhaseState == "thinking"
     }
 
     func replacingTranscriptPreview(_ transcriptPreview: SessionTranscriptPreview?) -> SessionDetail {
