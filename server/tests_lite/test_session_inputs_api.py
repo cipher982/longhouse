@@ -1165,3 +1165,68 @@ def test_startup_reconciliation_rewinds_stuck_delivering(tmp_path):
         assert refreshed.status == INPUT_STATUS_QUEUED
         assert refreshed.client_request_id == "old"
         assert refreshed.delivery_request_id is None
+
+
+def test_startup_reconciliation_returns_queued_sessions_for_boot_drain_idempotently(tmp_path):
+    from zerg.services.session_inputs import reconcile_startup_session_inputs
+
+    session_local = _make_db(tmp_path)
+    queued_session_id, _ = _seed_live_session(session_local)
+    retry_session_id, _ = _seed_live_session(session_local)
+    steer_session_id, _ = _seed_live_session(session_local)
+    delivered_session_id, _ = _seed_live_session(session_local)
+    stale_at = datetime.now(timezone.utc) - timedelta(seconds=300)
+
+    with session_local() as db:
+        create_session_input(
+            db,
+            session_id=queued_session_id,
+            text="already queued",
+            intent="queue",
+            status="queued",
+            client_request_id="boot-queued",
+        )
+        retry_row = create_session_input(
+            db,
+            session_id=retry_session_id,
+            text="retry at boot",
+            intent="auto",
+            status="delivering",
+            client_request_id="boot-auto",
+            delivery_request_id="boot-auto-delivery",
+        )
+        steer_row = create_session_input(
+            db,
+            session_id=steer_session_id,
+            text="too late to steer",
+            intent="steer",
+            status="delivering",
+            client_request_id="boot-steer",
+            delivery_request_id="boot-steer-delivery",
+        )
+        create_session_input(
+            db,
+            session_id=delivered_session_id,
+            text="already delivered",
+            intent="auto",
+            status="delivered",
+            client_request_id="boot-delivered",
+        )
+        retry_row.updated_at = stale_at
+        steer_row.updated_at = stale_at
+        db.commit()
+
+        first_boot = reconcile_startup_session_inputs(db)
+        second_boot = reconcile_startup_session_inputs(db)
+
+        expected = {str(queued_session_id), str(retry_session_id)}
+        assert {str(session_id) for session_id in first_boot} == expected
+        assert {str(session_id) for session_id in second_boot} == expected
+
+        db.expire_all()
+        retry_refreshed = db.query(SessionInput).filter(SessionInput.id == retry_row.id).one()
+        steer_refreshed = db.query(SessionInput).filter(SessionInput.id == steer_row.id).one()
+        assert retry_refreshed.status == INPUT_STATUS_QUEUED
+        assert retry_refreshed.delivery_request_id is None
+        assert steer_refreshed.status == INPUT_STATUS_FAILED
+        assert steer_refreshed.last_error == "steer interrupted by restart"

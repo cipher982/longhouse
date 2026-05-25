@@ -348,3 +348,14 @@ def requeue_stuck_delivering(db: Session, *, stale_after_secs: float = DELIVERIN
     if failed:
         logger.info("Marked %d stuck steer SessionInput rows as failed (no silent requeue)", failed)
     return int(requeued)
+
+
+def reconcile_startup_session_inputs(db: Session) -> list[UUID]:
+    """Boot-time recovery contract for durable session inputs.
+
+    Reconcile interrupted deliveries, then return the distinct sessions that
+    still have queued inputs so the runtime can schedule a best-effort drain.
+    """
+    requeue_stuck_delivering(db)
+    rows = db.query(SessionInput.session_id).filter(SessionInput.status == INPUT_STATUS_QUEUED).distinct().all()
+    return [row[0] for row in rows]
