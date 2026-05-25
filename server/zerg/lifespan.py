@@ -121,24 +121,11 @@ async def lifespan(app: FastAPI):
             try:
                 with _timed_startup_step("session_input_reconciliation"):
                     from zerg.database import get_session_factory
-                    from zerg.services.session_inputs import INPUT_STATUS_QUEUED
-                    from zerg.services.session_inputs import requeue_stuck_delivering
+                    from zerg.services.session_inputs import reconcile_startup_session_inputs
 
                     session_factory = get_session_factory()
                     with session_factory() as db:
-                        requeue_stuck_delivering(db)
-
-                        from zerg.models.agents import SessionInput
-
-                        queued_session_ids = [
-                            row[0]
-                            for row in (
-                                db.query(SessionInput.session_id)
-                                .filter(SessionInput.status == INPUT_STATUS_QUEUED)
-                                .distinct()
-                                .all()
-                            )
-                        ]
+                        queued_session_ids = reconcile_startup_session_inputs(db)
 
                 if queued_session_ids:
                     from zerg.database import default_engine
@@ -183,9 +170,7 @@ async def lifespan(app: FastAPI):
                         ).fetchone()
                         if not fts_row:
                             raise RuntimeError("events_fts table is missing (FTS5 required).")
-                        conn.execute(
-                            text("SELECT rowid FROM events_fts WHERE events_fts MATCH 'fts5' LIMIT 1")
-                        ).fetchone()
+                        conn.execute(text("SELECT rowid FROM events_fts WHERE events_fts MATCH 'fts5' LIMIT 1")).fetchone()
             except Exception as fts_error:
                 app.state.fts_violation = str(fts_error)
                 logger.error(f"FTS5 readiness check failed: {fts_error}")
@@ -374,6 +359,7 @@ async def lifespan(app: FastAPI):
             if _settings.job_queue_enabled and not _settings.testing:
                 try:
                     from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
                     from zerg.jobs.commis import enqueue_missed_runs
                     from zerg.jobs.commis import run_queue_commis
                     from zerg.jobs.git_sync import GitSyncService
