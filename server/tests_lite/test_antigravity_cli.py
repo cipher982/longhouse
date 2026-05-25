@@ -84,6 +84,46 @@ def test_antigravity_command_launches_managed_session_and_passes_extra_args(monk
     ]
 
 
+def test_agy_command_alias_launches_managed_session(monkeypatch, tmp_path):
+    runner = CliRunner()
+    launch_calls: list[dict] = []
+    run_calls: list[dict] = []
+
+    monkeypatch.setattr(
+        antigravity_cli,
+        "_load_api_credentials",
+        lambda **_kwargs: ("https://longhouse.test", "zdt_test_token"),
+    )
+    monkeypatch.setattr(
+        antigravity_cli,
+        "_resolve_antigravity_binary",
+        lambda explicit=None: "/Users/test/.local/bin/agy",
+    )
+    monkeypatch.setattr(antigravity_cli, "_ensure_managed_launch_preflight", lambda **_kwargs: None)
+    monkeypatch.setattr(antigravity_cli, "get_machine_name_label", lambda: "work-laptop")
+
+    def fake_launch(**kwargs):
+        launch_calls.append(kwargs)
+        return ManagedLocalLaunchResponse(
+            session_id="session-123",
+            provider_session_id="provider-123",
+            attach_command="",
+            source_runner_name="work-laptop",
+            managed_transport="antigravity_process",
+        )
+
+    monkeypatch.setattr(antigravity_cli, "_launch_managed_local_from_api", fake_launch)
+    monkeypatch.setattr(antigravity_cli, "_interactive_stdio", lambda: True)
+    monkeypatch.setattr(antigravity_cli, "_run_native_antigravity", lambda **kwargs: run_calls.append(kwargs) or 0)
+
+    result = runner.invoke(app, ["agy", "--cwd", str(tmp_path), "--", "--version"])
+
+    assert result.exit_code == 0, result.output
+    assert launch_calls[0]["cwd"] == tmp_path
+    assert run_calls[0]["antigravity_bin"] == "/Users/test/.local/bin/agy"
+    assert run_calls[0]["antigravity_args"] == ("--version",)
+
+
 def test_antigravity_no_attach_prints_tokenless_launch_script_command(monkeypatch, tmp_path):
     runner = CliRunner()
     launch_script = tmp_path / "session-123.launch.sh"
@@ -539,5 +579,3 @@ def test_antigravity_hook_script_quotes_paths_with_special_chars(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {"decision": "allow", "reason": ""}
-
-

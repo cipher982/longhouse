@@ -635,7 +635,7 @@ def onboard(
     if has_codex:
         typer.echo("  longhouse codex    Start a Longhouse Codex session")
     if has_antigravity:
-        typer.echo("  longhouse antigravity Start a Longhouse Antigravity session")
+        typer.echo("  longhouse agy      Start a Longhouse-managed agy session")
     if not (has_claude or has_codex or has_antigravity):
         typer.echo("  Install Claude Code, Codex CLI, or Antigravity CLI, then start a Longhouse session")
     typer.echo("")
