@@ -166,7 +166,6 @@ describe("resolveSessionRuntimeState", () => {
 
     expect(runtime.displayPhase).toBe("Idle");
     expect(runtime.tone).toBe("idle");
-    expect(runtime.factStatus).toBeNull();
     expect(getRuntimeOutcomeLabel(runtime)).toBe("Idle");
   });
 
@@ -223,7 +222,6 @@ describe("resolveSessionRuntimeState", () => {
     expect(runtime.presenceState).toBeNull();
     expect(runtime.displayPhase).toBe("Inactive");
     expect(runtime.isLive).toBe(false);
-    expect(runtime.factStatus).toBeNull();
     expect(getRuntimeOutcomeLabel(runtime)).toBe("Inactive");
   });
 

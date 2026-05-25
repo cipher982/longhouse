@@ -243,7 +243,7 @@ describe("LaunchSessionModal", () => {
       session_id: "failed-session-id",
       launch_state: "launch_failed",
       launch_error_code: "cwd_not_allowed",
-      launch_error_message: "cwd must be absolute",
+      launch_error_message: "Check the workspace path: cwd must be absolute",
     });
 
     const onLaunched = vi.fn();
@@ -255,7 +255,7 @@ describe("LaunchSessionModal", () => {
     await user.click(screen.getByTestId("launch-submit"));
 
     expect(await screen.findByTestId("launch-error")).toHaveTextContent(
-      "cwd must be absolute",
+      "Check the workspace path: cwd must be absolute",
     );
     expect(onLaunched).not.toHaveBeenCalled();
   });

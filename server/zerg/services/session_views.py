@@ -224,7 +224,7 @@ def _runtime_is_executing(*, runtime_display, runtime_facts) -> bool:
 
 def build_session_runtime_display_response(
     *,
-    runtime_overlay: SessionRuntimeView | None,
+    runtime_overlay: SessionRuntimeView,
     capability_flags,
     ended_at: datetime | None,
     binding_host_state: str | None = None,
@@ -235,9 +235,7 @@ def build_session_runtime_display_response(
     has_visible_transcript_preview: bool = False,
     has_pending_response_turn: bool = False,
     now: datetime | None = None,
-) -> SessionRuntimeDisplayResponse | None:
-    if runtime_overlay is None:
-        return None
+) -> SessionRuntimeDisplayResponse:
     display = build_session_runtime_display(
         runtime_view=runtime_overlay,
         capabilities=capability_flags,

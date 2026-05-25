@@ -233,9 +233,8 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var isClosed: Bool {
-        if runtimeDisplay?.lifecycle == "closed" { return true }
-        if runtimeDisplay?.lifecycle != nil { return false }
-        if runtimeDisplay?.lifecycle == nil && status == "completed" { return true }
+        if let lifecycle = runtimeDisplay?.lifecycle { return lifecycle == "closed" }
+        if status == "completed" { return true }
         return false
     }
 
@@ -603,9 +602,8 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var isClosed: Bool {
-        if runtimeDisplay?.lifecycle == "closed" { return true }
-        if runtimeDisplay?.lifecycle != nil { return false }
-        if runtimeDisplay?.lifecycle == nil && status == "completed" { return true }
+        if let lifecycle = runtimeDisplay?.lifecycle { return lifecycle == "closed" }
+        if status == "completed" { return true }
         return false
     }
 
@@ -724,9 +722,6 @@ struct SessionDetail: Codable, Identifiable, Sendable {
                 return nil
             }
             return RuntimeDisplayText.canonicalDisplayText(detail)
-        }
-        if isControlOffline || isReadOnly {
-            return controlHealthMessage
         }
         return controlHealthMessage
     }
