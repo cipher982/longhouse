@@ -389,6 +389,7 @@ function SessionDetailWorkspaceRoute({
                   canSteerActiveTurn={Boolean(
                     displaySession.capabilities?.can_steer_active_turn,
                   )}
+                  timelineItems={items}
                   isStalled={Boolean(
                     !displaySession.runtime_facts &&
                       displaySession.runtime_display?.is_stalled,

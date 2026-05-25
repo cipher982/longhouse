@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, beforeEach, vi } from "vitest";
 import { SessionChat, type SessionChatTarget } from "../SessionChat";
 import type { SessionLockInfo } from "../../services/api";
+import type { TimelineItem } from "../../lib/sessionWorkspace";
 
 const { fetchWithRefreshMock } = vi.hoisted(() => ({
   fetchWithRefreshMock: vi.fn(),
@@ -105,13 +106,57 @@ function renderSessionChat(
     ...props,
   };
 
-  return {
-    queryClient,
-    ...render(
+  const renderResult = render(
       <QueryClientProvider client={queryClient}>
         <SessionChat {...defaultProps} />
       </QueryClientProvider>,
-    ),
+  );
+
+  return {
+    queryClient,
+    ...renderResult,
+    rerenderSessionChat(nextProps: Partial<React.ComponentProps<typeof SessionChat>>) {
+      renderResult.rerender(
+        <QueryClientProvider client={queryClient}>
+          <SessionChat {...defaultProps} {...nextProps} />
+        </QueryClientProvider>,
+      );
+    },
+  };
+}
+
+function makeLonghouseUserItem({
+  sessionInputId,
+  clientRequestId,
+  text = "server projected text",
+  authoredVia = "longhouse",
+}: {
+  sessionInputId?: number | null;
+  clientRequestId?: string | null;
+  text?: string;
+  authoredVia?: "longhouse" | "terminal" | null;
+}): TimelineItem {
+  return {
+    kind: "message",
+    event: {
+      id: 99,
+      role: "user",
+      content_text: text,
+      tool_name: null,
+      tool_input_json: null,
+      tool_output_text: null,
+      tool_call_id: null,
+      timestamp: "2026-05-15T20:00:00Z",
+      in_active_context: true,
+      is_head_branch: true,
+      input_origin: authoredVia
+        ? {
+            authored_via: authoredVia,
+            session_input_id: sessionInputId,
+            client_request_id: clientRequestId,
+          }
+        : null,
+    },
   };
 }
 
@@ -487,6 +532,71 @@ describe("SessionChat", () => {
     expect(inputPostCount).toBe(1);
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["session-lock", "sess-1"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["agent-session-workspace", "sess-1"] });
+  });
+
+  it("keeps managed-local optimistic input until a durable identity appears", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+      },
+    });
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        return Promise.resolve({
+          outcome: "sent",
+          input_id: 7,
+          intent: "auto",
+          queued: [],
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    const { rerenderSessionChat } = renderSessionChat(
+      { chatMode: "managed_local", timelineItems: [] },
+      { queryClient },
+    );
+
+    await user.type(screen.getByRole("textbox"), "Continue locally");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    const inputCall = requestMock.mock.calls.find(([path, init]) =>
+      String(path).endsWith("/input") && (init as RequestInit | undefined)?.method === "POST",
+    );
+    const inputPayload = JSON.parse(String((inputCall?.[1] as RequestInit).body ?? "{}"));
+
+    await waitFor(() => expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["agent-session-workspace", "sess-1"] }));
+    expect(screen.getByText("Continue locally")).toBeInTheDocument();
+    expect(screen.getByLabelText("Syncing transcript")).toBeInTheDocument();
+
+    rerenderSessionChat({
+      chatMode: "managed_local",
+      timelineItems: [
+        makeLonghouseUserItem({
+          text: "Continue locally",
+          authoredVia: null,
+        }),
+      ],
+    });
+    expect(screen.getByText("Continue locally")).toBeInTheDocument();
+
+    rerenderSessionChat({
+      chatMode: "managed_local",
+      timelineItems: [
+        makeLonghouseUserItem({
+          sessionInputId: 7,
+          clientRequestId: inputPayload.client_request_id,
+        }),
+      ],
+    });
+
+    await waitFor(() => expect(screen.queryByText("Continue locally")).not.toBeInTheDocument());
   });
 
   it("requires an explicit click for the first message when configured", async () => {

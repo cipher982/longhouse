@@ -24,7 +24,7 @@ import {
   type SessionLockInfo,
 } from "../services/api";
 import type { AgentSession } from "../services/api/agents";
-import type { ManagedLaunchSuggestion } from "../lib/sessionWorkspace";
+import type { ManagedLaunchSuggestion, TimelineItem } from "../lib/sessionWorkspace";
 import { useComposerAttachments } from "../lib/useComposerAttachments";
 import { Badge, Button, Spinner } from "./ui";
 import { AttachmentTray } from "./AttachmentTray";
@@ -75,6 +75,13 @@ interface ChatMessage {
   toolNotices?: string[]; // Track tool notices separately to avoid overwrite
 }
 
+interface PendingManagedLocalInput {
+  text: string;
+  clientRequestId: string;
+  serverInputId: number | null;
+  phase: "submitting" | "sent";
+}
+
 interface SessionChatProps {
   session: SessionChatTarget;
   onClose?: () => void;
@@ -109,6 +116,12 @@ interface SessionChatProps {
   canSteerActiveTurn?: boolean;
   /** True when backend detected stale managed execution with no active tool. */
   isStalled?: boolean;
+  /**
+   * Durable timeline rows visible in the parent workspace. When present,
+   * managed-local optimistic inputs stay visible until the backend-authored
+   * user row with matching input identity arrives.
+   */
+  timelineItems?: TimelineItem[];
 }
 
 export type SessionChatTarget = Pick<AgentSession, "id" | "project" | "provider" | "capabilities">;
@@ -136,6 +149,23 @@ function newClientRequestId(): string {
   return `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 
+function timelineHasDurableSubmittedInput(
+  timelineItems: TimelineItem[],
+  pendingInput: PendingManagedLocalInput,
+): boolean {
+  return timelineItems.some((item) => {
+    if (item.kind !== "message") return false;
+    const { event } = item;
+    if (event.role !== "user" || event.is_head_branch === false) return false;
+    const origin = event.input_origin;
+    if (!origin || origin.authored_via !== "longhouse") return false;
+    if (pendingInput.serverInputId != null && origin.session_input_id === pendingInput.serverInputId) {
+      return true;
+    }
+    return Boolean(origin.client_request_id && origin.client_request_id === pendingInput.clientRequestId);
+  });
+}
+
 export function SessionChat({
   session,
   onClose,
@@ -157,6 +187,7 @@ export function SessionChat({
   canQueueNextInput = false,
   canSteerActiveTurn = false,
   isStalled = false,
+  timelineItems,
 }: SessionChatProps) {
   const isDock = layout === "dock";
   const isManagedLocal = chatMode === "managed_local";
@@ -175,7 +206,8 @@ export function SessionChat({
   const [blockedKeyboardSubmit, setBlockedKeyboardSubmit] = useState(false);
 
   const [sentConfirmation, setSentConfirmation] = useState(false);
-  const [pendingManagedLocalMessage, setPendingManagedLocalMessage] = useState<string | null>(null);
+  const [pendingManagedLocalInput, setPendingManagedLocalInput] =
+    useState<PendingManagedLocalInput | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const composerTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -223,6 +255,15 @@ export function SessionChat({
       queryClient.invalidateQueries({ queryKey: ["agent-sessions"] }),
     ]);
   }, [queryClient, session.id]);
+
+  const reconcilePendingInputWithTimeline = timelineItems !== undefined;
+
+  useEffect(() => {
+    if (!pendingManagedLocalInput || !timelineItems) return;
+    if (timelineHasDurableSubmittedInput(timelineItems, pendingManagedLocalInput)) {
+      setPendingManagedLocalInput(null);
+    }
+  }, [pendingManagedLocalInput, timelineItems]);
 
   const handleSSEEvent = useCallback(
     (eventType: string, data: unknown, assistantId: string) => {
@@ -394,7 +435,12 @@ export function SessionChat({
       attachments: { blob: Blob; filename: string }[] = [],
     ) => {
       const clientRequestId = newClientRequestId();
-      setPendingManagedLocalMessage(message);
+      setPendingManagedLocalInput({
+        text: message,
+        clientRequestId,
+        serverInputId: null,
+        phase: "submitting",
+      });
       setIsSubmitting(true);
       try {
         const result = attachments.length
@@ -430,9 +476,17 @@ export function SessionChat({
           setSentConfirmation(true);
           sentConfirmationTimerRef.current = setTimeout(() => setSentConfirmation(false), 2000);
 
-          void refreshCurrentSessionWorkspace().finally(() => setPendingManagedLocalMessage(null));
+          setPendingManagedLocalInput((pending) =>
+            pending?.clientRequestId === clientRequestId
+              ? { ...pending, serverInputId: result.input_id, phase: "sent" }
+              : pending,
+          );
+          const refreshPromise = refreshCurrentSessionWorkspace();
+          if (!reconcilePendingInputWithTimeline) {
+            void refreshPromise.finally(() => setPendingManagedLocalInput(null));
+          }
         } else {
-          setPendingManagedLocalMessage(null);
+          setPendingManagedLocalInput(null);
         }
         return true;
       } catch (e) {
@@ -446,13 +500,13 @@ export function SessionChat({
         } else {
           setError(e instanceof Error ? e.message : "Unknown error");
         }
-        setPendingManagedLocalMessage(null);
+        setPendingManagedLocalInput(null);
         return false;
       } finally {
         setIsSubmitting(false);
       }
     },
-    [queryClient, session.id, refreshCurrentSessionWorkspace],
+    [queryClient, reconcilePendingInputWithTimeline, session.id, refreshCurrentSessionWorkspace],
   );
 
   const handleCancelQueuedInput = useCallback(
@@ -1019,10 +1073,13 @@ export function SessionChat({
                 </span>
               </div>
             ) : null}
-            {isManagedLocal && pendingManagedLocalMessage ? (
+            {isManagedLocal && pendingManagedLocalInput ? (
               <div className="session-chat-pending-message">
-                <span className="session-chat-pending-message__text">{pendingManagedLocalMessage}</span>
-                <span className="session-chat-pending-message__spinner" aria-label="Sending" />
+                <span className="session-chat-pending-message__text">{pendingManagedLocalInput.text}</span>
+                <span
+                  className="session-chat-pending-message__spinner"
+                  aria-label={pendingManagedLocalInput.phase === "submitting" ? "Sending" : "Syncing transcript"}
+                />
               </div>
             ) : null}
             {attachImagesEnabled ? (
