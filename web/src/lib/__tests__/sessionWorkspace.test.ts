@@ -276,6 +276,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.managedLaunchSuggestion).toBeNull();
     expect(capabilities.capabilityLabel).toBe("Send");
     expect(capabilities.composerDisabledReason).toBeNull();
+    expect(capabilities.sendDisabledReason).toBeNull();
     expect(capabilities.primaryActionLabel).toBe("Open live dock");
     expect(capabilities.submitLabel).toBe("Send");
   });
@@ -358,6 +359,31 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
   });
 
+  it("prefers server read-only input mode over host reattach fallback", () => {
+    const capabilities = getSessionInteractionCapabilities({
+      session: makeSession({
+        provider: "codex",
+        capabilities: makeCapabilities({
+          live_control_available: true,
+          host_reattach_available: true,
+          reply_to_live_session_available: false,
+          input_mode: "read_only",
+          composer_enabled: false,
+          composer_disabled_reason: "This live Codex session is connected, but this control path cannot accept typed input.",
+          send_disabled_reason: "input_not_supported",
+        }),
+      }),
+    });
+
+    expect(capabilities.mode).toBe("unsupported");
+    expect(capabilities.managementLabel).toBe("Managed");
+    expect(capabilities.sendDisabledReason).toBe("input_not_supported");
+    expect(capabilities.composerDisabledReason).toBe(
+      "This live Codex session is connected, but this control path cannot accept typed input.",
+    );
+    expect(capabilities.composerDisabledReason).not.toMatch(/engine reconnects/i);
+  });
+
   it("surfaces managed-local sessions without runner metadata as host-reattach only", () => {
     const capabilities = getSessionInteractionCapabilities({
       session: makeSession({
@@ -395,6 +421,7 @@ describe("getSessionInteractionCapabilities", () => {
           input_mode: "offline",
           composer_placeholder: "Server placeholder",
           composer_disabled_reason: "Server says control is offline.",
+          send_disabled_reason: "control_offline",
         }),
       }),
     });
@@ -402,6 +429,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.mode).toBe("managed_local_unavailable");
     expect(capabilities.placeholder).toBe("Server placeholder");
     expect(capabilities.composerDisabledReason).toBe("Server says control is offline.");
+    expect(capabilities.sendDisabledReason).toBe("control_offline");
   });
 
   it("shows reattach when a managed-local Claude session loses its live control channel", () => {

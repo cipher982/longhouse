@@ -35,8 +35,10 @@ from zerg.services.managed_control_state import engine_channel_control_overlay
 from zerg.services.managed_control_state import live_transport_control_overlay
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.provisional_events import TranscriptPreview
+from zerg.services.send_affordance import OFFLINE_HOST_STATES
+from zerg.services.send_affordance import SendDisabledReason
+from zerg.services.send_affordance import project_send_affordance
 from zerg.services.session_capabilities import build_session_capability_display
-from zerg.services.session_capabilities import build_session_input_presentation
 from zerg.services.session_current_control import engine_control_online
 from zerg.services.session_current_control import engine_session_control_attached
 from zerg.services.session_liveness_facts import build_session_liveness_facts
@@ -100,7 +102,7 @@ def build_session_capabilities_response(
         host_state=host_state,
     )
     host_state_norm = (host_state or "").strip().lower()
-    runtime_offline = host_state_norm in {"stale", "offline", "lost", "unknown"}
+    runtime_offline = host_state_norm in OFFLINE_HOST_STATES
     lifecycle_closed = lifecycle == "closed"
     control_available = not runtime_offline and not lifecycle_closed
     effective_live_control = bool(capability_flags.live_control_available) and control_available
@@ -108,9 +110,9 @@ def build_session_capabilities_response(
     effective_queue = bool(capability_flags.can_queue_next_input) and control_available
     effective_steer = bool(capability_flags.can_steer_active_turn) and control_available
     effective_host_reattach = bool(capability_flags.host_reattach_available) and not lifecycle_closed
-    input_presentation = build_session_input_presentation(
+    input_presentation = project_send_affordance(
         capability_flags,
-        capability_display=capability_display,
+        read_only_reason=capability_display.detail,
         provider_label=_provider_label(session),
         lifecycle=lifecycle,
         is_executing=_runtime_is_executing(runtime_display=runtime_display, runtime_facts=runtime_facts),
@@ -130,6 +132,7 @@ def build_session_capabilities_response(
         composer_enabled=input_presentation.composer_enabled,
         composer_placeholder=input_presentation.composer_placeholder,
         composer_disabled_reason=input_presentation.composer_disabled_reason,
+        send_disabled_reason=input_presentation.send_disabled_reason,
         control_label=(kernel_capabilities.control_label if kernel_capabilities is not None else None),
         observe_only=(kernel_capabilities.observe_only if kernel_capabilities is not None else False),
         search_only=(kernel_capabilities.search_only if kernel_capabilities is not None else False),
@@ -484,6 +487,10 @@ class SessionCapabilitiesResponse(BaseModel):
     composer_enabled: bool = Field(False, description="True when clients should render an enabled composer")
     composer_placeholder: str = Field("Type a message...", description="Default composer placeholder text")
     composer_disabled_reason: Optional[str] = Field(None, description="User-facing reason the composer is disabled")
+    send_disabled_reason: Optional[SendDisabledReason] = Field(
+        None,
+        description="Stable reason code when the primary send action is disabled",
+    )
     control_label: Optional[Literal["live", "reattach", "search-only", "imported"]] = Field(
         None,
         description="Kernel-projected control bucket for this session",

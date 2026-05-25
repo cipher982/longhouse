@@ -534,6 +534,7 @@ struct SessionCapabilities: Codable, Sendable {
     let composerEnabled: Bool?
     let composerPlaceholder: String?
     let composerDisabledReason: String?
+    let sendDisabledReason: String?
     let attachImages: Bool?
 }
 
@@ -709,6 +710,14 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         canSendLive && (capabilities.attachImages ?? false)
     }
 
+    var inputModeValue: String? {
+        guard let mode = capabilities.inputMode?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !mode.isEmpty else {
+            return nil
+        }
+        return mode.lowercased()
+    }
+
     var canQueueNextInput: Bool {
         capabilities.canQueueNextInput ?? false
     }
@@ -718,11 +727,15 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var isControlOffline: Bool {
-        !canSendLive && capabilities.hostReattachAvailable
+        if inputModeValue == "offline" { return true }
+        if inputModeValue == "read_only" { return false }
+        return !canSendLive && capabilities.hostReattachAvailable
     }
 
     var isReadOnly: Bool {
-        !canSendLive && !capabilities.hostReattachAvailable
+        if inputModeValue == "read_only" { return true }
+        if inputModeValue == "offline" { return false }
+        return !canSendLive && !capabilities.hostReattachAvailable
     }
 
     var runtimePhaseState: String {
@@ -792,7 +805,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
             return label
         }
         if canSendLive { return "Send" }
-        if capabilities.hostReattachAvailable { return "Control offline" }
+        if isControlOffline { return "Control offline" }
         return "Read only"
     }
 
@@ -801,7 +814,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
             return tone
         }
         if canSendLive { return "success" }
-        if capabilities.hostReattachAvailable { return "warning" }
+        if isControlOffline { return "warning" }
         return "neutral"
     }
 
