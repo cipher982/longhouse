@@ -23,6 +23,7 @@ from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
+from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.device_token import DeviceToken
 from zerg.models.enums import UserRole
@@ -33,6 +34,7 @@ from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
 from zerg.services.runner_connection_manager import get_runner_connection_manager
+from zerg.services.session_chat_impl import _session_is_closed_for_input
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
 
@@ -172,6 +174,86 @@ def _seed_kernel_session(session_local, *, provider: str, with_kernel_rows: bool
             db.commit()
             db.refresh(session)
     return sid
+
+
+@pytest.mark.parametrize("terminal_state", ["finished", "host_expired"])
+def test_turn_or_unverified_terminal_state_does_not_block_session_input(tmp_path, terminal_state):
+    session_local = _make_db(tmp_path)
+    now = datetime.now(timezone.utc)
+
+    with session_local() as db:
+        source_session = AgentSession(
+            provider="claude",
+            environment="test",
+            project="zerg",
+            started_at=now - timedelta(minutes=5),
+            user_messages=1,
+            assistant_messages=1,
+            tool_calls=0,
+        )
+        db.add(source_session)
+        db.flush()
+        db.add(
+            SessionRuntimeState(
+                runtime_key=f"claude:{source_session.id}",
+                session_id=source_session.id,
+                provider="claude",
+                device_id="cinder",
+                phase="finished",
+                phase_source="semantic",
+                phase_started_at=now,
+                last_runtime_signal_at=now,
+                last_live_at=now,
+                timeline_anchor_at=now,
+                freshness_expires_at=now,
+                terminal_state=terminal_state,
+                terminal_at=now,
+                runtime_version=1,
+            )
+        )
+        db.commit()
+
+        assert not _session_is_closed_for_input(db, source_session)
+
+
+@pytest.mark.parametrize("terminal_state", ["session_ended", "process_gone", "user_closed"])
+def test_irreversible_terminal_state_blocks_session_input(tmp_path, terminal_state):
+    session_local = _make_db(tmp_path)
+    now = datetime.now(timezone.utc)
+
+    with session_local() as db:
+        source_session = AgentSession(
+            provider="claude",
+            environment="test",
+            project="zerg",
+            started_at=now - timedelta(minutes=5),
+            user_messages=1,
+            assistant_messages=1,
+            tool_calls=0,
+        )
+        db.add(source_session)
+        db.flush()
+        db.add(
+            SessionRuntimeState(
+                runtime_key=f"claude:{source_session.id}",
+                session_id=source_session.id,
+                provider="claude",
+                device_id="cinder",
+                phase="finished",
+                phase_source="semantic",
+                phase_started_at=now,
+                last_runtime_signal_at=now,
+                last_live_at=now,
+                timeline_anchor_at=now,
+                freshness_expires_at=now,
+                terminal_state=terminal_state,
+                terminal_at=now,
+                runtime_version=1,
+            )
+        )
+        db.commit()
+
+        assert _session_is_closed_for_input(db, source_session)
 
 
 def test_managed_local_launch_response_requires_managed_local_execution_home(tmp_path):

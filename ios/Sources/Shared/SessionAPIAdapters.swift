@@ -195,7 +195,7 @@ extension APITimelineCardPresentationResponse {
     var timelineCardPresentation: TimelineCardPresentation {
         TimelineCardPresentation(
             ownership: ownership.timelineBadgePresentation,
-            status: status?.timelineStatusPresentation,
+            status: status.timelineStatusPresentation,
             borderTone: borderTone ?? "inactive"
         )
     }

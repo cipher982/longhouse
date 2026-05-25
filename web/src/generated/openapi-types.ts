@@ -10267,7 +10267,7 @@ export interface components {
             /** @description Managed/unmanaged badge */
             ownership: components["schemas"]["TimelineBadgePresentationResponse"];
             /** @description Primary timeline status badge */
-            status?: components["schemas"]["TimelineStatusPresentationResponse"] | null;
+            status: components["schemas"]["TimelineStatusPresentationResponse"];
             /**
              * Border Tone
              * @description Stable tone token for the card edge/outline

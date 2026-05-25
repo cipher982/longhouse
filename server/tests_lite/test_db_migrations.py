@@ -416,6 +416,102 @@ def test_startup_migration_clears_progress_only_runtime_live_timestamps(tmp_path
     ]
 
 
+def test_startup_migration_only_backfills_irreversible_terminal_states(tmp_path):
+    db_path = tmp_path / "terminal_backfill.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+
+    host_expired_id = "00000000-0000-0000-0000-000000000201"
+    process_gone_id = "00000000-0000-0000-0000-000000000202"
+    with engine.begin() as conn:
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE sessions (
+                id VARCHAR(36) PRIMARY KEY,
+                provider VARCHAR(50) NOT NULL,
+                environment VARCHAR(20),
+                started_at DATETIME NOT NULL,
+                ended_at DATETIME,
+                execution_home VARCHAR(32),
+                source_runner_id INTEGER,
+                thread_root_session_id VARCHAR(36),
+                is_writable_head BOOLEAN DEFAULT 1,
+                continued_from_session_id VARCHAR(36),
+                loop_mode VARCHAR(32),
+                user_messages INTEGER DEFAULT 0,
+                assistant_messages INTEGER DEFAULT 0,
+                tool_calls INTEGER DEFAULT 0
+            )
+            """
+        )
+        conn.exec_driver_sql(
+            """
+            CREATE TABLE session_runtime_state (
+                runtime_key VARCHAR(255) PRIMARY KEY,
+                session_id CHAR(36),
+                provider VARCHAR(64) NOT NULL,
+                device_id VARCHAR(255),
+                phase VARCHAR(32) NOT NULL,
+                phase_source VARCHAR(32) NOT NULL,
+                active_tool VARCHAR(128),
+                phase_started_at DATETIME,
+                last_runtime_signal_at DATETIME,
+                last_progress_at DATETIME,
+                last_live_at DATETIME,
+                timeline_anchor_at DATETIME NOT NULL,
+                freshness_expires_at DATETIME,
+                terminal_state VARCHAR(32),
+                terminal_at DATETIME,
+                runtime_version INTEGER NOT NULL DEFAULT 0,
+                updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO sessions (
+                    id, provider, environment, started_at, user_messages, assistant_messages, tool_calls
+                ) VALUES
+                  (:host_expired_id, 'claude', 'test', '2026-05-04 17:00:00', 1, 1, 0),
+                  (:process_gone_id, 'claude', 'test', '2026-05-04 17:00:00', 1, 1, 0)
+                """
+            ),
+            {"host_expired_id": host_expired_id, "process_gone_id": process_gone_id},
+        )
+        conn.execute(
+            text(
+                """
+                INSERT INTO session_runtime_state (
+                    runtime_key, session_id, provider, phase, phase_source,
+                    last_runtime_signal_at, last_live_at, timeline_anchor_at,
+                    terminal_state, terminal_at
+                ) VALUES
+                  (
+                    'claude:host-expired', :host_expired_id, 'claude', 'finished', 'semantic',
+                    '2026-05-04 17:30:00', '2026-05-04 17:30:00', '2026-05-04 17:30:00',
+                    'host_expired', '2026-05-04 17:30:00'
+                  ),
+                  (
+                    'claude:process-gone', :process_gone_id, 'claude', 'finished', 'semantic',
+                    '2026-05-04 17:40:00', '2026-05-04 17:40:00', '2026-05-04 17:40:00',
+                    'process_gone', '2026-05-04 17:40:00'
+                  )
+                """
+            ),
+            {"host_expired_id": host_expired_id, "process_gone_id": process_gone_id},
+        )
+
+    _migrate_agents_columns(engine)
+
+    with engine.connect() as conn:
+        rows = conn.execute(text("SELECT id, ended_at FROM sessions ORDER BY id")).fetchall()
+
+    assert rows == [
+        (host_expired_id, None),
+        (process_gone_id, "2026-05-04 17:40:00"),
+    ]
+
+
 def test_heavy_migration_plan_detects_legacy_pending(tmp_path):
     db_path = tmp_path / "legacy_pending.db"
     engine = make_engine(f"sqlite:///{db_path}")

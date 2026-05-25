@@ -611,7 +611,7 @@ def _migrate_agents_columns(engine: Engine) -> None:
         return
 
     try:
-        with engine.connect() as conn:
+        with engine.begin() as conn:
             columns = {row[1] for row in conn.execute(text("PRAGMA table_info(sessions)"))}
             # Pure additive ALTER ADDs (summary, summary_title, needs_embedding,
             # summary_event_count, last_summarized_event_id,
@@ -716,12 +716,10 @@ def _migrate_agents_columns(engine: Engine) -> None:
                         ") WHERE last_activity_at IS NULL"
                     )
                 )
-            # Backfill: close sessions whose runtime row already observed a
-            # terminal state (process_gone / host_expired / user_closed /
-            # session_ended) but whose ended_at was never written. The reducer
-            # only stamped ended_at for "session_ended" historically, so
-            # engine-observed deaths left these rows lingering as "open" on
-            # the timeline and showing up with no useful status.
+            # Backfill: close sessions whose runtime row already observed an
+            # irreversible terminal state but whose ended_at was never written.
+            # host_expired is intentionally excluded because it only proves
+            # that the host stopped reporting, not that the session died.
             runtime_state_exists = conn.execute(
                 text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_runtime_state'")
             ).fetchone()
@@ -735,7 +733,7 @@ def _migrate_agents_columns(engine: Engine) -> None:
                             FROM session_runtime_state srs
                             WHERE srs.session_id = sessions.id
                               AND srs.terminal_state IN
-                                  ('session_ended', 'process_gone', 'host_expired', 'user_closed')
+                                  ('session_ended', 'process_gone', 'user_closed')
                             ORDER BY srs.terminal_at DESC
                             LIMIT 1
                         )
@@ -744,7 +742,7 @@ def _migrate_agents_columns(engine: Engine) -> None:
                                 SELECT 1 FROM session_runtime_state srs
                                 WHERE srs.session_id = sessions.id
                                   AND srs.terminal_state IN
-                                      ('session_ended', 'process_gone', 'host_expired', 'user_closed')
+                                      ('session_ended', 'process_gone', 'user_closed')
                           )
                         """
                     )
@@ -757,7 +755,6 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 text("CREATE INDEX IF NOT EXISTS ix_sessions_continued_from_started ON sessions(continued_from_session_id, started_at)")
             )
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_last_activity_at ON sessions(last_activity_at)"))
-            conn.commit()
     except Exception:
         logger.debug("sessions table migration skipped (table may not exist yet)", exc_info=True)
 

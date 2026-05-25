@@ -3,7 +3,6 @@ import type { TimelineRuntimeSession } from "../sessionRuntime";
 import {
   resolveSessionOwnershipLabel,
   resolveSessionRuntimeState,
-  resolveSessionStatusLabel,
   isSessionClosed,
 } from "../sessionRuntime";
 import { getRuntimeDisplayCopy, getRuntimeOutcomeLabel } from "../sessionUtils";
@@ -158,7 +157,6 @@ describe("resolveSessionRuntimeState", () => {
     expect(runtime.needsAttention).toBe(false);
     expect(runtime.isExecuting).toBe(false);
     expect(runtime.tone).toBe("inactive");
-    expect(resolveSessionStatusLabel(runtime)).toBe("Disconnected");
   });
 
   it("does not convert status-only progress into liveness", () => {
@@ -388,7 +386,6 @@ describe("resolveSessionRuntimeState", () => {
     );
 
     expect(resolveSessionOwnershipLabel(runtime)).toBe("Managed");
-    expect(resolveSessionStatusLabel(runtime)).toBe("Disconnected");
   });
 
   it("labels server-detected managed stalls without treating them as active work", () => {
@@ -423,7 +420,6 @@ describe("resolveSessionRuntimeState", () => {
     expect(runtime.isStalled).toBe(true);
     expect(runtime.isExecuting).toBe(false);
     expect(runtime.tone).toBe("stalled");
-    expect(resolveSessionStatusLabel(runtime)).toBe("Stalled");
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
       headline: "Stalled",
       detail: "No recent managed-session progress",
@@ -457,7 +453,6 @@ describe("resolveSessionRuntimeState", () => {
     );
 
     expect(resolveSessionOwnershipLabel(runtime)).toBe("Unmanaged");
-    expect(resolveSessionStatusLabel(runtime)).toBe("Stale");
   });
 
   it("does not promote unmanaged online hosts into session status", () => {
@@ -487,7 +482,6 @@ describe("resolveSessionRuntimeState", () => {
     );
 
     expect(resolveSessionOwnershipLabel(runtime)).toBe("Unmanaged");
-    expect(resolveSessionStatusLabel(runtime)).toBe("Unknown");
   });
 
   it("lets closed lifecycle suppress stale attention flags everywhere", () => {
@@ -519,7 +513,6 @@ describe("resolveSessionRuntimeState", () => {
     expect(runtime.isIdle).toBe(true);
     expect(runtime.displayPhase).toBe("Closed");
     expect(runtime.tone).toBe("closed");
-    expect(resolveSessionStatusLabel(runtime)).toBe("Closed");
     expect(getRuntimeOutcomeLabel(runtime)).toBe("Closed");
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
       headline: "Closed",
@@ -552,7 +545,6 @@ describe("resolveSessionRuntimeState", () => {
     expect(runtime.needsAttention).toBe(false);
     expect(runtime.displayPhase).toBe("Closed");
     expect(runtime.tone).toBe("closed");
-    expect(resolveSessionStatusLabel(runtime)).toBe("Closed");
     expect(getRuntimeOutcomeLabel(runtime)).toBe("Closed");
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
       headline: "Closed",
@@ -594,7 +586,6 @@ describe("resolveSessionRuntimeState", () => {
     );
 
     expect(resolveSessionOwnershipLabel(runtime)).toBe("Managed");
-    expect(resolveSessionStatusLabel(runtime)).toBe("Using Shell");
     expect(runtime.factStatus).toMatchObject({
       label: "Using Shell",
       tone: "running",
@@ -645,7 +636,6 @@ describe("resolveSessionRuntimeState", () => {
     expect(runtime.displayPhase).toBe("Syncing transcript");
     expect(runtime.tone).toBe("active");
     expect(runtime.isIdle).toBe(false);
-    expect(resolveSessionStatusLabel(runtime)).toBe("Syncing");
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
       headline: "Syncing",
       detail: "Waiting for transcript",
@@ -725,7 +715,6 @@ describe("resolveSessionRuntimeState", () => {
     );
 
     expect(resolveSessionOwnershipLabel(runtime)).toBe("Unmanaged");
-    expect(resolveSessionStatusLabel(runtime)).toBe("Running");
     expect(getRuntimeOutcomeLabel(runtime)).toBe("Running");
     expect(runtime.factStatus).toMatchObject({
       label: "Running",
@@ -734,7 +723,7 @@ describe("resolveSessionRuntimeState", () => {
     });
   });
 
-  it("renders transcript-only facts as unknown process state", () => {
+  it("renders transcript-only facts as no live signal", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
         runtime_display: makeRuntimeDisplay({
@@ -758,11 +747,10 @@ describe("resolveSessionRuntimeState", () => {
       }),
     );
 
-    expect(resolveSessionStatusLabel(runtime)).toBe("Unknown");
-    expect(getRuntimeOutcomeLabel(runtime)).toBe("Unknown");
+    expect(getRuntimeOutcomeLabel(runtime)).toBe("No live signal");
   });
 
-  it("renders unknown host facts as unknown", () => {
+  it("renders unknown host facts as no live signal", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
         runtime_display: makeRuntimeDisplay({
@@ -772,6 +760,11 @@ describe("resolveSessionRuntimeState", () => {
         }),
         runtime_facts: makeRuntimeFacts({
           control_path: "managed",
+          activity: {
+            last_transcript_at: null,
+            last_runtime_signal_at: "2026-03-21T11:00:00Z",
+            last_progress_at: null,
+          },
           host: {
             state: "unknown",
             last_seen_at: null,
@@ -786,7 +779,12 @@ describe("resolveSessionRuntimeState", () => {
       }),
     );
 
-    expect(resolveSessionStatusLabel(runtime)).toBe("Unknown");
+    expect(runtime.factStatus).toMatchObject({
+      label: "No live signal",
+      tone: "inactive",
+      seenAt: "2026-03-21T11:00:00Z",
+      seenAtPrefix: "Last signal",
+    });
   });
 
   it("renders closed facts as closed rather than completed", () => {
@@ -808,7 +806,6 @@ describe("resolveSessionRuntimeState", () => {
       }),
     );
 
-    expect(resolveSessionStatusLabel(runtime)).toBe("Closed");
     expect(runtime.tone).toBe("closed");
     expect(getRuntimeOutcomeLabel(runtime)).toBe("Closed");
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
@@ -838,7 +835,6 @@ describe("resolveSessionRuntimeState", () => {
     );
 
     expect(runtime.displayPhase).toBe("Closed");
-    expect(resolveSessionStatusLabel(runtime)).toBe("Closed");
     expect(runtime.tone).toBe("closed");
     expect(getRuntimeOutcomeLabel(runtime)).toBe("Closed");
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({

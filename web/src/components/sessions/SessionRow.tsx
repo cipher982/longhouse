@@ -10,10 +10,7 @@ import { useCallback, useEffect, useRef, type CSSProperties, type ReactNode, typ
 import type { DraggableAttributes } from "@dnd-kit/core";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import { type TimelineSessionCard } from "../../services/api/agents";
-import {
-  isSessionClosed,
-  resolveSessionRuntimeState,
-} from "../../lib/sessionRuntime";
+import { isSessionClosed } from "../../lib/sessionRuntime";
 import {
   formatRelativeTime,
   getBranchLabel,
@@ -22,6 +19,12 @@ import {
 } from "../../lib/sessionUtils";
 
 const HOVER_PREFETCH_DELAY_MS = 180;
+const MISSING_TIMELINE_STATUS = {
+  label: "No live signal",
+  tone: "inactive",
+  seen_at: null,
+  seen_at_prefix: "Checked",
+} as const;
 
 export interface SessionRowProps {
   thread: TimelineSessionCard;
@@ -59,18 +62,15 @@ export function SessionRow({
 }: SessionRowProps) {
   const session = thread.head;
   const detailSession = thread.detail;
-  const runtime = resolveSessionRuntimeState(session);
-  const timelineStatus = session.timeline_card?.status ?? null;
-  const runtimeFactStatus = runtime.factStatus ?? null;
-  const cardStatus = timelineStatus ?? runtimeFactStatus;
+  const timelineStatus = session.timeline_card?.status ?? MISSING_TIMELINE_STATUS;
   const isClosed = closed || isCardClosed(thread);
   const text = getSessionCardText(session, { titleMaxChars: 96, subheadingMaxChars: 200 });
   const branch = getBranchLabel(session.git_branch);
   const provider = session.provider;
   const startedAtIso = thread.root?.started_at || session.started_at;
   const timeLabel = getRowTimeLabel({
-    seenAt: timelineStatus?.seen_at ?? runtimeFactStatus?.seenAt ?? null,
-    seenAtPrefix: timelineStatus?.seen_at_prefix ?? runtimeFactStatus?.seenAtPrefix ?? null,
+    seenAt: timelineStatus.seen_at,
+    seenAtPrefix: timelineStatus.seen_at_prefix,
     startedAt: startedAtIso,
     relativeNowMs,
   });
@@ -83,10 +83,8 @@ export function SessionRow({
     ? renderHighlightedText(matchSnippet!, highlightQuery!)
     : text.subheading;
 
-  const statusTone = isClosed ? "closed" : (cardStatus?.tone ?? runtime.tone);
-  const statusLabel = isClosed
-    ? "closed"
-    : (cardStatus?.label ?? humanizeTone(runtime.tone));
+  const statusTone = isClosed ? "closed" : timelineStatus.tone;
+  const statusLabel = isClosed ? "closed" : timelineStatus.label;
 
   const hoverTimerRef = useRef<number | null>(null);
   const clearHover = useCallback(() => {
@@ -184,27 +182,6 @@ export function getRowTimeLabel({
     return `Started ${formatRelativeTime(startedAt, relativeNowMs)}`;
   }
   return "";
-}
-
-function humanizeTone(tone: string): string {
-  switch (tone) {
-    case "thinking":
-      return "thinking";
-    case "running":
-      return "running";
-    case "idle":
-      return "idle";
-    case "blocked":
-      return "blocked";
-    case "stalled":
-      return "stalled";
-    case "active":
-      return "active";
-    case "closed":
-      return "closed";
-    default:
-      return "";
-  }
 }
 
 function isCardClosed(card: TimelineSessionCard): boolean {

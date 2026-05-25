@@ -98,8 +98,6 @@ enum RuntimeDisplayText {
             return "inactive"
         }
     }
-
-    static let defaultStatusSeenAtPrefix = "Updated"
 }
 
 struct HostObservation: Codable, Hashable, Sendable {
@@ -214,7 +212,12 @@ func sessionFactStatus(_ facts: SessionLivenessFacts?) -> SessionFactStatus? {
             seenAtPrefix: "Verified"
         )
     }
-    return SessionFactStatus(label: "Unknown", tone: "inactive", seenAt: nil, seenAtPrefix: "Checked")
+    return SessionFactStatus(
+        label: "No live signal",
+        tone: "inactive",
+        seenAt: facts.activity.lastRuntimeSignalAt,
+        seenAtPrefix: facts.activity.lastRuntimeSignalAt == nil ? "Checked" : "Last signal"
+    )
 }
 
 /// Honest summarization state — mirrors backend `summary_status` field.
@@ -444,104 +447,38 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     }
 
     var timelineStatusLabel: String {
-        if let label = timelineCard?.status?.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
+        if let label = timelineCard?.status.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
             return label
         }
-        if runtimeDisplay?.state == transcriptSyncState {
-            return "Syncing"
-        }
-        if let factStatus = sessionFactStatus(runtimeFacts) {
-            return factStatus.label
-        }
-        if isClosed {
-            return "Closed"
-        }
-
-        let controlPath = runtimeDisplay?.controlPath ?? (isManaged ? "managed" : "unmanaged")
-        if controlPath == "managed" {
-            if isBlocked { return "Needs permission" }
-            if isExecuting { return "Working" }
-            if runtimeDisplay?.state == "needs_user" || runtimeDisplay?.state == "idle" || isIdle {
-                return "Idle"
-            }
-            switch runtimeDisplay?.activityRecency {
-            case "live", "recent":
-                return "Recent activity"
-            case "none":
-                return "Unknown"
-            default:
-                return "Disconnected"
-            }
-        }
-
-        if controlPath == "unmanaged" {
-            switch runtimeDisplay?.activityRecency {
-            case "live":
-                return "Active"
-            case "recent":
-                return "Recent activity"
-            case "stale":
-                return "Stale"
-            default:
-                break
-            }
-            if isExecuting || needsAttention {
-                return "Active"
-            }
-            return "Unknown"
-        }
-
-        if isExecuting || needsAttention {
-            return "Active"
-        }
-        if isIdle {
-            return "Idle"
-        }
-        return "Unknown"
+        return "No live signal"
     }
 
     var timelineStatusSeenAt: String? {
-        if let seenAt = timelineCard?.status?.seenAt?.trimmingCharacters(in: .whitespacesAndNewlines), !seenAt.isEmpty {
+        if let seenAt = timelineCard?.status.seenAt?.trimmingCharacters(in: .whitespacesAndNewlines), !seenAt.isEmpty {
             return seenAt
         }
-        if let seenAt = sessionFactStatus(runtimeFacts)?.seenAt?.trimmingCharacters(in: .whitespacesAndNewlines), !seenAt.isEmpty {
-            return seenAt
-        }
-        guard runtimeDisplay?.activityRecency == "stale" else { return nil }
-        return lastActivityAt ?? timelineAnchorAt
+        return nil
     }
 
     var timelineStatusSeenAtPrefix: String {
-        if let prefix = timelineCard?.status?.seenAtPrefix.trimmingCharacters(in: .whitespacesAndNewlines), !prefix.isEmpty {
+        if let prefix = timelineCard?.status.seenAtPrefix.trimmingCharacters(in: .whitespacesAndNewlines), !prefix.isEmpty {
             return prefix
         }
-        return sessionFactStatus(runtimeFacts)?.seenAtPrefix ?? RuntimeDisplayText.defaultStatusSeenAtPrefix
+        return "Checked"
     }
 
     var timelineStatusTone: String {
-        if let tone = timelineCard?.status?.tone.trimmingCharacters(in: .whitespacesAndNewlines), !tone.isEmpty {
+        if let tone = timelineCard?.status.tone.trimmingCharacters(in: .whitespacesAndNewlines), !tone.isEmpty {
             return tone
         }
-        if runtimeDisplay?.state == transcriptSyncState {
-            return runtimeDisplay?.tone ?? "active"
-        }
-        if let factStatus = sessionFactStatus(runtimeFacts) {
-            return factStatus.tone
-        }
-        if timelineStatusLabel == "Active" {
-            return "active"
-        }
-        return runtimeTone
+        return "inactive"
     }
 
     var timelineBorderTone: String {
         if let tone = timelineCard?.borderTone.trimmingCharacters(in: .whitespacesAndNewlines), !tone.isEmpty {
             return tone
         }
-        if let factStatus = sessionFactStatus(runtimeFacts) {
-            return factStatus.tone
-        }
-        return runtimeTone
+        return timelineStatusTone
     }
 
     var summaryPreview: String? {
@@ -614,7 +551,7 @@ struct TimelineStatusPresentation: Codable, Hashable, Sendable {
 
 struct TimelineCardPresentation: Codable, Hashable, Sendable {
     let ownership: TimelineBadgePresentation
-    let status: TimelineStatusPresentation?
+    let status: TimelineStatusPresentation
     let borderTone: String
 }
 

@@ -42,7 +42,9 @@ PHASE_FRESHNESS = {
     "needs_user": timedelta(minutes=10),
 }
 MANAGED_CODEX_FRESHNESS = timedelta(minutes=15)
-EXPLICIT_CLOSED_TERMINAL_STATES = {"session_ended", "finished", "user_closed", "process_gone"}
+# Irreversible session endings. These states stamp AgentSession.ended_at and
+# render as closed in liveness facts.
+EXPLICIT_CLOSED_TERMINAL_STATES = {"session_ended", "user_closed", "process_gone"}
 UNVERIFIED_TERMINAL_STATES = {"host_expired"}
 LIVE_EXECUTION_PHASES = {"thinking", "running"}
 ATTENTION_PHASES = {"blocked"}
@@ -916,7 +918,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         phase_started_at = normalize_utc(state.phase_started_at)
         if phase_started_at is None or phase_started_at < occurred_at:
             state.phase_started_at = occurred_at
-        if terminal_state in {"session_ended", "process_gone", "host_expired", "user_closed"} and event.session_id is not None:
+        if terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES and event.session_id is not None:
             session = db.query(AgentSession).filter(AgentSession.id == event.session_id).first()
             if session is not None and session.ended_at is None:
                 session.ended_at = occurred_at
