@@ -9,6 +9,7 @@ import type {
   AgentSession,
   AgentSessionProjectionItem,
   SessionCapabilities,
+  SessionRuntimeDisplay,
   AgentSessionTurn,
 } from "../../services/api/agents";
 import { TestRouter } from "../../test/test-utils";
@@ -62,6 +63,34 @@ function makeCapabilities(
     live_control_available: true,
     host_reattach_available: true,
     reply_to_live_session_available: true,
+    ...overrides,
+  };
+}
+
+function makeRuntimeDisplay(
+  overrides: Partial<SessionRuntimeDisplay> = {},
+): SessionRuntimeDisplay {
+  return {
+    truth_tier: "managed-local",
+    signal_tier: "phase_signal",
+    state: "running",
+    tone: "running",
+    headline: "Working",
+    detail: "Using Shell",
+    phase_label: "Using Shell",
+    compact_tool_label: "Shell",
+    is_live: true,
+    is_executing: true,
+    needs_attention: false,
+    is_idle: false,
+    is_stalled: false,
+    is_managed_local_truth: true,
+    has_signal: true,
+    control_path: "managed",
+    activity_recency: "live",
+    lifecycle: "open",
+    host_state: "online",
+    terminal_reason: null,
     ...overrides,
   };
 }
@@ -483,6 +512,58 @@ describe("SessionDetailPage", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps backend runtime display detail canonical when pending tool rows exist", () => {
+    const session = makeSession({
+      ended_at: null,
+      status: "working",
+      presence_state: "blocked",
+      active_tool: "AskUserQuestion",
+      runtime_source: "managed_local_transport",
+      confidence: "live",
+      display_phase: "Blocked AskUserQuestion",
+      last_live_at: "2026-03-22T22:04:30Z",
+      runtime_display: makeRuntimeDisplay({
+        state: "blocked",
+        tone: "blocked",
+        headline: "Needs permission",
+        detail: "Approval needed • AskUserQuestion",
+        phase_label: "Blocked on AskUserQuestion",
+        compact_tool_label: "AskUserQuestion",
+        is_executing: true,
+        needs_attention: true,
+      }),
+    });
+    const model = buildTimelineModel([
+      {
+        kind: "event",
+        session_id: session.id,
+        timestamp: "2026-03-22T22:04:00Z",
+        event: {
+          id: 1,
+          role: "assistant",
+          content_text: null,
+          tool_name: "AskUserQuestion",
+          tool_input_json: {
+            question: "Which path?",
+            choices: ["A", "B"],
+          },
+          tool_output_text: null,
+          tool_call_id: "tc-pending-ask",
+          timestamp: "2026-03-22T22:04:00Z",
+          in_active_context: true,
+        },
+      },
+    ]);
+
+    mockWorkspaceState({ session, model });
+    renderSessionDetailPage();
+
+    const strip = screen.getByTestId("session-control-strip");
+    expect(strip).toHaveTextContent("Needs permission");
+    expect(strip).toHaveTextContent("Approval needed • AskUserQuestion");
+    expect(strip).not.toHaveTextContent("Running AskUserQuestion");
   });
 
   it("marks unresolved ended-session tool calls as dropped in both row and inspector", () => {

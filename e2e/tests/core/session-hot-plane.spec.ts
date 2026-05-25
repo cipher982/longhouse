@@ -251,7 +251,9 @@ test.describe("Session hot plane", () => {
     await page.waitForSelector('body[data-ready="true"]', { timeout: 15_000 });
 
     const strip = page.getByTestId("session-control-strip");
-    await expect(strip).toContainText("Blocked AskUserQuestion", { timeout: 10_000 });
+    await expect(strip).toContainText("Needs permission", { timeout: 10_000 });
+    await expect(strip).toContainText("Approval needed", { timeout: 10_000 });
+    await expect(strip).toContainText("AskUserQuestion", { timeout: 10_000 });
 
     const blockedSession = await getSession(request, sessionId);
     expect(blockedSession.runtime_display?.state).toBe("blocked");
