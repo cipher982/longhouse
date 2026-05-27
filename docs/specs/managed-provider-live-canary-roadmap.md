@@ -82,7 +82,8 @@ Required canaries:
 1. Channel bridge handshake with the real Claude binary.
 2. Detached launch readiness using the PTY wrapper path Longhouse ships.
 3. Send payload delivery over `notifications/claude/channel`.
-4. Active-turn steer accepted only when runtime phase is fresh and active.
+4. Runtime Host dispatches channel steer only when runtime phase is fresh and
+   active; scheduled live-token proof verifies upstream mid-turn behavior.
 5. Idle steer rejected at the Runtime Host API before dispatch.
 6. Interrupt sends a graceful SIGINT to the real Claude session process.
 

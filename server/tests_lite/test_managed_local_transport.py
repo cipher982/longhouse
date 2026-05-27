@@ -331,26 +331,25 @@ def test_build_managed_local_interrupt_command_uses_opencode_bridge_for_opencode
     assert "exec longhouse opencode-bridge interrupt --session-id session-123" in inner
 
 
-def test_build_managed_local_steer_command_uses_opencode_bridge_for_opencode_process():
+def test_build_managed_local_steer_command_rejects_opencode_process():
     session = SimpleNamespace(
         id="session-123",
         managed_transport=ManagedSessionTransport.OPENCODE_PROCESS.value,
     )
     from zerg.services.managed_local_transport import build_managed_local_steer_text_command
 
-    command = build_managed_local_steer_text_command(session=session, text="abort and switch")
-    inner = _wrapped_inner(command)
-    assert "exec longhouse opencode-bridge steer --session-id session-123 --text 'abort and switch'" in inner
+    with pytest.raises(ManagedLocalTransportError, match="opencode_process"):
+        build_managed_local_steer_text_command(session=session, text="abort and switch")
 
 
-def test_build_managed_local_steer_command_rejects_attachments_for_opencode_process():
+def test_build_managed_local_steer_command_rejects_attachments_for_opencode_process_as_unsupported():
     session = SimpleNamespace(
         id="session-123",
         managed_transport=ManagedSessionTransport.OPENCODE_PROCESS.value,
     )
     from zerg.services.managed_local_transport import build_managed_local_steer_text_command
 
-    with pytest.raises(ManagedLocalTransportError):
+    with pytest.raises(ManagedLocalTransportError, match="opencode_process"):
         build_managed_local_steer_text_command(
             session=session,
             text="hi",

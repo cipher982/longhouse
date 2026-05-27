@@ -60,7 +60,7 @@ the upstream provider can support.
 | Provider | Local Launch | Remote Launch | Send | Interrupt | Steer | Runtime | Transcript | Current Truth |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Codex | Yes, `longhouse codex` | Yes, engine `session.launch` | Yes, engine channel | Yes, engine channel | Yes, engine channel with active-turn errors | Bridge/runtime events | Hooks + rollout | First-class |
-| Claude | Yes, `longhouse claude` | Yes, Machine Agent `claude.launch` with PTY-backed `--channels` channel-ready handshake | Yes, `claude-channel send` | Yes, `claude-channel interrupt` | Yes, gated by fresh active runtime phase, delivered through channel metadata | Channel/hooks/process scan | Claude channel + transcript ingest | First-class channel control |
+| Claude | Yes, `longhouse claude` | Yes, Machine Agent `claude.launch` with PTY-backed `--channels` channel-ready handshake | Yes, `claude-channel send` | Yes, `claude-channel interrupt` | Yes, dispatch gated by fresh active runtime phase and delivered through channel metadata; scheduled live-token canary still has to prove upstream mid-turn behavior continuously | Channel/hooks/process scan | Claude channel + transcript ingest | First-class channel control |
 | OpenCode | Yes, `longhouse opencode` server bridge + `opencode attach` | Yes, Machine Agent `opencode.launch` when `opencode` is on PATH | Yes, server `prompt_async` API | Yes, server `abort` API | No, active-turn injection not proven | OpenCode plugin runtime events | Plugin/transcript observation | First-class launch/send/interrupt; no steer |
 | Antigravity | Yes, `longhouse antigravity` / `longhouse agy` | No | Yes, hook inbox claimed by active hooks | No | No | JSON hooks + runtime outbox | Hook binding to transcript path | Send-only hook-inbox wrapper |
 
@@ -104,10 +104,12 @@ Claude uses the native channel bridge:
 - steer: same command with `--meta intent=steer`
 - interrupt: `longhouse claude-channel interrupt --session-id <id>`
 
-Steer is now a first-class Longhouse operation, but with an explicit active
-runtime gate before dispatch. Longhouse does not claim that idle channel
-injection is steer. If runtime phase is stale or idle, `intent=steer` returns
-`turn_not_active`.
+Steer dispatch is now a first-class Longhouse operation, but with an explicit
+active runtime gate before dispatch. Longhouse does not claim that idle channel
+injection is steer, and the scheduled live-token canary owns continuous proof
+that upstream Claude treats channel delivery as mid-turn guidance rather than
+queued next-turn input. If runtime phase is stale or idle, `intent=steer`
+returns `turn_not_active`.
 
 Next Claude gaps:
 
