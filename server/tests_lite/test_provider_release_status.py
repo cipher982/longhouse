@@ -88,6 +88,36 @@ def test_red_nonmatching_local_version_warns_for_untested_current_version(monkey
     assert status["statuses"]["codex"]["local_version_matches"] is False
 
 
+def test_newer_candidate_artifact_does_not_warn_for_older_local_version(monkeypatch, tmp_path: Path) -> None:
+    status_file = tmp_path / "codex.json"
+    status_file.write_text(
+        json.dumps(
+            {
+                "provider": "codex",
+                "schema_version": prs.PROVIDER_STATUS_SCHEMA_VERSION,
+                "codex_version": "rust-v0.135.0-alpha.1",
+                "verdict": "yellow",
+                "failure_code": "insufficient_coverage",
+                "generated_at": "2026-05-27T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(prs.CODEX_RELEASE_STATUS_FILE_ENV, str(status_file))
+    monkeypatch.setattr(
+        prs.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="codex-cli 0.134.0\n", stderr=""),
+    )
+
+    status = prs.collect_provider_release_status({"codex": {"path": "/opt/homebrew/bin/codex"}})
+
+    assert status["warning_count"] == 0
+    assert status["statuses"]["codex"]["status"] == "candidate_newer_than_local"
+    assert status["statuses"]["codex"]["risk"] == "none"
+    assert status["statuses"]["codex"]["artifact_version_delta"] == 1
+
+
 def test_stale_matching_green_artifact_warns(monkeypatch, tmp_path: Path) -> None:
     status_file = tmp_path / "codex.json"
     status_file.write_text(

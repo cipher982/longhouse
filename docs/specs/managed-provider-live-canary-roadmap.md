@@ -22,22 +22,23 @@ Local versions observed on David's machine:
 | --- | --- | --- |
 | Codex | `codex-cli 0.134.0` | app server bridge |
 | Claude Code | `2.1.152` | native channel / MCP bridge |
-| OpenCode | `1.15.7` | local HTTP server bridge |
+| OpenCode | `1.15.11` | local HTTP server bridge |
 | Antigravity | `1.0.2` | hook inbox |
 
 Dogfood health on 2026-05-27 proves operation advertisement but not full
 shipping health. The control channel advertised:
 
 ```text
-codex: send, interrupt, steer, launch
+codex: send, interrupt, steer, launch, continue
 claude: send, interrupt, steer, launch
 opencode: send, interrupt, launch
 antigravity: send
 ```
 
-The same dogfood check showed hosted ingest timeouts and an outbox backlog.
-That is a Runtime Host reachability problem, not a provider-control contract
-failure, but it means the machine was not globally green at that moment.
+Provider release status is interpreted against the installed local version.
+Newer upstream artifacts remain visible as candidate release status, but do
+not degrade local health until the installed provider version matches the
+artifact or is newer than the newest reviewed artifact.
 
 ## Control Plane Families
 
