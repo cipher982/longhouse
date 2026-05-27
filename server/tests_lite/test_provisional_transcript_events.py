@@ -13,6 +13,7 @@ from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
+from zerg.services import provisional_events as provisional_events_service
 from zerg.services import session_runtime as session_runtime_service
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
@@ -129,7 +130,9 @@ def _ingest_durable_session(db, *, session: AgentSession, now: datetime) -> None
         ),
     ]
     source_lines = [
-        SourceLineIngest(source_path=source_path, source_offset=event.source_offset or 0, raw_json=event.raw_json or "{}")
+        SourceLineIngest(
+            source_path=source_path, source_offset=event.source_offset or 0, raw_json=event.raw_json or "{}"
+        )
         for event in events
     ]
     AgentsStore(db).ingest_session(
@@ -164,13 +167,20 @@ def test_live_bridge_snapshots_store_observations_not_events(tmp_path):
                     seq=2,
                     live_text="hello",
                 ),
-                _bridge_transcript_event(session_id=session.id, occurred_at=now + timedelta(milliseconds=40), seq=1, live_text="h"),
+                _bridge_transcript_event(
+                    session_id=session.id, occurred_at=now + timedelta(milliseconds=40), seq=1, live_text="h"
+                ),
             ],
         )
         db.commit()
 
         rows = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).all()
-        observations = db.query(SessionObservation).filter(SessionObservation.session_id == session.id).order_by(SessionObservation.id).all()
+        observations = (
+            db.query(SessionObservation)
+            .filter(SessionObservation.session_id == session.id)
+            .order_by(SessionObservation.id)
+            .all()
+        )
         visible = AgentsStore(db).get_session_events(session.id)
         preview = load_active_provisional_preview_map(db, [session.id])[str(session.id)]
 
@@ -178,7 +188,10 @@ def test_live_bridge_snapshots_store_observations_not_events(tmp_path):
     assert result.duplicates == 1
     assert rows == []
     assert visible == []
-    assert [observation.kind for observation in observations] == [OBS_KIND_BRIDGE_TRANSCRIPT_DELTA, OBS_KIND_BRIDGE_TRANSCRIPT_DELTA]
+    assert [observation.kind for observation in observations] == [
+        OBS_KIND_BRIDGE_TRANSCRIPT_DELTA,
+        OBS_KIND_BRIDGE_TRANSCRIPT_DELTA,
+    ]
     assert observations[0].source_domain == "runtime"
     assert observations[0].source == "codex_bridge_live"
     assert json.loads(observations[1].payload_json or "{}")["payload"]["live_text"] == "hello"
@@ -220,6 +233,46 @@ def test_live_bridge_ingest_uses_observation_write_fast_path(monkeypatch, tmp_pa
     assert result.updated_runtime_keys == [f"codex:{session.id}"]
     assert observation.kind == OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
     assert preview.text == "fast preview"
+
+
+def test_active_preview_loader_caps_observations_per_session(monkeypatch, tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "live_overlay_preview_cap.db")
+    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    seen_row_ids: list[int] = []
+    original_candidate_loader = provisional_events_service._preview_candidate_from_bridge_observation
+
+    def _candidate_loader_spy(row):
+        seen_row_ids.append(int(row.id))
+        return original_candidate_loader(row)
+
+    monkeypatch.setattr(provisional_events_service, "MAX_ACTIVE_PREVIEW_OBSERVATIONS_PER_SESSION", 3)
+    monkeypatch.setattr(
+        provisional_events_service,
+        "_preview_candidate_from_bridge_observation",
+        _candidate_loader_spy,
+    )
+
+    with SessionLocal() as db:
+        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+        ingest_runtime_events(
+            db,
+            [
+                _bridge_transcript_event(
+                    session_id=session.id,
+                    occurred_at=now + timedelta(milliseconds=idx),
+                    seq=idx,
+                    live_text=f"preview {idx}",
+                )
+                for idx in range(1, 9)
+            ],
+        )
+        db.commit()
+
+        preview = load_active_provisional_preview_map(db, [session.id])[str(session.id)]
+
+    assert preview.text == "preview 8"
+    assert len(seen_row_ids) == 3
+    assert seen_row_ids == sorted(seen_row_ids, reverse=True)
 
 
 def test_bridge_transcript_observation_rebuild_does_not_create_event(tmp_path):
@@ -269,7 +322,12 @@ def test_cumulative_live_snapshot_does_not_merge_durable_tool_sequence(tmp_path)
 
         events = AgentsStore(db).get_session_events(session.id)
         count = AgentsStore(db).count_session_events(session.id)
-        rows = db.query(AgentEvent).filter(AgentEvent.session_id == session.id).order_by(AgentEvent.timestamp, AgentEvent.id).all()
+        rows = (
+            db.query(AgentEvent)
+            .filter(AgentEvent.session_id == session.id)
+            .order_by(AgentEvent.timestamp, AgentEvent.id)
+            .all()
+        )
         previews = load_active_provisional_preview_map(db, [session.id])
 
     assert len(rows) == 4
@@ -327,7 +385,11 @@ def test_cross_session_search_ignores_live_preview_text(tmp_path):
         session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
         ingest_runtime_events(
             db,
-            [_bridge_transcript_event(session_id=session.id, occurred_at=now, seq=1, live_text="only live preview needle")],
+            [
+                _bridge_transcript_event(
+                    session_id=session.id, occurred_at=now, seq=1, live_text="only live preview needle"
+                )
+            ],
         )
         db.commit()
 
