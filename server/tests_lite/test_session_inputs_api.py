@@ -857,6 +857,9 @@ def test_intent_steer_requires_steerable_capability(monkeypatch, tmp_path):
 def test_intent_steer_success_returns_sent_for_claude_channel(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_live_session(session_local)
+    with session_local() as db:
+        session = db.query(AgentSession).filter_by(id=session_id).one()
+        _seed_live_runtime_state(db, session, phase="running")
 
     async def fake_steer(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
         from zerg.services.managed_local_control import ManagedLocalSendResult
@@ -882,6 +885,68 @@ def test_intent_steer_success_returns_sent_for_claude_channel(monkeypatch, tmp_p
         body = resp.json()
         assert body["outcome"] == "sent"
         assert body["intent"] == "steer"
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_intent_steer_requires_active_turn_for_claude_channel(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+
+    async def fake_steer(**_kwargs):
+        raise AssertionError("steer dispatch should not run when Claude is idle")
+
+    monkeypatch.setattr(
+        "zerg.services.managed_local_control.steer_text_to_managed_local_session",
+        fake_steer,
+    )
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        resp = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "redirect to failing test", "intent": "steer"},
+        )
+        assert resp.status_code == 409, resp.text
+        detail = resp.json()["detail"]
+        assert detail["error_code"] == "turn_not_active"
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_intent_steer_failure_returns_structured_502_for_claude_channel(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    with session_local() as db:
+        session = db.query(AgentSession).filter_by(id=session_id).one()
+        _seed_live_runtime_state(db, session, phase="running")
+
+    async def fake_steer(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+        from zerg.services.managed_local_control import ManagedLocalSendResult
+
+        return ManagedLocalSendResult(ok=False, exit_code=1, error="Claude channel bridge is unavailable")
+
+    monkeypatch.setattr(
+        "zerg.services.managed_local_control.steer_text_to_managed_local_session",
+        fake_steer,
+    )
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        resp = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "redirect to failing test", "intent": "steer"},
+        )
+        assert resp.status_code == 502, resp.text
+        detail = resp.json()["detail"]
+        assert detail["error_code"] == "steer_failed"
+        assert detail["message"] == "Claude channel bridge is unavailable"
     finally:
         api_app_ref.dependency_overrides = {}
 

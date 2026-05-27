@@ -75,6 +75,7 @@ from zerg.services.session_inputs import mark_failed as _mark_input_failed
 from zerg.services.session_inputs import retry_failed_input
 from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
 from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
+from zerg.services.session_runtime import current_presence_state_for_session
 from zerg.services.write_serializer import get_write_serializer
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.session_loop_mode import coerce_session_loop_mode
@@ -83,6 +84,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/sessions", tags=["session-chat"])
 agents_router = APIRouter(prefix="/agents/sessions", tags=["agents"])
+_STEER_ACTIVE_PRESENCE_STATES = frozenset({"thinking", "running"})
 
 
 # ---------------------------------------------------------------------------
@@ -895,6 +897,14 @@ async def _dispatch_steer_input(
                 "message": "This session does not support mid-turn steer on the current transport.",
             },
         )
+    if not _session_has_active_steer_turn(db, source_session):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error_code": "turn_not_active",
+                "message": "This session is not currently in an active turn. Queue this as the next message instead?",
+            },
+        )
 
     # Record a delivering row so the steer attempt is audit-visible even on
     # failure (for drain-failure UX parity with intent=auto).
@@ -965,6 +975,14 @@ async def _dispatch_steer_input(
             "message": str(result.error or "Managed local steer failed"),
         },
     )
+
+
+def _session_has_active_steer_turn(db: Session, source_session) -> bool:
+    session_id = getattr(source_session, "id", None)
+    if session_id is None:
+        return False
+    presence_state = current_presence_state_for_session(db, session_id, session=source_session)
+    return str(presence_state or "").strip() in _STEER_ACTIVE_PRESENCE_STATES
 
 
 async def _create_session_input_response(

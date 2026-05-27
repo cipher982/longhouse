@@ -123,6 +123,23 @@ def test_active_claude_channel_session_exposes_steer_as_primary_intent():
     assert response.composer_placeholder == "Send a message to the live Claude session..."
 
 
+def test_idle_claude_channel_session_exposes_auto_primary_intent():
+    session = _session(
+        provider="claude",
+        managed_transport="claude_channel_bridge",
+    )
+
+    response = build_session_capabilities_response(
+        session=session,
+        capability_flags=build_session_capabilities(session),
+        runtime_display=_runtime(),
+    )
+
+    assert response.input_mode == "live"
+    assert response.default_input_intent == "auto"
+    assert response.composer_placeholder == "Send a message to the live Claude session..."
+
+
 def test_offline_managed_session_exposes_disabled_composer_reason():
     session = _session()
 
