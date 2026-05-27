@@ -1764,7 +1764,7 @@ fn resolve_bridge_paths(
     let state_root = state_root_override
         .map(Path::to_path_buf)
         .unwrap_or_else(|| {
-            home.join(".claude")
+            home.join(".longhouse")
                 .join("managed-local")
                 .join("codex-bridge")
         });
@@ -4193,21 +4193,21 @@ mod tests {
     }
 
     #[test]
-    fn resolve_bridge_paths_defaults_under_claude_dir() {
+    fn resolve_bridge_paths_defaults_under_longhouse_home() {
         let temp = tempfile::tempdir().unwrap();
         std::env::set_var("HOME", temp.path());
         let paths = resolve_bridge_paths(None, "session-123", None).unwrap();
         assert_eq!(
             paths.state_file.parent().unwrap(),
             temp.path()
-                .join(".claude")
+                .join(".longhouse")
                 .join("managed-local")
                 .join("codex-bridge")
         );
         assert_eq!(
             paths.state_file,
             temp.path()
-                .join(".claude")
+                .join(".longhouse")
                 .join("managed-local")
                 .join("codex-bridge")
                 .join("session-123.json")
@@ -4215,7 +4215,7 @@ mod tests {
         assert_eq!(
             paths.log_file,
             temp.path()
-                .join(".claude")
+                .join(".longhouse")
                 .join("managed-local")
                 .join("codex-bridge")
                 .join("session-123.log")

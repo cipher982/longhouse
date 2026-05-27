@@ -29,7 +29,7 @@ Use this skill when a task touches how Longhouse starts, observes, steers, or re
 - `--codex-bin` and `LONGHOUSE_CODEX_BIN` are explicit debug/operator overrides, not the normal install path.
 - The Python CLI starts `longhouse-engine codex-bridge`.
 - The Rust bridge starts `codex app-server`, fronts it with `engine/src/codex_ws_relay.rs`, and attaches the TUI with `codex --enable tui_app_server --remote ...`.
-- Bridge state, logs, lock sidecars, and IPC sockets live under `~/.claude/managed-local/codex-bridge/` unless overridden.
+- Bridge state, logs, lock sidecars, and IPC sockets live under `~/.longhouse/managed-local/codex-bridge/` unless overridden.
 - Hook scripts such as `longhouse-codex-hook.sh` are Longhouse hook scripts, not provider binaries.
 
 Codex launch modes:
@@ -72,7 +72,7 @@ Hard Codex contract:
 ### Debug Codex Bridge Failures
 
 1. Inspect `~/.codex/log/codex-tui.log`.
-2. Inspect the bridge `.json` state and `.log` under `~/.claude/managed-local/codex-bridge/`.
+2. Inspect the bridge `.json` state and `.log` under `~/.longhouse/managed-local/codex-bridge/`.
 3. Inspect rollout JSONL for the thread before trusting `last_turn_status`.
 4. Check app-server `readyz` and whether the relay URL was logged.
 5. For `longhouse-engine codex-bridge start` repros, prefer `--isolation-root <tmp-dir>`. It maps bridge state to `<tmp-dir>/codex-bridge` and Longhouse state to `<tmp-dir>/longhouse`. If you use lower-level flags, set both `--state-root` and `--longhouse-home`; `--state-root` alone is intentionally rejected on start.

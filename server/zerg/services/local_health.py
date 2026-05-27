@@ -38,6 +38,7 @@ from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_log_dir
 from zerg.services.longhouse_paths import get_agent_outbox_dir
 from zerg.services.longhouse_paths import get_agent_status_path
+from zerg.services.longhouse_paths import get_managed_local_dir
 from zerg.services.longhouse_paths import resolve_longhouse_home
 from zerg.services.machine_repair import recommended_machine_repair_command
 from zerg.services.machine_state import machine_state_source_hash
@@ -66,7 +67,6 @@ ACTIVITY_RECENCY_BANDS = [
     ("1-6h", timedelta(hours=6)),
 ]
 RECENT_TOUCH_LIMIT = 4
-BRIDGE_STATUS_DIR = "managed-local/codex-bridge"
 _PROCESS_SNAPSHOT: tuple[list[dict[str, Any]], list[dict[str, Any]]] | None = None
 
 CONTROL_PATH_MANAGED = "managed"
@@ -1189,7 +1189,7 @@ def _collect_update_info() -> dict[str, Any]:
 
 
 def _codex_bridge_state_dir(base_dir: Path) -> Path:
-    return base_dir.parent / ".claude" / BRIDGE_STATUS_DIR
+    return get_managed_local_dir("codex-bridge", base_dir=base_dir)
 
 
 def _compute_process_snapshot() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:

@@ -25,10 +25,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
-from zerg.services.local_health import (  # noqa: E402
-    BRIDGE_STATUS_DIR,
-    _collect_managed_codex_sessions,
-)
+from zerg.services.local_health import _collect_managed_codex_sessions  # noqa: E402
 
 ENGINE_BIN = shutil.which("longhouse-engine")
 SESSION_ID = "cccc2222-3333-4444-8555-666677778888"
@@ -60,10 +57,10 @@ def _wait_for_lock_held(lock_path: Path, deadline: float) -> bool:
 def test_bridge_state_file_schema_matches_python_reader(tmp_path: Path) -> None:
     """Engine writes every field `_collect_managed_codex_sessions` reads."""
     # base_dir mimics `~/.longhouse`; state dir resolves to
-    # `<base_dir.parent>/.claude/managed-local/codex-bridge`.
+    # `<base_dir>/managed-local/codex-bridge`.
     base_dir = tmp_path / ".longhouse"
     base_dir.mkdir()
-    state_dir = tmp_path / ".claude" / BRIDGE_STATUS_DIR
+    state_dir = base_dir / "managed-local" / "codex-bridge"
     state_dir.mkdir(parents=True)
 
     state_file = state_dir / f"{SESSION_ID}.json"
