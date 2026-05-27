@@ -7,6 +7,8 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
+import threading
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -26,6 +28,10 @@ from zerg.cli._common import load_api_credentials as _load_api_credentials
 from zerg.cli._common import open_session_url as _open_session_url
 from zerg.provider_cli_contract import OPENCODE_BIN_ENV
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_OPENCODE_BIN_FLAG
+from zerg.services.opencode_bridge_state import generate_server_password
+from zerg.services.opencode_bridge_state import parse_listen_line
+from zerg.services.opencode_bridge_state import remove_opencode_bridge_state
+from zerg.services.opencode_bridge_state import write_opencode_bridge_state
 from zerg.services.session_continuity import get_machine_name_label
 from zerg.session_loop_mode import SessionLoopMode
 
@@ -460,6 +466,77 @@ def _build_opencode_command(
     return f"cd {shlex.quote(str(cwd))} && {env_prefix} {command}"
 
 
+_OPENCODE_DEFAULT_SERVE_ARGS: tuple[str, ...] = ("serve", "--port", "0", "--hostname", "127.0.0.1")
+_OPENCODE_LISTEN_TIMEOUT_SECS = 30.0
+
+
+def _ensure_managed_serve_args(opencode_args: tuple[str, ...]) -> tuple[str, ...]:
+    """Coerce caller args so the managed launch always lands on `opencode serve`.
+
+    Longhouse owns the control plane: managed-local OpenCode means an HTTP
+    server we can drive from `longhouse opencode-bridge`. If the user passed
+    no args, default to `serve --port 0 --hostname 127.0.0.1`. If they passed
+    a different subcommand (e.g. `tui`), refuse loudly so we never end up in
+    "managed but unsteerable" land.
+    """
+
+    if not opencode_args:
+        return _OPENCODE_DEFAULT_SERVE_ARGS
+    first = (opencode_args[0] or "").strip()
+    if first.startswith("-") or first == "":
+        # No subcommand — caller is passing flags, prepend the canonical serve.
+        return _OPENCODE_DEFAULT_SERVE_ARGS + opencode_args
+    if first != "serve":
+        raise _OpenCodeLaunchError(
+            "Managed `longhouse opencode` only supports the `serve` subcommand "
+            "(it is the upstream HTTP control plane). To attach an interactive "
+            "TUI, run `opencode tui attach <url>` against the server URL printed "
+            "above using $OPENCODE_SERVER_PASSWORD."
+        )
+    return opencode_args
+
+
+def _stream_and_capture_listen_url(
+    process: subprocess.Popen,
+    *,
+    on_url: "callable[[str], None]",
+    timeout_secs: float = _OPENCODE_LISTEN_TIMEOUT_SECS,
+) -> threading.Thread:
+    """Tee the child's stdout to ours and call ``on_url`` once the listen line appears.
+
+    Returns the reader thread (caller can ``join`` once the child exits).
+    The caller is responsible for closing the child's stdout when done.
+    """
+
+    captured = {"done": False}
+
+    def _reader() -> None:
+        assert process.stdout is not None
+        for raw in process.stdout:
+            line = raw if isinstance(raw, str) else raw.decode("utf-8", errors="replace")
+            try:
+                sys.stdout.write(line)
+                sys.stdout.flush()
+            except Exception:
+                pass
+            if not captured["done"]:
+                url = parse_listen_line(line)
+                if url:
+                    captured["done"] = True
+                    try:
+                        on_url(url)
+                    except Exception as exc:  # pragma: no cover - defensive
+                        typer.secho(
+                            f"Longhouse: failed to record opencode bridge state: {exc}",
+                            fg=typer.colors.YELLOW,
+                            err=True,
+                        )
+
+    thread = threading.Thread(target=_reader, name="opencode-stdout-tee", daemon=True)
+    thread.start()
+    return thread
+
+
 def _run_native_opencode(
     *,
     session_id: str,
@@ -471,10 +548,14 @@ def _run_native_opencode(
     token: str,
     config_dir: Path | None = None,
 ) -> int:
-    cmd = [opencode_bin, *opencode_args]
+    serve_args = _ensure_managed_serve_args(opencode_args)
+    cmd = [opencode_bin, *serve_args]
     env = os.environ.copy()
     env["LONGHOUSE_MANAGED_SESSION_ID"] = session_id
     env["LONGHOUSE_DEVICE_ID"] = machine_name
+    server_password = generate_server_password()
+    env["OPENCODE_SERVER_PASSWORD"] = server_password
+    env.setdefault("OPENCODE_SERVER_USERNAME", "opencode")
     plugin_path = _ensure_opencode_runtime_plugin(config_dir)
     env["OPENCODE_CONFIG_CONTENT"] = _opencode_config_content_with_longhouse_plugin(
         existing_content=env.get("OPENCODE_CONFIG_CONTENT"),
@@ -484,12 +565,55 @@ def _run_native_opencode(
         session_id=session_id,
         device_id=machine_name,
     )
+
+    def _record_state(server_url: str) -> None:
+        write_opencode_bridge_state(
+            session_id=session_id,
+            server_url=server_url,
+            server_password=server_password,
+            server_username=env.get("OPENCODE_SERVER_USERNAME", "opencode"),
+            cwd=str(cwd),
+            opencode_pid=process.pid,
+            config_dir=config_dir,
+            ready=True,
+        )
+
     returncode = 1
+    process: subprocess.Popen | None = None
     try:
-        completed = subprocess.run(cmd, check=False, cwd=str(cwd), env=env)
-        returncode = int(completed.returncode)
+        process = subprocess.Popen(
+            cmd,
+            cwd=str(cwd),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        reader = _stream_and_capture_listen_url(process, on_url=_record_state)
+        try:
+            returncode = int(process.wait())
+        except KeyboardInterrupt:
+            try:
+                process.terminate()
+            except Exception:
+                pass
+            try:
+                returncode = int(process.wait(timeout=5))
+            except Exception:
+                returncode = 130
+            raise
+        finally:
+            # Drain reader before letting the stdout pipe close — once the
+            # child exits, the reader's iterator drops out naturally on EOF.
+            # Bound the join so a misbehaving stdout never wedges the launcher.
+            reader.join(timeout=2.0)
         return returncode
     finally:
+        try:
+            remove_opencode_bridge_state(session_id=session_id, config_dir=config_dir)
+        except Exception:
+            pass
         try:
             _post_opencode_runtime_event(
                 url=url,
@@ -649,13 +773,21 @@ def opencode(
     )
     if not attach:
         typer.echo(f"Run: {command}")
+        typer.secho(
+            "Note: --no-attach prints a launch script. Managed remote control "
+            "(longhouse opencode-bridge send/interrupt/steer) requires the "
+            "default attached path so Longhouse can capture the OpenCode "
+            "server URL + password.",
+            fg=typer.colors.YELLOW,
+        )
         return
     if not is_interactive:
         typer.secho("Skipping OpenCode launch because stdin/stdout are not TTYs.", fg=typer.colors.YELLOW)
         typer.echo(f"Run: {command}")
         return
 
-    typer.echo("Launching OpenCode...")
+    typer.echo("Launching managed OpenCode (`opencode serve`)...")
+    typer.echo("  attach a TUI from another shell with: " "`opencode tui attach <url> --password $OPENCODE_SERVER_PASSWORD`")
     exit_code = _run_native_opencode(
         session_id=result.session_id,
         machine_name=machine_name,
