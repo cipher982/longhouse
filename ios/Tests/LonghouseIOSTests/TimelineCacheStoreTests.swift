@@ -154,7 +154,6 @@ struct TimelineCacheStoreTests {
             hostReattachAvailable: true,
             replyToLiveSessionAvailable: true,
             runtimeDisplay: nil,
-            runtimeFacts: nil,
             timelineCard: nil
         )
     }

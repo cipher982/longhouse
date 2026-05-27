@@ -1,7 +1,6 @@
 import type {
   AgentSession,
   AgentSessionStatus,
-  SessionLivenessFacts,
   SessionRuntimeDisplay,
 } from "../services/api/agents";
 
@@ -21,7 +20,6 @@ type TimelineRuntimeOverlay = {
   active_tool?: string | null;
   confidence?: string | null;
   runtime_display?: SessionRuntimeDisplay | null;
-  runtime_facts?: SessionLivenessFacts | null;
   capabilities?: AgentSession["capabilities"] | null;
 };
 
@@ -35,7 +33,6 @@ export type TimelineRuntimeSession = Pick<
 export function isSessionClosed(
   session: Pick<AgentSession, "terminal_state"> & {
     runtime_display?: SessionRuntimeDisplay | null;
-    runtime_facts?: SessionLivenessFacts | null;
   },
 ): boolean {
   const lifecycle = session.runtime_display?.lifecycle;
@@ -67,7 +64,6 @@ export interface SessionRuntimeState {
   hasSignal: boolean;
   tone: RuntimeTone;
   runtimeDisplay: SessionRuntimeDisplay | null;
-  runtimeFacts: SessionLivenessFacts | null;
 }
 
 export type SessionControlPathLabel = "Managed" | "Unmanaged";
@@ -104,7 +100,6 @@ export function resolveSessionRuntimeState(
   session: TimelineRuntimeSession,
 ): SessionRuntimeState {
   const serverDisplay = session.runtime_display ?? null;
-  const runtimeFacts = session.runtime_facts ?? null;
   const status = session.status ?? null;
   if (!serverDisplay) {
     return {
@@ -125,7 +120,6 @@ export function resolveSessionRuntimeState(
       hasSignal: false,
       tone: "inactive",
       runtimeDisplay: null,
-      runtimeFacts,
     };
   }
 
@@ -161,7 +155,6 @@ export function resolveSessionRuntimeState(
     hasSignal: serverDisplay.has_signal,
     tone,
     runtimeDisplay: serverDisplay,
-    runtimeFacts,
   };
 }
 

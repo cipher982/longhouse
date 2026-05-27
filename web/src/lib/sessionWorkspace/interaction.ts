@@ -64,7 +64,7 @@ export function getSessionInteractionCapabilities({
     reply_to_live_session_available: replyToLiveSessionAvailable,
   } = session.capabilities;
   const canChatFromBrowser = Boolean(replyToLiveSessionAvailable ?? liveControlAvailable);
-  const controlPath = session.runtime_facts?.control_path ?? session.runtime_display?.control_path;
+  const controlPath = session.runtime_display?.control_path;
   const isManagedLocalSession =
     controlPath === "managed"
       ? true

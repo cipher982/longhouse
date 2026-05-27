@@ -949,15 +949,11 @@ private func parseLonghouseDate(_ value: String?) -> Date? {
 
 // MARK: - Liveness + duration helpers (RuntimeBadge)
 
-/// Per-session deadline check: require the server's `phase.expiresAt`.
-/// Without a server-stamped deadline we refuse to claim freshness — a
-/// missing/malformed payload should freeze the dot, not pulse forever.
+/// Per-session liveness check. The server projects `activity_recency` onto
+/// `runtime_display` after applying its own freshness windows; clients pulse
+/// only when that projection says `live`.
 func phaseSignalFresh(_ session: SessionSummary) -> Bool {
-    guard let raw = session.runtimeFacts?.phase.expiresAt,
-          let expires = parseLonghouseDate(raw) else {
-        return false
-    }
-    return Date() < expires
+    session.runtimeDisplay?.activityRecency == "live"
 }
 
 /// "How long in current state" — the headline number in the pill.
