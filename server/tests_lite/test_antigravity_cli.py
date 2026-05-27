@@ -19,6 +19,12 @@ os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-value")
 from zerg.cli import antigravity as antigravity_cli
 from zerg.cli._common import ManagedLocalLaunchResponse
 from zerg.cli.main import app
+from zerg.services.managed_session_contracts import list_managed_session_contracts
+
+
+@pytest.fixture(autouse=True)
+def _isolate_longhouse_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("LONGHOUSE_HOME", str(tmp_path / ".longhouse"))
 
 
 def test_antigravity_command_launches_managed_session_and_passes_extra_args(monkeypatch, tmp_path):
@@ -82,6 +88,7 @@ def test_antigravity_command_launches_managed_session_and_passes_extra_args(monk
             "config_dir": None,
         }
     ]
+    assert list_managed_session_contracts(tmp_path / ".longhouse") == []
 
 
 def test_agy_command_alias_launches_managed_session(monkeypatch, tmp_path):
@@ -179,6 +186,7 @@ def test_antigravity_no_attach_prints_tokenless_launch_script_command(monkeypatc
     assert "zdt_test_token" not in result.output
     assert launch_script_calls[0]["runtime_events_url"] == "https://longhouse.test/api/agents/runtime/events/batch"
     assert launch_script_calls[0]["token"] == "zdt_test_token"
+    assert list_managed_session_contracts(tmp_path / ".longhouse") == []
 
 
 def test_antigravity_launch_api_wrapper_sets_provider(monkeypatch, tmp_path):

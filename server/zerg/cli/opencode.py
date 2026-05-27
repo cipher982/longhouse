@@ -26,8 +26,12 @@ from zerg.cli._common import ensure_managed_launch_preflight as _ensure_managed_
 from zerg.cli._common import interactive_stdio as _interactive_stdio
 from zerg.cli._common import load_api_credentials as _load_api_credentials
 from zerg.cli._common import open_session_url as _open_session_url
+from zerg.cli._managed_contract import record_managed_provider_contract
+from zerg.cli._managed_contract import remove_managed_provider_contract
 from zerg.provider_cli_contract import OPENCODE_BIN_ENV
+from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_MISSING
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_OPENCODE_BIN_FLAG
+from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
 from zerg.services.longhouse_paths import get_managed_local_dir
 from zerg.services.opencode_bridge_state import generate_server_password
 from zerg.services.opencode_bridge_state import parse_listen_line
@@ -225,6 +229,14 @@ def _resolve_opencode_binary(explicit: str | None = None) -> str | None:
     if env_candidate:
         return _resolve_explicit_opencode_binary(env_candidate, source=OPENCODE_BIN_ENV)
     return shutil.which("opencode")
+
+
+def _opencode_binary_source(explicit: str | None, resolved: str | None) -> str:
+    if str(explicit or "").strip():
+        return PROVIDER_CLI_SOURCE_OPENCODE_BIN_FLAG
+    if str(os.environ.get(OPENCODE_BIN_ENV) or "").strip():
+        return OPENCODE_BIN_ENV
+    return PROVIDER_CLI_SOURCE_PATH if resolved else PROVIDER_CLI_SOURCE_MISSING
 
 
 def _launch_managed_local_from_api(
@@ -548,6 +560,7 @@ def _run_native_opencode(
     url: str,
     token: str,
     config_dir: Path | None = None,
+    opencode_bin_source: str | None = None,
 ) -> int:
     serve_args = _ensure_managed_serve_args(opencode_args)
     cmd = [opencode_bin, *serve_args]
@@ -568,7 +581,7 @@ def _run_native_opencode(
     )
 
     def _record_state(server_url: str) -> None:
-        write_opencode_bridge_state(
+        state_path = write_opencode_bridge_state(
             session_id=session_id,
             server_url=server_url,
             server_password=server_password,
@@ -578,6 +591,24 @@ def _run_native_opencode(
             config_dir=config_dir,
             ready=True,
         )
+        try:
+            record_managed_provider_contract(
+                provider="opencode",
+                session_id=session_id,
+                cwd=cwd,
+                config_dir=config_dir,
+                launch_mode="serve_attached",
+                provider_binary_path=opencode_bin,
+                provider_binary_source=opencode_bin_source,
+                control_kind="opencode_bridge",
+                control_state_path=state_path,
+            )
+        except Exception as exc:  # pragma: no cover - defensive warning path
+            typer.secho(
+                f"Longhouse warning: could not record managed-session contract: {exc}",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
 
     returncode = 1
     process: subprocess.Popen | None = None
@@ -611,6 +642,7 @@ def _run_native_opencode(
             reader.join(timeout=2.0)
         return returncode
     finally:
+        remove_managed_provider_contract(provider="opencode", session_id=session_id, config_dir=config_dir)
         try:
             remove_opencode_bridge_state(session_id=session_id, config_dir=config_dir)
         except Exception:
@@ -715,6 +747,7 @@ def opencode(
         url=resolved_url,
         machine_name=machine_name,
         config_dir=resolved_config_dir,
+        config_dir_is_provider_home=False,
         exit_code=managed_local_cli.EXIT_SETUP_FAILED,
     )
     typer.echo(f"Longhouse: {resolved_url}")
@@ -772,6 +805,24 @@ def opencode(
         config_content_path=command_config_content_path,
         launch_script_path=command_launch_script_path,
     )
+    if not (attach and is_interactive):
+        try:
+            record_managed_provider_contract(
+                provider="opencode",
+                session_id=result.session_id,
+                cwd=cwd,
+                config_dir=resolved_config_dir,
+                launch_mode="launch_script",
+                provider_binary_path=resolved_opencode_bin,
+                provider_binary_source=_opencode_binary_source(opencode_bin, resolved_opencode_bin),
+                control_kind="opencode_launch_script",
+            )
+        except Exception as exc:
+            typer.secho(
+                f"Longhouse warning: could not record managed-session contract: {exc}",
+                fg=typer.colors.YELLOW,
+                err=True,
+            )
     if not attach:
         typer.echo(f"Run: {command}")
         typer.secho(
@@ -788,7 +839,7 @@ def opencode(
         return
 
     typer.echo("Launching managed OpenCode (`opencode serve`)...")
-    typer.echo("  attach a TUI from another shell with: " "`opencode tui attach <url> --password $OPENCODE_SERVER_PASSWORD`")
+    typer.echo("  attach a TUI from another shell with: `opencode tui attach <url> --password $OPENCODE_SERVER_PASSWORD`")
     exit_code = _run_native_opencode(
         session_id=result.session_id,
         machine_name=machine_name,
@@ -798,6 +849,7 @@ def opencode(
         url=resolved_url,
         token=resolved_token,
         config_dir=resolved_config_dir,
+        opencode_bin_source=_opencode_binary_source(opencode_bin, resolved_opencode_bin),
     )
     if exit_code != 0:
         typer.secho(f"OpenCode exited with code {exit_code}.", fg=typer.colors.YELLOW)

@@ -139,6 +139,32 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
             if info.get("evidence_root"):
                 typer.echo(f"    evidence: {info.get('evidence_root')}")
 
+    provider_hook_diagnostics = dict(snapshot.get("provider_hook_diagnostics") or {})
+    hook_events = list(provider_hook_diagnostics.get("events") or [])
+    if provider_hook_diagnostics.get("state") == "session_cwd_missing" or hook_events:
+        typer.echo("")
+        typer.echo("Provider Hook Diagnostics")
+        typer.echo(f"  state: {provider_hook_diagnostics.get('state') or '-'}")
+        typer.echo(f"  deleted cwd errors: {provider_hook_diagnostics.get('deleted_cwd_error_count', 0)}")
+        latest = dict(provider_hook_diagnostics.get("latest") or {})
+        if latest:
+            typer.echo(f"  latest session: {latest.get('session_id') or '-'}")
+            typer.echo(f"  missing cwd: {latest.get('cwd') or '-'}")
+            typer.echo(f"  observed: {latest.get('timestamp') or '-'}")
+
+    managed_session_contracts = dict(snapshot.get("managed_session_contracts") or {})
+    contract_issues = list(managed_session_contracts.get("issues") or [])
+    if contract_issues:
+        typer.echo("")
+        typer.echo("Managed Session Contracts")
+        typer.echo(f"  state: {managed_session_contracts.get('state') or '-'}")
+        typer.echo(f"  issues: {managed_session_contracts.get('issue_count', len(contract_issues))}")
+        latest = dict(managed_session_contracts.get("latest") or {})
+        if latest:
+            typer.echo(f"  latest: {latest.get('headline') or latest.get('reason') or '-'}")
+            typer.echo(f"  latest session: {latest.get('session_id') or '-'}")
+            typer.echo(f"  action: {latest.get('action') or '-'}")
+
     typer.echo("")
     typer.echo("Outbox")
     typer.echo(f"  path: {outbox.get('path', '-')}")
