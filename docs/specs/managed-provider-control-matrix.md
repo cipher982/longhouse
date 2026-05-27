@@ -171,7 +171,13 @@ example `antigravity_hook_inbox`, not `antigravity_process`.
 
 ## Shared Architecture Target
 
-Add a provider adapter contract with these fields:
+Provider contract facts live in
+`server/zerg/config/managed_provider_contracts.json`. Python reads that
+manifest for managed-provider contracts and provider CLI discovery; the Rust
+Machine Agent embeds the same manifest for `supports[]` advertisement. Provider
+execution remains provider-specific code.
+
+The manifest carries these fields:
 
 ```text
 provider
@@ -192,7 +198,7 @@ transcript_binding_sources
 release_canary_profile
 ```
 
-This should be a contract registry, not a polymorphic mega-class. Shared code
+This is a contract registry, not a polymorphic mega-class. Shared code
 may ask the registry what a provider claims. Provider-specific code still owns
 how to execute each operation.
 
@@ -235,6 +241,6 @@ Before a provider is marked first-class, tests must prove:
 6. Decide Antigravity interrupt and steer only after hook canaries prove
    bounded behavior.
 7. Move all provider operation truth into the contract registry and remove
-   scattered provider-string gates. Python read surfaces now derive
-   launchability and per-provider operations from the registry; Rust support
-   advertisement still needs a generated/shared source of truth.
+   scattered provider-string gates. Python read surfaces and Rust support
+   advertisement now share the manifest; provider-specific launch/dispatch code
+   still intentionally branches per provider.

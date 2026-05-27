@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pytest
 
+from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
+from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
 from zerg.services.managed_provider_contracts import all_managed_provider_contracts
 from zerg.services.managed_provider_contracts import contract_for_control_plane
 from zerg.services.managed_provider_contracts import contract_for_provider
@@ -18,9 +20,111 @@ from zerg.services.managed_provider_contracts import trusted_non_runner_control_
 from zerg.session_execution_home import ManagedSessionTransport
 
 
+def _contract_snapshot():
+    return {
+        contract.provider: {
+            "managed_transport": contract.managed_transport.value,
+            "control_plane": contract.control_plane,
+            "control_plane_aliases": contract.control_plane_aliases,
+            "launch_local": contract.launch_local,
+            "launch_remote": contract.launch_remote,
+            "reattach": contract.reattach,
+            "send_input": contract.send_input,
+            "interrupt": contract.interrupt,
+            "steer_active_turn": contract.steer_active_turn,
+            "terminate": contract.terminate,
+            "tail_output": contract.tail_output,
+            "runtime_phase": contract.runtime_phase,
+            "transcript_binding": contract.transcript_binding,
+            "can_resume": contract.can_resume,
+            "machine_control_supports": contract.machine_control_supports,
+        }
+        for contract in all_managed_provider_contracts()
+    }
+
+
 def test_managed_provider_contract_matrix_covers_launch_scope_providers():
     assert managed_provider_names() == frozenset({"codex", "claude", "opencode", "antigravity"})
     assert {contract.provider for contract in all_managed_provider_contracts()} == managed_provider_names()
+
+
+def test_managed_provider_contract_manifest_snapshot():
+    assert _contract_snapshot() == {
+        "codex": {
+            "managed_transport": "codex_app_server",
+            "control_plane": "codex_bridge",
+            "control_plane_aliases": ("codex_app_server",),
+            "launch_local": True,
+            "launch_remote": True,
+            "reattach": True,
+            "send_input": True,
+            "interrupt": True,
+            "steer_active_turn": True,
+            "terminate": True,
+            "tail_output": True,
+            "runtime_phase": True,
+            "transcript_binding": True,
+            "can_resume": True,
+            "machine_control_supports": (
+                "codex.send",
+                "codex.interrupt",
+                "codex.steer",
+                "codex.launch",
+                "codex.continue",
+            ),
+        },
+        "claude": {
+            "managed_transport": "claude_channel_bridge",
+            "control_plane": "claude_channel_bridge",
+            "control_plane_aliases": (),
+            "launch_local": True,
+            "launch_remote": True,
+            "reattach": True,
+            "send_input": True,
+            "interrupt": True,
+            "steer_active_turn": True,
+            "terminate": True,
+            "tail_output": True,
+            "runtime_phase": True,
+            "transcript_binding": True,
+            "can_resume": True,
+            "machine_control_supports": ("claude.send", "claude.interrupt", "claude.steer", "claude.launch"),
+        },
+        "opencode": {
+            "managed_transport": "opencode_server_bridge",
+            "control_plane": "opencode_server_bridge",
+            "control_plane_aliases": (),
+            "launch_local": True,
+            "launch_remote": True,
+            "reattach": True,
+            "send_input": True,
+            "interrupt": True,
+            "steer_active_turn": False,
+            "terminate": True,
+            "tail_output": True,
+            "runtime_phase": True,
+            "transcript_binding": True,
+            "can_resume": True,
+            "machine_control_supports": ("opencode.send", "opencode.interrupt", "opencode.launch"),
+        },
+        "antigravity": {
+            "managed_transport": "antigravity_hook_inbox",
+            "control_plane": "antigravity_hook_inbox",
+            "control_plane_aliases": (),
+            "launch_local": True,
+            "launch_remote": False,
+            "reattach": False,
+            "send_input": True,
+            "interrupt": False,
+            "steer_active_turn": False,
+            "terminate": False,
+            "tail_output": True,
+            "runtime_phase": True,
+            "transcript_binding": True,
+            "can_resume": False,
+            "machine_control_supports": ("antigravity.send",),
+        },
+    }
 
 
 @pytest.mark.parametrize(
@@ -52,7 +156,13 @@ def test_codex_contract_is_current_remote_launch_engine_channel_provider():
     assert codex.send_input is True
     assert codex.interrupt is True
     assert codex.steer_active_turn is True
-    assert codex.machine_control_supports == ("codex.send", "codex.interrupt", "codex.steer", "codex.launch")
+    assert codex.machine_control_supports == (
+        "codex.send",
+        "codex.interrupt",
+        "codex.steer",
+        "codex.launch",
+        "codex.continue",
+    )
     assert remote_launch_supported_providers() == frozenset({"codex", "claude", "opencode"})
 
 
@@ -180,3 +290,18 @@ def test_machine_control_operations_by_provider_projects_live_supports():
 
 def test_machine_control_operations_by_provider_requires_connected_channel():
     assert machine_control_operations_by_provider(["codex.launch", "antigravity.send"], connected=False) == {}
+
+
+def test_provider_cli_discovery_contract_comes_from_managed_provider_manifest():
+    assert PROVIDER_CLI_BINARY_BY_PROVIDER == {
+        "codex": "codex",
+        "claude": "claude",
+        "opencode": "opencode",
+        "antigravity": "agy",
+    }
+    assert PROVIDER_CLI_ENV_BY_PROVIDER == {
+        "codex": "LONGHOUSE_CODEX_BIN",
+        "claude": None,
+        "opencode": "LONGHOUSE_OPENCODE_BIN",
+        "antigravity": "LONGHOUSE_ANTIGRAVITY_BIN",
+    }
