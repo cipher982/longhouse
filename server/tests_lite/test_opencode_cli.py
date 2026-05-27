@@ -21,6 +21,12 @@ from zerg.cli import opencode as opencode_cli
 from zerg.cli._common import ManagedLocalLaunchResponse
 from zerg.cli.main import app
 from zerg.services import opencode_bridge_state as bridge_state
+from zerg.services.managed_session_contracts import list_managed_session_contracts
+
+
+@pytest.fixture(autouse=True)
+def _isolate_longhouse_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("LONGHOUSE_HOME", str(tmp_path / ".longhouse"))
 
 
 def _stub_managed_launch(monkeypatch):
@@ -70,6 +76,10 @@ def test_opencode_command_launches_managed_session_and_passes_extra_args(monkeyp
             "config_dir": None,
         }
     ]
+    contracts = list_managed_session_contracts(tmp_path / ".longhouse")
+    assert contracts[0]["provider"] == "opencode"
+    assert contracts[0]["workspace"]["cwd"] == str(tmp_path)
+    assert contracts[0]["control"]["kind"] == "opencode_bridge"
 
 
 def test_opencode_command_defaults_to_serve_when_no_args(monkeypatch, tmp_path):

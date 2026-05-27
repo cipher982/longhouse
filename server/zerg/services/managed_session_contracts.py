@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
@@ -55,7 +56,8 @@ class ManagedSessionContractIssue:
 
 
 def managed_session_contract_root(base_dir: str | Path | None = None) -> Path:
-    return resolve_longhouse_home(Path(base_dir).expanduser() if base_dir is not None else None) / "managed-local" / "contracts"
+    resolved_base = Path(base_dir).expanduser() if base_dir is not None else None
+    return resolve_longhouse_home(resolved_base) / "managed-local" / "contracts"
 
 
 def build_managed_session_contract_path(
@@ -151,7 +153,11 @@ def write_managed_session_contract(
     return path
 
 
-def list_managed_session_contracts(base_dir: str | Path | None = None) -> list[dict[str, Any]]:
+def list_managed_session_contracts(
+    base_dir: str | Path | None = None,
+    *,
+    session_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
     root = managed_session_contract_root(base_dir)
     if not root.exists():
         return []
@@ -177,6 +183,9 @@ def list_managed_session_contracts(base_dir: str | Path | None = None) -> list[d
         if isinstance(payload, dict):
             payload = dict(payload)
             payload["source_path"] = str(path)
+            session_id = _normalize_optional_string(payload.get("session_id"))
+            if session_ids is not None and session_id not in session_ids:
+                continue
             contracts.append(payload)
     return contracts
 
@@ -199,12 +208,34 @@ def verify_managed_session_contracts(
     }
 
 
-def collect_managed_session_contract_diagnostics(base_dir: str | Path | None = None) -> dict[str, Any]:
+def collect_managed_session_contract_diagnostics(
+    base_dir: str | Path | None = None,
+    *,
+    session_ids: set[str] | None = None,
+) -> dict[str, Any]:
     root = managed_session_contract_root(base_dir)
-    contracts = list_managed_session_contracts(base_dir)
+    contracts = list_managed_session_contracts(base_dir, session_ids=session_ids)
     diagnostics = verify_managed_session_contracts(contracts)
     diagnostics["root"] = str(root)
     return diagnostics
+
+
+def capture_provider_version(provider_binary_path: str | None, *, timeout_seconds: float = 5.0) -> str | None:
+    binary = _normalize_optional_string(provider_binary_path)
+    if binary is None:
+        return None
+    try:
+        completed = subprocess.run(
+            [binary, "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    output = ((completed.stdout or "").strip() or (completed.stderr or "").strip()).splitlines()
+    return output[0].strip() if output and output[0].strip() else None
 
 
 def _issues_for_contract(contract: Mapping[str, Any]) -> list[ManagedSessionContractIssue]:
@@ -232,7 +263,7 @@ def _issues_for_contract(contract: Mapping[str, Any]) -> list[ManagedSessionCont
                     provider=provider,
                     severity="yellow",
                     headline="A provider session working directory disappeared",
-                    action=f"Restart or reattach the affected provider session from an existing directory; missing cwd: {cwd}",
+                    action=("Restart or reattach the affected provider session from an existing directory; " f"missing cwd: {cwd}"),
                     source_path=source_path,
                     detail={"cwd": cwd},
                 )
@@ -301,6 +332,7 @@ __all__ = [
     "REASON_PROVIDER_SESSION_CWD_REPLACED",
     "build_managed_session_contract",
     "build_managed_session_contract_path",
+    "capture_provider_version",
     "collect_managed_session_contract_diagnostics",
     "current_path_file_identity",
     "list_managed_session_contracts",

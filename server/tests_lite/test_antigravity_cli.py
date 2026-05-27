@@ -19,6 +19,12 @@ os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-value")
 from zerg.cli import antigravity as antigravity_cli
 from zerg.cli._common import ManagedLocalLaunchResponse
 from zerg.cli.main import app
+from zerg.services.managed_session_contracts import list_managed_session_contracts
+
+
+@pytest.fixture(autouse=True)
+def _isolate_longhouse_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("LONGHOUSE_HOME", str(tmp_path / ".longhouse"))
 
 
 def test_antigravity_command_launches_managed_session_and_passes_extra_args(monkeypatch, tmp_path):
@@ -82,6 +88,10 @@ def test_antigravity_command_launches_managed_session_and_passes_extra_args(monk
             "config_dir": None,
         }
     ]
+    contracts = list_managed_session_contracts(tmp_path / ".longhouse")
+    assert contracts[0]["provider"] == "antigravity"
+    assert contracts[0]["workspace"]["cwd"] == str(tmp_path)
+    assert contracts[0]["control"]["kind"] == "antigravity_process"
 
 
 def test_agy_command_alias_launches_managed_session(monkeypatch, tmp_path):
