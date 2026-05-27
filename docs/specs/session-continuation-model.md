@@ -175,6 +175,10 @@ Response:
 }
 ```
 
+If the session is already live and sendable, Continue short-circuits to
+`launch_state=live` without creating a new `SessionLaunchAttempt`; it is a
+no-op from a run/connection perspective.
+
 `carry_context` values:
 
 - `native`: use provider-native resume. Requires a provider thread alias and a
@@ -299,6 +303,8 @@ Acceptance criteria:
 - The new run has `launch_origin=longhouse_continued` or another documented
   continuation-specific value.
 - Idempotent `client_request_id` returns the existing launch attempt.
+- A live/sendable session returns `live` as a no-op rather than starting a
+  second run.
 - Missing provider alias, offline host, unsupported provider, or missing cwd
   return typed errors without creating a live connection.
 - Existing fresh launch behavior remains unchanged.
