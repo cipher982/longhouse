@@ -483,6 +483,14 @@ enum CodexBridgeCommands {
         #[arg(long)]
         create_initial_thread: bool,
 
+        /// Resume an existing Codex thread instead of creating a fresh one.
+        #[arg(long)]
+        resume_thread_id: Option<String>,
+
+        /// Existing Codex rollout/transcript path for --resume-thread-id.
+        #[arg(long)]
+        resume_thread_path: Option<String>,
+
         /// Persisted lifecycle mode for this bridge.
         #[arg(long, default_value = "tui")]
         launch_mode: String,
@@ -541,6 +549,14 @@ enum CodexBridgeCommands {
         /// Create the initial Codex thread ourselves via thread/start.
         #[arg(long)]
         create_initial_thread: bool,
+
+        /// Resume an existing Codex thread instead of creating a fresh one.
+        #[arg(long)]
+        resume_thread_id: Option<String>,
+
+        /// Existing Codex rollout/transcript path for --resume-thread-id.
+        #[arg(long)]
+        resume_thread_path: Option<String>,
 
         /// Persisted lifecycle mode for this bridge.
         #[arg(long, default_value = "tui")]
@@ -1055,6 +1071,8 @@ fn main() -> anyhow::Result<()> {
                     log_file,
                     start_timeout_secs,
                     create_initial_thread,
+                    resume_thread_id,
+                    resume_thread_path,
                     launch_mode,
                     json,
                 } => {
@@ -1081,6 +1099,8 @@ fn main() -> anyhow::Result<()> {
                         log_file,
                         start_timeout_secs,
                         create_initial_thread,
+                        resume_thread_id,
+                        resume_thread_path,
                         launch_mode,
                     }))?;
                     if json {
@@ -1116,6 +1136,8 @@ fn main() -> anyhow::Result<()> {
                     state_file,
                     log_file,
                     create_initial_thread,
+                    resume_thread_id,
+                    resume_thread_path,
                     launch_mode,
                 } => {
                     let launch_mode = parse_codex_bridge_launch_mode(&launch_mode)?;
@@ -1136,6 +1158,8 @@ fn main() -> anyhow::Result<()> {
                         state_file,
                         log_file,
                         create_initial_thread,
+                        resume_thread_id,
+                        resume_thread_path,
                         launch_mode,
                     }))?;
                 }
@@ -1343,6 +1367,45 @@ mod tests {
                     parse_codex_bridge_launch_mode(&launch_mode).unwrap(),
                     BridgeLaunchMode::DetachedUi
                 );
+            }
+            _ => panic!("expected codex-bridge start command"),
+        }
+    }
+
+    #[test]
+    fn codex_bridge_start_accepts_resume_thread_target() {
+        let cli = Cli::try_parse_from([
+            "longhouse-engine",
+            "codex-bridge",
+            "start",
+            "--session-id",
+            "00000000-0000-0000-0000-000000000001",
+            "--cwd",
+            "/tmp",
+            "--url",
+            "https://longhouse.test",
+            "--token",
+            "token",
+            "--resume-thread-id",
+            "thread-abc",
+            "--resume-thread-path",
+            "/tmp/thread-abc.jsonl",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::CodexBridge {
+                command:
+                    CodexBridgeCommands::Start {
+                        resume_thread_id,
+                        resume_thread_path,
+                        create_initial_thread,
+                        ..
+                    },
+            } => {
+                assert!(!create_initial_thread);
+                assert_eq!(resume_thread_id.as_deref(), Some("thread-abc"));
+                assert_eq!(resume_thread_path.as_deref(), Some("/tmp/thread-abc.jsonl"));
             }
             _ => panic!("expected codex-bridge start command"),
         }

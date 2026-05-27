@@ -34,8 +34,10 @@ from zerg.models.user import User
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import launch_managed_local_session_sync
+from zerg.services.remote_session_launch import RemoteContinueParams
 from zerg.services.remote_session_launch import RemoteLaunchError
 from zerg.services.remote_session_launch import RemoteLaunchParams
+from zerg.services.remote_session_launch import continue_remote_session
 from zerg.services.remote_session_launch import launch_remote_session
 from zerg.services.session_chat_impl import ManagedLocalSessionLaunchResponse
 from zerg.services.session_chat_impl import SessionDraftReplyResponse
@@ -125,6 +127,23 @@ class RemoteSessionLaunchResponse(BaseModel):
     launch_state: RemoteLaunchLifecycleState
     launch_error_code: RemoteLaunchErrorCode | None = None
     launch_error_message: str | None = None
+
+
+class RemoteSessionContinueRequest(BaseModel):
+    """User-initiated request to continue an existing durable session."""
+
+    device_id: str | None = Field(
+        None,
+        min_length=1,
+        description="Target enrolled device id; defaults to the session host",
+    )
+    cwd: str | None = Field(None, min_length=1, description="Absolute working directory; defaults to the session cwd")
+    client_request_id: str | None = Field(
+        None,
+        min_length=1,
+        max_length=64,
+        description="Optional idempotency key; repeated calls with the same value return the same attempt",
+    )
 
 
 class ManagedLocalThisDeviceLaunchRequest(BaseModel):
@@ -476,6 +495,43 @@ async def interrupt_live_session_agents(
     )
 
 
+@agents_router.post("/{session_id}/continue", response_model=RemoteSessionLaunchResponse)
+async def continue_remote_session_agents(
+    session_id: uuid.UUID,
+    body: RemoteSessionContinueRequest,
+    db: Session = Depends(get_db),
+    device_token: DeviceToken | None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> RemoteSessionLaunchResponse:
+    """Machine-facing continuation surface for existing durable sessions."""
+    owner_id = _resolve_agents_owner_id(db, device_token)
+    try:
+        result = await continue_remote_session(
+            db,
+            RemoteContinueParams(
+                owner_id=owner_id,
+                session_id=session_id,
+                device_id=body.device_id,
+                cwd=body.cwd,
+                client_request_id=body.client_request_id,
+            ),
+        )
+    except RemoteLaunchError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": exc.detail}) from exc
+    except Exception:
+        db.rollback()
+        logger.exception("Machine-facing remote session continue failed unexpectedly")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Remote session continue failed")
+
+    return RemoteSessionLaunchResponse(
+        session_id=str(result.session_id),
+        launch_state=result.launch_state,
+        launch_error_code=result.launch_error_code,
+        launch_error_message=result.launch_error_message,
+    )
+
+
 @router.post("/managed-local/this-device", response_model=ManagedLocalSessionLaunchResponse)
 async def launch_managed_local_this_device(
     body: ManagedLocalThisDeviceLaunchRequest,
@@ -573,6 +629,41 @@ async def launch_remote_session_endpoint(
         db.rollback()
         logger.exception("Remote session launch failed unexpectedly")
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Remote session launch failed")
+
+    return RemoteSessionLaunchResponse(
+        session_id=str(result.session_id),
+        launch_state=result.launch_state,
+        launch_error_code=result.launch_error_code,
+        launch_error_message=result.launch_error_message,
+    )
+
+
+@router.post("/{session_id}/continue", response_model=RemoteSessionLaunchResponse)
+async def continue_remote_session_endpoint(
+    session_id: uuid.UUID,
+    body: RemoteSessionContinueRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_browser_route_user),
+) -> RemoteSessionLaunchResponse:
+    """Continue an existing durable session on a user-owned machine."""
+    try:
+        result = await continue_remote_session(
+            db,
+            RemoteContinueParams(
+                owner_id=int(current_user.id),
+                session_id=session_id,
+                device_id=body.device_id,
+                cwd=body.cwd,
+                client_request_id=body.client_request_id,
+            ),
+        )
+    except RemoteLaunchError as exc:
+        db.rollback()
+        raise HTTPException(status_code=exc.status_code, detail={"code": exc.code, "message": exc.detail}) from exc
+    except Exception:
+        db.rollback()
+        logger.exception("Remote session continue failed unexpectedly")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Remote session continue failed")
 
     return RemoteSessionLaunchResponse(
         session_id=str(result.session_id),

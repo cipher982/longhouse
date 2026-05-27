@@ -173,6 +173,14 @@ export interface SessionCapabilities {
    * truth so the web client doesn't have to know the transport set.
    */
   attach_images?: boolean;
+  can_continue?: boolean;
+  continue_targets?: Array<{
+    provider?: string | null;
+    device_id?: string | null;
+    cwd?: string | null;
+    carry_context?: "native" | string;
+    native_resume_available?: boolean;
+  }>;
 }
 
 export interface AgentSessionsListResponse {

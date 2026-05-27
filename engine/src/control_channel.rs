@@ -42,11 +42,12 @@ const CONTROL_HEARTBEAT_LATE_WARN_MS: u128 = 500;
 const CONTROL_RECONNECT_SHORT_MAX_BACKOFF_SECS: u64 = 5;
 const CONTROL_RECONNECT_SUSTAINED_MAX_BACKOFF_SECS: u64 = 30;
 const CONTROL_RECONNECT_SHORT_WINDOW_SECS: u64 = 60;
-const CONTROL_SUPPORTS: [&str; 4] = [
+const CONTROL_SUPPORTS: [&str; 5] = [
     "codex.send",
     "codex.interrupt",
     "codex.steer",
     "codex.launch",
+    "codex.continue",
 ];
 
 #[derive(Clone, Debug)]
@@ -545,6 +546,7 @@ async fn execute_command(
                 code: "provider_launch_failed".to_string(),
                 message: "Machine Agent has no device token configured".to_string(),
             })?;
+            let resume_target = payload_resume_target(&payload)?;
 
             let summary = cmd_codex_bridge_start(BridgeStartConfig {
                 session_id: session_id.clone(),
@@ -564,7 +566,13 @@ async fn execute_command(
                 start_timeout_secs: LAUNCH_START_TIMEOUT_SECS,
                 // Detached-UI remote launch: there is no visible TUI to create
                 // a thread, so we ask the bridge to call thread/start itself.
-                create_initial_thread: true,
+                create_initial_thread: resume_target.is_none(),
+                resume_thread_id: resume_target
+                    .as_ref()
+                    .map(|target| target.thread_id.clone()),
+                resume_thread_path: resume_target
+                    .as_ref()
+                    .and_then(|target| target.thread_path.clone()),
                 launch_mode: BridgeLaunchMode::DetachedUi,
             })
             .await
@@ -579,6 +587,7 @@ async fn execute_command(
                 "transport": "codex_app_server",
                 "ws_url": summary.ws_url,
                 "thread_id": summary.thread_id,
+                "thread_path": summary.thread_path,
             }))
         }
         COMMAND_SEND_TEXT => {
@@ -765,6 +774,67 @@ fn payload_required_string(
         })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LaunchResumeTarget {
+    thread_id: String,
+    thread_path: Option<String>,
+}
+
+fn payload_resume_target(
+    payload: &Value,
+) -> std::result::Result<Option<LaunchResumeTarget>, CommandError> {
+    let mode = payload
+        .get("mode")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("fresh");
+    if mode != "fresh" && mode != "continue" {
+        return Err(CommandError {
+            code: "invalid_command".to_string(),
+            message: "payload.mode must be fresh or continue".to_string(),
+        });
+    }
+    let resume = payload.get("resume");
+    if mode != "continue" && resume.is_none() {
+        return Ok(None);
+    }
+    if mode != "continue" {
+        return Err(CommandError {
+            code: "invalid_command".to_string(),
+            message: "payload.resume requires mode=continue".to_string(),
+        });
+    }
+    let Some(resume) = resume.and_then(Value::as_object) else {
+        return Err(CommandError {
+            code: "invalid_command".to_string(),
+            message: "payload.resume is required for mode=continue".to_string(),
+        });
+    };
+    let thread_id = resume
+        .get("thread_id")
+        .or_else(|| resume.get("threadId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| CommandError {
+            code: "invalid_command".to_string(),
+            message: "payload.resume.thread_id is required for mode=continue".to_string(),
+        })?;
+    let thread_path = resume
+        .get("thread_path")
+        .or_else(|| resume.get("threadPath"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    Ok(Some(LaunchResumeTarget {
+        thread_id,
+        thread_path,
+    }))
+}
+
 fn command_error(command_id: &str, code: &str, message: &str) -> Value {
     json!({
         "type": "command_result",
@@ -898,6 +968,59 @@ mod tests {
         assert_eq!(connected.last_error_code, None);
         assert_eq!(connected.reconnect_backoff_seconds, None);
         assert!(connected.last_connected_at.is_some());
+    }
+
+    #[test]
+    fn control_channel_advertises_codex_continue() {
+        let status = new_control_channel_status();
+        status.set_connected("wss://example.test/api/agents/control/ws");
+        assert!(status
+            .snapshot()
+            .supports
+            .contains(&"codex.continue".to_string()));
+    }
+
+    #[test]
+    fn launch_resume_target_parses_continue_payload() {
+        let target = payload_resume_target(&json!({
+            "mode": "continue",
+            "resume": {
+                "thread_id": "thread-abc",
+                "thread_path": "/tmp/thread-abc.jsonl",
+            }
+        }))
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(target.thread_id, "thread-abc");
+        assert_eq!(target.thread_path.as_deref(), Some("/tmp/thread-abc.jsonl"));
+    }
+
+    #[test]
+    fn launch_resume_target_requires_thread_id_for_continue() {
+        let err = payload_resume_target(&json!({
+            "mode": "continue",
+            "resume": {
+                "thread_path": "/tmp/thread-abc.jsonl",
+            }
+        }))
+        .unwrap_err();
+
+        assert_eq!(err.code, "invalid_command");
+        assert!(err.message.contains("thread_id"));
+    }
+
+    #[test]
+    fn launch_resume_target_rejects_resume_without_continue_mode() {
+        let err = payload_resume_target(&json!({
+            "resume": {
+                "thread_id": "thread-abc",
+            }
+        }))
+        .unwrap_err();
+
+        assert_eq!(err.code, "invalid_command");
+        assert!(err.message.contains("mode=continue"));
     }
 
     #[tokio::test]
