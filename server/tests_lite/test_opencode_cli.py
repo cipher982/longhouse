@@ -96,7 +96,6 @@ def test_opencode_command_launches_managed_session_and_passes_extra_args(monkeyp
             "opencode_bin": "/opt/homebrew/bin/opencode",
             "cwd": tmp_path,
             "config_dir": None,
-            "opencode_bin_source": "PATH",
         }
     ]
     assert attach_calls == [

@@ -79,7 +79,7 @@ def test_live_executing_non_steerable_transport_uses_queue_intent():
     affordance = _project(_caps(control_plane="opencode_server_bridge"), provider_label="OpenCode", is_executing=True)
 
     assert affordance.input_mode == "live"
-    assert affordance.default_input_intent == "auto"
+    assert affordance.default_input_intent == "queue"
     assert affordance.send_disabled_reason is None
 
 
