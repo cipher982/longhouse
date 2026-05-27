@@ -49,6 +49,21 @@ def normalize_provider_version(raw: Any) -> str | None:
     return match.group(0) if match else text
 
 
+def _version_tuple(version: str | None) -> tuple[int, int, int] | None:
+    if version is None or not _VERSION_RE.fullmatch(version):
+        return None
+    major, minor, patch = version.split(".", 2)
+    return int(major), int(minor), int(patch)
+
+
+def _compare_versions(left: str | None, right: str | None) -> int | None:
+    left_tuple = _version_tuple(left)
+    right_tuple = _version_tuple(right)
+    if left_tuple is None or right_tuple is None:
+        return None
+    return (left_tuple > right_tuple) - (left_tuple < right_tuple)
+
+
 def provider_release_status_config_path() -> Path:
     raw = os.getenv(PROVIDER_RELEASE_STATUS_CONFIG_FILE_ENV, "").strip()
     if raw:
@@ -306,6 +321,7 @@ def _status_for_provider(provider: str, provider_cli: dict[str, Any]) -> dict[st
     normalized_artifact = normalize_provider_version(artifact_version)
     versions_available = bool(normalized_current and normalized_artifact)
     local_version_matches = versions_available and normalized_current == normalized_artifact
+    artifact_version_delta = _compare_versions(normalized_artifact, normalized_current)
     verdict = str(artifact.get("verdict") or "unknown").lower()
 
     risk = "none"
@@ -321,8 +337,11 @@ def _status_for_provider(provider: str, provider_cli: dict[str, Any]) -> dict[st
     elif verdict == "green" and local_version_matches:
         status = "ok"
     elif versions_available and not local_version_matches:
-        status = "unknown_for_current_version"
-        risk = "warning"
+        if artifact_version_delta is not None and artifact_version_delta > 0:
+            status = "candidate_newer_than_local"
+        else:
+            status = "unknown_for_current_version"
+            risk = "warning"
     else:
         status = "unknown"
         risk = "warning"
@@ -349,6 +368,7 @@ def _status_for_provider(provider: str, provider_cli: dict[str, Any]) -> dict[st
         "normalized_artifact_version": normalized_artifact,
         "normalized_current_version": normalized_current,
         "local_version_matches": local_version_matches,
+        "artifact_version_delta": artifact_version_delta,
         "version_error": version_error,
         "generated_at": generated_at,
         "generated_at_age_seconds": generated_at_age_seconds,
