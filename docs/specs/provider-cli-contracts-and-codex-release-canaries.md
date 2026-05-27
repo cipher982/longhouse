@@ -19,7 +19,7 @@ diff found that fresh remote TUI startup became asynchronous; a behavior repro
 showed startup events could route before Codex had installed an active thread,
 rendering `No active thread is available.` The Longhouse fix was to avoid that
 fragile fresh-start path: create the thread through the bridge, then attach the
-stock TUI with `codex resume <thread_id> --remote <bridge_ws_url>`.
+stock TUI to the bridge's active thread with `codex --remote <bridge_ws_url>`.
 
 This spec turns that lesson into a reusable contract for provider CLI
 integration and a concrete release canary plan for Codex.
@@ -110,11 +110,13 @@ Local `longhouse codex` must:
 4. Attach the visible stock TUI with:
 
 ```text
-codex -c check_for_update_on_startup=false resume <thread_id> --enable tui_app_server --remote <bridge_ws_url>
+codex -c check_for_update_on_startup=false --enable tui_app_server --remote <bridge_ws_url>
 ```
 
-The TUI attach path must not use fresh `codex --remote <ws_url>` startup for
-managed launches.
+The TUI attach path must rely on the bridge-prestarted active thread, not on
+`codex resume <thread_id>`, because Codex 0.133 resolves `resume` through local
+rollout files that bridge-created threads may not have in the visible user's
+session tree.
 
 ### Detached-UI Managed Launch
 
@@ -138,10 +140,11 @@ Longhouse currently depends on these upstream Codex behaviors:
 - WebSocket startup logs include a parseable listen URL announcement.
 - JSON-RPC `initialize` succeeds before thread operations.
 - JSON-RPC `thread/start` returns `thread.id` and usually `thread.path`.
-- JSON-RPC `thread/resume` can resume an existing thread.
+- JSON-RPC `thread/resume` can subscribe Longhouse to an existing thread over
+  the app-server protocol.
 - `thread/started` notifications identify the primary thread.
-- `codex resume <thread_id> --enable tui_app_server --remote <ws_url>` attaches
-  a visible TUI to an existing thread.
+- `codex --enable tui_app_server --remote <ws_url>` attaches a visible TUI to
+  the app-server's active bridge-prestarted thread.
 - App-server startup accepts the Longhouse-required feature flags:
   - `--enable tui_app_server`
   - `--enable hooks`
@@ -211,7 +214,7 @@ Sauron should publish a single structured artifact per release:
   "canaries": {
     "binary_identity": { "status": "pass" },
     "raw_fresh_remote": { "status": "warn", "evidence": "..." },
-    "managed_resume": { "status": "pass", "turn_status": "completed" },
+    "managed_tui_attach": { "status": "pass", "turn_status": "completed" },
     "detached_ui": { "status": "pass" },
     "fake_app_server": { "status": "pass" }
   },
@@ -284,9 +287,9 @@ Flow:
 
 This canary is upstream-only: no Longhouse bridge, no Longhouse state, no
 Longhouse home. It is advisory. It can flag upstream regressions without
-failing the Longhouse contract when managed resume attach still works.
+failing the Longhouse contract when managed TUI attach still works.
 
-### 2. Managed TUI Resume Contract Canary
+### 2. Managed TUI Attach Contract Canary
 
 Purpose: prove the user-facing `longhouse codex` startup contract against the
 current stock Codex binary.
@@ -303,7 +306,7 @@ Flow:
 3. Attach stock TUI with:
 
 ```text
-codex -c check_for_update_on_startup=false resume <thread_id> --enable tui_app_server --remote <ws_url>
+codex -c check_for_update_on_startup=false --enable tui_app_server --remote <ws_url>
 ```
 
 4. Record the TUI session briefly.
@@ -338,9 +341,10 @@ Use a fake app-server or existing `codex-app-server-canary` harness to assert:
 - prestart mode refuses ready-without-thread
 - launch-mode persistence round-trips `tui` and `detached_ui`
 - writer code never emits `headless`
-- resume attach argv contains `resume <thread_id> --enable tui_app_server
-  --remote <ws_url>`
-- process-scan detection matches `codex resume ... --remote <ws_url>`
+- managed TUI attach argv contains `--enable tui_app_server --remote <ws_url>`
+  without `resume <thread_id>`
+- process-scan detection matches `codex --remote <ws_url>` and still tolerates
+  older `codex resume ... --remote <ws_url>` processes for dogfood cleanup
 - protocol-shape failure evidence includes method name, redacted shape, and
   evidence path
 
@@ -389,7 +393,7 @@ artifacts. Release canaries should use a temporary cwd with synthetic files.
 2. Expand `validate-managed-codex-contract` or add a sibling target for source
    checks that forbid reintroducing packaged Codex runtimes, `--start-thread`,
    `longhouse-codex`, or writer-side `headless`.
-3. Add a manual/scripted managed TUI resume canary using an isolated home.
+3. Add a manual/scripted managed TUI attach canary using an isolated home.
 4. Wire Sauron release jobs to run source review plus behavioral canaries and
    emit Green/Yellow/Red output.
 5. Promote the fake app-server contract subset into normal CI once stable.
@@ -399,7 +403,7 @@ artifacts. Release canaries should use a temporary cwd with synthetic files.
 ## Open Questions
 
 - Should the raw fresh remote TUI warning canary ever become blocking, or stay
-  advisory when the managed resume contract passes?
+  advisory when the managed TUI attach contract passes?
 - Should model-invoking canaries run nightly, on every Codex release, or only
   manually? Default until decided: scheduled/manual only, not every cheap source
   review run.

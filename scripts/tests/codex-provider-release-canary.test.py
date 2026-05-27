@@ -31,14 +31,14 @@ import sys
 from pathlib import Path
 
 args = sys.argv[1:]
+log = os.environ.get("FAKE_CODEX_ARGS_LOG")
+if log:
+    Path(log).write_text(json.dumps(args), encoding="utf-8")
 if args == ["--version"]:
     print("codex 0.999.0")
     raise SystemExit(0)
 
 if "resume" in args:
-    log = os.environ.get("FAKE_CODEX_ARGS_LOG")
-    if log:
-        Path(log).write_text(json.dumps(args), encoding="utf-8")
     print("resume attached")
     raise SystemExit(0)
 
@@ -284,11 +284,12 @@ def test_full_fake_canary_can_go_green() -> None:
         for canary in payload["canaries"].values():
             assert canary["status"] == "pass"
 
-        resume_args = json.loads(fixture["codex_args"].read_text(encoding="utf-8"))
-        assert resume_args[:4] == ["-c", "check_for_update_on_startup=false", "resume", "thread_fake"]
-        assert "--enable" in resume_args
-        assert "tui_app_server" in resume_args
-        assert "--remote" in resume_args
+        attach_args = json.loads(fixture["codex_args"].read_text(encoding="utf-8"))
+        assert attach_args[:2] == ["-c", "check_for_update_on_startup=false"]
+        assert "resume" not in attach_args
+        assert "--enable" in attach_args
+        assert "tui_app_server" in attach_args
+        assert "--remote" in attach_args
 
         stop_lines = fixture["calls"].read_text(encoding="utf-8").splitlines()
         assert len(stop_lines) == 2
@@ -315,19 +316,19 @@ def test_raw_fresh_remote_warning_is_yellow() -> None:
         assert fingerprints["notifications"]["turn/completed"]["turn"]["status"] == "str"
 
 
-def test_managed_resume_active_thread_error_is_red() -> None:
+def test_managed_tui_attach_active_thread_error_is_red() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fixture = _fixture(root)
         result, payload = _run_canary(
             root,
             fixture,
-            ["--run-managed-resume", "--source-review-status", "pass"],
+            ["--run-managed-tui-attach", "--source-review-status", "pass"],
             {"FAKE_SCRIPT_RECORDING_TEXT": "■ No active thread is available.\n"},
         )
         assert result.returncode == 1
         assert payload["verdict"] == "red"
-        assert payload["failure_code"] == "managed_resume_active_thread_error"
+        assert payload["failure_code"] == "managed_tui_attach_active_thread_error"
 
 
 def test_forbidden_longhouse_codex_path_is_red() -> None:
@@ -391,7 +392,7 @@ def main() -> int:
     tests = [
         test_full_fake_canary_can_go_green,
         test_raw_fresh_remote_warning_is_yellow,
-        test_managed_resume_active_thread_error_is_red,
+        test_managed_tui_attach_active_thread_error_is_red,
         test_forbidden_longhouse_codex_path_is_red,
         test_longhouse_codex_bin_env_requires_explicit_override,
         test_release_artifact_can_use_upstream_version_without_local_binary_identity,

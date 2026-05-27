@@ -13,6 +13,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import uuid
 from datetime import UTC
 from datetime import datetime
@@ -427,10 +428,10 @@ def _start_bridge(
         raise RuntimeError("--api-url and --agents-token are required for managed bridge canaries")
 
     session_id = str(uuid.uuid4())
-    isolation_root = evidence_root / f"bridge-{launch_mode}-{session_id}"
+    isolation_root = Path(tempfile.mkdtemp(prefix=f"lhx-{launch_mode[:1]}-", dir="/tmp"))
     workspace = isolation_root / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
-    log_file = isolation_root / "bridge.log"
+    log_file = evidence_root / f"bridge-{launch_mode}-{session_id}.log"
 
     command = [
         engine,
@@ -527,8 +528,8 @@ def _record_terminal_session(
     return _run(wrapped, cwd=args.repo_root, timeout=args.tui_record_secs + 10)
 
 
-def run_managed_resume(args: argparse.Namespace, evidence_root: Path, codex_bin: str) -> dict[str, Any]:
-    root = evidence_root / "managed-resume"
+def run_managed_tui_attach(args: argparse.Namespace, evidence_root: Path, codex_bin: str) -> dict[str, Any]:
+    root = evidence_root / "managed-tui-attach"
     root.mkdir(parents=True, exist_ok=True)
     isolation_root: Path | None = None
     session_id: str | None = None
@@ -545,7 +546,7 @@ def run_managed_resume(args: argparse.Namespace, evidence_root: Path, codex_bin:
         state_file = Path(str(summary.get("state_file") or ""))
         if not thread_id or not ws_url or not state_file.exists():
             return _fail(
-                "managed_resume_incomplete_start",
+                "managed_tui_attach_incomplete_start",
                 "managed bridge start did not return ws_url, thread_id, and state_file",
                 evidence_root=str(root),
                 summary=summary,
@@ -554,19 +555,17 @@ def run_managed_resume(args: argparse.Namespace, evidence_root: Path, codex_bin:
         state = _read_json(state_file)
         if state.get("launch_mode") != "tui":
             return _fail(
-                "managed_resume_wrong_launch_mode",
+                "managed_tui_attach_wrong_launch_mode",
                 "managed TUI bridge did not persist launch_mode=tui",
                 evidence_root=str(root),
                 state=state,
             )
 
-        recording = root / "resume-tui.tty"
+        recording = root / "attach-tui.tty"
         terminal_command = [
             codex_bin,
             "-c",
             "check_for_update_on_startup=false",
-            "resume",
-            thread_id,
             "--enable",
             "tui_app_server",
             "--remote",
@@ -577,15 +576,15 @@ def run_managed_resume(args: argparse.Namespace, evidence_root: Path, codex_bin:
         recording_text = recording.read_text(encoding="utf-8", errors="replace") if recording.exists() else ""
         if tui_result.returncode not in (0, 124):
             return _fail(
-                "managed_resume_tui_failed",
-                "managed resume TUI recording command failed",
+                "managed_tui_attach_failed",
+                "managed TUI attach recording command failed",
                 evidence_root=str(root),
                 evidence=_command_evidence(tui_result),
             )
         if ACTIVE_THREAD_ERROR in recording_text:
             return _fail(
-                "managed_resume_active_thread_error",
-                f"managed resume attach showed: {ACTIVE_THREAD_ERROR}",
+                "managed_tui_attach_active_thread_error",
+                f"managed TUI attach showed: {ACTIVE_THREAD_ERROR}",
                 evidence_root=str(root),
                 recording=str(recording),
             )
@@ -598,7 +597,7 @@ def run_managed_resume(args: argparse.Namespace, evidence_root: Path, codex_bin:
             evidence_root=str(root),
         )
     except Exception as exc:  # noqa: BLE001 - canary artifact should keep failure evidence
-        return _fail("managed_resume_exception", str(exc), evidence_root=str(root))
+        return _fail("managed_tui_attach_exception", str(exc), evidence_root=str(root))
     finally:
         if session_id and isolation_root:
             stop = _stop_bridge(args, session_id, isolation_root)
@@ -704,7 +703,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--skip-static-contract", action="store_true")
     parser.add_argument("--run-fake-app-server", action="store_true")
     parser.add_argument("--run-raw-fresh-remote", action="store_true")
-    parser.add_argument("--run-managed-resume", action="store_true")
+    parser.add_argument("--run-managed-tui-attach", action="store_true")
     parser.add_argument("--run-detached-ui", action="store_true")
     parser.add_argument("--run-all-live", action="store_true")
     parser.add_argument(
@@ -739,7 +738,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.run_all_live:
         args.run_fake_app_server = True
         args.run_raw_fresh_remote = True
-        args.run_managed_resume = True
+        args.run_managed_tui_attach = True
         args.run_detached_ui = True
 
     canaries: dict[str, dict[str, Any]] = {}
@@ -765,10 +764,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.run_raw_fresh_remote
         else _status("not_run", reason="pass --run-raw-fresh-remote to exercise this canary")
     )
-    canaries["managed_resume"] = (
-        run_managed_resume(args, evidence_root, codex_bin)
-        if args.run_managed_resume
-        else _status("not_run", reason="pass --run-managed-resume to exercise this canary")
+    canaries["managed_tui_attach"] = (
+        run_managed_tui_attach(args, evidence_root, codex_bin)
+        if args.run_managed_tui_attach
+        else _status("not_run", reason="pass --run-managed-tui-attach to exercise this canary")
     )
     canaries["detached_ui"] = (
         run_detached_ui(args, evidence_root, codex_bin)

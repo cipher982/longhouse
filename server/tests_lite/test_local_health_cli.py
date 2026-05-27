@@ -577,7 +577,7 @@ def test_collect_local_health_degrades_for_blocked_provider_release(monkeypatch,
                 "codex": {
                     "status": "blocked",
                     "verdict": "red",
-                    "failure_code": "managed_resume_active_thread_error",
+                    "failure_code": "managed_tui_attach_active_thread_error",
                     "artifact_version": "0.133.0",
                     "current_version": "codex-cli 0.133.0",
                     "local_version_matches": True,

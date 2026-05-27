@@ -363,8 +363,6 @@ def _build_codex_attach_command(
         cmd += ["-c", f"model_reasoning_effort={model_reasoning_effort}"]
     if model:
         cmd += ["--model", model]
-    if thread_id:
-        cmd += ["resume", thread_id]
     if bypass_approvals:
         cmd.append("--dangerously-bypass-approvals-and-sandbox")
     cmd += ["--enable", "tui_app_server", "--remote", ws_url]
@@ -640,16 +638,14 @@ def _run_native_codex_tui(
     model_reasoning_effort: str | None = None,
     thread_id: str | None = None,
 ) -> int:
-    # Connect TUI to the bridge's app-server. When a thread_id is present, the
-    # TUI resumes the bridge-created thread instead of using Codex's fresh
-    # remote-TUI startup path.
+    # Connect TUI to the bridge's app-server. The bridge has already created the
+    # active thread; passing `resume <thread_id>` would make Codex resolve a
+    # local rollout file that may not exist for bridge-created sessions.
     cmd = [codex_bin, "-c", _CODEX_DISABLE_UPDATE_CHECK_CONFIG]
     if model_reasoning_effort:
         cmd += ["-c", f"model_reasoning_effort={model_reasoning_effort}"]
     if model:
         cmd += ["--model", model]
-    if thread_id:
-        cmd += ["resume", thread_id]
     if bypass_approvals:
         cmd.append("--dangerously-bypass-approvals-and-sandbox")
     cmd += ["--enable", "tui_app_server", "--remote", ws_url]
@@ -903,24 +899,24 @@ def codex(
     stop_error = None if keep_bridge_alive else bridge_stopper.stop(reason=_CODEX_STOP_REASON_TERMINAL_DISCONNECTED)
     if exit_code != 0:
         if keep_bridge_alive:
-            resume_thread_id = ""
+            attach_thread_id = ""
             state = _load_native_codex_bridge_state(state_file)
             if state is not None:
-                resume_thread_id = str(state.get("thread_id") or "").strip()
-            resume_cmd = _build_codex_attach_command(
+                attach_thread_id = str(state.get("thread_id") or "").strip()
+            attach_cmd = _build_codex_attach_command(
                 codex_bin=resolved_codex_bin,
                 ws_url=ws_url,
                 bypass_approvals=bypass_approvals,
                 model=model,
                 model_reasoning_effort=model_reasoning_effort,
                 session_id=result.session_id,
-                thread_id=resume_thread_id or None,
+                thread_id=attach_thread_id or None,
             )
             typer.secho(
-                "Auto-attach exited, but the managed Codex session is still running and resumable.",
+                "Auto-attach exited, but the managed Codex session is still running and reattachable.",
                 fg=typer.colors.YELLOW,
             )
-            typer.echo(f"Resume: {resume_cmd}")
+            typer.echo(f"Attach: {attach_cmd}")
             return
         _emit_warp_cli_agent_event(
             event="stop",
