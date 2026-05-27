@@ -622,13 +622,12 @@ def _invoke_antigravity_hook(
     config_dir: Path,
     payload: dict[str, Any],
 ) -> subprocess.CompletedProcess[str]:
-    from_env = {
+    hook_env = {
         "LONGHOUSE_HOOK_PYTHON": _hook_python(args),
         "LONGHOUSE_ENGINE": "/bin/true",
         "LONGHOUSE_MANAGED_SESSION_ID": session_id,
         "LONGHOUSE_ANTIGRAVITY_INBOX_DIR": str(_antigravity_inbox_dir(config_dir, session_id)),
         "LONGHOUSE_ANTIGRAVITY_STATE_DIR": str(_antigravity_state_dir(config_dir)),
-        "PATH": os.defpath,
     }
     return subprocess.run(
         [str(script), event],
@@ -636,7 +635,7 @@ def _invoke_antigravity_hook(
         text=True,
         capture_output=True,
         check=False,
-        env=from_env,
+        env=_runtime_env(args, hook_env),
         timeout=10,
     )
 

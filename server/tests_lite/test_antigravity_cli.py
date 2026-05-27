@@ -436,6 +436,32 @@ def test_antigravity_hook_derives_canonical_inbox_from_longhouse_home(tmp_path):
     assert json.loads(result.stdout) == {"injectSteps": [{"userMessage": "fallback inbox"}]}
 
 
+def test_antigravity_hook_reports_python_probe_failure(tmp_path):
+    plugin_root = antigravity_cli._ensure_antigravity_runtime_plugin(
+        config_dir=tmp_path / ".claude",
+        antigravity_cli_root=tmp_path / ".gemini" / "antigravity-cli",
+        engine_path="/bin/true",
+        global_hooks_path=tmp_path / ".gemini" / "config" / "hooks.json",
+    )
+    script = plugin_root / "longhouse-antigravity-hook.sh"
+
+    result = subprocess.run(
+        [str(script), "PreInvocation"],
+        input=json.dumps({"conversationId": "ag-provider-session"}),
+        text=True,
+        capture_output=True,
+        check=False,
+        env={
+            "LONGHOUSE_HOOK_PYTHON": str(tmp_path / "missing-python"),
+            "PATH": os.defpath,
+        },
+    )
+
+    assert result.returncode == 0
+    assert json.loads(result.stdout) == {"injectSteps": []}
+    assert "longhouse-antigravity-hook: python probe failed" in result.stderr
+
+
 def test_antigravity_channel_timeout_removes_unclaimed_message(tmp_path):
     runner = CliRunner()
     config_dir = tmp_path / ".claude"
