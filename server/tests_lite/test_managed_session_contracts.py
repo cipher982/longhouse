@@ -89,8 +89,10 @@ def test_contract_diagnostics_report_replaced_workspace(tmp_path: Path):
         control_kind="opencode_bridge",
     )
     write_managed_session_contract(contract, base_dir=tmp_path)
+    replacement = tmp_path / "replacement-repo"
+    replacement.mkdir()
     workspace.rmdir()
-    workspace.mkdir()
+    replacement.rename(workspace)
 
     diagnostics = collect_managed_session_contract_diagnostics(tmp_path)
 
