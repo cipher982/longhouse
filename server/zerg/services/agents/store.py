@@ -1630,6 +1630,8 @@ class AgentsStore:
                     session_obj.last_activity_at = latest_inserted_timestamp
                 from zerg.services.provisional_events import cleanup_bridge_transcript_preview_observations
 
+                # Projection supersession below owns UI correctness; raw observation
+                # cleanup is disk hygiene for large live-preview streams.
                 cleanup_bridge_transcript_preview_observations(
                     self.db,
                     session_ids=[session_id],

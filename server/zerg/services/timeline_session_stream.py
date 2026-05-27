@@ -330,6 +330,7 @@ def _load_live_preview_signatures(
             func.max(SessionLivePreview.preview_updated_at).label("preview_updated_at"),
         )
         .filter(SessionLivePreview.session_id.in_(session_ids))
+        .filter(SessionLivePreview.superseded_at.is_(None))
         .group_by(SessionLivePreview.session_id)
         .all()
     )
