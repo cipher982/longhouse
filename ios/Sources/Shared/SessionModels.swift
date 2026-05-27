@@ -2,60 +2,6 @@ import Foundation
 
 let transcriptSyncState = "syncing_transcript"
 
-enum RuntimeDisplayText {
-    private static let shellAliases: Set<String> = ["bash", "shell", "terminal"]
-
-    static func canonicalToolLabel(_ value: String?) -> String? {
-        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
-            return nil
-        }
-        if shellAliases.contains(value.lowercased()) {
-            return "Shell"
-        }
-        return value
-    }
-
-    static func canonicalDisplayText(_ value: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let running = canonicalPrefixedTool(in: trimmed, prefix: "Running ", outputPrefix: "Using ") {
-            return running
-        }
-        if let blocked = canonicalPrefixedTool(in: trimmed, prefix: "Blocked on ") {
-            return blocked
-        }
-        if let approval = canonicalPrefixedTool(in: trimmed, prefix: "Approval needed \u{2022} ") {
-            return approval
-        }
-        return trimmed
-    }
-
-    static func canonicalDisplayText(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let normalized = canonicalDisplayText(value)
-        return normalized.isEmpty ? nil : normalized
-    }
-
-    private static func canonicalPrefixedTool(in value: String, prefix: String, outputPrefix: String? = nil) -> String? {
-        guard value.lowercased().hasPrefix(prefix.lowercased()) else {
-            return nil
-        }
-        let tail = String(value.dropFirst(prefix.count))
-        guard let canonicalTail = canonicalToolPhrase(tail) else {
-            return value
-        }
-        return "\(outputPrefix ?? prefix)\(canonicalTail)"
-    }
-
-    private static func canonicalToolPhrase(_ value: String) -> String? {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if shellAliases.contains(trimmed.lowercased()) {
-            return "Shell"
-        }
-        return nil
-    }
-
-}
-
 /// Honest summarization state — mirrors backend `summary_status` field.
 /// Tiebreaker: ready > pending > failed > unavailable.
 enum SummaryStatus: String, Codable, Sendable, Hashable {
@@ -92,7 +38,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     let liveControlAvailable: Bool?
     let hostReattachAvailable: Bool?
     let replyToLiveSessionAvailable: Bool?
-    let runtimeDisplay: SessionRuntimeDisplay?
+    let runtimeDisplay: SessionRuntimeDisplay
     let timelineCard: TimelineCardPresentation?
 
     init(
@@ -120,7 +66,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         liveControlAvailable: Bool? = nil,
         hostReattachAvailable: Bool? = nil,
         replyToLiveSessionAvailable: Bool? = nil,
-        runtimeDisplay: SessionRuntimeDisplay? = nil,
+        runtimeDisplay: SessionRuntimeDisplay,
         timelineCard: TimelineCardPresentation? = nil
     ) {
         self.id = id
@@ -151,37 +97,17 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         self.timelineCard = timelineCard
     }
 
-    var isClosed: Bool {
-        if let lifecycle = runtimeDisplay?.lifecycle { return lifecycle == "closed" }
-        if status == "completed" { return true }
-        return false
-    }
+    var isClosed: Bool { runtimeDisplay.lifecycle == "closed" }
 
-    private var effectiveRuntimeState: String? {
-        if let runtimeDisplay { return runtimeDisplay.state }
-        return presenceState
-    }
-    var isBlocked: Bool { !isClosed && effectiveRuntimeState == "blocked" }
+    var isBlocked: Bool { !isClosed && runtimeDisplay.state == "blocked" }
     var isUserActive: Bool { userState == nil || userState == "active" }
     var needsAttention: Bool {
         if isClosed || !isUserActive { return false }
-        if let runtimeDisplay { return runtimeDisplay.needsAttention }
-        return isBlocked
+        return runtimeDisplay.needsAttention
     }
-    var isExecuting: Bool {
-        if isClosed { return false }
-        if let runtimeDisplay { return runtimeDisplay.isExecuting }
-        return false
-    }
-    var isIdle: Bool {
-        if isClosed { return true }
-        if let runtimeDisplay { return runtimeDisplay.isIdle }
-        return false
-    }
-    var runtimeTone: String {
-        if let tone = runtimeDisplay?.tone { return tone }
-        return isClosed ? "closed" : "inactive"
-    }
+    var isExecuting: Bool { !isClosed && runtimeDisplay.isExecuting }
+    var isIdle: Bool { isClosed || runtimeDisplay.isIdle }
+    var runtimeTone: String { runtimeDisplay.tone }
     var timelineAnchor: String? { timelineAnchorAt ?? lastActivityAt }
     var timelineBranchBadgeLabel: String? {
         guard let branch = gitBranch?.trimmingCharacters(in: .whitespacesAndNewlines), !branch.isEmpty else {
@@ -216,21 +142,9 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         return timelineCard?.ownership.tone ?? "neutral"
     }
 
-    private var isManaged: Bool {
-        if runtimeDisplay?.controlPath == "managed" { return true }
-        if runtimeDisplay?.controlPath == "unmanaged" { return false }
-        return liveControlAvailable == true || hostReattachAvailable == true || replyToLiveSessionAvailable == true
-    }
+    private var isManaged: Bool { runtimeDisplay.controlPath == "managed" }
 
-    var displayPhaseLabel: String {
-        if isClosed {
-            return "Closed"
-        }
-        if let phaseLabel = runtimeDisplay?.phaseLabel.trimmingCharacters(in: .whitespacesAndNewlines), !phaseLabel.isEmpty {
-            return RuntimeDisplayText.canonicalDisplayText(phaseLabel)
-        }
-        return "Inactive"
-    }
+    var displayPhaseLabel: String { runtimeDisplay.phaseLabel }
 
     var timelineStatusLabel: String {
         if let label = timelineCard?.status.label.trimmingCharacters(in: .whitespacesAndNewlines), !label.isEmpty {
@@ -393,9 +307,43 @@ struct SessionInputResponse: Codable, Sendable {
     }
 }
 
+extension SessionRuntimeDisplay {
+    /// Synthetic placeholder for SwiftUI previews and widget snapshot fixtures.
+    /// Production runtimeDisplay always comes from the server projection.
+    static func widgetPlaceholder(
+        state: String?,
+        phase: String,
+        tone: String,
+        lifecycle: String = "open"
+    ) -> SessionRuntimeDisplay {
+        SessionRuntimeDisplay(
+            truthTier: "none",
+            signalTier: "none",
+            state: state,
+            tone: tone,
+            headline: phase,
+            detail: nil,
+            phaseLabel: phase,
+            compactToolLabel: nil,
+            isLive: false,
+            isExecuting: false,
+            needsAttention: false,
+            isIdle: lifecycle == "closed",
+            isStalled: false,
+            isManagedLocalTruth: false,
+            hasSignal: false,
+            controlPath: "unmanaged",
+            activityRecency: "none",
+            lifecycle: lifecycle,
+            hostState: "unknown",
+            terminalReason: nil
+        )
+    }
+}
+
 struct SessionRuntimeDisplay: Codable, Hashable, Sendable {
     let truthTier: String
-    var signalTier: String? = nil
+    let signalTier: String
     let state: String?
     let tone: String
     let headline: String
@@ -406,12 +354,13 @@ struct SessionRuntimeDisplay: Codable, Hashable, Sendable {
     let isExecuting: Bool
     let needsAttention: Bool
     let isIdle: Bool
+    let isStalled: Bool
     let isManagedLocalTruth: Bool
     let hasSignal: Bool
-    let controlPath: String?
-    let activityRecency: String?
-    let lifecycle: String?
-    let hostState: String?
+    let controlPath: String
+    let activityRecency: String
+    let lifecycle: String
+    let hostState: String
     let terminalReason: String?
 }
 
@@ -439,6 +388,7 @@ struct SessionTranscriptPreview: Codable, Hashable, Sendable {
             toolInputJSON: nil,
             toolOutputText: nil,
             toolCallId: nil,
+            toolCallState: nil,
             timestamp: timestamp ?? "",
             inActiveContext: true,
             isHeadBranch: true,
@@ -507,7 +457,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     let homeLabel: String?
     let originLabel: String?
     let capabilities: SessionCapabilities
-    let runtimeDisplay: SessionRuntimeDisplay?
+    let runtimeDisplay: SessionRuntimeDisplay
     let loopMode: SessionLoopMode?
     var transcriptPreview: SessionTranscriptPreview? = nil
 
@@ -519,11 +469,7 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         loopMode ?? .manual
     }
 
-    var isClosed: Bool {
-        if let lifecycle = runtimeDisplay?.lifecycle { return lifecycle == "closed" }
-        if status == "completed" { return true }
-        return false
-    }
+    var isClosed: Bool { runtimeDisplay.lifecycle == "closed" }
 
     var canSendLive: Bool {
         if isClosed { return false }
@@ -564,17 +510,9 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         return !canSendLive && !capabilities.hostReattachAvailable
     }
 
-    var runtimePhaseState: String {
-        if let runtimeDisplay { return runtimeDisplay.state ?? "idle" }
-        return "idle"
-    }
+    var runtimePhaseState: String { runtimeDisplay.state ?? "idle" }
 
-    var runtimePhaseLabel: String {
-        if let phaseLabel = runtimeDisplay?.phaseLabel.trimmingCharacters(in: .whitespacesAndNewlines), !phaseLabel.isEmpty {
-            return RuntimeDisplayText.canonicalDisplayText(phaseLabel)
-        }
-        return "Inactive"
-    }
+    var runtimePhaseLabel: String { runtimeDisplay.phaseLabel }
 
     var controlHealthMessage: String? {
         if let disabledReason = capabilities.composerDisabledReason?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -626,33 +564,18 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         return placeholder
     }
 
-    var runtimeHeadline: String {
-        if let headline = runtimeDisplay?.headline.trimmingCharacters(in: .whitespacesAndNewlines), !headline.isEmpty {
-            return RuntimeDisplayText.canonicalDisplayText(headline)
-        }
-        if isControlOffline || isReadOnly { return runtimeCapabilityLabel }
-        return "Inactive"
-    }
+    var runtimeHeadline: String { runtimeDisplay.headline }
 
     var runtimeDetail: String? {
-        if let runtimeDisplay {
-            guard let detail = runtimeDisplay.detail?.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty else {
-                return nil
-            }
-            return RuntimeDisplayText.canonicalDisplayText(detail)
+        guard let detail = runtimeDisplay.detail?.trimmingCharacters(in: .whitespacesAndNewlines), !detail.isEmpty else {
+            return nil
         }
-        return controlHealthMessage
+        return detail
     }
 
-    var runtimeTone: String {
-        if let tone = runtimeDisplay?.tone { return tone }
-        return isClosed ? "closed" : "inactive"
-    }
+    var runtimeTone: String { runtimeDisplay.tone }
 
-    var isSessionExecuting: Bool {
-        if let runtimeDisplay { return runtimeDisplay.isExecuting }
-        return false
-    }
+    var isSessionExecuting: Bool { runtimeDisplay.isExecuting }
 
     func replacingTranscriptPreview(_ transcriptPreview: SessionTranscriptPreview?) -> SessionDetail {
         SessionDetail(
@@ -782,6 +705,12 @@ struct SessionInputOrigin: Codable, Hashable, Sendable {
     let clientRequestId: String?
 }
 
+enum ToolCallState: String, Codable, Hashable, Sendable, CaseIterable {
+    case running
+    case completed
+    case dropped
+}
+
 struct SessionEvent: Codable, Identifiable, Sendable {
     let id: Int
     let role: String
@@ -790,6 +719,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
     let toolInputJSON: [String: JSONValue]?
     let toolOutputText: String?
     let toolCallId: String?
+    let toolCallState: ToolCallState?
     let timestamp: String
     let inActiveContext: Bool
     let isHeadBranch: Bool
@@ -803,6 +733,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         case toolInputJSON = "toolInputJson"
         case toolOutputText
         case toolCallId
+        case toolCallState
         case timestamp
         case inActiveContext
         case isHeadBranch

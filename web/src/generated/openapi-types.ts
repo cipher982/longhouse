@@ -4797,7 +4797,7 @@ export interface components {
             /** @description Canonical session capability flags */
             capabilities: components["schemas"]["SessionCapabilitiesResponse"];
             /** @description Server-derived display state for clients */
-            runtime_display?: components["schemas"]["SessionRuntimeDisplayResponse"] | null;
+            runtime_display: components["schemas"]["SessionRuntimeDisplayResponse"];
             /**
              * @description Session loop mode: assist|autopilot
              * @default assist
@@ -4819,6 +4819,11 @@ export interface components {
              */
             last_refresh: string;
         };
+        /**
+         * ActivityRecency
+         * @enum {string}
+         */
+        ActivityRecency: "live" | "recent" | "stale" | "none";
         /**
          * AdminUserDetailResponse
          * @description Response for GET /api/admin/users/{id}/usage.
@@ -5418,6 +5423,11 @@ export interface components {
             seccomp_profile: string | null;
         };
         /**
+         * ControlPath
+         * @enum {string}
+         */
+        ControlPath: "managed" | "unmanaged";
+        /**
          * CreateTokenRequest
          * @description Request to create a new device token.
          */
@@ -5844,6 +5854,8 @@ export interface components {
              * @description Durable event id that replaced this provisional event
              */
             reconciled_event_id?: number | null;
+            /** @description Lifecycle of an assistant tool call: running|completed|dropped. Set only on assistant events that have tool_name. Server-authoritative. */
+            tool_call_state?: components["schemas"]["ToolCallState"] | null;
         };
         /**
          * EventsListResponse
@@ -6061,6 +6073,11 @@ export interface components {
             sessions_sequence?: number | null;
         };
         /**
+         * HostState
+         * @enum {string}
+         */
+        HostState: "online" | "stale" | "offline" | "unknown";
+        /**
          * HostedGmailConnectHandoffPayload
          * @description Payload the control plane sends after Gmail OAuth succeeds.
          */
@@ -6242,6 +6259,11 @@ export interface components {
             /** P95 */
             p95: number;
         };
+        /**
+         * Lifecycle
+         * @enum {string}
+         */
+        Lifecycle: "open" | "closed" | "unknown";
         /**
          * MCPServerAddRequest
          * @description Request model for adding an MCP server.
@@ -6930,6 +6952,11 @@ export interface components {
             /** Dedupe Key */
             dedupe_key?: string | null;
         };
+        /**
+         * PresenceState
+         * @enum {string}
+         */
+        PresenceState: "thinking" | "running" | "idle" | "needs_user" | "blocked" | "stalled" | "syncing_transcript";
         /** ProductHealthCheckEvidenceRefResponse */
         ProductHealthCheckEvidenceRefResponse: {
             /** Kind */
@@ -9157,27 +9184,14 @@ export interface components {
         };
         /** SessionRuntimeDisplayResponse */
         SessionRuntimeDisplayResponse: {
-            /**
-             * Truth Tier
-             * @description Runtime truth tier: none|stale|fresh|managed-local
-             */
-            truth_tier: string;
-            /**
-             * Signal Tier
-             * @description Strongest source signal tier: phase_signal|process_binding|transcript_progress|none
-             * @default none
-             */
-            signal_tier: string;
-            /**
-             * State
-             * @description Canonical presence state when known
-             */
-            state?: string | null;
-            /**
-             * Tone
-             * @description Stable visual tone for clients
-             */
-            tone: string;
+            /** @description Runtime truth tier */
+            truth_tier: components["schemas"]["TruthTier"];
+            /** @description Strongest source signal tier */
+            signal_tier: components["schemas"]["SignalTier"];
+            /** @description Canonical presence state, or null when unknown */
+            state: components["schemas"]["PresenceState"] | null;
+            /** @description Stable visual tone for clients */
+            tone: components["schemas"]["Tone"];
             /**
              * Headline
              * @description Primary user-facing runtime label
@@ -9185,9 +9199,9 @@ export interface components {
             headline: string;
             /**
              * Detail
-             * @description Secondary user-facing runtime label
+             * @description Secondary user-facing runtime label, or null
              */
-            detail?: string | null;
+            detail: string | null;
             /**
              * Phase Label
              * @description Compact phase label for cards and strips
@@ -9195,80 +9209,54 @@ export interface components {
             phase_label: string;
             /**
              * Compact Tool Label
-             * @description Normalized tool label for display
+             * @description Normalized tool label for display, or null
              */
-            compact_tool_label?: string | null;
+            compact_tool_label: string | null;
             /**
              * Is Live
              * @description True when the session is actively executing
-             * @default false
              */
             is_live: boolean;
             /**
              * Is Executing
              * @description True when the agent is thinking or running a tool
-             * @default false
              */
             is_executing: boolean;
             /**
              * Needs Attention
              * @description True when the user should respond or approve
-             * @default false
              */
             needs_attention: boolean;
             /**
              * Is Idle
              * @description True when the runtime is waiting for another turn
-             * @default false
              */
             is_idle: boolean;
             /**
              * Is Stalled
              * @description True when a provider explicitly reports stalled state
-             * @default false
              */
             is_stalled: boolean;
             /**
              * Is Managed Local Truth
              * @description True when runtime truth is from a managed-local control path
-             * @default false
              */
             is_managed_local_truth: boolean;
             /**
              * Has Signal
              * @description True when clients should render runtime state
-             * @default false
              */
             has_signal: boolean;
-            /**
-             * Control Path
-             * @description Does Longhouse own a control path? 'managed' or 'unmanaged'
-             * @default unmanaged
-             */
-            control_path: string;
-            /**
-             * Activity Recency
-             * @description How recently we heard from this session: 'live' | 'recent' | 'stale' | 'none'
-             * @default none
-             */
-            activity_recency: string;
-            /**
-             * Lifecycle
-             * @description Session lifecycle: 'open' | 'closed' | 'unknown'. Closed only with ground truth.
-             * @default open
-             */
-            lifecycle: string;
-            /**
-             * Host State
-             * @description Host/machine verifiability: 'online' | 'stale' | 'offline' | 'unknown'
-             * @default unknown
-             */
-            host_state: string;
-            /**
-             * Terminal Reason
-             * @description Why the session is closed, when lifecycle=='closed'
-             */
-            terminal_reason?: string | null;
+            /** @description Does Longhouse own a control path? */
+            control_path: components["schemas"]["ControlPath"];
+            /** @description How recently we heard from this session */
+            activity_recency: components["schemas"]["ActivityRecency"];
+            /** @description Session lifecycle. Closed only with ground truth. */
+            lifecycle: components["schemas"]["Lifecycle"];
+            /** @description Host/machine verifiability */
+            host_state: components["schemas"]["HostState"];
+            /** @description Why the session is closed (when lifecycle=='closed'), else null */
+            terminal_reason: components["schemas"]["TerminalReason"] | null;
         };
         /**
          * SessionSummaryResponse
@@ -9585,6 +9573,11 @@ export interface components {
             total: number;
         };
         /**
+         * SignalTier
+         * @enum {string}
+         */
+        SignalTier: "none" | "phase_signal" | "process_binding" | "transcript_progress";
+        /**
          * SkillCommandResponse
          * @description User-invocable skill command.
          */
@@ -9892,6 +9885,11 @@ export interface components {
             /** Requires Password */
             requires_password: boolean;
         };
+        /**
+         * TerminalReason
+         * @enum {string}
+         */
+        TerminalReason: "session_ended" | "user_closed" | "process_gone" | "host_expired" | "provider_signal";
         /** Thread */
         Thread: {
             /** Title */
@@ -10241,6 +10239,26 @@ export interface components {
             is_valid: boolean;
         };
         /**
+         * Tone
+         * @enum {string}
+         */
+        Tone: "stalled" | "blocked" | "running" | "thinking" | "idle" | "active" | "inactive" | "closed";
+        /**
+         * ToolCallState
+         * @description Per-event projection of tool-call lifecycle for assistant tool events.
+         *
+         *     Computed server-side from event pairings + session lifecycle. Clients must
+         *     not re-derive this; the server is authoritative.
+         *
+         *     - ``running``: assistant tool call is awaiting its result and the session
+         *       is still active and recent.
+         *     - ``completed``: a paired tool result has been observed.
+         *     - ``dropped``: the result will never arrive (session is closed, or the
+         *       call is older than the dropped-tool age threshold).
+         * @enum {string}
+         */
+        ToolCallState: "running" | "completed" | "dropped";
+        /**
          * TopAutomationUsage
          * @description Automation usage stats for user detail view.
          */
@@ -10301,6 +10319,11 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /**
+         * TruthTier
+         * @enum {string}
+         */
+        TruthTier: "none" | "stale" | "fresh" | "managed-local";
         /** TurnLatencyPercentilesResponse */
         TurnLatencyPercentilesResponse: {
             /** P50 */

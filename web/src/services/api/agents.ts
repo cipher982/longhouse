@@ -7,6 +7,7 @@
 
 import { buildUrl, request } from "./base";
 import type { RemoteLaunchErrorCode } from "./launch";
+import type { components } from "../../generated/openapi-types";
 
 const TIMELINE_API_PREFIX = "/timeline";
 const TIMELINE_SESSIONS_PREFIX = `${TIMELINE_API_PREFIX}/sessions`;
@@ -87,46 +88,17 @@ export interface SessionTranscriptPreview {
   stale_reason?: "freshness_window_expired" | "missing_preview_timestamp" | "superseded_by_durable" | null;
 }
 
-export interface SessionRuntimeDisplay {
-  truth_tier: "none" | "stale" | "fresh" | "managed-local" | (string & {});
-  signal_tier?: "phase_signal" | "process_binding" | "transcript_progress" | "none" | (string & {});
-  state: PresenceState | null;
-  tone:
-    | "inactive"
-    | "thinking"
-    | "running"
-    | "blocked"
-    | "stalled"
-    | "idle"
-    | "closed"
-    | "active"
-    | (string & {});
-  headline: string;
-  detail: string | null;
-  phase_label: string;
-  compact_tool_label: string | null;
-  is_live: boolean;
-  is_executing: boolean;
-  needs_attention: boolean;
-  is_idle: boolean;
-  is_stalled: boolean;
-  is_managed_local_truth: boolean;
-  has_signal: boolean;
-  control_path?: "managed" | "unmanaged" | (string & {});
-  activity_recency?: "live" | "recent" | "stale" | "none" | (string & {});
-  lifecycle?: "open" | "closed" | "unknown" | (string & {});
-  host_state?: "online" | "stale" | "offline" | "unknown" | (string & {});
-  terminal_reason?:
-    | "provider_signal"
-    | "process_gone"
-    | "host_expired"
-    | "user_closed"
-    | "host_reported"
-    | "bridge_stop"
-    | "terminal_disconnected"
-    | null
-    | (string & {});
-}
+export type RuntimeTruthTier = components["schemas"]["TruthTier"];
+export type RuntimeSignalTier = components["schemas"]["SignalTier"];
+export type RuntimeTone = components["schemas"]["Tone"];
+export type RuntimeControlPath = components["schemas"]["ControlPath"];
+export type RuntimeActivityRecency = components["schemas"]["ActivityRecency"];
+export type RuntimeLifecycle = components["schemas"]["Lifecycle"];
+export type RuntimeHostState = components["schemas"]["HostState"];
+export type RuntimeTerminalReason = components["schemas"]["TerminalReason"];
+
+export type SessionRuntimeDisplay =
+  components["schemas"]["SessionRuntimeDisplayResponse"];
 
 export interface TimelineBadgePresentation {
   label: string;
@@ -310,14 +282,7 @@ export type AgentSessionStatus =
   | "completed"
   | "active";
 
-export type PresenceState =
-  | "thinking"
-  | "running"
-  | "idle"
-  | "needs_user"
-  | "blocked"
-  | "stalled"
-  | (string & {});
+export type PresenceState = components["schemas"]["PresenceState"];
 
 export type UserStateAction = "park" | "snooze" | "archive" | "resume";
 export type SessionLoopMode = "assist" | "autopilot";
@@ -337,6 +302,7 @@ export interface AgentEvent {
   tool_input_json: Record<string, unknown> | null;
   tool_output_text: string | null;
   tool_call_id: string | null;
+  tool_call_state?: "running" | "completed" | "dropped" | null;
   timestamp: string;
   in_active_context?: boolean;
   branch_id?: number | null;

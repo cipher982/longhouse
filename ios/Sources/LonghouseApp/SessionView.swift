@@ -166,7 +166,6 @@ struct SessionView: View {
             WebTranscriptView(
                 items: viewModel.items,
                 submittedInputs: viewModel.submittedInputs,
-                sessionEnded: viewModel.isSessionEnded,
                 errorMessage: viewModel.errorMessage,
                 onNearTop: {
                     Task { await viewModel.loadOlder(sessionId: sessionId, appState: appState) }
@@ -1053,14 +1052,26 @@ final class SessionViewModel: ObservableObject {
     private func startVisiblePolling(sessionId: String, appState: AppState) {
         pollTask?.cancel()
         pollTask = Task { [weak self] in
+            var ticks = 0
             while !Task.isCancelled {
-                // Fallback-only: poll at 5s when SSE is disconnected. Skip when
-                // SSE is live since pushes drive updates directly.
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
                 if Task.isCancelled { break }
-                let connected = await MainActor.run { self?.streamConnected ?? false }
-                if connected { continue }
-                await self?.pollTick(sessionId: sessionId, appState: appState)
+                ticks += 1
+                let (connected, hasRunningTool) = await MainActor.run {
+                    (
+                        self?.streamConnected ?? false,
+                        self?.lastWorkspaceEvents.contains { $0.toolCallState == .running } ?? false,
+                    )
+                }
+                // Fast fallback when SSE is down. When SSE is up, the server
+                // flips unpaired tool calls to "dropped" lazily on read, so
+                // re-ask every ~60s while a running tool exists to keep
+                // tool_call_state honest if the stream stays quiet.
+                if !connected {
+                    await self?.pollTick(sessionId: sessionId, appState: appState)
+                } else if hasRunningTool, ticks % 12 == 0 {
+                    await self?.pollTick(sessionId: sessionId, appState: appState)
+                }
             }
         }
     }
@@ -1383,12 +1394,23 @@ final class SessionViewModel: ObservableObject {
 
     var liveActivityFingerprint: String {
         guard let detail else { return "" }
+        let rd = detail.runtimeDisplay
         return [
             detail.id,
             detail.displayTitle,
-            detail.presenceState ?? "",
-            detail.status ?? "",
-            detail.presenceTool ?? "",
+            rd.state ?? "",
+            rd.tone,
+            rd.headline,
+            rd.phaseLabel,
+            rd.compactToolLabel ?? "",
+            rd.lifecycle,
+            rd.controlPath,
+            rd.activityRecency,
+            rd.hostState,
+            String(rd.isLive),
+            String(rd.isExecuting),
+            String(rd.needsAttention),
+            String(rd.isStalled),
             detail.project ?? "",
             detail.provider,
         ].joined(separator: "|")

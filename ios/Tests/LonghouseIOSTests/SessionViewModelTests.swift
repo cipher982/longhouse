@@ -558,7 +558,29 @@ struct SessionViewModelTests {
               "host_reattach_available": true,
               "reply_to_live_session_available": true
             },
-            "loop_mode": "assist"\(transcriptPreviewField)
+            "runtime_display": {
+            "truth_tier": "fresh",
+            "signal_tier": "none",
+            "state": null,
+            "tone": "inactive",
+            "headline": "Inactive",
+            "detail": null,
+            "phase_label": "Inactive",
+            "compact_tool_label": null,
+            "is_live": false,
+            "is_executing": false,
+            "needs_attention": false,
+            "is_idle": true,
+            "is_stalled": false,
+            "is_managed_local_truth": false,
+            "has_signal": false,
+            "control_path": "unmanaged",
+            "activity_recency": "none",
+            "lifecycle": "open",
+            "host_state": "unknown",
+            "terminal_reason": null
+          },
+          "loop_mode": "assist"\(transcriptPreviewField)
           },
           "thread": {
             "root_session_id": "session-1",
@@ -623,6 +645,7 @@ struct SessionViewModelTests {
             toolInputJSON: nil,
             toolOutputText: nil,
             toolCallId: nil,
+            toolCallState: nil,
             timestamp: "2026-05-02T20:00:00Z",
             inActiveContext: true,
             isHeadBranch: true,

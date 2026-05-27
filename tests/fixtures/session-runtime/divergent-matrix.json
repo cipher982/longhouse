@@ -1,0 +1,311 @@
+{
+  "name": "divergent-matrix",
+  "description": "The five scenarios where web and iOS historically disagreed. Inputs mirror the server runtime_display snapshots in server/tests_lite/runtime_display_snapshots/. Both clients should render the same expectation values for the same projection.",
+  "cases": [
+    {
+      "name": "01-managed-control-bridge-detached",
+      "session": {
+        "id": "fixture-01-managed-detached",
+        "title": "Managed, control bridge detached",
+        "presence_state": "unknown",
+        "provider": "codex",
+        "project": "zerg",
+        "last_activity_at": "2026-04-26T11:30:00Z",
+        "status": "idle",
+        "user_state": "active",
+        "capabilities": {
+          "live_control_available": false,
+          "host_reattach_available": true,
+          "reply_to_live_session_available": false
+        },
+        "runtime_display": {
+          "truth_tier": "stale",
+          "signal_tier": "phase_signal",
+          "state": null,
+          "tone": "inactive",
+          "headline": "Not connected",
+          "detail": null,
+          "phase_label": "Inactive",
+          "compact_tool_label": null,
+          "is_live": false,
+          "is_executing": false,
+          "needs_attention": false,
+          "is_idle": false,
+          "is_stalled": false,
+          "is_managed_local_truth": false,
+          "has_signal": true,
+          "control_path": "managed",
+          "activity_recency": "stale",
+          "lifecycle": "open",
+          "host_state": "offline",
+          "terminal_reason": null
+        },
+        "timeline_card": {
+          "ownership": {"label": "Managed", "tone": "neutral"},
+          "status": {
+            "label": "Not connected",
+            "tone": "inactive",
+            "seen_at": "2026-04-26T11:30:00Z",
+            "seen_at_prefix": "Last seen"
+          },
+          "border_tone": "inactive"
+        }
+      },
+      "expectations": {
+        "management_label": "Managed",
+        "status_label": "Not connected",
+        "status_tone": "inactive",
+        "display_phase_label": "Inactive",
+        "runtime_headline": "Not connected",
+        "runtime_detail": null,
+        "runtime_tone": "inactive",
+        "seen_at": "2026-04-26T11:30:00Z",
+        "seen_at_prefix": "Last seen"
+      }
+    },
+    {
+      "name": "02-managed-orphan-bridge-phase-fresh",
+      "session": {
+        "id": "fixture-02-managed-orphan-fresh",
+        "title": "Managed bridge online, phase fresh",
+        "presence_state": "running",
+        "provider": "codex",
+        "project": "zerg",
+        "last_activity_at": "2026-04-26T11:50:00Z",
+        "status": "active",
+        "user_state": "active",
+        "capabilities": {
+          "live_control_available": true,
+          "host_reattach_available": true,
+          "reply_to_live_session_available": true
+        },
+        "runtime_display": {
+          "truth_tier": "managed-local",
+          "signal_tier": "phase_signal",
+          "state": "running",
+          "tone": "running",
+          "headline": "Working",
+          "detail": "Using Shell",
+          "phase_label": "Using Shell",
+          "compact_tool_label": "Shell",
+          "is_live": true,
+          "is_executing": true,
+          "needs_attention": false,
+          "is_idle": false,
+          "is_stalled": false,
+          "is_managed_local_truth": true,
+          "has_signal": true,
+          "control_path": "managed",
+          "activity_recency": "live",
+          "lifecycle": "open",
+          "host_state": "online",
+          "terminal_reason": null
+        },
+        "timeline_card": {
+          "ownership": {"label": "Managed", "tone": "neutral"},
+          "status": {
+            "label": "Using Shell",
+            "tone": "running",
+            "seen_at": "2026-04-26T11:55:00Z",
+            "seen_at_prefix": "Updated"
+          },
+          "border_tone": "running"
+        }
+      },
+      "expectations": {
+        "management_label": "Managed",
+        "status_label": "Using Shell",
+        "status_tone": "running",
+        "display_phase_label": "Using Shell",
+        "runtime_headline": "Working",
+        "runtime_detail": "Using Shell",
+        "runtime_tone": "running",
+        "seen_at": "2026-04-26T11:55:00Z",
+        "seen_at_prefix": "Updated"
+      }
+    },
+    {
+      "name": "03-unmanaged-process-gone",
+      "session": {
+        "id": "fixture-03-unmanaged-process-gone",
+        "title": "Unmanaged, process_gone",
+        "presence_state": "unknown",
+        "provider": "claude",
+        "project": "zerg",
+        "last_activity_at": "2026-04-26T11:00:00Z",
+        "status": "idle",
+        "user_state": "active",
+        "capabilities": {
+          "live_control_available": false,
+          "host_reattach_available": false,
+          "reply_to_live_session_available": false
+        },
+        "runtime_display": {
+          "truth_tier": "stale",
+          "signal_tier": "process_binding",
+          "state": null,
+          "tone": "closed",
+          "headline": "Closed",
+          "detail": null,
+          "phase_label": "Closed",
+          "compact_tool_label": null,
+          "is_live": false,
+          "is_executing": false,
+          "needs_attention": false,
+          "is_idle": true,
+          "is_stalled": false,
+          "is_managed_local_truth": false,
+          "has_signal": true,
+          "control_path": "unmanaged",
+          "activity_recency": "stale",
+          "lifecycle": "closed",
+          "host_state": "unknown",
+          "terminal_reason": "process_gone"
+        },
+        "timeline_card": {
+          "ownership": {"label": "Unmanaged", "tone": "neutral"},
+          "status": {
+            "label": "Closed",
+            "tone": "closed",
+            "seen_at": "2026-04-26T11:00:00Z",
+            "seen_at_prefix": "Closed"
+          },
+          "border_tone": "closed"
+        }
+      },
+      "expectations": {
+        "management_label": "Unmanaged",
+        "status_label": "Closed",
+        "status_tone": "closed",
+        "display_phase_label": "Closed",
+        "runtime_headline": "Closed",
+        "runtime_detail": null,
+        "runtime_tone": "closed",
+        "seen_at": "2026-04-26T11:00:00Z",
+        "seen_at_prefix": "Closed"
+      }
+    },
+    {
+      "name": "04-host-stale-pre-process-gone",
+      "session": {
+        "id": "fixture-04-host-stale",
+        "title": "Managed, host stale",
+        "presence_state": "unknown",
+        "provider": "codex",
+        "project": "zerg",
+        "last_activity_at": "2026-04-26T11:30:00Z",
+        "status": "idle",
+        "user_state": "active",
+        "capabilities": {
+          "live_control_available": false,
+          "host_reattach_available": true,
+          "reply_to_live_session_available": false
+        },
+        "runtime_display": {
+          "truth_tier": "stale",
+          "signal_tier": "phase_signal",
+          "state": null,
+          "tone": "inactive",
+          "headline": "Not connected",
+          "detail": null,
+          "phase_label": "Inactive",
+          "compact_tool_label": null,
+          "is_live": false,
+          "is_executing": false,
+          "needs_attention": false,
+          "is_idle": false,
+          "is_stalled": false,
+          "is_managed_local_truth": false,
+          "has_signal": true,
+          "control_path": "managed",
+          "activity_recency": "stale",
+          "lifecycle": "open",
+          "host_state": "stale",
+          "terminal_reason": null
+        },
+        "timeline_card": {
+          "ownership": {"label": "Managed", "tone": "neutral"},
+          "status": {
+            "label": "Not connected",
+            "tone": "inactive",
+            "seen_at": "2026-04-26T11:30:00Z",
+            "seen_at_prefix": "Last seen"
+          },
+          "border_tone": "inactive"
+        }
+      },
+      "expectations": {
+        "management_label": "Managed",
+        "status_label": "Not connected",
+        "status_tone": "inactive",
+        "display_phase_label": "Inactive",
+        "runtime_headline": "Not connected",
+        "runtime_detail": null,
+        "runtime_tone": "inactive",
+        "seen_at": "2026-04-26T11:30:00Z",
+        "seen_at_prefix": "Last seen"
+      }
+    },
+    {
+      "name": "05-expired-running-with-process",
+      "session": {
+        "id": "fixture-05-expired-running",
+        "title": "Expired but process running",
+        "presence_state": "unknown",
+        "provider": "claude",
+        "project": "zerg",
+        "last_activity_at": "2026-04-26T11:50:00Z",
+        "status": "active",
+        "user_state": "active",
+        "capabilities": {
+          "live_control_available": false,
+          "host_reattach_available": false,
+          "reply_to_live_session_available": false
+        },
+        "runtime_display": {
+          "truth_tier": "stale",
+          "signal_tier": "process_binding",
+          "state": null,
+          "tone": "inactive",
+          "headline": "Active",
+          "detail": null,
+          "phase_label": "Process running",
+          "compact_tool_label": null,
+          "is_live": false,
+          "is_executing": false,
+          "needs_attention": false,
+          "is_idle": false,
+          "is_stalled": false,
+          "is_managed_local_truth": false,
+          "has_signal": true,
+          "control_path": "unmanaged",
+          "activity_recency": "live",
+          "lifecycle": "unknown",
+          "host_state": "online",
+          "terminal_reason": "host_expired"
+        },
+        "timeline_card": {
+          "ownership": {"label": "Unmanaged", "tone": "neutral"},
+          "status": {
+            "label": "Process running",
+            "tone": "inactive",
+            "seen_at": "2026-04-26T11:50:00Z",
+            "seen_at_prefix": "Last seen"
+          },
+          "border_tone": "inactive"
+        }
+      },
+      "expectations": {
+        "management_label": "Unmanaged",
+        "status_label": "Process running",
+        "status_tone": "inactive",
+        "display_phase_label": "Process running",
+        "runtime_headline": "Active",
+        "runtime_detail": null,
+        "runtime_tone": "inactive",
+        "seen_at": "2026-04-26T11:50:00Z",
+        "seen_at_prefix": "Last seen"
+      }
+    }
+  ]
+}

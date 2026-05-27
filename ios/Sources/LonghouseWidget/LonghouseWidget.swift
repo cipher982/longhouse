@@ -19,8 +19,26 @@ struct SessionEntry: TimelineEntry {
     static let placeholder = SessionEntry(
         date: .now,
         sessions: [
-            SessionSummary(id: "1", title: "Debugging Codex Launch Path Bug", presenceState: "thinking", provider: "codex", project: "zerg", lastActivityAt: nil, status: "working"),
-            SessionSummary(id: "2", title: "Simple Arithmetic Calculation", presenceState: "idle", provider: "antigravity", project: "antigravity", lastActivityAt: nil, status: "completed"),
+            SessionSummary(
+                id: "1",
+                title: "Debugging Codex Launch Path Bug",
+                presenceState: "thinking",
+                provider: "codex",
+                project: "zerg",
+                lastActivityAt: nil,
+                status: "working",
+                runtimeDisplay: SessionRuntimeDisplay.widgetPlaceholder(state: "thinking", phase: "Thinking", tone: "thinking")
+            ),
+            SessionSummary(
+                id: "2",
+                title: "Simple Arithmetic Calculation",
+                presenceState: "idle",
+                provider: "antigravity",
+                project: "antigravity",
+                lastActivityAt: nil,
+                status: "completed",
+                runtimeDisplay: SessionRuntimeDisplay.widgetPlaceholder(state: nil, phase: "Closed", tone: "closed", lifecycle: "closed")
+            ),
         ],
         totalActive: 2,
         isPlaceholder: true,

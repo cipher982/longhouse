@@ -2557,6 +2557,34 @@ class AgentsStore:
         stmt = stmt.limit(limit).offset(offset)
         return list(self.db.execute(stmt).scalars().all())
 
+    def get_session_tool_call_events(
+        self,
+        session_id: UUID,
+        *,
+        branch_mode: str = "head",
+    ) -> List[AgentEvent]:
+        """Return tool-call/result events for the full session, ordered.
+
+        Used to project per-event tool_call_state authoritatively across the
+        whole ledger rather than the visible page. Only assistant tool calls
+        and role=tool events are returned — non-tool events are not relevant
+        to pairing.
+        """
+        stmt = (
+            select(AgentEvent)
+            .where(AgentEvent.session_id == session_id)
+            .where(visible_transcript_event_predicate())
+            .where(
+                or_(
+                    and_(AgentEvent.role == "assistant", AgentEvent.tool_name.isnot(None)),
+                    AgentEvent.role == "tool",
+                )
+            )
+            .order_by(AgentEvent.timestamp, AgentEvent.id)
+        )
+        stmt = self._apply_branch_mode_filter(stmt, session_id, branch_mode)
+        return list(self.db.execute(stmt).scalars().all())
+
     def count_session_events(
         self,
         session_id: UUID,

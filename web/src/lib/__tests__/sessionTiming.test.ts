@@ -37,8 +37,30 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     control: null,
     capabilities: null,
     loop_mode: "assist",
+    runtime_display: {
+      truth_tier: "none",
+      signal_tier: "none",
+      state: null,
+      tone: "inactive",
+      headline: "Inactive",
+      detail: null,
+      phase_label: "Inactive",
+      compact_tool_label: null,
+      is_live: false,
+      is_executing: false,
+      needs_attention: false,
+      is_idle: true,
+      is_stalled: false,
+      is_managed_local_truth: false,
+      has_signal: false,
+      control_path: "unmanaged",
+      activity_recency: "stale",
+      lifecycle: "open",
+      host_state: null,
+      terminal_reason: null,
+    },
     ...overrides,
-  };
+  } as AgentSession;
 }
 
 function makeTurn(overrides: Partial<AgentSessionTurn> = {}): AgentSessionTurn {

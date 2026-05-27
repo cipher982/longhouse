@@ -11,6 +11,7 @@ import logging
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from enum import Enum
 from typing import Any
 from typing import Dict
 from typing import List
@@ -46,12 +47,21 @@ from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
 from zerg.services.session_launch_lifecycle import project_remote_launch_lifecycle
 from zerg.services.session_liveness_facts import build_session_liveness_facts
 from zerg.services.session_runner_state import managed_runner_host_state
+from zerg.services.session_runtime import EXPLICIT_CLOSED_TERMINAL_STATES
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime import build_fallback_runtime_view
 from zerg.services.session_runtime import should_include_runtime_view
 from zerg.services.session_runtime_display import TRANSCRIPT_SYNC_STATE
+from zerg.services.session_runtime_display import ActivityRecency
+from zerg.services.session_runtime_display import ControlPath
+from zerg.services.session_runtime_display import HostState
+from zerg.services.session_runtime_display import Lifecycle
+from zerg.services.session_runtime_display import PresenceState
+from zerg.services.session_runtime_display import SignalTier
+from zerg.services.session_runtime_display import TerminalReason
+from zerg.services.session_runtime_display import Tone
+from zerg.services.session_runtime_display import TruthTier
 from zerg.services.session_runtime_display import build_session_runtime_display
-from zerg.services.session_runtime_display import compact_runtime_tool_label
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.session_loop_mode import coerce_session_loop_mode
 from zerg.utils.time import UTCBaseModel
@@ -63,6 +73,7 @@ _LAUNCH_ATTEMPT_MISSING = object()
 PROVISIONAL_TRANSCRIPT_PARTIAL_FRESHNESS = timedelta(minutes=2)
 PROVISIONAL_TRANSCRIPT_COMPLETE_FRESHNESS = timedelta(minutes=10)
 MOBILE_TOOL_OUTPUT_MAX_CHARS = 2000
+DROPPED_TOOL_AGE = timedelta(hours=1)
 
 # ---------------------------------------------------------------------------
 # Coercion helpers
@@ -312,88 +323,81 @@ def derive_session_liveness_facts(
 
 def build_session_timeline_card_response(
     *,
-    runtime_facts,
-    capability_flags,
-    runtime_display: SessionRuntimeDisplayResponse | None = None,
+    runtime_view: SessionRuntimeView | None,
+    runtime_display: SessionRuntimeDisplayResponse,
 ) -> TimelineCardPresentationResponse:
-    if runtime_facts is not None:
-        control_path = runtime_facts.control_path
-    else:
-        has_managed_control_path = (
-            getattr(capability_flags, "live_control_available", False)
-            or getattr(capability_flags, "host_reattach_available", False)
-            or getattr(capability_flags, "reply_to_live_session_available", False)
-        )
-        control_path = "managed" if has_managed_control_path else "unmanaged"
+    """Derive the timeline card entirely from the public runtime_display projection.
+
+    The runtime_view supplies the observation timestamps (presence_updated_at,
+    last_progress_at, last_live_at). All semantic axes — control_path,
+    lifecycle, state, tone, signal_tier — come from runtime_display, which is
+    the single source of presentation truth.
+    """
     ownership = TimelineBadgePresentationResponse(
-        label="Managed" if control_path == "managed" else "Unmanaged",
+        label="Managed" if runtime_display.control_path == ControlPath.MANAGED else "Unmanaged",
         tone="neutral",
     )
-    status = _timeline_status_from_display(runtime_display) or _timeline_status_from_liveness_facts(runtime_facts)
+    status = _timeline_status_from_display(runtime_display, runtime_view=runtime_view)
     return TimelineCardPresentationResponse(
         ownership=ownership,
         status=status,
-        border_tone=status.tone if status is not None else "inactive",
+        border_tone=status.tone,
     )
 
 
 def _timeline_status_from_display(
-    runtime_display: SessionRuntimeDisplayResponse | None,
-) -> TimelineStatusPresentationResponse | None:
-    if runtime_display is None or runtime_display.state != TRANSCRIPT_SYNC_STATE:
-        return None
-    return TimelineStatusPresentationResponse(
-        label="Syncing",
-        tone="active",
-        seen_at=None,
-        seen_at_prefix="Updated",
-    )
+    runtime_display: SessionRuntimeDisplayResponse,
+    *,
+    runtime_view: SessionRuntimeView | None,
+) -> TimelineStatusPresentationResponse:
+    state = runtime_display.state.value if runtime_display.state is not None else None
+    presence_at = normalize_utc(runtime_view.presence_updated_at) if runtime_view is not None else None
+    progress_at = normalize_utc(runtime_view.last_progress_at) if runtime_view is not None else None
+    last_live_at = normalize_utc(runtime_view.last_live_at) if runtime_view is not None else None
 
-
-def _timeline_status_from_liveness_facts(runtime_facts) -> TimelineStatusPresentationResponse:
-    if runtime_facts is None:
-        return TimelineStatusPresentationResponse(label="No live signal", tone="inactive", seen_at=None, seen_at_prefix="Checked")
-
-    process_state = str(runtime_facts.process_state or "").strip()
-    lifecycle = runtime_facts.lifecycle
-    if process_state == "closed" or lifecycle.state == "closed":
+    if state == TRANSCRIPT_SYNC_STATE:
+        return TimelineStatusPresentationResponse(
+            label="Syncing",
+            tone="active",
+            seen_at=None,
+            seen_at_prefix="Updated",
+        )
+    if runtime_display.lifecycle == Lifecycle.CLOSED:
         return TimelineStatusPresentationResponse(
             label="Closed",
             tone="closed",
-            seen_at=lifecycle.observed_at or runtime_facts.phase.observed_at or runtime_facts.activity.last_transcript_at,
+            seen_at=progress_at or last_live_at,
             seen_at_prefix="Closed",
         )
-
-    phase = runtime_facts.phase
-    phase_kind = str(phase.kind or "").strip()
-    if phase_kind:
+    if state in {"thinking", "running", "idle", "needs_user", "blocked", "stalled"}:
         return TimelineStatusPresentationResponse(
-            label=_phase_status_label(phase_kind, phase.tool),
-            tone=_phase_tone(phase_kind),
-            seen_at=phase.observed_at,
+            label=_phase_status_label(state, runtime_display.compact_tool_label),
+            tone=_phase_tone(state),
+            seen_at=presence_at,
             seen_at_prefix="Updated",
         )
-
-    if process_state == "running":
-        process = runtime_facts.process
+    if (
+        runtime_display.signal_tier == SignalTier.PROCESS_BINDING
+        and runtime_display.host_state == HostState.ONLINE
+        and runtime_display.lifecycle == Lifecycle.OPEN
+    ):
         return TimelineStatusPresentationResponse(
             label="Running",
             tone="inactive",
-            seen_at=process.observed_at or process.last_seen_at,
+            seen_at=progress_at or last_live_at,
             seen_at_prefix="Verified",
         )
-
+    last_signal = presence_at or last_live_at
     return TimelineStatusPresentationResponse(
         label="No live signal",
         tone="inactive",
-        seen_at=runtime_facts.activity.last_runtime_signal_at,
-        seen_at_prefix="Last signal" if runtime_facts.activity.last_runtime_signal_at is not None else "Checked",
+        seen_at=last_signal,
+        seen_at_prefix="Last signal" if last_signal is not None else "Checked",
     )
 
 
-def _phase_status_label(kind: str, tool_name: str | None) -> str:
+def _phase_status_label(kind: str, compact_tool: str | None) -> str:
     phase = "idle" if kind == "needs_user" else kind.replace("_", " ").replace("-", " ")
-    compact_tool = compact_runtime_tool_label(tool_name)
     if compact_tool and kind == "running":
         return f"Using {compact_tool}"
     if compact_tool and kind == "blocked":
@@ -515,43 +519,28 @@ class SessionCapabilitiesResponse(BaseModel):
 
 
 class SessionRuntimeDisplayResponse(BaseModel):
-    truth_tier: str = Field(..., description="Runtime truth tier: none|stale|fresh|managed-local")
-    signal_tier: str = Field(
-        "none",
-        description="Strongest source signal tier: phase_signal|process_binding|transcript_progress|none",
-    )
-    state: Optional[str] = Field(None, description="Canonical presence state when known")
-    tone: str = Field(..., description="Stable visual tone for clients")
+    truth_tier: TruthTier = Field(..., description="Runtime truth tier")
+    signal_tier: SignalTier = Field(..., description="Strongest source signal tier")
+    state: Optional[PresenceState] = Field(..., description="Canonical presence state, or null when unknown")
+    tone: Tone = Field(..., description="Stable visual tone for clients")
     headline: str = Field(..., description="Primary user-facing runtime label")
-    detail: Optional[str] = Field(None, description="Secondary user-facing runtime label")
+    detail: Optional[str] = Field(..., description="Secondary user-facing runtime label, or null")
     phase_label: str = Field(..., description="Compact phase label for cards and strips")
-    compact_tool_label: Optional[str] = Field(None, description="Normalized tool label for display")
-    is_live: bool = Field(False, description="True when the session is actively executing")
-    is_executing: bool = Field(False, description="True when the agent is thinking or running a tool")
-    needs_attention: bool = Field(False, description="True when the user should respond or approve")
-    is_idle: bool = Field(False, description="True when the runtime is waiting for another turn")
-    is_stalled: bool = Field(False, description="True when a provider explicitly reports stalled state")
-    is_managed_local_truth: bool = Field(False, description="True when runtime truth is from a managed-local control path")
-    has_signal: bool = Field(False, description="True when clients should render runtime state")
-    control_path: str = Field(
-        "unmanaged",
-        description="Does Longhouse own a control path? 'managed' or 'unmanaged'",
-    )
-    activity_recency: str = Field(
-        "none",
-        description="How recently we heard from this session: 'live' | 'recent' | 'stale' | 'none'",
-    )
-    lifecycle: str = Field(
-        "open",
-        description="Session lifecycle: 'open' | 'closed' | 'unknown'. Closed only with ground truth.",
-    )
-    host_state: str = Field(
-        "unknown",
-        description="Host/machine verifiability: 'online' | 'stale' | 'offline' | 'unknown'",
-    )
-    terminal_reason: Optional[str] = Field(
-        None,
-        description="Why the session is closed, when lifecycle=='closed'",
+    compact_tool_label: Optional[str] = Field(..., description="Normalized tool label for display, or null")
+    is_live: bool = Field(..., description="True when the session is actively executing")
+    is_executing: bool = Field(..., description="True when the agent is thinking or running a tool")
+    needs_attention: bool = Field(..., description="True when the user should respond or approve")
+    is_idle: bool = Field(..., description="True when the runtime is waiting for another turn")
+    is_stalled: bool = Field(..., description="True when a provider explicitly reports stalled state")
+    is_managed_local_truth: bool = Field(..., description="True when runtime truth is from a managed-local control path")
+    has_signal: bool = Field(..., description="True when clients should render runtime state")
+    control_path: ControlPath = Field(..., description="Does Longhouse own a control path?")
+    activity_recency: ActivityRecency = Field(..., description="How recently we heard from this session")
+    lifecycle: Lifecycle = Field(..., description="Session lifecycle. Closed only with ground truth.")
+    host_state: HostState = Field(..., description="Host/machine verifiability")
+    terminal_reason: Optional[TerminalReason] = Field(
+        ...,
+        description="Why the session is closed (when lifecycle=='closed'), else null",
     )
 
 
@@ -787,7 +776,7 @@ class ActiveSessionResponse(UTCBaseModel):
     home_label: Optional[str] = Field(None, description="User-facing home label, e.g. On this Mac|Hosted|Moved to cloud")
     control: Optional[SessionControlResponse] = Field(None, description="Host-control and managed-launch debugging detail")
     capabilities: SessionCapabilitiesResponse = Field(..., description="Canonical session capability flags")
-    runtime_display: Optional[SessionRuntimeDisplayResponse] = Field(None, description="Server-derived display state for clients")
+    runtime_display: SessionRuntimeDisplayResponse = Field(..., description="Server-derived display state for clients")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
 
 
@@ -845,6 +834,24 @@ class InputOriginResponse(BaseModel):
     )
 
 
+class ToolCallState(str, Enum):
+    """Per-event projection of tool-call lifecycle for assistant tool events.
+
+    Computed server-side from event pairings + session lifecycle. Clients must
+    not re-derive this; the server is authoritative.
+
+    - ``running``: assistant tool call is awaiting its result and the session
+      is still active and recent.
+    - ``completed``: a paired tool result has been observed.
+    - ``dropped``: the result will never arrive (session is closed, or the
+      call is older than the dropped-tool age threshold).
+    """
+
+    RUNNING = "running"
+    COMPLETED = "completed"
+    DROPPED = "dropped"
+
+
 class EventResponse(UTCBaseModel):
     """Response for a single event."""
 
@@ -877,6 +884,13 @@ class EventResponse(UTCBaseModel):
     provisional_cursor: Optional[str] = Field(None, description="Monotonic live snapshot cursor for provisional events")
     provisional_complete: bool = Field(False, description="True when the provider bridge reported the provisional turn complete")
     reconciled_event_id: Optional[int] = Field(None, description="Durable event id that replaced this provisional event")
+    tool_call_state: Optional[ToolCallState] = Field(
+        None,
+        description=(
+            "Lifecycle of an assistant tool call: running|completed|dropped. "
+            "Set only on assistant events that have tool_name. Server-authoritative."
+        ),
+    )
 
 
 class EventsListResponse(BaseModel):
@@ -1327,8 +1341,7 @@ def build_session_response(
         runtime_display=runtime_display,
         transcript_preview=transcript_preview_response,
         timeline_card=build_session_timeline_card_response(
-            runtime_facts=runtime_facts,
-            capability_flags=capability_flags,
+            runtime_view=display_runtime_overlay,
             runtime_display=runtime_display,
         ),
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
@@ -1514,6 +1527,7 @@ def build_event_response(
     boundary: int | None,
     head_branch_id: int | None,
     input_origin_map: dict[int, InputOriginResponse | None] | None = None,
+    tool_call_state_map: dict[int, ToolCallState] | None = None,
     mobile_payload: bool = False,
 ) -> EventResponse:
     content_text = event.content_text
@@ -1531,6 +1545,8 @@ def build_event_response(
         tool_output_original_chars = len(tool_output_text)
         tool_output_text = tool_output_text[:MOBILE_TOOL_OUTPUT_MAX_CHARS]
         tool_output_truncated = True
+
+    tool_call_state = tool_call_state_map.get(int(event.id)) if tool_call_state_map is not None else None
 
     return EventResponse(
         id=event.id,
@@ -1553,7 +1569,82 @@ def build_event_response(
         provisional_cursor=event.provisional_cursor,
         provisional_complete=bool(event.provisional_complete),
         reconciled_event_id=event.reconciled_event_id,
+        tool_call_state=tool_call_state,
     )
+
+
+def is_session_closed(session: AgentSession) -> bool:
+    """Lifecycle truth: has this session reached a terminal state?
+
+    Closed when ``ended_at`` is stamped (irreversible) or the session has an
+    explicit closed terminal_state. Mirrors ``Lifecycle.CLOSED`` derivation in
+    ``build_session_runtime_display`` so per-event tool_call_state stays in
+    sync with the runtime_display lifecycle the client is rendering.
+    """
+    if getattr(session, "ended_at", None) is not None:
+        return True
+    terminal_state = (getattr(session, "terminal_state", "") or "").strip().lower()
+    return terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES
+
+
+def build_tool_call_state_map(
+    events: list[AgentEvent],
+    *,
+    session_closed: bool,
+    now: datetime | None = None,
+) -> dict[int, ToolCallState]:
+    """Project per-event tool-call lifecycle from a list of events.
+
+    Returns a map of assistant-tool-call event_id → ToolCallState. Result events
+    and non-tool events are not included; clients consume the call event's
+    tool_call_state. Pairing mirrors the iOS/web rule: by tool_call_id when
+    present, FIFO otherwise. A call without a paired result is "dropped" if
+    the session is closed (lifecycle terminal or ended_at stamped) or the call
+    is older than ``DROPPED_TOOL_AGE``; otherwise "running". A paired call is
+    "completed". The events list MUST be the full session ledger (head branch),
+    not a paginated slice, or completed/running calls outside the page will be
+    misclassified as dropped.
+    """
+    now_utc = normalize_utc(now) or datetime.now(timezone.utc)
+    threshold = now_utc - DROPPED_TOOL_AGE
+
+    by_call_id: dict[str, AgentEvent] = {}
+    fifo_pending: list[AgentEvent] = []
+    paired_call_ids: set[int] = set()
+
+    for event in events:
+        role = (event.role or "").strip().lower()
+        if role == "assistant" and event.tool_name:
+            if event.tool_call_id:
+                by_call_id[event.tool_call_id] = event
+            else:
+                fifo_pending.append(event)
+        elif role == "tool":
+            matched: AgentEvent | None = None
+            if event.tool_call_id:
+                matched = by_call_id.pop(event.tool_call_id, None)
+            elif fifo_pending:
+                matched = fifo_pending.pop(0)
+            if matched is not None:
+                paired_call_ids.add(int(matched.id))
+
+    result: dict[int, ToolCallState] = {}
+    for event in events:
+        role = (event.role or "").strip().lower()
+        if role != "assistant" or not event.tool_name:
+            continue
+        if int(event.id) in paired_call_ids:
+            result[int(event.id)] = ToolCallState.COMPLETED
+            continue
+        if session_closed:
+            result[int(event.id)] = ToolCallState.DROPPED
+            continue
+        call_at = normalize_utc(event.timestamp)
+        if call_at is not None and call_at < threshold:
+            result[int(event.id)] = ToolCallState.DROPPED
+        else:
+            result[int(event.id)] = ToolCallState.RUNNING
+    return result
 
 
 def _event_input_origin_response(

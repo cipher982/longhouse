@@ -39,29 +39,100 @@ struct APISessionControlResponse: Codable, Hashable, Sendable {
     let attachCommand: String?
 }
 
-typealias APISessionLoopMode = String
+enum APISessionLoopMode: String, Codable, Hashable, Sendable, CaseIterable {
+    case assist = "assist"
+    case autopilot = "autopilot"
+}
+
+enum APIActivityRecency: String, Codable, Hashable, Sendable, CaseIterable {
+    case live = "live"
+    case recent = "recent"
+    case stale = "stale"
+    case none = "none"
+}
+
+enum APIControlPath: String, Codable, Hashable, Sendable, CaseIterable {
+    case managed = "managed"
+    case unmanaged = "unmanaged"
+}
+
+enum APIHostState: String, Codable, Hashable, Sendable, CaseIterable {
+    case online = "online"
+    case stale = "stale"
+    case offline = "offline"
+    case unknown = "unknown"
+}
+
+enum APILifecycle: String, Codable, Hashable, Sendable, CaseIterable {
+    case `open` = "open"
+    case closed = "closed"
+    case unknown = "unknown"
+}
+
+enum APIPresenceState: String, Codable, Hashable, Sendable, CaseIterable {
+    case thinking = "thinking"
+    case running = "running"
+    case idle = "idle"
+    case needsUser = "needs_user"
+    case blocked = "blocked"
+    case stalled = "stalled"
+    case syncingTranscript = "syncing_transcript"
+}
+
+enum APISignalTier: String, Codable, Hashable, Sendable, CaseIterable {
+    case none = "none"
+    case phaseSignal = "phase_signal"
+    case processBinding = "process_binding"
+    case transcriptProgress = "transcript_progress"
+}
+
+enum APITerminalReason: String, Codable, Hashable, Sendable, CaseIterable {
+    case sessionEnded = "session_ended"
+    case userClosed = "user_closed"
+    case processGone = "process_gone"
+    case hostExpired = "host_expired"
+    case providerSignal = "provider_signal"
+}
+
+enum APITone: String, Codable, Hashable, Sendable, CaseIterable {
+    case stalled = "stalled"
+    case blocked = "blocked"
+    case running = "running"
+    case thinking = "thinking"
+    case idle = "idle"
+    case active = "active"
+    case inactive = "inactive"
+    case closed = "closed"
+}
+
+enum APITruthTier: String, Codable, Hashable, Sendable, CaseIterable {
+    case none = "none"
+    case stale = "stale"
+    case fresh = "fresh"
+    case managedLocal = "managed-local"
+}
 
 struct APISessionRuntimeDisplayResponse: Codable, Hashable, Sendable {
-    let truthTier: String
-    let signalTier: String?
-    let state: String?
-    let tone: String
+    let truthTier: APITruthTier
+    let signalTier: APISignalTier
+    let state: APIPresenceState?
+    let tone: APITone
     let headline: String
     let detail: String?
     let phaseLabel: String
     let compactToolLabel: String?
-    let isLive: Bool?
-    let isExecuting: Bool?
-    let needsAttention: Bool?
-    let isIdle: Bool?
-    let isStalled: Bool?
-    let isManagedLocalTruth: Bool?
-    let hasSignal: Bool?
-    let controlPath: String?
-    let activityRecency: String?
-    let lifecycle: String?
-    let hostState: String?
-    let terminalReason: String?
+    let isLive: Bool
+    let isExecuting: Bool
+    let needsAttention: Bool
+    let isIdle: Bool
+    let isStalled: Bool
+    let isManagedLocalTruth: Bool
+    let hasSignal: Bool
+    let controlPath: APIControlPath
+    let activityRecency: APIActivityRecency
+    let lifecycle: APILifecycle
+    let hostState: APIHostState
+    let terminalReason: APITerminalReason?
 }
 
 struct APISessionTranscriptPreviewResponse: Codable, Hashable, Sendable {
@@ -183,6 +254,12 @@ struct APIInputOriginResponse: Codable, Hashable, Sendable {
     let clientRequestId: String?
 }
 
+enum APIToolCallState: String, Codable, Hashable, Sendable, CaseIterable {
+    case running = "running"
+    case completed = "completed"
+    case dropped = "dropped"
+}
+
 struct APIEventResponse: Codable, Hashable, Sendable {
     let id: Int
     let role: String
@@ -204,6 +281,7 @@ struct APIEventResponse: Codable, Hashable, Sendable {
     let provisionalCursor: String?
     let provisionalComplete: Bool?
     let reconciledEventId: Int?
+    let toolCallState: APIToolCallState?
 }
 
 struct APISessionProjectionItemResponse: Codable, Hashable, Sendable {

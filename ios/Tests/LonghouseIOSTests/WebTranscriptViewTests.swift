@@ -20,7 +20,6 @@ final class WebTranscriptViewTests: XCTestCase {
                     serverInputId: nil
                 ),
             ],
-            sessionEnded: false,
             errorMessage: nil
         )
 
@@ -49,8 +48,7 @@ final class WebTranscriptViewTests: XCTestCase {
                     clientRequestId: "ios-local",
                     serverInputId: 7
                 ),
-            ],
-            sessionEnded: false
+            ]
         )
 
         XCTAssertEqual(rows.count, 1)
@@ -78,8 +76,7 @@ final class WebTranscriptViewTests: XCTestCase {
                     clientRequestId: "ios-request-1",
                     serverInputId: nil
                 ),
-            ],
-            sessionEnded: false
+            ]
         )
 
         XCTAssertEqual(rows.map(\.kind), ["message"])
@@ -101,8 +98,7 @@ final class WebTranscriptViewTests: XCTestCase {
                     clientRequestId: "ios-request-1",
                     serverInputId: nil
                 ),
-            ],
-            sessionEnded: false
+            ]
         )
 
         XCTAssertEqual(rows.map(\.kind), ["message", "submitted"])
@@ -140,6 +136,7 @@ final class WebTranscriptViewTests: XCTestCase {
             toolInputJSON: nil,
             toolOutputText: nil,
             toolCallId: nil,
+            toolCallState: nil,
             timestamp: "2026-05-02T20:00:00Z",
             inActiveContext: true,
             isHeadBranch: isHeadBranch,

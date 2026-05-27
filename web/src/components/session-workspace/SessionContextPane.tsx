@@ -75,8 +75,6 @@ export function SessionContextPane({
   const showStateSection =
     shouldShowNotice || interaction.managedLaunchSuggestion;
 
-  // Phase 3 of session-liveness-honesty: freeze the duration only when
-  // the session is actually closed (lifecycle axis, terminal_state fallback).
   const durationStr = formatDuration(
     session.started_at,
     isSessionClosed(session) ? session.ended_at : null,

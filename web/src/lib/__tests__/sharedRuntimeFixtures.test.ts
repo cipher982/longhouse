@@ -36,8 +36,8 @@ function loadFixture(name: string): RuntimeFixture {
   return JSON.parse(readFileSync(fixturePath, "utf8")) as RuntimeFixture;
 }
 
-describe("shared runtime fixtures", () => {
-  const fixture = loadFixture("basic-runtime-semantics.json");
+describe.each(["basic-runtime-semantics.json", "divergent-matrix.json"])("shared runtime fixtures: %s", (fixtureName) => {
+  const fixture = loadFixture(fixtureName);
 
   it.each(fixture.cases)("matches $name", ({ session, expectations }) => {
     const runtime = resolveSessionRuntimeState(session);

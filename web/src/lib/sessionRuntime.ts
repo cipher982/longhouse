@@ -4,7 +4,14 @@ import type {
   SessionRuntimeDisplay,
 } from "../services/api/agents";
 
-export type KnownPresenceState = "thinking" | "running" | "idle" | "needs_user" | "blocked" | "stalled";
+export type KnownPresenceState =
+  | "thinking"
+  | "running"
+  | "idle"
+  | "needs_user"
+  | "blocked"
+  | "stalled"
+  | "syncing_transcript";
 export type RuntimeTruthTier = "none" | "stale" | "fresh" | "managed-local";
 export type RuntimeTone = "inactive" | "active" | "thinking" | "running" | "blocked" | "stalled" | "idle" | "closed";
 
@@ -19,31 +26,20 @@ type TimelineRuntimeOverlay = {
   display_phase?: string | null;
   active_tool?: string | null;
   confidence?: string | null;
-  runtime_display?: SessionRuntimeDisplay | null;
+  runtime_display: SessionRuntimeDisplay;
   capabilities?: AgentSession["capabilities"] | null;
 };
 
 export type TimelineRuntimeSession = Pick<
   AgentSession,
-  "ended_at" | "last_activity_at" | "timeline_anchor_at" | "capabilities"
+  "ended_at" | "last_activity_at" | "timeline_anchor_at" | "capabilities" | "runtime_display"
 > &
-  Partial<TimelineRuntimeOverlay>;
+  Partial<Omit<TimelineRuntimeOverlay, "runtime_display">>;
 
-/** Decide closed/open only from explicit lifecycle or terminal facts. */
 export function isSessionClosed(
-  session: Pick<AgentSession, "terminal_state"> & {
-    runtime_display?: SessionRuntimeDisplay | null;
-  },
+  session: Pick<AgentSession, "runtime_display"> | null | undefined,
 ): boolean {
-  const lifecycle = session.runtime_display?.lifecycle;
-  if (lifecycle != null) {
-    return lifecycle === "closed";
-  }
-  return (
-    session.terminal_state === "session_ended" ||
-    session.terminal_state === "process_gone" ||
-    session.terminal_state === "user_closed"
-  );
+  return session?.runtime_display?.lifecycle === "closed";
 }
 
 export interface SessionRuntimeState {
@@ -63,23 +59,15 @@ export interface SessionRuntimeState {
   isManagedLocalTruth: boolean;
   hasSignal: boolean;
   tone: RuntimeTone;
-  runtimeDisplay: SessionRuntimeDisplay | null;
+  runtimeDisplay: SessionRuntimeDisplay;
 }
 
 export type SessionControlPathLabel = "Managed" | "Unmanaged";
 
 export function resolveSessionOwnershipLabel(
   runtime: SessionRuntimeState,
-  fallback: SessionControlPathLabel = "Unmanaged",
 ): SessionControlPathLabel {
-  const controlPath = runtime.runtimeDisplay?.control_path;
-  if (controlPath === "managed") {
-    return "Managed";
-  }
-  if (controlPath === "unmanaged") {
-    return "Unmanaged";
-  }
-  return fallback;
+  return runtime.runtimeDisplay.control_path === "managed" ? "Managed" : "Unmanaged";
 }
 
 export function normalizePresenceState(state: string | null | undefined): KnownPresenceState | null {
@@ -89,7 +77,8 @@ export function normalizePresenceState(state: string | null | undefined): KnownP
     state === "idle" ||
     state === "needs_user" ||
     state === "blocked" ||
-    state === "stalled"
+    state === "stalled" ||
+    state === "syncing_transcript"
   ) {
     return state;
   }
@@ -99,30 +88,8 @@ export function normalizePresenceState(state: string | null | undefined): KnownP
 export function resolveSessionRuntimeState(
   session: TimelineRuntimeSession,
 ): SessionRuntimeState {
-  const serverDisplay = session.runtime_display ?? null;
+  const serverDisplay = session.runtime_display;
   const status = session.status ?? null;
-  if (!serverDisplay) {
-    return {
-      status,
-      presenceState: null,
-      presenceTool: null,
-      lastLiveAt: null,
-      confidence: null,
-      runtimeSource: null,
-      truthTier: "none",
-      displayPhase: "Inactive",
-      isLive: false,
-      isExecuting: false,
-      needsAttention: false,
-      isIdle: false,
-      isStalled: false,
-      isManagedLocalTruth: false,
-      hasSignal: false,
-      tone: "inactive",
-      runtimeDisplay: null,
-    };
-  }
-
   const presenceState = normalizePresenceState(serverDisplay.state);
   const presenceTool = serverDisplay.compact_tool_label ?? null;
   const lastLiveAt = session.last_live_at ?? session.presence_updated_at ?? null;

@@ -35,7 +35,8 @@ private extension SessionDetail {
             "displayTone": "\(live ? "success" : "warning")"
           },
           "runtimeDisplay": {
-            "truthTier": "live",
+            "truthTier": "managed-local",
+            "signalTier": "phase_signal",
             "state": "\(executing ? "running" : "idle")",
             "tone": "\(tone)",
             "headline": "\(headline)",
@@ -46,8 +47,14 @@ private extension SessionDetail {
             "isExecuting": \(executing),
             "needsAttention": false,
             "isIdle": \(!executing),
+            "isStalled": false,
             "isManagedLocalTruth": true,
-            "hasSignal": true
+            "hasSignal": true,
+            "controlPath": "managed",
+            "activityRecency": "live",
+            "lifecycle": "open",
+            "hostState": "online",
+            "terminalReason": null
           },
           "loopMode": "\(loopMode.rawValue)"
         }

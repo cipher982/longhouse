@@ -254,54 +254,48 @@ describe("getTimelineMessagePreview", () => {
 });
 
 describe("isToolInteractionDropped", () => {
-  const baseCall: AgentEvent = {
-    id: 1,
-    role: "assistant",
-    content_text: null,
-    tool_name: "Bash",
-    tool_input_json: null,
-    tool_output_text: null,
-    tool_call_id: "tc-1",
-    timestamp: "2026-03-22T22:00:00Z",
-    in_active_context: true,
-  };
-
-  function makeInteraction(overrides: Partial<ToolInteraction> = {}): ToolInteraction {
+  function makeCall(state: "running" | "completed" | "dropped" | null = null): AgentEvent {
     return {
-      key: "id:tc-1",
-      toolName: "Bash",
-      callEvent: baseCall,
-      resultEvent: null,
-      pairing: "id",
-      anchorId: 1,
-      timestamp: baseCall.timestamp,
-      ...overrides,
+      id: 1,
+      role: "assistant",
+      content_text: null,
+      tool_name: "Bash",
+      tool_input_json: null,
+      tool_output_text: null,
+      tool_call_id: "tc-1",
+      tool_call_state: state,
+      timestamp: "2026-03-22T22:00:00Z",
+      in_active_context: true,
     };
   }
 
-  const nowOlder = Date.parse("2026-03-22T23:30:00Z"); // 90min after call
-  const nowRecent = Date.parse("2026-03-22T22:10:00Z"); // 10min after call
+  function makeInteraction(state: "running" | "completed" | "dropped" | null = null): ToolInteraction {
+    const call = makeCall(state);
+    return {
+      key: "id:tc-1",
+      toolName: "Bash",
+      callEvent: call,
+      resultEvent: null,
+      pairing: "id",
+      anchorId: 1,
+      timestamp: call.timestamp,
+    };
+  }
 
-  it("returns false when a result is present", () => {
-    const interaction = makeInteraction({ resultEvent: { ...baseCall, id: 2, role: "tool" } });
-    expect(isToolInteractionDropped(interaction, false, nowOlder)).toBe(false);
+  it("returns true only when the server-emitted state is 'dropped'", () => {
+    expect(isToolInteractionDropped(makeInteraction("dropped"))).toBe(true);
   });
 
-  it("marks an unresolved call as dropped once the session has ended", () => {
-    expect(isToolInteractionDropped(makeInteraction(), true, nowRecent)).toBe(true);
+  it("returns false when state is running", () => {
+    expect(isToolInteractionDropped(makeInteraction("running"))).toBe(false);
   });
 
-  it("marks an unresolved call older than 1 hour as dropped in a live session", () => {
-    expect(isToolInteractionDropped(makeInteraction(), false, nowOlder)).toBe(true);
+  it("returns false when state is completed", () => {
+    expect(isToolInteractionDropped(makeInteraction("completed"))).toBe(false);
   });
 
-  it("leaves fresh unresolved calls in a live session as pending (not dropped)", () => {
-    expect(isToolInteractionDropped(makeInteraction(), false, nowRecent)).toBe(false);
-  });
-
-  it("never marks orphan results as dropped", () => {
-    const interaction = makeInteraction({ pairing: "orphan" });
-    expect(isToolInteractionDropped(interaction, true, nowOlder)).toBe(false);
+  it("returns false when state is missing", () => {
+    expect(isToolInteractionDropped(makeInteraction(null))).toBe(false);
   });
 });
 

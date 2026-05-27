@@ -23,7 +23,6 @@ interface SessionRuntimeStripProps {
   >;
   hostLabel?: string | null;
   elapsedLabel?: string | null;
-  detailFallback?: string | null;
   variant?: "inline" | "block" | "dock" | "bar";
   testId?: string;
 }
@@ -64,22 +63,17 @@ export function SessionRuntimeStrip({
   interaction,
   hostLabel,
   elapsedLabel,
-  detailFallback,
   variant = "inline",
   testId,
 }: SessionRuntimeStripProps) {
   const runtime = resolveSessionRuntimeState(session);
   const runtimeBadgeState = getRuntimeBadgeState(runtime);
   const runtimeBadgeTool = runtime.presenceTool;
-  const runtimeDisplay = getRuntimeDisplayCopy(runtime, {
-    managedLocal: interaction.isManagedLocalSession,
-  });
+  const runtimeDisplay = getRuntimeDisplayCopy(runtime);
   const runtimePhase = interaction.isManagedLocalSession
     ? runtimeDisplay.headline
     : getRuntimeOutcomeLabel(runtime);
-  const runtimeDetail = interaction.isManagedLocalSession
-    ? (runtimeDisplay.detail ?? (runtime.runtimeDisplay ? null : detailFallback))
-    : null;
+  const runtimeDetail = interaction.isManagedLocalSession ? runtimeDisplay.detail : null;
   const runtimeMeta = getRuntimeMetaLabel(runtime);
   const resolvedHostLabel =
     hostLabel?.trim() ||

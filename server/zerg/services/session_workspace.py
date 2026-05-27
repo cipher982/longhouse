@@ -17,14 +17,16 @@ from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_turns import load_pending_response_turn_map
+from zerg.services.session_views import SessionMobileTailResponse
 from zerg.services.session_views import SessionProjectionItemResponse
 from zerg.services.session_views import SessionProjectionResponse
-from zerg.services.session_views import SessionMobileTailResponse
 from zerg.services.session_views import SessionThreadResponse
 from zerg.services.session_views import SessionWorkspaceResponse
 from zerg.services.session_views import build_event_input_origin_map
 from zerg.services.session_views import build_event_response
 from zerg.services.session_views import build_session_response
+from zerg.services.session_views import build_tool_call_state_map
+from zerg.services.session_views import is_session_closed
 from zerg.services.unmanaged_bindings import load_binding_overlay
 from zerg.utils.server_timing import ServerTimingRecorder
 from zerg.utils.time import normalize_utc
@@ -350,6 +352,19 @@ def _build_projection_response(
         [item.event for item in projection.items if item.kind == "event" and item.event is not None],
     )
 
+    sessions_by_id: dict[UUID, object] = {}
+    for item in projection.items:
+        if item.kind == "event" and item.event is not None:
+            sessions_by_id.setdefault(item.session.id, item.session)
+    tool_call_state_map: dict[int, object] = {}
+    for sid, path_session in sessions_by_id.items():
+        tool_call_state_map.update(
+            build_tool_call_state_map(
+                store.get_session_tool_call_events(sid, branch_mode=branch_mode),
+                session_closed=is_session_closed(path_session),
+            )
+        )
+
     def get_boundary(current_session_id: UUID) -> int | None:
         if current_session_id not in active_context_boundary_cache:
             active_context_boundary_cache[current_session_id] = store.get_active_context_boundary(
@@ -377,6 +392,7 @@ def _build_projection_response(
                         boundary=get_boundary(item.session.id),
                         head_branch_id=get_head_branch_id(item.session.id),
                         input_origin_map=input_origin_map,
+                        tool_call_state_map=tool_call_state_map,
                         mobile_payload=mobile_payload,
                     ),
                 )
@@ -388,9 +404,7 @@ def _build_projection_response(
                 kind="seam",
                 session_id=str(item.session.id),
                 timestamp=item.session.started_at,
-                continued_from_session_id=(
-                    str(item.session.continued_from_session_id) if item.session.continued_from_session_id else None
-                ),
+                continued_from_session_id=(str(item.session.continued_from_session_id) if item.session.continued_from_session_id else None),
                 continuation_kind=item.session.continuation_kind,
                 origin_label=item.session.origin_label,
                 parent_origin_label=(item.parent_session.origin_label if item.parent_session else None),

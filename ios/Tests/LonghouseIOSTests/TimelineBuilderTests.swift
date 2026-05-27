@@ -10,6 +10,7 @@ final class TimelineBuilderTests: XCTestCase {
         input: [String: JSONValue]? = nil,
         output: String? = nil,
         callId: String? = nil,
+        toolCallState: ToolCallState? = nil,
         ts: String = "2026-04-18T18:00:00Z"
     ) -> SessionEvent {
         SessionEvent(
@@ -20,6 +21,7 @@ final class TimelineBuilderTests: XCTestCase {
             toolInputJSON: input,
             toolOutputText: output,
             toolCallId: callId,
+            toolCallState: toolCallState,
             timestamp: ts,
             inActiveContext: true,
             isHeadBranch: true,
@@ -176,21 +178,18 @@ final class TimelineBuilderTests: XCTestCase {
         XCTAssertEqual(secs!, 2.5, accuracy: 0.05)
     }
 
-    func testDroppedWhenSessionEnded() {
-        let call = event(id: 1, role: "assistant", tool: "Read", callId: "t1", ts: "2026-04-18T18:00:00Z")
-        XCTAssertTrue(TimelineBuilder.isDropped(call: call, sessionEnded: true))
-    }
+    func testDroppedReadsServerEmittedToolCallState() {
+        let dropped = event(id: 1, role: "assistant", tool: "Read", callId: "t1", toolCallState: .dropped)
+        XCTAssertTrue(TimelineBuilder.isDropped(call: dropped))
 
-    func testNotDroppedWhenSessionActiveAndRecent() {
-        let now = ISO8601DateFormatter().date(from: "2026-04-18T18:00:10Z")!
-        let call = event(id: 1, role: "assistant", tool: "Read", callId: "t1", ts: "2026-04-18T18:00:00Z")
-        XCTAssertFalse(TimelineBuilder.isDropped(call: call, sessionEnded: false, now: now))
-    }
+        let running = event(id: 2, role: "assistant", tool: "Read", callId: "t2", toolCallState: .running)
+        XCTAssertFalse(TimelineBuilder.isDropped(call: running))
 
-    func testDroppedWhenCallOlderThanOneHour() {
-        let now = ISO8601DateFormatter().date(from: "2026-04-18T19:05:00Z")!
-        let call = event(id: 1, role: "assistant", tool: "Read", callId: "t1", ts: "2026-04-18T18:00:00Z")
-        XCTAssertTrue(TimelineBuilder.isDropped(call: call, sessionEnded: false, now: now))
+        let completed = event(id: 3, role: "assistant", tool: "Read", callId: "t3", toolCallState: .completed)
+        XCTAssertFalse(TimelineBuilder.isDropped(call: completed))
+
+        let unset = event(id: 4, role: "assistant", tool: "Read", callId: "t4")
+        XCTAssertFalse(TimelineBuilder.isDropped(call: unset))
     }
 
     func testStableIDsAcrossBuilds() {

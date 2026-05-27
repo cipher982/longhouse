@@ -153,7 +153,7 @@ struct TimelineCacheStoreTests {
             liveControlAvailable: true,
             hostReattachAvailable: true,
             replyToLiveSessionAvailable: true,
-            runtimeDisplay: nil,
+            runtimeDisplay: SessionRuntimeDisplay.widgetPlaceholder(state: "idle", phase: "Idle", tone: "idle"),
             timelineCard: nil
         )
     }

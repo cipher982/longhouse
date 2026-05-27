@@ -53,12 +53,13 @@ private func mockSession(
         isExecuting: statusTone == "running" || statusTone == "thinking",
         needsAttention: statusTone == "blocked",
         isIdle: statusLabel == "Idle",
+        isStalled: false,
         isManagedLocalTruth: isManaged,
         hasSignal: true,
         controlPath: isManaged ? "managed" : "unmanaged",
         activityRecency: activityRecency,
         lifecycle: statusLabel == "Closed" ? "closed" : "running",
-        hostState: nil,
+        hostState: "unknown",
         terminalReason: nil
     )
     _ = phaseExpiresInSeconds
