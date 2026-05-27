@@ -38,7 +38,7 @@ from managed_profiler.sla_manifest import metric_target_ms
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_ROOT = ROOT / "artifacts" / "managed-session-propagation"
-BRIDGE_ROOT = Path.home() / ".claude" / "managed-local" / "codex-bridge"
+BRIDGE_ROOT = Path.home() / ".longhouse" / "managed-local" / "codex-bridge"
 CODEX_SESSIONS_ROOT = Path.home() / ".codex" / "sessions"
 CODEX_HOOKS_JSON = Path.home() / ".codex" / "hooks.json"
 CODEX_LONGHOUSE_HOOK_SCRIPT = Path.home() / ".codex" / "hooks" / "longhouse-codex-hook.sh"

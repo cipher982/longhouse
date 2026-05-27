@@ -18,6 +18,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from zerg.services.longhouse_paths import get_managed_local_dir
+
 _OPENCODE_LISTEN_PREFIX = "opencode server listening on "
 
 
@@ -42,12 +44,6 @@ def parse_listen_line(line: str) -> str | None:
     return candidate.rstrip("/")
 
 
-def _resolve_config_dir(config_dir: str | Path | None = None) -> Path:
-    if config_dir is None:
-        return Path.home() / ".claude"
-    return Path(config_dir).expanduser()
-
-
 def resolve_opencode_bridge_state_root(
     *,
     state_root: str | Path | None = None,
@@ -55,7 +51,8 @@ def resolve_opencode_bridge_state_root(
 ) -> Path:
     if state_root is not None:
         return Path(state_root).expanduser()
-    return _resolve_config_dir(config_dir) / "managed-local" / "opencode" / "bridge"
+    base_dir = Path(config_dir).expanduser() if config_dir is not None else None
+    return get_managed_local_dir("opencode", base_dir=base_dir) / "bridge"
 
 
 def build_opencode_bridge_state_file(

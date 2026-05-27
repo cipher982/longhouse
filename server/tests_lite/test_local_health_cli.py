@@ -900,7 +900,7 @@ def test_collect_local_health_flags_detached_managed_session(monkeypatch, tmp_pa
         [(str(rollout_path), "sess-detached", "codex", "2026-04-17T17:30:36Z")],
     )
 
-    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    state_dir = tmp_path / ".longhouse" / "managed-local" / "codex-bridge"
     _write_codex_bridge_state(
         state_dir,
         "sess-detached",
@@ -980,7 +980,7 @@ def test_collect_local_health_treats_detached_ui_ready_codex_bridge_as_attached(
         [(str(rollout_path), "sess-detached-ui", "codex", "2026-05-13T23:59:36Z")],
     )
 
-    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    state_dir = tmp_path / ".longhouse" / "managed-local" / "codex-bridge"
     _write_codex_bridge_state(
         state_dir,
         "sess-detached-ui",
@@ -1024,7 +1024,7 @@ def test_collect_local_health_flags_orphaned_managed_bridge(monkeypatch, tmp_pat
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     _write_engine_status(tmp_path, age_seconds=5)
 
-    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    state_dir = tmp_path / ".longhouse" / "managed-local" / "codex-bridge"
     _write_codex_bridge_state(
         state_dir,
         "sess-orphan",
@@ -1085,7 +1085,7 @@ def test_collect_local_health_flags_dead_codex_bridge_with_orphan_app_server(mon
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     _write_engine_status(tmp_path, age_seconds=5)
 
-    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    state_dir = tmp_path / ".longhouse" / "managed-local" / "codex-bridge"
     state_file = _write_codex_bridge_state(
         state_dir,
         "sess-dead-bridge",
@@ -1154,7 +1154,7 @@ def test_collect_local_health_uses_managed_session_phase_state_for_codex_bridge_
         ],
     )
 
-    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    state_dir = tmp_path / ".longhouse" / "managed-local" / "codex-bridge"
     _write_codex_bridge_state(
         state_dir,
         "sess-attached",
@@ -1223,7 +1223,7 @@ def test_collect_local_health_keeps_attached_codex_idle_from_managed_session_sta
         ],
     )
 
-    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    state_dir = tmp_path / ".longhouse" / "managed-local" / "codex-bridge"
     _write_codex_bridge_state(
         state_dir,
         "sess-attached",
@@ -1280,7 +1280,7 @@ def test_collect_local_health_shows_unknown_phase_for_attached_codex_without_man
         [(str(rollout_path), "sess-attached", "codex", "2026-04-17T17:30:36Z")],
     )
 
-    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    state_dir = tmp_path / ".longhouse" / "managed-local" / "codex-bridge"
     _write_codex_bridge_state(
         state_dir,
         "sess-attached",
@@ -1351,7 +1351,7 @@ def test_collect_local_health_flags_unknown_managed_phase_contract_drift(monkeyp
         ],
     )
 
-    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    state_dir = tmp_path / ".longhouse" / "managed-local" / "codex-bridge"
     _write_codex_bridge_state(
         state_dir,
         "sess-unknown-phase",
@@ -1407,7 +1407,7 @@ def test_collect_local_health_recognizes_remote_tui_attach_without_resume_token(
         [(str(rollout_path), "sess-attached", "codex", "2026-04-17T17:30:36Z")],
     )
 
-    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    state_dir = tmp_path / ".longhouse" / "managed-local" / "codex-bridge"
     _write_codex_bridge_state(
         state_dir,
         "sess-attached",
@@ -1455,7 +1455,7 @@ def test_collect_local_health_does_not_flag_missing_rollout_before_first_turn(mo
         [(str(rollout_path), "sess-bad-thread", "codex", "2026-04-17T17:30:36Z")],
     )
 
-    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    state_dir = tmp_path / ".longhouse" / "managed-local" / "codex-bridge"
     _write_codex_bridge_state(
         state_dir,
         "sess-bad-thread",
@@ -1508,7 +1508,7 @@ def test_collect_local_health_keeps_waiting_for_rollout_session_attached_after_t
         [(str(rollout_path), "sess-bad-thread", "codex", "2026-04-17T17:30:36Z")],
     )
 
-    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    state_dir = tmp_path / ".longhouse" / "managed-local" / "codex-bridge"
     _write_codex_bridge_state(
         state_dir,
         "sess-bad-thread",
@@ -1569,7 +1569,7 @@ def test_collect_local_health_marks_failed_thread_subscription_as_degraded(monke
         [(str(rollout_path), "sess-bad-thread", "codex", "2026-04-17T17:30:36Z")],
     )
 
-    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    state_dir = tmp_path / ".longhouse" / "managed-local" / "codex-bridge"
     _write_codex_bridge_state(
         state_dir,
         "sess-bad-thread",
@@ -1628,7 +1628,7 @@ def test_collect_local_health_names_subagent_control_failure(monkeypatch, tmp_pa
         [(str(rollout_path), "sess-subagent-control", "codex", "2026-04-29T19:48:36Z")],
     )
 
-    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    state_dir = tmp_path / ".longhouse" / "managed-local" / "codex-bridge"
     _write_codex_bridge_state(
         state_dir,
         "sess-subagent-control",
@@ -1719,7 +1719,7 @@ def test_collect_local_health_names_stale_subagent_bridge_path(monkeypatch, tmp_
         ],
     )
 
-    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    state_dir = tmp_path / ".longhouse" / "managed-local" / "codex-bridge"
     _write_codex_bridge_state(
         state_dir,
         "sess-subagent-control",
@@ -2794,7 +2794,7 @@ def test_collect_local_health_deep_falls_back_when_resolved_sessions_absent(monk
         tmp_path,
         [(str(rollout_path), "sess-fallback", "codex", "2026-05-05T11:59:58Z")],
     )
-    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    state_dir = tmp_path / ".longhouse" / "managed-local" / "codex-bridge"
     _write_codex_bridge_state(
         state_dir,
         "sess-fallback",

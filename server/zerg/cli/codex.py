@@ -167,7 +167,9 @@ def _codex_version(codex_bin: str | None) -> dict[str, object]:
 
 
 def _default_codex_bridge_state_root() -> Path:
-    return Path.home() / ".claude" / "managed-local" / "codex-bridge"
+    from zerg.services.longhouse_paths import get_managed_local_dir
+
+    return get_managed_local_dir("codex-bridge")
 
 
 def _pid_alive(pid: object) -> bool | None:
@@ -968,7 +970,7 @@ def codex_doctor(
         file_okay=False,
         dir_okay=True,
         resolve_path=True,
-        help="Codex bridge state root override (default: ~/.claude/managed-local/codex-bridge).",
+        help="Codex bridge state root override (default: ~/.longhouse/managed-local/codex-bridge).",
     ),
     json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
     check_readyz: bool = typer.Option(

@@ -28,6 +28,7 @@ from zerg.cli._common import load_api_credentials as _load_api_credentials
 from zerg.cli._common import open_session_url as _open_session_url
 from zerg.provider_cli_contract import OPENCODE_BIN_ENV
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_OPENCODE_BIN_FLAG
+from zerg.services.longhouse_paths import get_managed_local_dir
 from zerg.services.opencode_bridge_state import generate_server_password
 from zerg.services.opencode_bridge_state import parse_listen_line
 from zerg.services.opencode_bridge_state import remove_opencode_bridge_state
@@ -253,7 +254,7 @@ def _managed_runtime_events_url(base_url: str) -> str:
 
 
 def _opencode_runtime_dir(config_dir: Path | None = None) -> Path:
-    return (config_dir or (Path.home() / ".claude")) / "managed-local" / "opencode"
+    return get_managed_local_dir("opencode", base_dir=config_dir)
 
 
 def _ensure_opencode_runtime_plugin(config_dir: Path | None = None) -> Path:
@@ -675,7 +676,7 @@ def opencode(
         None,
         "--config-dir",
         "--claude-dir",
-        help="Longhouse config directory (default: ~/.claude).",
+        help="Longhouse home directory override (default: ~/.longhouse).",
     ),
     opencode_bin: str | None = typer.Option(
         None,

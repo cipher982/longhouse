@@ -1,6 +1,6 @@
 //! Managed-local Codex bridge scanner.
 //!
-//! Walks `~/.claude/managed-local/codex-bridge/*.json` once per tick and
+//! Walks `~/.longhouse/managed-local/codex-bridge/*.json` once per tick and
 //! produces `Vec<CodexBridgeObservation>` with the raw signals needed by
 //! both the heartbeat lease builder and the orphan-bridge reaper.
 //!
@@ -65,7 +65,7 @@ pub fn default_codex_bridge_state_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
     Some(
         PathBuf::from(home)
-            .join(".claude")
+            .join(".longhouse")
             .join("managed-local")
             .join("codex-bridge"),
     )

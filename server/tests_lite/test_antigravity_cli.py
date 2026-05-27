@@ -406,7 +406,7 @@ def test_antigravity_runtime_plugin_installs_with_agy(monkeypatch, tmp_path):
         global_hooks_path=tmp_path / ".gemini" / "config" / "hooks.json",
     )
 
-    source_root = tmp_path / ".claude" / "managed-local" / "antigravity" / "plugins" / "longhouse-runtime"
+    source_root = tmp_path / ".longhouse" / "managed-local" / "antigravity" / "plugins" / "longhouse-runtime"
     assert plugin_root == tmp_path / ".gemini" / "antigravity-cli" / "plugins" / "longhouse-runtime"
     assert calls == [["/usr/local/bin/agy", "plugin", "install", str(source_root)]]
     assert (source_root / "plugin.json").exists()

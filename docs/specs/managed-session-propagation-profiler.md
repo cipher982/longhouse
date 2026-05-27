@@ -446,7 +446,7 @@ Managed Codex uses:
 - `longhouse-engine codex-bridge`
 - Codex `app-server`
 - the Codex WebSocket relay in front of `app-server`
-- bridge state under `~/.claude/managed-local/codex-bridge/`
+- bridge state under `~/.longhouse/managed-local/codex-bridge/`
 - rollout JSONL under `~/.codex/sessions/...`
 - TUI logs under `~/.codex/log/codex-tui.log`
 - `longhouse-engine codex-bridge send`

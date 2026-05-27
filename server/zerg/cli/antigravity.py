@@ -27,7 +27,8 @@ from zerg.cli._common import load_api_credentials as _load_api_credentials
 from zerg.cli._common import open_session_url as _open_session_url
 from zerg.provider_cli_contract import ANTIGRAVITY_BIN_ENV
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_ANTIGRAVITY_BIN_FLAG
-from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
+from zerg.services.longhouse_paths import get_managed_local_dir
+from zerg.services.longhouse_paths import resolve_longhouse_home
 from zerg.services.session_continuity import get_machine_name_label
 from zerg.session_loop_mode import SessionLoopMode
 
@@ -255,7 +256,7 @@ def _antigravity_staged_plugin_root(antigravity_cli_root: Path | None = None) ->
 
 
 def _antigravity_runtime_dir(config_dir: Path | None = None) -> Path:
-    return (config_dir or (Path.home() / ".claude")) / "managed-local" / "antigravity"
+    return get_managed_local_dir("antigravity", base_dir=config_dir)
 
 
 def _antigravity_plugin_source_root(config_dir: Path | None = None) -> Path:
@@ -344,7 +345,7 @@ def _ensure_antigravity_runtime_plugin(
     staged_root = _antigravity_staged_plugin_root(antigravity_cli_root)
     plugin_root = _antigravity_plugin_source_root(config_dir) if antigravity_bin else staged_root
     hook_script = plugin_root / _ANTIGRAVITY_HOOK_SCRIPT_NAME
-    longhouse_home = resolve_longhouse_home_from_provider_home(config_dir or (Path.home() / ".claude"))
+    longhouse_home = resolve_longhouse_home(config_dir)
     hook_content = _ANTIGRAVITY_HOOK_SCRIPT.replace(
         "__LONGHOUSE_HOME__",
         shlex.quote(str(longhouse_home)),
@@ -605,7 +606,7 @@ def antigravity(
         None,
         "--config-dir",
         "--claude-dir",
-        help="Longhouse config directory (default: ~/.claude).",
+        help="Longhouse home directory override (default: ~/.longhouse).",
     ),
     antigravity_bin: str | None = typer.Option(
         None,

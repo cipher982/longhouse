@@ -396,7 +396,7 @@ else
             pass "CLI launched session $CLI_SESSION_ID with ws=$CLI_WS_URL"
 
             # Find and track the bridge daemon PID for cleanup
-            CLI_STATE_FILE=$(find "$HOME/.claude/managed-local/codex-bridge" -name "${CLI_SESSION_ID}.json" 2>/dev/null | head -1)
+            CLI_STATE_FILE=$(find "$HOME/.longhouse/managed-local/codex-bridge" -name "${CLI_SESSION_ID}.json" 2>/dev/null | head -1)
             if [ -n "$CLI_STATE_FILE" ]; then
                 CLI_BRIDGE_PID=$(python3 -c "import json; print(json.load(open('$CLI_STATE_FILE'))['pid'])" 2>/dev/null || echo "")
                 if [ -n "$CLI_BRIDGE_PID" ]; then

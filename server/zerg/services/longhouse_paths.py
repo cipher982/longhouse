@@ -129,6 +129,25 @@ def get_runtime_config_path(base_dir: Path | None = None) -> Path:
     return resolve_longhouse_home(base_dir) / "config.toml"
 
 
+def get_managed_local_dir(provider: str, *, base_dir: Path | None = None) -> Path:
+    """Return the per-provider managed-local state directory.
+
+    Longhouse-owned managed-session state for non-Claude providers (codex
+    bridge state, opencode runtime plugin + bridge state, antigravity
+    runtime plugin staging) lives under ``~/.longhouse/managed-local/``.
+
+    Earlier code wrote this state into ``~/.claude/managed-local/<provider>/``
+    by analogy with the Claude bridge, but that tree is provider-owned
+    foreign state per ``_PROVIDER_HOME_NAMES``. Longhouse should never
+    park its own state under another provider's home dir.
+    """
+
+    name = (provider or "").strip()
+    if not name:
+        raise ValueError("provider must not be empty")
+    return resolve_longhouse_home(base_dir) / "managed-local" / name
+
+
 def _normalize_longhouse_home(path: Path) -> Path:
     if path.name in _PROVIDER_HOME_NAMES:
         parent = path.parent
