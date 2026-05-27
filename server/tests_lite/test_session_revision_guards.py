@@ -63,6 +63,111 @@ async def test_generate_summary_impl_skips_provider_when_summary_revision_curren
 
 
 @pytest.mark.asyncio
+async def test_generate_summary_impl_marks_summary_current_when_llm_disabled(tmp_path):
+    from zerg.services.session_enrichment_reconciler import select_stale_summary_session_ids
+    from zerg.services.session_summaries import generate_summary_impl
+
+    factory = _make_db(tmp_path, "summary_llm_disabled.db")
+
+    db = factory()
+    session = AgentSession(
+        provider="claude",
+        environment="test",
+        project="zerg",
+        started_at=datetime.now(timezone.utc),
+        transcript_revision=2,
+        summary_revision=0,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    session_id = str(session.id)
+    db.close()
+
+    settings = SimpleNamespace(testing=False, llm_disabled=True)
+
+    with (
+        patch("zerg.database.get_session_factory", return_value=factory),
+        patch("zerg.services.session_summaries.get_settings", return_value=settings),
+        patch(
+            "zerg.models_config.get_llm_client_for_use_case",
+            side_effect=AssertionError("summary provider should not be fetched when LLMs are disabled"),
+        ),
+    ):
+        await generate_summary_impl(session_id)
+
+    verify = factory()
+    try:
+        refreshed = verify.query(AgentSession).filter(AgentSession.id == session_id).one()
+        assert refreshed.summary_revision == 2
+        assert refreshed.summary_title == "zerg"
+        assert select_stale_summary_session_ids(verify, limit=10) == []
+    finally:
+        verify.close()
+
+
+@pytest.mark.asyncio
+async def test_generate_summary_impl_marks_summary_current_when_llm_misconfigured(tmp_path):
+    from zerg.services.session_enrichment_reconciler import select_stale_summary_session_ids
+    from zerg.services.session_summaries import generate_summary_impl
+
+    factory = _make_db(tmp_path, "summary_llm_misconfigured.db")
+
+    db = factory()
+    session = AgentSession(
+        provider="claude",
+        environment="test",
+        project="zerg",
+        started_at=datetime.now(timezone.utc),
+        transcript_revision=2,
+        summary_revision=0,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    session_id = str(session.id)
+    db.add(
+        AgentEvent(
+            session_id=session.id,
+            role="user",
+            content_text="Please investigate hosted ingest timeouts.",
+            timestamp=datetime.now(timezone.utc),
+        )
+    )
+    db.add(
+        AgentEvent(
+            session_id=session.id,
+            role="assistant",
+            content_text="The summary reconciler is repeatedly selecting sessions it cannot summarize.",
+            timestamp=datetime.now(timezone.utc),
+        )
+    )
+    db.commit()
+    db.close()
+
+    settings = SimpleNamespace(testing=False, llm_disabled=False)
+
+    with (
+        patch("zerg.database.get_session_factory", return_value=factory),
+        patch("zerg.services.session_summaries.get_settings", return_value=settings),
+        patch(
+            "zerg.models_config.get_llm_client_for_use_case",
+            side_effect=ValueError("OPENROUTER_API_KEY required"),
+        ),
+    ):
+        await generate_summary_impl(session_id)
+
+    verify = factory()
+    try:
+        refreshed = verify.query(AgentSession).filter(AgentSession.id == session_id).one()
+        assert refreshed.summary_revision == 2
+        assert refreshed.summary_title == "zerg"
+        assert select_stale_summary_session_ids(verify, limit=10) == []
+    finally:
+        verify.close()
+
+
+@pytest.mark.asyncio
 async def test_generate_embeddings_impl_skips_provider_when_embedding_revision_current(tmp_path):
     from zerg.services.session_summaries import generate_embeddings_impl
 

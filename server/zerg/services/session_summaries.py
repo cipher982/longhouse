@@ -205,8 +205,8 @@ async def generate_summary_impl(session_id: str) -> None:
 
     settings = get_settings()
 
-    if settings.testing or settings.llm_disabled:
-        logger.debug("LLM disabled or testing mode, skipping summary for %s", session_id)
+    if settings.testing:
+        logger.debug("Testing mode, skipping summary for %s", session_id)
         return
 
     session_factory = get_session_factory()
@@ -227,6 +227,18 @@ async def generate_summary_impl(session_id: str) -> None:
                 session_id,
                 summary_revision,
                 transcript_revision,
+            )
+            return
+
+        if settings.llm_disabled:
+            logger.debug("LLM disabled, marking summary current for %s", session_id)
+            await set_structured_title_if_empty(session_id)
+            await _advance_session_revision(
+                db=db,
+                session_id=session_id,
+                column_name="summary_revision",
+                target_revision=transcript_revision,
+                label="summary-revision",
             )
             return
 
@@ -263,9 +275,8 @@ async def generate_summary_impl(session_id: str) -> None:
             return
 
         new_event_dicts = events_to_dicts(new_events)
-        meaningful_count = sum(
-            1 for e in new_event_dicts if e["role"] in ("user", "assistant") and e.get("content_text")
-        )
+        meaningful_roles = {"user", "assistant"}
+        meaningful_count = sum(1 for e in new_event_dicts if e["role"] in meaningful_roles and e.get("content_text"))
         if meaningful_count < 2:
             logger.debug("Only %d new messages for session %s, waiting for more", meaningful_count, session_id)
             await set_structured_title_if_empty(session_id)
@@ -301,6 +312,13 @@ async def generate_summary_impl(session_id: str) -> None:
                     e,
                 )
                 await set_structured_title_if_empty(session_id)
+                await _advance_session_revision(
+                    db=db,
+                    session_id=session_id,
+                    column_name="summary_revision",
+                    target_revision=transcript_revision,
+                    label="summary-revision",
+                )
                 return
 
         # Release the read connection before the LLM call. Summary generation is
