@@ -5,6 +5,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 
+from sqlalchemy import event as sqlalchemy_event
 from sqlalchemy.orm import sessionmaker
 
 from zerg.database import Base
@@ -19,6 +20,7 @@ from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
 from zerg.services.agents_store import SourceLineIngest
+from zerg.services.provisional_events import cleanup_bridge_transcript_preview_observations
 from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_observation_reducers import reduce_bridge_transcript_observation
 from zerg.services.session_observations import OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
@@ -273,6 +275,163 @@ def test_active_preview_loader_caps_observations_per_session(monkeypatch, tmp_pa
     assert preview.text == "preview 8"
     assert len(seen_row_ids) == 3
     assert seen_row_ids == sorted(seen_row_ids, reverse=True)
+
+
+def test_active_preview_loader_uses_session_activity_without_scanning_events(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "live_overlay_preview_no_event_scan.db")
+    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+        db.add(
+            AgentEvent(
+                session_id=session.id,
+                role="assistant",
+                content_text="newer durable row that should not be scanned by the preview loader",
+                timestamp=now + timedelta(minutes=5),
+                event_origin="durable",
+            )
+        )
+        ingest_runtime_events(
+            db,
+            [
+                _bridge_transcript_event(
+                    session_id=session.id,
+                    occurred_at=now,
+                    seq=1,
+                    live_text="bounded preview",
+                )
+            ],
+        )
+        db.commit()
+
+        statements: list[str] = []
+
+        def _collect_statement(_conn, _cursor, statement, _parameters, _context, _executemany):
+            statements.append(statement)
+
+        bind = db.get_bind()
+        sqlalchemy_event.listen(bind, "before_cursor_execute", _collect_statement)
+        try:
+            preview = load_active_provisional_preview_map(db, [session.id])[str(session.id)]
+        finally:
+            sqlalchemy_event.remove(bind, "before_cursor_execute", _collect_statement)
+
+    assert preview.text == "bounded preview"
+    assert not any("FROM events" in statement for statement in statements)
+
+
+def test_live_preview_cleanup_keeps_bounded_latest_window(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "live_overlay_preview_retention.db")
+    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+        ingest_runtime_events(
+            db,
+            [
+                _bridge_transcript_event(
+                    session_id=session.id,
+                    occurred_at=now + timedelta(milliseconds=idx),
+                    seq=idx,
+                    live_text=f"preview {idx}",
+                )
+                for idx in range(1, 9)
+            ],
+        )
+        db.commit()
+
+        removed = cleanup_bridge_transcript_preview_observations(
+            db,
+            session_ids=[session.id],
+            keep_per_session=3,
+            batch_size=10,
+        )
+        remaining = (
+            db.query(SessionObservation)
+            .filter(SessionObservation.session_id == session.id)
+            .order_by(SessionObservation.observed_at.asc(), SessionObservation.id.asc())
+            .all()
+        )
+        preview = load_active_provisional_preview_map(db, [session.id])[str(session.id)]
+
+    assert removed == 5
+    assert [json.loads(row.payload_json or "{}")["payload"]["seq"] for row in remaining] == [6, 7, 8]
+    assert preview.text == "preview 8"
+
+
+def test_live_preview_cleanup_removes_rows_covered_by_durable_activity(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "live_overlay_preview_durable_retention.db")
+    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+        ingest_runtime_events(
+            db,
+            [
+                _bridge_transcript_event(session_id=session.id, occurred_at=now, seq=1, live_text="old preview"),
+                _bridge_transcript_event(
+                    session_id=session.id,
+                    occurred_at=now + timedelta(seconds=10),
+                    seq=2,
+                    live_text="current preview",
+                ),
+            ],
+        )
+        _ingest_durable_session(db, session=session, now=now)
+        db.commit()
+
+        removed = cleanup_bridge_transcript_preview_observations(
+            db,
+            session_ids=[session.id],
+            keep_per_session=10,
+            batch_size=10,
+        )
+        remaining = (
+            db.query(SessionObservation)
+            .filter(SessionObservation.session_id == session.id)
+            .filter(SessionObservation.kind == OBS_KIND_BRIDGE_TRANSCRIPT_DELTA)
+            .all()
+        )
+        preview = load_active_provisional_preview_map(db, [session.id])[str(session.id)]
+
+    assert removed == 0
+    assert len(remaining) == 1
+    assert preview.text == "current preview"
+
+
+def test_runtime_ingest_prunes_bridge_preview_window_on_write(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "live_overlay_preview_write_retention.db")
+    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+    keep = provisional_events_service.BRIDGE_TRANSCRIPT_OBSERVATION_KEEP_PER_SESSION
+
+    with SessionLocal() as db:
+        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+        ingest_runtime_events(
+            db,
+            [
+                _bridge_transcript_event(
+                    session_id=session.id,
+                    occurred_at=now + timedelta(milliseconds=idx),
+                    seq=idx,
+                    live_text=f"preview {idx}",
+                )
+                for idx in range(1, keep + 8)
+            ],
+        )
+        db.commit()
+        remaining = (
+            db.query(SessionObservation)
+            .filter(SessionObservation.session_id == session.id)
+            .filter(SessionObservation.kind == OBS_KIND_BRIDGE_TRANSCRIPT_DELTA)
+            .order_by(SessionObservation.observed_at.asc(), SessionObservation.id.asc())
+            .all()
+        )
+        preview = load_active_provisional_preview_map(db, [session.id])[str(session.id)]
+
+    assert len(remaining) == keep
+    assert json.loads(remaining[0].payload_json or "{}")["payload"]["seq"] == 8
+    assert preview.text == f"preview {keep + 7}"
 
 
 def test_bridge_transcript_observation_rebuild_does_not_create_event(tmp_path):

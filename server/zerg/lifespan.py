@@ -170,7 +170,8 @@ async def lifespan(app: FastAPI):
                         ).fetchone()
                         if not fts_row:
                             raise RuntimeError("events_fts table is missing (FTS5 required).")
-                        conn.execute(text("SELECT rowid FROM events_fts WHERE events_fts MATCH 'fts5' LIMIT 1")).fetchone()
+                        fts_probe_sql = "SELECT rowid FROM events_fts WHERE events_fts MATCH 'fts5' LIMIT 1"
+                        conn.execute(text(fts_probe_sql)).fetchone()
             except Exception as fts_error:
                 app.state.fts_violation = str(fts_error)
                 logger.error(f"FTS5 readiness check failed: {fts_error}")
@@ -343,6 +344,32 @@ async def lifespan(app: FastAPI):
                 failed.append(f"attachment_cleanup ({e})")
                 logger.exception("Failed to start attachment_cleanup")
 
+            # Live-preview observation reaper: bridge transcript deltas are
+            # disposable UI evidence and can be very large during active turns.
+            try:
+                from zerg.database import get_session_factory as _get_sf_preview
+                from zerg.services.provisional_events import cleanup_bridge_transcript_preview_observations
+
+                async def _live_preview_cleanup_loop() -> None:
+                    while True:
+                        try:
+                            await asyncio.sleep(60)
+                            db = _get_sf_preview()()
+                            try:
+                                cleanup_bridge_transcript_preview_observations(db)
+                            finally:
+                                db.close()
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:  # noqa: BLE001
+                            logger.exception("live preview cleanup tick failed")
+
+                asyncio.create_task(_live_preview_cleanup_loop())
+                started.append("live_preview_cleanup")
+            except Exception as e:  # noqa: BLE001
+                failed.append(f"live_preview_cleanup ({e})")
+                logger.exception("Failed to start live_preview_cleanup")
+
             # Live session summary/title enrichment. This scans session revision
             # lag directly; it is intentionally separate from the legacy ingest
             # task workers.
@@ -358,7 +385,7 @@ async def lifespan(app: FastAPI):
             # Job queue
             if _settings.job_queue_enabled and not _settings.testing:
                 try:
-                    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+                    from apscheduler.schedulers.asyncio import AsyncIOScheduler  # noqa: I001
 
                     from zerg.jobs.commis import enqueue_missed_runs
                     from zerg.jobs.commis import run_queue_commis

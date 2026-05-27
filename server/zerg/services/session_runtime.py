@@ -593,6 +593,7 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
     accepted = 0
     duplicates = 0
     updated_runtime_keys: list[str] = []
+    bridge_preview_cleanup_session_ids: set[UUID] = set()
 
     for event in events:
         received_at = datetime.now(timezone.utc)
@@ -612,6 +613,8 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
         if bridge_transcript_event:
             outcome = "stored_live_overlay"
             _record_managed_codex_runtime_observation(event, outcome)
+            if event.session_id is not None:
+                bridge_preview_cleanup_session_ids.add(event.session_id)
             if event.runtime_key not in updated_runtime_keys:
                 updated_runtime_keys.append(event.runtime_key)
             continue
@@ -622,6 +625,15 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
         _record_managed_codex_runtime_observation(event, outcome)
         if outcome == "applied" and event.runtime_key not in updated_runtime_keys:
             updated_runtime_keys.append(event.runtime_key)
+
+    if bridge_preview_cleanup_session_ids:
+        from zerg.services.provisional_events import cleanup_bridge_transcript_preview_observations
+
+        cleanup_bridge_transcript_preview_observations(
+            db,
+            session_ids=list(bridge_preview_cleanup_session_ids),
+            commit=False,
+        )
 
     return RuntimeEventBatchResult(
         accepted=accepted,
@@ -823,7 +835,9 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
             refresh_at = _managed_lease_refresh_at(event, occurred_at)
             freshness_ms = _phase_signal_freshness_ms(event, next_phase)
             state.last_live_at = _latest_timestamp(state.last_live_at, refresh_at)
-            state.freshness_expires_at = refresh_at + timedelta(milliseconds=freshness_ms) if freshness_ms is not None else None
+            state.freshness_expires_at = None
+            if freshness_ms is not None:
+                state.freshness_expires_at = refresh_at + timedelta(milliseconds=freshness_ms)
             event_source = str(event.source or "").strip()
             if event_source in MANAGED_CODEX_RUNTIME_SOURCES:
                 state.phase_source = event_source
@@ -837,7 +851,8 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
                 return "applied"
             return "ignored"
         phase_changed = state.phase != next_phase
-        active_tool_changed = next_phase in {"running", "blocked"} and (state.active_tool or None) != (next_active_tool or None)
+        tool_phase = next_phase in {"running", "blocked"}
+        active_tool_changed = tool_phase and (state.active_tool or None) != (next_active_tool or None)
         if phase_changed or active_tool_changed:
             if phase_changed and _phase_reanchors(state.phase, next_phase):
                 state.timeline_anchor_at = occurred_at
@@ -853,7 +868,9 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         freshness_base_at = _managed_lease_refresh_at(event, occurred_at)
         state.last_live_at = _latest_timestamp(occurred_at, freshness_base_at)
         freshness_ms = _phase_signal_freshness_ms(event, next_phase)
-        state.freshness_expires_at = freshness_base_at + timedelta(milliseconds=freshness_ms) if freshness_ms is not None else None
+        state.freshness_expires_at = None
+        if freshness_ms is not None:
+            state.freshness_expires_at = freshness_base_at + timedelta(milliseconds=freshness_ms)
         state.terminal_state = None
         state.terminal_reason = None
         state.terminal_source = None
@@ -898,7 +915,12 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
             state.last_progress_at,
             state.terminal_at,
         )
-        if latest_terminal_related_at is not None and occurred_at < latest_terminal_related_at and terminal_state != "session_ended":
+        terminal_is_newer_than_event = False
+        if latest_terminal_related_at is not None:
+            terminal_is_newer_than_event = occurred_at < latest_terminal_related_at
+        terminal_is_session_end = terminal_state == "session_ended"
+        terminal_superseded = terminal_is_newer_than_event and not terminal_is_session_end
+        if terminal_superseded:
             return "ignored"
         terminal_reason = str((event.payload or {}).get("terminal_reason") or "").strip() or None
         if terminal_reason is None and terminal_state in {"process_gone", "host_expired", "user_closed"}:

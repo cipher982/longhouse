@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -11,6 +12,7 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentEvent
+from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
 from zerg.services.session_observations import OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
 from zerg.utils.time import normalize_utc
@@ -18,6 +20,11 @@ from zerg.utils.time import normalize_utc
 EVENT_ORIGIN_DURABLE = "durable"
 EVENT_ORIGIN_LIVE_PROVISIONAL = "live_provisional"
 MAX_ACTIVE_PREVIEW_OBSERVATIONS_PER_SESSION = 50
+BRIDGE_TRANSCRIPT_OBSERVATION_KEEP_PER_SESSION = 200
+BRIDGE_TRANSCRIPT_OBSERVATION_CLEANUP_BATCH_SIZE = 5000
+BRIDGE_TRANSCRIPT_OBSERVATION_CLEANUP_MAX_SESSIONS = 25
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -67,33 +74,14 @@ def load_active_provisional_preview_map(db: Session, session_ids: list[UUID]) ->
     if not session_ids:
         return {}
 
-    durable_activity = {
-        str(row.session_id): normalize_utc(row.latest_activity_at)
-        for row in (
-            db.query(
-                AgentEvent.session_id.label("session_id"),
-                func.max(AgentEvent.timestamp).label("latest_activity_at"),
-            )
-            .filter(AgentEvent.session_id.in_(session_ids))
-            .filter(durable_transcript_event_predicate())
-            .group_by(AgentEvent.session_id)
-            .all()
-        )
-    }
-
     rows: list[SessionObservation] = []
     for session_id in session_ids:
-        query = (
+        rows.extend(
             db.query(SessionObservation)
             .filter(SessionObservation.session_id == session_id)
             .filter(SessionObservation.source == "codex_bridge_live")
             .filter(SessionObservation.kind == OBS_KIND_BRIDGE_TRANSCRIPT_DELTA)
-        )
-        latest_durable_at = durable_activity.get(str(session_id))
-        if latest_durable_at is not None:
-            query = query.filter(SessionObservation.observed_at >= latest_durable_at)
-        rows.extend(
-            query.order_by(SessionObservation.observed_at.desc(), SessionObservation.id.desc())
+            .order_by(SessionObservation.observed_at.desc(), SessionObservation.id.desc())
             .limit(MAX_ACTIVE_PREVIEW_OBSERVATIONS_PER_SESSION)
             .all()
         )
@@ -101,11 +89,6 @@ def load_active_provisional_preview_map(db: Session, session_ids: list[UUID]) ->
     for row in rows:
         candidate = _preview_candidate_from_bridge_observation(row)
         if candidate is None:
-            continue
-        preview = candidate.preview
-        latest_durable_at = durable_activity.get(str(row.session_id))
-        preview_at = normalize_utc(preview.timestamp)
-        if latest_durable_at is not None and preview_at is not None and latest_durable_at > preview_at:
             continue
         key = (candidate.session_id, candidate.turn_key)
         existing = candidates_by_turn.get(key)
@@ -121,6 +104,132 @@ def load_active_provisional_preview_map(db: Session, session_ids: list[UUID]) ->
         ):
             previews[candidate.session_id] = candidate.preview
     return previews
+
+
+def cleanup_bridge_transcript_preview_observations(
+    db: Session,
+    *,
+    session_ids: list[UUID] | None = None,
+    keep_per_session: int = BRIDGE_TRANSCRIPT_OBSERVATION_KEEP_PER_SESSION,
+    batch_size: int = BRIDGE_TRANSCRIPT_OBSERVATION_CLEANUP_BATCH_SIZE,
+    max_sessions: int = BRIDGE_TRANSCRIPT_OBSERVATION_CLEANUP_MAX_SESSIONS,
+    commit: bool = True,
+    latest_durable_at_by_session: dict[UUID, datetime] | None = None,
+) -> int:
+    """Prune disposable Codex live-preview observations.
+
+    Bridge transcript deltas are raw live UI evidence, not durable archive.
+    Durable transcript rows and the latest bounded preview window are enough
+    for timeline rendering, so keep cleanup incremental to avoid long SQLite
+    writer stalls on large dogfood databases.
+    """
+    if keep_per_session < 1 or batch_size < 1 or max_sessions < 1:
+        return 0
+
+    candidate_session_ids = session_ids or _bridge_preview_session_ids(db, max_sessions=max_sessions)
+    if not candidate_session_ids:
+        return 0
+
+    removed = 0
+    durable_activity = _latest_durable_activity_map(db, candidate_session_ids)
+    if latest_durable_at_by_session:
+        for session_id, latest_durable_at in latest_durable_at_by_session.items():
+            durable_activity[str(session_id)] = normalize_utc(latest_durable_at)
+    for session_id in candidate_session_ids[:max_sessions]:
+        remaining = batch_size - removed
+        if remaining <= 0:
+            break
+        latest_durable_at = durable_activity.get(str(session_id))
+        if latest_durable_at is not None:
+            removed += _delete_bridge_preview_observation_ids(
+                db,
+                _bridge_preview_ids_before_durable(db, session_id, latest_durable_at, limit=remaining),
+            )
+        remaining = batch_size - removed
+        if remaining <= 0:
+            break
+        removed += _delete_bridge_preview_observation_ids(
+            db,
+            _bridge_preview_ids_over_cap(db, session_id, keep_per_session=keep_per_session, limit=remaining),
+        )
+
+    if removed and commit:
+        db.commit()
+    if removed:
+        logger.info("live preview cleanup: removed %d bridge transcript observation rows", removed)
+    return removed
+
+
+def _latest_durable_activity_map(db: Session, session_ids: list[UUID]) -> dict[str, datetime | None]:
+    return {
+        str(row.id): normalize_utc(row.last_activity_at)
+        for row in (
+            db.query(AgentSession.id, AgentSession.last_activity_at)
+            .filter(AgentSession.id.in_(session_ids))
+            .filter(AgentSession.last_activity_at.isnot(None))
+            .all()
+        )
+    }
+
+
+def _bridge_preview_session_ids(db: Session, *, max_sessions: int) -> list[UUID]:
+    rows = (
+        db.query(AgentSession.id)
+        .filter(AgentSession.provider == "codex")
+        .order_by(func.coalesce(AgentSession.last_activity_at, AgentSession.started_at).desc(), AgentSession.id.desc())
+        .limit(max_sessions)
+        .all()
+    )
+    return [row[0] for row in rows if row[0] is not None]
+
+
+def _bridge_preview_query(db: Session, session_id: UUID):
+    return (
+        db.query(SessionObservation.id)
+        .filter(SessionObservation.session_id == session_id)
+        .filter(SessionObservation.source == "codex_bridge_live")
+        .filter(SessionObservation.kind == OBS_KIND_BRIDGE_TRANSCRIPT_DELTA)
+    )
+
+
+def _bridge_preview_ids_before_durable(
+    db: Session,
+    session_id: UUID,
+    latest_durable_at: datetime,
+    *,
+    limit: int,
+) -> list[int]:
+    rows = (
+        _bridge_preview_query(db, session_id)
+        .filter(SessionObservation.observed_at < latest_durable_at)
+        .order_by(SessionObservation.observed_at.asc(), SessionObservation.id.asc())
+        .limit(limit)
+        .all()
+    )
+    return [int(row[0]) for row in rows]
+
+
+def _bridge_preview_ids_over_cap(
+    db: Session,
+    session_id: UUID,
+    *,
+    keep_per_session: int,
+    limit: int,
+) -> list[int]:
+    rows = (
+        _bridge_preview_query(db, session_id)
+        .order_by(SessionObservation.observed_at.desc(), SessionObservation.id.desc())
+        .offset(keep_per_session)
+        .limit(limit)
+        .all()
+    )
+    return [int(row[0]) for row in rows]
+
+
+def _delete_bridge_preview_observation_ids(db: Session, ids: list[int]) -> int:
+    if not ids:
+        return 0
+    return db.query(SessionObservation).filter(SessionObservation.id.in_(ids)).delete(synchronize_session=False)
 
 
 def _preview_candidate_from_bridge_observation(row: SessionObservation) -> _PreviewCandidate | None:

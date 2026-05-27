@@ -364,7 +364,8 @@ class AgentsStore:
         if bind is None or bind.dialect.name != "sqlite":
             return False
         try:
-            row = self.db.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")).fetchone()
+            fts_exists_sql = "SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1"
+            row = self.db.execute(text(fts_exists_sql)).fetchone()
             return row is not None
         except Exception:
             return False
@@ -411,11 +412,14 @@ class AgentsStore:
 
         incoming_environment = data.environment.strip()
         existing_environment = (session.environment or "").strip()
-        if incoming_environment and (
-            not existing_environment
-            or (is_generic_environment_label(existing_environment) and not is_generic_environment_label(incoming_environment))
-        ):
-            session.environment = incoming_environment
+        existing_environment_is_generic = is_generic_environment_label(existing_environment)
+        incoming_environment_is_specific = not is_generic_environment_label(incoming_environment)
+        if incoming_environment:
+            should_update_environment = not existing_environment
+            if not should_update_environment:
+                should_update_environment = existing_environment_is_generic and incoming_environment_is_specific
+            if should_update_environment:
+                session.environment = incoming_environment
 
         if not normalize_session_label(session.origin_label):
             session.origin_label = _infer_origin_label_from_ingest(data)
@@ -873,9 +877,9 @@ class AgentsStore:
         if not source_paths:
             return latest, max_offset_by_path
 
-        query = (
-            self.db.query(AgentSourceLine).filter(AgentSourceLine.session_id == session_id).filter(AgentSourceLine.branch_id == branch_id)
-        )
+        query = self.db.query(AgentSourceLine)
+        query = query.filter(AgentSourceLine.session_id == session_id)
+        query = query.filter(AgentSourceLine.branch_id == branch_id)
         if source_offsets_by_path is None:
             rows = query.filter(AgentSourceLine.source_path.in_(sorted(source_paths))).all()
         else:
@@ -1104,7 +1108,11 @@ class AgentsStore:
             self.db.query(AgentSourceLine)
             .filter(AgentSourceLine.session_id == session_id)
             .filter(AgentSourceLine.branch_id == from_branch_id)
-            .order_by(AgentSourceLine.source_path.asc(), AgentSourceLine.source_offset.asc(), AgentSourceLine.revision.asc())
+            .order_by(
+                AgentSourceLine.source_path.asc(),
+                AgentSourceLine.source_offset.asc(),
+                AgentSourceLine.revision.asc(),
+            )
             .all()
         )
         latest_by_offset: dict[tuple[str, int], AgentSourceLine] = {}
@@ -1148,7 +1156,9 @@ class AgentsStore:
         event_copies = []
         for event in parent_events:
             event_offset = int(event.source_offset) if event.source_offset is not None else None
-            if event.source_path == signal.source_path and event_offset is not None and event_offset >= signal.source_offset:
+            event_matches_signal_path = event.source_path == signal.source_path
+            event_is_after_rewind = event_offset is not None and event_offset >= signal.source_offset
+            if event_matches_signal_path and event_is_after_rewind:
                 continue
             event_copies.append(
                 AgentEvent(
@@ -1461,7 +1471,8 @@ class AgentsStore:
                         .on_conflict_do_nothing()
                     )
                     insert_result = self.db.execute(event_stmt) if observation_result.inserted else None
-                    event_inserted = bool(insert_result is not None and insert_result.rowcount and insert_result.rowcount > 0)
+                    inserted_rowcount = insert_result.rowcount if insert_result is not None else 0
+                    event_inserted = bool(inserted_rowcount and inserted_rowcount > 0)
                     reduction = ProviderEventReduction(event=None, inserted=event_inserted)
                 elif observation_result.observation is not None:
                     reduction = reduce_provider_event_observation(self.db, observation_result.observation)
@@ -1472,11 +1483,10 @@ class AgentsStore:
                     if reduction.event is not None and isinstance(reduction.event.id, int):
                         latest_inserted_event_id = reduction.event.id
                     if fts_triggers_dropped:
-                        has_inserted_event_id = (
-                            reduction.event is not None and isinstance(reduction.event.id, int) and reduction.event.id > 0
-                        )
+                        inserted_event_id = reduction.event.id if reduction.event is not None else None
+                        has_inserted_event_id = isinstance(inserted_event_id, int) and inserted_event_id > 0
                         if has_inserted_event_id:
-                            inserted_event_ids.append(reduction.event.id)
+                            inserted_event_ids.append(inserted_event_id)
                         else:
                             needs_session_wide_fts_backfill = True
                     normalized_timestamp = _normalize_utc_naive(event_data.timestamp)
@@ -1605,7 +1615,7 @@ class AgentsStore:
         transcript_changed = bool(source_lines_inserted) or not source_lines or rewind_signal is not None
         if events_inserted > 0 and not transcript_changed:
             logger.warning(
-                "Ingest inserted %s event rows for session %s without a source-line delta; suppressing post-ingest tasks",
+                "Ingest inserted %s event rows for session %s without source-line delta; skipping post-ingest tasks",
                 events_inserted,
                 session_id,
             )
@@ -1618,6 +1628,14 @@ class AgentsStore:
                 current = _normalize_utc_naive(session_obj.last_activity_at)
                 if current is None or latest_inserted_timestamp > current:
                     session_obj.last_activity_at = latest_inserted_timestamp
+                from zerg.services.provisional_events import cleanup_bridge_transcript_preview_observations
+
+                cleanup_bridge_transcript_preview_observations(
+                    self.db,
+                    session_ids=[session_id],
+                    commit=False,
+                    latest_durable_at_by_session={session_id: latest_inserted_timestamp},
+                )
         _record_stage("session_projection", stage_started)
 
         stage_started = time.monotonic()
@@ -1974,12 +1992,9 @@ class AgentsStore:
         if ranked_subq is None:
             return 0, ()
 
-        total = (
-            self.db.execute(
-                select(func.count()).select_from(select(ranked_subq.c.thread_id).where(ranked_subq.c.rn == 1).subquery())
-            ).scalar()
-            or 0
-        )
+        thread_ids_stmt = select(ranked_subq.c.thread_id).where(ranked_subq.c.rn == 1)
+        total_stmt = select(func.count()).select_from(thread_ids_stmt.subquery())
+        total = self.db.execute(total_stmt).scalar() or 0
         rows = tuple(
             self.db.execute(
                 select(
@@ -2036,12 +2051,9 @@ class AgentsStore:
 
         total: int | None = None
         if include_total:
-            total = (
-                self.db.execute(
-                    select(func.count()).select_from(select(ranked_subq.c.thread_id).where(ranked_subq.c.rn == 1).subquery())
-                ).scalar()
-                or 0
-            )
+            thread_ids_stmt = select(ranked_subq.c.thread_id).where(ranked_subq.c.rn == 1)
+            total_stmt = select(func.count()).select_from(thread_ids_stmt.subquery())
+            total = self.db.execute(total_stmt).scalar() or 0
 
         rows = tuple(
             self.db.execute(
@@ -2149,7 +2161,9 @@ class AgentsStore:
             stmt = stmt.where(or_(AgentSession.user_messages > 0, AgentSession.ended_at.is_(None)))
 
         if exclude_user_states:
-            stmt = stmt.where((AgentSession.user_state.notin_(exclude_user_states)) | (AgentSession.user_state.is_(None)))
+            excluded_state = AgentSession.user_state.notin_(exclude_user_states)
+            missing_state = AgentSession.user_state.is_(None)
+            stmt = stmt.where(excluded_state | missing_state)
 
         if query:
             session_ids = self._fts_session_ids(query, context_mode=context_mode, branch_mode=branch_mode)
@@ -2647,7 +2661,9 @@ class AgentsStore:
         projects = [p for (p,) in self.db.execute(projects_stmt).fetchall() if p]
 
         # Get distinct providers
-        providers_stmt = select(AgentSession.provider).where(AgentSession.started_at >= since).distinct().order_by(AgentSession.provider)
+        providers_stmt = select(AgentSession.provider)
+        providers_stmt = providers_stmt.where(AgentSession.started_at >= since)
+        providers_stmt = providers_stmt.distinct().order_by(AgentSession.provider)
         providers = [p for (p,) in self.db.execute(providers_stmt).fetchall() if p]
 
         # Get distinct machine names (stored in environment column)
