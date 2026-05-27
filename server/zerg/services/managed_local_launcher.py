@@ -19,12 +19,13 @@ from zerg.services.agents.kernel_writes import record_run
 from zerg.services.agents.kernel_writes import record_thread_alias
 from zerg.services.managed_local_runtime import mark_managed_local_session_launched
 from zerg.services.managed_local_transport import build_managed_local_attach_command
+from zerg.services.managed_provider_contracts import managed_provider_names
+from zerg.services.managed_provider_contracts import require_contract_for_provider
 from zerg.services.runner_connection_manager import get_runner_connection_manager
-from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_loop_mode import coerce_session_loop_mode
 
-_VALID_PROVIDERS = {"claude", "codex", "opencode", "antigravity"}
+_VALID_PROVIDERS = managed_provider_names()
 _MANAGED_LOCAL_NAME_SAFE_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
 _MANAGED_LOCAL_NAME_MAX = 64
 
@@ -168,7 +169,8 @@ def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchPar
     provider_session_id = str(session_uuid)
     project = _derive_project(cwd, params.project)
     display_name = (params.display_name or project).strip() or project
-    transport = ManagedSessionTransport.for_provider(provider)
+    contract = require_contract_for_provider(provider)
+    transport = contract.managed_transport
 
     session = AgentSession(
         id=session_uuid,
@@ -218,30 +220,19 @@ def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchPar
         cwd=cwd,
         launch_origin="longhouse_spawned",
     )
-    if provider == "codex":
-        control_plane = "codex_bridge"
-    elif provider == "opencode":
-        control_plane = "opencode_process"
-    elif provider == "antigravity":
-        control_plane = "antigravity_process"
-    else:
-        control_plane = "claude_channel_bridge"
-    # OpenCode is now first-class managed: longhouse owns `opencode serve`
-    # and drives upstream HTTP via `longhouse opencode-bridge`. Antigravity
-    # remains observe-only for now.
-    process_observe_only = provider in {"antigravity"}
+    connection_capabilities = contract.connection_capabilities
     record_connection(
         db,
         run=run,
-        control_plane=control_plane,
+        control_plane=contract.control_plane,
         acquisition_kind="spawned_control",
         state="attached",
         external_name=session.managed_session_name,
-        can_send_input=0 if process_observe_only else 1,
-        can_interrupt=0 if process_observe_only else 1,
-        can_terminate=0 if process_observe_only else 1,
-        can_tail_output=1,
-        can_resume=0 if process_observe_only else 1,
+        can_send_input=connection_capabilities["can_send_input"],
+        can_interrupt=connection_capabilities["can_interrupt"],
+        can_terminate=connection_capabilities["can_terminate"],
+        can_tail_output=connection_capabilities["can_tail_output"],
+        can_resume=connection_capabilities["can_resume"],
     )
 
     mark_managed_local_session_launched(db, session=session)

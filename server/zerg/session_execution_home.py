@@ -34,15 +34,10 @@ class ManagedSessionTransport(str, Enum):
         machine_name: str | None = None,
         native_claude_channels_available: bool | None = None,
     ) -> "ManagedSessionTransport":
-        if provider == "codex":
-            return ManagedSessionTransport.CODEX_APP_SERVER
-        if provider == "opencode":
-            return ManagedSessionTransport.OPENCODE_PROCESS
-        if provider == "antigravity":
-            return ManagedSessionTransport.ANTIGRAVITY_PROCESS
-        if provider == "claude":
-            return ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE
-        raise ValueError(f"Unsupported managed-local provider: {provider}")
+        del machine_name, native_claude_channels_available
+        from zerg.services.managed_provider_contracts import managed_transport_for_provider
+
+        return managed_transport_for_provider(provider)
 
 
 def coerce_execution_home(value: str | None) -> SessionExecutionHome | None:

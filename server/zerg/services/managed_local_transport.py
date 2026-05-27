@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentSession
 from zerg.services.claude_channel_bridge import build_claude_channel_exec_command
 from zerg.services.managed_local_shell import build_managed_local_shell_prelude
+from zerg.services.managed_provider_contracts import managed_transport_for_control_plane
 from zerg.session_execution_home import ManagedSessionTransport
 
 
@@ -105,14 +106,8 @@ def build_managed_local_attach_command(*, session: AgentSession, db: Session | N
         if not caps.host_reattach_available:
             return None
         control_plane = (caps.control_plane or "").strip()
-        # Translate to transport-style for the unified branching below.
-        transport = {
-            "codex_bridge": ManagedSessionTransport.CODEX_APP_SERVER.value,
-            "codex_app_server": ManagedSessionTransport.CODEX_APP_SERVER.value,
-            "claude_channel_bridge": ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value,
-            "opencode_process": ManagedSessionTransport.OPENCODE_PROCESS.value,
-            "antigravity_process": ManagedSessionTransport.ANTIGRAVITY_PROCESS.value,
-        }.get(control_plane)
+        resolved_transport = managed_transport_for_control_plane(control_plane)
+        transport = resolved_transport.value if resolved_transport is not None else None
     else:
         transport = getattr(session, "managed_transport", None)
 

@@ -22,6 +22,9 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
+from zerg.services.managed_provider_contracts import control_plane_for_provider
+from zerg.services.managed_provider_contracts import provider_for_control_plane
+from zerg.services.managed_provider_contracts import trusted_non_runner_control_planes
 from zerg.utils.time import normalize_utc
 
 CONTROL_SOURCE_HEARTBEAT = "machine_heartbeat"
@@ -46,10 +49,9 @@ _CONTROL_STATE_BY_KERNEL_STATE = {
 }
 
 _PROVIDER_BY_CONTROL_PLANE = {
-    "codex_bridge": "codex",
-    "claude_channel_bridge": "claude",
-    "opencode_process": "opencode",
-    "antigravity_process": "antigravity",
+    control_plane: provider_for_control_plane(control_plane)
+    for control_plane in trusted_non_runner_control_planes()
+    if provider_for_control_plane(control_plane) is not None
 }
 
 
@@ -58,13 +60,7 @@ def _kernel_connection_state(control_state: str) -> str:
 
 
 def _kernel_control_plane_for_provider(provider: str) -> str:
-    if provider == "codex":
-        return "codex_bridge"
-    if provider == "opencode":
-        return "opencode_process"
-    if provider == "antigravity":
-        return "antigravity_process"
-    return "claude_channel_bridge"
+    return control_plane_for_provider(provider)
 
 
 def _mirror_connection_state(
