@@ -43,6 +43,10 @@ from zerg.services.longhouse_paths import resolve_longhouse_home
 from zerg.services.machine_repair import recommended_machine_repair_command
 from zerg.services.machine_state import machine_state_source_hash
 from zerg.services.machine_state import read_machine_state
+from zerg.services.managed_session_contracts import REASON_BRIDGE_STATE_PATH_MISSING
+from zerg.services.managed_session_contracts import REASON_PROVIDER_SESSION_CWD_MISSING
+from zerg.services.managed_session_contracts import REASON_PROVIDER_SESSION_CWD_REPLACED
+from zerg.services.managed_session_contracts import collect_managed_session_contract_diagnostics
 from zerg.services.shipper.service import get_service_info
 from zerg.services.transport_health import TransportHealthAssessment
 from zerg.services.transport_health import TransportHealthSample
@@ -430,6 +434,47 @@ def _collect_provider_hook_diagnostics(base_dir: Path, *, now: datetime, fast: b
         "events": events,
         "latest": events[0] if events else None,
     }
+
+
+def _apply_managed_session_contract_diagnostics(
+    *,
+    diagnostics: Mapping[str, Any],
+    reasons: list[str],
+    suggested_actions: list[str],
+    managed_sessions: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    raw_issues = diagnostics.get("issues")
+    if not isinstance(raw_issues, list):
+        return None
+    issues = [issue for issue in raw_issues if isinstance(issue, Mapping)]
+    if not issues:
+        return None
+
+    issue_reasons_by_session: dict[str, list[str]] = {}
+    for issue in issues:
+        reason = _normalize_optional_string(issue.get("reason"))
+        if reason and reason not in reasons:
+            reasons.append(reason)
+        action = _normalize_optional_string(issue.get("action"))
+        if action:
+            _with_action(suggested_actions, action)
+        session_id = _normalize_optional_string(issue.get("session_id"))
+        if session_id and reason:
+            issue_reasons_by_session.setdefault(session_id, []).append(reason)
+
+    for session in managed_sessions:
+        session_id = _normalize_optional_string(session.get("session_id"))
+        if not session_id or session_id not in issue_reasons_by_session:
+            continue
+        reason_codes = list(session.get("reason_codes") or [])
+        for reason in issue_reasons_by_session[session_id]:
+            if reason not in reason_codes:
+                reason_codes.append(reason)
+        session["reason_codes"] = reason_codes
+        if session.get("state") == "attached":
+            session["state"] = "degraded"
+
+    return dict(issues[0])
 
 
 _THREAD_SUBSCRIPTION_TRANSIENT_STATES = frozenset(
@@ -3091,8 +3136,12 @@ def _degraded_health_headline(
         headline = "Longhouse local status needs a newer engine"
     elif "engine_status_sessions_invalid" in reasons:
         headline = "Longhouse local status has invalid session data"
-    elif "provider_hook_cwd_missing" in reasons:
+    elif REASON_PROVIDER_SESSION_CWD_MISSING in reasons:
         headline = "A provider session working directory disappeared"
+    elif REASON_PROVIDER_SESSION_CWD_REPLACED in reasons:
+        headline = "A provider session working directory was replaced"
+    elif REASON_BRIDGE_STATE_PATH_MISSING in reasons:
+        headline = "A managed provider bridge state file is missing"
     elif "managed_session_detached" in reasons:
         if managed_detached == 1 and managed_attached == 0:
             headline = "Managed session is running in background"
@@ -3439,6 +3488,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
     launch_readiness = _collect_launch_readiness(resolved_base_dir, service=service)
     transport_sample, transport_assessment = _collect_transport_health(engine_status)
     control_channel = _collect_control_channel_health(engine_status)
+    managed_session_contracts = collect_managed_session_contract_diagnostics(resolved_base_dir)
     provider_hook_diagnostics = _collect_provider_hook_diagnostics(resolved_base_dir, now=now, fast=fast)
     health_state, severity, headline, reasons, suggested_actions = _classify_health(
         service=service,
@@ -3450,9 +3500,15 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         managed_summary=managed_summary,
         managed_sessions=managed_sessions,
     )
+    latest_contract_issue = _apply_managed_session_contract_diagnostics(
+        diagnostics=managed_session_contracts,
+        reasons=reasons,
+        suggested_actions=suggested_actions,
+        managed_sessions=managed_sessions,
+    )
     if provider_hook_diagnostics.get("state") == "session_cwd_missing":
-        if "provider_hook_cwd_missing" not in reasons:
-            reasons.append("provider_hook_cwd_missing")
+        if REASON_PROVIDER_SESSION_CWD_MISSING not in reasons:
+            reasons.append(REASON_PROVIDER_SESSION_CWD_MISSING)
         latest_hook_issue = provider_hook_diagnostics.get("latest")
         latest_cwd = latest_hook_issue.get("cwd") if isinstance(latest_hook_issue, Mapping) else None
         action = (
@@ -3460,11 +3516,15 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
             if latest_cwd
             else "Restart or reattach the affected provider session from an existing directory."
         )
-        suggested_actions.append(action)
+        _with_action(suggested_actions, action)
         if health_state == "healthy":
             health_state = "degraded"
             severity = "yellow"
             headline = "A provider session working directory disappeared"
+    if latest_contract_issue is not None and health_state == "healthy":
+        health_state = "degraded"
+        severity = "yellow"
+        headline = _normalize_optional_string(latest_contract_issue.get("headline")) or "Managed provider session needs attention"
     if int(provider_release_status.get("blocking_count") or 0) > 0:
         if "provider_release_blocked" not in reasons:
             reasons.append("provider_release_blocked")
@@ -3501,6 +3561,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         "outbox": outbox,
         "provider_clis": provider_clis,
         "provider_release_status": provider_release_status,
+        "managed_session_contracts": managed_session_contracts,
         "provider_hook_diagnostics": provider_hook_diagnostics,
         "activity_summary": activity_summary,
         "managed_summary": managed_summary,
