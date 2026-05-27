@@ -7,11 +7,6 @@ from pathlib import Path
 from typing import Literal
 
 _PROVIDER_HOME_NAMES = frozenset({".claude", ".codex", ".gemini"})
-LEGACY_CLAUDE_MANAGED_LOCAL_PROVIDERS = {
-    "codex_bridge": "codex-bridge",
-    "opencode": "opencode",
-    "antigravity": "antigravity",
-}
 LonghouseHomeMode = Literal["stable", "scratch"]
 
 
@@ -151,34 +146,6 @@ def get_managed_local_dir(provider: str, *, base_dir: Path | None = None) -> Pat
     if not name:
         raise ValueError("provider must not be empty")
     return resolve_longhouse_home(base_dir) / "managed-local" / name
-
-
-def get_legacy_claude_managed_local_dir(provider: str, *, base_dir: Path | None = None) -> Path:
-    """Return the old provider-owned managed-local directory for migration checks.
-
-    Before Longhouse-owned managed-session state moved to the Longhouse home,
-    Codex/OpenCode/Antigravity state was written under Claude's config root.
-    This path is legacy evidence only; active liveness must use
-    ``get_managed_local_dir``.
-    """
-
-    name = (provider or "").strip()
-    if not name:
-        raise ValueError("provider must not be empty")
-
-    configured_claude_home = os.getenv("CLAUDE_CONFIG_DIR")
-    if configured_claude_home:
-        claude_home = Path(configured_claude_home).expanduser()
-    elif base_dir is not None:
-        longhouse_home = resolve_longhouse_home(base_dir)
-        if longhouse_home.name == ".longhouse":
-            claude_home = longhouse_home.parent / ".claude"
-        else:
-            claude_home = Path.home() / ".claude"
-    else:
-        claude_home = Path.home() / ".claude"
-
-    return claude_home / "managed-local" / name
 
 
 def _normalize_longhouse_home(path: Path) -> Path:
