@@ -3,7 +3,7 @@
 Status: Draft
 Owner: Machine Agent + managed provider CLI surfaces
 Updated: 2026-05-27
-Related: `managed-codex-prestarted-tui-attach.md`, `managed-codex-state-compat.md`, `managed-codex-liveness.md`, `remote-session-launch.md`, `distribution-update-loop.md`
+Related: `managed-provider-control-matrix.md`, `managed-codex-prestarted-tui-attach.md`, `managed-codex-state-compat.md`, `managed-codex-liveness.md`, `remote-session-launch.md`, `distribution-update-loop.md`
 
 ## Context
 
