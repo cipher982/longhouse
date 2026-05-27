@@ -588,7 +588,10 @@ async def get_timeline_session_mobile_tail(
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
     limit: int = Query(50, ge=1, le=200, description="Max projected tail items"),
     offset: int = Query(0, ge=0, description="Items before the latest tail window"),
-    snapshot_event_id: Optional[int] = Query(None, description="Previous snapshot marker for older-page drift detection"),
+    snapshot_event_id: Optional[int] = Query(
+        None,
+        description="Previous snapshot marker for older-page drift detection",
+    ),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_browser_user),
 ):
@@ -647,9 +650,8 @@ def _load_workspace_signature(
     """
     from zerg.models.agents import AgentEvent
     from zerg.models.agents import AgentSession
-    from zerg.models.agents import SessionObservation
+    from zerg.models.agents import SessionLivePreview
     from zerg.models.agents import SessionRuntimeState
-    from zerg.services.session_observations import OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
 
     session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
     if session is None:
@@ -667,7 +669,10 @@ def _load_workspace_signature(
 
     # Latest event emitted_at (the provider/engine timestamp on the newest event).
     # This feeds client beacons so we can measure true end-to-end latency.
-    latest_event_timestamp = db.query(func.max(AgentEvent.timestamp)).filter(AgentEvent.session_id.in_(thread_session_ids)).scalar()
+    latest_event_timestamp_column = func.max(AgentEvent.timestamp)
+    agent_event_session_filter = AgentEvent.session_id.in_(thread_session_ids)
+    latest_event_timestamp_query = db.query(latest_event_timestamp_column).filter(agent_event_session_filter)
+    latest_event_timestamp = latest_event_timestamp_query.scalar()
 
     # Latest runtime signal across thread — the runtime state row advances on every
     # hook-driven phase change, so this replaces the old SessionPresence anchor.
@@ -679,18 +684,9 @@ def _load_workspace_signature(
         db.query(func.sum(SessionRuntimeState.runtime_version)).filter(SessionRuntimeState.session_id.in_(thread_session_ids)).scalar()
     ) or 0
 
-    # Live Codex preview text is stored as runtime observations, not durable
-    # transcript events. Include the observation head so a pure provisional
-    # text delta wakes the detail workspace stream instead of waiting for a
-    # neighboring phase/session update.
-    bridge_transcript_head = (
-        db.query(func.max(SessionObservation.id))
-        .filter(SessionObservation.session_id.in_(thread_session_ids))
-        .filter(SessionObservation.source == "codex_bridge_live")
-        .filter(SessionObservation.kind == OBS_KIND_BRIDGE_TRANSCRIPT_DELTA)
-        .scalar()
-        or 0
-    )
+    live_preview_updated_at_column = func.max(SessionLivePreview.preview_updated_at)
+    live_preview_session_filter = SessionLivePreview.session_id.in_(thread_session_ids)
+    live_preview_updated_at = db.query(live_preview_updated_at_column).filter(live_preview_session_filter).scalar()
 
     return (
         str(thread_root_id),
@@ -700,7 +696,7 @@ def _load_workspace_signature(
         runtime_version_sum,
         len(thread_session_ids),
         latest_event_timestamp,
-        bridge_transcript_head,
+        live_preview_updated_at,
     )
 
 
@@ -946,13 +942,13 @@ async def _session_workspace_stream(
             previous_latest_event_id = int(old_sig[2] or 0) if old_sig is not None else latest_event_id
             now = datetime.now(timezone.utc)
             transcript_preview_payload = consumed_preview_payload
-            bridge_transcript_head = current_sig[7] if len(current_sig) > 7 else 0
-            previous_bridge_transcript_head = old_sig[7] if old_sig is not None and len(old_sig) > 7 else 0
-            durable_event_changed = bool(
-                latest_event_id
-                and ((old_sig is not None and latest_event_id != previous_latest_event_id) or (old_sig is None and consumed_seq))
-            )
-            live_preview_changed = bool(bridge_transcript_head and bridge_transcript_head != previous_bridge_transcript_head)
+            live_preview_signature = current_sig[7] if len(current_sig) > 7 else None
+            previous_live_preview_signature = old_sig[7] if old_sig is not None and len(old_sig) > 7 else None
+            changed_durable_event = old_sig is not None and latest_event_id != previous_latest_event_id
+            initial_pubsub_event = old_sig is None and consumed_seq
+            durable_event_changed = bool(latest_event_id and (changed_durable_event or initial_pubsub_event))
+            preview_signature_changed = live_preview_signature != previous_live_preview_signature
+            live_preview_changed = bool(live_preview_signature and preview_signature_changed)
             if transcript_preview_payload is None and (live_preview_changed or durable_event_changed):
                 with session_factory() as db:
                     transcript_preview_payload = _load_workspace_transcript_preview_payload(

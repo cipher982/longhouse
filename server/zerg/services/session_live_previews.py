@@ -139,7 +139,9 @@ def supersede_session_live_preview(
     if normalized_durable_at is None or preview_at is None or normalized_durable_at < preview_at:
         return False
 
-    row.superseded_at = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    row.superseded_at = now
+    row.preview_updated_at = now
     row.superseded_by_event_id = durable_event_id
     row.superseded_reason = reason
     return True
@@ -163,7 +165,7 @@ def load_session_live_preview_map(db: Session, session_ids: list[UUID]) -> dict[
         if timestamp is None:
             continue
         previews[str(row.session_id)] = TranscriptPreview(
-            event_id=0,
+            event_id=int(row.seq or 0),
             text=text,
             event_origin=row.event_origin or EVENT_ORIGIN_LIVE_PROVISIONAL,
             timestamp=timestamp,

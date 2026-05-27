@@ -1,4 +1,5 @@
 """Tests for the per-session workspace SSE stream."""
+
 from __future__ import annotations
 
 import asyncio
@@ -24,6 +25,7 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionLivePreview
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
 
@@ -62,7 +64,10 @@ async def _run_stream(sf, session_id, *, cycles: int = 2, skip_initial: bool = F
     request = _DisconnectAfterNCycles(cycles)
     events: list[dict] = []
     async for event in timeline_mod._session_workspace_stream(
-        request, session_factory=sf, session_id=session_id, skip_initial=skip_initial,
+        request,
+        session_factory=sf,
+        session_id=session_id,
+        skip_initial=skip_initial,
     ):
         events.append(event)
     return events
@@ -169,7 +174,10 @@ def test_workspace_stream_detects_new_event(tmp_path):
         request = _MutateAfterFirstCycle()
         events: list[dict] = []
         async for event in timeline_mod._session_workspace_stream(
-            request, session_factory=sf, session_id=session_id, skip_initial=False,
+            request,
+            session_factory=sf,
+            session_id=session_id,
+            skip_initial=False,
         ):
             events.append(event)
         return events
@@ -183,10 +191,8 @@ def test_workspace_stream_detects_new_event(tmp_path):
 
 
 @patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
-def test_workspace_stream_detects_live_bridge_preview_observation(tmp_path):
-    """Pure live preview deltas should advance the detail stream signature."""
-    from zerg.services.session_observations import OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
-
+def test_workspace_stream_detects_live_preview_projection_update(tmp_path):
+    """Pure live preview updates should advance the detail stream signature."""
     sf = _make_db(tmp_path)
     now = datetime.now(timezone.utc)
 
@@ -213,29 +219,19 @@ def test_workspace_stream_detects_live_bridge_preview_observation(tmp_path):
             if self._checks == 2:
                 with sf() as db:
                     db.add(
-                        SessionObservation(
-                            observation_id=f"runtime:codex_bridge_live:preview:{session_id}:1",
+                        SessionLivePreview(
                             session_id=session_id,
-                            runtime_key=f"codex:{session_id}",
-                            provider="codex",
-                            source_domain="runtime",
+                            thread_id="thread-1",
+                            turn_key=f"codex_bridge_live:{session_id}:thread-1:turn-1",
+                            seq=1,
+                            preview_text="hello live",
+                            provisional_cursor=f"codex_bridge_live:{session_id}:thread-1:turn-1:1",
+                            provisional_complete=0,
+                            event_origin="live_provisional",
+                            preview_observed_at=now,
+                            preview_updated_at=now,
                             source="codex_bridge_live",
-                            kind=OBS_KIND_BRIDGE_TRANSCRIPT_DELTA,
-                            observed_at=now,
-                            received_at=now,
-                            source_cursor="progress_signal:preview-1",
-                            payload_json=json.dumps(
-                                {
-                                    "kind": "progress_signal",
-                                    "payload": {
-                                        "progress_kind": "bridge_live_transcript_delta",
-                                        "thread_id": "thread-1",
-                                        "turn_id": "turn-1",
-                                        "seq": 1,
-                                        "live_text": "hello live",
-                                    },
-                                }
-                            ),
+                            last_observation_id=f"runtime:codex_bridge_live:preview:{session_id}:1",
                         )
                     )
                     db.commit()
@@ -245,7 +241,10 @@ def test_workspace_stream_detects_live_bridge_preview_observation(tmp_path):
         request = _MutatePreview()
         events: list[dict] = []
         async for event in timeline_mod._session_workspace_stream(
-            request, session_factory=sf, session_id=session_id, skip_initial=False,
+            request,
+            session_factory=sf,
+            session_id=session_id,
+            skip_initial=False,
         ):
             events.append(event)
         return events
@@ -308,7 +307,10 @@ def test_workspace_stream_detects_presence_change(tmp_path):
         request = _MutatePresence()
         events: list[dict] = []
         async for event in timeline_mod._session_workspace_stream(
-            request, session_factory=sf, session_id=session_id, skip_initial=False,
+            request,
+            session_factory=sf,
+            session_id=session_id,
+            skip_initial=False,
         ):
             events.append(event)
         return events

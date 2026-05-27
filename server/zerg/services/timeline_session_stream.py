@@ -16,10 +16,9 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 
-from zerg.models.agents import SessionObservation
+from zerg.models.agents import SessionLivePreview
 from zerg.services.agents_store import AgentsStore
 from zerg.services.session_listing import SessionListingError
-from zerg.services.session_observations import OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
 from zerg.services.session_pubsub import TOPIC_TIMELINE
 from zerg.services.session_pubsub import PubsubMessage
 from zerg.services.session_pubsub import get_pubsub
@@ -38,7 +37,7 @@ TIMELINE_STREAM_CHANGE_WAIT_SECONDS = 5.0
 TIMELINE_STREAM_HEARTBEAT_SECONDS = 30.0
 
 TimelineWindowSignature = tuple[
-    tuple[str, str, datetime | None, datetime | None, datetime | None, int, int | None],
+    tuple[str, str, datetime | None, datetime | None, datetime | None, int, datetime | None],
     ...,
 ]
 
@@ -307,17 +306,15 @@ def _load_timeline_stream_window_signature(
         context_mode=params.context_mode,
         include_total=False,
     )
-    bridge_transcript_heads = _load_bridge_observation_heads(db=db, rows=rows)
-    return tuple((*row, bridge_transcript_heads.get(row[1])) for row in rows)
+    live_preview_signatures = _load_live_preview_signatures(db=db, rows=rows)
+    return tuple((*row, live_preview_signatures.get(row[1])) for row in rows)
 
 
-def _load_bridge_observation_heads(
+def _load_live_preview_signatures(
     *,
     db: Session,
     rows: tuple[tuple[str, str, datetime | None, datetime | None, datetime | None, int], ...],
-) -> dict[str, int]:
-    # Bridge transcript previews materialize from observations synchronously,
-    # so the observation head is the stream signature for provisional preview updates.
+) -> dict[str, datetime]:
     session_ids: list[UUID] = []
     for row in rows:
         try:
@@ -329,20 +326,18 @@ def _load_bridge_observation_heads(
 
     result_rows = (
         db.query(
-            SessionObservation.session_id.label("session_id"),
-            func.max(SessionObservation.id).label("max_id"),
+            SessionLivePreview.session_id.label("session_id"),
+            func.max(SessionLivePreview.preview_updated_at).label("preview_updated_at"),
         )
-        .filter(SessionObservation.session_id.in_(session_ids))
-        .filter(SessionObservation.source == "codex_bridge_live")
-        .filter(SessionObservation.kind == OBS_KIND_BRIDGE_TRANSCRIPT_DELTA)
-        .group_by(SessionObservation.session_id)
+        .filter(SessionLivePreview.session_id.in_(session_ids))
+        .group_by(SessionLivePreview.session_id)
         .all()
     )
-    heads: dict[str, int] = {}
+    heads: dict[str, datetime] = {}
     for row in result_rows:
-        if row.session_id is None or row.max_id is None:
+        if row.session_id is None or row.preview_updated_at is None:
             continue
-        heads[str(row.session_id)] = int(row.max_id)
+        heads[str(row.session_id)] = row.preview_updated_at
     return heads
 
 
