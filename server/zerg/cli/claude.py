@@ -86,12 +86,9 @@ def _detect_native_claude_channels_available() -> tuple[bool, str]:
     logged_in = bool(payload.get("loggedIn"))
     auth_method = str(payload.get("authMethod") or "").strip()
     api_provider = str(payload.get("apiProvider") or "").strip()
-    available = logged_in and auth_method == "claude.ai" and api_provider == "firstParty"
-    if available:
+    if logged_in:
         return True, f"authMethod={auth_method}, apiProvider={api_provider}"
-    if not logged_in:
-        return False, "Claude is not logged in with Claude.ai auth"
-    return False, f"authMethod={auth_method or 'unknown'}, apiProvider={api_provider or 'unknown'}"
+    return False, "Claude is not logged in"
 
 
 def _collect_claude_launch_env() -> dict[str, str]:
@@ -458,10 +455,8 @@ def _post_claude_terminal_signal(
             return True
     except Exception as exc:
         if queued_path is not None:
-            typer.secho(
-                f"Could not confirm Claude terminal lifecycle event before timeout ({exc}). " "Queued for Machine Agent retry.",
-                fg=typer.colors.YELLOW,
-            )
+            message = f"Could not confirm Claude terminal lifecycle event before timeout ({exc})."
+            typer.secho(f"{message} Queued for Machine Agent retry.", fg=typer.colors.YELLOW)
             return False
         typer.secho(
             f"Could not confirm Claude terminal lifecycle event before timeout ({exc}). "
@@ -502,7 +497,8 @@ def _queue_claude_terminal_runtime_event(event: dict) -> Path | None:
     try:
         outbox_dir = get_agent_runtime_events_outbox_dir()
         outbox_dir.mkdir(parents=True, exist_ok=True)
-        file_digest = sha256(f"{event.get('source', '')}:{event.get('dedupe_key', '')}".encode("utf-8")).hexdigest()[:32]
+        digest_seed = f"{event.get('source', '')}:{event.get('dedupe_key', '')}"
+        file_digest = sha256(digest_seed.encode("utf-8")).hexdigest()[:32]
         final_path = outbox_dir / f"rte.{file_digest}.json"
         tmp_path = outbox_dir / f".tmp.{file_digest}.{os.getpid()}"
         payload = json.dumps(event, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
@@ -653,10 +649,8 @@ def claude(
         native_claude_channels_available = True
         native_claude_channels_detail = f"forced by {_FORCE_NATIVE_CLAUDE_CHANNELS_ENV}"
         force_flag_capable_path = False
-        typer.secho(
-            f"Forcing native Claude channels via {_FORCE_NATIVE_CLAUDE_CHANNELS_ENV}=1. " "This is a private unsupported local experiment.",
-            fg=typer.colors.YELLOW,
-        )
+        message = f"Forcing native Claude channels via {_FORCE_NATIVE_CLAUDE_CHANNELS_ENV}=1."
+        typer.secho(f"{message} This is a private unsupported local experiment.", fg=typer.colors.YELLOW)
     elif force_flag_capable_path:
         native_claude_channels_available = False
         native_claude_channels_detail = "disabled by Claude launch env"
