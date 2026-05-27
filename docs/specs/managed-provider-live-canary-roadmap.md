@@ -127,7 +127,9 @@ work while an agent is busy. Steer needs active-phase proof and idle rejection.
    `scripts/qa/provider-live-canary.py`.
 2. Extend the Claude lane beyond the initial no-token checks. The current lane
    proves binary identity, redacted auth shape, required launch/session flags,
-   hidden `--channels` tagged-channel parsing, and macOS PTY wrapper availability.
+   hidden `--channels` tagged-channel parsing, and macOS PTY wrapper availability,
+   but intentionally remains Yellow until scheduled live-token evidence proves
+   the full channel contract.
    The operator live POC at `make managed-claude-poc` can now run an optional
    delayed `intent=steer` injection with `ARGS="--steer-text ..."` and requires
    the assistant transcript to contain the expected steered response. Detached
@@ -138,9 +140,9 @@ work while an agent is busy. Steer needs active-phase proof and idle rejection.
    `opencode serve --hostname 127.0.0.1 --port 0 --pure`, `/global/health`,
    `/doc`, session create, attach `--help` command shape, and abort are checked
    without relying on a visible terminal or prompt execution. A later
-   token-spending lane can verify `prompt_async` execution if needed; the
-   current lane verifies the endpoint is present in OpenCode's OpenAPI
-   document.
+   token-spending lane must verify `prompt_async` execution before the
+   provider-live verdict can be Green; the current lane verifies the endpoint is
+   present in OpenCode's OpenAPI document and therefore stays Yellow.
 4. Extend the Antigravity canary from its current yellow state -- real `agy`
    version/help/plugin validate/install/list plus Longhouse global-hook config
    proof -- to loop-level hook behavior against the upstream runtime.

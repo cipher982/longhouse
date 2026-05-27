@@ -325,7 +325,7 @@ def _run_provider_canary(
     return result, payload
 
 
-def test_opencode_live_canary_can_go_green_with_fake_server() -> None:
+def test_opencode_live_canary_stays_yellow_until_prompt_execution_is_proven() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fake_bin = _fake_opencode(root / "bin" / "opencode")
@@ -334,15 +334,17 @@ def test_opencode_live_canary_can_go_green_with_fake_server() -> None:
         assert result.returncode == 0, result.stderr + result.stdout
         assert payload["provider"] == "opencode"
         assert payload["provider_version"] == "1.2.3-fake"
-        assert payload["verdict"] == "green"
+        assert payload["verdict"] == "yellow"
+        assert payload["failure_code"] == "insufficient_coverage"
         assert payload["canaries"]["binary_identity"]["status"] == "pass"
         assert payload["canaries"]["server_startup"]["status"] == "pass"
         assert payload["canaries"]["schema_probe"]["status"] == "pass"
         assert payload["canaries"]["session_create"]["tokens"]["input"] == 0
         assert payload["canaries"]["session_abort"]["status"] == "pass"
+        assert payload["canaries"]["prompt_async_execution_contract"]["status"] == "not_run"
 
 
-def test_claude_live_canary_can_go_green_with_fake_binary() -> None:
+def test_claude_live_canary_stays_yellow_until_live_token_contract_is_proven() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fake_bin = _fake_claude(root / "bin" / "claude")
@@ -351,12 +353,14 @@ def test_claude_live_canary_can_go_green_with_fake_binary() -> None:
         assert result.returncode == 0, result.stderr + result.stdout
         assert payload["provider"] == "claude"
         assert payload["provider_version"] == "2.9.9-fake (Claude Code)"
-        assert payload["verdict"] == "green"
+        assert payload["verdict"] == "yellow"
+        assert payload["failure_code"] == "insufficient_coverage"
         assert payload["canaries"]["auth_status"]["status"] == "pass"
         assert "email" not in payload["canaries"]["auth_status"]["auth"]
         assert payload["canaries"]["command_shape"]["status"] == "pass"
         assert payload["canaries"]["channels_shape"]["status"] == "pass"
         assert payload["canaries"]["detached_pty_shape"]["status"] == "pass"
+        assert payload["canaries"]["live_token_contract"]["status"] == "not_run"
 
 
 def test_antigravity_live_canary_stays_yellow_until_loop_invocation_is_proven() -> None:
@@ -412,7 +416,8 @@ def test_claude_live_canary_accepts_api_key_auth() -> None:
         )
 
         assert result.returncode == 0, result.stderr + result.stdout
-        assert payload["verdict"] == "green"
+        assert payload["verdict"] == "yellow"
+        assert payload["failure_code"] == "insufficient_coverage"
         assert payload["canaries"]["auth_status"]["status"] == "pass"
         auth = payload["canaries"]["auth_status"]["auth"]
         assert auth["apiProvider"] == "anthropic"
@@ -526,14 +531,14 @@ def test_opencode_live_canary_accepts_empty_successful_abort_response() -> None:
         result, payload = _run_canary(root, fake_bin, {"FAKE_OPENCODE_EMPTY_ABORT": "1"})
 
         assert result.returncode == 0, result.stderr + result.stdout
-        assert payload["verdict"] == "green"
+        assert payload["verdict"] == "yellow"
         assert payload["canaries"]["session_abort"]["status"] == "pass"
 
 
 def main() -> int:
     tests = [
-        test_opencode_live_canary_can_go_green_with_fake_server,
-        test_claude_live_canary_can_go_green_with_fake_binary,
+        test_opencode_live_canary_stays_yellow_until_prompt_execution_is_proven,
+        test_claude_live_canary_stays_yellow_until_live_token_contract_is_proven,
         test_antigravity_live_canary_stays_yellow_until_loop_invocation_is_proven,
         test_antigravity_live_canary_fails_when_plugin_install_fails,
         test_claude_live_canary_accepts_api_key_auth,
