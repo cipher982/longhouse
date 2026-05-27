@@ -119,11 +119,16 @@ work while an agent is busy. Steer needs active-phase proof and idle rejection.
 ## Next Implementation Slices
 
 1. Add a provider live-canary dispatcher that can run one provider or all
-   providers and emit one Sauron-facing artifact per provider.
-2. Add a real OpenCode server probe first. It is the lowest-risk live canary:
+   providers and emit one Sauron-facing artifact per provider. The initial
+   dispatcher exists for OpenCode at `scripts/qa/provider-live-canary.py`.
+2. Extend the OpenCode server probe from the initial no-token lane. It is the
+   lowest-risk live canary:
    `opencode serve --hostname 127.0.0.1 --port 0 --pure`, `/global/health`,
-   `/doc`, session create, attach, and abort can be checked without relying on
-   a visible terminal.
+   `/doc`, session create, attach `--help` command shape, and abort are checked
+   without relying on a visible terminal or prompt execution. A later
+   token-spending lane can verify `prompt_async` execution if needed; the
+   current lane verifies the endpoint is present in OpenCode's OpenAPI
+   document.
 3. Extend the Claude canary from bridge-only to detached launch readiness. Keep
    active-turn steer as a separate manual or scheduled lane because it may spend
    provider tokens.

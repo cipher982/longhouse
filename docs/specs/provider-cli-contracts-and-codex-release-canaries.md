@@ -248,6 +248,10 @@ Initial product contract:
   fake provider endpoints where needed. It is not a source-drift substitute for
   real upstream release probes; it is the regression gate for Longhouse's
   command/control implementation.
+- `scripts/qa/provider-live-canary.py --provider opencode` probes the installed
+  upstream OpenCode server contract without executing a prompt: binary version,
+  server readiness, `/doc` schema, zero-token session create/get, abort, and
+  attach command shape.
 - Runtime Host and local-health may cache it and expose:
   - provider
   - upstream version
