@@ -204,6 +204,41 @@ def test_collects_provider_status_artifacts_for_all_managed_providers(monkeypatc
     }
 
 
+def test_accepts_sauron_provider_status_url_envelope(monkeypatch) -> None:
+    monkeypatch.setenv(prs.PROVIDER_RELEASE_STATUS_URL_ENV, "https://sauron.local/provider-release-status/{provider}")
+    monkeypatch.setattr(
+        prs,
+        "_read_json_url",
+        lambda url: (
+            {
+                "provider": "claude",
+                "artifact": {
+                    "provider": "claude",
+                    "schema_version": prs.PROVIDER_STATUS_SCHEMA_VERSION,
+                    "provider_version": "1.2.3",
+                    "verdict": "green",
+                    "generated_at": "2026-05-27T00:00:00Z",
+                },
+            },
+            None,
+        )
+        if url.endswith("/claude")
+        else (None, "missing"),
+    )
+    monkeypatch.setattr(
+        prs.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="1.2.3\n", stderr=""),
+    )
+
+    status = prs.collect_provider_release_status({"claude": {"path": "/opt/homebrew/bin/claude"}})
+
+    assert status["enabled"] is True
+    assert status["warning_count"] == 0
+    assert status["statuses"]["claude"]["status"] == "ok"
+    assert status["statuses"]["claude"]["source"]["source"] == "url"
+
+
 def test_generic_status_dir_missing_provider_artifacts_are_not_configured(monkeypatch, tmp_path: Path) -> None:
     (tmp_path / "codex.json").write_text(
         json.dumps(
