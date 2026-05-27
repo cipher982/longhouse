@@ -114,7 +114,7 @@ class AgentSession(AgentsBase):
     # Per-session loop mode (assist/autopilot). Durable user-facing setting,
     # not control-plane state — kernel rows do not encode it. Stored as a
     # plain column so PATCH /loop-mode survives restart and refresh.
-    loop_mode = Column(String(32), nullable=True)
+    loop_mode = Column(String(32), nullable=False, default="assist", server_default=text("'assist'"))
 
     # Relationships
     branches = relationship("AgentSessionBranch", back_populates="session", cascade="all, delete-orphan")
