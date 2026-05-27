@@ -392,7 +392,8 @@ def test_build_codex_attach_command_carries_managed_override_and_session_env():
     )
 
     assert command.startswith("LONGHOUSE_MANAGED_SESSION_ID=session-123 ")
-    assert "/tmp/codex -c check_for_update_on_startup=false resume thr_123" in command
+    assert "/tmp/codex -c check_for_update_on_startup=false" in command
+    assert "resume thr_123" not in command
     assert "--enable tui_app_server --remote ws://127.0.0.1:4800" in command
 
 
@@ -612,7 +613,44 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     ]
 
 
-def test_codex_command_no_attach_prints_resume_command(monkeypatch, tmp_path):
+def test_codex_command_fails_before_tui_when_prestart_lacks_thread(monkeypatch, tmp_path):
+    runner = CliRunner()
+    native_tui_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        codex_cli,
+        "_load_api_credentials",
+        lambda **_kwargs: ("https://longhouse.test", "zdt_test_token"),
+    )
+    monkeypatch.setattr(codex_cli, "_ensure_managed_launch_preflight", lambda **_kwargs: None)
+    monkeypatch.setattr(codex_cli, "get_machine_name_label", lambda: "work-laptop")
+    monkeypatch.setattr(
+        codex_cli,
+        "_launch_managed_local_from_api",
+        lambda **_kwargs: codex_cli.ManagedLocalLaunchResponse(
+            session_id="session-123",
+            provider_session_id="provider-123",
+            attach_command="",
+            source_runner_name="work-laptop",
+        ),
+    )
+    monkeypatch.setattr(codex_cli, "_resolve_codex_binary", lambda _explicit=None: "/tmp/codex")
+
+    def fake_start_bridge(**_kwargs):
+        raise codex_cli._NativeBridgeError("Native Codex bridge did not return thread_id")
+
+    monkeypatch.setattr(codex_cli, "_start_native_codex_bridge", fake_start_bridge)
+    monkeypatch.setattr(codex_cli, "_interactive_stdio", lambda: True)
+    monkeypatch.setattr(codex_cli, "_run_native_codex_tui", lambda **kwargs: native_tui_calls.append(kwargs) or 0)
+
+    result = runner.invoke(app, ["codex", "--cwd", str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert "Codex bridge failed: Native Codex bridge did not return thread_id" in result.output
+    assert native_tui_calls == []
+
+
+def test_codex_command_no_attach_prints_attach_command(monkeypatch, tmp_path):
     runner = CliRunner()
 
     monkeypatch.setattr(
@@ -643,7 +681,8 @@ def test_codex_command_no_attach_prints_resume_command(monkeypatch, tmp_path):
 
     assert result.exit_code == 0, result.output
     assert "Attach: LONGHOUSE_MANAGED_SESSION_ID=session-123" in result.output
-    assert "/tmp/codex -c check_for_update_on_startup=false resume thr_123" in result.output
+    assert "/tmp/codex -c check_for_update_on_startup=false" in result.output
+    assert "resume thr_123" not in result.output
 
 
 def test_codex_command_preserves_bridge_when_active_turn_survives(monkeypatch, tmp_path):
@@ -681,7 +720,7 @@ def test_codex_command_preserves_bridge_when_active_turn_survives(monkeypatch, t
     result = runner.invoke(app, ["codex", "--cwd", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
-    assert "still running and resumable" in result.output
+    assert "still running and reattachable" in result.output
     assert stop_calls == []
 
 
@@ -877,7 +916,7 @@ def test_run_native_codex_tui_uses_foreground_process_group_when_interactive(mon
     assert foreground_calls[0]["env"]["LONGHOUSE_MANAGED_SESSION_ID"] == "session-123"
 
 
-def test_run_native_codex_tui_resumes_prestarted_thread(monkeypatch, tmp_path):
+def test_run_native_codex_tui_attaches_to_prestarted_thread(monkeypatch, tmp_path):
     foreground_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(codex_cli, "_stdio_ttys", lambda: True)
@@ -900,8 +939,6 @@ def test_run_native_codex_tui_resumes_prestarted_thread(monkeypatch, tmp_path):
         "/tmp/codex",
         "-c",
         "check_for_update_on_startup=false",
-        "resume",
-        "thr_123",
         "--enable",
         "tui_app_server",
         "--remote",

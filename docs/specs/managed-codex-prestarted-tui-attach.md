@@ -21,10 +21,10 @@ using the user's stock upstream `codex` binary.
 
 Local `longhouse codex` should create the initial Codex thread through the
 Longhouse bridge before launching the visible TUI. The TUI should then attach to
-that known thread with Codex's existing resume path:
+the bridge's active thread without asking Codex to resolve a local rollout path:
 
 ```text
-codex resume <thread_id> --enable tui_app_server --remote <bridge_ws_url>
+codex --enable tui_app_server --remote <bridge_ws_url>
 ```
 
 This uses only upstream Codex protocol and CLI surfaces. Longhouse does not
@@ -76,7 +76,8 @@ axes again.
 5. When local prestart is requested, `ready` without `thread_id` is a launch
    failure. The CLI must fail before starting a visible TUI.
 6. When the bridge start summary includes `thread_id`, launch and print attach
-   commands with `resume <thread_id>`.
+   commands with `--enable tui_app_server --remote <bridge_ws_url>`, without
+   `resume <thread_id>`.
 7. Keep bridge cleanup and signal handling unchanged; local TUI-attached
    sessions still persist `launch_mode=tui`.
 
@@ -86,8 +87,8 @@ and accepted launch-mode values do not change.
 ## Tests
 
 - Python CLI tests assert `longhouse codex` asks the engine to prestart a thread.
-- Python CLI tests assert auto-attach and printed attach commands include
-  `resume <thread_id>` when the bridge returns one.
+- Python CLI tests assert auto-attach and printed attach commands use
+  `--remote <bridge_ws_url>` without `resume <thread_id>`.
 - Python CLI tests assert prestart mode fails fast if the bridge reports ready
   without a thread id.
 - Rust CLI tests assert `--create-initial-thread` and `--launch-mode` keep

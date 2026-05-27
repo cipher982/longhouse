@@ -328,7 +328,7 @@ enum Commands {
         #[arg(long)]
         auto_approve: bool,
 
-        /// Spawn a real `codex resume --remote` TUI against the managed thread before sending the prompt
+        /// Spawn a real `codex --remote` TUI against the managed app-server before sending the prompt
         #[arg(long)]
         spawn_remote_tui: bool,
 

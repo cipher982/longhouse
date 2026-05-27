@@ -15,7 +15,7 @@
 #   8.   Loop continue — second prompt on same thread
 #   9.   Interrupt    — cancel active turn mid-flight
 #   10.  CLI entry    — `longhouse codex --no-attach` (the real user command)
-#   11.  TUI attach   — `codex resume <thread> --remote` connects without crashing
+#   11.  TUI attach   — `codex --remote` connects without crashing after bridge prestarts a thread
 
 set -euo pipefail
 
@@ -410,7 +410,7 @@ else
     fi
 fi
 
-echo "─── Test 11: TUI resume attach smoke (codex resume --remote connects) ───"
+echo "─── Test 11: TUI attach smoke (codex --remote connects) ───"
 
 # Test the exact CLI-created session from test 10.
 TUI_WS_URL="${CLI_WS_URL:-}"
@@ -423,7 +423,7 @@ else
     TUI_LOG="$ISOLATION_ROOT/bridge-e2e-tui.log"
     if command -v script &>/dev/null; then
         # macOS `script` syntax: script -q output_file command...
-        script -q "$TUI_LOG" "$CODEX_BIN" -c check_for_update_on_startup=false resume "$CLI_THREAD_ID" --enable tui_app_server --remote "$TUI_WS_URL" --no-alt-screen &
+        script -q "$TUI_LOG" "$CODEX_BIN" -c check_for_update_on_startup=false --enable tui_app_server --remote "$TUI_WS_URL" --no-alt-screen &
         TUI_PID=$!
         CLEANUP_PIDS+=("$TUI_PID")
 
@@ -431,9 +431,9 @@ else
         sleep 5
         if kill -0 "$TUI_PID" 2>/dev/null; then
             if grep -q "No active thread is available" "$TUI_LOG" 2>/dev/null; then
-                fail "TUI resume attach showed active-thread startup error"
+                fail "TUI attach showed active-thread startup error"
             else
-                pass "TUI resume connected via pseudo-TTY and stayed alive for 5s (pid=$TUI_PID)"
+                pass "TUI attach connected via pseudo-TTY and stayed alive for 5s (pid=$TUI_PID)"
             fi
             kill "$TUI_PID" 2>/dev/null || true
         else
@@ -444,9 +444,9 @@ else
             fi
             if [ "$TUI_EXIT" -eq 0 ]; then
                 if grep -q "No active thread is available" "$TUI_LOG" 2>/dev/null; then
-                    fail "TUI resume attach showed active-thread startup error"
+                fail "TUI attach showed active-thread startup error"
                 else
-                    pass "TUI resume exited cleanly"
+                    pass "TUI attach exited cleanly"
                 fi
             else
                 fail "TUI crashed with exit code $TUI_EXIT"

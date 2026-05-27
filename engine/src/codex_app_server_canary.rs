@@ -1539,6 +1539,26 @@ fn copy_optional_tree(source: &Path, destination: &Path) -> Result<()> {
             fs::create_dir_all(&target)?;
             continue;
         }
+        if entry.file_type().is_symlink() {
+            let link_target = fs::read_link(entry.path())
+                .with_context(|| format!("reading symlink {}", entry.path().display()))?;
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink(link_target, &target).with_context(|| {
+                    format!(
+                        "symlinking {} -> {}",
+                        entry.path().display(),
+                        target.display()
+                    )
+                })?;
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = link_target;
+                bail!("symlinked Codex tree entries are only supported on unix for the canary");
+            }
+            continue;
+        }
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -1742,6 +1762,28 @@ mod tests {
             parse_remote_tui_subscribe_phase("after_rollout").unwrap(),
             RemoteTuiSubscribePhase::AfterRollout
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn copy_optional_tree_preserves_symlinked_directories_inside_tree() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let destination = temp.path().join("destination");
+        let real = temp.path().join("real-plugin");
+        fs::create_dir_all(source.join("cache")).unwrap();
+        fs::create_dir_all(&real).unwrap();
+        fs::write(real.join("plugin.json"), "{}").unwrap();
+        std::os::unix::fs::symlink(&real, source.join("cache").join("latest")).unwrap();
+
+        copy_optional_tree(&source, &destination).unwrap();
+
+        let copied = destination.join("cache").join("latest");
+        assert!(fs::symlink_metadata(&copied)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(fs::read_link(copied).unwrap(), real);
     }
 
     #[tokio::test]

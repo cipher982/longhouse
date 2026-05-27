@@ -34,7 +34,7 @@ use tokio::net::{TcpListener, TcpStream};
 ///
 /// The relay task runs for the lifetime of the tokio runtime. Accepts are
 /// per-inbound so the same relay serves the bridge's own client plus any
-/// `codex resume --remote` TUI that shows up later.
+/// `codex --remote` TUI that shows up later.
 pub async fn spawn(upstream_url: &str) -> Result<String> {
     let upstream_addr = upstream_url
         .strip_prefix("ws://")

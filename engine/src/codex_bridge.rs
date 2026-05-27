@@ -1715,7 +1715,7 @@ pub async fn cmd_codex_bridge_interrupt(config: BridgeInterruptConfig) -> Result
 
 pub fn cmd_codex_bridge_attach(config: BridgeAttachConfig) -> Result<i32> {
     let state = load_ready_state(&config.session_id, config.state_root.as_deref())?;
-    let thread_id = state
+    let _thread_id = state
         .thread_id
         .clone()
         .context("bridge state is missing thread_id")?;
@@ -1732,8 +1732,6 @@ pub fn cmd_codex_bridge_attach(config: BridgeAttachConfig) -> Result<i32> {
     command
         .arg("-c")
         .arg(CODEX_DISABLE_UPDATE_CHECK_CONFIG)
-        .arg("resume")
-        .arg(&thread_id)
         .arg("--enable")
         .arg("tui_app_server")
         .arg("--remote")
@@ -1752,7 +1750,7 @@ pub fn cmd_codex_bridge_attach(config: BridgeAttachConfig) -> Result<i32> {
     {
         let status = command
             .status()
-            .with_context(|| format!("running {codex_bin} resume --remote"))?;
+            .with_context(|| format!("running {codex_bin} --remote"))?;
         Ok(status.code().unwrap_or(1))
     }
 }
@@ -3992,6 +3990,139 @@ mod tests {
 
         assert_eq!(raw["schema_version"], BRIDGE_STATE_SCHEMA_VERSION);
         assert_eq!(raw["launch_mode"], LAUNCH_MODE_DETACHED_UI);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bridge_attach_uses_remote_without_resume() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let session_id = "session-attach";
+        let args_file = temp.path().join("codex-args.txt");
+        let session_file = temp.path().join("codex-session.txt");
+        let fake_codex = temp.path().join("fake-codex");
+        fs::write(
+            &fake_codex,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\nprintf '%s\\n' \"$LONGHOUSE_MANAGED_SESSION_ID\" > '{}'\n",
+                args_file.display(),
+                session_file.display()
+            ),
+        )
+        .unwrap();
+        let mut perms = fs::metadata(&fake_codex).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&fake_codex, perms).unwrap();
+
+        let state = BridgeStateFile {
+            schema_version: BRIDGE_STATE_SCHEMA_VERSION,
+            session_id: session_id.to_string(),
+            cwd: temp.path().display().to_string(),
+            codex_bin: fake_codex.display().to_string(),
+            launch_mode: Some(LAUNCH_MODE_TUI.to_string()),
+            ws_url: Some("ws://127.0.0.1:4800".to_string()),
+            thread_id: Some("thread-123".to_string()),
+            thread_path: None,
+            pid: 42,
+            app_server_pid: None,
+            app_server_pgid: None,
+            app_server_ws_url: None,
+            status: "ready".to_string(),
+            log_file: temp.path().join("bridge.log").display().to_string(),
+            active_turn_id: None,
+            last_turn_status: None,
+            last_error: None,
+            thread_subscription_status: Some(
+                ThreadSubscriptionStatus::Subscribed.as_str().to_string(),
+            ),
+            thread_subscription_attempts: 1,
+            thread_subscription_last_error: None,
+            updated_at: Utc::now().to_rfc3339(),
+        };
+        write_state_file(&temp.path().join(format!("{session_id}.json")), &state).unwrap();
+
+        let exit_code = cmd_codex_bridge_attach(BridgeAttachConfig {
+            session_id: session_id.to_string(),
+            state_root: Some(temp.path().to_path_buf()),
+            codex_bin: None,
+        })
+        .unwrap();
+
+        assert_eq!(exit_code, 0);
+        let args = fs::read_to_string(args_file).unwrap();
+        assert_eq!(
+            args.lines().collect::<Vec<_>>(),
+            vec![
+                "-c",
+                CODEX_DISABLE_UPDATE_CHECK_CONFIG,
+                "--enable",
+                "tui_app_server",
+                "--remote",
+                "ws://127.0.0.1:4800",
+            ]
+        );
+        assert_eq!(fs::read_to_string(session_file).unwrap().trim(), session_id);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bridge_attach_refuses_ready_state_without_thread_id() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let session_id = "session-missing-thread";
+        let marker_file = temp.path().join("codex-ran.txt");
+        let fake_codex = temp.path().join("fake-codex");
+        fs::write(
+            &fake_codex,
+            format!("#!/bin/sh\ntouch '{}'\n", marker_file.display()),
+        )
+        .unwrap();
+        let mut perms = fs::metadata(&fake_codex).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&fake_codex, perms).unwrap();
+
+        let state = BridgeStateFile {
+            schema_version: BRIDGE_STATE_SCHEMA_VERSION,
+            session_id: session_id.to_string(),
+            cwd: temp.path().display().to_string(),
+            codex_bin: fake_codex.display().to_string(),
+            launch_mode: Some(LAUNCH_MODE_TUI.to_string()),
+            ws_url: Some("ws://127.0.0.1:4800".to_string()),
+            thread_id: None,
+            thread_path: None,
+            pid: 42,
+            app_server_pid: None,
+            app_server_pgid: None,
+            app_server_ws_url: None,
+            status: "ready".to_string(),
+            log_file: temp.path().join("bridge.log").display().to_string(),
+            active_turn_id: None,
+            last_turn_status: None,
+            last_error: None,
+            thread_subscription_status: Some(
+                ThreadSubscriptionStatus::WaitingForThread
+                    .as_str()
+                    .to_string(),
+            ),
+            thread_subscription_attempts: 0,
+            thread_subscription_last_error: None,
+            updated_at: Utc::now().to_rfc3339(),
+        };
+        write_state_file(&temp.path().join(format!("{session_id}.json")), &state).unwrap();
+
+        let err = cmd_codex_bridge_attach(BridgeAttachConfig {
+            session_id: session_id.to_string(),
+            state_root: Some(temp.path().to_path_buf()),
+            codex_bin: None,
+        })
+        .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("bridge state is missing thread_id"));
+        assert!(!marker_file.exists());
     }
 
     #[test]

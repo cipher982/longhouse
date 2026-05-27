@@ -19,7 +19,7 @@ def test_red_matching_local_version_blocks(monkeypatch, tmp_path: Path) -> None:
         "codex_version": "0.133.0",
         "schema_version": prs.PROVIDER_STATUS_SCHEMA_VERSION,
         "verdict": "red",
-        "failure_code": "managed_resume_active_thread_error",
+        "failure_code": "managed_tui_attach_active_thread_error",
         "recommendation": "block_upgrade_recommendation",
         "generated_at": "2026-05-27T00:00:00Z",
         "evidence_root": "/data/provider-release-status/codex",
