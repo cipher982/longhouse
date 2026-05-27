@@ -27,7 +27,7 @@ def test_managed_provider_contract_matrix_covers_launch_scope_providers():
         ("codex", ManagedSessionTransport.CODEX_APP_SERVER, "codex_bridge"),
         ("claude", ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE, "claude_channel_bridge"),
         ("opencode", ManagedSessionTransport.OPENCODE_SERVER_BRIDGE, "opencode_server_bridge"),
-        ("antigravity", ManagedSessionTransport.ANTIGRAVITY_PROCESS, "antigravity_process"),
+        ("antigravity", ManagedSessionTransport.ANTIGRAVITY_HOOK_INBOX, "antigravity_hook_inbox"),
     ],
 )
 def test_provider_contract_maps_transport_and_control_plane(provider, transport, control_plane):
@@ -85,21 +85,22 @@ def test_opencode_contract_is_server_bridge_control_provider_without_active_turn
     }
 
 
-def test_antigravity_process_wrapper_is_observe_only_until_named_control_plane_lands():
+def test_antigravity_contract_is_hook_inbox_send_only():
     provider = "antigravity"
     contract = contract_for_provider(provider)
 
     assert contract is not None
     assert contract.launch_local is True
     assert contract.launch_remote is False
-    assert contract.send_input is False
+    assert contract.send_input is True
     assert contract.interrupt is False
     assert contract.steer_active_turn is False
     assert contract.tail_output is True
     assert contract.runtime_phase is True
     assert contract.transcript_binding is True
+    assert contract.machine_control_supports == ("antigravity.send",)
     assert contract.connection_capabilities == {
-        "can_send_input": 0,
+        "can_send_input": 1,
         "can_interrupt": 0,
         "can_terminate": 0,
         "can_tail_output": 1,
@@ -117,10 +118,15 @@ def test_control_plane_aliases_are_explicit_contract_not_scattered_literals():
     assert "claude_channel_bridge" in steer_control_planes()
     assert "opencode_server_bridge" not in steer_control_planes()
     assert "opencode_process" not in steer_control_planes()
+    assert "antigravity_hook_inbox" not in steer_control_planes()
     assert "antigravity_process" not in steer_control_planes()
     assert managed_transport_for_control_plane("opencode_process") == ManagedSessionTransport.OPENCODE_PROCESS
     assert provider_for_control_plane("opencode_process") == "opencode"
+    assert managed_transport_for_control_plane("antigravity_process") == ManagedSessionTransport.ANTIGRAVITY_PROCESS
+    assert provider_for_control_plane("antigravity_process") == "antigravity"
     assert "opencode_process" not in trusted_non_runner_control_planes()
+    assert "antigravity_process" not in trusted_non_runner_control_planes()
+    assert "antigravity_hook_inbox" in trusted_non_runner_control_planes()
 
 
 @pytest.mark.parametrize(
@@ -135,7 +141,9 @@ def test_control_plane_aliases_are_explicit_contract_not_scattered_literals():
         ("opencode", "session.send_text", "opencode.send"),
         ("opencode", "session.interrupt", "opencode.interrupt"),
         ("opencode", "session.steer_text", None),
-        ("antigravity", "session.send_text", None),
+        ("antigravity", "session.send_text", "antigravity.send"),
+        ("antigravity", "session.interrupt", None),
+        ("antigravity", "session.steer_text", None),
     ],
 )
 def test_machine_control_capability_for_command_uses_provider_contract(provider, command_type, capability):

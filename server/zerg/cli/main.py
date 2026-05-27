@@ -10,6 +10,7 @@ import zerg.bootstrap_sqlite  # noqa: F401
 from zerg.build_info import BuildIdentityMissing
 from zerg.build_info import load as load_build_identity
 from zerg.cli.antigravity import antigravity
+from zerg.cli.antigravity_channel import app as antigravity_channel_app
 from zerg.cli.claude import claude
 from zerg.cli.claude_channel import app as claude_channel_app
 from zerg.cli.codex import app as codex_app
@@ -246,6 +247,7 @@ app.add_typer(db_app, name="db", help="SQLite database diagnostics and maintenan
 app.add_typer(claude_channel_app, name="claude-channel", help="Claude channel bridge commands", hidden=True)
 app.add_typer(opencode_bridge_app, name="opencode-bridge", help="OpenCode bridge commands", hidden=True)
 app.add_typer(opencode_channel_app, name="opencode-channel", help="OpenCode server bridge commands", hidden=True)
+app.add_typer(antigravity_channel_app, name="antigravity-channel", help="Antigravity hook-inbox commands", hidden=True)
 app.add_typer(codex_app, name="codex")
 app.add_typer(local_health_app, name="local-health")
 app.add_typer(machine_app, name="machine", help="Machine runtime repair and reconciliation")
@@ -255,7 +257,11 @@ for command in (serve, status, claude, wall, peers, message, tail, auth, ship, r
 
 app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})(opencode)
 app.command(name="agy", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})(antigravity)
-app.command(name="antigravity", hidden=True, context_settings={"allow_extra_args": True, "ignore_unknown_options": True})(antigravity)
+app.command(
+    name="antigravity",
+    hidden=True,
+    context_settings={"allow_extra_args": True, "ignore_unknown_options": True},
+)(antigravity)
 app.command(name="continue")(continue_session)
 app.command(name="connect")(connect_command)
 app.command(name="version")(version_command)

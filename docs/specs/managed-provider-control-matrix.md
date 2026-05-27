@@ -56,7 +56,7 @@ the upstream provider can support.
 | Codex | Yes, `longhouse codex` | Yes, engine `session.launch` | Yes, engine channel | Yes, engine channel | Yes, engine channel with active-turn errors | Bridge/runtime events | Hooks + rollout | First-class |
 | Claude | Yes, `longhouse claude` | Yes, Machine Agent `claude.launch` with PTY-backed `--channels` channel-ready handshake | Yes, `claude-channel send` | Yes, `claude-channel interrupt` | Yes, gated by fresh active runtime phase, delivered through channel metadata | Channel/hooks/process scan | Claude channel + transcript ingest | First-class channel control |
 | OpenCode | Yes, `longhouse opencode` server bridge + `opencode attach` | Yes, Machine Agent `opencode.launch` when `opencode` is on PATH | Yes, server `prompt_async` API | Yes, server `abort` API | No, active-turn injection not proven | OpenCode plugin runtime events | Plugin/transcript observation | First-class launch/send/interrupt; no steer |
-| Antigravity | Yes, `longhouse antigravity` / `longhouse agy` | No | No | No | No | JSON hooks + runtime outbox | Hook binding to transcript path | Observe-only managed wrapper |
+| Antigravity | Yes, `longhouse antigravity` / `longhouse agy` | No | Yes, hook inbox claimed by active hooks | No | No | JSON hooks + runtime outbox | Hook binding to transcript path | Send-only hook-inbox wrapper |
 
 ## Target Matrix
 
@@ -69,7 +69,7 @@ downgraded with the failed evidence attached.
 | Codex | First-class | Attached + detached-ui managed bridge | Machine Agent `session.launch` | Engine channel | Engine channel | Engine channel, active-turn gated | `codex --remote` attach | Codex source/API canary |
 | Claude | First-class | `longhouse claude` channel launch | Machine Agent `claude.launch` | Claude channel | Claude channel | Claude channel, active-turn gated | Channel resume/attach path | Claude channel/hook canary |
 | OpenCode | First-class if server API remains stable | OpenCode server bridge | Machine Agent `opencode.launch` | Server prompt API | Server abort API | Only after async/TUI prompt semantics prove active-turn delivery | `opencode attach` | OpenCode OpenAPI + live server canary |
-| Antigravity | Controlled wrapper with explicit limits | Stock `agy` + Longhouse plugin | Machine Agent `antigravity.launch` | Hook inbox / next-invocation injection | Only if graceful stop is proven | Only if active-turn injection is proven | Provider-supported reattach if exposed | Hook schema + inbox canary |
+| Antigravity | Controlled wrapper with explicit limits | Stock `agy` + Longhouse plugin | Only after launch semantics are proven | Hook inbox / next-invocation injection | Only if graceful stop is proven | Only if active-turn injection is proven | Provider-supported reattach if exposed | Hook schema + inbox canary |
 
 ## Provider Contracts
 
@@ -138,19 +138,26 @@ the server sidecar exists. Introduce a new control plane such as
 ### Antigravity
 
 Antigravity has hooks and plugin installation today. Its hooks can observe
-runtime phases and can inject steps at defined loop points. There is not
-currently a Longhouse-owned live server/control path equivalent to Codex or
-OpenCode in this repo.
+runtime phases and can inject steps at defined loop points. Longhouse now uses
+that hook surface as a send-only inbox while an Antigravity loop is alive. The
+hook inbox is the only Longhouse-owned Antigravity control surface today; there
+is no live server bridge equivalent to Codex or OpenCode in this repo.
 
 Target Antigravity adapter:
 
 1. Keep local launch through the stock `agy` binary and Longhouse plugin.
-2. Add a durable local control inbox under the managed Antigravity runtime dir.
-3. First implement `send_input` as next-invocation injection:
+2. Maintain a durable local control inbox under the managed Antigravity runtime
+   dir.
+3. Implement `send_input` as next-invocation injection:
    - Longhouse writes a pending input to the local inbox.
    - `PreInvocation` returns `injectSteps: [{ userMessage: ... }]`.
-   - If the agent reaches `Stop` while pending input exists, the hook can
-     return `decision: "continue"` with a reason that triggers the next loop.
+   - `PostInvocation` also claims pending input and returns
+     `terminationBehavior: "force_continue"` when it injects a message.
+   - If the agent reaches `Stop` while pending input exists, the hook returns
+     `decision: "continue"` with a reason that triggers the next loop.
+   - Live `agy` canaries still need to prove `force_continue` and
+     Stop/continue behavior end-to-end; until then, the hard product contract is
+     that active hooks claim queued input and report whether it was claimed.
 4. Do not mark `steer_active_turn` supported until we prove that an input can
    be injected into an already-active turn with bounded latency and explicit
    idle rejection.
@@ -224,7 +231,7 @@ Before a provider is marked first-class, tests must prove:
 2. Build OpenCode server-bridge sidecar and `opencode-channel send/interrupt`. Done.
 3. Add OpenCode remote launch and attach. Done.
 4. Decide OpenCode steer only after active-turn semantics are proven.
-5. Build Antigravity hook inbox for queued/next-invocation input.
+5. Build Antigravity hook inbox for queued input claimed by active hooks. Done.
 6. Decide Antigravity interrupt and steer only after hook canaries prove
    bounded behavior.
 7. Move all provider operation truth into the contract registry and remove

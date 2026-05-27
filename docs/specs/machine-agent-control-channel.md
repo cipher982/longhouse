@@ -104,7 +104,7 @@ Initial command types:
 
 - `session.send_text`
 - `session.interrupt`
-- `session.steer_text` (Codex only)
+- `session.steer_text` (Codex and Claude only today)
 
 Runtime Host sends:
 
@@ -175,7 +175,10 @@ The Machine Agent sends a hello frame:
   "supports": [
     "codex.send",
     "codex.interrupt",
-    "codex.steer"
+    "codex.steer",
+    "claude.send",
+    "opencode.send",
+    "antigravity.send"
   ]
 }
 ```
@@ -249,6 +252,15 @@ the stock `opencode` binary and Longhouse CLI are available, starts
 `opencode serve` through `opencode-channel launch`, and drives the provider via
 OpenCode's localhost server API. Do not advertise `opencode.steer` until
 active-turn injection is proven.
+
+### Antigravity
+
+Antigravity control goes through the local hook inbox exposed by the Python
+CLI. The engine advertises `antigravity.send` only when the stock `agy` binary
+and Longhouse CLI are available, and dispatches `session.send_text` through
+`antigravity-channel send`. This is queued input claimed by active
+`PreInvocation`/`PostInvocation` hooks, not active-turn steer, reattach, remote
+launch, or interrupt.
 
 ### Future Providers
 

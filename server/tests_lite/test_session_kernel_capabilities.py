@@ -187,6 +187,31 @@ def test_opencode_server_bridge_projects_live_send_without_steer(db):
     assert caps.can_steer_active_turn is False
 
 
+def test_antigravity_hook_inbox_projects_live_send_without_interrupt_or_steer(db):
+    s = _make_session(db, provider="antigravity")
+    t = _make_thread(db, s)
+    r = _make_run(db, t)
+    _make_conn(
+        db,
+        r,
+        control_plane="antigravity_hook_inbox",
+        state="attached",
+        caps={"send": 1, "tail": 1},
+    )
+    db.commit()
+
+    caps = project_session_capabilities(db, session_id=s.id)
+
+    assert caps.live_control_available is True
+    assert caps.managed_transport.value == "antigravity_hook_inbox"
+    assert caps.can_send_input is True
+    assert caps.can_interrupt is False
+    assert caps.can_terminate is False
+    assert caps.can_tail_output is True
+    assert caps.can_resume is False
+    assert caps.can_steer_active_turn is False
+
+
 def test_detached_claude_channel_bridge_cannot_steer_until_reattached(db):
     s = _make_session(db, provider="claude")
     t = _make_thread(db, s)
@@ -223,7 +248,7 @@ def test_degraded_claude_channel_bridge_still_projects_steer_when_send_capable(d
 
 @pytest.mark.parametrize(
     "control_plane",
-    ["log_tail", "opencode_server_bridge", "opencode_process", "antigravity_process"],
+    ["log_tail", "opencode_server_bridge", "opencode_process", "antigravity_hook_inbox", "antigravity_process"],
 )
 def test_non_injection_control_planes_do_not_project_steer(db, control_plane):
     s = _make_session(db, provider="opencode")

@@ -100,8 +100,10 @@ _CONTRACTS: tuple[ManagedProviderContract, ...] = (
     ),
     ManagedProviderContract(
         provider="antigravity",
-        managed_transport=ManagedSessionTransport.ANTIGRAVITY_PROCESS,
-        control_plane="antigravity_process",
+        managed_transport=ManagedSessionTransport.ANTIGRAVITY_HOOK_INBOX,
+        control_plane="antigravity_hook_inbox",
+        send_input=True,
+        machine_control_supports=("antigravity.send",),
     ),
 )
 
@@ -109,9 +111,11 @@ _BY_PROVIDER = {contract.provider: contract for contract in _CONTRACTS}
 _BY_CONTROL_PLANE = {control_plane: contract for contract in _CONTRACTS for control_plane in contract.control_planes}
 _LEGACY_CONTROL_PLANE_PROVIDERS = {
     "opencode_process": "opencode",
+    "antigravity_process": "antigravity",
 }
 _LEGACY_CONTROL_PLANE_TRANSPORTS = {
     "opencode_process": ManagedSessionTransport.OPENCODE_PROCESS,
+    "antigravity_process": ManagedSessionTransport.ANTIGRAVITY_PROCESS,
 }
 
 

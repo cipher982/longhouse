@@ -412,14 +412,14 @@ def test_this_device_launch_creates_native_antigravity_session(monkeypatch, tmp_
         connection = db.query(SessionConnection).one()
 
     assert response.status_code == 200, response.text
-    assert payload["managed_transport"] == "antigravity_process"
+    assert payload["managed_transport"] == "antigravity_hook_inbox"
     assert payload["source_runner_id"] == runner.id
     assert payload["attach_command"] == ""
     assert session.provider == "antigravity"
-    assert session.managed_transport == "antigravity_process"
+    assert session.managed_transport == "antigravity_hook_inbox"
     assert runtime_state.phase == "idle"
-    assert connection.control_plane == "antigravity_process"
+    assert connection.control_plane == "antigravity_hook_inbox"
     assert connection.can_tail_output == 1
-    assert connection.can_send_input == 0
+    assert connection.can_send_input == 1
     assert connection.can_interrupt == 0
     reset_pubsub_for_test()

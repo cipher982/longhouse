@@ -110,6 +110,7 @@ def _seed_session(
             "claude_channel_bridge": "claude_channel_bridge",
             "codex_app_server": "codex_app_server",
             "opencode_process": "opencode_process",
+            "antigravity_hook_inbox": "antigravity_hook_inbox",
             "antigravity_process": "antigravity_process",
         }
         control_plane = plane_map.get(managed_transport, managed_transport)

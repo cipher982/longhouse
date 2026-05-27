@@ -312,6 +312,7 @@ class AgentSession(AgentsBase):
                 "claude_channel_bridge": "claude_channel_bridge",
                 "opencode_server_bridge": "opencode_server_bridge",
                 "opencode_process": "opencode_process",
+                "antigravity_hook_inbox": "antigravity_hook_inbox",
                 "antigravity_process": "antigravity_process",
             }
             derived = mapping.get((conn.control_plane or "").strip())
@@ -342,7 +343,7 @@ class AgentSession(AgentsBase):
             if sess is None or not self.device_id:
                 return None
             transport = self.managed_transport
-            if transport in ("codex_app_server",):
+            if transport in ("codex_app_server", "antigravity_hook_inbox"):
                 self._legacy_set("source_runner_id", None)
                 return None
             from zerg.models.models import Runner
@@ -1383,6 +1384,7 @@ _CONTROL_PLANE_TO_TRANSPORT = {
     "claude_channel_bridge": "claude_channel_bridge",
     "opencode_server_bridge": "opencode_server_bridge",
     "opencode_process": "opencode_process",
+    "antigravity_hook_inbox": "antigravity_hook_inbox",
     "antigravity_process": "antigravity_process",
 }
 
@@ -1425,7 +1427,12 @@ def _seed_legacy_attrs_on_load(target, _context):
             bag = target.__dict__.get("_legacy_attrs") or {}
             if "source_runner_id" not in bag and target.device_id:
                 control_plane = (conn.control_plane or "").strip() if conn else ""
-                if control_plane in ("codex_bridge", "codex_app_server", "antigravity_process"):
+                if control_plane in (
+                    "codex_bridge",
+                    "codex_app_server",
+                    "antigravity_hook_inbox",
+                    "antigravity_process",
+                ):
                     target._legacy_set("source_runner_id", None)
                 else:
                     runner = sess.query(Runner).filter(Runner.name == target.device_id).first()

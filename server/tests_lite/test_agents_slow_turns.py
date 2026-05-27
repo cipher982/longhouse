@@ -67,6 +67,7 @@ _TRANSPORT_TO_CONTROL_PLANE = {
     "claude_channel_bridge": "claude_channel_bridge",
     "codex_app_server": "codex_app_server",
     "opencode_process": "opencode_process",
+    "antigravity_hook_inbox": "antigravity_hook_inbox",
     "antigravity_process": "antigravity_process",
 }
 
