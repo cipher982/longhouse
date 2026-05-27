@@ -156,12 +156,18 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
                 typer.echo(f"    contract: {', '.join(str(item) for item in supported_ops)}")
             if proof:
                 minimum_ops = ", ".join(str(item) for item in list(proof.get("minimum_evidence_operations") or []))
+                release_failed_ops = ", ".join(str(item) for item in list(proof.get("release_failed_operations") or []))
+                release_gap_ops = ", ".join(str(item) for item in list(proof.get("release_gap_operations") or []))
                 typer.echo(
                     "    proof: "
                     f"{proof.get('state') or '-'}; "
                     f"minimum={proof.get('minimum_evidence_level') or '-'}"
                     f"{f' ({minimum_ops})' if minimum_ops else ''}"
                 )
+                if release_failed_ops:
+                    typer.echo(f"    release failed: {release_failed_ops}")
+                elif release_gap_ops:
+                    typer.echo(f"    release gaps: {release_gap_ops}")
             if version:
                 typer.echo(f"    version readiness: {version.get('state') or '-'}")
 

@@ -235,6 +235,46 @@ def test_collects_provider_status_artifacts_for_all_managed_providers(monkeypatc
     }
 
 
+def test_collects_operation_evidence_from_provider_status_artifact(monkeypatch, tmp_path: Path) -> None:
+    status_file = tmp_path / "claude.json"
+    status_file.write_text(
+        json.dumps(
+            {
+                "provider": "claude",
+                "schema_version": prs.PROVIDER_STATUS_SCHEMA_VERSION,
+                "provider_version": "2.1.153",
+                "verdict": "green",
+                "generated_at": "2026-05-27T00:00:00Z",
+                "operation_evidence": {
+                    "steer_active_turn": {
+                        "status": "pass",
+                        "level": "scheduled_live_token",
+                        "source": "scheduled Claude steer canary",
+                        "canary": "claude_live_token_contract",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(prs.PROVIDER_RELEASE_STATUS_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(
+        prs.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="2.1.153\n", stderr=""),
+    )
+
+    status = prs.collect_provider_release_status({"claude": {"path": "/opt/homebrew/bin/claude"}})
+
+    assert status["statuses"]["claude"]["status"] == "ok"
+    assert status["statuses"]["claude"]["operation_evidence"]["steer_active_turn"] == {
+        "status": "pass",
+        "level": "scheduled_live_token",
+        "source": "scheduled Claude steer canary",
+        "canary": "claude_live_token_contract",
+    }
+
+
 def test_reads_provider_status_config_file_when_env_absent(monkeypatch, tmp_path: Path) -> None:
     artifact_dir = tmp_path / "artifacts"
     artifact_dir.mkdir()
