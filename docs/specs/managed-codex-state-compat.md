@@ -23,18 +23,18 @@ an abandoned TUI-attached session and stop it after the grace window.
 
 1. Bridge state has an explicit `schema_version`.
    Missing schema versions are legacy and must parse as `0`.
-2. New readers must accept old launch mode values.
-   `headless` is the legacy persisted value for detached-UI managed Codex.
+2. New readers must accept old dogfood launch mode values.
+   `headless` is interpreted as detached-UI managed Codex, but new writers
+   emit `detached_ui`.
 3. Readers must be safe by default for future state.
    A live bridge with an unknown launch mode or future schema version must not
    be reaped just because no visible TUI is attached.
 4. Missing launch mode is unknown.
    A state file with no `launch_mode` predates the current detached-UI safety
    contract. Treat it as unknown for live-bridge reaping.
-5. The product term is detached-UI managed.
-   The persisted compatibility value may remain `headless` during a release
-   floor window, but docs, user copy, and code comments should use detached-UI
-   for the lifecycle concept.
+5. The product term and persisted writer value are detached-UI managed.
+   Docs, user copy, code comments, and new bridge state should use detached-UI
+   / `detached_ui` for the lifecycle concept.
 6. Binary replacement must be atomic.
    Install/repair writes new engine binaries to a same-directory temporary file
    and atomically replaces the destination.

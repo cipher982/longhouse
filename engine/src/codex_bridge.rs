@@ -35,12 +35,9 @@ pub const BRIDGE_STATE_SCHEMA_VERSION: u32 = 1;
 pub const LAUNCH_MODE_DETACHED_UI: &str = "detached_ui";
 pub const LAUNCH_MODE_TUI: &str = "tui";
 pub const LEGACY_LAUNCH_MODE_HEADLESS: &str = "headless";
-// Keep the on-disk value old reapers already treat as detached-UI-safe until
-// all dogfood/release paths guarantee the daemon and bridge writer upgrade
-// together. Flip writers to LAUNCH_MODE_DETACHED_UI once the minimum supported
-// daemon is past f9d6f201; readers should accept legacy headless indefinitely.
-// Product/docs should still call this detached-UI managed.
-pub const PERSISTED_DETACHED_UI_LAUNCH_MODE: &str = LEGACY_LAUNCH_MODE_HEADLESS;
+// Readers accept the old dogfood `headless` value, but writers emit the product
+// lifecycle name directly.
+pub const PERSISTED_DETACHED_UI_LAUNCH_MODE: &str = LAUNCH_MODE_DETACHED_UI;
 const BRIDGE_OPT_OUT_NOTIFICATION_METHODS: &[&str] = &[
     "item/plan/delta",
     "item/reasoning/summaryTextDelta",
@@ -3994,7 +3991,7 @@ mod tests {
         let raw: Value = serde_json::from_slice(&fs::read(&state_file).unwrap()).unwrap();
 
         assert_eq!(raw["schema_version"], BRIDGE_STATE_SCHEMA_VERSION);
-        assert_eq!(raw["launch_mode"], LEGACY_LAUNCH_MODE_HEADLESS);
+        assert_eq!(raw["launch_mode"], LAUNCH_MODE_DETACHED_UI);
     }
 
     #[test]
@@ -4005,7 +4002,7 @@ mod tests {
         );
         assert_eq!(
             BridgeLaunchMode::DetachedUi.persisted_state_value(),
-            LEGACY_LAUNCH_MODE_HEADLESS
+            LAUNCH_MODE_DETACHED_UI
         );
     }
 
