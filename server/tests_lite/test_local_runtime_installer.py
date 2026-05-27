@@ -82,7 +82,7 @@ def test_install_local_runtime_does_not_create_global_mcp_configs(tmp_path, monk
     assert not (home / ".codex" / "config.toml").exists()
 
 
-def test_install_local_runtime_removes_legacy_managed_codex_runtime(tmp_path, monkeypatch):
+def test_install_local_runtime_removes_obsolete_managed_codex_runtime(tmp_path, monkeypatch):
     home = tmp_path / "home"
     claude_dir = home / ".claude"
     launcher = home / ".local" / "bin" / "longhouse-codex"
@@ -125,7 +125,7 @@ def test_install_local_runtime_removes_legacy_managed_codex_runtime(tmp_path, mo
     assert not (home / ".longhouse" / "runtimes" / "codex").exists()
 
 
-def test_legacy_managed_codex_cleanup_preserves_unmarked_launcher(tmp_path, monkeypatch):
+def test_obsolete_managed_codex_cleanup_preserves_unmarked_launcher(tmp_path, monkeypatch):
     home = tmp_path / "home"
     launcher = home / ".local" / "bin" / "longhouse-codex"
     launcher.parent.mkdir(parents=True, exist_ok=True)
@@ -135,11 +135,79 @@ def test_legacy_managed_codex_cleanup_preserves_unmarked_launcher(tmp_path, monk
 
     monkeypatch.setenv("HOME", str(home))
 
-    installer._cleanup_legacy_managed_codex_runtime(home / ".longhouse")
+    installer._cleanup_obsolete_managed_codex_runtime(home / ".longhouse")
 
     assert launcher.exists()
     assert launcher.read_text() == "#!/bin/sh\necho user-owned\n"
     assert not runtime_dir.exists()
+
+
+def test_install_local_runtime_removes_obsolete_claude_managed_local_state_only(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    claude_dir = home / ".claude"
+    managed_local = claude_dir / "managed-local"
+    for provider in ("codex-bridge", "opencode", "antigravity"):
+        state_file = managed_local / provider / "nested" / "state.json"
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        state_file.write_text("{}")
+    keep_dir = managed_local / "other-provider"
+    keep_dir.mkdir(parents=True)
+    (keep_dir / "state.json").write_text("{}")
+    raw_transcript = claude_dir / "projects" / "demo" / "session.jsonl"
+    raw_transcript.parent.mkdir(parents=True)
+    raw_transcript.write_text('{"type":"user"}\n')
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(
+        installer,
+        "write_machine_state",
+        lambda **kwargs: _stub_machine_state(**kwargs),
+    )
+    monkeypatch.setattr(installer, "save_token", lambda token, config_dir: None)
+    monkeypatch.setattr(installer, "sanitize_machine_name", lambda machine_name: machine_name)
+    monkeypatch.setattr(
+        installer,
+        "ensure_runtime_binary",
+        lambda component, **_kwargs: SimpleNamespace(path="/tmp/longhouse-engine", installed_now=False),
+    )
+    monkeypatch.setattr(
+        installer,
+        "install_service",
+        lambda **kwargs: {"message": "ok", "service": "launchd", "plist_path": "/tmp/test.plist"},
+    )
+    monkeypatch.setattr(installer, "install_hooks", lambda **kwargs: ["hooks installed"])
+
+    installer.install_local_runtime(
+        url="https://example.com",
+        token=None,
+        claude_dir=str(claude_dir),
+        machine_name="test-box",
+        menubar=False,
+    )
+
+    assert not (managed_local / "codex-bridge").exists()
+    assert not (managed_local / "opencode").exists()
+    assert not (managed_local / "antigravity").exists()
+    assert (keep_dir / "state.json").read_text() == "{}"
+    assert raw_transcript.read_text() == '{"type":"user"}\n'
+
+
+def test_obsolete_claude_managed_local_cleanup_skips_global_claude_when_scratch_home_has_no_provider_dir(
+    tmp_path, monkeypatch
+):
+    home = tmp_path / "home"
+    global_state = home / ".claude" / "managed-local" / "codex-bridge" / "state.json"
+    global_state.parent.mkdir(parents=True)
+    global_state.write_text("{}")
+
+    monkeypatch.setenv("HOME", str(home))
+
+    installer._cleanup_obsolete_claude_managed_local_state(
+        config_dir=home / ".longhouse-dev",
+        claude_dir=None,
+    )
+
+    assert global_state.read_text() == "{}"
 
 
 def test_install_local_runtime_installs_desktop_app_when_requested(tmp_path, monkeypatch):
@@ -176,7 +244,8 @@ def test_install_local_runtime_installs_desktop_app_when_requested(tmp_path, mon
     monkeypatch.setattr(
         installer,
         "install_desktop_app_service",
-        lambda **kwargs: calls.append(("desktop", kwargs)) or {
+        lambda **kwargs: calls.append(("desktop", kwargs))
+        or {
             "message": "desktop app installed",
             "plist_path": "/tmp/menubar.plist",
             "app_path": "/Applications/Longhouse.app",
@@ -484,7 +553,8 @@ def test_apply_machine_state_update_reconciles_existing_service(tmp_path, monkey
     monkeypatch.setattr(
         installer,
         "install_desktop_app_service",
-        lambda **kwargs: desktop_calls.append(kwargs) or {
+        lambda **kwargs: desktop_calls.append(kwargs)
+        or {
             "message": "desktop app installed",
             "plist_path": "/tmp/menubar.plist",
             "app_path": "/Applications/Longhouse.app",
@@ -673,7 +743,8 @@ def test_reconcile_local_runtime_uses_canonical_machine_state(tmp_path, monkeypa
     monkeypatch.setattr(
         installer,
         "install_desktop_app_service",
-        lambda **kwargs: desktop_calls.append(kwargs) or {
+        lambda **kwargs: desktop_calls.append(kwargs)
+        or {
             "message": "desktop app installed",
             "plist_path": "/tmp/menubar.plist",
             "app_path": "/Applications/Longhouse.app",

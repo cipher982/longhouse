@@ -1856,14 +1856,9 @@ fn resolve_bridge_paths(
     session_id: &str,
     log_file_override: Option<&Path>,
 ) -> Result<ResolvedBridgePaths> {
-    let home = home_dir()?;
     let state_root = state_root_override
         .map(Path::to_path_buf)
-        .unwrap_or_else(|| {
-            home.join(".longhouse")
-                .join("managed-local")
-                .join("codex-bridge")
-        });
+        .unwrap_or(crate::config::get_codex_bridge_state_dir()?);
     let state_file = state_root.join(format!("{session_id}.json"));
     let log_file = log_file_override
         .map(Path::to_path_buf)
@@ -3854,12 +3849,6 @@ fn should_emit_progress(last_emit: Option<Instant>, throttle_ms: u64) -> bool {
     }
 }
 
-fn home_dir() -> Result<PathBuf> {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .ok_or_else(|| anyhow!("HOME is not set"))
-}
-
 fn update_bridge_error(context: &mut BridgeContext, error: &str) -> Result<()> {
     context.state.status = "error".to_string();
     context.state.last_error = Some(error.to_string());
@@ -4502,30 +4491,117 @@ mod tests {
     #[test]
     fn resolve_bridge_paths_defaults_under_longhouse_home() {
         let temp = tempfile::tempdir().unwrap();
-        std::env::set_var("HOME", temp.path());
-        let paths = resolve_bridge_paths(None, "session-123", None).unwrap();
-        assert_eq!(
-            paths.state_file.parent().unwrap(),
-            temp.path()
-                .join(".longhouse")
-                .join("managed-local")
-                .join("codex-bridge")
+        temp_env::with_vars(
+            [
+                ("HOME", Some(temp.path().display().to_string())),
+                ("LONGHOUSE_HOME", None::<String>),
+                ("CLAUDE_CONFIG_DIR", None::<String>),
+            ],
+            || {
+                let paths = resolve_bridge_paths(None, "session-123", None).unwrap();
+                assert_eq!(
+                    paths.state_file.parent().unwrap(),
+                    temp.path()
+                        .join(".longhouse")
+                        .join("managed-local")
+                        .join("codex-bridge")
+                );
+                assert_eq!(
+                    paths.state_file,
+                    temp.path()
+                        .join(".longhouse")
+                        .join("managed-local")
+                        .join("codex-bridge")
+                        .join("session-123.json")
+                );
+                assert_eq!(
+                    paths.log_file,
+                    temp.path()
+                        .join(".longhouse")
+                        .join("managed-local")
+                        .join("codex-bridge")
+                        .join("session-123.log")
+                );
+            },
         );
-        assert_eq!(
-            paths.state_file,
-            temp.path()
-                .join(".longhouse")
-                .join("managed-local")
-                .join("codex-bridge")
-                .join("session-123.json")
+    }
+
+    #[test]
+    fn resolve_bridge_paths_prefers_longhouse_home_over_home() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let longhouse_home = temp.path().join("isolated-longhouse");
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home.display().to_string())),
+                ("LONGHOUSE_HOME", Some(longhouse_home.display().to_string())),
+                ("CLAUDE_CONFIG_DIR", None::<String>),
+            ],
+            || {
+                let paths = resolve_bridge_paths(None, "session-123", None).unwrap();
+                assert_eq!(
+                    paths.state_file,
+                    longhouse_home
+                        .join("managed-local")
+                        .join("codex-bridge")
+                        .join("session-123.json")
+                );
+                assert_eq!(
+                    paths.log_file,
+                    longhouse_home
+                        .join("managed-local")
+                        .join("codex-bridge")
+                        .join("session-123.log")
+                );
+            },
         );
-        assert_eq!(
-            paths.log_file,
-            temp.path()
-                .join(".longhouse")
-                .join("managed-local")
-                .join("codex-bridge")
-                .join("session-123.log")
+    }
+
+    #[test]
+    fn default_bridge_writer_and_scanner_use_same_state_dir() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let longhouse_home = temp.path().join("isolated-longhouse");
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home.display().to_string())),
+                ("LONGHOUSE_HOME", Some(longhouse_home.display().to_string())),
+                ("CLAUDE_CONFIG_DIR", None::<String>),
+            ],
+            || {
+                let paths = resolve_bridge_paths(None, "session-123", None).unwrap();
+                assert_eq!(
+                    paths.state_file.parent().unwrap(),
+                    crate::managed_bridge_scan::default_codex_bridge_state_dir()
+                        .unwrap()
+                        .as_path()
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn resolve_bridge_paths_maps_claude_config_dir_to_longhouse_sibling() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let claude_home = temp.path().join(".claude");
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home.display().to_string())),
+                ("LONGHOUSE_HOME", None::<String>),
+                ("CLAUDE_CONFIG_DIR", Some(claude_home.display().to_string())),
+            ],
+            || {
+                let paths = resolve_bridge_paths(None, "session-123", None).unwrap();
+                assert_eq!(
+                    paths.state_file,
+                    temp.path()
+                        .join(".longhouse")
+                        .join("managed-local")
+                        .join("codex-bridge")
+                        .join("session-123.json")
+                );
+            },
         );
     }
 

@@ -287,6 +287,12 @@ pub fn get_agent_log_dir() -> Result<PathBuf> {
     Ok(get_agent_dir()?.join("logs"))
 }
 
+pub fn get_codex_bridge_state_dir() -> Result<PathBuf> {
+    Ok(get_longhouse_home()?
+        .join("managed-local")
+        .join("codex-bridge"))
+}
+
 pub fn get_agent_flight_dir() -> Result<PathBuf> {
     if let Ok(dir) = std::env::var("LONGHOUSE_ENGINE_FLIGHT_RECORDER_DIR") {
         let trimmed = dir.trim();
