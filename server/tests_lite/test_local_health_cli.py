@@ -510,6 +510,15 @@ def test_collect_local_health_marks_connected_control_channel_launch_ready(monke
         "codex": ["launch"],
         "opencode": ["launch"],
     }
+    contracts = snapshot["provider_contracts"]["providers"]
+    assert contracts["claude"]["operations"]["steer_active_turn"] == {
+        "supported": True,
+        "evidence_level": "manual_live_token",
+        "evidence_source": "make managed-claude-poc delayed intent=steer transcript assertion",
+        "next": "promote to scheduled live token canary",
+    }
+    assert contracts["opencode"]["operations"]["steer_active_turn"]["supported"] is False
+    assert contracts["opencode"]["operations"]["steer_active_turn"]["evidence_level"] == "none"
 
 
 def test_collect_local_health_marks_opencode_only_control_channel_launch_ready(monkeypatch, tmp_path: Path):

@@ -121,6 +121,22 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
             if info.get("resolution_error"):
                 typer.echo(f"    resolution error: {info['resolution_error']}")
 
+    provider_contracts = dict(snapshot.get("provider_contracts") or {})
+    contract_providers = dict(provider_contracts.get("providers") or {})
+    if contract_providers:
+        typer.echo("")
+        typer.echo("Provider Contracts")
+        for provider, raw_info in sorted(contract_providers.items()):
+            info = dict(raw_info or {})
+            typer.echo(f"  {provider}: {info.get('control_plane') or '-'}")
+            operations = dict(info.get("operations") or {})
+            supported = [
+                f"{operation}:{dict(evidence).get('evidence_level') or '-'}"
+                for operation, evidence in sorted(operations.items())
+                if dict(evidence).get("supported")
+            ]
+            typer.echo(f"    supported: {', '.join(supported) or '-'}")
+
     provider_release_status = dict(snapshot.get("provider_release_status") or {})
     release_statuses = dict(provider_release_status.get("statuses") or {})
     if release_statuses or provider_release_status.get("skipped_reason"):

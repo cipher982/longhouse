@@ -42,6 +42,7 @@ from zerg.services.longhouse_paths import resolve_longhouse_home
 from zerg.services.machine_repair import recommended_machine_repair_command
 from zerg.services.machine_state import machine_state_source_hash
 from zerg.services.machine_state import read_machine_state
+from zerg.services.managed_provider_contracts import all_managed_provider_contracts
 from zerg.services.managed_provider_contracts import machine_control_launch_capability_by_provider
 from zerg.services.managed_provider_contracts import machine_control_operations_by_provider
 from zerg.services.managed_session_contracts import REASON_BRIDGE_STATE_PATH_MISSING
@@ -3474,6 +3475,31 @@ def _collect_control_channel_health(engine_status: dict[str, Any]) -> dict[str, 
     }
 
 
+def _collect_provider_contracts() -> dict[str, Any]:
+    providers: dict[str, Any] = {}
+    for contract in all_managed_provider_contracts():
+        operations: dict[str, Any] = {}
+        for operation, evidence in sorted(contract.operation_evidence.items()):
+            supported = bool(getattr(contract, operation, False))
+            operations[operation] = {
+                "supported": supported,
+                "evidence_level": evidence.get("level"),
+                "evidence_source": evidence.get("source"),
+                "next": evidence.get("next"),
+            }
+        providers[contract.provider] = {
+            "managed_transport": contract.managed_transport.value,
+            "control_plane": contract.control_plane,
+            "control_plane_aliases": list(contract.control_plane_aliases),
+            "machine_control_supports": list(contract.machine_control_supports),
+            "operations": operations,
+        }
+    return {
+        "schema_version": 1,
+        "providers": providers,
+    }
+
+
 def _collect_managed_session_sources(
     base_dir: Path,
     *,
@@ -3525,6 +3551,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
     engine_status = _collect_engine_status(resolved_base_dir, now=now)
     outbox = _collect_outbox(resolved_base_dir, now=now)
     provider_clis = _collect_provider_clis()
+    provider_contracts = _collect_provider_contracts()
     provider_release_status = collect_provider_release_status(provider_clis, fast=fast)
     activity_summary = _collect_activity_summary(resolved_base_dir, now=now)
     managed_summary, managed_sessions, orphan_bridges, unmanaged_processes = _collect_managed_session_sources(
@@ -3615,6 +3642,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         "control_channel": control_channel,
         "outbox": outbox,
         "provider_clis": provider_clis,
+        "provider_contracts": provider_contracts,
         "provider_release_status": provider_release_status,
         "managed_session_contracts": managed_session_contracts,
         "provider_hook_diagnostics": provider_hook_diagnostics,
