@@ -941,6 +941,7 @@ def test_collect_local_health_flags_detached_managed_session(monkeypatch, tmp_pa
         "orphan_bridge_count": 0,
         "latest_activity_at": "2026-04-17T17:31:00Z",
     }
+
     assert snapshot["managed_sessions"] == [
         {
             "session_id": "sess-detached",
@@ -964,6 +965,31 @@ def test_collect_local_health_flags_detached_managed_session(monkeypatch, tmp_pa
             "reason_codes": [],
         }
     ]
+    assert snapshot["orphan_bridges"] == []
+
+
+def test_collect_local_health_reports_legacy_claude_codex_bridge_state(monkeypatch, tmp_path: Path):
+    base_dir = tmp_path / ".longhouse"
+    legacy_state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    legacy_state_dir.mkdir(parents=True)
+    (legacy_state_dir / "old-session.json").write_text("{}")
+    (legacy_state_dir / "old-session.tmp").write_text("{}")
+
+    _disable_real_runner_env(monkeypatch, base_dir)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(base_dir, age_seconds=5)
+
+    snapshot = local_health_service.collect_local_health(base_dir)
+
+    legacy = snapshot["legacy_runtime_state"]["codex_bridge"]
+    assert legacy == {
+        "path": str(legacy_state_dir),
+        "exists": True,
+        "state_file_count": 1,
+        "active_truth": False,
+        "note": "Stale pre-migration Codex bridge state only; not used for active liveness.",
+    }
+    assert snapshot["managed_sessions"] == []
     assert snapshot["orphan_bridges"] == []
 
 

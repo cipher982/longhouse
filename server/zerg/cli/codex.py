@@ -253,6 +253,26 @@ def _read_codex_bridge_states(state_root: Path, *, check_readyz: bool = False) -
     return states
 
 
+def _count_bridge_state_files(state_root: Path) -> int:
+    if not state_root.exists():
+        return 0
+    try:
+        return sum(1 for path in state_root.glob("*.json") if not path.name.endswith(".tmp"))
+    except OSError:
+        return 0
+
+
+def _legacy_claude_bridge_state_summary(home: Path) -> dict[str, object]:
+    state_root = home / ".claude" / "managed-local" / "codex-bridge"
+    return {
+        "path": str(state_root),
+        "exists": state_root.exists(),
+        "state_file_count": _count_bridge_state_files(state_root),
+        "active_truth": False,
+        "note": "Stale pre-migration Codex bridge state only; not used for active liveness.",
+    }
+
+
 def _collect_codex_doctor(
     *,
     codex_bin: str | None,
@@ -283,6 +303,7 @@ def _collect_codex_doctor(
                 "path": str(legacy_runtime_dir),
                 "exists": legacy_runtime_dir.exists(),
             },
+            "claude_managed_bridge_state": _legacy_claude_bridge_state_summary(home),
         },
         "bridge": {
             "state_root": str(resolved_state_root),
@@ -318,12 +339,19 @@ def _render_codex_doctor(payload: dict[str, object], *, json_output: bool) -> No
     artifacts = dict(payload["legacy_artifacts"])
     launcher = dict(artifacts["launcher"])
     runtime = dict(artifacts["managed_runtime_dir"])
+    legacy_bridge = dict(artifacts["claude_managed_bridge_state"])
     typer.echo("")
     typer.echo("Legacy artifacts")
     typer.echo(f"  longhouse-codex: {'present' if launcher.get('exists') else 'absent'} ({launcher.get('path')})")
     if launcher.get("exists"):
         typer.echo(f"    legacy marker: {'yes' if launcher.get('legacy_marker') else 'no'}")
     typer.echo(f"  managed runtime dir: {'present' if runtime.get('exists') else 'absent'} ({runtime.get('path')})")
+    typer.echo(
+        "  claude managed bridge state: "
+        f"{'present' if legacy_bridge.get('exists') else 'absent'} "
+        f"({legacy_bridge.get('state_file_count') or 0} files, stale-only) "
+        f"({legacy_bridge.get('path')})"
+    )
 
     bridge = dict(payload["bridge"])
     sessions = list(bridge.get("sessions") or [])
