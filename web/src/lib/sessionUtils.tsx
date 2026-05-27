@@ -239,20 +239,10 @@ export function toTitleCaseWords(value: string): string {
     .join(" ");
 }
 
-export function getCardRuntimePhaseLabel(runtime: ReturnType<typeof resolveSessionRuntimeState>): string {
-  return runtime.runtimeDisplay?.phase_label ?? runtime.displayPhase;
-}
-
 export function getRuntimeOutcomeLabel(
   runtime: ReturnType<typeof resolveSessionRuntimeState>,
 ): string {
-  if (runtime.runtimeDisplay?.lifecycle === "closed") {
-    return "Closed";
-  }
-  if (runtime.runtimeDisplay?.headline) {
-    return runtime.runtimeDisplay.headline;
-  }
-  return "Inactive";
+  return runtime.runtimeDisplay.headline;
 }
 
 export interface RuntimeDisplayCopy {
@@ -262,27 +252,10 @@ export interface RuntimeDisplayCopy {
 
 export function getRuntimeDisplayCopy(
   runtime: ReturnType<typeof resolveSessionRuntimeState>,
-  {
-    managedLocal = false,
-  }: {
-    managedLocal?: boolean;
-  } = {},
 ): RuntimeDisplayCopy {
-  if (runtime.runtimeDisplay) {
-    if (runtime.runtimeDisplay.lifecycle === "closed") {
-      return {
-        headline: "Closed",
-        detail: null,
-      };
-    }
-    return {
-      headline: runtime.runtimeDisplay.headline,
-      detail: runtime.runtimeDisplay.detail,
-    };
-  }
   return {
-    headline: managedLocal ? "Not connected" : "Inactive",
-    detail: null,
+    headline: runtime.runtimeDisplay.headline,
+    detail: runtime.runtimeDisplay.detail,
   };
 }
 

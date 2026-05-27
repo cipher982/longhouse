@@ -540,6 +540,7 @@ def test_timeline_session_workspace_projects_claude_channel_display_text(tmp_pat
                 "provisional_cursor": None,
                 "provisional_complete": False,
                 "reconciled_event_id": None,
+                "tool_call_state": None,
             }
         ]
 

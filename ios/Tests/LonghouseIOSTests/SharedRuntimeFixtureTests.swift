@@ -41,7 +41,15 @@ final class SharedRuntimeFixtureTests: XCTestCase {
     }
 
     func testSharedRuntimeFixtures() throws {
-        let fixture = try loadFixture("basic-runtime-semantics.json")
+        try runFixture("basic-runtime-semantics.json")
+    }
+
+    func testDivergentMatrixFixtures() throws {
+        try runFixture("divergent-matrix.json")
+    }
+
+    private func runFixture(_ name: String) throws {
+        let fixture = try loadFixture(name)
         for testCase in fixture.cases {
             let session = testCase.session
             let expected = testCase.expectations

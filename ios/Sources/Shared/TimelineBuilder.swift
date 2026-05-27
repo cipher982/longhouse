@@ -224,17 +224,11 @@ enum TimelineBuilder {
         return max(0, b.timeIntervalSince(a))
     }
 
-    /// A call without a result is considered "dropped" (rather than still
-    /// running) when the enclosing session has terminated, or when the call is
-    /// older than 1 hour. 1 hour is a deliberately generous ceiling — longer
-    /// than any real tool we run — so legit slow Bash/Task calls aren't falsely
-    /// flagged while the session is actively working.
-    static let droppedAgeThreshold: TimeInterval = 3600
-
-    static func isDropped(call: SessionEvent, sessionEnded: Bool, now: Date = Date()) -> Bool {
-        if sessionEnded { return true }
-        guard let callDate = LonghouseDateParser.parse(call.timestamp) else { return false }
-        return now.timeIntervalSince(callDate) > droppedAgeThreshold
+    /// "Dropped" status is server-authoritative: the projection consumes
+    /// session ended-ness and call age and emits `tool_call_state == .dropped`.
+    /// Clients only consume; they never re-derive.
+    static func isDropped(call: SessionEvent) -> Bool {
+        call.toolCallState == .dropped
     }
 
     static func formatDuration(_ seconds: Double) -> String {

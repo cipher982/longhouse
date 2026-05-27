@@ -5,7 +5,14 @@
  * Injects keyframe animations once via a module-level flag.
  */
 
-export type PresenceState = "thinking" | "running" | "idle" | "needs_user" | "blocked" | "stalled";
+export type PresenceState =
+  | "thinking"
+  | "running"
+  | "idle"
+  | "needs_user"
+  | "blocked"
+  | "stalled"
+  | "syncing_transcript";
 export type PresenceStateInput = PresenceState | (string & {});
 
 export interface PresenceBadgeProps {
@@ -86,7 +93,8 @@ function isKnownPresenceState(state: PresenceStateInput | null | undefined): sta
     state === "idle" ||
     state === "needs_user" ||
     state === "blocked" ||
-    state === "stalled"
+    state === "stalled" ||
+    state === "syncing_transcript"
   );
 }
 
@@ -183,6 +191,23 @@ function Dot({ state, size, compact = false, animateCompact = false }: DotProps)
           background: compact ? "#b45309" : "radial-gradient(circle, #f59e0b 30%, #b45309 100%)",
           opacity: compact ? 0.84 : 1,
           boxShadow: compact ? undefined : "0 0 6px 2px rgba(245, 158, 11, 0.35)",
+        }}
+      />
+    );
+  }
+
+  if (state === "syncing_transcript") {
+    return (
+      <span
+        style={{
+          ...base,
+          background: compact ? "#a78bfa" : "radial-gradient(circle, #a78bfa 30%, #7c3aed 100%)",
+          animation:
+            !compact || animateCompact
+              ? "presence-pulse 1.6s ease-in-out infinite"
+              : undefined,
+          opacity: compact ? 0.85 : 1,
+          ["--presence-glow" as string]: "rgba(167, 139, 250, 0.5)",
         }}
       />
     );
@@ -294,7 +319,9 @@ export function PresenceBadge({
             ? "Idle"
             : normalizedState === "stalled"
               ? "Stalled"
-              : normalizedState;
+              : normalizedState === "syncing_transcript"
+                ? "Syncing transcript"
+                : normalizedState;
     return (
       <span
         className={className}
@@ -405,6 +432,17 @@ export function PresenceBadge({
     );
   }
 
+  if (normalizedState === "syncing_transcript") {
+    return (
+      <span className={className} style={containerStyle}>
+        <Dot state="syncing_transcript" size={dotSize} />
+        <span style={{ color: "#a78bfa", fontWeight: 500, letterSpacing: "0.02em" }}>
+          Syncing transcript
+        </span>
+      </span>
+    );
+  }
+
   // idle
   return (
     <span className={className} style={containerStyle}>
@@ -433,6 +471,7 @@ export function PresenceHero({ state, tool, className }: PresenceHeroProps) {
   const isRunning = normalizedState === "running";
   const isBlocked = normalizedState === "blocked";
   const isStalled = normalizedState === "stalled";
+  const isSyncing = normalizedState === "syncing_transcript";
 
   const borderColor = isThinking
     ? "rgba(251, 146, 60, 0.4)"
@@ -442,7 +481,9 @@ export function PresenceHero({ state, tool, className }: PresenceHeroProps) {
         ? "rgba(248, 113, 113, 0.4)"
         : isStalled
           ? "rgba(245, 158, 11, 0.36)"
-          : "rgba(107, 114, 128, 0.2)";
+          : isSyncing
+            ? "rgba(167, 139, 250, 0.4)"
+            : "rgba(107, 114, 128, 0.2)";
 
   const bgColor = isThinking
     ? "rgba(251, 146, 60, 0.08)"
@@ -452,7 +493,9 @@ export function PresenceHero({ state, tool, className }: PresenceHeroProps) {
         ? "rgba(248, 113, 113, 0.06)"
         : isStalled
           ? "rgba(245, 158, 11, 0.08)"
-          : "rgba(107, 114, 128, 0.04)";
+          : isSyncing
+            ? "rgba(167, 139, 250, 0.08)"
+            : "rgba(107, 114, 128, 0.04)";
 
   return (
     <div

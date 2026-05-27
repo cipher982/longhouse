@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from typing import Any
 from typing import List
 from typing import Optional
 from uuid import UUID
@@ -78,6 +79,8 @@ from zerg.services.session_views import build_event_input_origin_map
 from zerg.services.session_views import build_event_response
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import build_session_turn_response
+from zerg.services.session_views import build_tool_call_state_map
+from zerg.services.session_views import is_session_closed
 from zerg.services.session_views import latest_launch_attempts
 from zerg.services.session_views import normalize_utc_datetime
 from zerg.services.session_workspace import build_session_workspace
@@ -930,6 +933,10 @@ async def get_session_events(
     boundary = store.get_active_context_boundary(session_id, branch_mode=branch_mode)
     head_branch_id = store.get_head_branch_id(session_id)
     input_origin_map = build_event_input_origin_map(store, events)
+    tool_call_state_map = build_tool_call_state_map(
+        store.get_session_tool_call_events(session_id, branch_mode=branch_mode),
+        session_closed=is_session_closed(session),
+    )
 
     total = store.count_session_events(
         session_id,
@@ -959,6 +966,7 @@ async def get_session_events(
                 boundary=boundary,
                 head_branch_id=head_branch_id,
                 input_origin_map=input_origin_map,
+                tool_call_state_map=tool_call_state_map,
             )
             for e in events
         ],
@@ -1020,6 +1028,19 @@ async def get_session_projection(
         [item.event for item in projection.items if item.kind == "event" and item.event is not None],
     )
 
+    sessions_by_id: dict[UUID, Any] = {}
+    for item in projection.items:
+        if item.kind == "event" and item.event is not None:
+            sessions_by_id.setdefault(item.session.id, item.session)
+    tool_call_state_map: dict[int, Any] = {}
+    for sid, path_session in sessions_by_id.items():
+        tool_call_state_map.update(
+            build_tool_call_state_map(
+                store.get_session_tool_call_events(sid, branch_mode=branch_mode),
+                session_closed=is_session_closed(path_session),
+            )
+        )
+
     def get_boundary(current_session_id: UUID) -> int | None:
         if current_session_id not in active_context_boundary_cache:
             active_context_boundary_cache[current_session_id] = store.get_active_context_boundary(
@@ -1048,6 +1069,7 @@ async def get_session_projection(
                             boundary=get_boundary(item.session.id),
                             head_branch_id=get_head_branch_id(item.session.id),
                             input_origin_map=input_origin_map,
+                            tool_call_state_map=tool_call_state_map,
                         ),
                     )
                 )

@@ -37,6 +37,7 @@ export {
   isAgentToolInteraction,
   isOutsideActiveContext,
   isToolInteractionDropped,
+  isToolInteractionRunning,
   parseLonghouseOutput,
   projectionItemsWithTranscriptPreview,
   shouldRenderTranscriptPreview,

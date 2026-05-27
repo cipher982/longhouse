@@ -33,6 +33,29 @@ const AUTO_SCROLL_EPSILON_PX = 1;
 const WORKSPACE_FALLBACK_REFRESH_MS =
   (typeof window !== "undefined" && window.__TEST_WORKSPACE_FALLBACK_MS__) || 5_000;
 
+/** Slow reconciliation interval used even when SSE is connected.
+ *  Server flips unpaired tool calls older than DROPPED_TOOL_AGE (1h) to
+ *  "dropped" lazily on read; if SSE stays quiet (no other event in the session)
+ *  the client otherwise never re-asks. ~60s keeps tool_call_state honest with
+ *  small overhead. */
+const WORKSPACE_RECONCILE_REFRESH_MS = 60_000;
+
+function workspaceHasRunningTool(
+  workspace:
+    | { projection?: { items?: AgentSessionProjectionItem[] | null } | null }
+    | null
+    | undefined,
+): boolean {
+  const items = workspace?.projection?.items;
+  if (!items) return false;
+  for (const item of items) {
+    if (item.kind === "event" && item.event?.tool_call_state === "running") {
+      return true;
+    }
+  }
+  return false;
+}
+
 interface UseSessionWorkspaceOptions {
   highlightEventId?: number | null;
 }
@@ -205,14 +228,20 @@ export function useSessionWorkspace(
     limit: INITIAL_EVENTS_PAGE_SIZE,
     branch_mode: branchMode,
     refetchInterval: (query) => {
-      // When SSE stream is connected, no polling needed
-      if (streamConnected) return false;
-
-      // Fallback: poll at reduced frequency when stream is down
       const currentSession = query.state.data?.session;
       if (!documentVisible || !shouldRefreshWorkspaceSession(currentSession)) {
         return false;
       }
+
+      // Slow reconciliation: server flips unpaired tool calls to "dropped"
+      // after 1h on demand, so we re-ask occasionally even when SSE is quiet.
+      if (streamConnected) {
+        return workspaceHasRunningTool(query.state.data)
+          ? WORKSPACE_RECONCILE_REFRESH_MS
+          : false;
+      }
+
+      // Stream is down: poll at the shorter fallback cadence.
       return WORKSPACE_FALLBACK_REFRESH_MS;
     },
   });
@@ -243,7 +272,6 @@ export function useSessionWorkspace(
   } = useAgentSessionTurns(sessionId, {
     limit: 10,
     order: "desc",
-    // Phase 3: lifecycle (with terminal_state fallback) gates done-ness.
     enabled: Boolean(sessionId && session && !isSessionClosed(session)),
     refetchInterval:
       streamConnected || !documentVisible || !shouldRefreshWorkspaceSession(session)

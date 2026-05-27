@@ -40,35 +40,6 @@
           "host_state": "online",
           "terminal_reason": null
         },
-        "runtime_facts": {
-          "control_path": "managed",
-          "process_state": "running",
-          "host": {"state": "online", "last_seen_at": "2026-05-15T20:00:00Z", "source": "machine"},
-          "process": {
-            "status": "observed",
-            "pid": 4242,
-            "process_start_time": "2026-05-15T19:50:00Z",
-            "observed_at": "2026-05-15T20:00:01Z",
-            "last_seen_at": "2026-05-15T20:00:01Z",
-            "source_mtime": null,
-            "source_path": null,
-            "reason": null,
-            "source": "process_scan"
-          },
-          "phase": {
-            "kind": "running",
-            "tool": "shell",
-            "source": "managed_local_transport",
-            "observed_at": "2026-05-15T20:00:02Z",
-            "expires_at": "2026-05-15T20:15:02Z"
-          },
-          "activity": {
-            "last_transcript_at": "2026-05-15T20:00:00Z",
-            "last_runtime_signal_at": "2026-05-15T20:00:02Z",
-            "last_progress_at": "2026-05-15T20:00:02Z"
-          },
-          "lifecycle": {"state": "open", "reason": null, "observed_at": "2026-05-15T20:00:02Z"}
-        },
         "timeline_card": {
           "ownership": {"label": "Managed", "tone": "neutral"},
           "status": {
@@ -129,29 +100,6 @@
           "lifecycle": "open",
           "host_state": "online",
           "terminal_reason": null
-        },
-        "runtime_facts": {
-          "control_path": "unmanaged",
-          "process_state": "running",
-          "host": {"state": "online", "last_seen_at": "2026-05-15T20:10:00Z", "source": "machine"},
-          "process": {
-            "status": "observed",
-            "pid": 4343,
-            "process_start_time": "2026-05-15T20:00:00Z",
-            "observed_at": "2026-05-15T20:10:01Z",
-            "last_seen_at": "2026-05-15T20:10:01Z",
-            "source_mtime": null,
-            "source_path": null,
-            "reason": null,
-            "source": "process_scan"
-          },
-          "phase": {"kind": null, "tool": null, "source": null, "observed_at": null, "expires_at": null},
-          "activity": {
-            "last_transcript_at": "2026-05-15T20:10:00Z",
-            "last_runtime_signal_at": "2026-05-15T20:10:01Z",
-            "last_progress_at": null
-          },
-          "lifecycle": {"state": "open", "reason": null, "observed_at": "2026-05-15T20:10:01Z"}
         },
         "timeline_card": {
           "ownership": {"label": "Unmanaged", "tone": "neutral"},
@@ -214,29 +162,6 @@
           "host_state": "online",
           "terminal_reason": "process_gone"
         },
-        "runtime_facts": {
-          "control_path": "managed",
-          "process_state": "closed",
-          "host": {"state": "online", "last_seen_at": "2026-05-15T20:20:00Z", "source": "machine"},
-          "process": {
-            "status": "gone",
-            "pid": null,
-            "process_start_time": null,
-            "observed_at": "2026-05-15T20:20:01Z",
-            "last_seen_at": "2026-05-15T20:20:01Z",
-            "source_mtime": null,
-            "source_path": null,
-            "reason": "process_gone",
-            "source": "process_scan"
-          },
-          "phase": {"kind": null, "tool": null, "source": null, "observed_at": null, "expires_at": null},
-          "activity": {
-            "last_transcript_at": "2026-05-15T20:20:00Z",
-            "last_runtime_signal_at": "2026-05-15T20:20:01Z",
-            "last_progress_at": null
-          },
-          "lifecycle": {"state": "closed", "reason": "process_gone", "observed_at": "2026-05-15T20:20:01Z"}
-        },
         "timeline_card": {
           "ownership": {"label": "Managed", "tone": "neutral"},
           "status": {
@@ -297,35 +222,6 @@
           "lifecycle": "open",
           "host_state": "online",
           "terminal_reason": null
-        },
-        "runtime_facts": {
-          "control_path": "managed",
-          "process_state": "running",
-          "host": {"state": "online", "last_seen_at": "2026-05-15T20:30:00Z", "source": "machine"},
-          "process": {
-            "status": "observed",
-            "pid": 4444,
-            "process_start_time": "2026-05-15T20:25:00Z",
-            "observed_at": "2026-05-15T20:30:01Z",
-            "last_seen_at": "2026-05-15T20:30:01Z",
-            "source_mtime": null,
-            "source_path": null,
-            "reason": null,
-            "source": "process_scan"
-          },
-          "phase": {
-            "kind": "running",
-            "tool": "shell",
-            "source": "managed_local_transport",
-            "observed_at": "2026-05-15T20:30:02Z",
-            "expires_at": "2026-05-15T20:45:02Z"
-          },
-          "activity": {
-            "last_transcript_at": "2026-05-15T20:30:00Z",
-            "last_runtime_signal_at": "2026-05-15T20:30:02Z",
-            "last_progress_at": "2026-05-15T20:30:02Z"
-          },
-          "lifecycle": {"state": "open", "reason": null, "observed_at": "2026-05-15T20:30:02Z"}
         },
         "timeline_card": {
           "ownership": {"label": "Managed", "tone": "neutral"},

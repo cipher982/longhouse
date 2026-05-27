@@ -875,7 +875,9 @@ def test_three_axis_fields_closed_with_explicit_terminal():
     assert display.terminal_reason == "provider_signal"
 
 
-def test_three_axis_fields_prefers_explicit_terminal_reason():
+def test_three_axis_fields_collapses_provider_terminal_reason_to_canonical_value():
+    """Raw provider terminal_reason strings are not part of the wire contract.
+    The projection collapses provider signals into canonical TerminalReason values."""
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
             runtime_phase="finished",
@@ -890,12 +892,11 @@ def test_three_axis_fields_prefers_explicit_terminal_reason():
     )
 
     assert display.lifecycle == "closed"
-    assert display.terminal_reason == "bridge_stop"
+    assert display.terminal_reason == "provider_signal"
 
 
-def test_three_axis_fields_preserves_terminal_disconnected_reason_as_metadata():
-    """terminal_reason remains on the model for metadata/debug/future-resume,
-    but the user-facing labels collapse to generic "Closed"."""
+def test_three_axis_fields_collapses_arbitrary_terminal_reason_to_provider_signal():
+    """Same path for terminal_disconnected: collapse to provider_signal, generic Closed."""
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
             runtime_phase="finished",
@@ -910,7 +911,7 @@ def test_three_axis_fields_preserves_terminal_disconnected_reason_as_metadata():
     )
 
     assert display.lifecycle == "closed"
-    assert display.terminal_reason == "terminal_disconnected"
+    assert display.terminal_reason == "provider_signal"
     assert display.headline == "Closed"
     assert display.detail is None
     assert display.phase_label == "Closed"

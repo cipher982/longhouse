@@ -129,8 +129,6 @@ export function parseLonghouseOutput(
   };
 }
 
-const DROPPED_TOOL_AGE_MS = 3600 * 1000;
-
 function nonEmptyText(value: string | null | undefined): string {
   return (value || "").trim();
 }
@@ -195,18 +193,12 @@ export function projectionItemsWithTranscriptPreview(
   ];
 }
 
-export function isToolInteractionDropped(
-  interaction: ToolInteraction,
-  sessionEnded: boolean,
-  now: number = Date.now(),
-): boolean {
-  if (interaction.resultEvent) return false;
-  if (interaction.pairing === "orphan") return false;
-  if (sessionEnded) return true;
-  const ts = interaction.callEvent?.timestamp ?? interaction.timestamp;
-  const callMs = parseUTC(ts).getTime();
-  if (Number.isNaN(callMs)) return false;
-  return now - callMs > DROPPED_TOOL_AGE_MS;
+export function isToolInteractionDropped(interaction: ToolInteraction): boolean {
+  return interaction.callEvent?.tool_call_state === "dropped";
+}
+
+export function isToolInteractionRunning(interaction: ToolInteraction): boolean {
+  return interaction.callEvent?.tool_call_state === "running";
 }
 
 export function getToolDuration(callEvent: AgentEvent | null, resultEvent: AgentEvent | null): string | null {

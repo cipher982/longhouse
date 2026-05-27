@@ -53,9 +53,6 @@ export function getRuntimeElapsedLabel(
     return turnCounter ? `Turn ${turnCounter}` : null;
   }
 
-  // Phase 3 of session-liveness-honesty: freeze the elapsed counter only
-  // when the session is actually closed. lifecycle==='closed' is the
-  // ground-truth axis; older payloads fall back to terminal_state.
   const endedAt = isSessionClosed(session) ? session.ended_at : null;
   const sessionCounter = formatElapsedCounter(
     session.started_at,

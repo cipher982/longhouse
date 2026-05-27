@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from enum import Enum
 
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.session_runtime import EXPLICIT_CLOSED_TERMINAL_STATES
@@ -19,11 +20,80 @@ from zerg.services.session_runtime import UNVERIFIED_TERMINAL_STATES
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.utils.time import normalize_utc
 
+
+class TruthTier(str, Enum):
+    NONE = "none"
+    STALE = "stale"
+    FRESH = "fresh"
+    MANAGED_LOCAL = "managed-local"
+
+
+class SignalTier(str, Enum):
+    NONE = "none"
+    PHASE_SIGNAL = "phase_signal"
+    PROCESS_BINDING = "process_binding"
+    TRANSCRIPT_PROGRESS = "transcript_progress"
+
+
+class ControlPath(str, Enum):
+    MANAGED = "managed"
+    UNMANAGED = "unmanaged"
+
+
+class ActivityRecency(str, Enum):
+    LIVE = "live"
+    RECENT = "recent"
+    STALE = "stale"
+    NONE = "none"
+
+
+class Lifecycle(str, Enum):
+    OPEN = "open"
+    CLOSED = "closed"
+    UNKNOWN = "unknown"
+
+
+class HostState(str, Enum):
+    ONLINE = "online"
+    STALE = "stale"
+    OFFLINE = "offline"
+    UNKNOWN = "unknown"
+
+
+class PresenceState(str, Enum):
+    THINKING = "thinking"
+    RUNNING = "running"
+    IDLE = "idle"
+    NEEDS_USER = "needs_user"
+    BLOCKED = "blocked"
+    STALLED = "stalled"
+    SYNCING_TRANSCRIPT = "syncing_transcript"
+
+
+class Tone(str, Enum):
+    STALLED = "stalled"
+    BLOCKED = "blocked"
+    RUNNING = "running"
+    THINKING = "thinking"
+    IDLE = "idle"
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+    CLOSED = "closed"
+
+
+class TerminalReason(str, Enum):
+    SESSION_ENDED = "session_ended"
+    USER_CLOSED = "user_closed"
+    PROCESS_GONE = "process_gone"
+    HOST_EXPIRED = "host_expired"
+    PROVIDER_SIGNAL = "provider_signal"
+
+
 KNOWN_PRESENCE_STATES = {"thinking", "running", "idle", "needs_user", "blocked", "stalled"}
 LIVE_EXECUTION_STATES = {"thinking", "running"}
 ATTENTION_STATES = {"blocked"}
 TRANSCRIPT_SYNC_DISPLAY_WINDOW = timedelta(seconds=30)
-TRANSCRIPT_SYNC_STATE = "syncing_transcript"
+TRANSCRIPT_SYNC_STATE = PresenceState.SYNCING_TRANSCRIPT.value
 
 
 @dataclass(frozen=True)
@@ -43,11 +113,11 @@ class SessionRuntimeDisplay:
     is_stalled: bool
     is_managed_local_truth: bool
     has_signal: bool
-    control_path: str  # "managed" | "unmanaged"
-    activity_recency: str  # "live" | "recent" | "stale" | "none"
-    lifecycle: str  # "open" | "closed" | "unknown"
-    host_state: str  # "online" | "stale" | "offline" | "unknown"
-    terminal_reason: str | None  # populated when lifecycle == "closed"
+    control_path: str  # ControlPath
+    activity_recency: str  # ActivityRecency
+    lifecycle: str  # Lifecycle
+    host_state: str  # HostState
+    terminal_reason: str | None  # TerminalReason when lifecycle == "closed"
 
 
 def _normalize_presence_state(state: str | None) -> str | None:
@@ -336,17 +406,14 @@ def build_session_runtime_display(
     binding_closed = binding_terminal_reason == "process_gone" and control_path == "unmanaged"
     if terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES:
         lifecycle = "closed"
-        terminal_reason = runtime_view.terminal_reason or _derive_terminal_reason(terminal_state)
-    elif terminal_state in UNVERIFIED_TERMINAL_STATES:
+        terminal_reason = _derive_terminal_reason(runtime_view.terminal_reason) or _derive_terminal_reason(terminal_state)
+    elif terminal_state in UNVERIFIED_TERMINAL_STATES or terminal_state:
+        # Unverified or reversible signals (like "finished") don't actually close the session.
         lifecycle = "unknown"
-        terminal_reason = runtime_view.terminal_reason or terminal_state
-    elif terminal_state:
-        # Reversible signals like "finished" don't actually close the session.
-        lifecycle = "unknown"
-        terminal_reason = runtime_view.terminal_reason or terminal_state
+        terminal_reason = _derive_terminal_reason(runtime_view.terminal_reason) or _derive_terminal_reason(terminal_state)
     elif binding_closed:
         lifecycle = "closed"
-        terminal_reason = binding_terminal_reason
+        terminal_reason = _derive_terminal_reason(binding_terminal_reason)
     else:
         lifecycle = "open"
         terminal_reason = None

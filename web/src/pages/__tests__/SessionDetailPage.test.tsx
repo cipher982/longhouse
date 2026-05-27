@@ -490,6 +490,7 @@ describe("SessionDetailPage", () => {
             tool_input_json: { command: "git status --short" },
             tool_output_text: null,
             tool_call_id: "tc-pending",
+            tool_call_state: "running",
             timestamp: "2026-03-22T22:04:00Z",
             in_active_context: true,
           },
@@ -644,6 +645,7 @@ describe("SessionDetailPage", () => {
           tool_input_json: null,
           tool_output_text: null,
           tool_call_id: "tc-dropped",
+          tool_call_state: "dropped",
           timestamp: "2026-03-22T22:04:00Z",
           in_active_context: true,
         },
@@ -848,32 +850,6 @@ describe("SessionDetailPage", () => {
       confidence: null,
       display_phase: null,
       last_live_at: null,
-      runtime_facts: {
-        control_path: "managed",
-        host: {
-          state: "online",
-          last_seen_at: "2026-03-22T22:04:30Z",
-        },
-        process: {
-          status: "observed",
-          observed_at: "2026-03-22T22:04:30Z",
-          last_seen_at: "2026-03-22T22:04:30Z",
-        },
-        phase: {
-          kind: "running",
-          tool: "shell",
-          observed_at: "2026-03-22T22:04:30Z",
-        },
-        activity: {
-          last_transcript_at: "2026-03-22T22:04:30Z",
-          last_runtime_signal_at: "2026-03-22T22:04:30Z",
-          last_progress_at: "2026-03-22T22:04:30Z",
-        },
-        lifecycle: {
-          state: "open",
-          observed_at: "2026-03-22T22:04:30Z",
-        },
-      },
     });
     mockWorkspaceState({ session, model: buildTimelineModel([]) });
 
@@ -899,8 +875,23 @@ describe("SessionDetailPage", () => {
       confidence: null,
       display_phase: null,
       last_live_at: null,
-      runtime_display: null,
-      runtime_facts: null,
+      runtime_display: makeRuntimeDisplay({
+        truth_tier: "none",
+        signal_tier: "none",
+        state: null,
+        tone: "inactive",
+        headline: "Inactive",
+        detail: null,
+        phase_label: "Inactive",
+        compact_tool_label: null,
+        is_live: false,
+        is_executing: false,
+        is_idle: true,
+        is_managed_local_truth: false,
+        has_signal: false,
+        control_path: "unmanaged",
+        host_state: null,
+      }),
       capabilities: makeCapabilities({
         live_control_available: false,
         host_reattach_available: false,

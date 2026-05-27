@@ -316,7 +316,7 @@ private struct RuntimeBadge: View {
         // non-pulsing colored dot can't masquerade as "live".
         let globalHealthy = connectionState == .healthy
         let attentionTone = timelineAttentionTone(session.timelineStatusTone)
-        let withinDeadline = phaseSignalFresh(session)
+        let withinDeadline = session.runtimeDisplay.activityRecency == "live"
         let sessionStale = !withinDeadline && !isClosed
         // Pulse only when global is healthy AND the server's own
         // phase-signal deadline hasn't passed. Anything else freezes.
@@ -948,13 +948,6 @@ private func parseLonghouseDate(_ value: String?) -> Date? {
 }
 
 // MARK: - Liveness + duration helpers (RuntimeBadge)
-
-/// Per-session liveness check. The server projects `activity_recency` onto
-/// `runtime_display` after applying its own freshness windows; clients pulse
-/// only when that projection says `live`.
-func phaseSignalFresh(_ session: SessionSummary) -> Bool {
-    session.runtimeDisplay?.activityRecency == "live"
-}
 
 /// "How long in current state" — the headline number in the pill.
 /// Uses `timelineAnchor`, which the backend re-anchors on phase changes

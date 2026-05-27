@@ -69,25 +69,26 @@ extension APISessionCapabilitiesResponse {
 extension APISessionRuntimeDisplayResponse {
     var sessionRuntimeDisplay: SessionRuntimeDisplay {
         SessionRuntimeDisplay(
-            truthTier: truthTier,
-            signalTier: signalTier,
-            state: state,
-            tone: tone,
+            truthTier: truthTier.rawValue,
+            signalTier: signalTier.rawValue,
+            state: state?.rawValue,
+            tone: tone.rawValue,
             headline: headline,
             detail: detail,
             phaseLabel: phaseLabel,
             compactToolLabel: compactToolLabel,
-            isLive: isLive ?? false,
-            isExecuting: isExecuting ?? false,
-            needsAttention: needsAttention ?? false,
-            isIdle: isIdle ?? false,
-            isManagedLocalTruth: isManagedLocalTruth ?? false,
-            hasSignal: hasSignal ?? false,
-            controlPath: controlPath,
-            activityRecency: activityRecency,
-            lifecycle: lifecycle,
-            hostState: hostState,
-            terminalReason: terminalReason
+            isLive: isLive,
+            isExecuting: isExecuting,
+            needsAttention: needsAttention,
+            isIdle: isIdle,
+            isStalled: isStalled,
+            isManagedLocalTruth: isManagedLocalTruth,
+            hasSignal: hasSignal,
+            controlPath: controlPath.rawValue,
+            activityRecency: activityRecency.rawValue,
+            lifecycle: lifecycle.rawValue,
+            hostState: hostState.rawValue,
+            terminalReason: terminalReason?.rawValue
         )
     }
 }
@@ -151,7 +152,7 @@ extension APISessionResponse {
             originLabel: originLabel,
             capabilities: capabilities.sessionCapabilities,
             runtimeDisplay: runtimeDisplay.sessionRuntimeDisplay,
-            loopMode: loopMode.flatMap(SessionLoopMode.init(rawValue:)),
+            loopMode: loopMode.flatMap { SessionLoopMode(rawValue: $0.rawValue) },
             transcriptPreview: transcriptPreview?.sessionTranscriptPreview
         )
     }
@@ -167,6 +168,7 @@ extension APIEventResponse {
             toolInputJSON: toolInputJson,
             toolOutputText: toolOutputText,
             toolCallId: toolCallId,
+            toolCallState: toolCallState.flatMap { ToolCallState(rawValue: $0.rawValue) },
             timestamp: timestamp,
             inActiveContext: inActiveContext ?? true,
             isHeadBranch: isHeadBranch ?? true,
@@ -278,7 +280,7 @@ extension APISessionLoopModeResponse {
     var loopModeResponse: LoopModeResponse {
         LoopModeResponse(
             sessionId: sessionId,
-            loopMode: SessionLoopMode(rawValue: loopMode) ?? .assist
+            loopMode: SessionLoopMode(rawValue: loopMode.rawValue) ?? .assist
         )
     }
 }

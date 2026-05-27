@@ -1,6 +1,36 @@
 import { describe, expect, it } from "vitest";
 import { buildInboxLayout } from "../timelineInbox";
-import type { AgentSession, TimelineSessionCard } from "../../services/api/agents";
+import type {
+  AgentSession,
+  SessionRuntimeDisplay,
+  TimelineSessionCard,
+} from "../../services/api/agents";
+
+function makeRuntimeDisplay(overrides: Partial<SessionRuntimeDisplay> = {}): SessionRuntimeDisplay {
+  return {
+    truth_tier: "none",
+    signal_tier: "none",
+    state: null,
+    tone: "inactive",
+    headline: "Inactive",
+    detail: null,
+    phase_label: "Inactive",
+    compact_tool_label: null,
+    is_live: false,
+    is_executing: false,
+    needs_attention: false,
+    is_idle: true,
+    is_stalled: false,
+    is_managed_local_truth: false,
+    has_signal: false,
+    control_path: "unmanaged",
+    activity_recency: "stale",
+    lifecycle: "open",
+    host_state: null,
+    terminal_reason: null,
+    ...overrides,
+  };
+}
 
 function makeSession(overrides: Partial<AgentSession> & { id: string }): AgentSession {
   return {
@@ -20,8 +50,7 @@ function makeSession(overrides: Partial<AgentSession> & { id: string }): AgentSe
     user_messages: 0,
     tool_calls: 0,
     terminal_state: null,
-    runtime_facts: null,
-    runtime_display: null,
+    runtime_display: makeRuntimeDisplay(),
     timeline_card: null,
     capabilities: undefined,
     ...overrides,
@@ -38,9 +67,7 @@ function makeCard(args: {
     id: args.id,
     started_at: args.startedAt,
     project: args.repo,
-    runtime_facts: args.closed
-      ? ({ lifecycle: { state: "closed" } } as AgentSession["runtime_facts"])
-      : null,
+    runtime_display: makeRuntimeDisplay(args.closed ? { lifecycle: "closed" } : {}),
   });
   return {
     thread_id: args.id,

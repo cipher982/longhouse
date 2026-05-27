@@ -114,7 +114,30 @@ struct PushNotificationsTests {
         presenceState: String,
         userState: String? = "active"
     ) -> SessionSummary {
-        SessionSummary(
+        let needsAttention = presenceState == "blocked"
+        let display = SessionRuntimeDisplay(
+            truthTier: "managed-local",
+            signalTier: "phase_signal",
+            state: presenceState,
+            tone: presenceState,
+            headline: presenceState.capitalized,
+            detail: nil,
+            phaseLabel: presenceState.capitalized,
+            compactToolLabel: nil,
+            isLive: presenceState == "running",
+            isExecuting: presenceState == "running",
+            needsAttention: needsAttention,
+            isIdle: presenceState == "idle",
+            isStalled: false,
+            isManagedLocalTruth: true,
+            hasSignal: true,
+            controlPath: "managed",
+            activityRecency: "live",
+            lifecycle: "open",
+            hostState: "online",
+            terminalReason: nil
+        )
+        return SessionSummary(
             id: id,
             title: id,
             presenceState: presenceState,
@@ -122,7 +145,8 @@ struct PushNotificationsTests {
             project: "zerg",
             lastActivityAt: nil,
             userState: userState,
-            status: nil
+            status: nil,
+            runtimeDisplay: display
         )
     }
 }

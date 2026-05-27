@@ -3,9 +3,10 @@ import Testing
 @testable import Longhouse
 
 struct SessionModelsTests {
-    private func runtimeDisplay(activityRecency: String?) -> SessionRuntimeDisplay {
+    private func runtimeDisplay(activityRecency: String) -> SessionRuntimeDisplay {
         SessionRuntimeDisplay(
             truthTier: "managed-local",
+            signalTier: "phase_signal",
             state: "running",
             tone: "running",
             headline: "Using Codex",
@@ -16,6 +17,7 @@ struct SessionModelsTests {
             isExecuting: true,
             needsAttention: false,
             isIdle: false,
+            isStalled: false,
             isManagedLocalTruth: true,
             hasSignal: true,
             controlPath: "managed",
@@ -80,16 +82,6 @@ struct SessionModelsTests {
             "host_state": "online",
             "terminal_reason": null
           },
-          "runtime_facts": {
-            "control_path": "managed",
-            "control": {"state": "online", "reason": null, "source": "machine_heartbeat", "last_seen_at": "2026-04-25T20:00:00Z", "expires_at": "2026-04-25T20:15:00Z", "transport": "claude_channel_bridge"},
-            "process_state": "unknown",
-            "host": {"state": "online", "last_seen_at": "2026-04-25T20:00:00Z", "source": "machine_heartbeat"},
-            "process": {"status": "unknown", "pid": null, "process_start_time": null, "observed_at": null, "last_seen_at": null, "source_mtime": null, "source_path": null, "reason": null, "source": null},
-            "phase": {"kind": "needs_user", "tool": null, "source": "managed_local_transport", "observed_at": "2026-04-25T20:00:00Z", "expires_at": "2026-04-25T20:15:00Z"},
-            "activity": {"last_transcript_at": "2026-04-25T20:00:00Z", "last_runtime_signal_at": "2026-04-25T20:00:00Z", "last_progress_at": null},
-            "lifecycle": {"state": "open", "reason": "phase_observed", "observed_at": "2026-04-25T20:00:00Z"}
-          },
           "timeline_card": {
             "ownership": {"label": "Managed", "tone": "neutral"},
             "status": {"label": "Idle", "tone": "idle", "seen_at": null, "seen_at_prefix": "Updated"},
@@ -97,26 +89,6 @@ struct SessionModelsTests {
           }
         }
         """
-    }
-
-    private func summaryForPhaseFreshness(
-        activityRecency: String?,
-        phaseExpiresAt: String? = nil,
-        includeRuntimeFacts: Bool = true
-    ) -> SessionSummary {
-        _ = phaseExpiresAt
-        _ = includeRuntimeFacts
-        return SessionSummary(
-            id: "freshness-test",
-            title: "Freshness test",
-            presenceState: "running",
-            provider: "codex",
-            project: "zerg",
-            lastActivityAt: "2026-04-25T20:00:00Z",
-            status: "running",
-            displayPhase: "Using Codex",
-            runtimeDisplay: runtimeDisplay(activityRecency: activityRecency)
-        )
     }
 
     @Test
@@ -152,6 +124,7 @@ struct SessionModelsTests {
             },
             "runtime_display": {
               "truth_tier": "managed-local",
+              "signal_tier": "phase_signal",
               "state": "idle",
               "tone": "idle",
               "headline": "Idle",
@@ -162,6 +135,7 @@ struct SessionModelsTests {
               "is_executing": false,
               "needs_attention": false,
               "is_idle": true,
+              "is_stalled": false,
               "is_managed_local_truth": true,
               "has_signal": true,
               "control_path": "managed",
@@ -185,7 +159,30 @@ struct SessionModelsTests {
                   "live_control_available": true,
                   "host_reattach_available": true,
                   "reply_to_live_session_available": true
-                }
+                },
+                "runtime_display": {
+                  "truth_tier": "managed-local",
+                  "signal_tier": "phase_signal",
+                  "state": "idle",
+                  "tone": "idle",
+                  "headline": "Idle",
+                  "detail": null,
+                  "phase_label": "Idle",
+                  "compact_tool_label": null,
+                  "is_live": false,
+                  "is_executing": false,
+                  "needs_attention": false,
+                  "is_idle": true,
+                  "is_stalled": false,
+                  "is_managed_local_truth": true,
+                  "has_signal": true,
+                  "control_path": "managed",
+                  "activity_recency": "recent",
+                  "lifecycle": "open",
+                  "host_state": "online",
+                  "terminal_reason": null
+                },
+                "loop_mode": "assist"
               }
             ]
           },
@@ -496,7 +493,8 @@ struct SessionModelsTests {
             lastActivityAt: nil,
             gitBranch: " main ",
             homeLabel: "cinder",
-            headOriginLabel: "Cloud"
+            headOriginLabel: "Cloud",
+            runtimeDisplay: SessionRuntimeDisplay.widgetPlaceholder(state: "idle", phase: "Idle", tone: "idle")
         )
         let originOnlySession = SessionSummary(
             id: "session-origin",
@@ -507,7 +505,8 @@ struct SessionModelsTests {
             lastActivityAt: nil,
             gitBranch: nil,
             homeLabel: "cinder",
-            headOriginLabel: "email:Sauron production-mode validation"
+            headOriginLabel: "email:Sauron production-mode validation",
+            runtimeDisplay: SessionRuntimeDisplay.widgetPlaceholder(state: "idle", phase: "Idle", tone: "idle")
         )
         let headSession = SessionSummary(
             id: "session-head",
@@ -516,7 +515,8 @@ struct SessionModelsTests {
             provider: "codex",
             project: "zerg",
             lastActivityAt: nil,
-            gitBranch: "HEAD"
+            gitBranch: "HEAD",
+            runtimeDisplay: SessionRuntimeDisplay.widgetPlaceholder(state: "idle", phase: "Idle", tone: "idle")
         )
 
         #expect(branchSession.timelineBranchBadgeLabel == "main")
@@ -554,6 +554,7 @@ struct SessionModelsTests {
           },
           "runtime_display": {
             "truth_tier": "managed-local",
+            "signal_tier": "phase_signal",
             "state": "needs_user",
             "tone": "idle",
             "headline": "Idle",
@@ -564,6 +565,7 @@ struct SessionModelsTests {
             "is_executing": false,
             "needs_attention": false,
             "is_idle": true,
+            "is_stalled": false,
             "is_managed_local_truth": true,
             "has_signal": true,
             "control_path": "managed",
@@ -617,6 +619,7 @@ struct SessionModelsTests {
           },
           "runtime_display": {
             "truth_tier": "managed-local",
+            "signal_tier": "phase_signal",
             "state": "running",
             "tone": "running",
             "headline": "Working",
@@ -627,8 +630,14 @@ struct SessionModelsTests {
             "is_executing": true,
             "needs_attention": false,
             "is_idle": false,
+            "is_stalled": false,
             "is_managed_local_truth": true,
-            "has_signal": true
+            "has_signal": true,
+            "control_path": "managed",
+            "activity_recency": "live",
+            "lifecycle": "open",
+            "host_state": "online",
+            "terminal_reason": null
           },
           "loop_mode": "assist"
         }
@@ -674,6 +683,7 @@ struct SessionModelsTests {
             "is_executing": false,
             "needs_attention": false,
             "is_idle": false,
+            "is_stalled": false,
             "is_managed_local_truth": true,
             "has_signal": true,
             "control_path": "managed",
@@ -681,14 +691,6 @@ struct SessionModelsTests {
             "lifecycle": "open",
             "host_state": "online",
             "terminal_reason": null
-          },
-          "runtime_facts": {
-            "control_path": "managed",
-            "host": {"state": "online", "last_seen_at": "2026-04-25T20:00:00Z", "source": "machine_heartbeat"},
-            "process": {"status": "unknown", "pid": null, "process_start_time": null, "observed_at": null, "last_seen_at": null, "source_mtime": null, "source_path": null, "reason": null, "source": null},
-            "phase": {"kind": "idle", "tool": null, "source": "claude_hook", "observed_at": "2026-04-25T20:00:01Z", "expires_at": "2026-04-25T20:10:01Z"},
-            "activity": {"last_transcript_at": "2026-04-25T20:00:00Z", "last_runtime_signal_at": "2026-04-25T20:00:01Z", "last_progress_at": null},
-            "lifecycle": {"state": "open", "reason": "phase_observed", "observed_at": "2026-04-25T20:00:01Z"}
           },
           "loop_mode": "assist"
         }
@@ -721,6 +723,7 @@ struct SessionModelsTests {
           },
           "runtime_display": {
             "truth_tier": "managed-local",
+            "signal_tier": "phase_signal",
             "state": null,
             "tone": "inactive",
             "headline": "Not connected",
@@ -731,6 +734,7 @@ struct SessionModelsTests {
             "is_executing": false,
             "needs_attention": false,
             "is_idle": false,
+            "is_stalled": false,
             "is_managed_local_truth": true,
             "has_signal": true,
             "control_path": "managed",
@@ -748,64 +752,6 @@ struct SessionModelsTests {
         #expect(detail.runtimeHeadline == "Not connected")
         #expect(detail.runtimeTone == "inactive")
         #expect(!detail.isSessionExecuting)
-    }
-
-    @Test
-    func sessionDetailCanonicalizesRuntimeDisplayShellLabels() throws {
-        let json = """
-        {
-          "id": "session-shell",
-          "provider": "claude",
-          "project": "zerg",
-          "cwd": "/Users/davidrose/git/zerg",
-          "git_branch": "main",
-          "summary": "Run checks",
-          "summary_title": "Run Checks",
-          "presence_state": "running",
-          "presence_tool": "bash",
-          "user_state": "active",
-          "status": "working",
-          "last_activity_at": "2026-04-25T20:00:00Z",
-          "display_phase": "running bash",
-          "active_tool": "bash",
-          "home_label": "On this Mac",
-          "origin_label": "On this Mac",
-          "capabilities": {
-            "live_control_available": true,
-            "host_reattach_available": true,
-            "reply_to_live_session_available": true,
-            "display_label": "Live on this Mac",
-            "display_detail": "Longhouse can send prompts into this live session.",
-            "display_tone": "success"
-          },
-          "runtime_display": {
-            "truth_tier": "managed-local",
-            "state": "running",
-            "tone": "running",
-            "headline": "Working",
-            "detail": "running bash",
-            "phase_label": "running bash",
-            "compact_tool_label": "bash",
-            "is_live": true,
-            "is_executing": true,
-            "needs_attention": false,
-            "is_idle": false,
-            "is_managed_local_truth": true,
-            "has_signal": true,
-            "control_path": "managed",
-            "activity_recency": "live",
-            "lifecycle": "open",
-            "host_state": "online",
-            "terminal_reason": null
-          },
-          "loop_mode": "assist"
-        }
-        """.data(using: .utf8)!
-
-        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
-
-        #expect(detail.runtimePhaseLabel == "Using Shell")
-        #expect(detail.runtimeDetail == "Using Shell")
     }
 
     @Test
@@ -839,6 +785,7 @@ struct SessionModelsTests {
           },
           "runtime_display": {
             "truth_tier": "managed-local",
+            "signal_tier": "phase_signal",
             "state": "running",
             "tone": "running",
             "headline": "Working",
@@ -849,16 +796,14 @@ struct SessionModelsTests {
             "is_executing": true,
             "needs_attention": false,
             "is_idle": false,
+            "is_stalled": false,
             "is_managed_local_truth": true,
-            "has_signal": true
-          },
-          "runtime_facts": {
+            "has_signal": true,
             "control_path": "managed",
-            "host": {"state": "online", "last_seen_at": "2026-04-25T20:00:00Z", "source": "machine_heartbeat"},
-            "process": {"status": "unknown", "pid": null, "process_start_time": null, "observed_at": null, "last_seen_at": null, "source_mtime": null, "source_path": null, "reason": null, "source": null},
-            "phase": {"kind": "running", "tool": "shell", "source": "managed_local_transport", "observed_at": "2026-04-25T20:00:00Z", "expires_at": "2026-04-25T20:15:00Z"},
-            "activity": {"last_transcript_at": "2026-04-25T20:00:00Z", "last_runtime_signal_at": "2026-04-25T20:00:00Z", "last_progress_at": null},
-            "lifecycle": {"state": "open", "reason": "phase_observed", "observed_at": "2026-04-25T20:00:00Z"}
+            "activity_recency": "live",
+            "lifecycle": "open",
+            "host_state": "online",
+            "terminal_reason": null
           },
           "loop_mode": "assist"
         }
@@ -885,53 +830,6 @@ struct SessionModelsTests {
     }
 
     @Test
-    func runtimeDisplayTextCanonicalizesOnlyBareShellAliases() {
-        #expect(RuntimeDisplayText.canonicalDisplayText("Running bash") == "Using Shell")
-        #expect(RuntimeDisplayText.canonicalDisplayText("Blocked on terminal") == "Blocked on Shell")
-        #expect(RuntimeDisplayText.canonicalDisplayText("Approval needed \u{2022} shell") == "Approval needed \u{2022} Shell")
-        #expect(RuntimeDisplayText.canonicalDisplayText("Running bash-runner") == "Running bash-runner")
-        #expect(RuntimeDisplayText.canonicalDisplayText("Running bash script") == "Running bash script")
-    }
-
-    @Test
-    func sessionSummaryCanonicalizesRuntimeDisplayShellLabels() {
-        let summary = SessionSummary(
-            id: "session-shell",
-            title: "Run checks",
-            presenceState: "running",
-            provider: "claude",
-            project: "zerg",
-            lastActivityAt: "2026-04-25T20:00:00Z",
-            status: "working",
-            displayPhase: "Running bash",
-            presenceTool: "bash",
-            activeTool: "bash",
-            runtimeDisplay: SessionRuntimeDisplay(
-                truthTier: "managed-local",
-                state: "running",
-                tone: "running",
-                headline: "Working",
-                detail: "running bash",
-                phaseLabel: "Running bash",
-                compactToolLabel: "bash",
-                isLive: true,
-                isExecuting: true,
-                needsAttention: false,
-                isIdle: false,
-                isManagedLocalTruth: true,
-                hasSignal: true,
-                controlPath: "managed",
-                activityRecency: "live",
-                lifecycle: "open",
-                hostState: "online",
-                terminalReason: nil
-            )
-        )
-
-        #expect(summary.displayPhaseLabel == "Using Shell")
-    }
-
-    @Test
     func closedRuntimeDisplayDoesNotNeedAttention() {
         let summary = SessionSummary(
             id: "session-closed-attention",
@@ -944,16 +842,18 @@ struct SessionModelsTests {
             displayPhase: "Idle",
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "managed-local",
+                signalTier: "phase_signal",
                 state: "needs_user",
-                tone: "idle",
-                headline: "Idle",
-                detail: "Waiting for next prompt",
-                phaseLabel: "Idle",
+                tone: "closed",
+                headline: "Closed",
+                detail: nil,
+                phaseLabel: "Closed",
                 compactToolLabel: nil,
                 isLive: false,
                 isExecuting: false,
                 needsAttention: true,
                 isIdle: false,
+                isStalled: false,
                 isManagedLocalTruth: true,
                 hasSignal: true,
                 controlPath: "managed",
@@ -984,6 +884,7 @@ struct SessionModelsTests {
             displayPhase: "Idle",
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "managed-local",
+                signalTier: "phase_signal",
                 state: nil,
                 tone: "inactive",
                 headline: "Not connected",
@@ -994,6 +895,7 @@ struct SessionModelsTests {
                 isExecuting: false,
                 needsAttention: false,
                 isIdle: false,
+                isStalled: false,
                 isManagedLocalTruth: true,
                 hasSignal: true,
                 controlPath: "managed",
@@ -1024,6 +926,7 @@ struct SessionModelsTests {
             displayPhase: "Idle",
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "stale",
+                signalTier: "phase_signal",
                 state: nil,
                 tone: "inactive",
                 headline: "Inactive",
@@ -1034,6 +937,7 @@ struct SessionModelsTests {
                 isExecuting: false,
                 needsAttention: false,
                 isIdle: true,
+                isStalled: false,
                 isManagedLocalTruth: false,
                 hasSignal: true,
                 controlPath: "unmanaged",
@@ -1054,6 +958,7 @@ struct SessionModelsTests {
             displayPhase: "Idle",
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "fresh",
+                signalTier: "phase_signal",
                 state: "needs_user",
                 tone: "idle",
                 headline: "Inactive",
@@ -1064,6 +969,7 @@ struct SessionModelsTests {
                 isExecuting: false,
                 needsAttention: false,
                 isIdle: true,
+                isStalled: false,
                 isManagedLocalTruth: false,
                 hasSignal: true,
                 controlPath: "unmanaged",
@@ -1092,6 +998,7 @@ struct SessionModelsTests {
             displayPhase: "Idle",
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "managed-local",
+                signalTier: "phase_signal",
                 state: "needs_user",
                 tone: "idle",
                 headline: "Inactive",
@@ -1102,6 +1009,7 @@ struct SessionModelsTests {
                 isExecuting: false,
                 needsAttention: false,
                 isIdle: true,
+                isStalled: false,
                 isManagedLocalTruth: true,
                 hasSignal: true,
                 controlPath: "managed",
@@ -1113,14 +1021,6 @@ struct SessionModelsTests {
         )
 
         #expect(summary.timelineStatusLabel == "No live signal")
-    }
-
-    @Test
-    func phaseSignalFreshTracksActivityRecency() {
-        #expect(phaseSignalFresh(summaryForPhaseFreshness(activityRecency: "live")))
-        #expect(!phaseSignalFresh(summaryForPhaseFreshness(activityRecency: "recent")))
-        #expect(!phaseSignalFresh(summaryForPhaseFreshness(activityRecency: "stale")))
-        #expect(!phaseSignalFresh(summaryForPhaseFreshness(activityRecency: nil)))
     }
 
     @Test
@@ -1136,6 +1036,7 @@ struct SessionModelsTests {
             displayPhase: "Idle",
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "managed-local",
+                signalTier: "phase_signal",
                 state: "needs_user",
                 tone: "idle",
                 headline: "Idle",
@@ -1146,6 +1047,7 @@ struct SessionModelsTests {
                 isExecuting: false,
                 needsAttention: false,
                 isIdle: true,
+                isStalled: false,
                 isManagedLocalTruth: true,
                 hasSignal: true,
                 controlPath: "managed",
@@ -1180,6 +1082,7 @@ struct SessionModelsTests {
             status: "working",
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "managed-local",
+                signalTier: "phase_signal",
                 state: "running",
                 tone: "running",
                 headline: "Working",
@@ -1190,6 +1093,7 @@ struct SessionModelsTests {
                 isExecuting: true,
                 needsAttention: false,
                 isIdle: false,
+                isStalled: false,
                 isManagedLocalTruth: true,
                 hasSignal: true,
                 controlPath: "managed",
@@ -1262,16 +1166,6 @@ struct SessionModelsTests {
             "host_state": "online",
             "terminal_reason": null
           },
-          "runtime_facts": {
-            "control_path": "managed",
-            "control": {"state": "online", "reason": null, "source": "machine_heartbeat", "last_seen_at": "2026-04-25T20:00:00Z", "expires_at": "2026-04-25T20:15:00Z", "transport": "claude_channel_bridge"},
-            "process_state": "unknown",
-            "host": {"state": "online", "last_seen_at": "2026-04-25T20:00:00Z", "source": "machine_heartbeat"},
-            "process": {"status": "unknown", "pid": null, "process_start_time": null, "observed_at": null, "last_seen_at": null, "source_mtime": null, "source_path": null, "reason": null, "source": null},
-            "phase": {"kind": "needs_user", "tool": null, "source": "managed_local_transport", "observed_at": "2026-04-25T20:00:00Z", "expires_at": "2026-04-25T20:15:00Z"},
-            "activity": {"last_transcript_at": "2026-04-25T20:00:00Z", "last_runtime_signal_at": "2026-04-25T20:00:00Z", "last_progress_at": null},
-            "lifecycle": {"state": "open", "reason": "phase_observed", "observed_at": "2026-04-25T20:00:00Z"}
-          },
           "timeline_card": {
             "ownership": {"label": "Managed", "tone": "neutral"},
             "status": {"label": "Idle", "tone": "idle", "seen_at": null, "seen_at_prefix": "Updated"},
@@ -1308,8 +1202,8 @@ struct SessionModelsTests {
         #expect(session.timelineCard.ownership.label == "Managed")
         #expect(session.timelineCard.status.label == "Idle")
         #expect(session.timelineCard.borderTone == "idle")
-        #expect(session.runtimeDisplay.controlPath == "managed")
-        #expect(session.runtimeDisplay.hostState == "online")
+        #expect(session.runtimeDisplay.controlPath.rawValue == "managed")
+        #expect(session.runtimeDisplay.hostState.rawValue == "online")
         #expect(summary.timelineCard?.ownership.label == "Managed")
 
         let pendingSessionJSON = sessionJSON
@@ -1359,6 +1253,7 @@ struct SessionModelsTests {
             status: "working",
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "managed-local",
+                signalTier: "phase_signal",
                 state: "running",
                 tone: "running",
                 headline: "Working",
@@ -1369,6 +1264,7 @@ struct SessionModelsTests {
                 isExecuting: true,
                 needsAttention: false,
                 isIdle: false,
+                isStalled: false,
                 isManagedLocalTruth: true,
                 hasSignal: true,
                 controlPath: "managed",
@@ -1402,7 +1298,29 @@ struct SessionModelsTests {
             status: "idle",
             liveControlAvailable: false,
             hostReattachAvailable: true,
-            replyToLiveSessionAvailable: false
+            replyToLiveSessionAvailable: false,
+            runtimeDisplay: SessionRuntimeDisplay(
+                truthTier: "managed-local",
+                signalTier: "phase_signal",
+                state: "needs_user",
+                tone: "idle",
+                headline: "Idle",
+                detail: nil,
+                phaseLabel: "Idle",
+                compactToolLabel: nil,
+                isLive: false,
+                isExecuting: false,
+                needsAttention: false,
+                isIdle: true,
+                isStalled: false,
+                isManagedLocalTruth: true,
+                hasSignal: true,
+                controlPath: "managed",
+                activityRecency: "stale",
+                lifecycle: "open",
+                hostState: "offline",
+                terminalReason: nil
+            )
         )
 
         #expect(summary.managementLabel == "Managed")
@@ -1422,6 +1340,7 @@ struct SessionModelsTests {
             displayPhase: "Idle",
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "stale",
+                signalTier: "phase_signal",
                 state: "needs_user",
                 tone: "idle",
                 headline: "Inactive",
@@ -1432,6 +1351,7 @@ struct SessionModelsTests {
                 isExecuting: false,
                 needsAttention: false,
                 isIdle: false,
+                isStalled: false,
                 isManagedLocalTruth: false,
                 hasSignal: true,
                 controlPath: "managed",
@@ -1458,6 +1378,7 @@ struct SessionModelsTests {
             displayPhase: "Idle",
             runtimeDisplay: SessionRuntimeDisplay(
                 truthTier: "managed-local",
+                signalTier: "phase_signal",
                 state: "needs_user",
                 tone: "idle",
                 headline: "Idle",
@@ -1468,6 +1389,7 @@ struct SessionModelsTests {
                 isExecuting: false,
                 needsAttention: true,
                 isIdle: false,
+                isStalled: false,
                 isManagedLocalTruth: true,
                 hasSignal: true,
                 controlPath: "managed",
@@ -1485,7 +1407,8 @@ struct SessionModelsTests {
             project: "zerg",
             lastActivityAt: "2026-04-25T20:01:00Z",
             status: "active",
-            displayPhase: "Idle"
+            displayPhase: "Idle",
+            runtimeDisplay: SessionRuntimeDisplay.widgetPlaceholder(state: "needs_user", phase: "Idle", tone: "idle")
         )
 
         let ordered = SessionSummary.attentionWidgetOrder([closed, openAttention], limit: 2)
@@ -1522,6 +1445,28 @@ struct SessionModelsTests {
             "display_label": "Read only",
             "display_detail": "This imported session is searchable, but Longhouse cannot steer it.",
             "display_tone": "neutral"
+          },
+          "runtime_display": {
+            "truth_tier": "fresh",
+            "signal_tier": "none",
+            "state": null,
+            "tone": "neutral",
+            "headline": "Read only",
+            "detail": "This imported session is searchable, but Longhouse cannot steer it.",
+            "phase_label": "Inactive",
+            "compact_tool_label": null,
+            "is_live": false,
+            "is_executing": false,
+            "needs_attention": false,
+            "is_idle": true,
+            "is_stalled": false,
+            "is_managed_local_truth": false,
+            "has_signal": false,
+            "control_path": "unmanaged",
+            "activity_recency": "none",
+            "lifecycle": "open",
+            "host_state": "unknown",
+            "terminal_reason": null
           },
           "loop_mode": "manual"
         }
@@ -1568,6 +1513,28 @@ struct SessionModelsTests {
             "composer_disabled_reason": "This live Codex session is connected, but this control path cannot accept typed input.",
             "send_disabled_reason": "input_not_supported"
           },
+          "runtime_display": {
+            "truth_tier": "fresh",
+            "signal_tier": "none",
+            "state": null,
+            "tone": "neutral",
+            "headline": "Read only",
+            "detail": null,
+            "phase_label": "Inactive",
+            "compact_tool_label": null,
+            "is_live": false,
+            "is_executing": false,
+            "needs_attention": false,
+            "is_idle": true,
+            "is_stalled": false,
+            "is_managed_local_truth": false,
+            "has_signal": false,
+            "control_path": "unmanaged",
+            "activity_recency": "none",
+            "lifecycle": "open",
+            "host_state": "unknown",
+            "terminal_reason": null
+          },
           "loop_mode": "assist"
         }
         """.data(using: .utf8)!
@@ -1611,6 +1578,28 @@ struct SessionModelsTests {
             "display_detail": null,
             "display_tone": "success"
           },
+          "runtime_display": {
+            "truth_tier": "fresh",
+            "signal_tier": "none",
+            "state": null,
+            "tone": "inactive",
+            "headline": "Inactive",
+            "detail": null,
+            "phase_label": "Inactive",
+            "compact_tool_label": null,
+            "is_live": false,
+            "is_executing": false,
+            "needs_attention": false,
+            "is_idle": true,
+            "is_stalled": false,
+            "is_managed_local_truth": false,
+            "has_signal": false,
+            "control_path": "unmanaged",
+            "activity_recency": "none",
+            "lifecycle": "open",
+            "host_state": "unknown",
+            "terminal_reason": null
+          },
           "loop_mode": "assist"
         }
         """.data(using: .utf8)!
@@ -1639,6 +1628,28 @@ struct SessionModelsTests {
             "display_label": "Search only",
             "display_detail": null,
             "display_tone": "neutral"
+          },
+          "runtime_display": {
+            "truth_tier": "fresh",
+            "signal_tier": "none",
+            "state": null,
+            "tone": "neutral",
+            "headline": "Read only",
+            "detail": null,
+            "phase_label": "Read only",
+            "compact_tool_label": null,
+            "is_live": false,
+            "is_executing": false,
+            "needs_attention": false,
+            "is_idle": true,
+            "is_stalled": false,
+            "is_managed_local_truth": false,
+            "has_signal": false,
+            "control_path": "unmanaged",
+            "activity_recency": "none",
+            "lifecycle": "open",
+            "host_state": "unknown",
+            "terminal_reason": null
           },
           "loop_mode": "manual"
         }
@@ -1684,6 +1695,7 @@ struct SessionModelsTests {
           },
           "runtime_display": {
             "truth_tier": "managed-local",
+            "signal_tier": "phase_signal",
             "state": "needs_user",
             "tone": "idle",
             "headline": "Idle",
@@ -1694,6 +1706,7 @@ struct SessionModelsTests {
             "is_executing": false,
             "needs_attention": false,
             "is_idle": true,
+            "is_stalled": false,
             "is_managed_local_truth": true,
             "has_signal": true,
             "control_path": "managed",
@@ -1748,6 +1761,28 @@ struct SessionModelsTests {
             "composer_placeholder": "Send a message to the live Codex session...",
             "composer_disabled_reason": null
           },
+          "runtime_display": {
+            "truth_tier": "fresh",
+            "signal_tier": "none",
+            "state": null,
+            "tone": "inactive",
+            "headline": "Inactive",
+            "detail": null,
+            "phase_label": "Inactive",
+            "compact_tool_label": null,
+            "is_live": false,
+            "is_executing": false,
+            "needs_attention": false,
+            "is_idle": true,
+            "is_stalled": false,
+            "is_managed_local_truth": false,
+            "has_signal": false,
+            "control_path": "unmanaged",
+            "activity_recency": "none",
+            "lifecycle": "open",
+            "host_state": "unknown",
+            "terminal_reason": null
+          },
           "loop_mode": "manual"
         }
         """.data(using: .utf8)!
@@ -1797,9 +1832,9 @@ struct SessionModelsTests {
           },
           "runtime_display": {
             "truth_tier": "managed-local",
-            "signal_tier": "terminal_signal",
-            "state": "finished",
-            "tone": "neutral",
+            "signal_tier": "phase_signal",
+            "state": null,
+            "tone": "closed",
             "headline": "Closed",
             "detail": "This session has ended.",
             "phase_label": "Closed",
@@ -1807,22 +1842,15 @@ struct SessionModelsTests {
             "is_live": false,
             "is_executing": false,
             "needs_attention": false,
-            "is_idle": false,
+            "is_idle": true,
+            "is_stalled": false,
             "is_managed_local_truth": true,
             "has_signal": true,
             "control_path": "managed",
             "activity_recency": "stale",
             "lifecycle": "closed",
             "host_state": "online",
-            "terminal_reason": "terminal_disconnected"
-          },
-          "runtime_facts": {
-            "control_path": "managed",
-            "host": {"state": "online", "last_seen_at": "2026-05-24T15:03:10Z", "source": "machine_heartbeat"},
-            "process": {"status": "unknown", "pid": null, "process_start_time": null, "observed_at": null, "last_seen_at": null, "source_mtime": null, "source_path": null, "reason": null, "source": null},
-            "phase": {"kind": "finished", "tool": null, "source": "codex_bridge", "observed_at": "2026-05-24T15:05:10Z", "expires_at": null},
-            "activity": {"last_transcript_at": null, "last_runtime_signal_at": "2026-05-24T15:05:10Z", "last_progress_at": null},
-            "lifecycle": {"state": "closed", "reason": "terminal_disconnected", "observed_at": "2026-05-24T15:05:10Z"}
+            "terminal_reason": "provider_signal"
           },
           "loop_mode": "manual"
         }

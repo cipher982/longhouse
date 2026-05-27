@@ -21,6 +21,7 @@ import {
   isAgentToolInteraction,
   isOutsideActiveContext,
   isToolInteractionDropped,
+  isToolInteractionRunning,
   parseLonghouseOutput,
   timelineItemContainsSelection,
 } from "../../lib/sessionWorkspace";
@@ -47,7 +48,6 @@ interface TimelinePaneProps {
   onSelectKey: (key: string) => void;
   /** Called when local filtering hides/reveals the parent-selected key. */
   onVisibleSelectionChange?: (visibleKey: string | null) => void;
-  sessionEnded?: boolean;
   /** Navigation / context content rendered at the start of the header bar. */
   headerLeft?: ReactNode;
   /** Actions rendered at the far right of the header bar. */
@@ -289,7 +289,7 @@ function EditDiffView({ patch }: { patch: { filePath: string | null; oldStr: str
 }
 
 /** Inline metadata row rendered underneath an expanded tool row. */
-function ToolDetail({ interaction, sessionEnded }: { interaction: ToolInteraction; sessionEnded: boolean }) {
+function ToolDetail({ interaction }: { interaction: ToolInteraction }) {
   const rawInput = interaction.callEvent?.tool_input_json as Record<string, unknown> | null | undefined;
   const editPatch = editPatchFromInput(rawInput);
   const hasInput = rawInput != null && Object.keys(rawInput).length > 0;
@@ -300,7 +300,7 @@ function ToolDetail({ interaction, sessionEnded }: { interaction: ToolInteractio
     ? parsedOutput.output
     : interaction.resultEvent?.tool_output_text || null;
   const awaitingResult = !interaction.resultEvent && interaction.pairing !== "orphan";
-  const dropped = isToolInteractionDropped(interaction, sessionEnded);
+  const dropped = isToolInteractionDropped(interaction);
 
   return (
     <div className="tl-detail">
@@ -342,7 +342,6 @@ function ActionCard({
   rowId,
   expanded,
   isSelected,
-  sessionEnded,
   onSelect,
   onToggleExpand,
 }: {
@@ -350,7 +349,6 @@ function ActionCard({
   rowId: string;
   expanded: boolean;
   isSelected: boolean;
-  sessionEnded: boolean;
   onSelect: () => void;
   onToggleExpand: () => void;
 }) {
@@ -358,9 +356,8 @@ function ActionCard({
   const summary = getToolSummary(interaction);
   const exitCode = getToolExitCode(interaction);
   const duration = getToolDuration(interaction.callEvent, interaction.resultEvent);
-  const awaitingResult = !interaction.resultEvent && interaction.pairing !== "orphan";
-  const dropped = awaitingResult && isToolInteractionDropped(interaction, sessionEnded);
-  const pending = awaitingResult && !dropped;
+  const dropped = isToolInteractionDropped(interaction);
+  const pending = isToolInteractionRunning(interaction);
   const isAgent = isAgentToolInteraction(interaction);
   const agentType = isAgent
     ? ((interaction.callEvent?.tool_input_json as Record<string, unknown> | null)?.subagent_type as string | undefined)
@@ -414,7 +411,7 @@ function ActionCard({
       </button>
       {expanded ? (
         <div id={detailId}>
-          <ToolDetail interaction={interaction} sessionEnded={sessionEnded} />
+          <ToolDetail interaction={interaction} />
         </div>
       ) : null}
     </div>
@@ -426,7 +423,6 @@ function ContextLine({
   rowId,
   expanded,
   isSelected,
-  sessionEnded,
   onSelect,
   onToggleExpand,
 }: {
@@ -434,16 +430,14 @@ function ContextLine({
   rowId: string;
   expanded: boolean;
   isSelected: boolean;
-  sessionEnded: boolean;
   onSelect: () => void;
   onToggleExpand: () => void;
 }) {
   const info = getToolDisplayInfo(interaction.toolName);
   const summary = getToolSummary(interaction);
   const duration = getToolDuration(interaction.callEvent, interaction.resultEvent);
-  const awaitingResult = !interaction.resultEvent && interaction.pairing !== "orphan";
-  const dropped = awaitingResult && isToolInteractionDropped(interaction, sessionEnded);
-  const pending = awaitingResult && !dropped;
+  const dropped = isToolInteractionDropped(interaction);
+  const pending = isToolInteractionRunning(interaction);
   const statusTone = dropped ? "error" : pending ? "pending" : "ok";
   const statusClass = pending
     ? " tl-context--pending"
@@ -482,7 +476,7 @@ function ContextLine({
       </button>
       {expanded ? (
         <div id={detailId}>
-          <ToolDetail interaction={interaction} sessionEnded={sessionEnded} />
+          <ToolDetail interaction={interaction} />
         </div>
       ) : null}
     </div>
@@ -494,7 +488,6 @@ function NoiseChip({
   rowId,
   expanded,
   isSelected,
-  sessionEnded,
   expandedInteractionKey,
   onSelect,
   onToggleExpand,
@@ -504,7 +497,6 @@ function NoiseChip({
   rowId: string;
   expanded: boolean;
   isSelected: boolean;
-  sessionEnded: boolean;
   expandedInteractionKey: string | null;
   onSelect: () => void;
   onToggleExpand: () => void;
@@ -562,7 +554,7 @@ function NoiseChip({
                   </span>
                   <span className="tl-noise__item-summary">{sum || "—"}</span>
                 </button>
-                {isOpen ? <ToolDetail interaction={interaction} sessionEnded={sessionEnded} /> : null}
+                {isOpen ? <ToolDetail interaction={interaction} /> : null}
               </div>
             );
           })}
@@ -577,7 +569,6 @@ function ToolRow(props: {
   rowId: string;
   expanded: boolean;
   isSelected: boolean;
-  sessionEnded: boolean;
   onSelect: () => void;
   onToggleExpand: () => void;
 }) {
@@ -605,7 +596,6 @@ export function TimelinePane({
   selectedKey,
   onSelectKey,
   onVisibleSelectionChange,
-  sessionEnded = false,
   headerLeft,
   headerRight,
   dock = null,
@@ -948,7 +938,6 @@ export function TimelinePane({
                   rowId={`event-${item.interaction.anchorId}`}
                   expanded={expandedTools.has(item.interaction.key)}
                   isSelected={selectedKey === selectionKey}
-                  sessionEnded={sessionEnded}
                   onSelect={() => onSelectKey(selectionKey)}
                   onToggleExpand={() => toggleTool(item.interaction.key)}
                 />
@@ -966,7 +955,6 @@ export function TimelinePane({
                 rowId={`event-${item.group.anchorId}`}
                 expanded={expandedGroups.has(item.group.key)}
                 isSelected={timelineItemContainsSelection(item, selectedKey)}
-                sessionEnded={sessionEnded}
                 expandedInteractionKey={expandedChild ?? null}
                 onSelect={() => onSelectKey(groupKey)}
                 onToggleExpand={() => toggleGroup(item.group.key)}

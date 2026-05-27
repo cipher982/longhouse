@@ -36,6 +36,28 @@ const baseSession = {
   thread_head_session_id: "session-1",
   provider: "claude",
   project: "session-workspace-test",
+  runtime_display: {
+    truth_tier: "none",
+    signal_tier: "none",
+    state: null,
+    tone: "inactive",
+    headline: "Inactive",
+    detail: null,
+    phase_label: "Inactive",
+    compact_tool_label: null,
+    is_live: false,
+    is_executing: false,
+    needs_attention: false,
+    is_idle: true,
+    is_stalled: false,
+    is_managed_local_truth: false,
+    has_signal: false,
+    control_path: "unmanaged",
+    activity_recency: "stale",
+    lifecycle: "open",
+    host_state: null,
+    terminal_reason: null,
+  },
 };
 
 function makeEvents(count: number) {
@@ -575,6 +597,7 @@ describe("useSessionWorkspace", () => {
           ended_at: "2026-03-14T12:10:00.000Z",
           terminal_state: "session_ended",
           status: "completed",
+          runtime_display: { ...baseSession.runtime_display, lifecycle: "closed" },
         },
         thread: {
           sessions: [

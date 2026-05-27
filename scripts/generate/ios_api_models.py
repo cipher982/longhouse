@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -179,9 +180,29 @@ def swift_type(schema: dict[str, Any]) -> str:
     return f"{value}?" if nullable else value
 
 
+def _swift_enum_case(value: str) -> str:
+    parts = re.split(r"[^0-9a-zA-Z]+", value)
+    parts = [part for part in parts if part]
+    if not parts:
+        return "_unknown"
+    head = parts[0].lower()
+    tail = "".join(part[:1].upper() + part[1:].lower() for part in parts[1:])
+    case = head + tail
+    if case[:1].isdigit():
+        case = "_" + case
+    return escape_identifier(case)
+
+
 def render_struct(name: str, schema: dict[str, Any]) -> str:
-    if schema.get("type") == "string" and isinstance(schema.get("enum"), list):
-        return f"typealias {swift_type_name(name)} = String"
+    enum_values = schema.get("enum") if schema.get("type") == "string" else None
+    if isinstance(enum_values, list) and enum_values:
+        type_name = swift_type_name(name)
+        lines = [f"enum {type_name}: String, Codable, Hashable, Sendable, CaseIterable {{"]
+        for value in enum_values:
+            text = str(value)
+            lines.append(f"    case {_swift_enum_case(text)} = \"{text}\"")
+        lines.append("}")
+        return "\n".join(lines)
 
     properties = schema.get("properties") or {}
     required = set(schema.get("required") or [])

@@ -7,7 +7,6 @@ import OSLog
 struct WebTranscriptView: UIViewRepresentable {
     let items: [TimelineItem]
     let submittedInputs: [SubmittedInput]
-    let sessionEnded: Bool
     let errorMessage: String?
     let onNearTop: (() -> Void)?
     let onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
@@ -16,7 +15,6 @@ struct WebTranscriptView: UIViewRepresentable {
     init(
         items: [TimelineItem],
         submittedInputs: [SubmittedInput],
-        sessionEnded: Bool,
         errorMessage: String?,
         onNearTop: (() -> Void)? = nil,
         onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)? = nil,
@@ -24,7 +22,6 @@ struct WebTranscriptView: UIViewRepresentable {
     ) {
         self.items = items
         self.submittedInputs = submittedInputs
-        self.sessionEnded = sessionEnded
         self.errorMessage = errorMessage
         self.onNearTop = onNearTop
         self.onDiagnostics = onDiagnostics
@@ -75,7 +72,6 @@ struct WebTranscriptView: UIViewRepresentable {
         Self.preparedPayload(
             timelineItems: items,
             submittedInputs: submittedInputs,
-            sessionEnded: sessionEnded,
             errorMessage: errorMessage
         )
     }
@@ -83,15 +79,13 @@ struct WebTranscriptView: UIViewRepresentable {
     nonisolated static func preparedPayload(
         timelineItems: [TimelineItem],
         submittedInputs: [SubmittedInput],
-        sessionEnded: Bool,
         errorMessage: String?
     ) -> WebTranscriptPreparedPayload {
         let payload = WebTranscriptPayload(
             errorMessage: errorMessage,
             items: Self.payloadItems(
                 timelineItems: timelineItems,
-                submittedInputs: submittedInputs,
-                sessionEnded: sessionEnded
+                submittedInputs: submittedInputs
             )
         )
         let encoder = JSONEncoder()
@@ -106,11 +100,10 @@ struct WebTranscriptView: UIViewRepresentable {
 
     nonisolated static func payloadItems(
         timelineItems: [TimelineItem],
-        submittedInputs: [SubmittedInput],
-        sessionEnded: Bool
+        submittedInputs: [SubmittedInput]
     ) -> [WebTranscriptPayloadItem] {
         var rows = timelineItems.map { item in
-            payloadItem(item, sessionEnded: sessionEnded)
+            payloadItem(item)
         }
         let durableUserInputs = durableUserInputIdentities(timelineItems)
         rows.append(contentsOf: submittedInputs
@@ -143,18 +136,18 @@ struct WebTranscriptView: UIViewRepresentable {
         )
     }
 
-    private nonisolated static func payloadItem(_ item: TimelineItem, sessionEnded: Bool) -> WebTranscriptPayloadItem {
+    private nonisolated static func payloadItem(_ item: TimelineItem) -> WebTranscriptPayloadItem {
         switch item {
         case .user(let event):
             return messagePayload(id: item.id, role: "user", text: event.contentText ?? "", origin: event.inputOrigin?.authoredVia)
         case .assistant(let event):
             return messagePayload(id: item.id, role: "assistant", text: event.contentText ?? "", origin: nil)
         case .tool(let call, let result, _):
-            return toolPayload(id: item.id, call: call, result: result, sessionEnded: sessionEnded)
+            return toolPayload(id: item.id, call: call, result: result)
         case .orphanTool(let event):
-            return toolPayload(id: item.id, call: event, result: event, sessionEnded: sessionEnded, orphan: true)
+            return toolPayload(id: item.id, call: event, result: event, orphan: true)
         case .passiveGroup(let calls):
-            return passiveGroupPayload(id: item.id, calls: calls, sessionEnded: sessionEnded)
+            return passiveGroupPayload(id: item.id, calls: calls)
         }
     }
 
@@ -207,20 +200,20 @@ struct WebTranscriptView: UIViewRepresentable {
         id: String,
         call: SessionEvent,
         result: SessionEvent?,
-        sessionEnded: Bool,
         orphan: Bool = false
     ) -> WebTranscriptPayloadItem {
         let toolName = call.toolName ?? "Tool"
         let resolved = ToolTiers.resolve(toolName)
-        let pending = result == nil && !orphan && !TimelineBuilder.isDropped(call: call, sessionEnded: sessionEnded)
-        let dropped = result == nil && !orphan && TimelineBuilder.isDropped(call: call, sessionEnded: sessionEnded)
         let duration = result.flatMap { TimelineBuilder.durationSeconds(call: call, result: $0) }
             .map(TimelineBuilder.formatDuration)
         let status: String? = {
             if orphan { return "orphan" }
-            if pending { return "running" }
-            if dropped { return "dropped" }
-            return "done"
+            switch call.toolCallState {
+            case .running: return "running"
+            case .dropped: return "dropped"
+            case .completed: return "done"
+            case .none: return nil
+            }
         }()
 
         return WebTranscriptPayloadItem(
@@ -243,8 +236,7 @@ struct WebTranscriptView: UIViewRepresentable {
 
     private nonisolated static func passiveGroupPayload(
         id: String,
-        calls: [PassiveCall],
-        sessionEnded: Bool
+        calls: [PassiveCall]
     ) -> WebTranscriptPayloadItem {
         var counts: [(String, Int)] = []
         for passive in calls {
@@ -257,12 +249,18 @@ struct WebTranscriptView: UIViewRepresentable {
         }
 
         let childCalls = calls.map { passive in
-            WebTranscriptToolCall(
+            let status: String = {
+                switch passive.call.toolCallState {
+                case .running: return "running"
+                case .dropped: return "dropped"
+                case .completed: return "done"
+                case .none: return "done"
+                }
+            }()
+            return WebTranscriptToolCall(
                 title: ToolTiers.resolve(passive.call.toolName ?? "Tool").label,
                 subtitle: TimelineBuilder.inputSummary(for: passive.call),
-                status: passive.result == nil && TimelineBuilder.isDropped(call: passive.call, sessionEnded: sessionEnded)
-                    ? "dropped"
-                    : (passive.result == nil ? "running" : "done"),
+                status: status,
                 input: prettyJSON(passive.call.toolInputJSON) ?? TimelineBuilder.inputSummary(for: passive.call),
                 output: truncatedOutput(passive.result?.toolOutputText)
             )
