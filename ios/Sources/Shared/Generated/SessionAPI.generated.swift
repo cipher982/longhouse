@@ -31,6 +31,8 @@ struct APISessionCapabilitiesResponse: Codable, Hashable, Sendable {
     let canTailOutput: Bool?
     let canResume: Bool?
     let attachImages: Bool?
+    let canContinue: Bool?
+    let continueTargets: [[String: JSONValue]]?
 }
 
 struct APISessionControlResponse: Codable, Hashable, Sendable {

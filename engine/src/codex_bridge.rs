@@ -835,12 +835,17 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     initialize_client(&mut client).await?;
 
     let mut startup_subscribed_thread_id: Option<String> = None;
+    let mut startup_resume_response: Option<Value> = None;
     if let Some(thread_id) = resume_thread_id.clone() {
-        let params = json!({
-            "threadId": thread_id,
-            "path": resume_thread_path,
-        });
-        match send_request(&mut client, "thread/resume", params).await {
+        match resume_startup_thread_with_retry(
+            &mut client,
+            &config,
+            &mut starting_state,
+            &thread_id,
+            resume_thread_path.as_deref(),
+        )
+        .await
+        {
             Ok(response) => {
                 let resume_thread = response.get("thread").cloned().unwrap_or(Value::Null);
                 if codex_thread_value_is_subagent(&resume_thread) {
@@ -868,6 +873,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                     starting_state.thread_path.as_deref(),
                     &config.session_id,
                 );
+                startup_resume_response = Some(response);
             }
             Err(err) => {
                 starting_state.status = "error".to_string();
@@ -1025,6 +1031,9 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     // launches already have a thread id; legacy TUI launches capture it later
     // from thread/started notifications.
     write_state_file(&context.state_file, &context.state)?;
+    if let Some(response) = startup_resume_response.as_ref() {
+        apply_thread_resume_snapshot(&config, &mut context, response).await?;
+    }
     if config.create_initial_thread && context.state.thread_id.is_some() {
         let startup_phase = context.runtime_tracker.current_phase_update();
         emit_runtime_updates(&config, &mut context, vec![startup_phase]).await;
@@ -3953,10 +3962,7 @@ async fn handle_bridge_followup(
             thread_id,
             thread_path,
         } => {
-            let params = json!({
-                "threadId": thread_id,
-                "path": thread_path,
-            });
+            let params = thread_resume_params(&thread_id, thread_path.as_deref());
             let mut last_error = None;
             for attempt in 0..=THREAD_SUBSCRIBE_RETRY_ATTEMPTS {
                 context.state.thread_subscription_attempts =
@@ -4052,6 +4058,64 @@ async fn handle_bridge_followup(
             Err(last_error.expect("subscribe retry loop should capture an error"))
         }
     }
+}
+
+fn thread_resume_params(thread_id: &str, thread_path: Option<&str>) -> Value {
+    let mut params = json!({
+        "threadId": thread_id,
+    });
+    if let Some(path) = thread_path {
+        params["path"] = Value::String(path.to_string());
+    }
+    params
+}
+
+async fn resume_startup_thread_with_retry(
+    client: &mut RpcClient,
+    config: &BridgeRunConfig,
+    state: &mut BridgeStateFile,
+    thread_id: &str,
+    thread_path: Option<&str>,
+) -> Result<Value> {
+    let params = thread_resume_params(thread_id, thread_path);
+    let mut last_error = None;
+    for attempt in 0..=THREAD_SUBSCRIBE_RETRY_ATTEMPTS {
+        state.thread_subscription_attempts = state.thread_subscription_attempts.saturating_add(1);
+        state.thread_subscription_status =
+            Some(ThreadSubscriptionStatus::Subscribing.as_str().to_string());
+        state.thread_subscription_last_error = None;
+        state.updated_at = Utc::now().to_rfc3339();
+        write_state_file(&config.state_file, state)?;
+
+        match send_request(client, "thread/resume", params.clone()).await {
+            Ok(response) => return Ok(response),
+            Err(err) => {
+                let error_text = err.to_string();
+                let retryable = is_retryable_thread_subscription_error(&error_text);
+                state.thread_subscription_status = Some(
+                    if retryable {
+                        ThreadSubscriptionStatus::Retrying
+                    } else {
+                        ThreadSubscriptionStatus::Failed
+                    }
+                    .as_str()
+                    .to_string(),
+                );
+                state.thread_subscription_last_error = Some(error_text.clone());
+                state.last_error = Some(format!("thread/resume failed: {error_text}"));
+                state.updated_at = Utc::now().to_rfc3339();
+                let _ = write_state_file(&config.state_file, state);
+                last_error = Some(err);
+                if retryable && attempt < THREAD_SUBSCRIBE_RETRY_ATTEMPTS {
+                    tokio::time::sleep(Duration::from_millis(THREAD_SUBSCRIBE_RETRY_DELAY_MS))
+                        .await;
+                    continue;
+                }
+                break;
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow!("thread/resume retry loop exited without an error")))
 }
 
 async fn apply_thread_resume_snapshot(
@@ -6428,6 +6492,31 @@ mod tests {
         assert_eq!(
             payload["file_len_hint"].as_u64(),
             Some(fs::metadata(&rollout_path).unwrap().len())
+        );
+    }
+
+    #[test]
+    fn thread_resume_params_omits_missing_path() {
+        let params = thread_resume_params("thr-live", None);
+
+        assert_eq!(
+            params.get("threadId").and_then(Value::as_str),
+            Some("thr-live")
+        );
+        assert!(params.get("path").is_none());
+    }
+
+    #[test]
+    fn thread_resume_params_includes_path_when_available() {
+        let params = thread_resume_params("thr-live", Some("/tmp/thread.jsonl"));
+
+        assert_eq!(
+            params.get("threadId").and_then(Value::as_str),
+            Some("thr-live")
+        );
+        assert_eq!(
+            params.get("path").and_then(Value::as_str),
+            Some("/tmp/thread.jsonl")
         );
     }
 
