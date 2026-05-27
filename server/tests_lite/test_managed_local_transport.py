@@ -61,13 +61,16 @@ def test_build_managed_local_attach_command_uses_native_claude_session_id_for_ch
     )
 
 
-def test_build_managed_local_attach_command_is_empty_for_opencode_process():
+def test_build_managed_local_attach_command_uses_opencode_bridge_for_opencode_process():
     session = SimpleNamespace(
         id="session-123",
         managed_transport=ManagedSessionTransport.OPENCODE_PROCESS.value,
     )
 
-    assert build_managed_local_attach_command(session=session) is None
+    command = build_managed_local_attach_command(session=session)
+    assert command is not None
+    inner = _wrapped_inner(command)
+    assert "exec longhouse opencode-bridge inspect --session-id session-123" in inner
 
 
 def test_build_managed_local_attach_command_is_empty_for_antigravity_process():
@@ -184,14 +187,15 @@ def test_build_managed_local_send_text_command_rejects_unsupported_transport():
         build_managed_local_send_text_command(session=session, text="continue")
 
 
-def test_build_managed_local_send_text_command_rejects_opencode_process():
+def test_build_managed_local_send_text_command_uses_opencode_bridge_for_opencode_process():
     session = SimpleNamespace(
         id="session-123",
         managed_transport=ManagedSessionTransport.OPENCODE_PROCESS.value,
     )
 
-    with pytest.raises(ManagedLocalTransportError, match="does not support remote text sends yet"):
-        build_managed_local_send_text_command(session=session, text="continue")
+    command = build_managed_local_send_text_command(session=session, text="continue")
+    inner = _wrapped_inner(command)
+    assert "exec longhouse opencode-bridge send --session-id session-123 --text continue" in inner
 
 
 def test_build_managed_local_send_text_command_rejects_antigravity_process():
@@ -204,14 +208,42 @@ def test_build_managed_local_send_text_command_rejects_antigravity_process():
         build_managed_local_send_text_command(session=session, text="continue")
 
 
-def test_build_managed_local_interrupt_command_rejects_opencode_process():
+def test_build_managed_local_interrupt_command_uses_opencode_bridge_for_opencode_process():
     session = SimpleNamespace(
         id="session-123",
         managed_transport=ManagedSessionTransport.OPENCODE_PROCESS.value,
     )
 
-    with pytest.raises(ManagedLocalTransportError, match="does not support remote interrupts yet"):
-        build_managed_local_interrupt_command(session=session)
+    command = build_managed_local_interrupt_command(session=session)
+    inner = _wrapped_inner(command)
+    assert "exec longhouse opencode-bridge interrupt --session-id session-123" in inner
+
+
+def test_build_managed_local_steer_command_uses_opencode_bridge_for_opencode_process():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.OPENCODE_PROCESS.value,
+    )
+    from zerg.services.managed_local_transport import build_managed_local_steer_text_command
+
+    command = build_managed_local_steer_text_command(session=session, text="abort and switch")
+    inner = _wrapped_inner(command)
+    assert "exec longhouse opencode-bridge steer --session-id session-123 --text 'abort and switch'" in inner
+
+
+def test_build_managed_local_steer_command_rejects_attachments_for_opencode_process():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.OPENCODE_PROCESS.value,
+    )
+    from zerg.services.managed_local_transport import build_managed_local_steer_text_command
+
+    with pytest.raises(ManagedLocalTransportError):
+        build_managed_local_steer_text_command(
+            session=session,
+            text="hi",
+            attachments=[{"id": "x", "mime_type": "image/png", "sha256": "a" * 64, "blob_url": "/x"}],
+        )
 
 
 def test_build_managed_local_interrupt_command_rejects_antigravity_process():
