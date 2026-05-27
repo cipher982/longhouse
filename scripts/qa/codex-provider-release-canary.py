@@ -692,6 +692,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifact", type=Path)
     parser.add_argument("--engine")
     parser.add_argument("--codex-bin")
+    parser.add_argument("--provider-version")
     parser.add_argument("--cargo-bin")
     parser.add_argument("--script-bin")
     parser.add_argument("--timeout-bin")
@@ -699,6 +700,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--api-url")
     parser.add_argument("--agents-token")
     parser.add_argument("--allow-codex-bin-override", action="store_true")
+    parser.add_argument("--skip-binary-identity", action="store_true")
     parser.add_argument("--skip-static-contract", action="store_true")
     parser.add_argument("--run-fake-app-server", action="store_true")
     parser.add_argument("--run-raw-fresh-remote", action="store_true")
@@ -710,6 +712,10 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["not_run", "pass", "warn", "fail"],
         default="not_run",
         help="Sauron source-review result. not_run keeps the artifact yellow with insufficient_coverage.",
+    )
+    parser.add_argument(
+        "--source-review-note",
+        default="Sauron source review should fill this section before publishing a release recommendation.",
     )
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--canary-timeout-secs", type=int, default=90)
@@ -737,7 +743,11 @@ def main(argv: list[str] | None = None) -> int:
         args.run_detached_ui = True
 
     canaries: dict[str, dict[str, Any]] = {}
-    canaries["binary_identity"] = run_binary_identity(args)
+    canaries["binary_identity"] = (
+        _status("not_run", reason="--skip-binary-identity", version=args.provider_version)
+        if args.skip_binary_identity
+        else run_binary_identity(args)
+    )
     codex_bin = str(canaries["binary_identity"].get("path") or args.codex_bin or "codex")
 
     if args.skip_static_contract:
@@ -768,13 +778,13 @@ def main(argv: list[str] | None = None) -> int:
 
     source_review = {
         "status": args.source_review_status,
-        "note": "Sauron source review should fill this section before publishing a release recommendation.",
+        "note": args.source_review_note,
     }
     verdict, failure_code, recommendation = classify_artifact(canaries, source_review)
     artifact = {
         "provider": "codex",
         "generated_at": _now_iso(),
-        "codex_version": canaries["binary_identity"].get("version"),
+        "codex_version": args.provider_version or canaries["binary_identity"].get("version"),
         "codex_bin": canaries["binary_identity"].get("path"),
         "longhouse_commit": _git_commit(args.repo_root),
         "verdict": verdict,
