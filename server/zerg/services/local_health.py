@@ -1645,10 +1645,10 @@ def _codex_bridge_reason_codes(
     if rollout_missing_after_turn and not thread_subscription_transitional:
         thread_subscription_issue = True
 
-    if thread_subscription_issue:
-        if provider_thread_switched:
-            reason_codes.append("provider_thread_switched")
-        elif (
+    if provider_thread_switched:
+        reason_codes.append("provider_thread_switched")
+    elif thread_subscription_issue:
+        if (
             bridge_thread_is_subagent
             or _looks_like_subagent_control_error(last_error)
             or _looks_like_subagent_control_error(thread_subscription_last_error)
