@@ -78,6 +78,10 @@ def _validate_operation_evidence(item: dict[str, Any]) -> None:
     if missing:
         joined = ", ".join(missing)
         raise ValueError(f"managed provider contract {provider}: operation_evidence missing {joined}")
+    extra = [field for field in evidence if field not in _OPERATION_EVIDENCE_FIELDS]
+    if extra:
+        joined = ", ".join(str(field) for field in extra)
+        raise ValueError(f"managed provider contract {provider}: operation_evidence has unknown keys {joined}")
     for field in _OPERATION_EVIDENCE_FIELDS:
         entry = evidence.get(field)
         if not isinstance(entry, dict):

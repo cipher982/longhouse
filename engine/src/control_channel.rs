@@ -274,13 +274,92 @@ fn command_exists_in_path(command: &str, path_value: Option<&std::ffi::OsStr>) -
 
 fn managed_provider_contract_items() -> &'static Vec<Value> {
     let payload = MANAGED_PROVIDER_CONTRACTS.get_or_init(|| {
-        serde_json::from_str(MANAGED_PROVIDER_CONTRACTS_JSON)
-            .expect("managed provider contract manifest must be valid JSON")
+        let payload: Value = serde_json::from_str(MANAGED_PROVIDER_CONTRACTS_JSON)
+            .expect("managed provider contract manifest must be valid JSON");
+        validate_managed_provider_contract_manifest(&payload)
+            .expect("managed provider contract manifest must satisfy the engine contract");
+        payload
     });
     payload
         .get("providers")
         .and_then(Value::as_array)
         .expect("managed provider contract manifest must contain providers[]")
+}
+
+fn validate_managed_provider_contract_manifest(payload: &Value) -> Result<(), String> {
+    if payload.get("schema_version").and_then(Value::as_u64) != Some(1) {
+        return Err("schema_version must be 1".to_string());
+    }
+    let providers = payload
+        .get("providers")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "providers[] missing".to_string())?;
+    let operations = [
+        "launch_local",
+        "launch_remote",
+        "reattach",
+        "send_input",
+        "interrupt",
+        "steer_active_turn",
+        "terminate",
+        "tail_output",
+        "runtime_phase",
+        "transcript_binding",
+    ];
+    let evidence_levels = [
+        "none",
+        "source_review",
+        "hermetic",
+        "live_no_token",
+        "manual_live_token",
+        "scheduled_live_token",
+    ];
+    for provider in providers {
+        let provider_name = provider
+            .get("provider")
+            .and_then(Value::as_str)
+            .unwrap_or("<unknown>");
+        let evidence = provider
+            .get("operation_evidence")
+            .and_then(Value::as_object)
+            .ok_or_else(|| format!("{provider_name}: operation_evidence must be an object"))?;
+        for key in evidence.keys() {
+            if !operations.contains(&key.as_str()) {
+                return Err(format!("{provider_name}: unknown operation_evidence key {key}"));
+            }
+        }
+        for operation in operations {
+            let supported = provider
+                .get(operation)
+                .and_then(Value::as_bool)
+                .ok_or_else(|| format!("{provider_name}.{operation}: support flag must be boolean"))?;
+            let entry = evidence
+                .get(operation)
+                .and_then(Value::as_object)
+                .ok_or_else(|| format!("{provider_name}.{operation}: evidence missing"))?;
+            let level = entry
+                .get("level")
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("{provider_name}.{operation}: evidence level missing"))?;
+            if !evidence_levels.contains(&level) {
+                return Err(format!("{provider_name}.{operation}: unknown evidence level {level}"));
+            }
+            let source = entry
+                .get("source")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            if source.is_empty() {
+                return Err(format!("{provider_name}.{operation}: evidence source missing"));
+            }
+            if supported == (level == "none") {
+                return Err(format!(
+                    "{provider_name}.{operation}: support flag and evidence level diverge"
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn control_supports_for_path(path_value: Option<&std::ffi::OsStr>) -> Vec<String> {
@@ -1521,6 +1600,7 @@ mod tests {
     #[test]
     fn managed_provider_contract_manifest_includes_operation_evidence() {
         let payload: Value = serde_json::from_str(MANAGED_PROVIDER_CONTRACTS_JSON).unwrap();
+        validate_managed_provider_contract_manifest(&payload).unwrap();
         assert_eq!(payload["schema_version"].as_u64(), Some(1));
         let providers = payload["providers"].as_array().unwrap();
         for provider in providers {
@@ -1555,6 +1635,21 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn managed_provider_contract_manifest_validation_rejects_evidence_drift() {
+        let mut payload: Value = serde_json::from_str(MANAGED_PROVIDER_CONTRACTS_JSON).unwrap();
+        let first_provider = payload["providers"][0].as_object_mut().unwrap();
+        first_provider
+            .get_mut("operation_evidence")
+            .unwrap()
+            .as_object_mut()
+            .unwrap()
+            .insert("made_up".to_string(), json!({"level": "none", "source": "test"}));
+
+        let error = validate_managed_provider_contract_manifest(&payload).unwrap_err();
+        assert!(error.contains("unknown operation_evidence key made_up"));
     }
 
     #[test]
