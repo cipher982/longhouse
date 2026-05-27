@@ -33,6 +33,7 @@ from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_BRIDGE_STATE
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_MISSING
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PROCESS
+from zerg.provider_release_status import collect_provider_release_status
 from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_log_dir
 from zerg.services.longhouse_paths import get_agent_outbox_dir
@@ -3266,6 +3267,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
     engine_status = _collect_engine_status(resolved_base_dir, now=now)
     outbox = _collect_outbox(resolved_base_dir, now=now)
     provider_clis = _collect_provider_clis()
+    provider_release_status = collect_provider_release_status(provider_clis, fast=fast)
     activity_summary = _collect_activity_summary(resolved_base_dir, now=now)
     managed_summary, managed_sessions, orphan_bridges, unmanaged_processes = _collect_managed_session_sources(
         resolved_base_dir,
@@ -3286,6 +3288,14 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         managed_summary=managed_summary,
         managed_sessions=managed_sessions,
     )
+    if int(provider_release_status.get("blocking_count") or 0) > 0:
+        if "provider_release_blocked" not in reasons:
+            reasons.append("provider_release_blocked")
+        suggested_actions.append("Upgrade or downgrade the affected provider CLI before starting managed sessions.")
+        if health_state == "healthy":
+            health_state = "degraded"
+            severity = "yellow"
+            headline = "Installed provider release is blocked"
     build_identity = _collect_build_identity(engine_status=engine_status)
 
     return {
@@ -3306,6 +3316,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         "control_channel": control_channel,
         "outbox": outbox,
         "provider_clis": provider_clis,
+        "provider_release_status": provider_release_status,
         "activity_summary": activity_summary,
         "managed_summary": managed_summary,
         "managed_sessions": managed_sessions,

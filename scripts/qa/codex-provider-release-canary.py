@@ -20,6 +20,25 @@ from pathlib import Path
 from typing import Any
 
 ACTIVE_THREAD_ERROR = "No active thread is available."
+TERMINAL_TURN_METHODS = {
+    "turn/completed",
+    "turn/failed",
+    "turn/interrupted",
+    "turn/cancelled",
+}
+FINGERPRINT_RESPONSE_METHODS = {
+    "initialize",
+    "thread/start",
+    "thread/resume",
+    "thread/read",
+    "thread/list",
+    "turn/start",
+}
+FINGERPRINT_NOTIFICATION_METHODS = {
+    "thread/started",
+    "turn/started",
+    *TERMINAL_TURN_METHODS,
+}
 
 
 def _now_iso() -> str:
@@ -110,6 +129,97 @@ def _load_json_stdout(result: subprocess.CompletedProcess[str]) -> dict[str, Any
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _value_type(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int) and not isinstance(value, bool):
+        return "int"
+    if isinstance(value, float):
+        return "float"
+    if isinstance(value, str):
+        return "str"
+    if isinstance(value, list):
+        return "list"
+    if isinstance(value, dict):
+        return "object"
+    return type(value).__name__
+
+
+def _shape(value: Any, *, depth: int = 0) -> Any:
+    if depth >= 4:
+        return _value_type(value)
+    if isinstance(value, dict):
+        return {str(key): _shape(value[key], depth=depth + 1) for key in sorted(value)}
+    if isinstance(value, list):
+        if not value:
+            return []
+        return [_shape(value[0], depth=depth + 1)]
+    return _value_type(value)
+
+
+def protocol_fingerprints_from_jsonl(path: Path) -> dict[str, Any]:
+    """Return redacted protocol-shape fingerprints from a canary JSONL log."""
+    pending: dict[str, str] = {}
+    responses: dict[str, Any] = {}
+    notifications: dict[str, Any] = {}
+    server_requests: dict[str, Any] = {}
+    response_errors: dict[str, Any] = {}
+
+    if not path.exists():
+        return {
+            "status": "missing",
+            "path": str(path),
+            "responses": responses,
+            "notifications": notifications,
+            "server_requests": server_requests,
+            "response_errors": response_errors,
+        }
+
+    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not raw_line.strip():
+            continue
+        try:
+            row = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        payload = row.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        request_id = payload.get("id")
+        method = payload.get("method")
+        direction = row.get("direction")
+        if direction == "client_request" and request_id is not None and isinstance(method, str):
+            pending[str(request_id)] = method
+            continue
+        if direction != "server_message":
+            continue
+        if request_id is not None and "result" in payload:
+            request_method = pending.get(str(request_id))
+            if request_method in FINGERPRINT_RESPONSE_METHODS and request_method not in responses:
+                responses[request_method] = _shape(payload.get("result"))
+            continue
+        if request_id is not None and "error" in payload:
+            request_method = pending.get(str(request_id), f"request#{request_id}")
+            response_errors.setdefault(request_method, _shape(payload.get("error")))
+            continue
+        if isinstance(method, str):
+            if request_id is not None:
+                server_requests.setdefault(method, _shape(payload.get("params")))
+            elif method in FINGERPRINT_NOTIFICATION_METHODS and method not in notifications:
+                notifications[method] = _shape(payload.get("params"))
+
+    return {
+        "status": "ok",
+        "path": str(path),
+        "responses": responses,
+        "notifications": notifications,
+        "server_requests": server_requests,
+        "response_errors": response_errors,
+    }
 
 
 def _git_commit(repo_root: Path) -> str | None:
@@ -289,8 +399,14 @@ def run_raw_fresh_remote(args: argparse.Namespace, evidence_root: Path, codex_bi
             evidence=f"raw fresh remote TUI showed: {ACTIVE_THREAD_ERROR}",
             evidence_root=str(root),
             summary=summary,
+            protocol_fingerprints=protocol_fingerprints_from_jsonl(jsonl_path),
         )
-    return _status("pass", evidence_root=str(root), summary=summary)
+    return _status(
+        "pass",
+        evidence_root=str(root),
+        summary=summary,
+        protocol_fingerprints=protocol_fingerprints_from_jsonl(jsonl_path),
+    )
 
 
 def _bridge_state_root(isolation_root: Path) -> Path:

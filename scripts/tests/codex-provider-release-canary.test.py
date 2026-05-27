@@ -129,7 +129,18 @@ if args and args[0] == "codex-app-server-canary":
             text = "■ No active thread is available.\n"
         Path(remote_log).write_text(text, encoding="utf-8")
     if jsonl_log:
-        Path(jsonl_log).write_text('{"direction":"server_message","method":"turn/completed"}\n', encoding="utf-8")
+        Path(jsonl_log).write_text(
+            "\n".join([
+                json.dumps({"direction": "client_request", "payload": {"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "test"}}}}),
+                json.dumps({"direction": "server_message", "payload": {"id": 1, "result": {"platformFamily": "unix", "userAgent": "fake/1.0"}}}),
+                json.dumps({"direction": "client_request", "payload": {"id": 2, "method": "thread/start", "params": {"cwd": "/tmp/work"}}}),
+                json.dumps({"direction": "server_message", "payload": {"method": "thread/started", "params": {"thread": {"id": "thread_raw"}}}}),
+                json.dumps({"direction": "server_message", "payload": {"id": 2, "result": {"thread": {"id": "thread_raw", "path": "/tmp/thread.jsonl"}}}}),
+                json.dumps({"direction": "server_message", "payload": {"method": "turn/completed", "params": {"threadId": "thread_raw", "turn": {"id": "turn_raw", "status": "completed"}}}}),
+            ])
+            + "\n",
+            encoding="utf-8",
+        )
     print(json.dumps({
         "codex_bin": arg_value("--codex-bin"),
         "thread_id": "thread_raw",
@@ -297,6 +308,11 @@ def test_raw_fresh_remote_warning_is_yellow() -> None:
         assert payload["verdict"] == "yellow"
         assert payload["canaries"]["raw_fresh_remote"]["status"] == "warn"
         assert "No active thread is available." in payload["canaries"]["raw_fresh_remote"]["evidence"]
+        fingerprints = payload["canaries"]["raw_fresh_remote"]["protocol_fingerprints"]
+        assert fingerprints["responses"]["initialize"]["platformFamily"] == "str"
+        assert fingerprints["responses"]["thread/start"]["thread"]["id"] == "str"
+        assert fingerprints["notifications"]["thread/started"]["thread"]["id"] == "str"
+        assert fingerprints["notifications"]["turn/completed"]["turn"]["status"] == "str"
 
 
 def test_managed_resume_active_thread_error_is_red() -> None:
