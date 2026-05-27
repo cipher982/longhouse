@@ -73,8 +73,10 @@ downgraded with the failed evidence attached.
 
 `scripts/qa/provider-release-profile-canary.py` now emits the shared
 Sauron-facing release artifact for every managed provider. Provider-specific
-live canary fields remain yellow/not-run until the live probes named above are
-implemented.
+release profile live fields remain yellow/not-run until real upstream provider
+probes run. `scripts/qa/provider-control-e2e-canary.py` is the hermetic
+Longhouse control-path canary: it proves the local commands and control
+contracts without spending model tokens.
 
 ## Provider Contracts
 
@@ -103,9 +105,13 @@ injection is steer. If runtime phase is stale or idle, `intent=steer` returns
 
 Next Claude gaps:
 
-1. Add a canary that proves channel `launch`, `send`, active-turn `steer`, idle steer
-   rejection, and `interrupt`.
-2. Dogfood detached launch on Linux; macOS requires a `script(1)` PTY wrapper
+1. Extend the hermetic canary into a real upstream Claude channel lane for
+   release-drift review. The local control-path canary already proves
+   `send`, `intent=steer` channel delivery, and `interrupt`.
+2. Add an API/runtime canary for active-turn steer injection and idle steer
+   rejection. Channel metadata delivery is not the same as proving a fresh
+   running turn accepted corrective input.
+3. Dogfood detached launch on Linux; macOS requires a `script(1)` PTY wrapper
    because stock Claude falls into print-mode behavior without a terminal.
    Hook tokens are passed through process env, not argv or PTY log text.
 
@@ -160,9 +166,10 @@ Target Antigravity adapter:
      `terminationBehavior: "force_continue"` when it injects a message.
    - If the agent reaches `Stop` while pending input exists, the hook returns
      `decision: "continue"` with a reason that triggers the next loop.
-   - Live `agy` canaries still need to prove `force_continue` and
-     Stop/continue behavior end-to-end; until then, the hard product contract is
-     that active hooks claim queued input and report whether it was claimed.
+   - The hermetic control-path canary proves the generated hook claims queued
+     input at `PreInvocation` and `PostInvocation`, requests
+     `force_continue`, and continues at `Stop` when inbox input is waiting.
+     A real upstream `agy` canary still needs to prove provider release drift.
 4. Do not mark `steer_active_turn` supported until we prove that an input can
    be injected into an already-active turn with bounded latency and explicit
    idle rejection.

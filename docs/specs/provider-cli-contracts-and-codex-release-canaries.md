@@ -243,6 +243,11 @@ Initial product contract:
   `server/zerg/config/managed_provider_contracts.json`.
 - `scripts/qa/codex-provider-release-canary.py` remains the Codex-specific
   live bridge/TUI canary suite.
+- `scripts/qa/provider-control-e2e-canary.py` proves the Longhouse-managed
+  local control contracts for Claude, OpenCode, and Antigravity with hermetic
+  fake provider endpoints where needed. It is not a source-drift substitute for
+  real upstream release probes; it is the regression gate for Longhouse's
+  command/control implementation.
 - Runtime Host and local-health may cache it and expose:
   - provider
   - upstream version
@@ -263,6 +268,27 @@ be stable before any UI or upgrade prompt depends on it.
 
 Canaries should run with an isolated home and bridge state root. They should
 preserve raw logs and JSONL evidence on failure.
+
+### Shared Provider Control E2E Canary
+
+Purpose: prove Longhouse can actually drive every non-Codex managed provider
+operation it advertises, without spending model tokens.
+
+Flow:
+
+1. Claude starts the real `claude-channel serve` bridge against a fake
+   interruptible Claude process, then proves `send`, `intent=steer` metadata
+   delivery, and `interrupt` via SIGINT.
+2. OpenCode launches through the real `opencode-channel launch` command using
+   a fake `opencode serve` binary, then proves session create, `prompt_async`,
+   `abort`, `attach`, and stop behavior.
+3. Antigravity installs the generated Longhouse runtime hook, sends through the
+   real `antigravity-channel send`, and proves `PreInvocation`,
+   `PostInvocation`/`force_continue`, and `Stop`/continue inbox behavior.
+
+The canary emits `provider-control-e2e.json` with a green/red verdict. A green
+result means Longhouse's local control implementation is coherent. It does not
+mean the latest upstream provider release was reviewed.
 
 ### 0. Binary Identity Canary
 
