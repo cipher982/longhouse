@@ -69,6 +69,10 @@ Use specific reason codes. Do not collapse these into a generic
 | `provider_binary_changed` | Current provider binary/version differs from launch. | Restart the session under the current provider CLI. |
 | `legacy_bridge_state_location` | Longhouse read managed state from a legacy compatibility path. | Let the session quiesce, then restart under the current Longhouse build. |
 
+Initial launch hardening implements cwd-missing, cwd-replaced, and bridge-state
+missing. The other reason codes are reserved by the taxonomy and should not be
+emitted until their verifier and tests land.
+
 ## Contract Storage
 
 Store one JSON contract file per managed session under Longhouse-owned state:
@@ -110,6 +114,21 @@ Minimum schema:
 The contract is not a replacement for `managed_session_state`. The existing
 SQLite row owns current phase/workspace truth. The contract owns launch-time
 environment and control provenance.
+
+## Contract Lifecycle
+
+Contract files are live-session provenance, not an archive.
+
+- Launchers write the contract when a Longhouse managed session is created.
+- Providers that publish bridge/control state update the contract only after
+  the control state path exists.
+- Launchers remove the contract when they observe a clean local provider exit
+  and Longhouse has attempted terminal lifecycle reporting.
+- local-health verifies contracts only for sessions present in the current
+  local session snapshot, so stale files do not create user-facing false
+  positives.
+- A later repair command may sweep old orphaned contracts, but launch-critical
+  health must not depend on a global historical contract scan.
 
 ## local-health Verification
 

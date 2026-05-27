@@ -161,7 +161,7 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
         typer.echo(f"  issues: {managed_session_contracts.get('issue_count', len(contract_issues))}")
         latest = dict(managed_session_contracts.get("latest") or {})
         if latest:
-            typer.echo(f"  latest reason: {latest.get('reason') or '-'}")
+            typer.echo(f"  latest: {latest.get('headline') or latest.get('reason') or '-'}")
             typer.echo(f"  latest session: {latest.get('session_id') or '-'}")
             typer.echo(f"  action: {latest.get('action') or '-'}")
 

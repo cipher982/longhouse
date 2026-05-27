@@ -26,8 +26,10 @@ from zerg.cli._common import interactive_stdio as _interactive_stdio
 from zerg.cli._common import load_api_credentials as _load_api_credentials
 from zerg.cli._common import open_session_url as _open_session_url
 from zerg.cli._managed_contract import record_managed_provider_contract
+from zerg.cli._managed_contract import remove_managed_provider_contract
 from zerg.provider_cli_contract import ANTIGRAVITY_BIN_ENV
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_ANTIGRAVITY_BIN_FLAG
+from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_MISSING
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
 from zerg.services.longhouse_paths import get_managed_local_dir
 from zerg.services.longhouse_paths import resolve_longhouse_home
@@ -231,7 +233,7 @@ def _antigravity_binary_source(explicit: str | None, resolved: str | None) -> st
         return PROVIDER_CLI_SOURCE_ANTIGRAVITY_BIN_FLAG
     if str(os.environ.get(ANTIGRAVITY_BIN_ENV) or "").strip():
         return ANTIGRAVITY_BIN_ENV
-    return PROVIDER_CLI_SOURCE_PATH if resolved else "missing"
+    return PROVIDER_CLI_SOURCE_PATH if resolved else PROVIDER_CLI_SOURCE_MISSING
 
 
 def _launch_managed_local_from_api(
@@ -570,6 +572,7 @@ def _run_native_antigravity(
             )
         except _AntigravityLaunchError as exc:
             typer.secho(f"Longhouse runtime event warning: {exc}", fg=typer.colors.YELLOW, err=True)
+        remove_managed_provider_contract(provider="antigravity", session_id=session_id, config_dir=config_dir)
 
 
 def antigravity(

@@ -28,6 +28,7 @@ from zerg.cli._common import interactive_stdio as _interactive_stdio
 from zerg.cli._common import load_api_credentials as _load_api_credentials
 from zerg.cli._common import open_session_url as _open_session_url
 from zerg.cli._managed_contract import record_managed_provider_contract
+from zerg.cli._managed_contract import remove_managed_provider_contract
 from zerg.provider_cli_contract import CODEX_BIN_ENV
 from zerg.provider_cli_contract import LEGACY_MANAGED_CODEX_LAUNCHER_MARKER
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_CODEX_BIN_FLAG
@@ -880,6 +881,7 @@ def codex(
             provider_binary_source=codex_bin_source,
             control_kind="codex_bridge",
             control_state_path=state_file,
+            config_dir_is_provider_home=True,
         )
     except Exception as exc:
         typer.secho(
@@ -928,6 +930,13 @@ def codex(
         _restore_signal_handlers(previous_handlers)
     keep_bridge_alive = exit_code != 0 and _active_turn_survived_tui_exit(state_file)
     stop_error = None if keep_bridge_alive else bridge_stopper.stop(reason=_CODEX_STOP_REASON_TERMINAL_DISCONNECTED)
+    if not keep_bridge_alive and stop_error is None:
+        remove_managed_provider_contract(
+            provider="codex",
+            session_id=result.session_id,
+            config_dir=resolved_config_dir,
+            config_dir_is_provider_home=True,
+        )
     if exit_code != 0:
         if keep_bridge_alive:
             attach_thread_id = ""

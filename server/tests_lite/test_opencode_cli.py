@@ -18,6 +18,7 @@ os.environ.setdefault("JWT_SECRET", "test-jwt-secret-value")
 os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-value")
 
 from zerg.cli import opencode as opencode_cli
+from zerg.cli import _managed_contract
 from zerg.cli._common import ManagedLocalLaunchResponse
 from zerg.cli.main import app
 from zerg.services import opencode_bridge_state as bridge_state
@@ -74,12 +75,9 @@ def test_opencode_command_launches_managed_session_and_passes_extra_args(monkeyp
             "url": "https://longhouse.test",
             "token": "zdt_test_token",
             "config_dir": None,
+            "opencode_bin_source": "PATH",
         }
     ]
-    contracts = list_managed_session_contracts(tmp_path / ".longhouse")
-    assert contracts[0]["provider"] == "opencode"
-    assert contracts[0]["workspace"]["cwd"] == str(tmp_path)
-    assert contracts[0]["control"]["kind"] == "opencode_bridge"
 
 
 def test_opencode_command_defaults_to_serve_when_no_args(monkeypatch, tmp_path):
@@ -216,6 +214,8 @@ def test_run_native_opencode_writes_bridge_state_and_terminal_event(monkeypatch,
     monkeypatch.setattr(opencode_cli.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(bridge_state, "generate_server_password", lambda: "test-password-redacted")
     monkeypatch.setattr(opencode_cli, "generate_server_password", lambda: "test-password-redacted")
+    monkeypatch.setattr(opencode_cli, "remove_managed_provider_contract", lambda **_kwargs: None)
+    monkeypatch.setattr(_managed_contract, "capture_provider_version", lambda _path: None)
 
     config_dir = tmp_path / "config"
     exit_code = opencode_cli._run_native_opencode(
@@ -247,11 +247,13 @@ def test_run_native_opencode_writes_bridge_state_and_terminal_event(monkeypatch,
 
     assert runtime_events[0]["event"]["kind"] == "terminal_signal"
     assert runtime_events[0]["event"]["payload"] == {"terminal_state": "session_ended", "exit_code": 0}
+    contracts = list_managed_session_contracts(config_dir)
+    assert contracts[0]["provider"] == "opencode"
+    assert contracts[0]["workspace"]["cwd"] == str(tmp_path)
+    assert contracts[0]["control"]["kind"] == "opencode_bridge"
 
     # Bridge state should have been removed in the finally block.
-    state_path = bridge_state.build_opencode_bridge_state_file(
-        session_id="session-123", config_dir=config_dir
-    )
+    state_path = bridge_state.build_opencode_bridge_state_file(session_id="session-123", config_dir=config_dir)
     assert not state_path.exists(), "bridge state should be cleaned up after exit"
 
 

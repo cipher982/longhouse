@@ -9,6 +9,7 @@ from zerg.services.managed_session_contracts import build_managed_session_contra
 from zerg.services.managed_session_contracts import collect_managed_session_contract_diagnostics
 from zerg.services.managed_session_contracts import current_path_file_identity
 from zerg.services.managed_session_contracts import list_managed_session_contracts
+from zerg.services.managed_session_contracts import remove_managed_session_contract
 from zerg.services.managed_session_contracts import write_managed_session_contract
 
 
@@ -55,6 +56,22 @@ def test_contract_diagnostics_report_missing_workspace(tmp_path: Path):
     assert diagnostics["issues"][0]["reason"] == REASON_PROVIDER_SESSION_CWD_MISSING
     assert diagnostics["issues"][0]["session_id"] == "sess-1"
     assert diagnostics["issues"][0]["detail"]["cwd"] == str(missing_workspace)
+
+
+def test_remove_managed_session_contract_is_idempotent(tmp_path: Path):
+    workspace = tmp_path / "repo"
+    workspace.mkdir()
+    contract = build_managed_session_contract(
+        session_id="sess-1",
+        provider="claude",
+        cwd=workspace,
+    )
+    write_managed_session_contract(contract, base_dir=tmp_path)
+
+    remove_managed_session_contract(provider="claude", session_id="sess-1", base_dir=tmp_path)
+    remove_managed_session_contract(provider="claude", session_id="sess-1", base_dir=tmp_path)
+
+    assert list_managed_session_contracts(tmp_path) == []
 
 
 def test_contract_diagnostics_report_replaced_workspace(tmp_path: Path):

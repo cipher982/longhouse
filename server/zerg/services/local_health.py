@@ -3527,9 +3527,10 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
             health_state = "degraded"
             severity = "yellow"
             headline = "A provider session working directory disappeared"
-    if latest_contract_issue is not None and health_state == "healthy":
-        health_state = "degraded"
-        severity = "yellow"
+    if latest_contract_issue is not None and health_state != "broken":
+        if health_state == "healthy":
+            health_state = "degraded"
+            severity = "yellow"
         headline = _normalize_optional_string(latest_contract_issue.get("headline")) or "Managed provider session needs attention"
     if int(provider_release_status.get("blocking_count") or 0) > 0:
         if "provider_release_blocked" not in reasons:
