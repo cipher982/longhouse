@@ -20,6 +20,10 @@ Use this skill when a task touches how Longhouse starts, observes, steers, or re
 ### Claude
 
 - `longhouse claude` relies on Claude's native channel/MCP/stdin control path.
+- Claude channel send, interrupt, and active-turn steer are first-class local
+  control operations. Steer uses `claude-channel send --meta intent=steer` and
+  Runtime Host must gate explicit `intent=steer` on a fresh active runtime
+  phase; idle channel injection is not steer.
 - No detached bridge daemon, bridge state file, or flock sidecar should be required for Claude liveness.
 - Claude liveness in local health comes from process scanning, especially `local_health._collect_managed_sessions_by_process`.
 
@@ -56,6 +60,10 @@ Hard Codex contract:
 
 - Start from the same ownership rule: Longhouse can own the wrapper/control path, but the provider CLI remains user-owned unless the product decision explicitly changes.
 - Do not infer one provider's liveness/control model from another provider. Split behavior when the provider mechanics differ.
+- OpenCode and Antigravity currently have managed local wrappers plus runtime
+  observation, not live send/interrupt/steer. Treat `opencode_process` and
+  `antigravity_process` as observe-only until a named control plane such as an
+  OpenCode server bridge or Antigravity hook inbox is implemented.
 
 ## Workflows
 
