@@ -638,7 +638,7 @@ def test_detect_native_claude_channels_available_true_for_first_party_auth(monke
     assert detail == "authMethod=claude.ai, apiProvider=firstParty"
 
 
-def test_detect_native_claude_channels_available_false_for_bedrock(monkeypatch):
+def test_detect_native_claude_channels_available_true_for_any_logged_in_auth(monkeypatch):
     monkeypatch.setattr(
         claude_cli,
         "_run_claude_auth_status",
@@ -651,7 +651,7 @@ def test_detect_native_claude_channels_available_false_for_bedrock(monkeypatch):
 
     available, detail = claude_cli._detect_native_claude_channels_available()
 
-    assert available is False
+    assert available is True
     assert detail == "authMethod=third_party, apiProvider=bedrock"
 
 
