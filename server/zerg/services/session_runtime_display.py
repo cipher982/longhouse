@@ -14,6 +14,8 @@ from datetime import timedelta
 from datetime import timezone
 
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
+from zerg.services.session_runtime import EXPLICIT_CLOSED_TERMINAL_STATES
+from zerg.services.session_runtime import UNVERIFIED_TERMINAL_STATES
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.utils.time import normalize_utc
 
@@ -332,9 +334,16 @@ def build_session_runtime_display(
         has_signal=has_signal,
     )
     binding_closed = binding_terminal_reason == "process_gone" and control_path == "unmanaged"
-    if terminal_state:
+    if terminal_state in EXPLICIT_CLOSED_TERMINAL_STATES:
         lifecycle = "closed"
         terminal_reason = runtime_view.terminal_reason or _derive_terminal_reason(terminal_state)
+    elif terminal_state in UNVERIFIED_TERMINAL_STATES:
+        lifecycle = "unknown"
+        terminal_reason = runtime_view.terminal_reason or terminal_state
+    elif terminal_state:
+        # Reversible signals like "finished" don't actually close the session.
+        lifecycle = "unknown"
+        terminal_reason = runtime_view.terminal_reason or terminal_state
     elif binding_closed:
         lifecycle = "closed"
         terminal_reason = binding_terminal_reason

@@ -593,7 +593,6 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 hostState: "online",
                 terminalReason: nil
             ),
-            runtimeFacts: nil,
             loopMode: .assist
         )
         return detail

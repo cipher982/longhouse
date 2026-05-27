@@ -255,7 +255,6 @@ def _product_surface_snapshot(db, session_id) -> dict:
     card = next(card for card in cards if card.head.id == str(session_id))
     transcript_preview = card.head.transcript_preview
     runtime_display = card.head.runtime_display
-    runtime_facts = card.head.runtime_facts
     return {
         "visible_events": [
             {
@@ -292,7 +291,6 @@ def _product_surface_snapshot(db, session_id) -> dict:
             "runtime_status": card.head.status,
             "runtime_phase": card.head.runtime_phase,
             "runtime_display_lifecycle": runtime_display.lifecycle if runtime_display else None,
-            "runtime_fact_phase": runtime_facts.phase.kind if runtime_facts else None,
             "timeline_status_label": card.head.timeline_card.status.label if card.head.timeline_card.status else None,
             "timeline_border_tone": card.head.timeline_card.border_tone,
         },

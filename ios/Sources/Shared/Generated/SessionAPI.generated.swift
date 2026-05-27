@@ -39,64 +39,6 @@ struct APISessionControlResponse: Codable, Hashable, Sendable {
     let attachCommand: String?
 }
 
-struct APIActivityObservationResponse: Codable, Hashable, Sendable {
-    let lastTranscriptAt: String?
-    let lastRuntimeSignalAt: String?
-    let lastProgressAt: String?
-}
-
-struct APIControlObservationResponse: Codable, Hashable, Sendable {
-    let state: String?
-    let reason: String?
-    let source: String?
-    let lastSeenAt: String?
-    let expiresAt: String?
-    let transport: String?
-}
-
-struct APIHostObservationResponse: Codable, Hashable, Sendable {
-    let state: String?
-    let lastSeenAt: String?
-    let source: String?
-}
-
-struct APILifecycleFactResponse: Codable, Hashable, Sendable {
-    let state: String?
-    let reason: String?
-    let observedAt: String?
-}
-
-struct APIPhaseObservationResponse: Codable, Hashable, Sendable {
-    let kind: String?
-    let tool: String?
-    let source: String?
-    let observedAt: String?
-    let expiresAt: String?
-}
-
-struct APIProcessObservationResponse: Codable, Hashable, Sendable {
-    let status: String?
-    let pid: Int?
-    let processStartTime: String?
-    let observedAt: String?
-    let lastSeenAt: String?
-    let sourceMtime: String?
-    let sourcePath: String?
-    let reason: String?
-    let source: String?
-}
-
-struct APISessionLivenessFactsResponse: Codable, Hashable, Sendable {
-    let controlPath: String
-    let control: APIControlObservationResponse?
-    let processState: String
-    let host: APIHostObservationResponse
-    let process: APIProcessObservationResponse
-    let phase: APIPhaseObservationResponse
-    let activity: APIActivityObservationResponse
-    let lifecycle: APILifecycleFactResponse
-}
-
 typealias APISessionLoopMode = String
 
 struct APISessionRuntimeDisplayResponse: Codable, Hashable, Sendable {
@@ -203,7 +145,6 @@ struct APISessionResponse: Codable, Hashable, Sendable {
     let control: APISessionControlResponse?
     let capabilities: APISessionCapabilitiesResponse
     let runtimeDisplay: APISessionRuntimeDisplayResponse
-    let runtimeFacts: APISessionLivenessFactsResponse?
     let transcriptPreview: APISessionTranscriptPreviewResponse?
     let timelineCard: APITimelineCardPresentationResponse
     let loopMode: APISessionLoopMode?

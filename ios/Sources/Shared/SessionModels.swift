@@ -56,84 +56,6 @@ enum RuntimeDisplayText {
 
 }
 
-struct HostObservation: Codable, Hashable, Sendable {
-    let state: String
-    let lastSeenAt: String?
-    let source: String?
-}
-
-struct ProcessObservation: Codable, Hashable, Sendable {
-    let status: String
-    let pid: Int?
-    let processStartTime: String?
-    let observedAt: String?
-    let lastSeenAt: String?
-    let sourceMtime: String?
-    let sourcePath: String?
-    let reason: String?
-    let source: String?
-}
-
-struct PhaseObservation: Codable, Hashable, Sendable {
-    let kind: String?
-    let tool: String?
-    let source: String?
-    let observedAt: String?
-    let expiresAt: String?
-}
-
-struct ActivityObservation: Codable, Hashable, Sendable {
-    let lastTranscriptAt: String?
-    let lastRuntimeSignalAt: String?
-    let lastProgressAt: String?
-}
-
-struct LifecycleFact: Codable, Hashable, Sendable {
-    let state: String
-    let reason: String?
-    let observedAt: String?
-}
-
-struct ControlObservation: Codable, Hashable, Sendable {
-    let state: String?
-    let reason: String?
-    let source: String?
-    let lastSeenAt: String?
-    let expiresAt: String?
-    let transport: String?
-}
-
-struct SessionLivenessFacts: Codable, Hashable, Sendable {
-    let controlPath: String
-    let control: ControlObservation?
-    let processState: String?
-    let host: HostObservation
-    let process: ProcessObservation
-    let phase: PhaseObservation
-    let activity: ActivityObservation
-    let lifecycle: LifecycleFact
-
-    init(
-        controlPath: String,
-        control: ControlObservation? = nil,
-        processState: String?,
-        host: HostObservation,
-        process: ProcessObservation,
-        phase: PhaseObservation,
-        activity: ActivityObservation,
-        lifecycle: LifecycleFact
-    ) {
-        self.controlPath = controlPath
-        self.control = control
-        self.processState = processState
-        self.host = host
-        self.process = process
-        self.phase = phase
-        self.activity = activity
-        self.lifecycle = lifecycle
-    }
-}
-
 /// Honest summarization state — mirrors backend `summary_status` field.
 /// Tiebreaker: ready > pending > failed > unavailable.
 enum SummaryStatus: String, Codable, Sendable, Hashable {
@@ -171,7 +93,6 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     let hostReattachAvailable: Bool?
     let replyToLiveSessionAvailable: Bool?
     let runtimeDisplay: SessionRuntimeDisplay?
-    let runtimeFacts: SessionLivenessFacts?
     let timelineCard: TimelineCardPresentation?
 
     init(
@@ -200,7 +121,6 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         hostReattachAvailable: Bool? = nil,
         replyToLiveSessionAvailable: Bool? = nil,
         runtimeDisplay: SessionRuntimeDisplay? = nil,
-        runtimeFacts: SessionLivenessFacts? = nil,
         timelineCard: TimelineCardPresentation? = nil
     ) {
         self.id = id
@@ -228,7 +148,6 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         self.hostReattachAvailable = hostReattachAvailable
         self.replyToLiveSessionAvailable = replyToLiveSessionAvailable
         self.runtimeDisplay = runtimeDisplay
-        self.runtimeFacts = runtimeFacts
         self.timelineCard = timelineCard
     }
 
@@ -589,7 +508,6 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     let originLabel: String?
     let capabilities: SessionCapabilities
     let runtimeDisplay: SessionRuntimeDisplay?
-    let runtimeFacts: SessionLivenessFacts?
     let loopMode: SessionLoopMode?
     var transcriptPreview: SessionTranscriptPreview? = nil
 
@@ -756,7 +674,6 @@ struct SessionDetail: Codable, Identifiable, Sendable {
             originLabel: originLabel,
             capabilities: capabilities,
             runtimeDisplay: runtimeDisplay,
-            runtimeFacts: runtimeFacts,
             loopMode: loopMode,
             transcriptPreview: transcriptPreview
         )
