@@ -393,7 +393,8 @@ def test_active_preview_loader_does_not_scan_observations_when_projection_missin
     assert observation_preview.text == "observation only preview"
 
 
-def test_live_preview_cleanup_keeps_bounded_latest_window(tmp_path):
+def test_live_preview_cleanup_keeps_bounded_latest_window(monkeypatch, tmp_path):
+    monkeypatch.setenv("LONGHOUSE_DISABLE_LIVE_PREVIEW_PROJECTION", "1")
     SessionLocal = _make_sessionmaker(tmp_path, "live_overlay_preview_retention.db")
     now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
 
@@ -428,7 +429,8 @@ def test_live_preview_cleanup_keeps_bounded_latest_window(tmp_path):
     assert preview.text == "preview 8"
 
 
-def test_live_preview_cleanup_removes_rows_covered_by_durable_activity(tmp_path):
+def test_live_preview_cleanup_removes_rows_covered_by_durable_activity(monkeypatch, tmp_path):
+    monkeypatch.setenv("LONGHOUSE_DISABLE_LIVE_PREVIEW_PROJECTION", "1")
     SessionLocal = _make_sessionmaker(tmp_path, "live_overlay_preview_durable_retention.db")
     now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
 
