@@ -109,8 +109,10 @@ Next Claude gaps:
    current live lane proves binary/auth/flag/channel-parser shape without
    starting a model turn.
 2. Add a token-spending or controlled live canary for active-turn steer
-   injection. The API/runtime tests prove idle steer rejection and active-phase
-   dispatch gating, but not provider-side text acceptance during a real turn.
+   injection to scheduled CI/Sauron. The operator POC supports delayed
+   `intent=steer` channel injection and transcript assertion, while the
+   API/runtime tests prove idle steer rejection and active-phase dispatch
+   gating.
 3. Dogfood detached launch on Linux; macOS requires a `script(1)` PTY wrapper
    because stock Claude falls into print-mode behavior without a terminal.
    Hook tokens are passed through process env, not argv or PTY log text.

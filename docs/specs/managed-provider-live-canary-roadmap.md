@@ -125,8 +125,11 @@ work while an agent is busy. Steer needs active-phase proof and idle rejection.
 2. Extend the Claude lane beyond the initial no-token checks. The current lane
    proves binary identity, redacted auth shape, required launch/session flags,
    hidden `--channels` tagged-channel parsing, and macOS PTY wrapper availability.
-   Detached channel launch readiness and active-turn steer still need live
-   evidence.
+   The operator live POC at `make managed-claude-poc` can now run an optional
+   delayed `intent=steer` injection with `ARGS="--steer-text ..."` and requires
+   the assistant transcript to contain the expected steered response. Detached
+   remote launch still needs a repeatable live gate against a healthy Runtime
+   Host.
 3. Extend the OpenCode server probe from the initial no-token lane. It is the
    lowest-risk live canary:
    `opencode serve --hostname 127.0.0.1 --port 0 --pure`, `/global/health`,
