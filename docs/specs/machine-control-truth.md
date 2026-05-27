@@ -72,6 +72,7 @@ When launch is unavailable:
 {
   "control_channel_status": "disconnected",
   "supports": [],
+  "control_operations_by_provider": {},
   "can_launch_codex": false,
   "launch_blocked_by": "control_down"
 }
@@ -80,13 +81,21 @@ When launch is unavailable:
 Known `launch_blocked_by` values:
 
 - `control_down` — no active Machine Agent control WebSocket
-- `no_codex_support` — connected engine did not advertise `codex.launch`
+- `no_launch_support` — connected engine did not advertise any remote-launch
+  provider capability
+- `no_codex_support` — legacy value for connected engines that did not
+  advertise `codex.launch`
 - `engine_too_old` — reserved for minimum-build gating if we need it
 - `auth_failed` — reserved for local-health/control diagnostics
 - `runtime_unreachable` — reserved for local-health/control diagnostics
 
 The launch sheet should render `launch_blocked_by`. It should not rederive
 capability logic from raw fields.
+
+`supports[]` remains the raw Machine Agent hello frame. Consumers that need a
+provider-level read model should use `control_operations_by_provider`, for
+example `{"antigravity": ["send"]}` for a machine that can inject
+Antigravity hook-inbox input but cannot remote-launch Antigravity.
 
 ## Task List
 
@@ -105,6 +114,7 @@ capability logic from raw fields.
    - last connected/disconnected
    - last error code/message
    - advertised `supports[]`
+   - derived `control_operations_by_provider`
    - engine build
 5. Make `make dogfood-check` print the same readiness reason the hosted launch
    sheet shows.
@@ -142,4 +152,3 @@ capability logic from raw fields.
   session detail can send the first turn.
 - Tests cover backend machine truth, frontend launch gating/empty states,
   engine control status reporting, and launch lifecycle edge cases.
-

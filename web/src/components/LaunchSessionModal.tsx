@@ -314,6 +314,8 @@ function launchBlockedLabel(machine: MachineDirectoryEntry): string {
       return "control channel disconnected";
     case "no_codex_support":
       return "connected, but this engine does not advertise Codex launch";
+    case "no_launch_support":
+      return "connected, but this engine cannot remote-launch provider sessions";
     case "engine_too_old":
       return "engine too old for Codex launch";
     case "auth_failed":

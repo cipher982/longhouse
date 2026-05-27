@@ -13,6 +13,7 @@ ControlChannelStatus = Literal["connected", "disconnected"]
 LaunchBlockedBy = Literal[
     "control_down",
     "no_codex_support",
+    "no_launch_support",
     "engine_too_old",
     "auth_failed",
     "runtime_unreachable",
@@ -30,6 +31,10 @@ class MachineDirectoryEntry(UTCBaseModel):
     supports: list[str] = Field(
         default_factory=list,
         description="Capabilities announced by the Machine Agent on its last hello frame. Empty when offline.",
+    )
+    control_operations_by_provider: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="Live Machine Agent operations by provider, derived from supports[]. Empty when offline.",
     )
     can_launch_codex: bool = Field(
         ...,

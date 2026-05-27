@@ -7,6 +7,7 @@ Provider-specific launch/control code still owns how an operation runs.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from zerg.session_execution_home import ManagedSessionTransport
@@ -168,6 +169,42 @@ def provider_for_control_plane(control_plane: str | None) -> str | None:
 
 def remote_launch_supported_providers() -> frozenset[str]:
     return frozenset(contract.provider for contract in _CONTRACTS if contract.launch_remote)
+
+
+def machine_control_launch_capability_by_provider() -> dict[str, str]:
+    return {
+        contract.provider: f"{contract.provider}.launch"
+        for contract in _CONTRACTS
+        if f"{contract.provider}.launch" in contract.machine_control_supports
+    }
+
+
+def machine_control_operations_by_provider(
+    supports: Iterable[str],
+    *,
+    connected: bool,
+) -> dict[str, tuple[str, ...]]:
+    """Project live machine-control supports into provider operation names.
+
+    The raw ``supports[]`` list remains the transport handshake. This helper is
+    the shared read model for UI/agent surfaces that need to know the actual
+    operations a connected machine can perform without hardcoding provider
+    allowlists.
+    """
+    if not connected:
+        return {}
+
+    support_set = {str(item).strip() for item in supports if str(item).strip()}
+    operations_by_provider: dict[str, tuple[str, ...]] = {}
+    for contract in _CONTRACTS:
+        operations = tuple(
+            capability.split(".", 1)[1]
+            for capability in contract.machine_control_supports
+            if capability in support_set and "." in capability
+        )
+        if operations:
+            operations_by_provider[contract.provider] = operations
+    return operations_by_provider
 
 
 def steer_control_planes() -> frozenset[str]:

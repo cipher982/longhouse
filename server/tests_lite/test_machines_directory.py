@@ -97,6 +97,10 @@ def test_directory_returns_online_machine_with_supports(tmp_path):
     assert entry.online is True
     assert entry.control_channel_status == "connected"
     assert entry.supports == ("claude.launch", "codex.launch", "codex.send")  # sorted
+    assert entry.control_operations_by_provider == {
+        "codex": ("send", "launch"),
+        "claude": ("launch",),
+    }
     assert entry.can_launch_codex is True
     assert entry.launchable_providers == ("claude", "codex")
     assert entry.launch_blocked_by is None
@@ -114,6 +118,7 @@ def test_directory_surfaces_offline_enrolled_machine_with_empty_supports(tmp_pat
 
     assert [(e.device_id, e.online, e.supports) for e in entries] == [("homelab", False, ())]
     assert entries[0].control_channel_status == "disconnected"
+    assert entries[0].control_operations_by_provider == {}
     assert entries[0].can_launch_codex is False
     assert entries[0].launchable_providers == ()
     assert entries[0].launch_blocked_by == "control_down"
@@ -131,9 +136,10 @@ def test_directory_surfaces_online_machine_without_codex_launch_as_blocked(tmp_p
     assert len(entries) == 1
     assert entries[0].online is True
     assert entries[0].control_channel_status == "connected"
+    assert entries[0].control_operations_by_provider == {"codex": ("send",)}
     assert entries[0].can_launch_codex is False
     assert entries[0].launchable_providers == ()
-    assert entries[0].launch_blocked_by == "no_codex_support"
+    assert entries[0].launch_blocked_by == "no_launch_support"
 
 
 def test_directory_does_not_block_claude_only_launchable_machine(tmp_path):
@@ -164,6 +170,22 @@ def test_directory_does_not_block_opencode_only_launchable_machine(tmp_path):
     assert entries[0].can_launch_codex is False
     assert entries[0].launchable_providers == ("opencode",)
     assert entries[0].launch_blocked_by is None
+
+
+def test_directory_surfaces_antigravity_send_without_launchability(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+    registry = MachineControlChannelRegistry()
+    _register(registry, owner_id=OWNER_ID, device_id="antigravity-host", supports=("antigravity.send",))
+
+    with SessionLocal() as db:
+        entries = build_machines_directory(db, owner_id=OWNER_ID, registry=registry)
+
+    assert len(entries) == 1
+    assert entries[0].control_operations_by_provider == {"antigravity": ("send",)}
+    assert entries[0].can_launch_codex is False
+    assert entries[0].launchable_providers == ()
+    assert entries[0].launch_blocked_by == "no_launch_support"
 
 
 def test_directory_prefers_online_record_over_persisted_row(tmp_path):
@@ -289,12 +311,14 @@ def test_agents_machines_route_matches_timeline_route(tmp_path):
     assert [m["device_id"] for m in body["machines"]] == ["cinder", "homelab"]
     assert body["machines"][0]["supports"] == ["codex.launch"]
     assert body["machines"][0]["control_channel_status"] == "connected"
+    assert body["machines"][0]["control_operations_by_provider"] == {"codex": ["launch"]}
     assert body["machines"][0]["can_launch_codex"] is True
     assert body["machines"][0]["launchable_providers"] == ["codex"]
     assert body["machines"][0]["launch_blocked_by"] is None
     assert body["machines"][1]["online"] is False
     assert body["machines"][1]["supports"] == []
     assert body["machines"][1]["control_channel_status"] == "disconnected"
+    assert body["machines"][1]["control_operations_by_provider"] == {}
     assert body["machines"][1]["can_launch_codex"] is False
     assert body["machines"][1]["launchable_providers"] == []
     assert body["machines"][1]["launch_blocked_by"] == "control_down"

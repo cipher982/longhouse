@@ -224,11 +224,11 @@ Sauron should publish a single structured artifact per release:
 
 Downstream action:
 
-- **Green:** update the recommended Codex version; no user-facing warning.
+- **Green:** update the recommended provider version; no user-facing warning.
 - **Yellow:** keep the recommended version at the previous Green; local-health
   may show a low-severity note with the artifact link.
 - **Red:** block upgrade recommendation, open a Longhouse fix task, and warn
-  only users already running the affected Codex version.
+  only users already running the affected provider version.
 
 ## Provider Release Status Signal
 
@@ -246,8 +246,10 @@ Initial product contract:
   - failure code
   - evidence URL
   - generated timestamp
-- Local-health only warns when the local installed provider version matches a
-  Red release or when the user explicitly asks for provider status.
+- Local-health evaluates every managed provider in the contract registry. A
+  provider with no configured artifact is reported as `not_configured` and does
+  not affect health; configured Yellow/Red artifacts can warn or block only
+  when they match the locally installed provider version.
 
 The exact storage path remains a deployment detail, but the JSON schema should
 be stable before any UI or upgrade prompt depends on it.
