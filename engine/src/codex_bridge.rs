@@ -52,6 +52,42 @@ const BRIDGE_OPT_OUT_NOTIFICATION_METHODS: &[&str] = &[
     "rawResponseItem/completed",
 ];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BridgeLaunchMode {
+    Tui,
+    DetachedUi,
+}
+
+impl BridgeLaunchMode {
+    pub fn persisted_state_value(self) -> &'static str {
+        match self {
+            Self::Tui => LAUNCH_MODE_TUI,
+            Self::DetachedUi => PERSISTED_DETACHED_UI_LAUNCH_MODE,
+        }
+    }
+
+    pub fn cli_value(self) -> &'static str {
+        match self {
+            Self::Tui => LAUNCH_MODE_TUI,
+            Self::DetachedUi => "detached-ui",
+        }
+    }
+
+    pub fn from_cli_value(value: &str) -> Option<Self> {
+        let value = value.trim();
+        if value.eq_ignore_ascii_case(LAUNCH_MODE_TUI) {
+            return Some(Self::Tui);
+        }
+        if value.eq_ignore_ascii_case(LAUNCH_MODE_DETACHED_UI)
+            || value.eq_ignore_ascii_case("detached-ui")
+            || value.eq_ignore_ascii_case(LEGACY_LAUNCH_MODE_HEADLESS)
+        {
+            return Some(Self::DetachedUi);
+        }
+        None
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BridgeStartConfig {
     pub session_id: String,
@@ -69,10 +105,10 @@ pub struct BridgeStartConfig {
     pub longhouse_home: Option<PathBuf>,
     pub log_file: Option<PathBuf>,
     pub start_timeout_secs: u64,
-    /// When true, the bridge's run loop will invoke `thread/start` itself so
-    /// the managed session is driveable without a visible TUI attach. Default
-    /// (false) preserves the legacy behavior where a TUI creates the thread.
-    pub start_thread: bool,
+    /// When true, the bridge's run loop invokes `thread/start` itself before
+    /// marking the bridge ready. This is independent from launch lifecycle.
+    pub create_initial_thread: bool,
+    pub launch_mode: BridgeLaunchMode,
 }
 
 #[derive(Debug, Clone)]
@@ -93,8 +129,9 @@ pub struct BridgeRunConfig {
     pub state_file: PathBuf,
     pub log_file: PathBuf,
     /// When true, the bridge calls `thread/start` itself instead of waiting
-    /// for a TUI attach. Used by the detached-UI remote-launch path.
-    pub start_thread: bool,
+    /// for a TUI attach.
+    pub create_initial_thread: bool,
+    pub launch_mode: BridgeLaunchMode,
 }
 
 #[derive(Debug, Clone)]
@@ -553,14 +590,7 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         session_id: config.session_id.clone(),
         cwd: config.cwd.display().to_string(),
         codex_bin: config.codex_bin.clone(),
-        launch_mode: Some(
-            if config.start_thread {
-                PERSISTED_DETACHED_UI_LAUNCH_MODE
-            } else {
-                LAUNCH_MODE_TUI
-            }
-            .to_string(),
-        ),
+        launch_mode: Some(config.launch_mode.persisted_state_value().to_string()),
         ws_url: None,
         thread_id: None,
         thread_path: None,
@@ -637,8 +667,13 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
     if config.auto_approve {
         child.arg("--auto-approve");
     }
-    if config.start_thread {
-        child.arg("--start-thread");
+    if config.create_initial_thread {
+        child.arg("--create-initial-thread");
+    }
+    if config.launch_mode != BridgeLaunchMode::Tui {
+        child
+            .arg("--launch-mode")
+            .arg(config.launch_mode.cli_value());
     }
 
     #[cfg(unix)]
@@ -716,14 +751,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         session_id: config.session_id.clone(),
         cwd: config.cwd.display().to_string(),
         codex_bin: config.codex_bin.clone(),
-        launch_mode: Some(
-            if config.start_thread {
-                PERSISTED_DETACHED_UI_LAUNCH_MODE
-            } else {
-                LAUNCH_MODE_TUI
-            }
-            .to_string(),
-        ),
+        launch_mode: Some(config.launch_mode.persisted_state_value().to_string()),
         ws_url: None,
         thread_id: None,
         thread_path: None,
@@ -764,16 +792,13 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     starting_state.app_server_ws_url = client.child_ws_url.clone();
     write_state_file(&config.state_file, &starting_state)?;
 
-    // Initialize the protocol handshake. The TUI-attached path creates the
-    // thread later; detached-UI remote launch creates it below.
+    // Initialize the protocol handshake. Legacy TUI-attached startup creates
+    // the thread later; prestart paths create it below.
     initialize_client(&mut client).await?;
 
-    // Detached-UI remote-launch path: create the thread ourselves so the
-    // session is driveable via send/interrupt/steer without a visible TUI
-    // attach. A TUI that attaches later can still create its own thread;
-    // bridge state captures the most recent thread via thread/started
-    // notifications.
-    if config.start_thread {
+    // Initial thread creation path: create the thread ourselves so the session
+    // is driveable before a visible TUI attaches.
+    if config.create_initial_thread {
         let params = json!({
             "cwd": config.cwd.to_string_lossy(),
             "approvalPolicy": config.approval_policy,
@@ -787,6 +812,13 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                     .and_then(|thread| thread.get("id"))
                     .and_then(Value::as_str)
                     .map(str::to_string);
+                if thread_id.as_deref().unwrap_or("").is_empty() {
+                    starting_state.status = "error".to_string();
+                    starting_state.last_error =
+                        Some("thread/start did not return thread id".to_string());
+                    let _ = write_state_file(&config.state_file, &starting_state);
+                    bail!("thread/start did not return thread id");
+                }
                 let thread_path = response
                     .get("thread")
                     .and_then(|thread| thread.get("path"))
@@ -806,7 +838,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                 starting_state.status = "error".to_string();
                 starting_state.last_error = Some(format!("thread/start failed: {err}"));
                 let _ = write_state_file(&config.state_file, &starting_state);
-                bail!("thread/start failed in detached-ui bridge: {err}");
+                bail!("thread/start failed in bridge: {err}");
             }
         }
     }
@@ -905,11 +937,11 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         subscribed_thread_id: None,
         rejected_thread_ids: BTreeSet::new(),
     };
-    // Mark ready so the CLI can read ws_url and launch the TUI. Detached-UI
-    // launches already have a thread id; TUI launches capture it later from
-    // thread/started notifications.
+    // Mark ready so the CLI can read ws_url and launch the TUI. Prestart
+    // launches already have a thread id; legacy TUI launches capture it later
+    // from thread/started notifications.
     write_state_file(&context.state_file, &context.state)?;
-    if config.start_thread && context.state.thread_id.is_some() {
+    if config.create_initial_thread && context.state.thread_id.is_some() {
         let startup_phase = context.runtime_tracker.current_phase_update();
         emit_runtime_updates(&config, &mut context, vec![startup_phase]).await;
     }
@@ -3965,6 +3997,18 @@ mod tests {
         assert_eq!(raw["launch_mode"], LEGACY_LAUNCH_MODE_HEADLESS);
     }
 
+    #[test]
+    fn bridge_launch_mode_separates_tui_from_detached_ui_persistence() {
+        assert_eq!(
+            BridgeLaunchMode::Tui.persisted_state_value(),
+            LAUNCH_MODE_TUI
+        );
+        assert_eq!(
+            BridgeLaunchMode::DetachedUi.persisted_state_value(),
+            LEGACY_LAUNCH_MODE_HEADLESS
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn remove_bridge_state_sidecars_removes_json_tmp_lock_and_sock() {
@@ -4001,7 +4045,8 @@ mod tests {
             longhouse_home: Some(temp.path().to_path_buf()),
             state_file: temp.path().join("bridge-state.json"),
             log_file: temp.path().join("bridge.log"),
-            start_thread: false,
+            create_initial_thread: false,
+            launch_mode: BridgeLaunchMode::Tui,
         }
     }
 
@@ -5708,10 +5753,16 @@ mod tests {
             })))
             .unwrap();
 
-        let summary =
-            handle_ipc_turn_start(&config, &mut client, &mut context, "continue", "thr_test", &[])
-                .await
-                .unwrap();
+        let summary = handle_ipc_turn_start(
+            &config,
+            &mut client,
+            &mut context,
+            "continue",
+            "thr_test",
+            &[],
+        )
+        .await
+        .unwrap();
 
         assert_eq!(summary.turn_id, "turn-live");
         assert_eq!(context.state.active_turn_id.as_deref(), Some("turn-live"));

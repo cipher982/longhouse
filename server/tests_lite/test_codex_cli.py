@@ -6,6 +6,7 @@ from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from cryptography.fernet import Fernet
 from typer.testing import CliRunner
 
@@ -408,6 +409,61 @@ def test_build_codex_attach_command_carries_model_overrides():
     assert "-c model_reasoning_effort=low --model gpt-5.4-mini" in command
 
 
+def test_start_native_codex_bridge_can_prestart_initial_thread(monkeypatch, tmp_path):
+    calls: list[dict[str, object]] = []
+
+    def fake_run(command, **kwargs):
+        calls.append({"command": command, **kwargs})
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps(
+                {
+                    "ws_url": "ws://127.0.0.1:4800",
+                    "thread_id": "thr_123",
+                    "state_file": "/tmp/state.json",
+                }
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(codex_cli, "get_engine_executable", lambda: "/tmp/longhouse-engine")
+    monkeypatch.setattr(codex_cli.subprocess, "run", fake_run)
+
+    thread_id, ws_url, state_file = codex_cli._start_native_codex_bridge(
+        session_id="session-123",
+        cwd=tmp_path,
+        url="https://longhouse.test",
+        token="zdt_test_token",
+        codex_bin="/tmp/codex",
+        create_initial_thread=True,
+    )
+
+    assert (thread_id, ws_url, state_file) == ("thr_123", "ws://127.0.0.1:4800", "/tmp/state.json")
+    assert "--create-initial-thread" in calls[0]["command"]
+
+
+def test_start_native_codex_bridge_requires_thread_id_when_prestarting(monkeypatch, tmp_path):
+    def fake_run(_command, **_kwargs):
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"ws_url": "ws://127.0.0.1:4800", "state_file": "/tmp/state.json"}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(codex_cli, "get_engine_executable", lambda: "/tmp/longhouse-engine")
+    monkeypatch.setattr(codex_cli.subprocess, "run", fake_run)
+
+    with pytest.raises(codex_cli._NativeBridgeError, match="did not return thread_id"):
+        codex_cli._start_native_codex_bridge(
+            session_id="session-123",
+            cwd=tmp_path,
+            url="https://longhouse.test",
+            token="zdt_test_token",
+            codex_bin="/tmp/codex",
+            create_initial_thread=True,
+        )
+
+
 def test_launch_managed_local_from_api_sets_codex_provider(monkeypatch, tmp_path):
     fake_client = _FakeClient(
         response=_FakeResponse(
@@ -459,7 +515,7 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     runner = CliRunner()
     open_calls: list[str] = []
     bridge_calls: list[dict[str, object]] = []
-    native_tui_calls: list[tuple[str, str, str, str, bool]] = []
+    native_tui_calls: list[tuple[str, str, str, str, bool, str | None, str | None, str | None]] = []
     stop_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(
@@ -496,8 +552,9 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
         cwd,
         bypass_approvals=False,
         model=None,
-        model_reasoning_effort=None: native_tui_calls.append(
-            (session_id, codex_bin, ws_url, str(cwd), bypass_approvals, model, model_reasoning_effort)
+        model_reasoning_effort=None,
+        thread_id=None: native_tui_calls.append(
+            (session_id, codex_bin, ws_url, str(cwd), bypass_approvals, model, model_reasoning_effort, thread_id)
         )
         or 0,
     )
@@ -540,10 +597,11 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
             "codex_bin": "/tmp/codex",
             "model": None,
             "model_reasoning_effort": None,
+            "create_initial_thread": True,
         }
     ]
     assert native_tui_calls == [
-        ("session-123", "/tmp/codex", "ws://127.0.0.1:4800", str(tmp_path), False, None, None)
+        ("session-123", "/tmp/codex", "ws://127.0.0.1:4800", str(tmp_path), False, None, None, "thr_123")
     ]
     assert stop_calls == [
         {
@@ -552,6 +610,40 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
             "timeout_secs": None,
         }
     ]
+
+
+def test_codex_command_no_attach_prints_resume_command(monkeypatch, tmp_path):
+    runner = CliRunner()
+
+    monkeypatch.setattr(
+        codex_cli,
+        "_load_api_credentials",
+        lambda **_kwargs: ("https://longhouse.test", "zdt_test_token"),
+    )
+    monkeypatch.setattr(codex_cli, "_ensure_managed_launch_preflight", lambda **_kwargs: None)
+    monkeypatch.setattr(codex_cli, "get_machine_name_label", lambda: "work-laptop")
+    monkeypatch.setattr(
+        codex_cli,
+        "_launch_managed_local_from_api",
+        lambda **_kwargs: codex_cli.ManagedLocalLaunchResponse(
+            session_id="session-123",
+            provider_session_id="provider-123",
+            attach_command="",
+            source_runner_name="work-laptop",
+        ),
+    )
+    monkeypatch.setattr(codex_cli, "_resolve_codex_binary", lambda _explicit=None: "/tmp/codex")
+    monkeypatch.setattr(
+        codex_cli,
+        "_start_native_codex_bridge",
+        lambda **_kwargs: ("thr_123", "ws://127.0.0.1:4800", "/tmp/state.json"),
+    )
+
+    result = runner.invoke(app, ["codex", "--cwd", str(tmp_path), "--no-attach"])
+
+    assert result.exit_code == 0, result.output
+    assert "Attach: LONGHOUSE_MANAGED_SESSION_ID=session-123" in result.output
+    assert "/tmp/codex -c check_for_update_on_startup=false resume thr_123" in result.output
 
 
 def test_codex_command_preserves_bridge_when_active_turn_survives(monkeypatch, tmp_path):
@@ -783,6 +875,38 @@ def test_run_native_codex_tui_uses_foreground_process_group_when_interactive(mon
     ]
     assert foreground_calls[0]["cwd"] == tmp_path
     assert foreground_calls[0]["env"]["LONGHOUSE_MANAGED_SESSION_ID"] == "session-123"
+
+
+def test_run_native_codex_tui_resumes_prestarted_thread(monkeypatch, tmp_path):
+    foreground_calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(codex_cli, "_stdio_ttys", lambda: True)
+    monkeypatch.setattr(
+        codex_cli,
+        "_run_foreground_process_group",
+        lambda **kwargs: foreground_calls.append(kwargs) or 0,
+    )
+
+    exit_code = codex_cli._run_native_codex_tui(
+        session_id="session-123",
+        codex_bin="/tmp/codex",
+        ws_url="ws://127.0.0.1:4800",
+        cwd=tmp_path,
+        thread_id="thr_123",
+    )
+
+    assert exit_code == 0
+    assert foreground_calls[0]["cmd"] == [
+        "/tmp/codex",
+        "-c",
+        "check_for_update_on_startup=false",
+        "resume",
+        "thr_123",
+        "--enable",
+        "tui_app_server",
+        "--remote",
+        "ws://127.0.0.1:4800",
+    ]
 
 
 def test_run_foreground_process_group_hands_terminal_to_child(monkeypatch, tmp_path):
