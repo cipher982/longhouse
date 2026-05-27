@@ -87,6 +87,7 @@ def require_contains(relative: str, label: str, pattern: str) -> None:
 
 for required in [
     "docs/specs/managed-provider-session-contract.md",
+    "server/zerg/cli/_common.py",
     "server/zerg/cli/_managed_contract.py",
     "server/zerg/services/managed_session_contracts.py",
     "server/zerg/services/local_health.py",
@@ -102,6 +103,27 @@ require_contains(
     "provider homes are mapped out of provider-owned directories",
     r"resolve_longhouse_home_from_provider_home\(config_dir\)",
 )
+require_contains(
+    "server/zerg/cli/_common.py",
+    "managed launch credential/preflight helpers expose provider-home semantics",
+    r"config_dir_is_provider_home",
+)
+require_contains(
+    "server/zerg/cli/claude.py",
+    "Claude credentials map provider config dir to Longhouse home",
+    r"load_api_credentials\([^)]*config_dir_is_provider_home\s*=\s*True",
+)
+require_contains(
+    "server/zerg/cli/codex.py",
+    "Codex credentials map provider config dir to Longhouse home",
+    r"_load_api_credentials\([^)]*config_dir_is_provider_home\s*=\s*True",
+)
+for relative in ["server/zerg/cli/opencode.py", "server/zerg/cli/antigravity.py"]:
+    require_contains(
+        relative,
+        "Longhouse-home config dirs stay Longhouse-home config dirs during preflight",
+        r"_ensure_managed_launch_preflight\([^)]*config_dir_is_provider_home\s*=\s*False",
+    )
 require_contains(
     "server/zerg/services/managed_session_contracts.py",
     "provider version capture must be bounded",

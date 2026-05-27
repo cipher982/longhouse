@@ -33,15 +33,17 @@ def load_api_credentials(
     token: str | None,
     config_dir: Path | None,
     exit_code: int = 1,
+    config_dir_is_provider_home: bool = False,
     resolve_url: Callable[[Path | None], str | None] = get_zerg_url,
     resolve_token: Callable[[Path | None], str | None] = load_token,
 ) -> tuple[str, str]:
-    resolved_url = (url or resolve_url(config_dir) or "").strip()
+    state_root = resolve_longhouse_home_from_provider_home(config_dir) if config_dir_is_provider_home and config_dir else config_dir
+    resolved_url = (url or resolve_url(state_root) or "").strip()
     if not resolved_url:
         typer.secho("No Longhouse URL configured. Run 'longhouse auth' first.", fg=typer.colors.RED)
         raise typer.Exit(code=exit_code)
 
-    resolved_token = (token or resolve_token(config_dir) or "").strip()
+    resolved_token = (token or resolve_token(state_root) or "").strip()
     if not resolved_token:
         typer.secho("No device token found. Run 'longhouse auth' first.", fg=typer.colors.RED)
         raise typer.Exit(code=exit_code)
@@ -54,11 +56,12 @@ def ensure_managed_launch_preflight(
     url: str,
     machine_name: str,
     config_dir: Path | None,
+    config_dir_is_provider_home: bool = True,
     exit_code: int = 1,
 ) -> None:
     """Fail fast when the local machine contract disagrees with managed launch."""
 
-    state_root = resolve_longhouse_home_from_provider_home(config_dir) if config_dir else None
+    state_root = resolve_longhouse_home_from_provider_home(config_dir) if config_dir_is_provider_home and config_dir else config_dir
     readiness = collect_launch_readiness(
         state_root,
         runtime_url_override=url,

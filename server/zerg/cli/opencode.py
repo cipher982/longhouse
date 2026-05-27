@@ -642,6 +642,7 @@ def _run_native_opencode(
             reader.join(timeout=2.0)
         return returncode
     finally:
+        remove_managed_provider_contract(provider="opencode", session_id=session_id, config_dir=config_dir)
         try:
             remove_opencode_bridge_state(session_id=session_id, config_dir=config_dir)
         except Exception:
@@ -661,7 +662,6 @@ def _run_native_opencode(
             )
         except _OpenCodeLaunchError as exc:
             typer.secho(f"Longhouse runtime event warning: {exc}", fg=typer.colors.YELLOW, err=True)
-        remove_managed_provider_contract(provider="opencode", session_id=session_id, config_dir=config_dir)
 
 
 def opencode(
@@ -747,6 +747,7 @@ def opencode(
         url=resolved_url,
         machine_name=machine_name,
         config_dir=resolved_config_dir,
+        config_dir_is_provider_home=False,
         exit_code=managed_local_cli.EXIT_SETUP_FAILED,
     )
     typer.echo(f"Longhouse: {resolved_url}")

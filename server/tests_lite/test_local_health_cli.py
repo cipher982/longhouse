@@ -661,6 +661,198 @@ def test_collect_local_health_classifies_missing_cwd_from_managed_session_contra
     )
 
 
+def test_collect_local_health_classifies_replaced_cwd_from_managed_session_contract(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    workspace = tmp_path / "recreated-workspace"
+    workspace.mkdir()
+    contract = managed_session_contracts.build_managed_session_contract(
+        session_id="sess-replaced",
+        provider="opencode",
+        cwd=workspace,
+        control_kind="opencode_bridge",
+    )
+    managed_session_contracts.write_managed_session_contract(contract, base_dir=tmp_path)
+    workspace.rmdir()
+    workspace.mkdir()
+    _write_engine_status(
+        tmp_path,
+        age_seconds=5,
+        payload={
+            "sessions": [
+                {
+                    "session_id": "sess-replaced",
+                    "provider": "opencode",
+                    "control_path": "managed",
+                    "presentation_state": "managed_attached",
+                    "state": "attached",
+                    "phase": "idle",
+                    "phase_observed_at": "2026-05-27T14:35:24Z",
+                    "last_activity_at": "2026-05-27T14:35:24Z",
+                    "workspace": {
+                        "cwd": str(workspace),
+                        "label": "recreated-workspace",
+                    },
+                    "bridge": {},
+                    "evidence": {},
+                    "reason_codes": [],
+                }
+            ]
+        },
+    )
+    _write_managed_session_state_rows(
+        tmp_path,
+        [
+            (
+                "sess-replaced",
+                "opencode",
+                str(workspace),
+                "recreated-workspace",
+                "idle",
+                None,
+                "opencode_bridge",
+                "2026-05-27T14:35:24Z",
+                "2026-05-27T14:35:24Z",
+            )
+        ],
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "degraded"
+    assert snapshot["headline"] == "A provider session working directory was replaced"
+    assert "provider_session_cwd_replaced" in snapshot["reasons"]
+    assert snapshot["managed_session_contracts"]["issues"][0]["reason"] == "provider_session_cwd_replaced"
+    assert snapshot["managed_sessions"][0]["state"] == "degraded"
+    assert "provider_session_cwd_replaced" in snapshot["managed_sessions"][0]["reason_codes"]
+
+
+def test_collect_local_health_classifies_missing_bridge_state_from_managed_session_contract(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    state_path = tmp_path / "bridge" / "missing.json"
+    _write_engine_status(
+        tmp_path,
+        age_seconds=5,
+        payload={
+            "sessions": [
+                {
+                    "session_id": "sess-bridge-missing",
+                    "provider": "codex",
+                    "control_path": "managed",
+                    "presentation_state": "managed_attached",
+                    "state": "attached",
+                    "phase": "idle",
+                    "phase_observed_at": "2026-05-27T14:35:24Z",
+                    "last_activity_at": "2026-05-27T14:35:24Z",
+                    "workspace": {
+                        "cwd": str(workspace),
+                        "label": "workspace",
+                    },
+                    "bridge": {},
+                    "evidence": {},
+                    "reason_codes": [],
+                }
+            ]
+        },
+    )
+    contract = managed_session_contracts.build_managed_session_contract(
+        session_id="sess-bridge-missing",
+        provider="codex",
+        cwd=workspace,
+        control_kind="codex_bridge",
+        control_state_path=state_path,
+    )
+    managed_session_contracts.write_managed_session_contract(contract, base_dir=tmp_path)
+    _write_managed_session_state_rows(
+        tmp_path,
+        [
+            (
+                "sess-bridge-missing",
+                "codex",
+                str(workspace),
+                "workspace",
+                "idle",
+                None,
+                "codex_bridge",
+                "2026-05-27T14:35:24Z",
+                "2026-05-27T14:35:24Z",
+            )
+        ],
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "degraded"
+    assert snapshot["headline"] == "A managed provider bridge state file is missing"
+    assert "bridge_state_path_missing" in snapshot["reasons"]
+    assert snapshot["managed_session_contracts"]["issues"][0]["reason"] == "bridge_state_path_missing"
+    assert snapshot["managed_sessions"][0]["state"] == "degraded"
+    assert "bridge_state_path_missing" in snapshot["managed_sessions"][0]["reason_codes"]
+
+
+def test_collect_local_health_uses_count_headline_for_multiple_contract_issues(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    missing_a = tmp_path / "missing-a"
+    missing_b = tmp_path / "missing-b"
+    _write_engine_status(
+        tmp_path,
+        age_seconds=5,
+        payload={
+            "sessions": [
+                {
+                    "session_id": "sess-a",
+                    "provider": "codex",
+                    "control_path": "managed",
+                    "presentation_state": "managed_attached",
+                    "state": "attached",
+                    "phase": "idle",
+                    "phase_observed_at": "2026-05-27T14:35:24Z",
+                    "last_activity_at": "2026-05-27T14:35:24Z",
+                    "workspace": {"cwd": str(missing_a), "label": "missing-a"},
+                    "bridge": {},
+                    "evidence": {},
+                    "reason_codes": [],
+                },
+                {
+                    "session_id": "sess-b",
+                    "provider": "opencode",
+                    "control_path": "managed",
+                    "presentation_state": "managed_attached",
+                    "state": "attached",
+                    "phase": "idle",
+                    "phase_observed_at": "2026-05-27T14:35:24Z",
+                    "last_activity_at": "2026-05-27T14:35:24Z",
+                    "workspace": {"cwd": str(missing_b), "label": "missing-b"},
+                    "bridge": {},
+                    "evidence": {},
+                    "reason_codes": [],
+                },
+            ]
+        },
+    )
+    for session_id, provider, missing_cwd in [
+        ("sess-a", "codex", missing_a),
+        ("sess-b", "opencode", missing_b),
+    ]:
+        contract = managed_session_contracts.build_managed_session_contract(
+            session_id=session_id,
+            provider=provider,
+            cwd=missing_cwd,
+            control_kind=f"{provider}_bridge",
+        )
+        managed_session_contracts.write_managed_session_contract(contract, base_dir=tmp_path)
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "degraded"
+    assert snapshot["headline"] == "2 managed provider sessions need attention"
+    assert snapshot["managed_session_contracts"]["issue_count"] == 2
+
+
 def test_collect_local_health_ignores_contract_for_inactive_session(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))

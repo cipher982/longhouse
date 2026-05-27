@@ -659,6 +659,7 @@ def antigravity(
         url=resolved_url,
         machine_name=machine_name,
         config_dir=resolved_config_dir,
+        config_dir_is_provider_home=False,
         exit_code=managed_local_cli.EXIT_SETUP_FAILED,
     )
     typer.echo(f"Longhouse: {resolved_url}")
@@ -706,13 +707,22 @@ def antigravity(
         antigravity_args=antigravity_args,
         launch_script_path=command_launch_script_path,
     )
+    if not attach:
+        typer.echo(f"Run: {command}")
+        return
+    if not is_interactive:
+        typer.secho("Skipping Antigravity launch because stdin/stdout are not TTYs.", fg=typer.colors.YELLOW)
+        typer.echo(f"Run: {command}")
+        return
+
+    typer.echo("Launching Antigravity...")
     try:
         record_managed_provider_contract(
             provider="antigravity",
             session_id=result.session_id,
             cwd=cwd,
             config_dir=resolved_config_dir,
-            launch_mode="tui" if attach and is_interactive else "launch_script",
+            launch_mode="tui",
             provider_binary_path=resolved_antigravity_bin,
             provider_binary_source=_antigravity_binary_source(antigravity_bin, resolved_antigravity_bin),
             control_kind="antigravity_process",
@@ -723,25 +733,19 @@ def antigravity(
             fg=typer.colors.YELLOW,
             err=True,
         )
-    if not attach:
-        typer.echo(f"Run: {command}")
-        return
-    if not is_interactive:
-        typer.secho("Skipping Antigravity launch because stdin/stdout are not TTYs.", fg=typer.colors.YELLOW)
-        typer.echo(f"Run: {command}")
-        return
-
-    typer.echo("Launching Antigravity...")
-    exit_code = _run_native_antigravity(
-        session_id=result.session_id,
-        machine_name=machine_name,
-        antigravity_bin=resolved_antigravity_bin,
-        cwd=cwd,
-        antigravity_args=antigravity_args,
-        url=resolved_url,
-        token=resolved_token,
-        config_dir=resolved_config_dir,
-    )
+    try:
+        exit_code = _run_native_antigravity(
+            session_id=result.session_id,
+            machine_name=machine_name,
+            antigravity_bin=resolved_antigravity_bin,
+            cwd=cwd,
+            antigravity_args=antigravity_args,
+            url=resolved_url,
+            token=resolved_token,
+            config_dir=resolved_config_dir,
+        )
+    finally:
+        remove_managed_provider_contract(provider="antigravity", session_id=result.session_id, config_dir=resolved_config_dir)
     if exit_code != 0:
         typer.secho(f"Antigravity exited with code {exit_code}.", fg=typer.colors.YELLOW)
         raise typer.Exit(code=exit_code)

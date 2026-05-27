@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 
 from zerg.services.managed_session_contracts import REASON_BRIDGE_STATE_PATH_MISSING
@@ -35,6 +37,9 @@ def test_managed_session_contract_round_trips_private_file(tmp_path: Path):
 
     assert path == tmp_path / "managed-local" / "contracts" / "codex" / "sess-1.json"
     assert path.stat().st_mode & 0o777 == 0o600
+    assert (tmp_path / "managed-local").stat().st_mode & 0o777 == 0o700
+    assert (tmp_path / "managed-local" / "contracts").stat().st_mode & 0o777 == 0o700
+    assert (tmp_path / "managed-local" / "contracts" / "codex").stat().st_mode & 0o777 == 0o700
     loaded = list_managed_session_contracts(tmp_path)
     assert loaded[0]["session_id"] == "sess-1"
     assert loaded[0]["workspace"]["file_identity"] == current_path_file_identity(workspace)
@@ -112,3 +117,27 @@ def test_contract_diagnostics_report_missing_bridge_state(tmp_path: Path):
     assert diagnostics["state"] == "degraded"
     assert diagnostics["issues"][0]["reason"] == REASON_BRIDGE_STATE_PATH_MISSING
     assert diagnostics["issues"][0]["detail"]["state_path"] == str(state_path)
+
+
+def test_contract_diagnostics_latest_uses_created_at_not_glob_order(tmp_path: Path):
+    old_missing = tmp_path / "old-missing"
+    new_missing = tmp_path / "new-missing"
+    old_contract = build_managed_session_contract(
+        session_id="zzz-old",
+        provider="codex",
+        cwd=old_missing,
+        created_at=datetime(2026, 5, 27, 10, 0, tzinfo=timezone.utc),
+    )
+    new_contract = build_managed_session_contract(
+        session_id="aaa-new",
+        provider="codex",
+        cwd=new_missing,
+        created_at=datetime(2026, 5, 27, 11, 0, tzinfo=timezone.utc),
+    )
+    write_managed_session_contract(old_contract, base_dir=tmp_path)
+    write_managed_session_contract(new_contract, base_dir=tmp_path)
+
+    diagnostics = collect_managed_session_contract_diagnostics(tmp_path)
+
+    assert diagnostics["issues"][0]["session_id"] == "aaa-new"
+    assert diagnostics["latest"]["session_id"] == "aaa-new"

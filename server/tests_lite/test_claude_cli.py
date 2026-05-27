@@ -355,7 +355,7 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
     assert not (provider_home / "managed-local" / "contracts").exists()
 
 
-def test_claude_no_attach_records_contract_outside_provider_home(monkeypatch, tmp_path):
+def test_claude_no_attach_does_not_record_unlaunched_provider_contract(monkeypatch, tmp_path):
     runner = CliRunner()
     provider_home = tmp_path / ".claude"
 
@@ -385,10 +385,7 @@ def test_claude_no_attach_records_contract_outside_provider_home(monkeypatch, tm
     )
 
     assert result.exit_code == 0, result.output
-    contracts = list_managed_session_contracts(tmp_path / ".longhouse")
-    assert contracts[0]["provider"] == "claude"
-    assert contracts[0]["workspace"]["cwd"] == str(tmp_path)
-    assert contracts[0]["control"]["kind"] == "claude_channel_bridge"
+    assert list_managed_session_contracts(tmp_path / ".longhouse") == []
     assert not (provider_home / "managed-local" / "contracts").exists()
 
 

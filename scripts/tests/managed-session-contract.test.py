@@ -23,6 +23,16 @@ def _write_minimal_contract_root(root: Path) -> None:
         "# Managed Provider Session Contract\n",
     )
     _write(
+        root / "server/zerg/cli/_common.py",
+        """
+def load_api_credentials(*, config_dir_is_provider_home=False, **kwargs):
+    return "", ""
+
+def ensure_managed_launch_preflight(*, config_dir_is_provider_home=True, **kwargs):
+    return None
+""",
+    )
+    _write(
         root / "server/zerg/cli/_managed_contract.py",
         """
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
@@ -58,6 +68,7 @@ def collect():
         root / "server/zerg/cli/claude.py",
         """
 def run():
+    load_api_credentials(config_dir_is_provider_home=True)
     record_managed_provider_contract(provider="claude", config_dir_is_provider_home=True)
     remove_managed_provider_contract(provider="claude", config_dir_is_provider_home=True)
 """,
@@ -66,6 +77,7 @@ def run():
         root / "server/zerg/cli/codex.py",
         """
 def run():
+    _load_api_credentials(config_dir_is_provider_home=True)
     record_managed_provider_contract(provider="codex", config_dir_is_provider_home=True)
     remove_managed_provider_contract(provider="codex", config_dir_is_provider_home=True)
 """,
@@ -81,6 +93,7 @@ def _run_native_opencode():
     remove_managed_provider_contract(provider="opencode")
 
 def launch_script():
+    _ensure_managed_launch_preflight(config_dir_is_provider_home=False)
     record_managed_provider_contract(provider="opencode")
 """,
     )
@@ -88,6 +101,7 @@ def launch_script():
         root / "server/zerg/cli/antigravity.py",
         """
 def run():
+    _ensure_managed_launch_preflight(config_dir_is_provider_home=False)
     record_managed_provider_contract(provider="antigravity")
     remove_managed_provider_contract(provider="antigravity")
 """,
@@ -154,6 +168,28 @@ def run():
 """,
         )
         _assert_fails(root, "config_dir_is_provider_home=True")
+
+
+def test_rejects_opencode_preflight_provider_home_mapping() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_minimal_contract_root(root)
+        _write(
+            root / "server/zerg/cli/opencode.py",
+            """
+def _run_native_opencode():
+    def _record_state():
+        state_path = write_opencode_bridge_state(session_id="sid")
+        record_managed_provider_contract(provider="opencode", control_state_path=state_path)
+    _record_state()
+    remove_managed_provider_contract(provider="opencode")
+
+def launch_script():
+    _ensure_managed_launch_preflight(config_dir_is_provider_home=True)
+    record_managed_provider_contract(provider="opencode")
+""",
+        )
+        _assert_fails(root, "Longhouse-home config dirs stay Longhouse-home config dirs")
 
 
 def test_rejects_opencode_contract_before_bridge_state() -> None:
@@ -270,6 +306,7 @@ def main() -> int:
         test_minimal_valid_contract_passes,
         test_rejects_claude_contract_in_provider_home_semantics,
         test_rejects_codex_contract_cleanup_in_provider_home_semantics,
+        test_rejects_opencode_preflight_provider_home_mapping,
         test_rejects_opencode_contract_before_bridge_state,
         test_rejects_opencode_contract_without_state_path,
         test_rejects_provider_owned_contract_path_literal,
