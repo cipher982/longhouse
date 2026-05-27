@@ -24,8 +24,11 @@ from zerg.models.device_token import DeviceToken
 from zerg.services.machine_control_channel import MachineControlChannelRegistry
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 
-
 CODEX_LAUNCH_CAPABILITY = "codex.launch"
+LAUNCH_CAPABILITY_BY_PROVIDER = {
+    "codex": "codex.launch",
+    "claude": "claude.launch",
+}
 CONTROL_CONNECTED = "connected"
 CONTROL_DISCONNECTED = "disconnected"
 LAUNCH_BLOCKED_CONTROL_DOWN = "control_down"
@@ -40,6 +43,7 @@ class MachineEntry:
     control_channel_status: str
     supports: tuple[str, ...]
     can_launch_codex: bool
+    launchable_providers: tuple[str, ...]
     launch_blocked_by: str | None
     last_seen_at: datetime | None
     engine_build: str | None
@@ -52,6 +56,7 @@ class MachineEntry:
             "control_channel_status": self.control_channel_status,
             "supports": list(self.supports),
             "can_launch_codex": self.can_launch_codex,
+            "launchable_providers": list(self.launchable_providers),
             "launch_blocked_by": self.launch_blocked_by,
             "last_seen_at": self.last_seen_at.isoformat() if self.last_seen_at else None,
             "engine_build": self.engine_build,
@@ -99,6 +104,9 @@ def build_machines_directory(
     for conn_info in reg.list_for_owner(owner_id=owner_id):
         supports = tuple(sorted(conn_info.supports))
         can_launch_codex = CODEX_LAUNCH_CAPABILITY in supports
+        launchable_providers = tuple(
+            sorted(provider for provider, capability in LAUNCH_CAPABILITY_BY_PROVIDER.items() if capability in supports)
+        )
         entry = MachineEntry(
             device_id=conn_info.device_id,
             machine_name=conn_info.machine_name or conn_info.device_id,
@@ -106,6 +114,7 @@ def build_machines_directory(
             control_channel_status=CONTROL_CONNECTED,
             supports=supports,
             can_launch_codex=can_launch_codex,
+            launchable_providers=launchable_providers,
             launch_blocked_by=None if can_launch_codex else LAUNCH_BLOCKED_NO_CODEX_SUPPORT,
             last_seen_at=conn_info.last_seen_at,
             engine_build=conn_info.engine_build,
@@ -124,6 +133,7 @@ def build_machines_directory(
             control_channel_status=CONTROL_DISCONNECTED,
             supports=(),
             can_launch_codex=False,
+            launchable_providers=(),
             launch_blocked_by=LAUNCH_BLOCKED_CONTROL_DOWN,
             last_seen_at=_as_utc(last_used),
             engine_build=None,

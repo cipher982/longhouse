@@ -238,6 +238,46 @@ def test_happy_path_inserts_live_session(tmp_path):
     assert sent["payload"]["provider"] == "codex"
 
 
+def test_happy_path_inserts_live_claude_channel_session(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("claude.launch",))
+
+    with SessionLocal() as db:
+        result = asyncio.run(
+            launch_remote_session(
+                db,
+                RemoteLaunchParams(
+                    owner_id=OWNER_ID,
+                    device_id="cinder",
+                    provider="claude",
+                    cwd="/Users/me/repo",
+                ),
+                registry=registry,
+            )
+        )
+
+    assert result.launch_state == "live"
+    with SessionLocal() as db:
+        row = db.get(AgentSession, result.session_id)
+        assert row is not None
+        connection = db.query(SessionConnection).one()
+        assert row.provider == "claude"
+        assert row.managed_transport == "claude_channel_bridge"
+        assert row.source_runner_id is None
+        assert connection.control_plane == "claude_channel_bridge"
+        assert connection.can_send_input == 1
+        assert connection.can_interrupt == 1
+        assert connection.can_resume == 1
+
+    assert len(registry.sent) == 1
+    sent = registry.sent[0]
+    assert sent["command_type"] == "session.launch"
+    assert sent["session_id"] == str(result.session_id)
+    assert sent["payload"]["provider"] == "claude"
+
+
 def test_offline_machine_returns_409_no_row(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)
@@ -265,7 +305,30 @@ def test_offline_machine_returns_409_no_row(tmp_path):
         assert db.query(AgentSession).count() == 0
 
 
-def test_unsupported_provider_rejected(tmp_path):
+def test_provider_without_remote_launch_contract_rejected(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.launch",))
+
+    with SessionLocal() as db:
+        with pytest.raises(RemoteLaunchError) as excinfo:
+            asyncio.run(
+                launch_remote_session(
+                    db,
+                    RemoteLaunchParams(
+                        owner_id=OWNER_ID,
+                        device_id="cinder",
+                        provider="opencode",
+                        cwd="/Users/me/repo",
+                    ),
+                    registry=registry,
+                )
+            )
+    assert excinfo.value.code == "provider_unsupported"
+
+
+def test_provider_missing_machine_launch_support_rejected(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)
     registry = _StubRegistry()

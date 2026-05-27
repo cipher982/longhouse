@@ -11,6 +11,16 @@ from dataclasses import dataclass
 
 from zerg.session_execution_home import ManagedSessionTransport
 
+COMMAND_INTERRUPT = "session.interrupt"
+COMMAND_SEND_TEXT = "session.send_text"
+COMMAND_STEER_TEXT = "session.steer_text"
+
+_MACHINE_CONTROL_OPERATION_BY_COMMAND = {
+    COMMAND_SEND_TEXT: "send",
+    COMMAND_INTERRUPT: "interrupt",
+    COMMAND_STEER_TEXT: "steer",
+}
+
 
 @dataclass(frozen=True)
 class ManagedProviderContract:
@@ -67,12 +77,14 @@ _CONTRACTS: tuple[ManagedProviderContract, ...] = (
         provider="claude",
         managed_transport=ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE,
         control_plane="claude_channel_bridge",
+        launch_remote=True,
         reattach=True,
         send_input=True,
         interrupt=True,
         steer_active_turn=True,
         terminate=True,
         can_resume=True,
+        machine_control_supports=("claude.send", "claude.interrupt", "claude.steer", "claude.launch"),
     ),
     ManagedProviderContract(
         provider="opencode",
@@ -141,3 +153,12 @@ def steer_control_planes() -> frozenset[str]:
 
 def trusted_non_runner_control_planes() -> frozenset[str]:
     return frozenset(control_plane for contract in _CONTRACTS for control_plane in contract.control_planes)
+
+
+def machine_control_capability_for_command(provider: str | None, command_type: str | None) -> str | None:
+    contract = contract_for_provider(provider)
+    operation = _MACHINE_CONTROL_OPERATION_BY_COMMAND.get(str(command_type or "").strip())
+    if contract is None or operation is None:
+        return None
+    capability = f"{contract.provider}.{operation}"
+    return capability if capability in contract.machine_control_supports else None

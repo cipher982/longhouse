@@ -54,7 +54,7 @@ the upstream provider can support.
 | Provider | Local Launch | Remote Launch | Send | Interrupt | Steer | Runtime | Transcript | Current Truth |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Codex | Yes, `longhouse codex` | Yes, engine `session.launch` | Yes, engine channel | Yes, engine channel | Yes, engine channel with active-turn errors | Bridge/runtime events | Hooks + rollout | First-class |
-| Claude | Yes, `longhouse claude` | Not first-class yet; local wrapper exists, Machine Agent remote launch is not wired | Yes, `claude-channel send` | Yes, `claude-channel interrupt` | Yes, gated by fresh active runtime phase, delivered through channel metadata | Channel/hooks/process scan | Claude channel + transcript ingest | First-class local, remote-launch gap |
+| Claude | Yes, `longhouse claude` | Yes, Machine Agent `claude.launch` with channel-ready handshake | Yes, `claude-channel send` | Yes, `claude-channel interrupt` | Yes, gated by fresh active runtime phase, delivered through channel metadata | Channel/hooks/process scan | Claude channel + transcript ingest | First-class channel control |
 | OpenCode | Yes, `longhouse opencode` | No | No | No | No | OpenCode plugin runtime events | Plugin/transcript observation | Observe-only managed wrapper |
 | Antigravity | Yes, `longhouse antigravity` / `longhouse agy` | No | No | No | No | JSON hooks + runtime outbox | Hook binding to transcript path | Observe-only managed wrapper |
 
@@ -98,13 +98,10 @@ injection is steer. If runtime phase is stale or idle, `intent=steer` returns
 
 Next Claude gaps:
 
-1. Move browser/iOS remote launch off the legacy Runner path and onto the
-   Machine Agent control channel.
-2. Add a `claude.launch` advertised support bit.
-3. Add a detached local launch shape, even if it is just a terminal-owned
-   provider process with channel state and no visible TUI.
-4. Add a canary that proves channel `send`, active-turn `steer`, idle steer
+1. Add a canary that proves channel `launch`, `send`, active-turn `steer`, idle steer
    rejection, and `interrupt`.
+2. Dogfood detached launch on macOS and Linux to confirm stock Claude does not
+   require an externally visible terminal when the channel-ready state appears.
 
 ### OpenCode
 

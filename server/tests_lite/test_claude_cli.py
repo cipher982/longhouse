@@ -389,6 +389,52 @@ def test_claude_no_attach_does_not_record_unlaunched_provider_contract(monkeypat
     assert not (provider_home / "managed-local" / "contracts").exists()
 
 
+def test_launch_detached_native_claude_channel_waits_for_channel_state(monkeypatch, tmp_path):
+    prereq_calls: list[dict] = []
+    popen_calls: list[dict] = []
+
+    class _FakeProcess:
+        pid = 12345
+
+        def poll(self):
+            return None
+
+    def fake_popen(cmd, **kwargs):
+        popen_calls.append({"cmd": list(cmd), **kwargs})
+        return _FakeProcess()
+
+    monkeypatch.setattr(
+        claude_cli,
+        "_ensure_native_claude_prereqs",
+        lambda **kwargs: prereq_calls.append(kwargs),
+    )
+    monkeypatch.setattr(claude_cli.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        claude_cli,
+        "wait_for_claude_channel_state",
+        lambda **_kwargs: {"ready": True, "port": 49200},
+    )
+
+    result = claude_cli._launch_detached_native_claude_channel(
+        session_id="11111111-1111-4111-8111-111111111111",
+        provider_session_id="22222222-2222-4222-8222-222222222222",
+        cwd=tmp_path,
+        base_url="https://longhouse.test",
+        token="zdt_test_token",
+        config_dir=tmp_path / ".claude",
+    )
+
+    assert result["provider"] == "claude"
+    assert result["transport"] == "claude_channel_bridge"
+    assert result["pid"] == 12345
+    assert result["channel_state"] == {"ready": True, "port": 49200}
+    assert prereq_calls[0]["base_url"] == "https://longhouse.test"
+    assert popen_calls[0]["cwd"] == str(tmp_path)
+    command_text = " ".join(popen_calls[0]["cmd"])
+    assert "claude" in command_text
+    assert "11111111-1111-4111-8111-111111111111" in command_text
+
+
 def test_run_claude_auth_status_uses_bare_claude(monkeypatch):
     calls: list[list[str]] = []
 

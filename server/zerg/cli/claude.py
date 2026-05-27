@@ -28,6 +28,7 @@ from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
 from zerg.services.claude_channel_bridge import CLAUDE_CHANNEL_SERVER_NAME
 from zerg.services.claude_channel_bridge import build_claude_channel_exec_command
 from zerg.services.claude_channel_bridge import install_claude_channel_mcp_server
+from zerg.services.claude_channel_bridge import wait_for_claude_channel_state
 from zerg.services.longhouse_paths import get_agent_runtime_events_outbox_dir
 from zerg.services.session_continuity import get_machine_name_label
 from zerg.services.shipper import get_zerg_url
@@ -52,6 +53,7 @@ _FORCE_NATIVE_CLAUDE_CHANNELS_ENV = "LONGHOUSE_FORCE_NATIVE_CLAUDE_CHANNELS"
 EXIT_SETUP_FAILED = 78
 _CLAUDE_TERMINAL_POST_TIMEOUT_SECS = 2.0
 _CLAUDE_TERMINAL_SOURCE = "claude_channel_wrapper"
+_CLAUDE_REMOTE_LAUNCH_LOG_DIR = "claude-channel-launch"
 
 
 def _run_claude_auth_status() -> subprocess.CompletedProcess[str]:
@@ -333,6 +335,83 @@ def _run_native_claude_tui(
         exit_code=exit_code,
     )
     return exit_code
+
+
+def _remote_launch_log_path(*, session_id: str, config_dir: Path | None) -> Path:
+    base = _resolve_claude_dir(config_dir) / "logs" / _CLAUDE_REMOTE_LAUNCH_LOG_DIR
+    base.mkdir(parents=True, exist_ok=True)
+    return base / f"{session_id}.log"
+
+
+def _terminate_detached_process(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        process.terminate()
+        process.wait(timeout=2)
+    except Exception:
+        try:
+            process.kill()
+        except Exception:
+            return
+
+
+def _launch_detached_native_claude_channel(
+    *,
+    session_id: str,
+    provider_session_id: str,
+    cwd: Path,
+    base_url: str,
+    token: str,
+    config_dir: Path | None = None,
+    wait_ready_secs: float = 20.0,
+) -> dict:
+    _ensure_native_claude_prereqs(
+        base_url=base_url,
+        token=token,
+        workspace_path=cwd,
+        config_dir=config_dir,
+    )
+    command = build_claude_channel_exec_command(
+        provider_session_id=provider_session_id,
+        longhouse_session_id=session_id,
+        cwd=str(cwd),
+        resume=False,
+        hook_url=base_url,
+        hook_token=token,
+    )
+    log_path = _remote_launch_log_path(session_id=session_id, config_dir=config_dir)
+    log_file = log_path.open("ab")
+    process: subprocess.Popen | None = None
+    try:
+        process = subprocess.Popen(
+            shlex.split(command),
+            cwd=str(cwd),
+            stdin=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        state = wait_for_claude_channel_state(
+            session_id=session_id,
+            timeout_secs=wait_ready_secs,
+        )
+    except Exception:
+        if process is not None:
+            _terminate_detached_process(process)
+        raise
+    finally:
+        log_file.close()
+
+    return {
+        "session_id": session_id,
+        "provider_session_id": provider_session_id,
+        "provider": "claude",
+        "transport": ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value,
+        "pid": process.pid if process is not None else None,
+        "channel_state": state,
+        "log_path": str(log_path),
+    }
 
 
 def _post_claude_terminal_signal(

@@ -16,8 +16,8 @@ from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
+from zerg.services.managed_provider_contracts import machine_control_capability_for_command
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
-from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 
 MANAGED_CONTROL_COMMAND_INTERRUPT = "session.interrupt"
@@ -27,12 +27,6 @@ MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL = "engine_channel"
 MANAGED_CONTROL_TRANSPORT_LEGACY_RUNNER = "legacy_runner"
 MANAGED_CONTROL_TRANSPORT_NONE = "none"
 MISSING_LEGACY_RUNNER_METADATA_ERROR = "Managed local session is missing source runner metadata"
-
-_CODEX_ENGINE_CAPABILITY_BY_COMMAND = {
-    MANAGED_CONTROL_COMMAND_SEND_TEXT: "codex.send",
-    MANAGED_CONTROL_COMMAND_INTERRUPT: "codex.interrupt",
-    MANAGED_CONTROL_COMMAND_STEER_TEXT: "codex.steer",
-}
 
 
 @dataclass(frozen=True)
@@ -56,9 +50,7 @@ def _session_uses_engine_control(
 ) -> bool:
     if owner_id is None or command_type is None:
         return False
-    if str(getattr(session, "managed_transport", "") or "").strip() != ManagedSessionTransport.CODEX_APP_SERVER.value:
-        return False
-    capability = _CODEX_ENGINE_CAPABILITY_BY_COMMAND.get(command_type)
+    capability = machine_control_capability_for_command(getattr(session, "provider", None), command_type)
     device_id = _session_device_id(session)
     if capability is None or device_id is None:
         return False
@@ -238,7 +230,10 @@ async def _dispatch_engine_channel(
         device_id=device_id,
         session_id=str(getattr(session, "id")),
         command_type=command_type,
-        payload=payload,
+        payload={
+            "provider": str(getattr(session, "provider", "") or "").strip().lower(),
+            **dict(payload or {}),
+        },
         timeout_secs=timeout_secs,
         command_id=command_id,
     )
