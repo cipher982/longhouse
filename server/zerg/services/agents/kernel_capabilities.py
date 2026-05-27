@@ -26,6 +26,8 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
+from zerg.services.managed_provider_contracts import managed_transport_for_control_plane
+from zerg.services.managed_provider_contracts import steer_control_planes
 
 _STATE_PRIORITY = {
     "attached": 5,
@@ -35,14 +37,7 @@ _STATE_PRIORITY = {
     "ended": 1,
 }
 
-_STEER_CONTROL_PLANES = frozenset(
-    {
-        "codex_bridge",
-        "codex_app_server",
-        "claude_channel_bridge",
-        "opencode_process",
-    }
-)
+_STEER_CONTROL_PLANES = steer_control_planes()
 
 
 @dataclass(frozen=True)
@@ -104,17 +99,7 @@ class KernelSessionCapabilities:
 
     @property
     def managed_transport(self):
-        from zerg.session_execution_home import ManagedSessionTransport
-
-        if self.control_plane == "codex_bridge":
-            return ManagedSessionTransport.CODEX_APP_SERVER
-        if self.control_plane == "claude_channel_bridge":
-            return ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE
-        if self.control_plane == "opencode_process":
-            return ManagedSessionTransport.OPENCODE_PROCESS
-        if self.control_plane == "antigravity_process":
-            return ManagedSessionTransport.ANTIGRAVITY_PROCESS
-        return None
+        return managed_transport_for_control_plane(self.control_plane)
 
     @property
     def home_label(self) -> Optional[str]:

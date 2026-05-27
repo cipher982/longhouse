@@ -48,12 +48,28 @@ depend on the legacy Runner shell path.
 
 ## Current Matrix
 
+This table describes what Longhouse has wired today, not the ceiling of what
+the upstream provider can support.
+
 | Provider | Local Launch | Remote Launch | Send | Interrupt | Steer | Runtime | Transcript | Current Truth |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Codex | Yes, `longhouse codex` | Yes, engine `session.launch` | Yes, engine channel | Yes, engine channel | Yes, engine channel with active-turn errors | Bridge/runtime events | Hooks + rollout | First-class |
-| Claude | Yes, `longhouse claude` | Not first-class; local/Runner-era only | Yes, `claude-channel send` | Yes, `claude-channel interrupt` | Yes, gated by fresh active runtime phase, delivered through channel metadata | Channel/hooks/process scan | Claude channel + transcript ingest | First-class local, remote-launch gap |
+| Claude | Yes, `longhouse claude` | Not first-class yet; local wrapper exists, Machine Agent remote launch is not wired | Yes, `claude-channel send` | Yes, `claude-channel interrupt` | Yes, gated by fresh active runtime phase, delivered through channel metadata | Channel/hooks/process scan | Claude channel + transcript ingest | First-class local, remote-launch gap |
 | OpenCode | Yes, `longhouse opencode` | No | No | No | No | OpenCode plugin runtime events | Plugin/transcript observation | Observe-only managed wrapper |
 | Antigravity | Yes, `longhouse antigravity` / `longhouse agy` | No | No | No | No | JSON hooks + runtime outbox | Hook binding to transcript path | Observe-only managed wrapper |
+
+## Target Matrix
+
+This is the launch target. If a provider cannot support a capability after
+source-level canaries prove the upstream contract, the target row must be
+downgraded with the failed evidence attached.
+
+| Provider | Target Tier | Local Launch | Remote Launch | Send | Interrupt | Steer | Reattach | Release Drift Guard |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Codex | First-class | Attached + detached-ui managed bridge | Machine Agent `session.launch` | Engine channel | Engine channel | Engine channel, active-turn gated | `codex --remote` attach | Codex source/API canary |
+| Claude | First-class | `longhouse claude` channel launch | Machine Agent `claude.launch` | Claude channel | Claude channel | Claude channel, active-turn gated | Channel resume/attach path | Claude channel/hook canary |
+| OpenCode | First-class if server API remains stable | OpenCode server bridge | Machine Agent `opencode.launch` | Server prompt API | Server abort API | Only after async/TUI prompt semantics prove active-turn delivery | `opencode attach` | OpenCode OpenAPI + live server canary |
+| Antigravity | Controlled wrapper with explicit limits | Stock `agy` + Longhouse plugin | Machine Agent `antigravity.launch` | Hook inbox / next-invocation injection | Only if graceful stop is proven | Only if active-turn injection is proven | Provider-supported reattach if exposed | Hook schema + inbox canary |
 
 ## Provider Contracts
 

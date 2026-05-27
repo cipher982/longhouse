@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
+from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_execution_home import infer_execution_home
@@ -45,14 +46,10 @@ def _execution_home_label(execution_home: SessionExecutionHome) -> str | None:
 
 
 def _control_plane_for_transport(managed_transport: ManagedSessionTransport | None) -> str | None:
-    if managed_transport == ManagedSessionTransport.CODEX_APP_SERVER:
-        return "codex_bridge"
-    if managed_transport == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE:
-        return "claude_channel_bridge"
-    if managed_transport == ManagedSessionTransport.OPENCODE_PROCESS:
-        return "opencode_process"
-    if managed_transport == ManagedSessionTransport.ANTIGRAVITY_PROCESS:
-        return "antigravity_process"
+    for provider in ("codex", "claude", "opencode", "antigravity"):
+        contract = contract_for_provider(provider)
+        if contract and contract.managed_transport == managed_transport:
+            return contract.control_plane
     return None
 
 

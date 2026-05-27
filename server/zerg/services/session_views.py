@@ -38,6 +38,7 @@ from zerg.services.managed_control_state import CONTROL_SOURCE_LEGACY_RUNNER
 from zerg.services.managed_control_state import engine_channel_control_overlay
 from zerg.services.managed_control_state import live_transport_control_overlay
 from zerg.services.managed_local_transport import build_managed_local_attach_command
+from zerg.services.managed_provider_contracts import trusted_non_runner_control_planes
 from zerg.services.provisional_events import TranscriptPreview
 from zerg.services.send_affordance import OFFLINE_HOST_STATES
 from zerg.services.send_affordance import SendDisabledReason
@@ -77,6 +78,7 @@ PROVISIONAL_TRANSCRIPT_PARTIAL_FRESHNESS = timedelta(minutes=2)
 PROVISIONAL_TRANSCRIPT_COMPLETE_FRESHNESS = timedelta(minutes=10)
 MOBILE_TOOL_OUTPUT_MAX_CHARS = 2000
 DROPPED_TOOL_AGE = timedelta(hours=1)
+_TRUSTED_NON_RUNNER_CONTROL_PLANES = trusted_non_runner_control_planes()
 
 # ---------------------------------------------------------------------------
 # Coercion helpers
@@ -1332,7 +1334,7 @@ def build_session_response(
     elif (
         capability_flags.live_control_available
         and not binding_host_state
-        and capability_flags.control_plane in ("codex_bridge", "codex_app_server", "opencode_process", "antigravity_process")
+        and capability_flags.control_plane in _TRUSTED_NON_RUNNER_CONTROL_PLANES
     ):
         # Kernel attests control is live on a non-Runner-backed control plane
         # (engine channel / direct process). There is no Runner row to consult,

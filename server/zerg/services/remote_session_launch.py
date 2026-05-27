@@ -45,6 +45,9 @@ from zerg.services.agents.kernel_writes import upsert_connection_for_run
 from zerg.services.machine_control_channel import MachineControlChannelRegistry
 from zerg.services.machine_control_channel import MachineControlCommandResponse
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
+from zerg.services.managed_provider_contracts import control_plane_for_provider
+from zerg.services.managed_provider_contracts import remote_launch_supported_providers
+from zerg.services.managed_provider_contracts import require_contract_for_provider
 from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
 from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
 from zerg.services.session_launch_lifecycle import normalize_remote_launch_error_code
@@ -55,7 +58,7 @@ from zerg.session_loop_mode import SessionLoopMode
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_PROVIDERS = {"codex"}
+SUPPORTED_PROVIDERS = remote_launch_supported_providers()
 LAUNCH_COMMAND_TIMEOUT_SECS = 30
 LAUNCH_LEASE_SECS = 120
 
@@ -136,15 +139,7 @@ def _launch_result_for_attempt(attempt: SessionLaunchAttempt) -> RemoteLaunchRes
 
 
 def _control_plane_for_provider(provider: str | None) -> str:
-    return (
-        "codex_bridge"
-        if provider == "codex"
-        else "opencode_process"
-        if provider == "opencode"
-        else "antigravity_process"
-        if provider == "antigravity"
-        else "claude_channel_bridge"
-    )
+    return control_plane_for_provider(provider)
 
 
 def _attach_live_launch_run(
@@ -195,18 +190,20 @@ def _attach_live_launch_run(
             host_id=session.device_id,
         )
     )
+    contract = require_contract_for_provider(session.provider)
+    connection_capabilities = contract.connection_capabilities
     upsert_connection_for_run(
         db,
         run=run,
-        control_plane=_control_plane_for_provider(session.provider),
+        control_plane=contract.control_plane,
         acquisition_kind="spawned_control",
         state="attached",
         external_name=external_name or session.device_id,
-        can_send_input=1,
-        can_interrupt=1,
-        can_terminate=1,
-        can_tail_output=1,
-        can_resume=1,
+        can_send_input=connection_capabilities["can_send_input"],
+        can_interrupt=connection_capabilities["can_interrupt"],
+        can_terminate=connection_capabilities["can_terminate"],
+        can_tail_output=connection_capabilities["can_tail_output"],
+        can_resume=connection_capabilities["can_resume"],
     )
     if session.ended_at is not None:
         session.ended_at = None
