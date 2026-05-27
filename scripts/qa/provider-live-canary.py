@@ -34,6 +34,7 @@ PROVIDER_STATUS_SCHEMA_VERSION = 1
 _OPENCODE_SERVER_LOG_RE = re.compile(r"opencode server listening on (?P<url>http://127\.0\.0\.1:\d+)")
 _ANTIGRAVITY_PLUGIN_NAME = "longhouse-runtime"
 _ANTIGRAVITY_HOOK_EVENTS = ("PreInvocation", "PreToolUse", "PostToolUse", "PostInvocation", "Stop")
+_GAP_OPERATION_STATUSES = {"fail", "missing", "not_run", "skipped", "stale"}
 
 
 def _repo_root_from_script() -> Path:
@@ -96,6 +97,240 @@ def _resolve_provider_binary(args: argparse.Namespace, binary_name: str) -> str 
         path = Path(args.provider_bin).expanduser()
         return str(path) if path.is_file() else None
     return shutil.which(binary_name)
+
+
+def _provider_contract(repo_root: Path, provider: str) -> dict[str, Any] | None:
+    path = repo_root / "server/zerg/config/managed_provider_contracts.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    for item in payload.get("providers") or []:
+        if isinstance(item, dict) and item.get("provider") == provider:
+            return dict(item)
+    return None
+
+
+def _manifest_operation_evidence(contract: dict[str, Any], operation: str) -> dict[str, Any]:
+    evidence = (contract.get("operation_evidence") or {}).get(operation)
+    return dict(evidence) if isinstance(evidence, dict) else {}
+
+
+def _operation_entry(
+    contract: dict[str, Any],
+    operation: str,
+    *,
+    status: str,
+    canary: str,
+    canaries: list[str] | None = None,
+    level: str | None = None,
+    source: str | None = None,
+    message: str | None = None,
+    failure_code: str | None = None,
+    next_note: str | None = None,
+) -> dict[str, Any]:
+    target = _manifest_operation_evidence(contract, operation)
+    if status in _GAP_OPERATION_STATUSES:
+        effective_level = level or "none"
+    else:
+        effective_level = level or str(target.get("level") or "none")
+    entry: dict[str, Any] = {
+        "status": status,
+        "level": effective_level,
+        "source": source or target.get("source"),
+        "canary": canary,
+    }
+    if canaries:
+        entry["canaries"] = canaries
+    if failure_code:
+        entry["failure_code"] = failure_code
+    if message:
+        entry["message"] = message
+    if next_note or target.get("next"):
+        entry["next"] = next_note or target.get("next")
+    return {key: value for key, value in entry.items() if value is not None}
+
+
+def _group_operation_status(canaries: dict[str, dict[str, Any]], names: list[str]) -> tuple[str, dict[str, Any] | None]:
+    saw_warn: dict[str, Any] | None = None
+    for name in names:
+        canary = canaries.get(name)
+        if not isinstance(canary, dict):
+            return "", None
+        status = canary.get("status")
+        if status == "fail":
+            return "fail", canary
+        if status == "warn" and saw_warn is None:
+            saw_warn = canary
+        elif status != "pass":
+            return "", None
+    if saw_warn is not None:
+        return "warn", saw_warn
+    return "pass", None
+
+
+def _entry_from_canary_group(
+    contract: dict[str, Any],
+    operation: str,
+    *,
+    canaries: dict[str, dict[str, Any]],
+    required: list[str],
+    canary_name: str,
+    source: str | None = None,
+    message: str | None = None,
+) -> dict[str, Any] | None:
+    status, detail = _group_operation_status(canaries, required)
+    if not status:
+        return None
+    return _operation_entry(
+        contract,
+        operation,
+        status=status,
+        canary=canary_name,
+        canaries=required,
+        level="none" if status == "fail" else None,
+        source=source,
+        message=message or (detail or {}).get("message"),
+        failure_code=(detail or {}).get("failure_code"),
+    )
+
+
+def _schema_probe_failed_for(
+    canaries: dict[str, dict[str, Any]],
+    path: str,
+    operation_id: str,
+) -> dict[str, Any] | None:
+    schema_probe = canaries.get("schema_probe")
+    if not isinstance(schema_probe, dict) or schema_probe.get("status") != "fail":
+        return None
+    for failure in schema_probe.get("failures") or []:
+        if not isinstance(failure, dict):
+            continue
+        if failure.get("path") == path or failure.get("expected") == operation_id:
+            return failure
+    return None
+
+
+def _claude_operation_evidence(
+    contract: dict[str, Any],
+    canaries: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    launch_local = _entry_from_canary_group(
+        contract,
+        "launch_local",
+        canaries=canaries,
+        required=["binary_identity", "command_shape", "channels_shape", "detached_pty_shape"],
+        canary_name="claude_launch_local_no_token",
+    )
+    return {"launch_local": launch_local} if launch_local else {}
+
+
+def _opencode_operation_evidence(
+    contract: dict[str, Any],
+    canaries: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    evidence: dict[str, dict[str, Any]] = {}
+    launch_local = _entry_from_canary_group(
+        contract,
+        "launch_local",
+        canaries=canaries,
+        required=["binary_identity", "server_startup", "session_create", "session_get"],
+        canary_name="opencode_server_session_no_token",
+    )
+    if launch_local:
+        evidence["launch_local"] = launch_local
+
+    reattach = _entry_from_canary_group(
+        contract,
+        "reattach",
+        canaries=canaries,
+        required=["binary_identity", "attach_command_shape"],
+        canary_name="opencode_attach_surface",
+        message=(
+            "API-surface proof: attach command exposes session and auth flags; "
+            "process-restart reattach is future proof."
+        ),
+    )
+    if reattach:
+        evidence["reattach"] = reattach
+
+    send_failure = _schema_probe_failed_for(canaries, "/session/{sessionID}/prompt_async", "session.prompt_async")
+    if send_failure:
+        evidence["send_input"] = _operation_entry(
+            contract,
+            "send_input",
+            status="fail",
+            canary="opencode_prompt_async_schema",
+            level="none",
+            failure_code=send_failure.get("failure_code") or "opencode_prompt_async_schema_failed",
+            message=send_failure.get("message"),
+        )
+    elif canaries.get("schema_probe", {}).get("status") == "pass":
+        evidence["send_input"] = _operation_entry(
+            contract,
+            "send_input",
+            status="pass",
+            canary="opencode_prompt_async_schema",
+            canaries=["schema_probe"],
+            message=(
+                "API-surface proof: /doc exposes session.prompt_async; token-spending transcript proof is future work."
+            ),
+        )
+
+    interrupt_failure = _schema_probe_failed_for(canaries, "/session/{sessionID}/abort", "session.abort")
+    if interrupt_failure:
+        evidence["interrupt"] = _operation_entry(
+            contract,
+            "interrupt",
+            status="fail",
+            canary="opencode_abort_endpoint",
+            level="none",
+            failure_code=interrupt_failure.get("failure_code") or "opencode_abort_schema_failed",
+            message=interrupt_failure.get("message"),
+        )
+    else:
+        interrupt = _entry_from_canary_group(
+            contract,
+            "interrupt",
+            canaries=canaries,
+            required=["binary_identity", "session_abort"],
+            canary_name="opencode_abort_endpoint",
+            message="API-surface proof: abort endpoint accepted a request against a created session.",
+        )
+        if interrupt:
+            evidence["interrupt"] = interrupt
+
+    return evidence
+
+
+def _antigravity_operation_evidence(
+    contract: dict[str, Any], canaries: dict[str, dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    launch_local = _entry_from_canary_group(
+        contract,
+        "launch_local",
+        canaries=canaries,
+        required=["binary_identity", "command_shape", "plugin_contract", "global_hooks_contract"],
+        canary_name="antigravity_launch_local_no_token",
+    )
+    return {"launch_local": launch_local} if launch_local else {}
+
+
+def _provider_operation_evidence(
+    repo_root: Path,
+    provider: str,
+    canaries: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    contract = _provider_contract(repo_root, provider)
+    if contract is None:
+        return {}
+    if provider == "claude":
+        return _claude_operation_evidence(contract, canaries)
+    if provider == "opencode":
+        return _opencode_operation_evidence(contract, canaries)
+    if provider == "antigravity":
+        return _antigravity_operation_evidence(contract, canaries)
+    return {}
 
 
 def _classify(canaries: dict[str, dict[str, Any]]) -> tuple[str, str | None, str]:
@@ -199,12 +434,20 @@ def _doc_path_summary(doc: dict[str, Any]) -> list[dict[str, Any]]:
 def _require_doc_operation(doc: dict[str, Any], path: str, method: str, operation_id: str) -> dict[str, Any] | None:
     operation = ((doc.get("paths") or {}).get(path) or {}).get(method.lower())
     if not isinstance(operation, dict):
-        return _fail("opencode_schema_missing_path", f"OpenCode /doc is missing {method.upper()} {path}")
+        return _fail(
+            "opencode_schema_missing_path",
+            f"OpenCode /doc is missing {method.upper()} {path}",
+            path=path,
+            method=method.upper(),
+            expected=operation_id,
+        )
     observed = str(operation.get("operationId") or "")
     if observed != operation_id:
         return _fail(
             "opencode_schema_operation_mismatch",
             f"OpenCode /doc operation mismatch for {method.upper()} {path}",
+            path=path,
+            method=method.upper(),
             expected=operation_id,
             observed=observed,
         )
@@ -932,6 +1175,7 @@ def main(argv: list[str] | None = None) -> int:
 
     provider_result = run_provider(args, evidence_root)
     canaries = provider_result["canaries"]
+    operation_evidence = _provider_operation_evidence(args.repo_root, provider_result["provider"], canaries)
     verdict, failure_code, recommendation = _classify(canaries)
     artifact = {
         "schema_version": PROVIDER_STATUS_SCHEMA_VERSION,
@@ -945,6 +1189,8 @@ def main(argv: list[str] | None = None) -> int:
         "canaries": canaries,
         "evidence_root": str(evidence_root),
     }
+    if operation_evidence:
+        artifact["operation_evidence"] = operation_evidence
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
     artifact_path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if args.json:

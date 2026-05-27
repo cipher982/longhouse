@@ -23,7 +23,7 @@ def _write_exe(path: Path, text: str) -> Path:
 def _fake_provider(path: Path, version: str) -> Path:
     return _write_exe(
         path,
-        f"#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo '{version}'; exit 0; fi\nexit 0\n",
+        f'#!/bin/sh\nif [ "$1" = "--version" ]; then echo \'{version}\'; exit 0; fi\nexit 0\n',
     )
 
 
@@ -82,6 +82,7 @@ def test_each_managed_provider_emits_profile_artifact() -> None:
             assert payload["canaries"]["contract_profile"]["operation_evidence"]
             assert payload["canaries"]["binary_identity"]["status"] == "pass"
             assert payload["canaries"]["live_contract"]["status"] == "not_run"
+            assert "operation_evidence" not in payload
 
 
 def test_profile_canary_can_use_release_version_without_local_binary() -> None:

@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 ACTIVE_THREAD_ERROR = "No active thread is available."
+_GAP_OPERATION_STATUSES = {"fail", "missing", "not_run", "skipped", "stale"}
 TERMINAL_TURN_METHODS = {
     "turn/completed",
     "turn/failed",
@@ -93,9 +94,7 @@ def _redact_text(text: str, secrets: list[str] | None = None) -> str:
     return redacted
 
 
-def _command_evidence(
-    result: subprocess.CompletedProcess[str], *, secrets: list[str] | None = None
-) -> dict[str, Any]:
+def _command_evidence(result: subprocess.CompletedProcess[str], *, secrets: list[str] | None = None) -> dict[str, Any]:
     return {
         "argv": _redact_argv(result.args, secrets),
         "returncode": result.returncode,
@@ -234,6 +233,155 @@ def _resolve_executable(value: str | None, fallback_name: str) -> str | None:
     if value:
         return value
     return shutil.which(fallback_name)
+
+
+def _provider_contract(repo_root: Path, provider: str) -> dict[str, Any] | None:
+    path = repo_root / "server/zerg/config/managed_provider_contracts.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    for item in payload.get("providers") or []:
+        if isinstance(item, dict) and item.get("provider") == provider:
+            return dict(item)
+    return None
+
+
+def _manifest_operation_evidence(contract: dict[str, Any], operation: str) -> dict[str, Any]:
+    evidence = (contract.get("operation_evidence") or {}).get(operation)
+    return dict(evidence) if isinstance(evidence, dict) else {}
+
+
+def _operation_entry(
+    contract: dict[str, Any],
+    operation: str,
+    *,
+    status: str,
+    canary: str,
+    level: str | None = None,
+    source: str | None = None,
+    message: str | None = None,
+    failure_code: str | None = None,
+) -> dict[str, Any]:
+    target = _manifest_operation_evidence(contract, operation)
+    if status in _GAP_OPERATION_STATUSES:
+        effective_level = level or "none"
+    else:
+        effective_level = level or str(target.get("level") or "none")
+    entry: dict[str, Any] = {
+        "status": status,
+        "level": effective_level,
+        "source": source or target.get("source"),
+        "canary": canary,
+    }
+    if failure_code:
+        entry["failure_code"] = failure_code
+    if message:
+        entry["message"] = message
+    if target.get("next"):
+        entry["next"] = target.get("next")
+    return {key: value for key, value in entry.items() if value is not None}
+
+
+def _canary_operation_entry(
+    contract: dict[str, Any],
+    operation: str,
+    *,
+    canary_name: str,
+    canary: dict[str, Any],
+    pass_statuses: set[str] | None = None,
+    source: str | None = None,
+    message: str | None = None,
+) -> dict[str, Any] | None:
+    pass_statuses = pass_statuses or {"pass"}
+    status = str(canary.get("status") or "")
+    if status == "fail":
+        return _operation_entry(
+            contract,
+            operation,
+            status="fail",
+            canary=canary_name,
+            level="none",
+            source=source,
+            message=canary.get("message") or message,
+            failure_code=canary.get("failure_code"),
+        )
+    if status in pass_statuses:
+        return _operation_entry(
+            contract,
+            operation,
+            status=status,
+            canary=canary_name,
+            source=source,
+            message=message or canary.get("message"),
+        )
+    return None
+
+
+def build_operation_evidence(
+    args: argparse.Namespace,
+    canaries: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    contract = _provider_contract(args.repo_root, "codex")
+    if contract is None:
+        return {}
+    evidence: dict[str, dict[str, Any]] = {}
+
+    binary_identity = canaries.get("binary_identity") or {}
+    if binary_identity.get("status") == "fail":
+        evidence["launch_local"] = _operation_entry(
+            contract,
+            "launch_local",
+            status="fail",
+            canary="binary_identity",
+            level="none",
+            message=binary_identity.get("message"),
+            failure_code=binary_identity.get("failure_code"),
+        )
+
+    managed_tui_attach = canaries.get("managed_tui_attach") or {}
+    launch_local = _canary_operation_entry(
+        contract,
+        "launch_local",
+        canary_name="managed_tui_attach",
+        canary=managed_tui_attach,
+    )
+    if launch_local and "launch_local" not in evidence:
+        evidence["launch_local"] = launch_local
+    reattach = _canary_operation_entry(
+        contract,
+        "reattach",
+        canary_name="managed_tui_attach",
+        canary=managed_tui_attach,
+        message="Managed TUI attach proves the remote attach surface; process-restart resume is future proof.",
+    )
+    if reattach:
+        evidence["reattach"] = reattach
+
+    detached_ui = _canary_operation_entry(
+        contract,
+        "launch_remote",
+        canary_name="detached_ui",
+        canary=canaries.get("detached_ui") or {},
+    )
+    if detached_ui:
+        evidence["launch_remote"] = detached_ui
+
+    tail_output = _canary_operation_entry(
+        contract,
+        "tail_output",
+        canary_name="raw_fresh_remote",
+        canary=canaries.get("raw_fresh_remote") or {},
+        pass_statuses={"pass", "warn"},
+        message=(
+            "Raw fresh remote canary observed provider protocol/terminal output; "
+            "warnings preserve proof but require review."
+        ),
+    )
+    if tail_output:
+        evidence["tail_output"] = tail_output
+
+    return evidence
 
 
 def _forbidden_codex_path(path: str) -> str | None:
@@ -779,6 +927,7 @@ def main(argv: list[str] | None = None) -> int:
         "status": args.source_review_status,
         "note": args.source_review_note,
     }
+    operation_evidence = build_operation_evidence(args, canaries)
     verdict, failure_code, recommendation = classify_artifact(canaries, source_review)
     artifact = {
         "provider": "codex",
@@ -793,6 +942,8 @@ def main(argv: list[str] | None = None) -> int:
         "canaries": canaries,
         "evidence_root": str(evidence_root),
     }
+    if operation_evidence:
+        artifact["operation_evidence"] = operation_evidence
     _write_json(artifact_path, artifact)
 
     if args.json:
