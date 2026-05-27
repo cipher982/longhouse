@@ -8610,9 +8610,41 @@ export interface components {
              * Continue Targets
              * @description Compact continuation targets available to clients
              */
-            continue_targets?: {
-                [key: string]: unknown;
-            }[];
+            continue_targets?: components["schemas"]["SessionContinueTarget"][];
+        };
+        /**
+         * SessionContinueTarget
+         * @description Compact native continuation target exposed to web/iOS clients.
+         */
+        SessionContinueTarget: {
+            /**
+             * Provider
+             * @description Provider that can resume this target
+             */
+            provider: string;
+            /**
+             * Device Id
+             * @description Recorded source device id for the session
+             */
+            device_id?: string | null;
+            /**
+             * Cwd
+             * @description Recorded working directory for the session
+             */
+            cwd?: string | null;
+            /**
+             * Carry Context
+             * @description Continuation context strategy
+             * @default native
+             * @constant
+             */
+            carry_context: "native";
+            /**
+             * Native Resume Available
+             * @description True when provider-native resume data exists
+             * @default true
+             */
+            native_resume_available: boolean;
         };
         /** SessionControlResponse */
         SessionControlResponse: {

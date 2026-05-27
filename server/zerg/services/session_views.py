@@ -88,7 +88,7 @@ def build_session_capabilities_response(
     runtime_facts=None,
     kernel_capabilities: KernelSessionCapabilities | None = None,
     can_continue: bool = False,
-    continue_targets: list[dict[str, Any]] | None = None,
+    continue_targets: list[SessionContinueTarget] | None = None,
 ) -> SessionCapabilitiesResponse:
     if capability_flags is None:
         raise RuntimeError("capability_flags is required; the kernel adapter must build them")
@@ -208,7 +208,7 @@ def _attach_images_capability(capability_flags, *, live_control_available: bool 
     return live
 
 
-def _native_continue_target(db, session: AgentSession) -> dict[str, Any] | None:
+def _native_continue_target(db, session: AgentSession) -> SessionContinueTarget | None:
     if (session.provider or "").strip().lower() != "codex":
         return None
     thread = (
@@ -252,13 +252,13 @@ def _native_continue_target(db, session: AgentSession) -> dict[str, Any] | None:
     source_path = str(source_path).strip() if source_path else ""
     if not source_path:
         return None
-    return {
-        "provider": session.provider,
-        "device_id": session.device_id,
-        "cwd": session.cwd,
-        "carry_context": "native",
-        "native_resume_available": True,
-    }
+    return SessionContinueTarget(
+        provider=session.provider,
+        device_id=session.device_id,
+        cwd=session.cwd,
+        carry_context="native",
+        native_resume_available=True,
+    )
 
 
 def _provider_label(session: AgentSession | None) -> str | None:
@@ -511,6 +511,16 @@ class SessionControlResponse(BaseModel):
     attach_command: Optional[str] = Field(None, description="Local reattach command for managed-local sessions")
 
 
+class SessionContinueTarget(BaseModel):
+    """Compact native continuation target exposed to web/iOS clients."""
+
+    provider: str = Field(..., description="Provider that can resume this target")
+    device_id: str | None = Field(None, description="Recorded source device id for the session")
+    cwd: str | None = Field(None, description="Recorded working directory for the session")
+    carry_context: Literal["native"] = Field("native", description="Continuation context strategy")
+    native_resume_available: bool = Field(True, description="True when provider-native resume data exists")
+
+
 class SessionCapabilitiesResponse(BaseModel):
     live_control_available: bool = Field(False, description="True when Longhouse can inject into the live session now")
     host_reattach_available: bool = Field(False, description="True when this session can be resumed from its host terminal")
@@ -576,7 +586,7 @@ class SessionCapabilitiesResponse(BaseModel):
         False,
         description="True when Longhouse has a native continuation target for this session",
     )
-    continue_targets: list[dict[str, Any]] = Field(
+    continue_targets: list[SessionContinueTarget] = Field(
         default_factory=list,
         description="Compact continuation targets available to clients",
     )

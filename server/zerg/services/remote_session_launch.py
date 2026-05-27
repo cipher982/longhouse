@@ -87,9 +87,9 @@ class RemoteLaunchParams:
 class RemoteContinueParams:
     owner_id: int
     session_id: UUID
+    client_request_id: str
     device_id: str | None = None
     cwd: str | None = None
-    client_request_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -585,8 +585,13 @@ async def continue_remote_session(
 
     _verify_device_owned_by(db, owner_id=params.owner_id, device_id=device_id)
     source_device_id = (session.device_id or "").strip()
-    if source_device_id:
-        _verify_device_owned_by(db, owner_id=params.owner_id, device_id=source_device_id)
+    if not source_device_id:
+        raise RemoteLaunchError(
+            "Session cannot be continued because it has no recorded source host",
+            code="invalid_request",
+            status_code=409,
+        )
+    _verify_device_owned_by(db, owner_id=params.owner_id, device_id=source_device_id)
 
     client_request_id = (params.client_request_id or "").strip() or None
     if not client_request_id:
