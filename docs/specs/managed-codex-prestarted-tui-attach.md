@@ -59,10 +59,9 @@ create_initial_thread=false
 launch_mode=tui
 ```
 
-The existing `start_thread` CLI flag is a compatibility surface for detached-UI
-remote launch. It may continue to map to `create_initial_thread=true` plus the
-persisted detached-UI compatibility launch mode, but new local TUI startup must
-not use it if that would persist detached-UI/headless launch state.
+Detached-UI remote launch is explicit: `create_initial_thread=true` plus
+`launch_mode=detached-ui`. Do not add compatibility flags that collapse these
+axes again.
 
 ## Implementation Plan
 
@@ -71,16 +70,14 @@ not use it if that would persist detached-UI/headless launch state.
 2. Rename the Rust config axis to `create_initial_thread` and add an explicit
    launch-mode enum for `tui` vs detached-UI lifecycle. Consolidate persisted
    launch-mode string mapping in one helper.
-3. Keep `--start-thread` as the detached-UI compatibility option and map it to
-   `create_initial_thread=true` plus the old persisted launch-mode behavior.
-4. Update remote launch to pass detached-UI lifecycle explicitly while keeping
+3. Update remote launch to pass detached-UI lifecycle explicitly while keeping
    its existing prestarted-thread behavior.
-5. Change `longhouse codex` to start the bridge with the new prestart option.
-6. When local prestart is requested, `ready` without `thread_id` is a launch
+4. Change `longhouse codex` to start the bridge with the new prestart option.
+5. When local prestart is requested, `ready` without `thread_id` is a launch
    failure. The CLI must fail before starting a visible TUI.
-7. When the bridge start summary includes `thread_id`, launch and print attach
+6. When the bridge start summary includes `thread_id`, launch and print attach
    commands with `resume <thread_id>`.
-8. Keep bridge cleanup and signal handling unchanged; local TUI-attached
+7. Keep bridge cleanup and signal handling unchanged; local TUI-attached
    sessions still persist `launch_mode=tui`.
 
 The bridge state schema version is intentionally unchanged. On-disk field names
@@ -93,10 +90,10 @@ and accepted launch-mode values do not change.
   `resume <thread_id>` when the bridge returns one.
 - Python CLI tests assert prestart mode fails fast if the bridge reports ready
   without a thread id.
-- Rust CLI tests assert `--create-initial-thread` parses separately from
-  `--start-thread`.
+- Rust CLI tests assert `--create-initial-thread` and `--launch-mode` keep
+  initial thread creation separate from lifecycle.
 - Rust bridge tests assert prestarted TUI state persists `launch_mode=tui`.
 - Reaper tests cover a prestarted TUI bridge with no TUI attachment during and
   after the grace window.
-- Existing detached-UI tests continue asserting the persisted compatibility
-  launch mode remains `headless` until the release floor allows changing it.
+- Detached-UI tests assert new bridge writers persist `launch_mode=detached_ui`;
+  readers still tolerate older dogfood `headless` state.

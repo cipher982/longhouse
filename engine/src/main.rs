@@ -99,31 +99,6 @@ fn parse_codex_bridge_launch_mode(raw: &str) -> anyhow::Result<BridgeLaunchMode>
         .ok_or_else(|| anyhow::anyhow!("invalid Codex bridge launch mode: {raw}"))
 }
 
-fn codex_bridge_start_semantics(
-    start_thread: bool,
-    create_initial_thread: bool,
-) -> (bool, BridgeLaunchMode) {
-    if start_thread {
-        (true, BridgeLaunchMode::DetachedUi)
-    } else {
-        (create_initial_thread, BridgeLaunchMode::Tui)
-    }
-}
-
-fn codex_bridge_run_semantics(
-    start_thread: bool,
-    create_initial_thread: bool,
-    launch_mode: &str,
-) -> anyhow::Result<(bool, BridgeLaunchMode)> {
-    if start_thread {
-        return Ok((true, BridgeLaunchMode::DetachedUi));
-    }
-    Ok((
-        create_initial_thread,
-        parse_codex_bridge_launch_mode(launch_mode)?,
-    ))
-}
-
 #[derive(Parser)]
 #[command(
     name = "longhouse-engine",
@@ -504,15 +479,13 @@ enum CodexBridgeCommands {
         #[arg(long, default_value_t = 25)]
         start_timeout_secs: u64,
 
-        /// Create the initial Codex thread ourselves via thread/start while
-        /// preserving TUI lifecycle semantics.
-        #[arg(long, conflicts_with = "start_thread")]
+        /// Create the initial Codex thread ourselves via thread/start.
+        #[arg(long)]
         create_initial_thread: bool,
 
-        /// Legacy detached-UI option: create the initial Codex thread and
-        /// persist detached-UI/headless launch-mode semantics.
-        #[arg(long, conflicts_with = "create_initial_thread")]
-        start_thread: bool,
+        /// Persisted lifecycle mode for this bridge.
+        #[arg(long, default_value = "tui")]
+        launch_mode: String,
 
         #[arg(long)]
         json: bool,
@@ -566,17 +539,12 @@ enum CodexBridgeCommands {
         log_file: PathBuf,
 
         /// Create the initial Codex thread ourselves via thread/start.
-        #[arg(long, conflicts_with = "start_thread")]
+        #[arg(long)]
         create_initial_thread: bool,
 
         /// Persisted lifecycle mode for this bridge.
         #[arg(long, default_value = "tui")]
         launch_mode: String,
-
-        /// Legacy detached-UI option: create the initial Codex thread and
-        /// persist detached-UI/headless launch-mode semantics.
-        #[arg(long, conflicts_with = "create_initial_thread")]
-        start_thread: bool,
     },
 
     /// Attach stock Codex TUI to a running managed bridge
@@ -1077,7 +1045,7 @@ fn main() -> anyhow::Result<()> {
                     log_file,
                     start_timeout_secs,
                     create_initial_thread,
-                    start_thread,
+                    launch_mode,
                     json,
                 } => {
                     let (state_root, longhouse_home) = resolve_codex_bridge_start_roots(
@@ -1085,8 +1053,7 @@ fn main() -> anyhow::Result<()> {
                         longhouse_home,
                         isolation_root,
                     )?;
-                    let (create_initial_thread, launch_mode) =
-                        codex_bridge_start_semantics(start_thread, create_initial_thread);
+                    let launch_mode = parse_codex_bridge_launch_mode(&launch_mode)?;
                     let summary = rt.block_on(cmd_codex_bridge_start(BridgeStartConfig {
                         session_id,
                         cwd,
@@ -1140,13 +1107,8 @@ fn main() -> anyhow::Result<()> {
                     log_file,
                     create_initial_thread,
                     launch_mode,
-                    start_thread,
                 } => {
-                    let (create_initial_thread, launch_mode) = codex_bridge_run_semantics(
-                        start_thread,
-                        create_initial_thread,
-                        &launch_mode,
-                    )?;
+                    let launch_mode = parse_codex_bridge_launch_mode(&launch_mode)?;
                     rt.block_on(cmd_codex_bridge_run(BridgeRunConfig {
                         session_id,
                         cwd,
@@ -1323,21 +1285,22 @@ mod tests {
                 command:
                     CodexBridgeCommands::Start {
                         create_initial_thread,
-                        start_thread,
+                        launch_mode,
                         ..
                     },
             } => {
-                let (create_initial_thread, launch_mode) =
-                    codex_bridge_start_semantics(start_thread, create_initial_thread);
                 assert!(create_initial_thread);
-                assert_eq!(launch_mode, BridgeLaunchMode::Tui);
+                assert_eq!(
+                    parse_codex_bridge_launch_mode(&launch_mode).unwrap(),
+                    BridgeLaunchMode::Tui
+                );
             }
             _ => panic!("expected codex-bridge start command"),
         }
     }
 
     #[test]
-    fn codex_bridge_start_thread_keeps_detached_ui_compatibility() {
+    fn codex_bridge_start_detached_ui_launch_mode_is_explicit() {
         let cli = Cli::try_parse_from([
             "longhouse-engine",
             "codex-bridge",
@@ -1350,7 +1313,9 @@ mod tests {
             "https://longhouse.test",
             "--token",
             "token",
-            "--start-thread",
+            "--create-initial-thread",
+            "--launch-mode",
+            "detached-ui",
         ])
         .unwrap();
 
@@ -1359,14 +1324,15 @@ mod tests {
                 command:
                     CodexBridgeCommands::Start {
                         create_initial_thread,
-                        start_thread,
+                        launch_mode,
                         ..
                     },
             } => {
-                let (create_initial_thread, launch_mode) =
-                    codex_bridge_start_semantics(start_thread, create_initial_thread);
                 assert!(create_initial_thread);
-                assert_eq!(launch_mode, BridgeLaunchMode::DetachedUi);
+                assert_eq!(
+                    parse_codex_bridge_launch_mode(&launch_mode).unwrap(),
+                    BridgeLaunchMode::DetachedUi
+                );
             }
             _ => panic!("expected codex-bridge start command"),
         }

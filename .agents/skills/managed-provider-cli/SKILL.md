@@ -41,7 +41,7 @@ Codex launch modes:
 Bridge state compatibility:
 
 - Treat `docs/specs/managed-codex-state-compat.md` as the contract before changing bridge state fields.
-- On-disk `launch_mode` may use legacy `headless` as the persisted compatibility value for detached-UI managed sessions during a release floor window. Product/docs/code comments should still call the lifecycle detached-UI managed.
+- New bridge writers persist detached-UI managed sessions as `launch_mode=detached_ui`; readers still tolerate older dogfood `headless` state.
 - Reapers must skip live-bridge reaping for unknown launch modes or future bridge state schema versions.
 
 Hard Codex contract:
