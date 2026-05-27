@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import time
 from datetime import UTC
 from datetime import datetime
@@ -46,15 +47,23 @@ def antigravity_inbox_dir(session_id: str, config_dir: Path | None = None) -> Pa
 def _write_private_json(path: Path, payload: dict[str, Any]) -> None:
     _ensure_private_dir(path.parent)
     data = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd, tmp_name = tempfile.mkstemp(prefix=".tmp.", dir=str(path.parent))
+    tmp_path = Path(tmp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(data)
-    finally:
+        tmp_path.chmod(0o600)
+        tmp_path.replace(path)
         try:
             path.chmod(0o600)
         except OSError:
             pass
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
