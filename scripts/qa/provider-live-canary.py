@@ -858,6 +858,14 @@ def run_antigravity_live_canary(args: argparse.Namespace, root: Path) -> dict[st
             "command_shape": _run_antigravity_command_shape(binary),
             "plugin_contract": _run_antigravity_plugin_contract(binary, root),
             "global_hooks_contract": _run_antigravity_global_hooks_contract(root / "plugin" / "global-hooks.json"),
+            "loop_invocation_contract": _status(
+                "not_run",
+                reason=(
+                    "This no-token canary proves agy plugin/config drift only. "
+                    "A real upstream agy loop must invoke PreInvocation/PostInvocation/Stop before "
+                    "Antigravity send can be promoted as behavior-proven."
+                ),
+            ),
         },
     }
 

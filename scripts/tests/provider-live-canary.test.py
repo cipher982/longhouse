@@ -359,7 +359,7 @@ def test_claude_live_canary_can_go_green_with_fake_binary() -> None:
         assert payload["canaries"]["detached_pty_shape"]["status"] == "pass"
 
 
-def test_antigravity_live_canary_can_go_green_with_fake_binary() -> None:
+def test_antigravity_live_canary_stays_yellow_until_loop_invocation_is_proven() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fake_bin = _fake_antigravity(root / "bin" / "agy")
@@ -368,10 +368,12 @@ def test_antigravity_live_canary_can_go_green_with_fake_binary() -> None:
         assert result.returncode == 0, result.stderr + result.stdout
         assert payload["provider"] == "antigravity"
         assert payload["provider_version"] == "1.0.2-fake"
-        assert payload["verdict"] == "green"
+        assert payload["verdict"] == "yellow"
+        assert payload["failure_code"] == "insufficient_coverage"
         assert payload["canaries"]["command_shape"]["status"] == "pass"
         assert payload["canaries"]["plugin_contract"]["status"] == "pass"
         assert payload["canaries"]["global_hooks_contract"]["status"] == "pass"
+        assert payload["canaries"]["loop_invocation_contract"]["status"] == "not_run"
         assert set(payload["canaries"]["global_hooks_contract"]["events"]) == {
             "PostInvocation",
             "PostToolUse",
@@ -532,7 +534,7 @@ def main() -> int:
     tests = [
         test_opencode_live_canary_can_go_green_with_fake_server,
         test_claude_live_canary_can_go_green_with_fake_binary,
-        test_antigravity_live_canary_can_go_green_with_fake_binary,
+        test_antigravity_live_canary_stays_yellow_until_loop_invocation_is_proven,
         test_antigravity_live_canary_fails_when_plugin_install_fails,
         test_claude_live_canary_accepts_api_key_auth,
         test_claude_live_canary_turns_yellow_when_not_logged_in,
