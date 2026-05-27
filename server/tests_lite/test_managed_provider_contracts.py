@@ -7,6 +7,8 @@ from zerg.services.managed_provider_contracts import contract_for_control_plane
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import control_plane_for_provider
 from zerg.services.managed_provider_contracts import machine_control_capability_for_command
+from zerg.services.managed_provider_contracts import machine_control_launch_capability_by_provider
+from zerg.services.managed_provider_contracts import machine_control_operations_by_provider
 from zerg.services.managed_provider_contracts import managed_provider_names
 from zerg.services.managed_provider_contracts import managed_transport_for_control_plane
 from zerg.services.managed_provider_contracts import provider_for_control_plane
@@ -148,3 +150,33 @@ def test_control_plane_aliases_are_explicit_contract_not_scattered_literals():
 )
 def test_machine_control_capability_for_command_uses_provider_contract(provider, command_type, capability):
     assert machine_control_capability_for_command(provider, command_type) == capability
+
+
+def test_machine_control_launch_capability_map_comes_from_provider_contracts():
+    assert machine_control_launch_capability_by_provider() == {
+        "codex": "codex.launch",
+        "claude": "claude.launch",
+        "opencode": "opencode.launch",
+    }
+
+
+def test_machine_control_operations_by_provider_projects_live_supports():
+    assert machine_control_operations_by_provider(
+        [
+            "antigravity.send",
+            "claude.launch",
+            "claude.steer",
+            "codex.send",
+            "codex.launch",
+            "unknown.launch",
+        ],
+        connected=True,
+    ) == {
+        "codex": ("send", "launch"),
+        "claude": ("steer", "launch"),
+        "antigravity": ("send",),
+    }
+
+
+def test_machine_control_operations_by_provider_requires_connected_channel():
+    assert machine_control_operations_by_provider(["codex.launch", "antigravity.send"], connected=False) == {}

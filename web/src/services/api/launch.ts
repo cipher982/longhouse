@@ -6,11 +6,14 @@ export type MachineDirectoryEntry = {
   online: boolean;
   control_channel_status: "connected" | "disconnected";
   supports: string[];
+  control_operations_by_provider: Record<string, string[]>;
   can_launch_codex: boolean;
+  launchable_providers: string[];
   launch_blocked_by:
     | null
     | "control_down"
     | "no_codex_support"
+    | "no_launch_support"
     | "engine_too_old"
     | "auth_failed"
     | "runtime_unreachable";

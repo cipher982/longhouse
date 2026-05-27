@@ -479,6 +479,7 @@ def test_collect_local_health_surfaces_control_channel_status(monkeypatch, tmp_p
     assert control["launch_blocked_by"] == "control_down"
     assert control["last_error_code"] == "connect_failed"
     assert control["supports"] == ["codex.send", "codex.launch"]
+    assert control["control_operations_by_provider"] == {}
 
 
 def test_collect_local_health_marks_connected_control_channel_launch_ready(monkeypatch, tmp_path: Path):
@@ -504,6 +505,11 @@ def test_collect_local_health_marks_connected_control_channel_launch_ready(monke
     assert snapshot["control_channel"]["can_launch_opencode"] is True
     assert snapshot["control_channel"]["launchable_providers"] == ["claude", "codex", "opencode"]
     assert snapshot["control_channel"]["launch_blocked_by"] is None
+    assert snapshot["control_channel"]["control_operations_by_provider"] == {
+        "claude": ["launch"],
+        "codex": ["launch"],
+        "opencode": ["launch"],
+    }
 
 
 def test_collect_local_health_marks_opencode_only_control_channel_launch_ready(monkeypatch, tmp_path: Path):
@@ -528,6 +534,31 @@ def test_collect_local_health_marks_opencode_only_control_channel_launch_ready(m
     assert snapshot["control_channel"]["can_launch_opencode"] is True
     assert snapshot["control_channel"]["launchable_providers"] == ["opencode"]
     assert snapshot["control_channel"]["launch_blocked_by"] is None
+    assert snapshot["control_channel"]["control_operations_by_provider"] == {"opencode": ["launch"]}
+
+
+def test_collect_local_health_surfaces_antigravity_send_without_launch_claim(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(
+        tmp_path,
+        age_seconds=5,
+        payload={
+            "control_channel": {
+                "enabled": True,
+                "status": "connected",
+                "ws_url": "wss://david010.longhouse.ai/api/agents/control/ws",
+                "supports": ["antigravity.send"],
+            }
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["control_channel"]["can_launch_codex"] is False
+    assert snapshot["control_channel"]["launchable_providers"] == []
+    assert snapshot["control_channel"]["launch_blocked_by"] == "no_launch_support"
+    assert snapshot["control_channel"]["control_operations_by_provider"] == {"antigravity": ["send"]}
 
 
 def test_collect_local_health_ignores_fresh_outbox_file(monkeypatch, tmp_path: Path):
@@ -919,6 +950,26 @@ def test_collect_local_health_surfaces_codex_provider_cli(monkeypatch, tmp_path:
 
     assert snapshot["provider_clis"]["codex"] == {
         "path": "/opt/homebrew/bin/codex",
+        "source": "PATH",
+        "resolution_error": None,
+        "env_override": None,
+    }
+
+
+def test_collect_local_health_surfaces_claude_provider_cli(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service.shutil,
+        "which",
+        lambda name: "/opt/homebrew/bin/claude" if name == "claude" else None,
+    )
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["provider_clis"]["claude"] == {
+        "path": "/opt/homebrew/bin/claude",
         "source": "PATH",
         "resolution_error": None,
         "env_override": None,

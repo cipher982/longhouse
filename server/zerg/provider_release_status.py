@@ -20,6 +20,8 @@ from urllib.error import URLError
 from urllib.request import Request
 from urllib.request import urlopen
 
+from zerg.services.managed_provider_contracts import managed_provider_names
+
 PROVIDER_RELEASE_STATUS_DIR_ENV = "LONGHOUSE_PROVIDER_RELEASE_STATUS_DIR"
 PROVIDER_RELEASE_STATUS_URL_ENV = "LONGHOUSE_PROVIDER_RELEASE_STATUS_URL"
 CODEX_RELEASE_STATUS_FILE_ENV = "LONGHOUSE_CODEX_RELEASE_STATUS_FILE"
@@ -91,17 +93,17 @@ def _read_json_url(url: str) -> tuple[dict[str, Any] | None, str | None]:
     return payload, None
 
 
-def _provider_file_candidates(provider: str) -> list[Path]:
-    candidates: list[Path] = []
+def _provider_file_candidates(provider: str) -> list[tuple[Path, bool]]:
+    candidates: list[tuple[Path, bool]] = []
     if provider == "codex":
         raw = os.getenv(CODEX_RELEASE_STATUS_FILE_ENV)
         if raw:
-            candidates.append(Path(raw).expanduser())
+            candidates.append((Path(raw).expanduser(), True))
     status_dir = os.getenv(PROVIDER_RELEASE_STATUS_DIR_ENV)
     if status_dir:
         root = Path(status_dir).expanduser()
-        candidates.append(root / f"{provider}.json")
-        candidates.append(root / f"{provider}-latest.json")
+        candidates.append((root / f"{provider}.json", False))
+        candidates.append((root / f"{provider}-latest.json", False))
     return candidates
 
 
@@ -119,9 +121,9 @@ def _provider_url_candidates(provider: str) -> list[str]:
 
 def _load_provider_artifact(provider: str) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     attempts: list[dict[str, Any]] = []
-    for path in _provider_file_candidates(provider):
+    for path, required in _provider_file_candidates(provider):
         payload, error = _read_json_file(path)
-        attempts.append({"source": "file", "path": str(path), "error": error})
+        attempts.append({"source": "file", "path": str(path), "error": error, "required": required})
         if payload is not None:
             return payload, {"source": "file", "path": str(path), "attempts": attempts}
     for url in _provider_url_candidates(provider):
@@ -153,11 +155,16 @@ def _provider_version_from_cli(path: str | None) -> tuple[str | None, str | None
 def _status_for_provider(provider: str, provider_cli: dict[str, Any]) -> dict[str, Any]:
     artifact, source = _load_provider_artifact(provider)
     if artifact is None:
+        attempts = list(source.get("attempts") or [])
+        optional_missing_only = bool(attempts) and all(
+            attempt.get("source") == "file" and attempt.get("required") is False and attempt.get("error") == "missing"
+            for attempt in attempts
+        )
         return {
             "provider": provider,
-            "configured": bool(source.get("attempts")),
-            "status": "not_configured" if not source.get("attempts") else "unavailable",
-            "risk": "none" if not source.get("attempts") else "warning",
+            "configured": bool(attempts) and not optional_missing_only,
+            "status": "not_configured" if not attempts or optional_missing_only else "unavailable",
+            "risk": "none" if not attempts or optional_missing_only else "warning",
             "source": source,
         }
 
@@ -248,7 +255,8 @@ def collect_provider_release_status(
         }
 
     statuses: dict[str, Any] = {}
-    for provider in ("codex",):
+    providers = sorted(set(provider_clis) | set(managed_provider_names()))
+    for provider in providers:
         statuses[provider] = _status_for_provider(provider, dict(provider_clis.get(provider) or {}))
 
     blocking_count = sum(1 for item in statuses.values() if item.get("risk") == "blocking")

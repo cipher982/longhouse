@@ -26,9 +26,8 @@ from typing import Any
 
 from zerg.managed_phase_contract import display_label_for_phase
 from zerg.managed_phase_contract import is_known_raw_phase
-from zerg.provider_cli_contract import ANTIGRAVITY_BIN_ENV
-from zerg.provider_cli_contract import CODEX_BIN_ENV
-from zerg.provider_cli_contract import OPENCODE_BIN_ENV
+from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
+from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_BRIDGE_STATE
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_MISSING
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
@@ -43,6 +42,8 @@ from zerg.services.longhouse_paths import resolve_longhouse_home
 from zerg.services.machine_repair import recommended_machine_repair_command
 from zerg.services.machine_state import machine_state_source_hash
 from zerg.services.machine_state import read_machine_state
+from zerg.services.managed_provider_contracts import machine_control_launch_capability_by_provider
+from zerg.services.managed_provider_contracts import machine_control_operations_by_provider
 from zerg.services.managed_session_contracts import REASON_BRIDGE_STATE_PATH_MISSING
 from zerg.services.managed_session_contracts import REASON_PROVIDER_SESSION_CWD_MISSING
 from zerg.services.managed_session_contracts import REASON_PROVIDER_SESSION_CWD_REPLACED
@@ -81,12 +82,10 @@ CONTROL_PATH_UNMANAGED = "unmanaged"
 LIVENESS_MODEL_CODEX_BRIDGE = "codex_bridge"
 LIVENESS_MODEL_PROCESS_SCAN = "process_scan"
 LIVENESS_MODEL_ENGINE_STATUS = "engine_status"
-CODEX_LAUNCH_CAPABILITY = "codex.launch"
-LAUNCH_CAPABILITY_BY_PROVIDER = {
-    "codex": "codex.launch",
-    "claude": "claude.launch",
-    "opencode": "opencode.launch",
-}
+LAUNCH_CAPABILITY_BY_PROVIDER = machine_control_launch_capability_by_provider()
+CODEX_BIN_ENV = PROVIDER_CLI_ENV_BY_PROVIDER["codex"]
+OPENCODE_BIN_ENV = PROVIDER_CLI_ENV_BY_PROVIDER["opencode"]
+ANTIGRAVITY_BIN_ENV = PROVIDER_CLI_ENV_BY_PROVIDER["antigravity"]
 
 
 def _utc_now() -> datetime:
@@ -235,56 +234,31 @@ def _provider_cli_reference(path: str | None, *, source: str) -> dict[str, str |
     return {"path": _normalize_optional_string(path), "source": source}
 
 
-def _collect_provider_clis() -> dict[str, Any]:
-    env_candidate = _normalize_optional_string(os.environ.get(CODEX_BIN_ENV))
+def _collect_provider_cli(*, binary: str, env_var: str | None) -> dict[str, Any]:
+    env_candidate = _normalize_optional_string(os.environ.get(env_var)) if env_var else None
     if env_candidate:
-        codex_path = _resolve_provider_cli_candidate(env_candidate)
-        codex_source = CODEX_BIN_ENV
-        codex_resolution_error = None if codex_path else f"{CODEX_BIN_ENV} did not resolve to an executable"
+        path = _resolve_provider_cli_candidate(env_candidate)
+        source = env_var
+        resolution_error = None if path else f"{env_var} did not resolve to an executable"
     else:
-        codex_path = shutil.which("codex")
-        codex_source = PROVIDER_CLI_SOURCE_PATH if codex_path else PROVIDER_CLI_SOURCE_MISSING
-        codex_resolution_error = None if codex_path else "`codex` not found on PATH"
-    opencode_env_candidate = _normalize_optional_string(os.environ.get(OPENCODE_BIN_ENV))
-    if opencode_env_candidate:
-        opencode_path = _resolve_provider_cli_candidate(opencode_env_candidate)
-        opencode_source = OPENCODE_BIN_ENV
-        opencode_resolution_error = None if opencode_path else f"{OPENCODE_BIN_ENV} did not resolve to an executable"
-    else:
-        opencode_path = shutil.which("opencode")
-        opencode_source = PROVIDER_CLI_SOURCE_PATH if opencode_path else PROVIDER_CLI_SOURCE_MISSING
-        opencode_resolution_error = None if opencode_path else "`opencode` not found on PATH"
-    antigravity_env_candidate = _normalize_optional_string(os.environ.get(ANTIGRAVITY_BIN_ENV))
-    if antigravity_env_candidate:
-        antigravity_path = _resolve_provider_cli_candidate(antigravity_env_candidate)
-        antigravity_source = ANTIGRAVITY_BIN_ENV
-        if antigravity_path:
-            antigravity_resolution_error = None
-        else:
-            antigravity_resolution_error = f"{ANTIGRAVITY_BIN_ENV} did not resolve to an executable"
-    else:
-        antigravity_path = shutil.which("agy")
-        antigravity_source = PROVIDER_CLI_SOURCE_PATH if antigravity_path else PROVIDER_CLI_SOURCE_MISSING
-        antigravity_resolution_error = None if antigravity_path else "`agy` not found on PATH"
+        path = shutil.which(binary)
+        source = PROVIDER_CLI_SOURCE_PATH if path else PROVIDER_CLI_SOURCE_MISSING
+        resolution_error = None if path else f"`{binary}` not found on PATH"
     return {
-        "codex": {
-            "path": codex_path,
-            "source": codex_source,
-            "resolution_error": codex_resolution_error,
-            "env_override": env_candidate,
-        },
-        "opencode": {
-            "path": opencode_path,
-            "source": opencode_source,
-            "resolution_error": opencode_resolution_error,
-            "env_override": opencode_env_candidate,
-        },
-        "antigravity": {
-            "path": antigravity_path,
-            "source": antigravity_source,
-            "resolution_error": antigravity_resolution_error,
-            "env_override": antigravity_env_candidate,
-        },
+        "path": path,
+        "source": source,
+        "resolution_error": resolution_error,
+        "env_override": env_candidate,
+    }
+
+
+def _collect_provider_clis() -> dict[str, Any]:
+    return {
+        provider: _collect_provider_cli(
+            binary=binary,
+            env_var=PROVIDER_CLI_ENV_BY_PROVIDER.get(provider),
+        )
+        for provider, binary in PROVIDER_CLI_BINARY_BY_PROVIDER.items()
     }
 
 
@@ -3467,13 +3441,18 @@ def _collect_control_channel_health(engine_status: dict[str, Any]) -> dict[str, 
 
     supports = [str(item) for item in list(raw_control.get("supports") or []) if str(item).strip()]
     status = str(raw_control.get("status") or "disabled").strip() or "disabled"
-    can_launch_codex = status == "connected" and CODEX_LAUNCH_CAPABILITY in supports
+    connected = status == "connected"
+    operations_by_provider = machine_control_operations_by_provider(supports, connected=connected)
+    control_operations_by_provider = {provider: list(operations) for provider, operations in sorted(operations_by_provider.items())}
     launchable_providers = sorted(
-        provider for provider, capability in LAUNCH_CAPABILITY_BY_PROVIDER.items() if status == "connected" and capability in supports
+        provider
+        for provider, operations in operations_by_provider.items()
+        if "launch" in operations and provider in LAUNCH_CAPABILITY_BY_PROVIDER
     )
+    can_launch_codex = "codex" in launchable_providers
     launch_blocked_by = None
     if not launchable_providers:
-        launch_blocked_by = "no_codex_support" if status == "connected" else "control_down"
+        launch_blocked_by = "no_launch_support" if connected else "control_down"
 
     return {
         "source": "engine_status",
@@ -3486,6 +3465,7 @@ def _collect_control_channel_health(engine_status: dict[str, Any]) -> dict[str, 
         "last_error_message": raw_control.get("last_error_message"),
         "reconnect_backoff_seconds": raw_control.get("reconnect_backoff_seconds"),
         "supports": supports,
+        "control_operations_by_provider": control_operations_by_provider,
         "can_launch_codex": can_launch_codex,
         "can_launch_claude": "claude" in launchable_providers,
         "can_launch_opencode": "opencode" in launchable_providers,

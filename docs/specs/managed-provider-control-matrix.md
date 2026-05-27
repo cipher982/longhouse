@@ -204,8 +204,8 @@ Consumers:
 - `managed_control_dispatcher`
 - kernel capability projection
 - machine control `supports[]`
-- local-health provider readiness
-- Sauron release status artifacts
+- local-health provider readiness and `control_operations_by_provider`
+- Sauron release status artifacts for every managed provider
 
 ## E2E Contract For Each First-Class Provider
 
@@ -235,4 +235,6 @@ Before a provider is marked first-class, tests must prove:
 6. Decide Antigravity interrupt and steer only after hook canaries prove
    bounded behavior.
 7. Move all provider operation truth into the contract registry and remove
-   scattered provider-string gates.
+   scattered provider-string gates. Python read surfaces now derive
+   launchability and per-provider operations from the registry; Rust support
+   advertisement still needs a generated/shared source of truth.

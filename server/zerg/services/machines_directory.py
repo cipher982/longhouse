@@ -23,17 +23,14 @@ from sqlalchemy.orm import Session
 from zerg.models.device_token import DeviceToken
 from zerg.services.machine_control_channel import MachineControlChannelRegistry
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
+from zerg.services.managed_provider_contracts import machine_control_launch_capability_by_provider
+from zerg.services.managed_provider_contracts import machine_control_operations_by_provider
 
-CODEX_LAUNCH_CAPABILITY = "codex.launch"
-LAUNCH_CAPABILITY_BY_PROVIDER = {
-    "codex": "codex.launch",
-    "claude": "claude.launch",
-    "opencode": "opencode.launch",
-}
+LAUNCH_CAPABILITY_BY_PROVIDER = machine_control_launch_capability_by_provider()
 CONTROL_CONNECTED = "connected"
 CONTROL_DISCONNECTED = "disconnected"
 LAUNCH_BLOCKED_CONTROL_DOWN = "control_down"
-LAUNCH_BLOCKED_NO_CODEX_SUPPORT = "no_codex_support"
+LAUNCH_BLOCKED_NO_LAUNCH_SUPPORT = "no_launch_support"
 
 
 @dataclass(frozen=True)
@@ -43,6 +40,7 @@ class MachineEntry:
     online: bool
     control_channel_status: str
     supports: tuple[str, ...]
+    control_operations_by_provider: dict[str, tuple[str, ...]]
     can_launch_codex: bool
     launchable_providers: tuple[str, ...]
     launch_blocked_by: str | None
@@ -56,6 +54,9 @@ class MachineEntry:
             "online": self.online,
             "control_channel_status": self.control_channel_status,
             "supports": list(self.supports),
+            "control_operations_by_provider": {
+                provider: list(operations) for provider, operations in sorted(self.control_operations_by_provider.items())
+            },
             "can_launch_codex": self.can_launch_codex,
             "launchable_providers": list(self.launchable_providers),
             "launch_blocked_by": self.launch_blocked_by,
@@ -104,19 +105,28 @@ def build_machines_directory(
     # last_seen_at.
     for conn_info in reg.list_for_owner(owner_id=owner_id):
         supports = tuple(sorted(conn_info.supports))
-        can_launch_codex = CODEX_LAUNCH_CAPABILITY in supports
-        launchable_providers = tuple(
-            sorted(provider for provider, capability in LAUNCH_CAPABILITY_BY_PROVIDER.items() if capability in supports)
+        control_operations_by_provider = machine_control_operations_by_provider(
+            supports,
+            connected=True,
         )
+        launchable_providers = tuple(
+            sorted(
+                provider
+                for provider, operations in control_operations_by_provider.items()
+                if "launch" in operations and provider in LAUNCH_CAPABILITY_BY_PROVIDER
+            )
+        )
+        can_launch_codex = "codex" in launchable_providers
         entry = MachineEntry(
             device_id=conn_info.device_id,
             machine_name=conn_info.machine_name or conn_info.device_id,
             online=True,
             control_channel_status=CONTROL_CONNECTED,
             supports=supports,
+            control_operations_by_provider=control_operations_by_provider,
             can_launch_codex=can_launch_codex,
             launchable_providers=launchable_providers,
-            launch_blocked_by=None if launchable_providers else LAUNCH_BLOCKED_NO_CODEX_SUPPORT,
+            launch_blocked_by=None if launchable_providers else LAUNCH_BLOCKED_NO_LAUNCH_SUPPORT,
             last_seen_at=conn_info.last_seen_at,
             engine_build=conn_info.engine_build,
         )
@@ -133,6 +143,7 @@ def build_machines_directory(
             online=False,
             control_channel_status=CONTROL_DISCONNECTED,
             supports=(),
+            control_operations_by_provider={},
             can_launch_codex=False,
             launchable_providers=(),
             launch_blocked_by=LAUNCH_BLOCKED_CONTROL_DOWN,

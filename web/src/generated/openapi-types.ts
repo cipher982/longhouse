@@ -5280,7 +5280,7 @@ export interface components {
              */
             execution_home: "unmanaged_local" | "managed_local" | "managed_hosted" | "cloud_takeover";
             /** Managed Transport */
-            managed_transport?: ("claude_channel_bridge" | "codex_app_server" | "opencode_process" | "antigravity_process") | null;
+            managed_transport?: ("claude_channel_bridge" | "codex_app_server" | "opencode_server_bridge" | "opencode_process" | "antigravity_hook_inbox" | "antigravity_process") | null;
             /** Source Runner Id */
             source_runner_id?: number | null;
             /** Source Runner Name */
@@ -6429,15 +6429,27 @@ export interface components {
              */
             supports?: string[];
             /**
+             * Control Operations By Provider
+             * @description Live Machine Agent operations by provider, derived from supports[]. Empty when offline.
+             */
+            control_operations_by_provider?: {
+                [key: string]: string[];
+            };
+            /**
              * Can Launch Codex
-             * @description Derived launch readiness for Codex v1. Browser/iOS should gate Start on this field.
+             * @description Compatibility flag for Codex launch readiness. Prefer launchable_providers for provider-agnostic launch.
              */
             can_launch_codex: boolean;
             /**
-             * Launch Blocked By
-             * @description Machine-readable reason Codex launch is unavailable; null when can_launch_codex is true.
+             * Launchable Providers
+             * @description Providers this Machine Agent can remote-launch now, derived from live supports[].
              */
-            launch_blocked_by?: ("control_down" | "no_codex_support" | "engine_too_old" | "auth_failed" | "runtime_unreachable") | null;
+            launchable_providers?: string[];
+            /**
+             * Launch Blocked By
+             * @description Machine-readable reason no provider can be launched; null when launchable_providers is non-empty.
+             */
+            launch_blocked_by?: ("control_down" | "no_codex_support" | "no_launch_support" | "engine_too_old" | "auth_failed" | "runtime_unreachable") | null;
             /**
              * Last Seen At
              * @description Most recent control-channel activity or device-token use; null if never observed.
@@ -6699,7 +6711,7 @@ export interface components {
          *     Transport is auto-determined by launch context — not user-selectable.
          * @enum {string}
          */
-        ManagedSessionTransport: "claude_channel_bridge" | "codex_app_server" | "opencode_process" | "antigravity_process";
+        ManagedSessionTransport: "claude_channel_bridge" | "codex_app_server" | "opencode_server_bridge" | "opencode_process" | "antigravity_hook_inbox" | "antigravity_process";
         /** ManagedTurnProviderSummaryResponse */
         ManagedTurnProviderSummaryResponse: {
             /** Completed Turns */

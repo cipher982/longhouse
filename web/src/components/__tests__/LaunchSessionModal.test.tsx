@@ -51,7 +51,9 @@ function machine(overrides: Partial<MachineDirectoryEntry> = {}): MachineDirecto
     online,
     control_channel_status: controlChannelStatus,
     supports: canLaunch ? ["codex.launch"] : [],
+    control_operations_by_provider: canLaunch ? { codex: ["launch"] } : {},
     can_launch_codex: canLaunch,
+    launchable_providers: canLaunch ? ["codex"] : [],
     launch_blocked_by: launchBlockedBy,
     last_seen_at: null,
     engine_build: null,
@@ -140,6 +142,27 @@ describe("LaunchSessionModal", () => {
     expect(await screen.findByTestId("launch-no-launchable")).toBeInTheDocument();
     expect(screen.getByText(/old-engine/)).toBeInTheDocument();
     expect(screen.getByText(/connected, but this engine does not advertise Codex launch/)).toBeInTheDocument();
+  });
+
+  it("shows connected machines with non-launch control operations as not launchable", async () => {
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [
+        machine({
+          device_id: "antigravity-host",
+          machine_name: "antigravity-host",
+          online: true,
+          supports: ["antigravity.send"],
+          control_operations_by_provider: { antigravity: ["send"] },
+          can_launch_codex: false,
+          launchable_providers: [],
+          launch_blocked_by: "no_launch_support",
+        }),
+      ],
+    });
+    renderModal();
+    expect(await screen.findByTestId("launch-no-launchable")).toBeInTheDocument();
+    expect(screen.getByText(/antigravity-host/)).toBeInTheDocument();
+    expect(screen.getByText(/connected, but this engine cannot remote-launch provider sessions/)).toBeInTheDocument();
   });
 
   it("dismisses on Escape", async () => {
