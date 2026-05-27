@@ -48,6 +48,8 @@ models:
 
 scripts:
   - 'scripts/**'
+  - '.github/path-filters.yml'
+  - '.github/workflows/contract-first-ci.yml'
 
 runtime_image:
   - 'bun.lock'
