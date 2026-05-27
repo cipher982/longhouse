@@ -127,6 +127,44 @@ def test_install_desktop_app_service_writes_plist_and_loads(monkeypatch, tmp_pat
     assert result["launch_path"] == "/Applications/Longhouse.app/Contents/MacOS/Longhouse"
 
 
+def test_install_desktop_app_service_persists_provider_release_status_env(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv(
+        "LONGHOUSE_PROVIDER_RELEASE_STATUS_URL",
+        "http://100.118.94.100:8876/provider-release-status/{provider}",
+    )
+    monkeypatch.setattr(desktop_app.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(desktop_app, "detect_platform", lambda: Platform.MACOS)
+    monkeypatch.setattr(
+        desktop_app,
+        "ensure_runtime_artifact",
+        lambda component, source_override=None: SimpleNamespace(
+            path="/Applications/Longhouse.app",
+            launch_path="/Applications/Longhouse.app/Contents/MacOS/Longhouse",
+            source="override",
+            installed_now=True,
+        ),
+    )
+    monkeypatch.setattr(
+        desktop_app.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stderr="", stdout=""),
+    )
+
+    desktop_app.install_desktop_app_service(
+        ui_url="https://longhouse.ai",
+        claude_dir=str(home / ".claude"),
+    )
+
+    plist_path = home / "Library" / "LaunchAgents" / "ai.longhouse.app.plist"
+    plist = plistlib.loads(plist_path.read_bytes())
+    assert plist["EnvironmentVariables"] == {
+        "LONGHOUSE_PROVIDER_RELEASE_STATUS_URL": "http://100.118.94.100:8876/provider-release-status/{provider}",
+    }
+
+
 def test_install_desktop_app_service_omits_invalid_ui_url(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()

@@ -29,6 +29,12 @@ LEGACY_LAUNCHD_LABEL = "com.longhouse.local-health-menubar"
 LOG_BASENAME = "desktop-app"
 LEGACY_LOG_BASENAME = "local-health-menubar"
 DEFAULT_REFRESH_SECONDS = 30
+PROVIDER_RELEASE_ENV_KEYS = (
+    "LONGHOUSE_PROVIDER_RELEASE_STATUS_URL",
+    "LONGHOUSE_PROVIDER_RELEASE_STATUS_DIR",
+    "LONGHOUSE_CODEX_RELEASE_STATUS_URL",
+    "LONGHOUSE_CODEX_RELEASE_STATUS_FILE",
+)
 
 
 def build_snapshot_command(*, claude_dir: str | None = None) -> str:
@@ -179,6 +185,18 @@ def _generate_launchd_plist(
     log_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = log_dir / f"{LOG_BASENAME}.stdout.log"
     stderr_path = log_dir / f"{LOG_BASENAME}.stderr.log"
+    environment = {key: value for key in PROVIDER_RELEASE_ENV_KEYS if (value := os.getenv(key, "").strip())}
+    environment_xml = ""
+    if environment:
+        rows = "\n".join(
+            f"        <key>{saxutils.escape(key)}</key>\n        <string>{saxutils.escape(value)}</string>"
+            for key, value in sorted(environment.items())
+        )
+        environment_xml = f"""
+    <key>EnvironmentVariables</key>
+    <dict>
+{rows}
+    </dict>"""
 
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -190,6 +208,7 @@ def _generate_launchd_plist(
     <array>
 {program_args_xml}
     </array>
+{environment_xml}
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -370,7 +389,11 @@ def install_desktop_app_service(
 
 def uninstall_desktop_app_service() -> dict[str, str]:
     if detect_platform() != Platform.MACOS:
-        return {"success": "true", "platform": detect_platform().value, "message": "Longhouse desktop app is not supported"}
+        return {
+            "success": "true",
+            "platform": detect_platform().value,
+            "message": "Longhouse desktop app is not supported",
+        }
 
     removed_any = False
     for plist_path, _, _ in _service_candidates():
