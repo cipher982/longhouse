@@ -673,8 +673,10 @@ def test_collect_local_health_classifies_replaced_cwd_from_managed_session_contr
         control_kind="opencode_bridge",
     )
     managed_session_contracts.write_managed_session_contract(contract, base_dir=tmp_path)
+    replacement = tmp_path / "replacement-workspace"
+    replacement.mkdir()
     workspace.rmdir()
-    workspace.mkdir()
+    replacement.rename(workspace)
     _write_engine_status(
         tmp_path,
         age_seconds=5,
@@ -1277,6 +1279,7 @@ def test_collect_local_health_flags_detached_managed_session(monkeypatch, tmp_pa
         "orphan_bridge_count": 0,
         "latest_activity_at": "2026-04-17T17:31:00Z",
     }
+
     assert snapshot["managed_sessions"] == [
         {
             "session_id": "sess-detached",

@@ -1,6 +1,6 @@
 //! Managed-local Codex bridge scanner.
 //!
-//! Walks `~/.longhouse/managed-local/codex-bridge/*.json` once per tick and
+//! Walks the configured Longhouse codex-bridge state directory once per tick and
 //! produces `Vec<CodexBridgeObservation>` with the raw signals needed by
 //! both the heartbeat lease builder and the orphan-bridge reaper.
 //!
@@ -62,13 +62,7 @@ pub fn collect_observations() -> Vec<CodexBridgeObservation> {
 }
 
 pub fn default_codex_bridge_state_dir() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
-    Some(
-        PathBuf::from(home)
-            .join(".longhouse")
-            .join("managed-local")
-            .join("codex-bridge"),
-    )
+    crate::config::get_codex_bridge_state_dir().ok()
 }
 
 pub fn collect_process_commands() -> Vec<String> {
@@ -233,5 +227,48 @@ mod tests {
         fs::write(tmp.path().join("note.txt"), b"{}").unwrap();
         let obs = collect_observations_from(tmp.path(), &[]);
         assert!(obs.is_empty());
+    }
+
+    #[test]
+    fn default_state_dir_prefers_longhouse_home_over_home() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let longhouse_home = temp.path().join("isolated-longhouse");
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home.display().to_string())),
+                ("LONGHOUSE_HOME", Some(longhouse_home.display().to_string())),
+                ("CLAUDE_CONFIG_DIR", None::<String>),
+            ],
+            || {
+                assert_eq!(
+                    default_codex_bridge_state_dir().unwrap(),
+                    longhouse_home.join("managed-local").join("codex-bridge")
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn default_state_dir_maps_claude_config_dir_to_longhouse_sibling() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let claude_home = temp.path().join(".claude");
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home.display().to_string())),
+                ("LONGHOUSE_HOME", None::<String>),
+                ("CLAUDE_CONFIG_DIR", Some(claude_home.display().to_string())),
+            ],
+            || {
+                assert_eq!(
+                    default_codex_bridge_state_dir().unwrap(),
+                    temp.path()
+                        .join(".longhouse")
+                        .join("managed-local")
+                        .join("codex-bridge")
+                );
+            },
+        );
     }
 }

@@ -25,6 +25,8 @@ from zerg.services.provisional_events import cleanup_bridge_transcript_preview_o
 from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_observation_reducers import reduce_bridge_transcript_observation
 from zerg.services.session_observations import OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
+from zerg.services.session_observations import SOURCE_DOMAIN_RUNTIME
+from zerg.services.session_observations import record_session_observation
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.session_execution_home import SessionExecutionHome
@@ -90,6 +92,51 @@ def _bridge_transcript_event(
             "live_text": live_text,
             "turn_completed": turn_completed,
         },
+    )
+
+
+def _insert_legacy_bridge_preview_observation(
+    db,
+    *,
+    session_id,
+    occurred_at: datetime,
+    seq: int,
+    live_text: str,
+    turn_id: str = "turn-1",
+    turn_completed: bool = False,
+):
+    record_session_observation(
+        db,
+        observation_id=f"runtime:codex_bridge_live:legacy:{session_id}:thread-1:{turn_id}:{seq}",
+        session_id=session_id,
+        runtime_key=f"codex:{session_id}",
+        provider="codex",
+        device_id="cinder",
+        source_domain=SOURCE_DOMAIN_RUNTIME,
+        source="codex_bridge_live",
+        kind=OBS_KIND_BRIDGE_TRANSCRIPT_DELTA,
+        source_offset=seq,
+        source_cursor=f"progress_signal:bridge:live:{session_id}:thread-1:{turn_id}:{seq}",
+        observed_at=occurred_at,
+        payload={
+            "kind": "progress_signal",
+            "phase": None,
+            "tool_name": None,
+            "freshness_ms": None,
+            "dedupe_key": f"bridge:live:{session_id}:thread-1:{turn_id}:{seq}",
+            "payload": {
+                "progress_kind": "bridge_live_transcript_delta",
+                "managed_transport": "codex_app_server",
+                "thread_id": "thread-1",
+                "turn_id": turn_id,
+                "seq": seq,
+                "method": "item/agentMessage/delta",
+                "delta": live_text[-1:],
+                "live_text": live_text,
+                "turn_completed": turn_completed,
+            },
+        },
+        load_observation=False,
     )
 
 
@@ -191,13 +238,10 @@ def test_live_bridge_snapshots_store_observations_not_events(tmp_path):
     assert result.duplicates == 1
     assert rows == []
     assert visible == []
-    assert [observation.kind for observation in observations] == [
-        OBS_KIND_BRIDGE_TRANSCRIPT_DELTA,
-        OBS_KIND_BRIDGE_TRANSCRIPT_DELTA,
-    ]
+    assert [observation.kind for observation in observations] == [OBS_KIND_BRIDGE_TRANSCRIPT_DELTA]
     assert observations[0].source_domain == "runtime"
     assert observations[0].source == "codex_bridge_live"
-    assert json.loads(observations[1].payload_json or "{}")["payload"]["live_text"] == "hello"
+    assert json.loads(observations[0].payload_json or "{}")["payload"]["live_text"] == "hello"
     assert preview.text == "hello"
     assert preview.provisional_cursor == f"codex_bridge_live:{session.id}:thread-1:turn-1:2"
     assert preview.provisional_complete is False
@@ -258,18 +302,14 @@ def test_active_preview_loader_caps_observations_per_session(monkeypatch, tmp_pa
 
     with SessionLocal() as db:
         session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
-        ingest_runtime_events(
-            db,
-            [
-                _bridge_transcript_event(
-                    session_id=session.id,
-                    occurred_at=now + timedelta(milliseconds=idx),
-                    seq=idx,
-                    live_text=f"preview {idx}",
-                )
-                for idx in range(1, 9)
-            ],
-        )
+        for idx in range(1, 9):
+            _insert_legacy_bridge_preview_observation(
+                db,
+                session_id=session.id,
+                occurred_at=now + timedelta(milliseconds=idx),
+                seq=idx,
+                live_text=f"preview {idx}",
+            )
         db.commit()
 
         preview = load_active_provisional_preview_map(db, [session.id])[str(session.id)]
@@ -359,18 +399,14 @@ def test_live_preview_cleanup_keeps_bounded_latest_window(tmp_path):
 
     with SessionLocal() as db:
         session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
-        ingest_runtime_events(
-            db,
-            [
-                _bridge_transcript_event(
-                    session_id=session.id,
-                    occurred_at=now + timedelta(milliseconds=idx),
-                    seq=idx,
-                    live_text=f"preview {idx}",
-                )
-                for idx in range(1, 9)
-            ],
-        )
+        for idx in range(1, 9):
+            _insert_legacy_bridge_preview_observation(
+                db,
+                session_id=session.id,
+                occurred_at=now + timedelta(milliseconds=idx),
+                seq=idx,
+                live_text=f"preview {idx}",
+            )
         db.commit()
 
         removed = cleanup_bridge_transcript_preview_observations(
@@ -398,17 +434,19 @@ def test_live_preview_cleanup_removes_rows_covered_by_durable_activity(tmp_path)
 
     with SessionLocal() as db:
         session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
-        ingest_runtime_events(
+        _insert_legacy_bridge_preview_observation(
             db,
-            [
-                _bridge_transcript_event(session_id=session.id, occurred_at=now, seq=1, live_text="old preview"),
-                _bridge_transcript_event(
-                    session_id=session.id,
-                    occurred_at=now + timedelta(seconds=10),
-                    seq=2,
-                    live_text="current preview",
-                ),
-            ],
+            session_id=session.id,
+            occurred_at=now,
+            seq=1,
+            live_text="old preview",
+        )
+        _insert_legacy_bridge_preview_observation(
+            db,
+            session_id=session.id,
+            occurred_at=now + timedelta(seconds=10),
+            seq=2,
+            live_text="current preview",
         )
         _ingest_durable_session(db, session=session, now=now)
         db.commit()
@@ -432,7 +470,7 @@ def test_live_preview_cleanup_removes_rows_covered_by_durable_activity(tmp_path)
     assert preview.text == "current preview"
 
 
-def test_runtime_ingest_prunes_bridge_preview_window_on_write(tmp_path):
+def test_runtime_ingest_keeps_one_live_overlay_per_turn_on_write(tmp_path):
     SessionLocal = _make_sessionmaker(tmp_path, "live_overlay_preview_write_retention.db")
     now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
     keep = provisional_events_service.BRIDGE_TRANSCRIPT_OBSERVATION_KEEP_PER_SESSION
@@ -461,8 +499,8 @@ def test_runtime_ingest_prunes_bridge_preview_window_on_write(tmp_path):
         )
         preview = load_active_provisional_preview_map(db, [session.id])[str(session.id)]
 
-    assert len(remaining) == keep
-    assert json.loads(remaining[0].payload_json or "{}")["payload"]["seq"] == 8
+    assert len(remaining) == 1
+    assert json.loads(remaining[0].payload_json or "{}")["payload"]["seq"] == keep + 7
     assert preview.text == f"preview {keep + 7}"
 
 
