@@ -49,6 +49,7 @@ from zerg.services.managed_session_contracts import REASON_BRIDGE_STATE_PATH_MIS
 from zerg.services.managed_session_contracts import REASON_PROVIDER_SESSION_CWD_MISSING
 from zerg.services.managed_session_contracts import REASON_PROVIDER_SESSION_CWD_REPLACED
 from zerg.services.managed_session_contracts import collect_managed_session_contract_diagnostics
+from zerg.services.provider_support_state import collect_provider_support_state
 from zerg.services.shipper.service import get_service_info
 from zerg.services.transport_health import TransportHealthAssessment
 from zerg.services.transport_health import TransportHealthSample
@@ -407,9 +408,11 @@ def _collect_provider_hook_diagnostics(base_dir: Path, *, now: datetime, fast: b
     )
     events = events[:PROVIDER_HOOK_DIAGNOSTIC_EVENT_LIMIT]
     actionable_cutoff = now - PROVIDER_HOOK_DIAGNOSTIC_ACTIONABLE_WINDOW
-    actionable_events = [
-        event for event in events if (parsed := _parse_rfc3339(event.get("timestamp"))) is not None and parsed >= actionable_cutoff
-    ]
+    actionable_events = []
+    for event in events:
+        parsed = _parse_rfc3339(event.get("timestamp"))
+        if parsed is not None and parsed >= actionable_cutoff:
+            actionable_events.append(event)
     state = "session_cwd_missing" if actionable_events else "stale_session_cwd_missing" if events else "healthy"
     return {
         "schema_version": 1,
@@ -471,7 +474,11 @@ def _apply_managed_session_contract_diagnostics(
 def _managed_contract_headline(diagnostics: Mapping[str, Any], latest_issue: Mapping[str, Any]) -> str:
     raw_issues = diagnostics.get("issues")
     issues = [issue for issue in raw_issues if isinstance(issue, Mapping)] if isinstance(raw_issues, list) else []
-    session_ids = {session_id for issue in issues if (session_id := _normalize_optional_string(issue.get("session_id"))) is not None}
+    session_ids = set()
+    for issue in issues:
+        session_id = _normalize_optional_string(issue.get("session_id"))
+        if session_id is not None:
+            session_ids.add(session_id)
     if len(session_ids) > 1:
         return f"{len(session_ids)} managed provider sessions need attention"
     if len(issues) > 1:
@@ -3452,7 +3459,9 @@ def _collect_control_channel_health(engine_status: dict[str, Any]) -> dict[str, 
     status = str(raw_control.get("status") or "disabled").strip() or "disabled"
     connected = status == "connected"
     operations_by_provider = machine_control_operations_by_provider(supports, connected=connected)
-    control_operations_by_provider = {provider: list(operations) for provider, operations in sorted(operations_by_provider.items())}
+    control_operations_by_provider = {}
+    for provider, operations in sorted(operations_by_provider.items()):
+        control_operations_by_provider[provider] = list(operations)
     launchable_providers = sorted(
         provider
         for provider, operations in operations_by_provider.items()
@@ -3571,9 +3580,16 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
     launch_readiness = _collect_launch_readiness(resolved_base_dir, service=service)
     transport_sample, transport_assessment = _collect_transport_health(engine_status)
     control_channel = _collect_control_channel_health(engine_status)
-    managed_session_ids = {
-        session_id for session in managed_sessions if (session_id := _normalize_optional_string(session.get("session_id"))) is not None
-    }
+    provider_support_state = collect_provider_support_state(
+        provider_clis=provider_clis,
+        provider_release_status=provider_release_status,
+        control_channel=control_channel,
+    )
+    managed_session_ids = set()
+    for session in managed_sessions:
+        session_id = _normalize_optional_string(session.get("session_id"))
+        if session_id is not None:
+            managed_session_ids.add(session_id)
     managed_session_contracts = collect_managed_session_contract_diagnostics(
         resolved_base_dir,
         session_ids=managed_session_ids,
@@ -3652,6 +3668,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         "provider_clis": provider_clis,
         "provider_contracts": provider_contracts,
         "provider_release_status": provider_release_status,
+        "provider_support_state": provider_support_state,
         "managed_session_contracts": managed_session_contracts,
         "provider_hook_diagnostics": provider_hook_diagnostics,
         "activity_summary": activity_summary,

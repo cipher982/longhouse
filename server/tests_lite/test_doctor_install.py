@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 from types import SimpleNamespace
 
 from cryptography.fernet import Fernet
@@ -12,8 +11,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
-from zerg.cli import doctor as doctor_cli
 from zerg.cli import config_file as config_file_cli
+from zerg.cli import doctor as doctor_cli
 from zerg.cli.main import app
 from zerg.cli.update_manager import InstallMetadata
 from zerg.cli.update_manager import UpdateCheckResult
@@ -92,9 +91,42 @@ def test_doctor_check_updates_surfaces_upgrade_command(monkeypatch):
     assert "uv tool upgrade longhouse" in result.output
 
 
+def test_check_provider_support_reports_capability_axes(monkeypatch):
+    monkeypatch.setattr(
+        "zerg.services.local_health.collect_local_health",
+        lambda: {
+            "provider_support_state": {
+                "providers": {
+                    "claude": {
+                        "state": "ready",
+                        "capabilities": {"live_control_operations": ["send", "steer"]},
+                        "proof": {"minimum_evidence_level": "source_review"},
+                        "version_readiness": {"state": "no_artifact"},
+                    },
+                    "opencode": {
+                        "state": "provider_cli_missing",
+                        "capabilities": {"live_control_operations": []},
+                        "proof": {"minimum_evidence_level": "live_no_token"},
+                        "version_readiness": {"state": "not_configured"},
+                    },
+                }
+            }
+        },
+    )
+
+    results = doctor_cli._check_provider_support()
+    labels = {result.label: result for result in results}
+
+    assert labels["claude managed support ready"].status == doctor_cli.PASS
+    assert labels["claude managed support ready"].detail == (
+        "live=send, steer; proof_min=source_review; version=no_artifact"
+    )
+    assert labels["opencode managed support provider_cli_missing"].status == doctor_cli.WARN
+
+
 def test_check_config_does_not_flag_hosted_machine_state_as_local_url_drift(tmp_path, monkeypatch):
     config_path = tmp_path / "config.toml"
-    config_path.write_text("[server]\nhost = \"127.0.0.1\"\nport = 65534\n", encoding="utf-8")
+    config_path.write_text('[server]\nhost = "127.0.0.1"\nport = 65534\n', encoding="utf-8")
 
     monkeypatch.setattr(config_file_cli, "get_config_path", lambda: config_path)
     monkeypatch.setattr(
@@ -127,7 +159,7 @@ def test_check_config_does_not_flag_hosted_machine_state_as_local_url_drift(tmp_
 
 def test_check_config_tolerates_missing_machine_state(tmp_path, monkeypatch):
     config_path = tmp_path / "config.toml"
-    config_path.write_text("[server]\nhost = \"127.0.0.1\"\nport = 65534\n", encoding="utf-8")
+    config_path.write_text('[server]\nhost = "127.0.0.1"\nport = 65534\n', encoding="utf-8")
 
     monkeypatch.setattr(config_file_cli, "get_config_path", lambda: config_path)
     monkeypatch.setattr(

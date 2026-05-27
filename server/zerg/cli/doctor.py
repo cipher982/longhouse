@@ -162,7 +162,13 @@ def _check_environment() -> list[CheckResult]:
         conn.close()
         results.append(CheckResult(PASS, f"SQLite {sqlite_ver} (FTS5 supported)"))
     except Exception:
-        results.append(CheckResult(WARN, f"SQLite {sqlite_ver} (FTS5 not available)", "Search will fall back to LIKE queries"))
+        results.append(
+            CheckResult(
+                WARN,
+                f"SQLite {sqlite_ver} (FTS5 not available)",
+                "Search will fall back to LIKE queries",
+            )
+        )
 
     return results
 
@@ -320,7 +326,13 @@ def _check_shipper() -> list[CheckResult]:
         except PermissionError:
             results.append(CheckResult(WARN, "Claude Code projects dir not readable"))
     else:
-        results.append(CheckResult(WARN, "No Claude Code sessions directory", "Install Claude Code to start shipping sessions"))
+        results.append(
+            CheckResult(
+                WARN,
+                "No Claude Code sessions directory",
+                "Install Claude Code to start shipping sessions",
+            )
+        )
 
     # Device token
     token_path = get_token_path(claude_dir)
@@ -338,7 +350,13 @@ def _check_shipper() -> list[CheckResult]:
             if isinstance(parsed, dict):
                 settings_data = parsed
             else:
-                results.append(CheckResult(WARN, "Claude settings.json has unexpected shape", "Expected top-level JSON object"))
+                results.append(
+                    CheckResult(
+                        WARN,
+                        "Claude settings.json has unexpected shape",
+                        "Expected top-level JSON object",
+                    )
+                )
         except Exception as exc:
             results.append(CheckResult(WARN, "Claude settings.json is unreadable", str(exc)))
     else:
@@ -592,6 +610,38 @@ def _check_config() -> list[CheckResult]:
     return results
 
 
+def _check_provider_support() -> list[CheckResult]:
+    """Provider support checks from the canonical local-health projection."""
+    results: list[CheckResult] = []
+    try:
+        from zerg.services.local_health import collect_local_health
+
+        snapshot = collect_local_health()
+        support_state = dict(snapshot.get("provider_support_state") or {})
+        providers = dict(support_state.get("providers") or {})
+    except Exception as exc:
+        return [CheckResult(WARN, "Provider support state unavailable", str(exc))]
+
+    for provider, raw_info in sorted(providers.items()):
+        info = dict(raw_info or {})
+        capabilities = dict(info.get("capabilities") or {})
+        proof = dict(info.get("proof") or {})
+        version = dict(info.get("version_readiness") or {})
+        live_ops = ", ".join(str(item) for item in list(capabilities.get("live_control_operations") or [])) or "-"
+        minimum_level = str(proof.get("minimum_evidence_level") or "-")
+        version_state = str(version.get("state") or "-")
+        state = str(info.get("state") or "unknown")
+        detail = f"live={live_ops}; proof_min={minimum_level}; version={version_state}"
+        if state in {"blocked", "provider_cli_missing"}:
+            results.append(CheckResult(WARN, f"{provider} managed support {state}", detail))
+        elif state == "needs_attention":
+            results.append(CheckResult(WARN, f"{provider} managed support needs attention", detail))
+        else:
+            results.append(CheckResult(PASS, f"{provider} managed support {state}", detail))
+
+    return results
+
+
 # ---------------------------------------------------------------------------
 # Main command
 # ---------------------------------------------------------------------------
@@ -630,6 +680,7 @@ def doctor(
         ("Install", _check_install(check_updates=check_updates)),
         ("Local Runtime", _check_server()),
         ("Machine Agent", _check_shipper()),
+        ("Provider Support", _check_provider_support()),
         ("Config", _check_config()),
     ]
 

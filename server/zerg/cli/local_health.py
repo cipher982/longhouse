@@ -106,9 +106,9 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
         if control_channel.get("launch_blocked_by"):
             typer.echo(f"  launch blocked by: {control_channel['launch_blocked_by']}")
         if control_channel.get("last_error_code") or control_channel.get("last_error_message"):
-            typer.echo(
-                "  last error: " f"{control_channel.get('last_error_code') or '-'}" f" - {control_channel.get('last_error_message') or '-'}"
-            )
+            last_error_code = control_channel.get("last_error_code") or "-"
+            last_error_message = control_channel.get("last_error_message") or "-"
+            typer.echo(f"  last error: {last_error_code} - {last_error_message}")
 
     provider_clis = dict(snapshot.get("provider_clis") or {})
     if provider_clis:
@@ -136,6 +136,34 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
                 if dict(evidence).get("supported")
             ]
             typer.echo(f"    supported: {', '.join(supported) or '-'}")
+
+    provider_support_state = dict(snapshot.get("provider_support_state") or {})
+    support_providers = dict(provider_support_state.get("providers") or {})
+    if support_providers:
+        typer.echo("")
+        typer.echo("Provider Support")
+        for provider, raw_info in sorted(support_providers.items()):
+            info = dict(raw_info or {})
+            capabilities = dict(info.get("capabilities") or {})
+            proof = dict(info.get("proof") or {})
+            version = dict(info.get("version_readiness") or {})
+            live_ops = list(capabilities.get("live_control_operations") or [])
+            supported_ops = list(capabilities.get("supported_operations") or [])
+            typer.echo(f"  {provider}: {info.get('state') or '-'}")
+            if live_ops:
+                typer.echo(f"    live: {', '.join(str(item) for item in live_ops)}")
+            if supported_ops:
+                typer.echo(f"    contract: {', '.join(str(item) for item in supported_ops)}")
+            if proof:
+                minimum_ops = ", ".join(str(item) for item in list(proof.get("minimum_evidence_operations") or []))
+                typer.echo(
+                    "    proof: "
+                    f"{proof.get('state') or '-'}; "
+                    f"minimum={proof.get('minimum_evidence_level') or '-'}"
+                    f"{f' ({minimum_ops})' if minimum_ops else ''}"
+                )
+            if version:
+                typer.echo(f"    version readiness: {version.get('state') or '-'}")
 
     provider_release_status = dict(snapshot.get("provider_release_status") or {})
     release_statuses = dict(provider_release_status.get("statuses") or {})
@@ -305,7 +333,10 @@ def _launch_desktop_surface(
             command.extend(["--health-arg", argument])
         if ui_url:
             command.extend(["--ui-url", ui_url])
-        cwd = Path(prebuilt_artifact.path) if component == RuntimeComponent.DESKTOP_APP else Path(prebuilt_artifact.launch_path).parent
+        if component == RuntimeComponent.DESKTOP_APP:
+            cwd = Path(prebuilt_artifact.path)
+        else:
+            cwd = Path(prebuilt_artifact.launch_path).parent
     else:
         if not allow_source_fallback:
             repair_command = recommended_machine_repair_command(

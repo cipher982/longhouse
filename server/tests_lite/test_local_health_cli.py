@@ -485,6 +485,7 @@ def test_collect_local_health_surfaces_control_channel_status(monkeypatch, tmp_p
 def test_collect_local_health_marks_connected_control_channel_launch_ready(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(local_health_service.shutil, "which", lambda name: None)
     _write_engine_status(
         tmp_path,
         age_seconds=5,
@@ -518,6 +519,12 @@ def test_collect_local_health_marks_connected_control_channel_launch_ready(monke
         "next": "promote to scheduled live token canary",
     }
     assert contracts["opencode"]["operations"]["steer_active_turn"]["supported"] is False
+    provider_support = snapshot["provider_support_state"]["providers"]
+    assert provider_support["claude"]["state"] == "provider_cli_missing"
+    assert provider_support["claude"]["capabilities"]["live_control_operations"] == ["launch"]
+    assert provider_support["claude"]["proof"]["minimum_evidence_level"] == "source_review"
+    assert "steer_active_turn" in provider_support["claude"]["capabilities"]["supported_operations"]
+    assert "steer_active_turn" in provider_support["opencode"]["capabilities"]["unsupported_operations"]
     assert contracts["opencode"]["operations"]["steer_active_turn"]["evidence_level"] == "none"
 
 
@@ -849,7 +856,10 @@ def test_collect_local_health_classifies_replaced_cwd_from_managed_session_contr
     assert "provider_session_cwd_replaced" in snapshot["managed_sessions"][0]["reason_codes"]
 
 
-def test_collect_local_health_classifies_missing_bridge_state_from_managed_session_contract(monkeypatch, tmp_path: Path):
+def test_collect_local_health_classifies_missing_bridge_state_from_managed_session_contract(
+    monkeypatch,
+    tmp_path: Path,
+):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     workspace = tmp_path / "workspace"
