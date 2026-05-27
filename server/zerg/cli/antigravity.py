@@ -78,7 +78,9 @@ emit_default_response() {
   esac
 }
 
-if ! "$PYTHON" -c 'import json' >/dev/null 2>&1; then
+PROBE_ERR=$("$PYTHON" -c 'import json' 2>&1)
+if [ $? -ne 0 ]; then
+  printf 'longhouse-antigravity-hook: python probe failed: %s\n' "$PROBE_ERR" >&2
   emit_default_response
   exit 0
 fi
@@ -87,7 +89,7 @@ LONGHOUSE_HOOK_INPUT="$INPUT" \\
 LONGHOUSE_HOOK_EVENT="$EVENT" \\
 LONGHOUSE_HOOK_HOME="$LONGHOUSE_HOME" \\
 LONGHOUSE_HOOK_ENGINE="$ENGINE" \\
-"$PYTHON" - <<'PY' || emit_default_response
+"$PYTHON" - <<'PY'
 from __future__ import annotations
 
 import json
@@ -397,6 +399,11 @@ if event in {"PreInvocation", "PostInvocation"}:
 
 print(json.dumps(hook_response(event, claimed_texts, inbox_dir), separators=(",", ":")))
 PY
+HOOK_RC=$?
+if [ "$HOOK_RC" -ne 0 ]; then
+  printf 'longhouse-antigravity-hook: python hook failed with exit %s\n' "$HOOK_RC" >&2
+  emit_default_response
+fi
 exit 0
 """
 
