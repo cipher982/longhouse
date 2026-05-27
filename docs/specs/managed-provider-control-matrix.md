@@ -212,21 +212,25 @@ The manifest carries these fields:
 
 ```text
 provider
+provider_cli_binary
+provider_cli_env
+requires_longhouse_cli
 managed_transport
 control_plane
-binary_resolution
-launch_modes
-operation_support:
-  launch_local
-  launch_remote
-  reattach
-  send_input
-  interrupt
-  steer_active_turn
-  terminate
-runtime_sources
-transcript_binding_sources
-release_canary_profile
+control_plane_aliases
+launch_local
+launch_remote
+reattach
+send_input
+interrupt
+steer_active_turn
+terminate
+tail_output
+runtime_phase
+transcript_binding
+can_resume
+operation_evidence
+machine_control_supports
 ```
 
 This is a contract registry, not a polymorphic mega-class. Shared code

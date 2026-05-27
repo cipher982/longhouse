@@ -269,7 +269,7 @@ def test_happy_path_inserts_live_claude_channel_session(tmp_path):
         assert connection.control_plane == "claude_channel_bridge"
         assert connection.can_send_input == 1
         assert connection.can_interrupt == 1
-        assert connection.can_resume == 1
+        assert connection.can_resume == 0
 
     assert len(registry.sent) == 1
     sent = registry.sent[0]
@@ -311,7 +311,7 @@ def test_happy_path_inserts_live_opencode_server_bridge_session(tmp_path):
         assert connection.can_interrupt == 1
         assert connection.can_terminate == 1
         assert connection.can_tail_output == 1
-        assert connection.can_resume == 1
+        assert connection.can_resume == 0
 
     assert len(registry.sent) == 1
     sent = registry.sent[0]

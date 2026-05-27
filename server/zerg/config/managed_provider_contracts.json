@@ -90,7 +90,7 @@
       "tail_output": true,
       "runtime_phase": true,
       "transcript_binding": true,
-      "can_resume": true,
+      "can_resume": false,
       "operation_evidence": {
         "launch_local": {
           "level": "live_no_token",
@@ -98,9 +98,9 @@
           "next": "promote with detached channel launch transcript canary"
         },
         "launch_remote": {
-          "level": "hermetic",
+          "level": "source_review",
           "source": "provider-control-e2e Claude fake process plus Machine Agent claude.launch support tests",
-          "next": "promote with Runtime Host remote launch against real Claude"
+          "next": "promote with Runtime Host remote launch against real Claude or a hermetic engine launch happy-path"
         },
         "reattach": {
           "level": "hermetic",
@@ -160,7 +160,7 @@
       "tail_output": true,
       "runtime_phase": true,
       "transcript_binding": true,
-      "can_resume": true,
+      "can_resume": false,
       "operation_evidence": {
         "launch_local": {
           "level": "live_no_token",

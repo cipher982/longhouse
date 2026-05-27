@@ -1,6 +1,7 @@
 //! Machine Agent managed-control WebSocket client.
 
 use std::collections::{HashMap, VecDeque};
+use std::ffi::{OsStr, OsString};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -26,7 +27,7 @@ use crate::codex_bridge::{
 use crate::config::ShipperConfig;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const COMMAND_SEND_TEXT: &str = "session.send_text";
 const COMMAND_INTERRUPT: &str = "session.interrupt";
@@ -243,7 +244,7 @@ fn timestamp_now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
-fn is_executable(path: &std::path::Path) -> bool {
+fn is_executable(path: &Path) -> bool {
     let Ok(metadata) = std::fs::metadata(path) else {
         return false;
     };
@@ -260,16 +261,21 @@ fn is_executable(path: &std::path::Path) -> bool {
     }
 }
 
-fn command_exists_in_path(command: &str, path_value: Option<&std::ffi::OsStr>) -> bool {
-    if command.contains(std::path::MAIN_SEPARATOR) {
-        return is_executable(std::path::Path::new(command));
+fn command_value_exists_in_path(command: &OsStr, path_value: Option<&OsStr>) -> bool {
+    let command_path = Path::new(command);
+    if command_path.is_absolute() || command_path.components().count() > 1 {
+        return is_executable(command_path);
     }
     let Some(path_value) = path_value else {
         return false;
     };
     std::env::split_paths(path_value)
-        .map(|dir| dir.join(command))
+        .map(|dir| dir.join(command_path))
         .any(|candidate| is_executable(&candidate))
+}
+
+fn command_exists_in_path(command: &str, path_value: Option<&OsStr>) -> bool {
+    command_value_exists_in_path(OsStr::new(command), path_value)
 }
 
 fn managed_provider_contract_items() -> &'static Vec<Value> {
@@ -362,17 +368,34 @@ fn validate_managed_provider_contract_manifest(payload: &Value) -> Result<(), St
     Ok(())
 }
 
-fn control_supports_for_path(path_value: Option<&std::ffi::OsStr>) -> Vec<String> {
+fn provider_binary_available(
+    contract: &Value,
+    path_value: Option<&OsStr>,
+    env_lookup: &dyn Fn(&str) -> Option<OsString>,
+) -> bool {
+    if let Some(env_name) = contract.get("provider_cli_env").and_then(Value::as_str) {
+        if !env_name.trim().is_empty() {
+            if let Some(env_value) = env_lookup(env_name) {
+                return !env_value.as_os_str().is_empty()
+                    && command_value_exists_in_path(env_value.as_os_str(), path_value);
+            }
+        }
+    }
+
+    let binary = contract
+        .get("provider_cli_binary")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    !binary.is_empty() && command_exists_in_path(binary, path_value)
+}
+
+fn control_supports_for_path_with_env(
+    path_value: Option<&OsStr>,
+    env_lookup: &dyn Fn(&str) -> Option<OsString>,
+) -> Vec<String> {
     let mut supports = Vec::new();
     let longhouse_available = command_exists_in_path(DEFAULT_LONGHOUSE_BIN, path_value);
     for contract in managed_provider_contract_items() {
-        let binary = contract
-            .get("provider_cli_binary")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        if binary.is_empty() {
-            continue;
-        }
         let requires_longhouse = contract
             .get("requires_longhouse_cli")
             .and_then(Value::as_bool)
@@ -380,7 +403,7 @@ fn control_supports_for_path(path_value: Option<&std::ffi::OsStr>) -> Vec<String
         if requires_longhouse && !longhouse_available {
             continue;
         }
-        if !command_exists_in_path(binary, path_value) {
+        if !provider_binary_available(contract, path_value, env_lookup) {
             continue;
         }
         if let Some(items) = contract
@@ -391,6 +414,10 @@ fn control_supports_for_path(path_value: Option<&std::ffi::OsStr>) -> Vec<String
         }
     }
     supports
+}
+
+fn control_supports_for_path(path_value: Option<&OsStr>) -> Vec<String> {
+    control_supports_for_path_with_env(path_value, &|name| std::env::var_os(name))
 }
 
 fn control_supports() -> Vec<String> {
@@ -1451,6 +1478,8 @@ impl CommandError {
 mod tests {
     use super::*;
 
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
     fn command_cache() -> CompletedCommandCache {
         CompletedCommandCache::new(16, Duration::from_secs(60))
     }
@@ -1461,6 +1490,16 @@ mod tests {
             api_token: Some("test-token".to_string()),
             machine_name: "test-machine".to_string(),
             ..ShipperConfig::default()
+        }
+    }
+
+    fn write_test_executable(path: &Path, body: &str) {
+        std::fs::write(path, body).unwrap();
+        #[cfg(unix)]
+        {
+            let mut perms = std::fs::metadata(path).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(path, perms).unwrap();
         }
     }
 
@@ -1510,6 +1549,7 @@ mod tests {
 
     #[test]
     fn control_channel_status_tracks_connection_state() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let status = new_control_channel_status();
         assert_eq!(status.snapshot().enabled, false);
         assert_eq!(status.snapshot().status, "disabled");
@@ -1678,7 +1718,7 @@ mod tests {
 
         write_executable(&dir, "longhouse");
         write_executable(&dir, "opencode");
-        let supports = control_supports_for_path(Some(dir.as_os_str()));
+        let supports = control_supports_for_path_with_env(Some(dir.as_os_str()), &|_| None);
         assert_eq!(
             supports,
             vec![
@@ -1688,10 +1728,21 @@ mod tests {
             ]
         );
 
+        write_executable(&dir, "custom-codex");
+        let supports = control_supports_for_path_with_env(Some(dir.as_os_str()), &|name| {
+            if name == "LONGHOUSE_CODEX_BIN" {
+                Some(dir.join("custom-codex").into_os_string())
+            } else {
+                None
+            }
+        });
+        assert!(supports.contains(&"codex.launch".to_string()));
+        assert!(supports.contains(&"codex.continue".to_string()));
+
         write_executable(&dir, "codex");
         write_executable(&dir, "claude");
         write_executable(&dir, "agy");
-        let supports = control_supports_for_path(Some(dir.as_os_str()));
+        let supports = control_supports_for_path_with_env(Some(dir.as_os_str()), &|_| None);
         assert!(supports.contains(&"codex.launch".to_string()));
         assert!(supports.contains(&"codex.continue".to_string()));
         assert!(supports.contains(&"claude.launch".to_string()));
@@ -1795,6 +1846,105 @@ mod tests {
 
         assert_eq!(first, second);
         assert_eq!(second["error"]["code"], "unsupported_command");
+    }
+
+    #[tokio::test]
+    async fn handle_command_frame_routes_claude_send_through_longhouse_cli() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = format!(
+            "lh-claude-send-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let dir = std::env::temp_dir().join(unique);
+        std::fs::create_dir_all(&dir).unwrap();
+        let args_path = dir.join("args.txt");
+        write_test_executable(
+            &dir.join("longhouse"),
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$LONGHOUSE_ARGS_OUT\"\nexit 0\n",
+        );
+
+        let old_path = std::env::var_os("PATH");
+        let old_args_out = std::env::var_os("LONGHOUSE_ARGS_OUT");
+        std::env::set_var("PATH", dir.as_os_str());
+        std::env::set_var("LONGHOUSE_ARGS_OUT", args_path.as_os_str());
+        let mut cache = command_cache();
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-claude-send",
+                "session_id": "session-1",
+                "command_type": COMMAND_SEND_TEXT,
+                "payload": {"provider": "claude", "text": "hello"},
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+        if let Some(value) = old_path {
+            std::env::set_var("PATH", value);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(value) = old_args_out {
+            std::env::set_var("LONGHOUSE_ARGS_OUT", value);
+        } else {
+            std::env::remove_var("LONGHOUSE_ARGS_OUT");
+        }
+
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["result"]["provider"], "claude");
+        assert_eq!(result["result"]["transport"], "claude_channel_bridge");
+        let args = std::fs::read_to_string(&args_path).unwrap();
+        assert_eq!(
+            args.lines().collect::<Vec<_>>(),
+            vec![
+                "claude-channel",
+                "send",
+                "--session-id",
+                "session-1",
+                "--text",
+                "hello",
+            ]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn handle_command_frame_rejects_unproven_provider_steer_paths() {
+        let mut cache = command_cache();
+        let opencode = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-opencode-steer",
+                "session_id": "session-1",
+                "command_type": COMMAND_STEER_TEXT,
+                "payload": {"provider": "opencode", "text": "change course"},
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+        let antigravity = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-antigravity-steer",
+                "session_id": "session-1",
+                "command_type": COMMAND_STEER_TEXT,
+                "payload": {"provider": "antigravity", "text": "change course"},
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+
+        assert_eq!(opencode["ok"], false);
+        assert_eq!(opencode["error"]["code"], "unsupported_command");
+        assert_eq!(antigravity["ok"], false);
+        assert_eq!(antigravity["error"]["code"], "unsupported_command");
     }
 
     #[test]
