@@ -3,12 +3,13 @@ from datetime import timezone
 
 import pytest
 
-from zerg.services.session_views import ActivityObservationResponse
-from zerg.services.session_views import HostObservationResponse
-from zerg.services.session_views import LifecycleFactResponse
-from zerg.services.session_views import PhaseObservationResponse
-from zerg.services.session_views import ProcessObservationResponse
-from zerg.services.session_views import SessionLivenessFactsResponse
+from zerg.services.session_liveness_facts import ActivityObservation
+from zerg.services.session_liveness_facts import ControlObservation
+from zerg.services.session_liveness_facts import HostObservation
+from zerg.services.session_liveness_facts import LifecycleFact
+from zerg.services.session_liveness_facts import PhaseObservation
+from zerg.services.session_liveness_facts import ProcessObservation
+from zerg.services.session_liveness_facts import SessionLivenessFacts
 from zerg.services.session_views import _timeline_status_from_liveness_facts
 
 
@@ -21,26 +22,32 @@ def _facts(
     process_status: str = "unknown",
     process_state: str | None = None,
     last_runtime_signal_at: datetime | None = None,
-) -> SessionLivenessFactsResponse:
+) -> SessionLivenessFacts:
     now = datetime(2026, 3, 21, 12, 0, tzinfo=timezone.utc)
-    return SessionLivenessFactsResponse(
+    return SessionLivenessFacts(
         control_path="managed",
+        control=ControlObservation(state="unknown"),
         process_state=process_state or ("running" if process_status == "observed" else "unknown"),
-        host=HostObservationResponse(state="unknown", last_seen_at=None, source=None),
-        process=ProcessObservationResponse(
+        host=HostObservation(state="unknown", last_seen_at=None, source=None),
+        process=ProcessObservation(
             status=process_status,
             pid=123 if process_status == "observed" else None,
             observed_at=now if process_status == "observed" else None,
             source="machine_process_scan" if process_status == "observed" else None,
         ),
-        phase=PhaseObservationResponse(
+        phase=PhaseObservation(
             kind=phase_kind,
             tool=phase_tool,
             source="managed_local_transport" if phase_kind else None,
             observed_at=now if phase_kind else None,
+            expires_at=None,
         ),
-        activity=ActivityObservationResponse(last_runtime_signal_at=last_runtime_signal_at),
-        lifecycle=LifecycleFactResponse(
+        activity=ActivityObservation(
+            last_transcript_at=None,
+            last_runtime_signal_at=last_runtime_signal_at,
+            last_progress_at=None,
+        ),
+        lifecycle=LifecycleFact(
             state=lifecycle_state,
             reason=lifecycle_reason,
             observed_at=now if lifecycle_state == "closed" else None,

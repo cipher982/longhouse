@@ -891,11 +891,8 @@ def test_session_response_uses_owner_for_engine_channel_capability(monkeypatch, 
                     control_overlay=control_overlay,
                 )
 
-                assert response.runtime_facts is not None
-                assert response.runtime_facts.host.state == "online"
-                assert response.runtime_facts.control.state == "online"
-                assert response.runtime_facts.control.source == "machine_control_ws"
-                assert response.runtime_facts.control.transport == "codex_app_server"
+                assert response.runtime_display is not None
+                assert response.runtime_display.host_state == "online"
                 assert response.capabilities.live_control_available is True
                 assert response.capabilities.reply_to_live_session_available is True
                 assert response.capabilities.can_queue_next_input is True
@@ -974,11 +971,8 @@ def test_session_response_keeps_engine_control_live_after_phase_goes_stale(monke
                     control_overlay=stale_control_overlay,
                 )
 
-                assert response.runtime_facts is not None
-                assert response.runtime_facts.lifecycle.state == "open"
-                assert response.runtime_facts.phase.kind is None
-                assert response.runtime_facts.control.state == "online"
-                assert response.runtime_facts.control.source == "machine_control_ws"
+                assert response.runtime_display is not None
+                assert response.runtime_display.lifecycle == "open"
                 assert response.capabilities.live_control_available is True
                 assert response.capabilities.composer_enabled is True
                 assert response.capabilities.composer_disabled_reason is None
@@ -1038,11 +1032,8 @@ def test_session_response_fresh_control_lease_not_phase_age_drives_sendability(t
                 control_overlay=fresh_control_overlay,
             )
 
-            assert response.runtime_facts is not None
-            assert response.runtime_facts.lifecycle.state == "open"
-            assert response.runtime_facts.phase.kind is None
-            assert response.runtime_facts.control.state == "online"
-            assert response.runtime_facts.control.source == "machine_heartbeat"
+            assert response.runtime_display is not None
+            assert response.runtime_display.lifecycle == "open"
             assert response.capabilities.live_control_available is True
             assert response.capabilities.composer_enabled is True
             assert response.capabilities.composer_disabled_reason is None
@@ -1139,11 +1130,8 @@ def test_session_response_stale_control_lease_is_offline_not_closed(tmp_path):
                 control_overlay=stale_control_overlay,
             )
 
-            assert response.runtime_facts is not None
-            assert response.runtime_facts.lifecycle.state == "open"
-            assert response.runtime_facts.phase.kind is None
-            assert response.runtime_facts.control.state == "offline"
-            assert response.runtime_facts.control.reason == "lease_stale"
+            assert response.runtime_display is not None
+            assert response.runtime_display.lifecycle == "open"
             assert response.capabilities.live_control_available is False
             assert response.capabilities.composer_enabled is False
             assert response.capabilities.display_label == "Control offline"
@@ -1186,10 +1174,8 @@ def test_session_response_projects_unmanaged_control_observation(tmp_path):
                 owner_id=None,
             )
 
-            assert response.runtime_facts is not None
-            assert response.runtime_facts.control_path == "unmanaged"
-            assert response.runtime_facts.control.state == "none"
-            assert response.runtime_facts.control.reason == "no_control_path"
+            assert response.runtime_display is not None
+            assert response.runtime_display.control_path == "unmanaged"
             assert response.capabilities.live_control_available is False
     finally:
         engine.dispose()
@@ -1354,9 +1340,7 @@ def test_session_response_uses_managed_control_lease_when_codex_phase_source_is_
                     control_overlay=control_overlay,
                 )
 
-                assert response.runtime_facts is not None
-                assert response.runtime_facts.phase.source == "semantic"
-                assert response.runtime_facts.control.state == "online"
+                assert response.runtime_display is not None
                 assert response.capabilities.live_control_available is True
                 assert response.capabilities.can_queue_next_input is True
                 assert response.capabilities.can_steer_active_turn is True

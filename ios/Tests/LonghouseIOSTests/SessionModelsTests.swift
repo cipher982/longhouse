@@ -3,58 +3,6 @@ import Testing
 @testable import Longhouse
 
 struct SessionModelsTests {
-    private func runtimeFacts(
-        controlPath: String = "managed",
-        processState: String = "unknown",
-        hostState: String = "unknown",
-        processStatus: String = "unknown",
-        phaseKind: String? = nil,
-        phaseTool: String? = nil,
-        phaseExpiresAt: String? = nil,
-        transcriptAt: String? = nil,
-        lifecycleState: String = "unknown",
-        lifecycleReason: String? = nil,
-        observedAt: String = "2026-04-25T20:00:00Z"
-    ) -> SessionLivenessFacts {
-        SessionLivenessFacts(
-            controlPath: controlPath,
-            processState: processState,
-            host: HostObservation(
-                state: hostState,
-                lastSeenAt: hostState == "unknown" ? nil : observedAt,
-                source: hostState == "unknown" ? nil : "machine_heartbeat"
-            ),
-            process: ProcessObservation(
-                status: processStatus,
-                pid: processStatus == "observed" ? 123 : nil,
-                processStartTime: processStatus == "observed" ? "2026-04-25T19:00:00Z" : nil,
-                observedAt: processStatus == "observed" ? observedAt : nil,
-                lastSeenAt: processStatus == "unknown" ? nil : observedAt,
-                sourceMtime: nil,
-                sourcePath: processStatus == "observed" ? "/tmp/session.jsonl" : nil,
-                reason: nil,
-                source: processStatus == "unknown" ? nil : "machine_process_scan"
-            ),
-            phase: PhaseObservation(
-                kind: phaseKind,
-                tool: phaseTool,
-                source: phaseKind == nil ? nil : "managed_local_transport",
-                observedAt: phaseKind == nil ? nil : observedAt,
-                expiresAt: phaseKind == nil ? nil : (phaseExpiresAt ?? "2026-04-25T20:15:00Z")
-            ),
-            activity: ActivityObservation(
-                lastTranscriptAt: transcriptAt,
-                lastRuntimeSignalAt: phaseKind == nil ? nil : observedAt,
-                lastProgressAt: nil
-            ),
-            lifecycle: LifecycleFact(
-                state: lifecycleState,
-                reason: lifecycleReason,
-                observedAt: lifecycleState == "unknown" ? nil : observedAt
-            )
-        )
-    }
-
     private func runtimeDisplay(activityRecency: String?) -> SessionRuntimeDisplay {
         SessionRuntimeDisplay(
             truthTier: "managed-local",
@@ -156,7 +104,9 @@ struct SessionModelsTests {
         phaseExpiresAt: String? = nil,
         includeRuntimeFacts: Bool = true
     ) -> SessionSummary {
-        SessionSummary(
+        _ = phaseExpiresAt
+        _ = includeRuntimeFacts
+        return SessionSummary(
             id: "freshness-test",
             title: "Freshness test",
             presenceState: "running",
@@ -165,17 +115,7 @@ struct SessionModelsTests {
             lastActivityAt: "2026-04-25T20:00:00Z",
             status: "running",
             displayPhase: "Using Codex",
-            runtimeDisplay: runtimeDisplay(activityRecency: activityRecency),
-            runtimeFacts: includeRuntimeFacts
-                ? runtimeFacts(
-                    processState: "running",
-                    hostState: "online",
-                    processStatus: "observed",
-                    phaseKind: "running",
-                    phaseTool: "codex",
-                    phaseExpiresAt: phaseExpiresAt
-                )
-                : nil
+            runtimeDisplay: runtimeDisplay(activityRecency: activityRecency)
         )
     }
 
@@ -1176,20 +1116,11 @@ struct SessionModelsTests {
     }
 
     @Test
-    func phaseSignalFreshUsesRuntimeFactDeadlineWhenPresent() {
-        let future = ISO8601DateFormatter().string(from: Date().addingTimeInterval(60))
-        let past = ISO8601DateFormatter().string(from: Date().addingTimeInterval(-60))
-
-        #expect(phaseSignalFresh(summaryForPhaseFreshness(activityRecency: "stale", phaseExpiresAt: future)))
-        #expect(!phaseSignalFresh(summaryForPhaseFreshness(activityRecency: "live", phaseExpiresAt: past)))
-    }
-
-    @Test
-    func phaseSignalFreshRequiresRuntimeFactDeadlineForLegacyPayloads() {
-        #expect(!phaseSignalFresh(summaryForPhaseFreshness(activityRecency: "live", includeRuntimeFacts: false)))
-        #expect(!phaseSignalFresh(summaryForPhaseFreshness(activityRecency: "recent", includeRuntimeFacts: false)))
-        #expect(!phaseSignalFresh(summaryForPhaseFreshness(activityRecency: "stale", includeRuntimeFacts: false)))
-        #expect(!phaseSignalFresh(summaryForPhaseFreshness(activityRecency: nil, includeRuntimeFacts: false)))
+    func phaseSignalFreshTracksActivityRecency() {
+        #expect(phaseSignalFresh(summaryForPhaseFreshness(activityRecency: "live")))
+        #expect(!phaseSignalFresh(summaryForPhaseFreshness(activityRecency: "recent")))
+        #expect(!phaseSignalFresh(summaryForPhaseFreshness(activityRecency: "stale")))
+        #expect(!phaseSignalFresh(summaryForPhaseFreshness(activityRecency: nil)))
     }
 
     @Test
@@ -1238,7 +1169,7 @@ struct SessionModelsTests {
     }
 
     @Test
-    func runtimeDisplayOverridesRuntimeFactsPresentation() {
+    func runtimeDisplayDrivesPresentation() {
         let managedPhase = SessionSummary(
             id: "session-fact-phase",
             title: "Managed phase",
@@ -1266,15 +1197,6 @@ struct SessionModelsTests {
                 lifecycle: "open",
                 hostState: "online",
                 terminalReason: nil
-            ),
-            runtimeFacts: runtimeFacts(
-                controlPath: "managed",
-                hostState: "online",
-                phaseKind: "running",
-                phaseTool: "mcp__hatch__hatch_codex",
-                transcriptAt: "2026-04-25T20:00:00Z",
-                lifecycleState: "open",
-                lifecycleReason: "phase_observed"
             )
         )
 
@@ -1283,169 +1205,6 @@ struct SessionModelsTests {
         #expect(managedPhase.displayPhaseLabel == "Using Shell")
         #expect(managedPhase.timelineStatusTone == "inactive")
         #expect(managedPhase.isExecuting)
-    }
-
-    @Test
-    func runtimeFactsRenderUnmanagedProcessTranscriptHostAndClosedStates() {
-        let processObserved = SessionSummary(
-            id: "session-process-observed",
-            title: "Unmanaged process",
-            presenceState: "idle",
-            provider: "codex",
-            project: "zerg",
-            lastActivityAt: "2026-04-25T20:00:00Z",
-            status: "working",
-            runtimeFacts: runtimeFacts(
-                controlPath: "unmanaged",
-                processState: "running",
-                hostState: "online",
-                processStatus: "observed",
-                transcriptAt: "2026-04-25T20:00:00Z",
-                lifecycleState: "open",
-                lifecycleReason: "process_observed"
-            )
-        )
-        let transcriptOnly = SessionSummary(
-            id: "session-transcript-only",
-            title: "Transcript only",
-            presenceState: "idle",
-            provider: "claude",
-            project: "zerg",
-            lastActivityAt: "2026-04-25T20:00:00Z",
-            status: "active",
-            runtimeFacts: runtimeFacts(controlPath: "unmanaged", transcriptAt: "2026-04-25T20:00:00Z")
-        )
-        let hostUnverified = SessionSummary(
-            id: "session-host-unverified",
-            title: "Runtime unverified",
-            presenceState: "idle",
-            provider: "codex",
-            project: "zerg",
-            lastActivityAt: "2026-04-25T20:00:00Z",
-            status: "idle",
-            runtimeFacts: runtimeFacts(controlPath: "managed")
-        )
-        let closed = SessionSummary(
-            id: "session-closed-fact",
-            title: "Closed",
-            presenceState: "running",
-            provider: "codex",
-            project: "zerg",
-            lastActivityAt: "2026-04-25T20:00:00Z",
-            status: "working",
-            runtimeDisplay: SessionRuntimeDisplay(
-                truthTier: "stale",
-                state: nil,
-                tone: "closed",
-                headline: "Closed",
-                detail: nil,
-                phaseLabel: "Closed",
-                compactToolLabel: nil,
-                isLive: false,
-                isExecuting: false,
-                needsAttention: false,
-                isIdle: true,
-                isManagedLocalTruth: false,
-                hasSignal: true,
-                controlPath: "unmanaged",
-                activityRecency: "stale",
-                lifecycle: "closed",
-                hostState: "unknown",
-                terminalReason: "provider_signal"
-            ),
-            runtimeFacts: runtimeFacts(
-                controlPath: "unmanaged",
-                transcriptAt: "2026-04-25T20:00:00Z",
-                lifecycleState: "closed",
-                lifecycleReason: "session_ended"
-            )
-        )
-        let terminalDisconnected = SessionSummary(
-            id: "session-terminal-disconnected",
-            title: "Terminal disconnected",
-            presenceState: "needs_user",
-            provider: "codex",
-            project: "zerg",
-            lastActivityAt: "2026-04-25T20:00:00Z",
-            status: "working",
-            runtimeDisplay: SessionRuntimeDisplay(
-                truthTier: "managed-local",
-                state: "needs_user",
-                tone: "idle",
-                headline: "Terminal disconnected",
-                detail: "The terminal client disconnected.",
-                phaseLabel: "Terminal disconnected",
-                compactToolLabel: nil,
-                isLive: false,
-                isExecuting: false,
-                needsAttention: false,
-                isIdle: true,
-                isManagedLocalTruth: true,
-                hasSignal: true,
-                controlPath: "managed",
-                activityRecency: "stale",
-                lifecycle: "closed",
-                hostState: "online",
-                terminalReason: "terminal_disconnected"
-            ),
-            runtimeFacts: runtimeFacts(
-                controlPath: "managed",
-                processState: "closed",
-                transcriptAt: "2026-04-25T20:00:00Z",
-                lifecycleState: "closed",
-                lifecycleReason: "terminal_disconnected"
-            )
-        )
-        let unknownWithClosedLegacy = SessionSummary(
-            id: "session-unknown-fact",
-            title: "Unknown fact",
-            presenceState: "idle",
-            provider: "codex",
-            project: "zerg",
-            lastActivityAt: "2026-04-25T20:00:00Z",
-            status: "completed",
-            runtimeDisplay: SessionRuntimeDisplay(
-                truthTier: "stale",
-                state: nil,
-                tone: "inactive",
-                headline: "Closed",
-                detail: nil,
-                phaseLabel: "Closed",
-                compactToolLabel: nil,
-                isLive: false,
-                isExecuting: false,
-                needsAttention: false,
-                isIdle: true,
-                isManagedLocalTruth: false,
-                hasSignal: true,
-                controlPath: "unmanaged",
-                activityRecency: "stale",
-                lifecycle: "closed",
-                hostState: "unknown",
-                terminalReason: "process_gone"
-            ),
-            runtimeFacts: runtimeFacts(controlPath: "unmanaged", transcriptAt: "2026-04-25T20:00:00Z")
-        )
-
-        #expect(processObserved.managementLabel == "Unmanaged")
-        #expect(processObserved.timelineStatusLabel == "No live signal")
-        #expect(processObserved.timelineStatusTone == "inactive")
-        #expect(processObserved.timelineStatusSeenAtPrefix == "Checked")
-        #expect(transcriptOnly.timelineStatusLabel == "No live signal")
-        #expect(transcriptOnly.timelineStatusSeenAtPrefix == "Checked")
-        #expect(hostUnverified.timelineStatusLabel == "No live signal")
-        #expect(closed.isClosed)
-        #expect(closed.timelineStatusLabel == "No live signal")
-        #expect(closed.timelineStatusTone == "inactive")
-        #expect(closed.displayPhaseLabel == "Closed")
-        #expect(!closed.isExecuting)
-        #expect(terminalDisconnected.isClosed)
-        #expect(terminalDisconnected.timelineStatusLabel == "No live signal")
-        #expect(terminalDisconnected.timelineStatusTone == "inactive")
-        #expect(terminalDisconnected.displayPhaseLabel == "Closed")
-        #expect(!terminalDisconnected.isExecuting)
-        #expect(unknownWithClosedLegacy.isClosed)
-        #expect(unknownWithClosedLegacy.timelineStatusLabel == "No live signal")
     }
 
     @Test
@@ -1549,11 +1308,8 @@ struct SessionModelsTests {
         #expect(session.timelineCard.ownership.label == "Managed")
         #expect(session.timelineCard.status.label == "Idle")
         #expect(session.timelineCard.borderTone == "idle")
-        #expect(session.runtimeFacts?.controlPath == "managed")
-        #expect(session.runtimeFacts?.control?.state == "online")
-        #expect(session.runtimeFacts?.control?.source == "machine_heartbeat")
-        #expect(session.runtimeFacts?.processState == "unknown")
-        #expect(session.runtimeFacts?.phase.kind == "needs_user")
+        #expect(session.runtimeDisplay.controlPath == "managed")
+        #expect(session.runtimeDisplay.hostState == "online")
         #expect(summary.timelineCard?.ownership.label == "Managed")
 
         let pendingSessionJSON = sessionJSON
@@ -1620,15 +1376,6 @@ struct SessionModelsTests {
                 lifecycle: "open",
                 hostState: "online",
                 terminalReason: nil
-            ),
-            runtimeFacts: runtimeFacts(
-                controlPath: "managed",
-                hostState: "online",
-                phaseKind: "running",
-                phaseTool: "shell",
-                transcriptAt: "2026-04-25T20:00:00Z",
-                lifecycleState: "open",
-                lifecycleReason: "phase_observed"
             ),
             timelineCard: TimelineCardPresentation(
                 ownership: TimelineBadgePresentation(label: "Managed", tone: "neutral"),

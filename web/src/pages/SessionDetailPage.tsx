@@ -390,10 +390,7 @@ function SessionDetailWorkspaceRoute({
                     displaySession.capabilities?.can_steer_active_turn,
                   )}
                   timelineItems={items}
-                  isStalled={Boolean(
-                    !displaySession.runtime_facts &&
-                      displaySession.runtime_display?.is_stalled,
-                  )}
+                  isStalled={Boolean(displaySession.runtime_display?.is_stalled)}
                   onSessionChanged={(nextSessionId) => {
                     if (!nextSessionId || nextSessionId === session.id) return;
                     navigate(`/timeline/${nextSessionId}`, {
