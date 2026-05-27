@@ -238,6 +238,11 @@ read the structured artifact, not Sauron's raw reasoning transcript.
 Initial product contract:
 
 - Sauron publishes one latest-status JSON document per provider.
+- `scripts/qa/provider-release-profile-canary.py` emits the shared provider
+  profile artifact for any managed provider in
+  `server/zerg/config/managed_provider_contracts.json`.
+- `scripts/qa/codex-provider-release-canary.py` remains the Codex-specific
+  live bridge/TUI canary suite.
 - Runtime Host and local-health may cache it and expose:
   - provider
   - upstream version
