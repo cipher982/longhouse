@@ -246,7 +246,10 @@ def _collect_provider_clis() -> dict[str, Any]:
     if antigravity_env_candidate:
         antigravity_path = _resolve_provider_cli_candidate(antigravity_env_candidate)
         antigravity_source = ANTIGRAVITY_BIN_ENV
-        antigravity_resolution_error = None if antigravity_path else f"{ANTIGRAVITY_BIN_ENV} did not resolve to an executable"
+        if antigravity_path:
+            antigravity_resolution_error = None
+        else:
+            antigravity_resolution_error = f"{ANTIGRAVITY_BIN_ENV} did not resolve to an executable"
     else:
         antigravity_path = shutil.which("agy")
         antigravity_source = PROVIDER_CLI_SOURCE_PATH if antigravity_path else PROVIDER_CLI_SOURCE_MISSING
@@ -729,11 +732,15 @@ def _add_launch_service_config_reasons(
     warnings: list[str],
     actions: list[str],
 ) -> None:
-    if ctx.can_reconcile_from_state and ctx.machine_name and ctx.service_machine_name and ctx.machine_name != ctx.service_machine_name:
+    machine_name = ctx.machine_name
+    service_machine_name = ctx.service_machine_name
+    service_machine_name_mismatch = machine_name and service_machine_name and machine_name != service_machine_name
+    if ctx.can_reconcile_from_state and service_machine_name_mismatch:
         reasons.append("service_machine_name_mismatch")
         _with_action(actions, _repair_command(can_reconcile_from_state=True))
 
-    if ctx.can_reconcile_from_state and ctx.state_hash and ctx.service_state_hash and ctx.state_hash != ctx.service_state_hash:
+    service_state_hash_mismatch = ctx.state_hash and ctx.service_state_hash and ctx.state_hash != ctx.service_state_hash
+    if ctx.can_reconcile_from_state and service_state_hash_mismatch:
         reasons.append("service_state_hash_mismatch")
         _with_action(actions, _repair_command(can_reconcile_from_state=True))
 
@@ -769,7 +776,15 @@ def _add_launch_service_runner_reason(ctx: _LaunchReadinessContext, reasons: lis
 
 
 def _launch_readiness_configured(ctx: _LaunchReadinessContext) -> bool:
-    return bool(ctx.state_exists or ctx.stored_url or ctx.machine_name or ctx.service_machine_name or ctx.runner.get("exists"))
+    return any(
+        (
+            ctx.state_exists,
+            ctx.stored_url,
+            ctx.machine_name,
+            ctx.service_machine_name,
+            ctx.runner.get("exists"),
+        )
+    )
 
 
 def _launch_readiness_state(*, reasons: list[str], configured: bool) -> tuple[str, str]:
@@ -868,9 +883,12 @@ def _launch_override_context(
     machine_name_override: str | None,
 ) -> _LaunchOverrideContext:
     runner = dict(readiness.get("runner") or {})
+    override_machine_name = str(machine_name_override or "").strip()
+    stored_machine_name = str(readiness.get("machine_name") or "").strip()
+    effective_machine_name = override_machine_name or stored_machine_name or None
     return _LaunchOverrideContext(
         effective_url=str(runtime_url_override or "").strip() or str(readiness.get("stored_url") or "").strip() or None,
-        effective_machine_name=str(machine_name_override or "").strip() or str(readiness.get("machine_name") or "").strip() or None,
+        effective_machine_name=effective_machine_name,
         runner_expected=bool(readiness.get("runner_expected")),
         runner_name=str(runner.get("runner_name") or "").strip() or None,
         runner_urls=[str(item).strip() for item in list(runner.get("runner_urls") or []) if str(item).strip()],
@@ -883,7 +901,8 @@ def _launch_override_context(
 
 def _apply_runner_url_override_reason(readiness: dict[str, Any], ctx: _LaunchOverrideContext) -> None:
     _drop_launch_reason(ctx.reasons, "config_url_runner_url_mismatch")
-    if ctx.runner_expected and ctx.effective_url and ctx.runner_urls and ctx.effective_url not in ctx.runner_urls:
+    runner_url_mismatch = ctx.effective_url and ctx.runner_urls and ctx.effective_url not in ctx.runner_urls
+    if ctx.runner_expected and runner_url_mismatch:
         ctx.reasons.append("config_url_runner_url_mismatch")
         _with_action(
             ctx.actions,
@@ -897,7 +916,9 @@ def _apply_runner_url_override_reason(readiness: dict[str, Any], ctx: _LaunchOve
 
 def _apply_runner_name_override_reason(readiness: dict[str, Any], ctx: _LaunchOverrideContext) -> None:
     _drop_launch_reason(ctx.reasons, "machine_name_runner_name_mismatch")
-    if ctx.runner_expected and ctx.effective_machine_name and ctx.runner_name and ctx.effective_machine_name != ctx.runner_name:
+    effective_machine_name = ctx.effective_machine_name
+    runner_name_mismatch = effective_machine_name and ctx.runner_name and effective_machine_name != ctx.runner_name
+    if ctx.runner_expected and runner_name_mismatch:
         ctx.reasons.append("machine_name_runner_name_mismatch")
         _with_action(
             ctx.actions,
@@ -1015,7 +1036,8 @@ def _collect_build_identity(*, engine_status: dict[str, Any]) -> dict[str, Any]:
     daemon_started_at = _parse_iso8601(daemon_started_at_raw)
 
     commit_mismatch = bool(installed_short and engine_short and installed_short != engine_short)
-    binary_newer_than_daemon = binary_mtime is not None and daemon_started_at is not None and binary_mtime > daemon_started_at
+    binary_times_present = binary_mtime is not None and daemon_started_at is not None
+    binary_newer_than_daemon = bool(binary_times_present and binary_mtime > daemon_started_at)
     engine_restart_pending = commit_mismatch or binary_newer_than_daemon
 
     return {
@@ -1115,7 +1137,10 @@ def _collect_outbox(base_dir: Path, *, now: datetime) -> dict[str, Any]:
             "oldest_age_seconds": None,
         }
 
-    files = [path for path in outbox_dir.iterdir() if path.is_file() and path.name.endswith(".json") and not path.name.startswith(".")]
+    files = []
+    for path in outbox_dir.iterdir():
+        if path.is_file() and path.name.endswith(".json") and not path.name.startswith("."):
+            files.append(path)
     if not files:
         return {
             "path": str(outbox_dir),
@@ -1190,6 +1215,34 @@ def _collect_update_info() -> dict[str, Any]:
 
 def _codex_bridge_state_dir(base_dir: Path) -> Path:
     return get_managed_local_dir("codex-bridge", base_dir=base_dir)
+
+
+def _legacy_codex_bridge_state_dir(base_dir: Path) -> Path | None:
+    longhouse_home = Path(base_dir).expanduser()
+    if longhouse_home.name != ".longhouse":
+        return None
+    return longhouse_home.parent / ".claude" / "managed-local" / "codex-bridge"
+
+
+def _count_codex_bridge_state_files(state_dir: Path) -> int:
+    if not state_dir.exists():
+        return 0
+    try:
+        return sum(1 for path in state_dir.glob("*.json") if not path.name.endswith(".tmp"))
+    except OSError:
+        return 0
+
+
+def _collect_legacy_runtime_state(base_dir: Path) -> dict[str, Any]:
+    legacy_codex_dir = _legacy_codex_bridge_state_dir(base_dir)
+    codex_bridge: dict[str, Any] = {
+        "path": str(legacy_codex_dir) if legacy_codex_dir is not None else None,
+        "exists": bool(legacy_codex_dir and legacy_codex_dir.exists()),
+        "state_file_count": _count_codex_bridge_state_files(legacy_codex_dir) if legacy_codex_dir is not None else 0,
+        "active_truth": False,
+        "note": "Stale pre-migration Codex bridge state only; not used for active liveness.",
+    }
+    return {"codex_bridge": codex_bridge}
 
 
 def _compute_process_snapshot() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -1420,7 +1473,8 @@ def _load_outbox_session_phase_rows(base_dir: Path) -> dict[str, dict[str, str |
             "last_activity_at": _to_rfc3339(observed_at),
         }
         current = merged.get(session_id)
-        if current is None or _max_rfc3339(next_row["observed_at"], current.get("observed_at")) == next_row["observed_at"]:
+        latest_observed_at = _max_rfc3339(next_row["observed_at"], current.get("observed_at")) if current else None
+        if current is None or latest_observed_at == next_row["observed_at"]:
             merged[session_id] = next_row
     return merged
 
@@ -1460,7 +1514,8 @@ def _load_managed_session_phase_state(base_dir: Path, *, now: datetime) -> dict[
     merged = _load_persisted_managed_session_phase_rows(base_dir)
     for session_id, row in _load_outbox_session_phase_rows(base_dir).items():
         current = merged.get(session_id)
-        if current is None or _max_rfc3339(row.get("observed_at"), current.get("observed_at")) == row.get("observed_at"):
+        latest_observed_at = _max_rfc3339(row.get("observed_at"), current.get("observed_at")) if current else None
+        if current is None or latest_observed_at == row.get("observed_at"):
             next_row = dict(row)
             if current is not None:
                 for field_name in ("workspace_path", "workspace_label"):
@@ -1679,9 +1734,8 @@ def _codex_managed_session_row(
     thread_subscription_last_error: str | None,
     reason_codes: list[str],
 ) -> dict[str, Any]:
-    detached_ui_control_ready = bool(
-        app_server is not None and bridge_status == "ready" and _normalize_optional_string(state.get("thread_id")) is not None
-    )
+    bridge_has_thread = _normalize_optional_string(state.get("thread_id")) is not None
+    detached_ui_control_ready = bool(app_server is not None and bridge_status == "ready" and bridge_has_thread)
     normalized_state = "attached" if attached_process is not None or detached_ui_control_ready else "detached"
     if reason_codes:
         normalized_state = "degraded"
@@ -1773,9 +1827,9 @@ def _collect_managed_codex_sessions(
         thread_subscription_last_error = _normalize_optional_string(state.get("thread_subscription_last_error"))
         codex_bin = _normalize_optional_string(state.get("codex_bin"))
         bridge_heartbeat_at = bridge_updated_at
-        has_turn_activity = bool(
-            _normalize_optional_string(state.get("active_turn_id")) or _normalize_optional_string(state.get("last_turn_status"))
-        )
+        active_turn_id = _normalize_optional_string(state.get("active_turn_id"))
+        last_turn_status = _normalize_optional_string(state.get("last_turn_status"))
+        has_turn_activity = bool(active_turn_id or last_turn_status)
 
         if binding is None:
             orphan_bridges.append(
@@ -1919,13 +1973,14 @@ def _process_managed_session_row(
         workspace_path = _normalize_optional_string(proc_row.get("cwd"))
     phase_observed_at = phase_state.get("observed_at") if phase_state else None
     phase_last_activity_at = phase_state.get("last_activity_at") if phase_state else None
+    provider_cli = proc_row.get("provider_cli") or _provider_cli_reference(None, source=PROVIDER_CLI_SOURCE_PROCESS)
 
     return {
         "session_id": session_id,
         "provider": provider,
         "control_path": CONTROL_PATH_MANAGED,
         "liveness_model": LIVENESS_MODEL_PROCESS_SCAN,
-        "provider_cli": proc_row.get("provider_cli") or _provider_cli_reference(None, source=PROVIDER_CLI_SOURCE_PROCESS),
+        "provider_cli": provider_cli,
         "pid": proc_row.get("pid"),
         "workspace_label": workspace_label,
         "cwd": workspace_path,
@@ -2015,12 +2070,13 @@ def _collect_unmanaged_processes(
         if not started_at:
             continue
 
+        provider_cli = proc_row.get("provider_cli") or _provider_cli_reference(None, source=PROVIDER_CLI_SOURCE_PROCESS)
         processes.append(
             {
                 "provider": _normalize_optional_string(proc_row.get("provider")),
                 "control_path": CONTROL_PATH_UNMANAGED,
                 "liveness_model": LIVENESS_MODEL_PROCESS_SCAN,
-                "provider_cli": proc_row.get("provider_cli") or _provider_cli_reference(None, source=PROVIDER_CLI_SOURCE_PROCESS),
+                "provider_cli": provider_cli,
                 "pid": proc_row.get("pid"),
                 "workspace_label": _normalize_optional_string(proc_row.get("workspace_label")),
                 "cwd": _normalize_optional_string(proc_row.get("cwd")),
@@ -2174,6 +2230,7 @@ def _resolved_engine_managed_session_row(
     row_phase_observed_at = _normalize_optional_string(raw_row.get("phase_observed_at"))
     last_activity_at = _normalize_optional_string(raw_row.get("last_activity_at"))
     bridge_heartbeat_at = _normalize_optional_string(bridge.get("heartbeat_at"))
+    reason_codes = list(raw_row.get("reason_codes") or []) if isinstance(raw_row.get("reason_codes"), list) else []
 
     return {
         "session_id": session_id,
@@ -2195,7 +2252,7 @@ def _resolved_engine_managed_session_row(
         "app_server_pid": _normalize_optional_int(bridge.get("app_server_pid")),
         "bridge_heartbeat_at": bridge_heartbeat_at,
         "thread_subscription_status": _normalize_optional_string(bridge.get("thread_subscription_status")),
-        "reason_codes": (list(raw_row.get("reason_codes") or []) if isinstance(raw_row.get("reason_codes"), list) else []),
+        "reason_codes": reason_codes,
         "evidence": dict(evidence),
     }
 
@@ -2717,8 +2774,9 @@ def _add_outbox_reasons(
     outbox_oldest: Any,
     engine_log_path: str,
 ) -> None:
+    degraded_outbox_is_old = outbox_oldest is not None and outbox_oldest > OUTBOX_DEGRADED_AGE_SECONDS
     outbox_backlog_is_actionable = outbox_count >= BROKEN_BACKLOG_COUNT or (
-        outbox_count >= DEGRADED_BACKLOG_COUNT and outbox_oldest is not None and outbox_oldest > OUTBOX_DEGRADED_AGE_SECONDS
+        outbox_count >= DEGRADED_BACKLOG_COUNT and degraded_outbox_is_old
     )
     if outbox_backlog_is_actionable:
         reasons.append("outbox_backlog")
@@ -2792,7 +2850,10 @@ def _broken_shipping_flag(
         return True
     if service_status != "running" and (outbox_count > 0 or spool_pending > 0):
         return True
-    return bool(engine_exists and engine_age is not None and engine_age > ENGINE_STALE_SECONDS and (outbox_count > 0 or spool_pending > 0))
+    engine_is_stale = engine_exists and engine_age is not None and engine_age > ENGINE_STALE_SECONDS
+    has_pending_work = outbox_count > 0 or spool_pending > 0
+    stale_engine_has_pending_work = engine_is_stale and has_pending_work
+    return bool(stale_engine_has_pending_work)
 
 
 def _degraded_shipping_flag(
@@ -2958,6 +3019,14 @@ def _health_classification_context(
     service_status = str(service.get("status") or "not-installed")
     payload = engine_status.get("payload") or {}
     launch_reasons = [str(item) for item in list(launch_readiness.get("reasons") or [])]
+    if transport_sample is not None:
+        spool_pending = transport_sample.spool_pending
+    else:
+        spool_pending = int(payload.get("spool_pending_count") or 0)
+    unknown_managed_phase_count = 0
+    for session in managed_sessions:
+        if _managed_phase_is_unknown(session.get("raw_phase")):
+            unknown_managed_phase_count += 1
 
     return _HealthClassificationContext(
         service_status=service_status,
@@ -2966,7 +3035,7 @@ def _health_classification_context(
         engine_exists=bool(engine_status.get("exists")),
         engine_error=engine_status.get("error"),
         engine_age=engine_status.get("age_seconds"),
-        spool_pending=transport_sample.spool_pending if transport_sample is not None else int(payload.get("spool_pending_count") or 0),
+        spool_pending=spool_pending,
         disk_free_bytes=payload.get("disk_free_bytes"),
         outbox_count=int(outbox.get("file_count") or 0),
         outbox_oldest=outbox.get("oldest_age_seconds"),
@@ -2978,7 +3047,7 @@ def _health_classification_context(
         managed_detached=int((managed_summary or {}).get("detached_count") or 0),
         managed_degraded=int((managed_summary or {}).get("degraded_count") or 0),
         orphan_bridge_count=int((managed_summary or {}).get("orphan_bridge_count") or 0),
-        unknown_managed_phase_count=sum(1 for session in managed_sessions if _managed_phase_is_unknown(session.get("raw_phase"))),
+        unknown_managed_phase_count=unknown_managed_phase_count,
         canonical_sessions_missing=bool((managed_summary or {}).get("canonical_sessions_missing")),
         canonical_sessions_invalid=bool((managed_summary or {}).get("canonical_sessions_invalid")),
         repair_action=_repair_action_for_launch_readiness(launch_readiness),
@@ -3274,6 +3343,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
     provider_clis = _collect_provider_clis()
     provider_release_status = collect_provider_release_status(provider_clis, fast=fast)
     activity_summary = _collect_activity_summary(resolved_base_dir, now=now)
+    legacy_runtime_state = _collect_legacy_runtime_state(resolved_base_dir)
     managed_summary, managed_sessions, orphan_bridges, unmanaged_processes = _collect_managed_session_sources(
         resolved_base_dir,
         engine_status=engine_status,
@@ -3330,6 +3400,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         "provider_clis": provider_clis,
         "provider_release_status": provider_release_status,
         "activity_summary": activity_summary,
+        "legacy_runtime_state": legacy_runtime_state,
         "managed_summary": managed_summary,
         "managed_sessions": managed_sessions,
         "unmanaged_processes": unmanaged_processes,
