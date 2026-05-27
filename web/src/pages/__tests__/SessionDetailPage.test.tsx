@@ -537,7 +537,8 @@ describe("SessionDetailPage", () => {
     mockWorkspaceState({ session, model: buildTimelineModel([]) });
 
     renderSessionDetailPage();
-    await user.click(screen.getByTestId("session-continue-button"));
+    const continueButton = screen.getByTestId("session-continue-button");
+    await user.click(continueButton);
 
     await waitFor(() => {
       expect(launchApiMocks.continueRemoteSession).toHaveBeenCalledWith(
@@ -552,6 +553,9 @@ describe("SessionDetailPage", () => {
     expect(screen.getByTestId("launch-pending-banner")).toHaveTextContent(
       "Starting session on cinder",
     );
+    expect(continueButton).toBeDisabled();
+    await user.click(continueButton);
+    expect(launchApiMocks.continueRemoteSession).toHaveBeenCalledTimes(1);
   });
 
   it("keeps unresolved live tool calls pending from the row into the inspector", () => {

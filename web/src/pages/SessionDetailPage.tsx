@@ -184,6 +184,8 @@ function SessionDetailWorkspaceRoute({
     sessionLaunchState && sessionLaunchState !== "launching" && sessionLaunchState !== "launching_unknown"
       ? sessionLaunchState
       : (localContinueLaunchState ?? sessionLaunchState);
+  const continueLaunchInProgress =
+    effectiveLaunchState === "launching" || effectiveLaunchState === "launching_unknown";
 
   const refreshSessionQueries = useCallback(
     (targetSessionId: string) => {
@@ -197,7 +199,7 @@ function SessionDetailWorkspaceRoute({
 
   const handleContinueSession = useCallback(async () => {
     const sessionToContinue = continuationSession;
-    if (!canContinueSession || !continueTarget || !sessionToContinue || continuingSession) return;
+    if (!canContinueSession || !continueTarget || !sessionToContinue || continuingSession || continueLaunchInProgress) return;
     if (config.demoMode) {
       toast(DEMO_READ_ONLY_MESSAGE);
       return;
@@ -235,6 +237,7 @@ function SessionDetailWorkspaceRoute({
   }, [
     canContinueSession,
     continuationSession,
+    continueLaunchInProgress,
     continueTarget,
     continuingSession,
     refreshSessionQueries,
@@ -370,13 +373,13 @@ function SessionDetailWorkspaceRoute({
           variant="primary"
           size="sm"
           onClick={() => void handleContinueSession()}
-          disabled={continuingSession}
+          disabled={continuingSession || continueLaunchInProgress}
           title="Continue session"
           aria-label="Continue session"
           data-testid="session-continue-button"
         >
-          {continuingSession ? <Spinner size="sm" /> : <PlayIcon width={13} height={13} />}
-          <span>{continuingSession ? "Continuing" : "Continue"}</span>
+          {continuingSession || continueLaunchInProgress ? <Spinner size="sm" /> : <PlayIcon width={13} height={13} />}
+          <span>{continuingSession || continueLaunchInProgress ? "Continuing" : "Continue"}</span>
         </Button>
       ) : null}
       <Button
