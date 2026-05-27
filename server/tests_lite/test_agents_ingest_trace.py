@@ -15,6 +15,7 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
+from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
 from zerg.routers.agents_ingest import _write_serializer_label_for_ship_trace
 
@@ -100,6 +101,9 @@ def test_agents_ingest_persists_ship_trace_runtime_event(tmp_path):
 
         assert response.status_code == 200, response.text
         with factory() as db:
+            session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+            assert session.loop_mode == "assist"
+
             observation = (
                 db.query(SessionObservation)
                 .filter(SessionObservation.session_id == session_id)

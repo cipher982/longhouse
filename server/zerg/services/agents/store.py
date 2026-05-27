@@ -1336,6 +1336,7 @@ class AgentsStore:
                 started_at=data.started_at,
                 ended_at=None,
                 last_activity_at=(_normalize_utc_naive(data.ended_at) or _normalize_utc_naive(data.started_at)),
+                loop_mode="assist",
             )
             self.db.add(session)
             self.db.flush()
