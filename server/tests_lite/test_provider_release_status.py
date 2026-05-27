@@ -10,7 +10,7 @@ from zerg import provider_release_status as prs
 
 
 @pytest.fixture(autouse=True)
-def clear_release_status_env(monkeypatch) -> None:
+def clear_release_status_env(monkeypatch, tmp_path: Path) -> None:
     for key in (
         prs.PROVIDER_RELEASE_STATUS_DIR_ENV,
         prs.PROVIDER_RELEASE_STATUS_URL_ENV,
@@ -19,6 +19,7 @@ def clear_release_status_env(monkeypatch) -> None:
         prs.PROVIDER_RELEASE_STATUS_MAX_AGE_SECONDS_ENV,
     ):
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv(prs.PROVIDER_RELEASE_STATUS_CONFIG_FILE_ENV, str(tmp_path / "missing-provider-status.env"))
 
 
 def test_normalizes_codex_cli_version() -> None:
@@ -202,6 +203,49 @@ def test_collects_provider_status_artifacts_for_all_managed_providers(monkeypatc
         "codex": "ok",
         "opencode": "ok",
     }
+
+
+def test_reads_provider_status_config_file_when_env_absent(monkeypatch, tmp_path: Path) -> None:
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir()
+    (artifact_dir / "codex.json").write_text(
+        json.dumps(
+            {
+                "provider": "codex",
+                "schema_version": prs.PROVIDER_STATUS_SCHEMA_VERSION,
+                "provider_version": "codex-cli 0.134.0",
+                "verdict": "green",
+                "generated_at": "2026-05-27T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    config_file = tmp_path / "provider-release-status.env"
+    config_file.write_text(f"{prs.PROVIDER_RELEASE_STATUS_DIR_ENV}={artifact_dir}\n", encoding="utf-8")
+    monkeypatch.setenv(prs.PROVIDER_RELEASE_STATUS_CONFIG_FILE_ENV, str(config_file))
+    monkeypatch.setattr(
+        prs.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="codex-cli 0.134.0\n", stderr=""),
+    )
+
+    status = prs.collect_provider_release_status({"codex": {"path": "/opt/homebrew/bin/codex"}})
+
+    assert status["enabled"] is True
+    assert status["statuses"]["codex"]["status"] == "ok"
+
+
+def test_persists_provider_status_config_from_env(monkeypatch, tmp_path: Path) -> None:
+    config_file = tmp_path / "provider-release-status.env"
+    monkeypatch.setenv(prs.PROVIDER_RELEASE_STATUS_CONFIG_FILE_ENV, str(config_file))
+    monkeypatch.setenv(prs.PROVIDER_RELEASE_STATUS_URL_ENV, "http://sauron.local/provider-release-status/{provider}")
+
+    written = prs.persist_provider_release_status_config_from_env()
+
+    assert written == config_file
+    assert "LONGHOUSE_PROVIDER_RELEASE_STATUS_URL='http://sauron.local/provider-release-status/{provider}'" in (
+        config_file.read_text(encoding="utf-8")
+    )
 
 
 def test_accepts_sauron_provider_status_url_envelope(monkeypatch) -> None:

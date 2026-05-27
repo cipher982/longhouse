@@ -15,6 +15,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from zerg.provider_cli_contract import LEGACY_MANAGED_CODEX_LAUNCHER_MARKER
+from zerg.provider_release_status import persist_provider_release_status_config_from_env
 from zerg.services.desktop_app import install_desktop_app_service
 from zerg.services.local_health import collect_launch_readiness
 from zerg.services.longhouse_paths import classify_longhouse_home
@@ -221,6 +222,7 @@ def _reconcile_launch_artifacts(
     machine_state_hash: str | None,
     engine_path: str | None = None,
 ) -> tuple[dict[str, str], HookInstallResult, dict[str, str] | None]:
+    persist_provider_release_status_config_from_env()
     service_result = install_service(
         url=url,
         token=token,

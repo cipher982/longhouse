@@ -1,6 +1,7 @@
 import plistlib
 from types import SimpleNamespace
 
+from zerg import provider_release_status as prs
 from zerg.services import local_runtime_installer as installer
 
 
@@ -80,6 +81,48 @@ def test_install_local_runtime_does_not_create_global_mcp_configs(tmp_path, monk
     ]
     assert not (home / ".claude.json").exists()
     assert not (home / ".codex" / "config.toml").exists()
+
+
+def test_install_local_runtime_persists_provider_release_status_config(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    claude_dir = home / ".claude"
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv(
+        prs.PROVIDER_RELEASE_STATUS_URL_ENV,
+        "http://100.118.94.100:8876/provider-release-status/{provider}",
+    )
+    monkeypatch.setattr(
+        installer,
+        "write_machine_state",
+        lambda **kwargs: _stub_machine_state(**kwargs),
+    )
+    monkeypatch.setattr(installer, "save_token", lambda token, config_dir: None)
+    monkeypatch.setattr(installer, "sanitize_machine_name", lambda machine_name: machine_name)
+    monkeypatch.setattr(
+        installer,
+        "ensure_runtime_binary",
+        lambda component, **_kwargs: SimpleNamespace(path="/tmp/longhouse-engine", installed_now=False),
+    )
+    monkeypatch.setattr(
+        installer,
+        "install_service",
+        lambda **kwargs: {"message": "ok", "service": "launchd", "plist_path": "/tmp/test.plist"},
+    )
+    monkeypatch.setattr(installer, "install_hooks", lambda **kwargs: ["hooks installed"])
+
+    installer.install_local_runtime(
+        url="https://example.com",
+        token=None,
+        claude_dir=str(claude_dir),
+        machine_name="test-box",
+        menubar=False,
+    )
+
+    config_file = home / ".config" / "longhouse" / "provider-release-status.env"
+    assert "LONGHOUSE_PROVIDER_RELEASE_STATUS_URL='http://100.118.94.100:8876/provider-release-status/{provider}'" in (
+        config_file.read_text(encoding="utf-8")
+    )
 
 
 def test_install_local_runtime_removes_obsolete_managed_codex_runtime(tmp_path, monkeypatch):
