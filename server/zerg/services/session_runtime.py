@@ -593,7 +593,6 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
     accepted = 0
     duplicates = 0
     updated_runtime_keys: list[str] = []
-    bridge_preview_cleanup_session_ids: set[UUID] = set()
 
     for event in events:
         received_at = datetime.now(timezone.utc)
@@ -613,8 +612,6 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
         if bridge_transcript_event:
             outcome = "stored_live_overlay"
             _record_managed_codex_runtime_observation(event, outcome)
-            if event.session_id is not None:
-                bridge_preview_cleanup_session_ids.add(event.session_id)
             if event.runtime_key not in updated_runtime_keys:
                 updated_runtime_keys.append(event.runtime_key)
             continue
@@ -625,15 +622,6 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
         _record_managed_codex_runtime_observation(event, outcome)
         if outcome == "applied" and event.runtime_key not in updated_runtime_keys:
             updated_runtime_keys.append(event.runtime_key)
-
-    if bridge_preview_cleanup_session_ids:
-        from zerg.services.provisional_events import cleanup_bridge_transcript_preview_observations
-
-        cleanup_bridge_transcript_preview_observations(
-            db,
-            session_ids=list(bridge_preview_cleanup_session_ids),
-            commit=False,
-        )
 
     return RuntimeEventBatchResult(
         accepted=accepted,

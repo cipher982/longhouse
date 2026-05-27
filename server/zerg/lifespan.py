@@ -347,18 +347,23 @@ async def lifespan(app: FastAPI):
             # Live-preview observation reaper: bridge transcript deltas are
             # disposable UI evidence and can be very large during active turns.
             try:
-                from zerg.database import get_session_factory as _get_sf_preview
                 from zerg.services.provisional_events import cleanup_bridge_transcript_preview_observations
+                from zerg.services.write_serializer import get_write_serializer
 
                 async def _live_preview_cleanup_loop() -> None:
+                    ws = get_write_serializer()
                     while True:
                         try:
                             await asyncio.sleep(60)
-                            db = _get_sf_preview()()
-                            try:
-                                cleanup_bridge_transcript_preview_observations(db)
-                            finally:
-                                db.close()
+                            await ws.execute(
+                                lambda db: cleanup_bridge_transcript_preview_observations(
+                                    db,
+                                    batch_size=250,
+                                    max_sessions=5,
+                                    commit=False,
+                                ),
+                                label="live-preview-cleanup",
+                            )
                         except asyncio.CancelledError:
                             raise
                         except Exception:  # noqa: BLE001
