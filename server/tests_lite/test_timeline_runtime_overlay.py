@@ -866,8 +866,8 @@ def test_sessions_list_exposes_home_label_from_existing_session_metadata(tmp_pat
         assert rows["cloud-branch"]["home_label"] is None  # cloud labels hidden for launch
 
 
-def test_managed_session_capability_needs_current_runner_truth(tmp_path):
-    factory = _make_db(tmp_path, "managed_capability_requires_runner.db")
+def test_claude_channel_kernel_truth_marks_non_runner_session_online(tmp_path):
+    factory = _make_db(tmp_path, "claude_channel_kernel_truth.db")
     now = datetime.now(timezone.utc)
 
     db = factory()
@@ -898,12 +898,11 @@ def test_managed_session_capability_needs_current_runner_truth(tmp_path):
         assert data["id"] == str(session.id)
         assert data["runtime_display"]["control_path"] == "managed"
         assert data["runtime_display"]["activity_recency"] == "live"
-        assert data["runtime_display"]["host_state"] == "unknown"
-        assert data["capabilities"]["live_control_available"] is False
-        assert data["capabilities"]["reply_to_live_session_available"] is False
-        assert data["capabilities"]["can_queue_next_input"] is False
-        assert data["capabilities"]["display_label"] == "Control offline"
-        assert not str(data["capabilities"]["display_label"]).startswith("Live on")
+        assert data["runtime_display"]["host_state"] == "online"
+        assert data["capabilities"]["live_control_available"] is True
+        assert data["capabilities"]["reply_to_live_session_available"] is True
+        assert data["capabilities"]["can_queue_next_input"] is True
+        assert data["capabilities"]["display_label"] == "Live on this Mac"
 
 
 def test_active_sessions_fresh_presence_beats_ended_at(tmp_path):

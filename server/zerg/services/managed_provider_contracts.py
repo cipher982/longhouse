@@ -29,6 +29,8 @@ class ManagedProviderContract:
     runtime_phase: bool = True
     transcript_binding: bool = True
     can_resume: bool = False
+    # Expected machine-control channel operation names. The engine still owns
+    # the live supports[] handshake; this field documents the provider ceiling.
     machine_control_supports: tuple[str, ...] = ()
 
     @property
