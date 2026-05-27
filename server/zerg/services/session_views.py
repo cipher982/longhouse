@@ -252,14 +252,7 @@ def _native_continue_target(db, session: AgentSession) -> SessionContinueTarget 
         .scalar()
     )
     if not source_path:
-        source_path = (
-            db.query(AgentSourceLine.source_path)
-            .filter(AgentSourceLine.session_id == session.id)
-            .filter((AgentSourceLine.thread_id == thread.id) | (AgentSourceLine.thread_id.is_(None)))
-            .order_by(AgentSourceLine.created_at.desc(), AgentSourceLine.id.desc())
-            .limit(1)
-            .scalar()
-        )
+        source_path = _latest_source_line_path_for_native_continue(db, session_id=session.id)
     source_path = str(source_path).strip() if source_path else ""
     if not source_path:
         return None
@@ -269,6 +262,24 @@ def _native_continue_target(db, session: AgentSession) -> SessionContinueTarget 
         cwd=session.cwd,
         carry_context="native",
         native_resume_available=True,
+    )
+
+
+def _latest_source_line_path_for_native_continue(db, *, session_id) -> str | None:
+    """Find source evidence without touching ``thread_id`` on the hot path.
+
+    Hosted tenant DBs can have millions of source lines. A single
+    ``thread_id = ? OR thread_id IS NULL`` predicate has been observed to choose
+    a full-table OR plan and block timeline cards. Native continue only needs
+    evidence that the session has a local source transcript, so keep the fallback
+    bounded to the existing source_lines session index.
+    """
+    return (
+        db.query(AgentSourceLine.source_path)
+        .filter(AgentSourceLine.session_id == session_id)
+        .order_by(AgentSourceLine.id.desc())
+        .limit(1)
+        .scalar()
     )
 
 
