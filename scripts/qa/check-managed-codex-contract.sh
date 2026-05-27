@@ -25,13 +25,83 @@ scan_forbidden_pattern() {
   fi
 
   set +e
-  rg -n --hidden \
-    --glob '!.git' \
-    --glob '!**/check-managed-codex-contract.sh' \
-    --glob '!**/managed-codex-contract.test.py' \
-    --glob '!**/routers/threads.py' \
-    --glob '!**/generated/**' \
-    -- "$pattern" "${paths[@]}" >"$MATCHES_FILE"
+  if command -v rg >/dev/null 2>&1; then
+    rg -n --hidden \
+      --glob '!.git' \
+      --glob '!**/check-managed-codex-contract.sh' \
+      --glob '!**/managed-codex-contract.test.py' \
+      --glob '!**/routers/threads.py' \
+      --glob '!**/generated/**' \
+      -- "$pattern" "${paths[@]}" >"$MATCHES_FILE"
+  else
+    python3 - "$pattern" "$MATCHES_FILE" "${paths[@]}" <<'PY'
+from __future__ import annotations
+
+import re
+import sys
+import os
+from pathlib import Path
+
+pattern = sys.argv[1].replace("[[:space:]]", r"\s")
+matches_file = Path(sys.argv[2])
+roots = [Path(arg) for arg in sys.argv[3:]]
+regex = re.compile(pattern)
+excluded_names = {
+    "check-managed-codex-contract.sh",
+    "managed-codex-contract.test.py",
+}
+excluded_suffixes = {
+    Path("server/zerg/routers/threads.py"),
+    Path("server/zerg/api/routers/threads.py"),
+}
+matches: list[str] = []
+skipped_dirs = {
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    "__pycache__",
+    "build",
+    "dist",
+    "generated",
+    "node_modules",
+    "target",
+}
+
+def should_skip(path: Path) -> bool:
+    parts = set(path.parts)
+    if parts.intersection(skipped_dirs):
+        return True
+    if path.name in excluded_names:
+        return True
+    return any(path.as_posix().endswith(suffix.as_posix()) for suffix in excluded_suffixes)
+
+def iter_files(root: Path):
+    if root.is_file():
+        yield root
+    elif root.is_dir():
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames[:] = sorted(name for name in dirnames if name not in skipped_dirs)
+            for filename in sorted(filenames):
+                yield Path(dirpath) / filename
+
+for root in roots:
+    for path in iter_files(root):
+        if should_skip(path):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for match in regex.finditer(text):
+            line = text.count("\n", 0, match.start()) + 1
+            lines = text.splitlines()
+            line_text = lines[line - 1].strip() if lines else ""
+            matches.append(f"{path}:{line}:{line_text}")
+
+matches_file.write_text(("\n".join(matches) + "\n") if matches else "", encoding="utf-8")
+raise SystemExit(0 if matches else 1)
+PY
+  fi
   local rc=$?
   set -e
 
@@ -63,7 +133,33 @@ require_pattern() {
   fi
 
   set +e
-  rg -n --hidden -- "$pattern" "$ROOT_DIR/$rel_path" >"$MATCHES_FILE"
+  if command -v rg >/dev/null 2>&1; then
+    rg -n --hidden -- "$pattern" "$ROOT_DIR/$rel_path" >"$MATCHES_FILE"
+  else
+    python3 - "$pattern" "$MATCHES_FILE" "$ROOT_DIR/$rel_path" <<'PY'
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+pattern = sys.argv[1].replace("[[:space:]]", r"\s")
+matches_file = Path(sys.argv[2])
+path = Path(sys.argv[3])
+text = path.read_text(encoding="utf-8", errors="ignore")
+regex = re.compile(pattern)
+matches: list[str] = []
+
+for match in regex.finditer(text):
+    line = text.count("\n", 0, match.start()) + 1
+    lines = text.splitlines()
+    line_text = lines[line - 1].strip() if lines else ""
+    matches.append(f"{path}:{line}:{line_text}")
+
+matches_file.write_text(("\n".join(matches) + "\n") if matches else "", encoding="utf-8")
+raise SystemExit(0 if matches else 1)
+PY
+  fi
   local rc=$?
   set -e
 
