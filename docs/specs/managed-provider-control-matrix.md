@@ -3,7 +3,7 @@
 Status: Draft
 Owner: Machine Agent + managed provider CLI surfaces
 Updated: 2026-05-27
-Related: `provider-cli-contracts-and-codex-release-canaries.md`, `remote-session-launch.md`, `machine-agent-control-channel.md`, `managed-session-stall-recovery.md`
+Related: `provider-cli-contracts-and-codex-release-canaries.md`, `managed-provider-live-canary-roadmap.md`, `remote-session-launch.md`, `machine-agent-control-channel.md`, `managed-session-stall-recovery.md`
 
 ## Purpose
 
