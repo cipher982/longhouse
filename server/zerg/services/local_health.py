@@ -3585,11 +3585,12 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         provider_release_status=provider_release_status,
         control_channel=control_channel,
     )
-    managed_session_ids = set()
-    for session in managed_sessions:
-        session_id = _normalize_optional_string(session.get("session_id"))
-        if session_id is not None:
-            managed_session_ids.add(session_id)
+    managed_session_ids = {
+        session_id
+        for session in managed_sessions
+        for session_id in [_normalize_optional_string(session.get("session_id"))]
+        if session_id is not None
+    }
     managed_session_contracts = collect_managed_session_contract_diagnostics(
         resolved_base_dir,
         session_ids=managed_session_ids,
