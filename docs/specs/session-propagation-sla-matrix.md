@@ -162,8 +162,10 @@ This path is still experimental until repeated profiler runs prove the browser
 warm lane and durable archive lane independently.
 
 Managed OpenCode lifecycle:
-Lifecycle can be measured before remote send/interrupt is a product contract.
-This is `ci_mode=blocked` until managed OpenCode launch/control is first-class.
+Managed OpenCode now has a first-class server-bridge control path for launch,
+reattach, send, and interrupt. It remains blocked only for active-turn steer
+until the server/TUI prompt APIs prove bounded mid-turn injection and idle
+rejection.
 
 Unmanaged Codex and Claude graceful close:
 These compatibility/import paths should be truthful, but they do not get the
@@ -180,8 +182,9 @@ relationship loss from provider process death.
 Unmanaged live send is not promised. The UI should not imply live control for
 unmanaged sessions.
 
-OpenCode remote send/interrupt is not promised until the managed control path
-is defined.
+OpenCode remote send/interrupt is promised only for `opencode_server_bridge`
+sessions on machines whose control channel advertises `opencode.*` support.
+OpenCode active-turn steer is not promised.
 
 ## Promotion Rules
 

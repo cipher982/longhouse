@@ -55,7 +55,7 @@ the upstream provider can support.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Codex | Yes, `longhouse codex` | Yes, engine `session.launch` | Yes, engine channel | Yes, engine channel | Yes, engine channel with active-turn errors | Bridge/runtime events | Hooks + rollout | First-class |
 | Claude | Yes, `longhouse claude` | Yes, Machine Agent `claude.launch` with PTY-backed `--channels` channel-ready handshake | Yes, `claude-channel send` | Yes, `claude-channel interrupt` | Yes, gated by fresh active runtime phase, delivered through channel metadata | Channel/hooks/process scan | Claude channel + transcript ingest | First-class channel control |
-| OpenCode | Yes, `longhouse opencode` | No | No | No | No | OpenCode plugin runtime events | Plugin/transcript observation | Observe-only managed wrapper |
+| OpenCode | Yes, `longhouse opencode` server bridge + `opencode attach` | Yes, Machine Agent `opencode.launch` when `opencode` is on PATH | Yes, server `prompt_async` API | Yes, server `abort` API | No, active-turn injection not proven | OpenCode plugin runtime events | Plugin/transcript observation | First-class launch/send/interrupt; no steer |
 | Antigravity | Yes, `longhouse antigravity` / `longhouse agy` | No | No | No | No | JSON hooks + runtime outbox | Hook binding to transcript path | Observe-only managed wrapper |
 
 ## Target Matrix
@@ -106,32 +106,30 @@ Next Claude gaps:
 
 ### OpenCode
 
-OpenCode is the closest next provider to full control because it already has a
-server model. The current CLI exposes `opencode serve`, `opencode attach`, and
-`opencode run --attach <server>`. The local server's `/doc` OpenAPI payload
-exposes session create/list, prompt, async prompt, wait, abort, and TUI prompt
-append/submit endpoints.
+OpenCode now uses a server bridge because stock OpenCode exposes a local HTTP
+server model. The CLI exposes `opencode serve` and `opencode attach`; the local
+server's `/doc` OpenAPI payload exposes session create/list, prompt, async
+prompt, wait, abort, and TUI prompt append/submit endpoints.
 
-Target OpenCode adapter:
+Current OpenCode adapter:
 
 1. Launch an engine-owned OpenCode server sidecar:
    - stock `opencode serve --hostname 127.0.0.1 --port 0`
    - `OPENCODE_CONFIG_CONTENT` includes the Longhouse runtime plugin
-   - state file records `session_id`, `server_url`, pid/pgid, auth, cwd, and
-     provider session id
+   - state file records `session_id`, `server_url`, pid, auth, cwd, and
+     provider session id with mode 0600
+   - launch is idempotent per Longhouse session id and guarded by a lock
 2. Create or resolve the OpenCode session through the server API.
 3. Implement `longhouse opencode-channel send` against
-   `/api/session/:id/prompt`, `/api/session/:id/prompt_async`, or the stable
-   legacy `/session/:id/message`/`prompt_async` endpoint after a canary proves
-   the exact versioned shape.
+   `/session/:id/prompt_async`.
 4. Implement interrupt against `/session/:id/abort`.
 5. Implement attach as `opencode attach <server_url> --session <provider_id>`.
 6. Only after send + active phase + abort are proven, evaluate whether
    `steer_active_turn` should use async prompt, TUI prompt append/submit, or
    remain unsupported.
 7. Advertise support bits only when the engine can actually start and control
-   the server: `opencode.launch`, then `opencode.send`,
-   `opencode.interrupt`, and optionally `opencode.steer`.
+   the server: `opencode.launch`, `opencode.send`, and
+   `opencode.interrupt`. Do not advertise `opencode.steer` yet.
 
 OpenCode should not use process-only `opencode_process` as a control plane once
 the server sidecar exists. Introduce a new control plane such as
@@ -222,9 +220,9 @@ Before a provider is marked first-class, tests must prove:
 
 ## Immediate Delivery Order
 
-1. Finish Claude remote launch on Machine Agent control channel.
-2. Build OpenCode server-bridge sidecar and `opencode-channel send/interrupt`.
-3. Add OpenCode remote launch and attach.
+1. Finish Claude remote launch on Machine Agent control channel. Done.
+2. Build OpenCode server-bridge sidecar and `opencode-channel send/interrupt`. Done.
+3. Add OpenCode remote launch and attach. Done.
 4. Decide OpenCode steer only after active-turn semantics are proven.
 5. Build Antigravity hook inbox for queued/next-invocation input.
 6. Decide Antigravity interrupt and steer only after hook canaries prove

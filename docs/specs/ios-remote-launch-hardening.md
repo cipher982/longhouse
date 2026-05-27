@@ -2,7 +2,7 @@
 
 Status: Active prelaunch buildout
 Owner: mobile + managed session control
-Last updated: 2026-05-24
+Last updated: 2026-05-27
 
 ## Goal
 
@@ -10,13 +10,16 @@ Make "Start session" from iOS feel like a first-class Longhouse launch path:
 pick a machine, pick a real workspace from recent/common choices, see the
 provider being launched, start a managed Codex session, and send the first
 prompt without falling through a legacy control path.
+Codex is no longer the only launchable provider; iOS should render the same
+provider choices the Machine Agent advertises for Codex, Claude, and OpenCode.
 
 This is prelaunch. Prefer correcting the contract now over preserving
 compatibility with half-migrated launch state.
 
 ## Current Findings
 
-- iOS remote launch is Codex-only, but the sheet does not say so explicitly.
+- iOS remote launch must not be Codex-only in UI logic; provider choices come
+  from `launchable_providers`.
 - iOS still requires manual absolute cwd entry. Web already derives recent cwd
   suggestions from timeline sessions for the selected machine.
 - iOS navigates after launch without checking `launch_failed` or
@@ -43,6 +46,8 @@ Machine
 
 Provider
   Codex                          launchable on cinder
+  Claude                         launchable on cinder
+  OpenCode                       launchable on cinder
 
 Workspace
   ~/git/zerg/longhouse           recent
@@ -59,9 +64,9 @@ Start
 Rules:
 
 - Machine remains first because placement is the execution owner.
-- Provider is visible even while only Codex is supported.
+- Provider is visible and selectable for each entry in `launchable_providers`.
 - Provider choices are driven by `supports[]` (`<provider>.launch`), not
-  hardcoded UI assumptions. For this phase only Codex is selectable.
+  hardcoded UI assumptions.
 - Recent workspaces are scoped to `(owner, device_id)`.
 - Manual absolute path remains available, but it is no longer the primary
   path.

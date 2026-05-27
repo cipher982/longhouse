@@ -26,6 +26,7 @@ _LIVE_CONTROL_TRANSPORTS = frozenset(
     {
         ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE,
         ManagedSessionTransport.CODEX_APP_SERVER,
+        ManagedSessionTransport.OPENCODE_SERVER_BRIDGE,
     }
 )
 

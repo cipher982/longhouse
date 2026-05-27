@@ -516,7 +516,15 @@ class ConfigureTestSessionRuntimeRequest(BaseModel):
     """Test-only session runtime override for Playwright coverage."""
 
     execution_home: Literal["unmanaged_local", "managed_local", "managed_hosted", "cloud_takeover"] = "managed_local"
-    managed_transport: Optional[Literal["claude_channel_bridge", "codex_app_server", "opencode_process", "antigravity_process"]] = None
+    managed_transport: Optional[
+        Literal[
+            "claude_channel_bridge",
+            "codex_app_server",
+            "opencode_server_bridge",
+            "opencode_process",
+            "antigravity_process",
+        ]
+    ] = None
     source_runner_id: Optional[int] = None
     source_runner_name: Optional[str] = None
     managed_session_name: Optional[str] = None

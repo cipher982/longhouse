@@ -88,8 +88,15 @@ _CONTRACTS: tuple[ManagedProviderContract, ...] = (
     ),
     ManagedProviderContract(
         provider="opencode",
-        managed_transport=ManagedSessionTransport.OPENCODE_PROCESS,
-        control_plane="opencode_process",
+        managed_transport=ManagedSessionTransport.OPENCODE_SERVER_BRIDGE,
+        control_plane="opencode_server_bridge",
+        launch_remote=True,
+        reattach=True,
+        send_input=True,
+        interrupt=True,
+        terminate=True,
+        can_resume=True,
+        machine_control_supports=("opencode.send", "opencode.interrupt", "opencode.launch"),
     ),
     ManagedProviderContract(
         provider="antigravity",
@@ -100,6 +107,12 @@ _CONTRACTS: tuple[ManagedProviderContract, ...] = (
 
 _BY_PROVIDER = {contract.provider: contract for contract in _CONTRACTS}
 _BY_CONTROL_PLANE = {control_plane: contract for contract in _CONTRACTS for control_plane in contract.control_planes}
+_LEGACY_CONTROL_PLANE_PROVIDERS = {
+    "opencode_process": "opencode",
+}
+_LEGACY_CONTROL_PLANE_TRANSPORTS = {
+    "opencode_process": ManagedSessionTransport.OPENCODE_PROCESS,
+}
 
 
 def all_managed_provider_contracts() -> tuple[ManagedProviderContract, ...]:
@@ -130,6 +143,9 @@ def managed_transport_for_provider(provider: str | None) -> ManagedSessionTransp
 
 
 def managed_transport_for_control_plane(control_plane: str | None) -> ManagedSessionTransport | None:
+    normalized = str(control_plane or "").strip()
+    if normalized in _LEGACY_CONTROL_PLANE_TRANSPORTS:
+        return _LEGACY_CONTROL_PLANE_TRANSPORTS[normalized]
     contract = contract_for_control_plane(control_plane)
     return contract.managed_transport if contract is not None else None
 
@@ -139,6 +155,9 @@ def control_plane_for_provider(provider: str | None) -> str:
 
 
 def provider_for_control_plane(control_plane: str | None) -> str | None:
+    normalized = str(control_plane or "").strip()
+    if normalized in _LEGACY_CONTROL_PLANE_PROVIDERS:
+        return _LEGACY_CONTROL_PLANE_PROVIDERS[normalized]
     contract = contract_for_control_plane(control_plane)
     return contract.provider if contract is not None else None
 
@@ -148,7 +167,11 @@ def remote_launch_supported_providers() -> frozenset[str]:
 
 
 def steer_control_planes() -> frozenset[str]:
-    return frozenset(control_plane for contract in _CONTRACTS if contract.steer_active_turn for control_plane in contract.control_planes)
+    control_planes: list[str] = []
+    for contract in _CONTRACTS:
+        if contract.steer_active_turn:
+            control_planes.extend(contract.control_planes)
+    return frozenset(control_planes)
 
 
 def trusted_non_runner_control_planes() -> frozenset[str]:

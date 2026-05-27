@@ -28,6 +28,7 @@ CODEX_LAUNCH_CAPABILITY = "codex.launch"
 LAUNCH_CAPABILITY_BY_PROVIDER = {
     "codex": "codex.launch",
     "claude": "claude.launch",
+    "opencode": "opencode.launch",
 }
 CONTROL_CONNECTED = "connected"
 CONTROL_DISCONNECTED = "disconnected"

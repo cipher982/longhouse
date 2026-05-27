@@ -29,6 +29,7 @@ from zerg.cli.mcp_serve import mcp_server
 from zerg.cli.onboard import onboard
 from zerg.cli.opencode import opencode
 from zerg.cli.opencode_bridge import app as opencode_bridge_app
+from zerg.cli.opencode_channel import app as opencode_channel_app
 from zerg.cli.runtime_artifact_smoke import runtime_artifact_install_command
 from zerg.cli.runtime_artifact_smoke import runtime_artifact_smoke_command
 from zerg.cli.serve import serve
@@ -244,6 +245,7 @@ app.add_typer(config_app, name="config", help="Configuration management")
 app.add_typer(db_app, name="db", help="SQLite database diagnostics and maintenance")
 app.add_typer(claude_channel_app, name="claude-channel", help="Claude channel bridge commands", hidden=True)
 app.add_typer(opencode_bridge_app, name="opencode-bridge", help="OpenCode bridge commands", hidden=True)
+app.add_typer(opencode_channel_app, name="opencode-channel", help="OpenCode server bridge commands", hidden=True)
 app.add_typer(codex_app, name="codex")
 app.add_typer(local_health_app, name="local-health")
 app.add_typer(machine_app, name="machine", help="Machine runtime repair and reconciliation")

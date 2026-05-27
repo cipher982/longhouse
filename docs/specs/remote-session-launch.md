@@ -1,23 +1,23 @@
 # Remote Session Launch
 
-Status: Implemented in `remote-session-launch` as a Codex-only v1. Directory picker, presets, Claude launch, and richer SLA telemetry remain deferred.
+Status: Implemented in `remote-session-launch`; Codex, Claude, and OpenCode are launchable when the target Machine Agent advertises provider-specific support. Directory picker, presets, Antigravity launch, and richer SLA telemetry remain deferred.
 Owner: machine control + mobile/web launch UX
-Updated: 2026-05-12
+Updated: 2026-05-27
 
 ## Goal
 
 Let a user start a new managed session on one of their own already-enrolled
 machines from iOS or web, without first opening a terminal on that machine.
 
-Today, managed sessions are created by `longhouse codex` / `longhouse claude`
-running on the target machine itself. That machine POSTs to
+Managed sessions can be created by `longhouse codex`, `longhouse claude`, or
+`longhouse opencode` running on the target machine itself. That machine POSTs to
 `/api/sessions/managed-local/this-device` with its own device token.
 
 After this spec, a user on iPhone or browser picks a machine, picks a
 workspace (cwd), picks a provider, and says "start it there." The target
 Machine Agent receives a typed `session.launch` command over its existing
-control WebSocket, spawns the provider locally in detached-UI managed mode
-under the engine bridge, and reports the pre-allocated session id back.
+control WebSocket, spawns the provider locally through the provider's managed
+transport, and reports the pre-allocated session id back.
 
 This is a natural extension of `machine-agent-control-channel.md`: Phase 2
 gave us `session.send_text` / `interrupt` / `steer_text` on known sessions.
@@ -29,8 +29,8 @@ session rather than act on an existing one.
 - No session migration between machines. Sessions run where launched.
 - No workspace filesystem sync, rsync, or git auto-commit on launch.
 - No Longhouse-provisioned runtime. Machines are user-owned.
-- No Claude support in v1. Codex only. Claude joins when its control path
-  leaves `legacy_runner` and becomes native.
+- No Antigravity remote launch until its control path is more than an
+  observe-only process wrapper.
 - No "queue launch until machine comes online." Machine must be online at
   request time. Queueing is a jobs product.
 - No generic remote shell. `session.launch` spawns one Longhouse-managed
@@ -40,19 +40,20 @@ session rather than act on an existing one.
 
 ## Release Scope
 
-The release scope is the narrow Codex v1:
+The current release scope:
 
 - machine directory endpoints for browser and machine clients
 - `POST /api/sessions/launch`
 - `session.launch` over the Machine Agent control WebSocket
 - detached-UI Codex bridge startup with thread creation
+- PTY-backed Claude channel launch
+- OpenCode server-bridge launch with `opencode attach` reattach
 - web and iOS launch sheets
 - launch lifecycle fields on `sessions`
 - launch reaper and admin debug endpoint
 
-Directory picker, workspace presets, Claude launch, queued offline
-launch, and propagation SLA dashboard integration are intentionally
-deferred.
+Directory picker, workspace presets, Antigravity launch, queued offline launch,
+and propagation SLA dashboard integration are intentionally deferred.
 
 ## Product Shape
 
@@ -67,13 +68,13 @@ additive follow-ups.
 Start Session
 ──────────────
 Machine
-  [cinder]  online     · Codex ✓
+  [cinder]  online     · Codex ✓  Claude ✓  OpenCode ✓
   [homelab] offline              (disabled)
 
 Workspace on cinder
   /Users/david/git/zerg
 
-Provider     [Codex]
+Provider     [Codex | Claude | OpenCode]
 
                                                 [Start]
 ```
@@ -81,22 +82,21 @@ Provider     [Codex]
 - Machine list is first — it is what new users actually have.
 - Workspace is a typed absolute cwd in v1. A directory picker backed by
   the Machine Agent and recent workspaces are deferred accelerators.
-- Provider defaults to the only one in v1 (Codex).
+- Provider choices come from live `supports[]` values such as `codex.launch`,
+  `claude.launch`, and `opencode.launch`.
 - Initial prompt is deferred from the Codex v1 release. The v1 launch
   creates a steerable empty session; the user sends the first prompt from
   session detail.
 
 ### After "Start"
 
-- Success deep-links into session detail, which already renders managed
-  Codex live transcript + steering.
-- Provider process runs in detached-UI managed mode on the target machine
-  under the engine-owned bridge. Same long-running app-server/bridge control
-  path a local `longhouse codex` ends up on, minus the visible terminal TUI
-  attach. This is not one-shot prompt-and-exit execution.
-- A user at a terminal on the target machine can later `longhouse codex
-  --attach <session-id>` if they want to watch it there (pre-existing
-  capability; unchanged).
+- Success deep-links into session detail, which renders the provider's managed
+  control capabilities from the kernel projection.
+- Codex runs detached-UI under the engine-owned app-server bridge. Claude runs
+  through the channel launch path. OpenCode runs through the localhost server
+  bridge. None of these are one-shot prompt-and-exit execution.
+- A user at a terminal on the target machine can later reattach through the
+  provider-specific attach command.
 
 ## First-Principles Invariants
 
@@ -126,7 +126,7 @@ Provider     [Codex]
 
 6. **Explicit per-provider per-op capability.**
    Only providers the Machine Agent announces in `supports[]` as
-   `<provider>.launch` are offerable. Codex in v1.
+   `<provider>.launch` are offerable.
 
 7. **Machine Agent is authoritative for cwd.**
    Runtime Host does not validate filesystem paths. The Machine Agent
@@ -420,11 +420,10 @@ Acceptance:
 - DB migration: add `session_launch_attempts`.
 - `POST /api/sessions/launch` endpoint.
 - Control-channel `session.launch` command dispatch.
-- Engine handler in `control_channel.rs` that validates cwd via
-  `launch_policy`, calls `cmd_codex_bridge_start`, returns the typed
-  result.
-- Engine `supports[]` gains `codex.launch` when the Codex bridge is
-  available.
+- Engine handler in `control_channel.rs` validates cwd, dispatches to the
+  provider-specific launch adapter, and returns the typed result.
+- Engine `supports[]` includes only launch providers whose stock binaries are
+  present on PATH.
 - `launch_error_code` + `launch_error_message` surface on
   `GET /api/sessions/{id}` for clients to render.
 

@@ -85,6 +85,7 @@ CODEX_LAUNCH_CAPABILITY = "codex.launch"
 LAUNCH_CAPABILITY_BY_PROVIDER = {
     "codex": "codex.launch",
     "claude": "claude.launch",
+    "opencode": "opencode.launch",
 }
 
 
@@ -3471,7 +3472,7 @@ def _collect_control_channel_health(engine_status: dict[str, Any]) -> dict[str, 
         provider for provider, capability in LAUNCH_CAPABILITY_BY_PROVIDER.items() if status == "connected" and capability in supports
     )
     launch_blocked_by = None
-    if not can_launch_codex:
+    if not launchable_providers:
         launch_blocked_by = "no_codex_support" if status == "connected" else "control_down"
 
     return {
@@ -3487,6 +3488,7 @@ def _collect_control_channel_health(engine_status: dict[str, Any]) -> dict[str, 
         "supports": supports,
         "can_launch_codex": can_launch_codex,
         "can_launch_claude": "claude" in launchable_providers,
+        "can_launch_opencode": "opencode" in launchable_providers,
         "launchable_providers": launchable_providers,
         "launch_blocked_by": launch_blocked_by,
     }

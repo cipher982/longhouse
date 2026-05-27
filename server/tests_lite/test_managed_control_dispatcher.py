@@ -14,6 +14,7 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg.services.live_session_dispatch import supports_live_text_dispatch_metadata
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
+from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_INTERRUPT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_LEGACY_RUNNER
@@ -152,6 +153,52 @@ def test_select_managed_control_transport_supports_claude_engine_channel():
                     ),
                     owner_id=42,
                     command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+                )
+                == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
+            )
+        finally:
+            await _clear_machine_registry()
+
+    asyncio.run(_run())
+
+
+def test_select_managed_control_transport_supports_opencode_engine_channel():
+    async def _run():
+        await _clear_machine_registry()
+        try:
+            await _connect_fake_engine(owner_id=42, supports=["opencode.send"])
+            assert (
+                select_managed_control_transport(
+                    _session(
+                        provider="opencode",
+                        managed_transport="opencode_server_bridge",
+                        source_runner_id=None,
+                    ),
+                    owner_id=42,
+                    command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+                )
+                == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
+            )
+        finally:
+            await _clear_machine_registry()
+
+    asyncio.run(_run())
+
+
+def test_select_managed_control_transport_supports_opencode_interrupt_engine_channel():
+    async def _run():
+        await _clear_machine_registry()
+        try:
+            await _connect_fake_engine(owner_id=42, supports=["opencode.interrupt"])
+            assert (
+                select_managed_control_transport(
+                    _session(
+                        provider="opencode",
+                        managed_transport="opencode_server_bridge",
+                        source_runner_id=None,
+                    ),
+                    owner_id=42,
+                    command_type=MANAGED_CONTROL_COMMAND_INTERRUPT,
                 )
                 == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
             )
@@ -311,6 +358,20 @@ def test_live_text_dispatch_metadata_accepts_claude_engine_channel_without_runne
         assert (
             supports_live_text_dispatch_metadata(
                 _session(provider="claude", managed_transport="claude_channel_bridge", source_runner_id=None),
+                owner_id=42,
+            )
+            is True
+        )
+
+    asyncio.run(_run())
+
+
+def test_live_text_dispatch_metadata_accepts_opencode_engine_channel_without_runner_metadata():
+    async def _run():
+        await _connect_fake_engine(owner_id=42, supports=["opencode.send"])
+        assert (
+            supports_live_text_dispatch_metadata(
+                _session(provider="opencode", managed_transport="opencode_server_bridge", source_runner_id=None),
                 owner_id=42,
             )
             is True

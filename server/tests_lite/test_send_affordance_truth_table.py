@@ -75,20 +75,11 @@ def test_live_executing_claude_channel_bridge_uses_steer_intent():
     assert affordance.send_disabled_reason is None
 
 
-def test_live_executing_opencode_process_uses_steer_intent():
-    """OpenCode is first-class managed: mid-turn steer must be exposed.
+def test_live_executing_non_steerable_transport_uses_queue_intent():
+    affordance = _project(_caps(control_plane="opencode_server_bridge"), provider_label="OpenCode", is_executing=True)
 
-    Regression test for codex-review finding #1: prior to this fix,
-    ``can_steer_active_turn`` was hardcoded to ``codex_bridge`` only,
-    which silently downgraded OpenCode to queue-intent in the UI even
-    though the bridge supports abort+resend.
-    """
-
-    caps = _caps(control_plane="opencode_process")
-    assert caps.can_steer_active_turn is True
-    affordance = _project(caps, provider_label="OpenCode", is_executing=True)
     assert affordance.input_mode == "live"
-    assert affordance.default_input_intent == "steer"
+    assert affordance.default_input_intent == "auto"
     assert affordance.send_disabled_reason is None
 
 

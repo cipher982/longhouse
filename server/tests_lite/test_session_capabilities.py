@@ -112,8 +112,10 @@ def _seed_agent_session(db, *, seed_kernel_rows: bool = True, **overrides) -> Ag
     if seed_kernel_rows and home == "managed_local":
         if provider == "codex" or transport == "codex_app_server":
             kernel_plane = "codex_bridge"
-        elif provider == "opencode" or transport == "opencode_process":
+        elif transport == "opencode_process":
             kernel_plane = "opencode_process"
+        elif provider == "opencode" or transport == "opencode_server_bridge":
+            kernel_plane = "opencode_server_bridge"
         elif provider == "antigravity" or transport == "antigravity_process":
             kernel_plane = "antigravity_process"
         else:
@@ -228,6 +230,24 @@ def test_opencode_process_transport_is_managed_but_not_remote_controllable():
     assert capabilities.host_reattach_available is False
     assert capabilities.reply_to_live_session_available is False
     assert capabilities.can_queue_next_input is False
+    assert capabilities.can_steer_active_turn is False
+
+
+def test_opencode_server_bridge_transport_is_live_send_capable_but_not_steerable():
+    session = _make_session(
+        provider="opencode",
+        execution_home="managed_local",
+        managed_transport=ManagedSessionTransport.OPENCODE_SERVER_BRIDGE.value,
+        source_runner_id=17,
+    )
+
+    capabilities = build_session_capabilities(session)
+
+    assert capabilities.managed_transport == ManagedSessionTransport.OPENCODE_SERVER_BRIDGE
+    assert capabilities.live_control_available is True
+    assert capabilities.host_reattach_available is True
+    assert capabilities.reply_to_live_session_available is True
+    assert capabilities.can_queue_next_input is True
     assert capabilities.can_steer_active_turn is False
 
 
