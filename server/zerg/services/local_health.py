@@ -3488,7 +3488,13 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
     launch_readiness = _collect_launch_readiness(resolved_base_dir, service=service)
     transport_sample, transport_assessment = _collect_transport_health(engine_status)
     control_channel = _collect_control_channel_health(engine_status)
-    managed_session_contracts = collect_managed_session_contract_diagnostics(resolved_base_dir)
+    managed_session_ids = {
+        session_id for session in managed_sessions if (session_id := _normalize_optional_string(session.get("session_id"))) is not None
+    }
+    managed_session_contracts = collect_managed_session_contract_diagnostics(
+        resolved_base_dir,
+        session_ids=managed_session_ids,
+    )
     provider_hook_diagnostics = _collect_provider_hook_diagnostics(resolved_base_dir, now=now, fast=fast)
     health_state, severity, headline, reasons, suggested_actions = _classify_health(
         service=service,

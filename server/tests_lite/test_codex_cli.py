@@ -17,7 +17,13 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 from zerg.cli import claude as claude_cli
 from zerg.cli import codex as codex_cli
 from zerg.cli.main import app
+from zerg.services.managed_session_contracts import list_managed_session_contracts
 from zerg.session_loop_mode import SessionLoopMode
+
+
+@pytest.fixture(autouse=True)
+def _isolate_longhouse_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("LONGHOUSE_HOME", str(tmp_path / ".longhouse"))
 
 
 class _FakeResponse:
@@ -604,6 +610,11 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     assert native_tui_calls == [
         ("session-123", "/tmp/codex", "ws://127.0.0.1:4800", str(tmp_path), False, None, None, "thr_123")
     ]
+    contracts = list_managed_session_contracts(tmp_path / ".longhouse")
+    assert contracts[0]["provider"] == "codex"
+    assert contracts[0]["workspace"]["cwd"] == str(tmp_path)
+    assert contracts[0]["control"]["state_path"] == "/tmp/state.json"
+    assert contracts[0]["launch_mode"] == "tui"
     assert stop_calls == [
         {
             "session_id": "session-123",

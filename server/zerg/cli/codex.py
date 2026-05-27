@@ -27,6 +27,7 @@ from zerg.cli._common import ensure_managed_launch_preflight as _ensure_managed_
 from zerg.cli._common import interactive_stdio as _interactive_stdio
 from zerg.cli._common import load_api_credentials as _load_api_credentials
 from zerg.cli._common import open_session_url as _open_session_url
+from zerg.cli._managed_contract import record_managed_provider_contract
 from zerg.provider_cli_contract import CODEX_BIN_ENV
 from zerg.provider_cli_contract import LEGACY_MANAGED_CODEX_LAUNCHER_MARKER
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_CODEX_BIN_FLAG
@@ -140,6 +141,14 @@ def _resolve_codex_binary_with_source(explicit: str | None = None) -> dict[str, 
         return {"path": _resolve_explicit_codex_binary(env_candidate, source=CODEX_BIN_ENV), "source": CODEX_BIN_ENV}
     resolved = shutil.which("codex")
     return {"path": resolved, "source": PROVIDER_CLI_SOURCE_PATH if resolved else PROVIDER_CLI_SOURCE_MISSING}
+
+
+def _codex_binary_source(explicit: str | None, resolved: str | None) -> str:
+    if str(explicit or "").strip():
+        return PROVIDER_CLI_SOURCE_CODEX_BIN_FLAG
+    if str(os.environ.get(CODEX_BIN_ENV) or "").strip():
+        return CODEX_BIN_ENV
+    return PROVIDER_CLI_SOURCE_PATH if resolved else PROVIDER_CLI_SOURCE_MISSING
 
 
 def _codex_version(codex_bin: str | None) -> dict[str, object]:
@@ -813,6 +822,7 @@ def codex(
             fg=typer.colors.RED,
         )
         raise typer.Exit(code=1)
+    codex_bin_source = _codex_binary_source(codex_bin, resolved_codex_bin)
     machine_name = get_machine_name_label()
     _ensure_managed_launch_preflight(
         url=resolved_url,
@@ -858,6 +868,25 @@ def codex(
     if thread_id:
         typer.echo(f"Codex thread: {thread_id}")
     typer.echo(f"Remote target: {ws_url}")
+    is_interactive = _interactive_stdio()
+    try:
+        record_managed_provider_contract(
+            provider="codex",
+            session_id=result.session_id,
+            cwd=cwd,
+            config_dir=resolved_config_dir,
+            launch_mode="tui" if attach and is_interactive else "detached_ui",
+            provider_binary_path=resolved_codex_bin,
+            provider_binary_source=codex_bin_source,
+            control_kind="codex_bridge",
+            control_state_path=state_file,
+        )
+    except Exception as exc:
+        typer.secho(
+            f"Longhouse warning: could not record managed-session contract: {exc}",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
 
     if open_browser:
         typer.echo("Opening session in browser...")
@@ -876,7 +905,7 @@ def codex(
     if not attach:
         typer.echo(f"Attach: {attach_cmd}")
         return
-    if not _interactive_stdio():
+    if not is_interactive:
         typer.secho("Skipping auto-attach because stdin/stdout are not TTYs.", fg=typer.colors.YELLOW)
         typer.echo(f"Attach: {attach_cmd}")
         return

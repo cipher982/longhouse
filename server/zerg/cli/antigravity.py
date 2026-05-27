@@ -25,8 +25,10 @@ from zerg.cli._common import ensure_managed_launch_preflight as _ensure_managed_
 from zerg.cli._common import interactive_stdio as _interactive_stdio
 from zerg.cli._common import load_api_credentials as _load_api_credentials
 from zerg.cli._common import open_session_url as _open_session_url
+from zerg.cli._managed_contract import record_managed_provider_contract
 from zerg.provider_cli_contract import ANTIGRAVITY_BIN_ENV
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_ANTIGRAVITY_BIN_FLAG
+from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
 from zerg.services.longhouse_paths import get_managed_local_dir
 from zerg.services.longhouse_paths import resolve_longhouse_home
 from zerg.services.session_continuity import get_machine_name_label
@@ -222,6 +224,14 @@ def _resolve_antigravity_binary(explicit: str | None = None) -> str | None:
     if env_candidate:
         return _resolve_explicit_antigravity_binary(env_candidate, source=ANTIGRAVITY_BIN_ENV)
     return shutil.which("agy")
+
+
+def _antigravity_binary_source(explicit: str | None, resolved: str | None) -> str:
+    if str(explicit or "").strip():
+        return PROVIDER_CLI_SOURCE_ANTIGRAVITY_BIN_FLAG
+    if str(os.environ.get(ANTIGRAVITY_BIN_ENV) or "").strip():
+        return ANTIGRAVITY_BIN_ENV
+    return PROVIDER_CLI_SOURCE_PATH if resolved else "missing"
 
 
 def _launch_managed_local_from_api(
@@ -693,6 +703,23 @@ def antigravity(
         antigravity_args=antigravity_args,
         launch_script_path=command_launch_script_path,
     )
+    try:
+        record_managed_provider_contract(
+            provider="antigravity",
+            session_id=result.session_id,
+            cwd=cwd,
+            config_dir=resolved_config_dir,
+            launch_mode="tui" if attach and is_interactive else "launch_script",
+            provider_binary_path=resolved_antigravity_bin,
+            provider_binary_source=_antigravity_binary_source(antigravity_bin, resolved_antigravity_bin),
+            control_kind="antigravity_process",
+        )
+    except Exception as exc:
+        typer.secho(
+            f"Longhouse warning: could not record managed-session contract: {exc}",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
     if not attach:
         typer.echo(f"Run: {command}")
         return

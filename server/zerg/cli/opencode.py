@@ -26,9 +26,12 @@ from zerg.cli._common import ensure_managed_launch_preflight as _ensure_managed_
 from zerg.cli._common import interactive_stdio as _interactive_stdio
 from zerg.cli._common import load_api_credentials as _load_api_credentials
 from zerg.cli._common import open_session_url as _open_session_url
+from zerg.cli._managed_contract import record_managed_provider_contract
 from zerg.provider_cli_contract import OPENCODE_BIN_ENV
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_OPENCODE_BIN_FLAG
+from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
 from zerg.services.longhouse_paths import get_managed_local_dir
+from zerg.services.opencode_bridge_state import build_opencode_bridge_state_file
 from zerg.services.opencode_bridge_state import generate_server_password
 from zerg.services.opencode_bridge_state import parse_listen_line
 from zerg.services.opencode_bridge_state import remove_opencode_bridge_state
@@ -225,6 +228,14 @@ def _resolve_opencode_binary(explicit: str | None = None) -> str | None:
     if env_candidate:
         return _resolve_explicit_opencode_binary(env_candidate, source=OPENCODE_BIN_ENV)
     return shutil.which("opencode")
+
+
+def _opencode_binary_source(explicit: str | None, resolved: str | None) -> str:
+    if str(explicit or "").strip():
+        return PROVIDER_CLI_SOURCE_OPENCODE_BIN_FLAG
+    if str(os.environ.get(OPENCODE_BIN_ENV) or "").strip():
+        return OPENCODE_BIN_ENV
+    return PROVIDER_CLI_SOURCE_PATH if resolved else "missing"
 
 
 def _launch_managed_local_from_api(
@@ -772,6 +783,28 @@ def opencode(
         config_content_path=command_config_content_path,
         launch_script_path=command_launch_script_path,
     )
+    try:
+        record_managed_provider_contract(
+            provider="opencode",
+            session_id=result.session_id,
+            cwd=cwd,
+            config_dir=resolved_config_dir,
+            launch_mode="serve_attached" if attach and is_interactive else "launch_script",
+            provider_binary_path=resolved_opencode_bin,
+            provider_binary_source=_opencode_binary_source(opencode_bin, resolved_opencode_bin),
+            control_kind="opencode_bridge" if attach and is_interactive else "opencode_launch_script",
+            control_state_path=(
+                build_opencode_bridge_state_file(session_id=result.session_id, config_dir=resolved_config_dir)
+                if attach and is_interactive
+                else None
+            ),
+        )
+    except Exception as exc:
+        typer.secho(
+            f"Longhouse warning: could not record managed-session contract: {exc}",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
     if not attach:
         typer.echo(f"Run: {command}")
         typer.secho(
@@ -788,7 +821,7 @@ def opencode(
         return
 
     typer.echo("Launching managed OpenCode (`opencode serve`)...")
-    typer.echo("  attach a TUI from another shell with: " "`opencode tui attach <url> --password $OPENCODE_SERVER_PASSWORD`")
+    typer.echo("  attach a TUI from another shell with: `opencode tui attach <url> --password $OPENCODE_SERVER_PASSWORD`")
     exit_code = _run_native_opencode(
         session_id=result.session_id,
         machine_name=machine_name,

@@ -15,7 +15,13 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg.cli import claude as claude_cli
 from zerg.cli.main import app
+from zerg.services.managed_session_contracts import list_managed_session_contracts
 from zerg.session_loop_mode import SessionLoopMode
+
+
+@pytest.fixture(autouse=True)
+def _isolate_longhouse_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("LONGHOUSE_HOME", str(tmp_path / ".longhouse"))
 
 
 class _FakeResponse:
@@ -342,6 +348,10 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
         ("session-123", "provider-123", str(tmp_path), "https://longhouse.test", "zdt_test_token")
     ]
     assert open_calls == ["https://longhouse.test/timeline/session-123"]
+    contracts = list_managed_session_contracts(tmp_path / ".longhouse")
+    assert contracts[0]["provider"] == "claude"
+    assert contracts[0]["workspace"]["cwd"] == str(tmp_path)
+    assert contracts[0]["control"]["kind"] == "claude_channel_bridge"
 
 
 def test_run_claude_auth_status_uses_bare_claude(monkeypatch):
