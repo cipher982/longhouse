@@ -256,11 +256,15 @@ Initial product contract:
 - `scripts/qa/provider-live-canary.py --provider claude` probes the installed
   upstream Claude Code binary without executing a prompt: binary version,
   redacted auth shape, required launch/session flags, hidden `--channels`
-  tagged-channel parsing, and local PTY wrapper availability.
+  tagged-channel parsing, and local PTY wrapper availability. It remains
+  Yellow until scheduled live-token evidence proves detached launch,
+  active-turn steer delivery, idle steer rejection, interrupt, and reattach.
 - `scripts/qa/provider-live-canary.py --provider opencode` probes the installed
   upstream OpenCode server contract without executing a prompt: binary version,
   server readiness, `/doc` schema, zero-token session create/get, abort, and
-  attach command shape.
+  attach command shape. It remains Yellow until scheduled live-token evidence
+  proves `prompt_async` execution, transcript binding, active-turn abort, and
+  reattach.
 - Runtime Host and local-health may cache it and expose:
   - provider
   - upstream version

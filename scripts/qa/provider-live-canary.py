@@ -391,6 +391,17 @@ def _run_claude_pty_wrapper_shape() -> dict[str, Any]:
     return _status("pass", script_path=script_path, platform=sys.platform)
 
 
+def _claude_live_token_contract_placeholder() -> dict[str, Any]:
+    return _status(
+        "not_run",
+        reason=(
+            "Claude no-token live canary proves binary/auth/channel/PTY shape only; "
+            "scheduled live-token evidence must prove detached launch, active-turn steer transcript delivery, "
+            "idle steer rejection, interrupt, and reattach."
+        ),
+    )
+
+
 def _run_antigravity_command_shape(binary: str) -> dict[str, Any]:
     probes = [
         ([binary, "--help"], ("--print", "--prompt-interactive", "--conversation", "plugin")),
@@ -627,6 +638,7 @@ def run_claude_live_canary(args: argparse.Namespace, _root: Path) -> dict[str, A
             "command_shape": _run_claude_command_shape(binary),
             "channels_shape": _run_claude_channels_shape(binary),
             "detached_pty_shape": _run_claude_pty_wrapper_shape(),
+            "live_token_contract": _claude_live_token_contract_placeholder(),
         },
     }
 
@@ -813,6 +825,14 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
             )
             return {"provider": "opencode", "provider_version": version, "canaries": canaries}
         canaries["session_abort"] = _status("pass", provider_session_id=provider_session_id)
+        canaries["prompt_async_execution_contract"] = _status(
+            "not_run",
+            reason=(
+                "OpenCode no-token live canary proves server schema/session/abort shape only; "
+                "scheduled live-token evidence must prove prompt_async execution, transcript binding, "
+                "active-turn abort, and reattach."
+            ),
+        )
         return {"provider": "opencode", "provider_version": version, "canaries": canaries}
     except Exception as exc:  # noqa: BLE001
         canaries["live_contract"] = _fail(
