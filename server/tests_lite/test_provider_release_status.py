@@ -237,6 +237,8 @@ def test_accepts_sauron_provider_status_url_envelope(monkeypatch) -> None:
     assert status["warning_count"] == 0
     assert status["statuses"]["claude"]["status"] == "ok"
     assert status["statuses"]["claude"]["source"]["source"] == "url"
+    assert status["statuses"]["codex"]["status"] == "no_artifact"
+    assert status["statuses"]["codex"]["configured"] is True
 
 
 def test_generic_status_dir_missing_provider_artifacts_are_not_configured(monkeypatch, tmp_path: Path) -> None:
