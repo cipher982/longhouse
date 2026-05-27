@@ -1,7 +1,7 @@
 //! Machine Agent managed-control WebSocket client.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -34,6 +34,10 @@ const COMMAND_STEER_TEXT: &str = "session.steer_text";
 const COMMAND_LAUNCH: &str = "session.launch";
 const DEFAULT_CODEX_BIN: &str = "codex";
 const DEFAULT_LONGHOUSE_BIN: &str = "longhouse";
+// Engine is built from the monorepo. Keep this path beside the Python reader so
+// advertised supports[] and server-side contracts cannot drift silently.
+const MANAGED_PROVIDER_CONTRACTS_JSON: &str =
+    include_str!("../../server/zerg/config/managed_provider_contracts.json");
 const LAUNCH_START_TIMEOUT_SECS: u64 = 45;
 const COMPLETED_COMMAND_CACHE_CAPACITY: usize = 256;
 const COMPLETED_COMMAND_CACHE_TTL_SECS: u64 = 5 * 60;
@@ -47,21 +51,7 @@ const CONTROL_HEARTBEAT_LATE_WARN_MS: u128 = 500;
 const CONTROL_RECONNECT_SHORT_MAX_BACKOFF_SECS: u64 = 5;
 const CONTROL_RECONNECT_SUSTAINED_MAX_BACKOFF_SECS: u64 = 30;
 const CONTROL_RECONNECT_SHORT_WINDOW_SECS: u64 = 60;
-const CODEX_SUPPORTS: [&str; 5] = [
-    "codex.send",
-    "codex.interrupt",
-    "codex.steer",
-    "codex.launch",
-    "codex.continue",
-];
-const CLAUDE_SUPPORTS: [&str; 4] = [
-    "claude.send",
-    "claude.interrupt",
-    "claude.steer",
-    "claude.launch",
-];
-const OPENCODE_SUPPORTS: [&str; 3] = ["opencode.send", "opencode.interrupt", "opencode.launch"];
-const ANTIGRAVITY_SUPPORTS: [&str; 1] = ["antigravity.send"];
+static MANAGED_PROVIDER_CONTRACTS: OnceLock<Value> = OnceLock::new();
 
 #[derive(Clone, Debug)]
 pub struct ControlChannelStatus {
@@ -282,20 +272,44 @@ fn command_exists_in_path(command: &str, path_value: Option<&std::ffi::OsStr>) -
         .any(|candidate| is_executable(&candidate))
 }
 
+fn managed_provider_contract_items() -> &'static Vec<Value> {
+    let payload = MANAGED_PROVIDER_CONTRACTS.get_or_init(|| {
+        serde_json::from_str(MANAGED_PROVIDER_CONTRACTS_JSON)
+            .expect("managed provider contract manifest must be valid JSON")
+    });
+    payload
+        .get("providers")
+        .and_then(Value::as_array)
+        .expect("managed provider contract manifest must contain providers[]")
+}
+
 fn control_supports_for_path(path_value: Option<&std::ffi::OsStr>) -> Vec<String> {
     let mut supports = Vec::new();
     let longhouse_available = command_exists_in_path(DEFAULT_LONGHOUSE_BIN, path_value);
-    if command_exists_in_path(DEFAULT_CODEX_BIN, path_value) {
-        supports.extend(CODEX_SUPPORTS.iter().map(|item| item.to_string()));
-    }
-    if longhouse_available && command_exists_in_path("claude", path_value) {
-        supports.extend(CLAUDE_SUPPORTS.iter().map(|item| item.to_string()));
-    }
-    if longhouse_available && command_exists_in_path("opencode", path_value) {
-        supports.extend(OPENCODE_SUPPORTS.iter().map(|item| item.to_string()));
-    }
-    if longhouse_available && command_exists_in_path("agy", path_value) {
-        supports.extend(ANTIGRAVITY_SUPPORTS.iter().map(|item| item.to_string()));
+    for contract in managed_provider_contract_items() {
+        let binary = contract
+            .get("provider_cli_binary")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if binary.is_empty() {
+            continue;
+        }
+        let requires_longhouse = contract
+            .get("requires_longhouse_cli")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if requires_longhouse && !longhouse_available {
+            continue;
+        }
+        if !command_exists_in_path(binary, path_value) {
+            continue;
+        }
+        if let Some(items) = contract
+            .get("machine_control_supports")
+            .and_then(Value::as_array)
+        {
+            supports.extend(items.iter().filter_map(Value::as_str).map(str::to_string));
+        }
     }
     supports
 }
@@ -1450,7 +1464,15 @@ mod tests {
 
     #[test]
     fn control_channel_advertises_codex_continue() {
-        assert!(CODEX_SUPPORTS.contains(&"codex.continue"));
+        let codex_contract = managed_provider_contract_items()
+            .iter()
+            .find(|item| item.get("provider").and_then(Value::as_str) == Some("codex"))
+            .expect("codex contract exists");
+        let supports = codex_contract
+            .get("machine_control_supports")
+            .and_then(Value::as_array)
+            .expect("codex contract has machine_control_supports");
+        assert!(supports.iter().any(|item| item.as_str() == Some("codex.continue")));
     }
 
     #[test]

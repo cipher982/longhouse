@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from zerg.managed_provider_contract_manifest import managed_provider_contract_items
 from zerg.session_execution_home import ManagedSessionTransport
 
 COMMAND_INTERRUPT = "session.interrupt"
@@ -59,54 +60,28 @@ class ManagedProviderContract:
         }
 
 
-_CONTRACTS: tuple[ManagedProviderContract, ...] = (
-    ManagedProviderContract(
-        provider="codex",
-        managed_transport=ManagedSessionTransport.CODEX_APP_SERVER,
-        control_plane="codex_bridge",
-        control_plane_aliases=("codex_app_server",),
-        launch_remote=True,
-        reattach=True,
-        send_input=True,
-        interrupt=True,
-        steer_active_turn=True,
-        terminate=True,
-        can_resume=True,
-        machine_control_supports=("codex.send", "codex.interrupt", "codex.steer", "codex.launch"),
-    ),
-    ManagedProviderContract(
-        provider="claude",
-        managed_transport=ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE,
-        control_plane="claude_channel_bridge",
-        launch_remote=True,
-        reattach=True,
-        send_input=True,
-        interrupt=True,
-        steer_active_turn=True,
-        terminate=True,
-        can_resume=True,
-        machine_control_supports=("claude.send", "claude.interrupt", "claude.steer", "claude.launch"),
-    ),
-    ManagedProviderContract(
-        provider="opencode",
-        managed_transport=ManagedSessionTransport.OPENCODE_SERVER_BRIDGE,
-        control_plane="opencode_server_bridge",
-        launch_remote=True,
-        reattach=True,
-        send_input=True,
-        interrupt=True,
-        terminate=True,
-        can_resume=True,
-        machine_control_supports=("opencode.send", "opencode.interrupt", "opencode.launch"),
-    ),
-    ManagedProviderContract(
-        provider="antigravity",
-        managed_transport=ManagedSessionTransport.ANTIGRAVITY_HOOK_INBOX,
-        control_plane="antigravity_hook_inbox",
-        send_input=True,
-        machine_control_supports=("antigravity.send",),
-    ),
-)
+def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderContract:
+    return ManagedProviderContract(
+        provider=str(item["provider"]),
+        managed_transport=ManagedSessionTransport(str(item["managed_transport"])),
+        control_plane=str(item["control_plane"]),
+        control_plane_aliases=tuple(str(value) for value in item.get("control_plane_aliases") or ()),
+        launch_local=bool(item.get("launch_local", True)),
+        launch_remote=bool(item.get("launch_remote", False)),
+        reattach=bool(item.get("reattach", False)),
+        send_input=bool(item.get("send_input", False)),
+        interrupt=bool(item.get("interrupt", False)),
+        steer_active_turn=bool(item.get("steer_active_turn", False)),
+        terminate=bool(item.get("terminate", False)),
+        tail_output=bool(item.get("tail_output", True)),
+        runtime_phase=bool(item.get("runtime_phase", True)),
+        transcript_binding=bool(item.get("transcript_binding", True)),
+        can_resume=bool(item.get("can_resume", False)),
+        machine_control_supports=tuple(str(value) for value in item.get("machine_control_supports") or ()),
+    )
+
+
+_CONTRACTS: tuple[ManagedProviderContract, ...] = tuple(_contract_from_manifest_item(item) for item in managed_provider_contract_items())
 
 _BY_PROVIDER = {contract.provider: contract for contract in _CONTRACTS}
 _BY_CONTROL_PLANE = {control_plane: contract for contract in _CONTRACTS for control_plane in contract.control_planes}
