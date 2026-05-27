@@ -74,6 +74,7 @@ ACTIVITY_RECENCY_BANDS = [
 ]
 RECENT_TOUCH_LIMIT = 4
 PROVIDER_HOOK_DIAGNOSTIC_WINDOW = timedelta(hours=24)
+PROVIDER_HOOK_DIAGNOSTIC_ACTIONABLE_WINDOW = timedelta(hours=1)
 PROVIDER_HOOK_DIAGNOSTIC_FILE_LIMIT = 24
 PROVIDER_HOOK_DIAGNOSTIC_EVENT_LIMIT = 8
 _PROCESS_SNAPSHOT: tuple[list[dict[str, Any]], list[dict[str, Any]]] | None = None
@@ -405,17 +406,24 @@ def _collect_provider_hook_diagnostics(base_dir: Path, *, now: datetime, fast: b
         reverse=True,
     )
     events = events[:PROVIDER_HOOK_DIAGNOSTIC_EVENT_LIMIT]
-    state = "session_cwd_missing" if events else "healthy"
+    actionable_cutoff = now - PROVIDER_HOOK_DIAGNOSTIC_ACTIONABLE_WINDOW
+    actionable_events = [
+        event for event in events if (parsed := _parse_rfc3339(event.get("timestamp"))) is not None and parsed >= actionable_cutoff
+    ]
+    state = "session_cwd_missing" if actionable_events else "stale_session_cwd_missing" if events else "healthy"
     return {
         "schema_version": 1,
         "state": state,
         "provider_config_dir": str(provider_config_dir),
         "scan_window_seconds": int(PROVIDER_HOOK_DIAGNOSTIC_WINDOW.total_seconds()),
+        "actionable_window_seconds": int(PROVIDER_HOOK_DIAGNOSTIC_ACTIONABLE_WINDOW.total_seconds()),
         "scanned_files": len(paths),
         "recent_error_count": recent_error_count,
         "deleted_cwd_error_count": len(events),
+        "actionable_deleted_cwd_error_count": len(actionable_events),
         "events": events,
-        "latest": events[0] if events else None,
+        "latest": actionable_events[0] if actionable_events else events[0] if events else None,
+        "latest_actionable": actionable_events[0] if actionable_events else None,
     }
 
 
