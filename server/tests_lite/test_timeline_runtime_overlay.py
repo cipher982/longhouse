@@ -25,6 +25,7 @@ from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
+from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
@@ -33,6 +34,7 @@ from zerg.services.agents_store import SessionIngest
 from zerg.services.session_observations import OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
+from zerg.services.session_views import _latest_source_line_path_for_native_continue
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.timeline_session_listing import build_timeline_cards_from_thread_rows
 from zerg.services.timeline_session_listing import list_timeline_sessions_for_browser
@@ -601,6 +603,64 @@ def test_timeline_cards_read_projection_not_large_observation_history(tmp_path):
     assert cards[0].head.transcript_preview.text == "projection preview"
     assert elapsed < 0.5
     assert not any("session_observations" in statement.lower() for statement in statements)
+
+
+def test_native_continue_source_line_fallback_uses_session_only_lookup(tmp_path):
+    factory = _make_db(tmp_path, "native_continue_source_line_lookup.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            provider="codex",
+            project="codex-native-continue-source",
+            started_at=now - timedelta(minutes=10),
+        )
+        from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+        thread, _run, _connection = seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
+        db.add_all(
+            [
+                AgentSourceLine(
+                    session_id=session.id,
+                    thread_id=thread.id,
+                    source_path="/tmp/older-thread.jsonl",
+                    source_offset=1,
+                    branch_id=0,
+                    raw_json="{}",
+                    line_hash="native-continue-older",
+                ),
+                AgentSourceLine(
+                    session_id=session.id,
+                    thread_id=None,
+                    source_path="/tmp/latest-session.jsonl",
+                    source_offset=2,
+                    branch_id=0,
+                    raw_json="{}",
+                    line_hash="native-continue-latest",
+                ),
+            ]
+        )
+        db.commit()
+
+        statements: list[str] = []
+
+        def _collect_statement(_conn, _cursor, statement, _parameters, _context, _executemany):
+            statements.append(statement)
+
+        bind = db.get_bind()
+        sqlalchemy_event.listen(bind, "before_cursor_execute", _collect_statement)
+        try:
+            source_path = _latest_source_line_path_for_native_continue(db, session_id=session.id)
+        finally:
+            sqlalchemy_event.remove(bind, "before_cursor_execute", _collect_statement)
+    finally:
+        db.close()
+
+    assert source_path == "/tmp/latest-session.jsonl"
+    source_statements = " ".join(statement.lower() for statement in statements if "source_lines" in statement.lower())
+    assert "thread_id" not in source_statements
 
 
 def test_sessions_list_hides_bridge_transcript_preview_after_durable_activity_catches_up(tmp_path):
