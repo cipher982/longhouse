@@ -1636,6 +1636,14 @@ class AgentsStore:
                     commit=False,
                     latest_durable_at_by_session={session_id: latest_inserted_timestamp},
                 )
+                from zerg.services.session_live_previews import supersede_session_live_preview
+
+                supersede_session_live_preview(
+                    self.db,
+                    session_id=session_id,
+                    durable_at=latest_inserted_timestamp,
+                    durable_event_id=latest_inserted_event_id,
+                )
         _record_stage("session_projection", stage_started)
 
         stage_started = time.monotonic()

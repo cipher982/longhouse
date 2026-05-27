@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -71,6 +72,17 @@ def build_provisional_cursor(*, key: str, seq: int | None) -> str:
 
 
 def load_active_provisional_preview_map(db: Session, session_ids: list[UUID]) -> dict[str, TranscriptPreview]:
+    if not _live_preview_projection_disabled():
+        from zerg.services.session_live_previews import load_session_live_preview_map
+
+        return load_session_live_preview_map(db, session_ids)
+    return _load_active_provisional_preview_map_from_observations(db, session_ids)
+
+
+def _load_active_provisional_preview_map_from_observations(
+    db: Session,
+    session_ids: list[UUID],
+) -> dict[str, TranscriptPreview]:
     if not session_ids:
         return {}
 
@@ -104,6 +116,11 @@ def load_active_provisional_preview_map(db: Session, session_ids: list[UUID]) ->
         ):
             previews[candidate.session_id] = candidate.preview
     return previews
+
+
+def _live_preview_projection_disabled() -> bool:
+    raw = str(os.getenv("LONGHOUSE_DISABLE_LIVE_PREVIEW_PROJECTION") or "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 def cleanup_bridge_transcript_preview_observations(

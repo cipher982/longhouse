@@ -13,6 +13,7 @@ from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionLivePreview
 from zerg.models.agents import SessionObservation
 from zerg.services import provisional_events as provisional_events_service
 from zerg.services import session_runtime as session_runtime_service
@@ -238,6 +239,7 @@ def test_live_bridge_ingest_uses_observation_write_fast_path(monkeypatch, tmp_pa
 
 
 def test_active_preview_loader_caps_observations_per_session(monkeypatch, tmp_path):
+    monkeypatch.setenv("LONGHOUSE_DISABLE_LIVE_PREVIEW_PROJECTION", "1")
     SessionLocal = _make_sessionmaker(tmp_path, "live_overlay_preview_cap.db")
     now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
     seen_row_ids: list[int] = []
@@ -319,6 +321,36 @@ def test_active_preview_loader_uses_session_activity_without_scanning_events(tmp
 
     assert preview.text == "bounded preview"
     assert not any("FROM events" in statement for statement in statements)
+    assert not any("FROM session_observations" in statement for statement in statements)
+
+
+def test_active_preview_loader_does_not_scan_observations_when_projection_missing(monkeypatch, tmp_path):
+    monkeypatch.delenv("LONGHOUSE_DISABLE_LIVE_PREVIEW_PROJECTION", raising=False)
+    SessionLocal = _make_sessionmaker(tmp_path, "live_overlay_no_projection_fallback.db")
+    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+        ingest_runtime_events(
+            db,
+            [
+                _bridge_transcript_event(
+                    session_id=session.id,
+                    occurred_at=now,
+                    seq=1,
+                    live_text="observation only preview",
+                )
+            ],
+        )
+        db.query(SessionLivePreview).filter(SessionLivePreview.session_id == session.id).delete()
+        db.commit()
+
+        projection_preview = load_active_provisional_preview_map(db, [session.id])
+        monkeypatch.setenv("LONGHOUSE_DISABLE_LIVE_PREVIEW_PROJECTION", "1")
+        observation_preview = load_active_provisional_preview_map(db, [session.id])[str(session.id)]
+
+    assert projection_preview == {}
+    assert observation_preview.text == "observation only preview"
 
 
 def test_live_preview_cleanup_keeps_bounded_latest_window(tmp_path):
