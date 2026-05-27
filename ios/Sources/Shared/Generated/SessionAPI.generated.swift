@@ -6,6 +6,14 @@
 
 import Foundation
 
+struct APISessionContinueTarget: Codable, Hashable, Sendable {
+    let provider: String
+    let deviceId: String?
+    let cwd: String?
+    let carryContext: String?
+    let nativeResumeAvailable: Bool?
+}
+
 struct APISessionCapabilitiesResponse: Codable, Hashable, Sendable {
     let liveControlAvailable: Bool?
     let hostReattachAvailable: Bool?
@@ -32,7 +40,7 @@ struct APISessionCapabilitiesResponse: Codable, Hashable, Sendable {
     let canResume: Bool?
     let attachImages: Bool?
     let canContinue: Bool?
-    let continueTargets: [[String: JSONValue]]?
+    let continueTargets: [APISessionContinueTarget]?
 }
 
 struct APISessionControlResponse: Codable, Hashable, Sendable {

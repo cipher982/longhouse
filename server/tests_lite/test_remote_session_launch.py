@@ -118,7 +118,7 @@ def _seed_continuable_codex_session(
     db,
     *,
     session_id=None,
-    device_id: str = "cinder",
+    device_id: str | None = "cinder",
     provider_thread_id: str = "thread-abc",
     thread_path: str = "/Users/me/.codex/sessions/thread-abc.jsonl",
     ended: bool = True,
@@ -688,8 +688,24 @@ def test_continue_session_dispatches_resume_payload_and_attaches_new_run(tmp_pat
             can_tail_output=1,
             can_resume=1,
         )
+        degraded_run = record_run(db, thread=thread, provider="codex", host_id="cinder", cwd="/Users/me/repo")
+        degraded_connection = upsert_connection_for_run(
+            db,
+            run=degraded_run,
+            control_plane="codex_bridge",
+            acquisition_kind="spawned_control",
+            state="degraded",
+            external_name="cinder",
+            can_send_input=0,
+            can_interrupt=1,
+            can_terminate=1,
+            can_tail_output=1,
+            can_resume=1,
+        )
         existing_run_id = existing_run.id
         existing_connection_id = existing_connection.id
+        degraded_run_id = degraded_run.id
+        degraded_connection_id = degraded_connection.id
         db.commit()
 
     with SessionLocal() as db:
@@ -727,7 +743,8 @@ def test_continue_session_dispatches_resume_payload_and_attaches_new_run(tmp_pat
         assert attempt.state == "adopted"
         assert attempt.run_id is not None
         assert attempt.run_id != existing_run_id
-        assert db.query(SessionRun).count() == 2
+        assert attempt.run_id != degraded_run_id
+        assert db.query(SessionRun).count() == 3
         assert db.get(SessionRun, attempt.run_id).launch_origin == "longhouse_continued"
         released_run = db.get(SessionRun, existing_run_id)
         assert released_run.ended_at is not None
@@ -736,6 +753,12 @@ def test_continue_session_dispatches_resume_payload_and_attaches_new_run(tmp_pat
         assert released_connection.can_send_input == 0
         assert released_connection.can_interrupt == 0
         assert released_connection.released_at is not None
+        released_degraded_run = db.get(SessionRun, degraded_run_id)
+        assert released_degraded_run.ended_at is not None
+        released_degraded_connection = db.get(SessionConnection, degraded_connection_id)
+        assert released_degraded_connection.state == "released"
+        assert released_degraded_connection.can_interrupt == 0
+        assert released_degraded_connection.released_at is not None
         live_connection = (
             db.query(SessionConnection)
             .join(SessionRun, SessionConnection.run_id == SessionRun.id)
@@ -746,7 +769,7 @@ def test_continue_session_dispatches_resume_payload_and_attaches_new_run(tmp_pat
         assert live_connection.can_send_input == 1
         workspace = build_session_workspace(db=db, session_id=session_id, owner_id=OWNER_ID)
         assert workspace.session.capabilities.can_continue is True
-        assert workspace.session.capabilities.continue_targets[0]["carry_context"] == "native"
+        assert workspace.session.capabilities.continue_targets[0].carry_context == "native"
 
 
 def test_continue_session_is_idempotent_by_client_request_id(tmp_path):
@@ -780,7 +803,7 @@ def test_continue_requires_client_request_id(tmp_path):
             asyncio.run(
                 continue_remote_session(
                     db,
-                    RemoteContinueParams(owner_id=OWNER_ID, session_id=session_id),
+                    RemoteContinueParams(owner_id=OWNER_ID, session_id=session_id, client_request_id=""),
                     registry=registry,
                 )
             )
@@ -815,6 +838,33 @@ def test_continue_requires_source_session_device_owned_by_user(tmp_path):
 
     assert excinfo.value.code == "device_not_enrolled"
     assert excinfo.value.status_code == 404
+    assert registry.sent == []
+
+
+def test_continue_rejects_session_without_recorded_source_host(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal, owner_id=OWNER_ID, device_id="cinder")
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.continue",))
+
+    with SessionLocal() as db:
+        session_id = _seed_continuable_codex_session(db, device_id=None)
+        with pytest.raises(RemoteLaunchError) as excinfo:
+            asyncio.run(
+                continue_remote_session(
+                    db,
+                    RemoteContinueParams(
+                        owner_id=OWNER_ID,
+                        session_id=session_id,
+                        device_id="cinder",
+                        client_request_id="continue-null-source-host",
+                    ),
+                    registry=registry,
+                )
+            )
+
+    assert excinfo.value.code == "invalid_request"
+    assert excinfo.value.status_code == 409
     assert registry.sent == []
 
 
@@ -883,6 +933,33 @@ def test_continue_rejects_missing_resume_identity(tmp_path):
                         owner_id=OWNER_ID,
                         session_id=sid,
                         client_request_id="continue-missing-identity",
+                    ),
+                    registry=registry,
+                )
+            )
+
+    assert excinfo.value.code == "invalid_request"
+    assert excinfo.value.status_code == 409
+    assert registry.sent == []
+
+
+def test_continue_rejects_legacy_session_id_as_provider_thread_id(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.continue",))
+
+    with SessionLocal() as db:
+        sid = uuid4()
+        session_id = _seed_continuable_codex_session(db, session_id=sid, provider_thread_id=str(sid))
+        with pytest.raises(RemoteLaunchError) as excinfo:
+            asyncio.run(
+                continue_remote_session(
+                    db,
+                    RemoteContinueParams(
+                        owner_id=OWNER_ID,
+                        session_id=session_id,
+                        client_request_id="continue-legacy-thread-id",
                     ),
                     registry=registry,
                 )
