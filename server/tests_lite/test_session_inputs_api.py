@@ -917,6 +917,45 @@ def test_intent_steer_requires_active_turn_for_claude_channel(monkeypatch, tmp_p
         api_app_ref.dependency_overrides = {}
 
 
+def test_intent_steer_rejects_stale_active_turn_for_claude_channel(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+    with session_local() as db:
+        session = db.query(AgentSession).filter_by(id=session_id).one()
+        _seed_live_runtime_state(db, session, phase="running")
+        from zerg.models.agents import SessionRuntimeState
+
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).one()
+        stale_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        state.freshness_expires_at = stale_at
+        state.last_runtime_signal_at = stale_at
+        state.last_live_at = stale_at
+        db.commit()
+
+    async def fake_steer(**_kwargs):
+        raise AssertionError("stale intent=steer must be rejected before dispatch")
+
+    monkeypatch.setattr(
+        "zerg.services.managed_local_control.steer_text_to_managed_local_session",
+        fake_steer,
+    )
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        resp = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "redirect to failing test", "intent": "steer"},
+        )
+        assert resp.status_code == 409, resp.text
+        detail = resp.json()["detail"]
+        assert detail["error_code"] == "turn_not_active"
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
 def test_intent_steer_failure_returns_structured_502_for_claude_channel(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_live_session(session_local)

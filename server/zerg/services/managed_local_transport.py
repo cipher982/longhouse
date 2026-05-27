@@ -290,14 +290,14 @@ def build_managed_local_steer_text_command(
 ) -> str:
     """Build a mid-turn steer command.
 
-    Supported on codex_app_server (engine codex-bridge) and on
-    opencode_process (longhouse opencode-bridge steer, which performs
-    abort -> wait idle -> send under the hood). claude_channel_bridge
-    injects a channel send with intent=steer metadata.
+    Supported on codex_app_server (engine codex-bridge) and
+    claude_channel_bridge (channel send with intent=steer metadata).
     """
     transport = _resolve_transport(getattr(session, "managed_transport", None))
     if transport == ManagedSessionTransport.OPENCODE_SERVER_BRIDGE:
         raise ManagedLocalTransportError("Mid-turn steer is not supported on opencode_server_bridge transports")
+    if transport == ManagedSessionTransport.OPENCODE_PROCESS:
+        raise ManagedLocalTransportError("Mid-turn steer is not supported on opencode_process transports")
     if transport == ManagedSessionTransport.ANTIGRAVITY_HOOK_INBOX:
         raise ManagedLocalTransportError("Mid-turn steer is not supported on antigravity_hook_inbox transports")
     if transport == ManagedSessionTransport.ANTIGRAVITY_PROCESS:
@@ -311,12 +311,6 @@ def build_managed_local_steer_text_command(
             session_id=session_id,
             subcommand="steer",
             args=("--text", shlex.quote(text), *attach_args),
-        )
-    if transport == ManagedSessionTransport.OPENCODE_PROCESS:
-        return _build_longhouse_cli_shell_command(
-            subcommand="steer",
-            args=("--session-id", shlex.quote(session_id), "--text", shlex.quote(text)),
-            namespace="opencode-bridge",
         )
     if transport == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE:
         return _build_longhouse_cli_shell_command(
