@@ -5,6 +5,7 @@ Extracted from main.py — keeps the app factory lean.
 
 import asyncio
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from contextlib import contextmanager
@@ -21,6 +22,11 @@ from zerg.services.scheduler_service import scheduler_service
 
 _settings = get_settings()
 logger = logging.getLogger(__name__)
+_TRUTHY_ENV = {"1", "true", "yes", "on"}
+
+
+def _live_preview_cleanup_enabled() -> bool:
+    return os.getenv("LONGHOUSE_ENABLE_LIVE_PREVIEW_CLEANUP", "").strip().lower() in _TRUTHY_ENV
 
 
 @contextmanager
@@ -344,31 +350,39 @@ async def lifespan(app: FastAPI):
                 failed.append(f"attachment_cleanup ({e})")
                 logger.exception("Failed to start attachment_cleanup")
 
-            # Live-preview observation reaper: bridge transcript deltas are
-            # disposable UI evidence and can be very large during active turns.
-            try:
-                from zerg.database import get_session_factory as _get_sf_preview
-                from zerg.services.provisional_events import cleanup_bridge_transcript_preview_observations
+            # Live-preview observation reaper: keep disabled by default. Legacy
+            # dogfood databases can contain millions of append-only preview rows,
+            # and a global startup scan can starve the runtime. Session-scoped
+            # cleanup still runs when durable transcript ingest completes.
+            if _live_preview_cleanup_enabled():
+                try:
+                    from zerg.services.provisional_events import cleanup_bridge_transcript_preview_observations
+                    from zerg.services.write_serializer import get_write_serializer
 
-                async def _live_preview_cleanup_loop() -> None:
-                    while True:
-                        try:
-                            await asyncio.sleep(60)
-                            db = _get_sf_preview()()
+                    async def _live_preview_cleanup_loop() -> None:
+                        ws = get_write_serializer()
+                        while True:
                             try:
-                                cleanup_bridge_transcript_preview_observations(db)
-                            finally:
-                                db.close()
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception:  # noqa: BLE001
-                            logger.exception("live preview cleanup tick failed")
+                                await asyncio.sleep(60)
+                                await ws.execute(
+                                    lambda db: cleanup_bridge_transcript_preview_observations(
+                                        db,
+                                        batch_size=250,
+                                        max_sessions=5,
+                                        commit=False,
+                                    ),
+                                    label="live-preview-cleanup",
+                                )
+                            except asyncio.CancelledError:
+                                raise
+                            except Exception:  # noqa: BLE001
+                                logger.exception("live preview cleanup tick failed")
 
-                asyncio.create_task(_live_preview_cleanup_loop())
-                started.append("live_preview_cleanup")
-            except Exception as e:  # noqa: BLE001
-                failed.append(f"live_preview_cleanup ({e})")
-                logger.exception("Failed to start live_preview_cleanup")
+                    asyncio.create_task(_live_preview_cleanup_loop())
+                    started.append("live_preview_cleanup")
+                except Exception as e:  # noqa: BLE001
+                    failed.append(f"live_preview_cleanup ({e})")
+                    logger.exception("Failed to start live_preview_cleanup")
 
             # Live session summary/title enrichment. This scans session revision
             # lag directly; it is intentionally separate from the legacy ingest

@@ -1,7 +1,9 @@
-"""Append-only session observation writes.
+"""Session observation writes.
 
 This is the write-side bus for raw facts that later reducers materialize into
-transcript, archive, runtime, and timeline read models.
+transcript, archive, runtime, and timeline read models. Durable observations
+are append-only; high-volume provisional live transcript previews are bounded
+mutable overlays because the durable transcript archive carries the final text.
 """
 
 from __future__ import annotations
@@ -114,6 +116,16 @@ def record_runtime_observation(
     payload = event.payload or {}
     dedupe_key = _runtime_dedupe_key(event)
     kind = OBS_KIND_BRIDGE_TRANSCRIPT_DELTA if _is_bridge_transcript_delta(event, payload) else OBS_KIND_RUNTIME_SIGNAL
+    if kind == OBS_KIND_BRIDGE_TRANSCRIPT_DELTA:
+        return _record_bridge_transcript_preview_observation(
+            db,
+            event,
+            payload=payload,
+            dedupe_key=dedupe_key,
+            received_at=received_at,
+            thread_id=thread_id,
+            load_observation=load_observation,
+        )
     return record_session_observation(
         db,
         observation_id=f"runtime:{event.source}:{dedupe_key}",
@@ -138,6 +150,137 @@ def record_runtime_observation(
             "payload": payload,
         },
     )
+
+
+def _record_bridge_transcript_preview_observation(
+    db: Session,
+    event: Any,
+    *,
+    payload: dict[str, Any],
+    dedupe_key: str,
+    received_at: datetime | None = None,
+    thread_id: UUID | None = None,
+    load_observation: bool = True,
+) -> ObservationWriteResult:
+    observation_id = _bridge_transcript_preview_observation_id(event, payload)
+    source_offset = _bridge_transcript_seq(payload)
+    observed_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
+    received = normalize_utc(received_at) or datetime.now(timezone.utc)
+    source_cursor = f"{event.kind}:{dedupe_key}"
+
+    existing = (
+        db.query(SessionObservation.id, SessionObservation.source_offset)
+        .filter(SessionObservation.observation_id == observation_id)
+        .first()
+    )
+    if existing is not None:
+        existing_seq = _optional_int(existing.source_offset)
+        if existing_seq is not None and source_offset is not None and source_offset <= existing_seq:
+            return ObservationWriteResult(observation=None, inserted=False)
+        if existing_seq is not None and source_offset is None:
+            return ObservationWriteResult(observation=None, inserted=False)
+
+        if thread_id is None and event.session_id is not None:
+            from zerg.services.agents.kernel_writes import ensure_thread_id_for_session
+
+            thread_id = ensure_thread_id_for_session(db, event.session_id)
+
+        payload_json = _observation_payload_json(event, payload, dedupe_key=dedupe_key)
+        rowcount = (
+            db.query(SessionObservation)
+            .filter(SessionObservation.id == existing.id)
+            .update(
+                {
+                    SessionObservation.thread_id: thread_id,
+                    SessionObservation.runtime_key: event.runtime_key,
+                    SessionObservation.provider: (event.provider or "unknown").strip() or "unknown",
+                    SessionObservation.device_id: event.device_id,
+                    SessionObservation.source_cursor: source_cursor,
+                    SessionObservation.source_offset: source_offset,
+                    SessionObservation.observed_at: observed_at,
+                    SessionObservation.received_at: received,
+                    SessionObservation.payload_json: payload_json,
+                    SessionObservation.payload_json_z: None,
+                    SessionObservation.payload_json_codec: CODEC_PLAIN,
+                },
+                synchronize_session=False,
+            )
+        )
+        if not rowcount:
+            return ObservationWriteResult(observation=None, inserted=False)
+        if not load_observation:
+            return ObservationWriteResult(observation=None, inserted=True)
+        db.flush()
+        observation = db.query(SessionObservation).filter(SessionObservation.id == existing.id).first()
+        return ObservationWriteResult(observation=observation, inserted=True)
+
+    return record_session_observation(
+        db,
+        observation_id=observation_id,
+        session_id=event.session_id,
+        thread_id=thread_id,
+        runtime_key=event.runtime_key,
+        provider=event.provider,
+        device_id=event.device_id,
+        source_domain=SOURCE_DOMAIN_RUNTIME,
+        source=event.source,
+        kind=OBS_KIND_BRIDGE_TRANSCRIPT_DELTA,
+        source_offset=source_offset,
+        source_cursor=source_cursor,
+        observed_at=observed_at,
+        received_at=received,
+        load_observation=load_observation,
+        payload={
+            "kind": event.kind,
+            "phase": event.phase,
+            "tool_name": event.tool_name,
+            "freshness_ms": event.freshness_ms,
+            "dedupe_key": dedupe_key,
+            "payload": payload,
+        },
+    )
+
+
+def _observation_payload_json(event: Any, payload: dict[str, Any], *, dedupe_key: str) -> str:
+    return json.dumps(
+        {
+            "kind": event.kind,
+            "phase": event.phase,
+            "tool_name": event.tool_name,
+            "freshness_ms": event.freshness_ms,
+            "dedupe_key": dedupe_key,
+            "payload": payload,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+
+def _bridge_transcript_preview_observation_id(event: Any, payload: dict[str, Any]) -> str:
+    session_identity = str(event.session_id or event.runtime_key or "unknown-session")
+    thread_id = _clean_bridge_part(payload.get("thread_id"), fallback="unknown-thread")
+    turn_id = _clean_bridge_part(payload.get("turn_id"), fallback="unknown-turn")
+    identity = _hash_parts(str(event.source or "unknown-source"), session_identity, thread_id, turn_id)
+    return f"runtime-preview:{event.source}:{identity}"
+
+
+def _clean_bridge_part(value: Any, *, fallback: str) -> str:
+    parsed = str(value or "").strip()
+    return parsed or fallback
+
+
+def _bridge_transcript_seq(payload: dict[str, Any]) -> int | None:
+    return _optional_int(payload.get("seq"))
+
+
+def _optional_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def record_source_line_observation(
@@ -226,6 +369,12 @@ def record_provider_event_observation(
         timestamp.isoformat(),
     )
     observation_id = "provider_event:" + _hash_parts(str(session_id), str(branch_id), identity)
+    source_cursor = event_uuid
+    if source_cursor is None:
+        if source_path is not None and source_offset is not None:
+            source_cursor = f"{source_path}:{source_offset}:{event_hash}"
+        else:
+            source_cursor = identity
     return record_session_observation(
         db,
         observation_id=observation_id,
@@ -239,12 +388,7 @@ def record_provider_event_observation(
         kind=OBS_KIND_PROVIDER_EVENT,
         source_path=source_path,
         source_offset=source_offset,
-        source_cursor=event_uuid
-        or (
-            f"{source_path}:{source_offset}:{event_hash}"
-            if source_path is not None and source_offset is not None
-            else identity
-        ),
+        source_cursor=source_cursor,
         observed_at=timestamp,
         received_at=received_at,
         load_observation=load_observation,

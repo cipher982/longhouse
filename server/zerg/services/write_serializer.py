@@ -106,6 +106,7 @@ _LABEL_PRIORITIES: dict[str, int] = {
     # the system is healthy, but never let it outrank live transcript/runtime
     # writes when SQLite is under pressure.
     "client-render": 70,
+    "live-preview-cleanup": 80,
     "task-claim": 7,
     "task-done": 7,
     "task-retry": 7,
@@ -490,9 +491,7 @@ class WriteSerializer:
         if auto_commit:
             db.commit()
         exec_ms = (time.monotonic() - t0) * 1000
-        _last_write_timing.set(
-            LastWriteTiming(label=label, queue_wait_ms=0.0, exec_ms=exec_ms)
-        )
+        _last_write_timing.set(LastWriteTiming(label=label, queue_wait_ms=0.0, exec_ms=exec_ms))
         self._stats.record_sample(label, 0.0, exec_ms)
         return result
 
