@@ -303,6 +303,7 @@ class WriteSerializer:
         label: str = "",
         priority: int | None = None,
         auto_commit: bool = True,
+        timeout_seconds: float | None = None,
     ) -> T:
         """Submit a write operation using the provided session factory."""
         return await self._execute_queued(
@@ -310,6 +311,7 @@ class WriteSerializer:
             label=label,
             priority=priority,
             auto_commit=auto_commit,
+            timeout_seconds=timeout_seconds,
             session_factory=session_factory,
         )
 

@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
 from typing import Any
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
@@ -25,6 +28,15 @@ logger = logging.getLogger(__name__)
 _embedding_semaphore = asyncio.Semaphore(5)
 _PLACEHOLDER_TITLE = "Untitled Session"
 _PLACEHOLDER_SUMMARY = "No summary generated."
+SUMMARY_EVENT_LOAD_LIMIT = int(os.getenv("SESSION_SUMMARY_EVENT_LOAD_LIMIT", "200"))
+SUMMARY_EVENT_TEXT_MAX_CHARS = int(os.getenv("SESSION_SUMMARY_EVENT_TEXT_MAX_CHARS", "4000"))
+
+
+@dataclass(frozen=True)
+class _SummaryEventChunk:
+    events: list[dict]
+    last_event_id: int | None
+    has_more: bool
 
 
 def _summary_content_values(summary: Any) -> dict[str, str]:
@@ -52,6 +64,66 @@ def events_to_dicts(events: list[AgentEvent]) -> list[dict]:
         }
         for event in events
     ]
+
+
+def _load_summary_event_chunk(
+    db: Session,
+    *,
+    session_id: str,
+    cursor_id: int | None,
+    limit: int | None = None,
+) -> _SummaryEventChunk:
+    """Load a bounded user/assistant chunk for incremental summary updates."""
+    limit = SUMMARY_EVENT_LOAD_LIMIT if limit is None else limit
+    limit = max(1, int(limit or 1))
+    text_chars = max(1, int(SUMMARY_EVENT_TEXT_MAX_CHARS or 1))
+    text_expr = func.substr(AgentEvent.content_text, 1, text_chars).label("content_text")
+    base_query = (
+        db.query(
+            AgentEvent.id,
+            AgentEvent.role,
+            text_expr,
+            AgentEvent.timestamp,
+        )
+        .filter(AgentEvent.session_id == session_id)
+        .filter(AgentEvent.role.in_(("user", "assistant")))
+        .filter(AgentEvent.content_text.isnot(None))
+        .filter(durable_transcript_event_predicate())
+    )
+
+    if cursor_id is None:
+        # Legacy sessions may have no summary cursor. Summarize the recent tail
+        # instead of pulling the full historical transcript into the API process.
+        rows = base_query.order_by(AgentEvent.id.desc()).limit(limit + 1).all()
+        if len(rows) > limit:
+            logger.info(
+                "Summary bootstrap for session %s is using last %d messages; older history is intentionally skipped",
+                session_id,
+                limit,
+            )
+        rows = list(reversed(rows[:limit]))
+        has_more = False
+    else:
+        rows = base_query.filter(AgentEvent.id > cursor_id).order_by(AgentEvent.id).limit(limit + 1).all()
+        has_more = len(rows) > limit
+        rows = rows[:limit]
+
+    events = [
+        {
+            "role": row.role,
+            "content_text": row.content_text,
+            "tool_name": None,
+            "tool_input_json": None,
+            "tool_output_text": None,
+            "timestamp": row.timestamp.isoformat() if row.timestamp else None,
+        }
+        for row in rows
+    ]
+    return _SummaryEventChunk(
+        events=events,
+        last_event_id=int(rows[-1].id) if rows else None,
+        has_more=has_more,
+    )
 
 
 async def _advance_session_revision(
@@ -244,26 +316,9 @@ async def generate_summary_impl(session_id: str) -> None:
 
         cursor_id = session.last_summarized_event_id
         expected_summary_event_count = session.summary_event_count or 0
-        if cursor_id is not None:
-            new_events = (
-                db.query(AgentEvent)
-                .filter(AgentEvent.session_id == session_id, AgentEvent.id > cursor_id)
-                .filter(durable_transcript_event_predicate())
-                .order_by(AgentEvent.id)
-                .all()
-            )
-        else:
-            old_count = expected_summary_event_count
-            all_events = (
-                db.query(AgentEvent)
-                .filter(AgentEvent.session_id == session_id)
-                .filter(durable_transcript_event_predicate())
-                .order_by(AgentEvent.id)
-                .all()
-            )
-            new_events = all_events[old_count:]
+        new_chunk = _load_summary_event_chunk(db, session_id=session_id, cursor_id=cursor_id)
 
-        if not new_events:
+        if not new_chunk.events:
             await _advance_session_revision(
                 db=db,
                 session_id=session_id,
@@ -274,7 +329,7 @@ async def generate_summary_impl(session_id: str) -> None:
             logger.debug("No new events for session %s, skipping summary", session_id)
             return
 
-        new_event_dicts = events_to_dicts(new_events)
+        new_event_dicts = new_chunk.events
         meaningful_roles = {"user", "assistant"}
         meaningful_count = sum(1 for e in new_event_dicts if e["role"] in meaningful_roles and e.get("content_text"))
         if meaningful_count < 2:
@@ -289,7 +344,7 @@ async def generate_summary_impl(session_id: str) -> None:
             )
             return
 
-        new_last_event_id = new_events[-1].id
+        new_last_event_id = new_chunk.last_event_id
         current_summary = session.summary
         current_title = session.summary_title
         metadata = {
@@ -340,7 +395,7 @@ async def generate_summary_impl(session_id: str) -> None:
         for _attempt in range(2):
             values: dict = {
                 "last_summarized_event_id": new_last_event_id,
-                "summary_revision": transcript_revision,
+                "summary_revision": transcript_revision if not new_chunk.has_more else summary_revision,
             }
             if summary:
                 content_values = _summary_content_values(summary)
@@ -381,27 +436,11 @@ async def generate_summary_impl(session_id: str) -> None:
                     return
                 cursor_id = session.last_summarized_event_id
                 expected_summary_event_count = session.summary_event_count or 0
-                if cursor_id is not None:
-                    new_events = (
-                        retry_db.query(AgentEvent)
-                        .filter(AgentEvent.session_id == session_id, AgentEvent.id > cursor_id)
-                        .filter(durable_transcript_event_predicate())
-                        .order_by(AgentEvent.id)
-                        .all()
-                    )
-                else:
-                    all_events = (
-                        retry_db.query(AgentEvent)
-                        .filter(AgentEvent.session_id == session_id)
-                        .filter(durable_transcript_event_predicate())
-                        .order_by(AgentEvent.id)
-                        .all()
-                    )
-                    new_events = all_events[expected_summary_event_count:]
-                if not new_events:
+                new_chunk = _load_summary_event_chunk(retry_db, session_id=session_id, cursor_id=cursor_id)
+                if not new_chunk.events:
                     return
-                new_last_event_id = new_events[-1].id
-                new_event_dicts = events_to_dicts(new_events)
+                new_last_event_id = new_chunk.last_event_id
+                new_event_dicts = new_chunk.events
                 current_summary = session.summary
                 current_title = session.summary_title
                 metadata = {
