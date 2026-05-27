@@ -134,7 +134,7 @@ work while an agent is busy. Steer needs active-phase proof and idle rejection.
    `scripts/qa/provider-live-canary.py`.
 2. Extend the Claude lane beyond the initial no-token checks. The current lane
    proves binary identity, redacted auth shape, required launch/session flags,
-   hidden `--channels` tagged-channel parsing, and macOS PTY wrapper availability,
+   development-channel tagged server parsing, and macOS PTY wrapper availability,
    but the release-drift artifact intentionally remains Yellow until scheduled
    live-token evidence proves the full channel contract. That Yellow status is
    not a downgrade from first-class Claude channel control.
@@ -160,7 +160,8 @@ work while an agent is busy. Steer needs active-phase proof and idle rejection.
 ## Reference Surfaces
 
 - Codex: stock `codex app-server`, `codex --remote`, engine bridge relay.
-- Claude Code: `claude --channels server:longhouse-channel`,
+- Claude Code:
+  `claude --dangerously-load-development-channels server:longhouse-channel`,
   `claude-channel serve/send/interrupt`, and Runtime Host active-turn gating.
 - OpenCode: `opencode serve`, `opencode attach`, server `/global/health`,
   `/doc`, `/session`, `/session/:id/prompt_async`, and

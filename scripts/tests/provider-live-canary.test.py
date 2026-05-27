@@ -178,14 +178,12 @@ if args == ["--help"]:
         print("--session-id --resume --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
     raise SystemExit(0)
 
-if args == ["--channels", "--help"]:
+if args == ["--dangerously-load-development-channels", "server:longhouse-channel", "--help"]:
     if os.environ.get("FAKE_CLAUDE_BAD_CHANNELS") == "1":
-        print("unknown option --channels", file=sys.stderr)
+        print("unknown option --dangerously-load-development-channels", file=sys.stderr)
         raise SystemExit(1)
-    print("--channels entries must be tagged: --help", file=sys.stderr)
-    print("  plugin:<name>@<marketplace>  — plugin-provided channel", file=sys.stderr)
-    print("  server:<name>                — manually configured MCP server", file=sys.stderr)
-    raise SystemExit(1)
+    print("--session-id --resume --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
+    raise SystemExit(0)
 
 print("unexpected fake claude args: " + json.dumps(args), file=sys.stderr)
 raise SystemExit(2)
@@ -502,7 +500,7 @@ def test_claude_live_canary_fails_when_channels_contract_is_missing() -> None:
 
         assert result.returncode == 1
         assert payload["verdict"] == "red"
-        assert payload["failure_code"] == "claude_channels_contract_missing"
+        assert payload["failure_code"] == "claude_development_channels_contract_missing"
 
 
 def test_claude_live_canary_fails_when_session_flag_is_missing() -> None:

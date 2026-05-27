@@ -591,7 +591,7 @@ def _run_claude_command_shape(binary: str) -> dict[str, Any]:
 
 
 def _run_claude_channels_shape(binary: str) -> dict[str, Any]:
-    argv = [binary, "--channels", "--help"]
+    argv = [binary, "--dangerously-load-development-channels", "server:longhouse-channel", "--help"]
     try:
         result = subprocess.run(
             argv,
@@ -603,19 +603,22 @@ def _run_claude_channels_shape(binary: str) -> dict[str, Any]:
     except (OSError, subprocess.TimeoutExpired) as exc:
         return _fail("claude_channels_probe_failed", f"{type(exc).__name__}: {exc}", argv=argv)
     output = f"{result.stdout}\n{result.stderr}"
-    if "unknown option --channels" in output or "Unknown option '--channels'" in output:
+    if (
+        "unknown option --dangerously-load-development-channels" in output
+        or "Unknown option '--dangerously-load-development-channels'" in output
+    ):
         return _fail(
-            "claude_channels_contract_missing",
-            "Claude does not recognize the hidden --channels option.",
+            "claude_development_channels_contract_missing",
+            "Claude does not recognize the development channel flag Longhouse needs for private MCP channels.",
             evidence=_command_evidence(result),
         )
-    required_tokens = ("server:", "plugin:")
+    required_tokens = ("--session-id", "--resume", "--dangerously-skip-permissions")
     missing = [token for token in required_tokens if token not in output]
     if missing:
         return _status(
             "warn",
-            reason="claude_channels_contract_unconfirmed",
-            message="Claude recognized --channels, but the tagged-channel help shape could not be confirmed.",
+            reason="claude_development_channels_contract_unconfirmed",
+            message="Claude recognized the development channel flag, but launch help did not confirm the session-control shape.",
             missing=missing,
             evidence=_command_evidence(result),
         )
