@@ -126,8 +126,9 @@ test.describe("Managed Codex liveness", () => {
     await sendAttachedIdleLease(request, sessionId);
 
     const session = await getSession(request, sessionId);
-    expect(session.runtime_facts?.control?.state).toBe("online");
-    expect(session.runtime_facts?.phase?.kind).toBeNull();
+    expect(session.runtime_display?.control_path).toBe("managed");
+    expect(session.runtime_display?.host_state).toBe("online");
+    expect(session.runtime_display?.state).toBeNull();
     expect(session.capabilities?.live_control_available).toBe(true);
     expect(session.capabilities?.composer_enabled).toBe(true);
 
