@@ -15,6 +15,7 @@ including launch. The session id is the one we pre-allocated. No parallel
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
@@ -26,11 +27,18 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
+from zerg.models.agents import AgentSourceLine
+from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionLaunchAttempt
+from zerg.models.agents import SessionRun
+from zerg.models.agents import SessionThread
+from zerg.models.agents import SessionThreadAlias
 from zerg.models.device_token import DeviceToken
+from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.agents.kernel_writes import ensure_open_run_for_session
 from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import record_launch_attempt
+from zerg.services.agents.kernel_writes import record_run
 from zerg.services.agents.kernel_writes import record_thread_alias
 from zerg.services.agents.kernel_writes import update_launch_attempt
 from zerg.services.agents.kernel_writes import upsert_connection_for_run
@@ -73,6 +81,15 @@ class RemoteLaunchParams:
     project: str | None = None
     display_name: str | None = None
     client_request_id: str | None = None
+
+
+@dataclass(frozen=True)
+class RemoteContinueParams:
+    owner_id: int
+    session_id: UUID
+    client_request_id: str
+    device_id: str | None = None
+    cwd: str | None = None
 
 
 @dataclass(frozen=True)
@@ -136,12 +153,47 @@ def _attach_live_launch_run(
     session: AgentSession,
     attempt: SessionLaunchAttempt,
     external_name: str | None,
+    force_new_run: bool = False,
+    provider_thread_id: str | None = None,
+    thread_path: str | None = None,
+    cwd: str | None = None,
 ) -> None:
-    run = ensure_open_run_for_session(
-        db,
-        session,
-        launch_origin="longhouse_spawned",
-        host_id=session.device_id,
+    thread = ensure_primary_thread(db, session)
+    now = datetime.now(timezone.utc)
+    if provider_thread_id:
+        record_thread_alias(
+            db,
+            thread=thread,
+            provider=session.provider,
+            alias_kind="provider_session_id",
+            alias_value=provider_thread_id,
+        )
+    if thread_path:
+        record_thread_alias(
+            db,
+            thread=thread,
+            provider=session.provider,
+            alias_kind="source_path",
+            alias_value=thread_path,
+        )
+    if force_new_run:
+        _release_open_runs_for_thread(db, thread=thread, now=now)
+    run = (
+        record_run(
+            db,
+            thread=thread,
+            provider=session.provider,
+            host_id=session.device_id,
+            cwd=cwd or session.cwd,
+            launch_origin="longhouse_continued",
+        )
+        if force_new_run
+        else ensure_open_run_for_session(
+            db,
+            session,
+            launch_origin="longhouse_spawned",
+            host_id=session.device_id,
+        )
     )
     upsert_connection_for_run(
         db,
@@ -156,6 +208,8 @@ def _attach_live_launch_run(
         can_tail_output=1,
         can_resume=1,
     )
+    if session.ended_at is not None:
+        session.ended_at = None
     update_launch_attempt(
         db,
         attempt,
@@ -163,6 +217,112 @@ def _attach_live_launch_run(
         run=run,
         clear_expires=True,
     )
+
+
+def _release_open_runs_for_thread(db: Session, *, thread: SessionThread, now: datetime) -> None:
+    run_query = db.query(SessionRun).filter(SessionRun.thread_id == thread.id)
+    open_runs = run_query.filter(SessionRun.ended_at.is_(None)).all()
+    if not open_runs:
+        return
+
+    open_run_ids = [run.id for run in open_runs]
+    for run in open_runs:
+        run.ended_at = now
+    for conn in (
+        db.query(SessionConnection)
+        .filter(SessionConnection.run_id.in_(open_run_ids))
+        .filter(SessionConnection.state.in_(("attached", "degraded")))
+        .all()
+    ):
+        conn.state = "released"
+        conn.released_at = now
+        conn.last_health_at = now
+        conn.can_send_input = 0
+        conn.can_interrupt = 0
+        conn.can_terminate = 0
+        conn.can_tail_output = 0
+        conn.can_resume = 0
+
+
+def _result_resume_thread_id(message: Mapping | None) -> str | None:
+    result = message.get("result") if isinstance(message, Mapping) else None
+    if not isinstance(result, dict):
+        return None
+    value = result.get("thread_id")
+    return str(value).strip() if value else None
+
+
+def _result_resume_thread_path(message: Mapping | None) -> str | None:
+    result = message.get("result") if isinstance(message, Mapping) else None
+    if not isinstance(result, dict):
+        return None
+    value = result.get("thread_path")
+    return str(value).strip() if value else None
+
+
+def _latest_thread_alias(db: Session, *, thread: SessionThread, alias_kind: str) -> str | None:
+    value = (
+        db.query(SessionThreadAlias.alias_value)
+        .filter(SessionThreadAlias.thread_id == thread.id)
+        .filter(SessionThreadAlias.provider == thread.provider)
+        .filter(SessionThreadAlias.alias_kind == alias_kind)
+        .order_by(SessionThreadAlias.last_seen_at.desc(), SessionThreadAlias.id.desc())
+        .limit(1)
+        .scalar()
+    )
+    return str(value).strip() if value else None
+
+
+def _latest_source_path(db: Session, *, session: AgentSession, thread: SessionThread) -> str | None:
+    alias = _latest_thread_alias(db, thread=thread, alias_kind="source_path")
+    if alias:
+        return alias
+    row = (
+        db.query(AgentSourceLine.source_path)
+        .filter(AgentSourceLine.session_id == session.id)
+        .filter((AgentSourceLine.thread_id == thread.id) | (AgentSourceLine.thread_id.is_(None)))
+        .order_by(AgentSourceLine.created_at.desc(), AgentSourceLine.id.desc())
+        .limit(1)
+        .first()
+    )
+    source_path = str(row[0]).strip() if row is not None and row[0] else None
+    if source_path:
+        record_thread_alias(
+            db,
+            thread=thread,
+            provider=session.provider,
+            alias_kind="source_path",
+            alias_value=source_path,
+        )
+    return source_path
+
+
+def _resolve_continue_target(db: Session, *, session: AgentSession) -> tuple[SessionThread, str, str]:
+    if session.provider != "codex":
+        raise RemoteLaunchError(
+            f"provider {session.provider!r} is not supported for session continuation in v1",
+            code="provider_unsupported",
+            status_code=400,
+        )
+
+    thread = ensure_primary_thread(db, session)
+    provider_thread_id = _latest_thread_alias(db, thread=thread, alias_kind="provider_session_id")
+    if provider_thread_id == str(session.id):
+        provider_thread_id = None
+    thread_path = _latest_source_path(db, session=session, thread=thread)
+    if not provider_thread_id:
+        raise RemoteLaunchError(
+            "Session is missing a Codex thread id; cannot continue until thread identity is ingested",
+            code="invalid_request",
+            status_code=409,
+        )
+    if not thread_path:
+        raise RemoteLaunchError(
+            "Session is missing a Codex transcript path; cannot continue without a provider resume target",
+            code="invalid_request",
+            status_code=409,
+        )
+    return thread, provider_thread_id, thread_path
 
 
 async def launch_remote_session(
@@ -338,6 +498,9 @@ async def launch_remote_session(
             session=session,
             attempt=launch_attempt,
             external_name=info.machine_name or device_id,
+            provider_thread_id=_result_resume_thread_id(message),
+            thread_path=_result_resume_thread_path(message),
+            cwd=cwd,
         )
         db.commit()
         db.refresh(session)
@@ -375,6 +538,208 @@ async def launch_remote_session(
     return _launch_result_for_attempt(launch_attempt)
 
 
+async def continue_remote_session(
+    db: Session,
+    params: RemoteContinueParams,
+    *,
+    registry: MachineControlChannelRegistry | None = None,
+) -> RemoteLaunchResult:
+    """Start a new managed Codex process on an existing Longhouse session/thread."""
+
+    session = db.query(AgentSession).filter(AgentSession.id == params.session_id).first()
+    if session is None:
+        raise RemoteLaunchError(
+            f"Session {params.session_id} was not found",
+            code="invalid_request",
+            status_code=404,
+        )
+
+    device_id = (params.device_id or session.device_id or "").strip()
+    if not device_id:
+        raise RemoteLaunchError(
+            "device_id is required because the session has no recorded host",
+            code="invalid_request",
+            status_code=400,
+        )
+    cwd = (params.cwd or session.cwd or "").strip()
+    if not cwd:
+        raise RemoteLaunchError(
+            "cwd is required because the session has no recorded working directory",
+            code="invalid_request",
+            status_code=400,
+        )
+    if not cwd.startswith("/"):
+        raise RemoteLaunchError(
+            "cwd must be absolute",
+            code="cwd_not_allowed",
+            status_code=400,
+        )
+
+    provider = (session.provider or "").strip().lower()
+    if provider not in SUPPORTED_PROVIDERS:
+        raise RemoteLaunchError(
+            f"provider {provider!r} is not supported for session continuation in v1",
+            code="provider_unsupported",
+            status_code=400,
+        )
+
+    _verify_device_owned_by(db, owner_id=params.owner_id, device_id=device_id)
+    source_device_id = (session.device_id or "").strip()
+    if not source_device_id:
+        raise RemoteLaunchError(
+            "Session cannot be continued because it has no recorded source host",
+            code="invalid_request",
+            status_code=409,
+        )
+    _verify_device_owned_by(db, owner_id=params.owner_id, device_id=source_device_id)
+
+    client_request_id = (params.client_request_id or "").strip() or None
+    if not client_request_id:
+        raise RemoteLaunchError(
+            "client_request_id is required for session continuation",
+            code="invalid_request",
+            status_code=400,
+        )
+
+    caps = project_session_capabilities(db, session_id=session.id)
+    if caps.live_control_available and caps.can_send_input:
+        return RemoteLaunchResult(session_id=UUID(str(session.id)), launch_state="live")
+
+    thread, provider_thread_id, thread_path = _resolve_continue_target(db, session=session)
+
+    existing = (
+        db.query(SessionLaunchAttempt)
+        .filter(SessionLaunchAttempt.session_id == session.id)
+        .filter(SessionLaunchAttempt.client_request_id == client_request_id)
+        .filter(SessionLaunchAttempt.owner_id == params.owner_id)
+        .filter(SessionLaunchAttempt.host_id == device_id)
+        .filter(SessionLaunchAttempt.provider == provider)
+        .order_by(SessionLaunchAttempt.created_at.desc(), SessionLaunchAttempt.id.desc())
+        .first()
+    )
+    if existing is not None:
+        return _launch_result_for_attempt(existing)
+
+    reg = registry or get_machine_control_channel_registry()
+    info = reg.info(owner_id=params.owner_id, device_id=device_id)
+    if info is None:
+        raise RemoteLaunchError(
+            f"Machine {device_id!r} is offline",
+            code="machine_offline",
+            status_code=409,
+        )
+    continue_cap = f"{provider}.continue"
+    if continue_cap not in info.supports:
+        raise RemoteLaunchError(
+            f"Machine {device_id!r} does not support {continue_cap}",
+            code="provider_unsupported",
+            status_code=409,
+        )
+
+    now = datetime.now(timezone.utc)
+    lease_until = now + timedelta(seconds=LAUNCH_LEASE_SECS)
+    command_id = f"continue-{uuid4()}"
+    launch_attempt = record_launch_attempt(
+        db,
+        session=session,
+        thread=thread,
+        provider=provider,
+        host_id=device_id,
+        owner_id=params.owner_id,
+        client_request_id=client_request_id,
+        command_id=command_id,
+        state="pending",
+        expires_at=lease_until,
+    )
+    session.device_id = device_id
+    session.device_name = info.machine_name or device_id
+    session.cwd = cwd
+    session.origin_label = info.machine_name or device_id
+    session.source_runner_name = info.machine_name or device_id
+    db.commit()
+    db.refresh(session)
+
+    payload = {
+        "provider": provider,
+        "cwd": cwd,
+        "git_repo": session.git_repo,
+        "git_branch": session.git_branch,
+        "project": session.project,
+        "display_name": session.managed_session_name or session.project,
+        "mode": "continue",
+        "resume": {
+            "thread_id": provider_thread_id,
+            "thread_path": thread_path,
+        },
+    }
+    response: MachineControlCommandResponse = await reg.send_command(
+        owner_id=params.owner_id,
+        device_id=device_id,
+        session_id=str(session.id),
+        command_type="session.launch",
+        payload=payload,
+        timeout_secs=LAUNCH_COMMAND_TIMEOUT_SECS,
+        command_id=command_id,
+    )
+
+    if not response.transport_ok:
+        update_launch_attempt(
+            db,
+            launch_attempt,
+            state="dispatched",
+            error_message=response.error or "control channel transport failed",
+        )
+        db.commit()
+        db.refresh(session)
+        return _launch_result_for_attempt(launch_attempt)
+
+    message = response.message or {}
+    if message.get("ok"):
+        _attach_live_launch_run(
+            db,
+            session=session,
+            attempt=launch_attempt,
+            external_name=info.machine_name or device_id,
+            force_new_run=True,
+            provider_thread_id=_result_resume_thread_id(message) or provider_thread_id,
+            thread_path=_result_resume_thread_path(message) or thread_path,
+            cwd=cwd,
+        )
+        db.commit()
+        db.refresh(session)
+        elapsed_ms = int((datetime.now(timezone.utc) - now).total_seconds() * 1000)
+        logger.info(
+            "remote_continue session=%s device=%s provider=%s state=live duration_ms=%s",
+            session.id,
+            device_id,
+            provider,
+            elapsed_ms,
+        )
+        return _launch_result_for_attempt(launch_attempt)
+
+    error = message.get("error") or {}
+    code = normalize_remote_launch_error_code(error.get("code"))
+    err_msg = str(error.get("message") or "unknown error")
+    update_launch_attempt(
+        db,
+        launch_attempt,
+        state="failed",
+        error_code=code,
+        error_message=err_msg,
+        clear_expires=True,
+    )
+    db.commit()
+    db.refresh(session)
+    logger.warning(
+        "remote_continue session=%s device=%s provider=%s state=launch_failed code=%s",
+        session.id,
+        device_id,
+        provider,
+        code,
+    )
+    return _launch_result_for_attempt(launch_attempt)
+
+
 def reconcile_launch_from_command_result(db: Session, message: dict) -> bool:
     """Late-result reconciliation for a ``session.launch`` command.
 
@@ -387,7 +752,7 @@ def reconcile_launch_from_command_result(db: Session, message: dict) -> bool:
     Returns True if a row was reconciled.
     """
     command_id = str(message.get("command_id") or "").strip()
-    if not command_id or not command_id.startswith("launch-"):
+    if not command_id or not (command_id.startswith("launch-") or command_id.startswith("continue-")):
         return False
     attempt = db.query(SessionLaunchAttempt).filter(SessionLaunchAttempt.command_id == command_id).first()
     if attempt is None:
@@ -412,10 +777,14 @@ def reconcile_launch_from_command_result(db: Session, message: dict) -> bool:
             session=session,
             attempt=attempt,
             external_name=session.device_name or session.device_id,
+            force_new_run=command_id.startswith("continue-"),
+            provider_thread_id=_result_resume_thread_id(message),
+            thread_path=_result_resume_thread_path(message),
+            cwd=session.cwd,
         )
     else:
         error = message.get("error") or {}
-        if session.ended_at is None:
+        if command_id.startswith("launch-") and session.ended_at is None:
             session.ended_at = datetime.now(timezone.utc)
         update_launch_attempt(
             db,
@@ -446,7 +815,8 @@ def reap_orphaned_launches(db: Session, *, now: datetime | None = None) -> int:
 
     for attempt in stale:
         session = db.query(AgentSession).filter(AgentSession.id == attempt.session_id).first()
-        if session is not None and session.ended_at is None:
+        command_id = str(attempt.command_id or "")
+        if session is not None and session.ended_at is None and not command_id.startswith("continue-"):
             session.ended_at = cutoff
         update_launch_attempt(
             db,
@@ -465,8 +835,10 @@ __all__ = [
     "LAUNCH_COMMAND_TIMEOUT_SECS",
     "LAUNCH_LEASE_SECS",
     "RemoteLaunchError",
+    "RemoteContinueParams",
     "RemoteLaunchParams",
     "RemoteLaunchResult",
+    "continue_remote_session",
     "launch_remote_session",
     "reap_orphaned_launches",
     "reconcile_launch_from_command_result",

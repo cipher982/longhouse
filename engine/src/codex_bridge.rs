@@ -48,6 +48,7 @@ const BRIDGE_OPT_OUT_NOTIFICATION_METHODS: &[&str] = &[
     "thread/tokenUsage/updated",
     "rawResponseItem/completed",
 ];
+const PROVIDER_THREAD_SWITCHED_REASON: &str = "provider_thread_switched";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BridgeLaunchMode {
@@ -105,6 +106,10 @@ pub struct BridgeStartConfig {
     /// When true, the bridge's run loop invokes `thread/start` itself before
     /// marking the bridge ready. This is independent from launch lifecycle.
     pub create_initial_thread: bool,
+    /// Existing Codex thread id to resume instead of creating a fresh thread.
+    pub resume_thread_id: Option<String>,
+    /// Existing Codex rollout/transcript path paired with `resume_thread_id`.
+    pub resume_thread_path: Option<String>,
     pub launch_mode: BridgeLaunchMode,
 }
 
@@ -128,6 +133,10 @@ pub struct BridgeRunConfig {
     /// When true, the bridge calls `thread/start` itself instead of waiting
     /// for a TUI attach.
     pub create_initial_thread: bool,
+    /// Existing Codex thread id to resume instead of creating a fresh thread.
+    pub resume_thread_id: Option<String>,
+    /// Existing Codex rollout/transcript path paired with `resume_thread_id`.
+    pub resume_thread_path: Option<String>,
     pub launch_mode: BridgeLaunchMode,
 }
 
@@ -342,6 +351,7 @@ enum ThreadSubscriptionStatus {
     Retrying,
     Subscribed,
     Failed,
+    ProviderThreadSwitched,
 }
 
 impl ThreadSubscriptionStatus {
@@ -355,6 +365,7 @@ impl ThreadSubscriptionStatus {
             Self::Retrying => "retrying",
             Self::Subscribed => "subscribed",
             Self::Failed => "failed",
+            Self::ProviderThreadSwitched => PROVIDER_THREAD_SWITCHED_REASON,
         }
     }
 }
@@ -569,6 +580,14 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
     if config.cwd.as_os_str().is_empty() || !config.cwd.is_dir() {
         bail!("cwd does not exist: {}", config.cwd.display());
     }
+    let resume_thread_id = normalize_optional_string(config.resume_thread_id.clone());
+    let resume_thread_path = normalize_optional_string(config.resume_thread_path.clone());
+    if config.create_initial_thread && resume_thread_id.is_some() {
+        bail!("create_initial_thread cannot be combined with resume_thread_id");
+    }
+    if resume_thread_path.is_some() && resume_thread_id.is_none() {
+        bail!("resume_thread_path requires resume_thread_id");
+    }
 
     let paths = resolve_bridge_paths(
         config.state_root.as_deref(),
@@ -589,8 +608,8 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         codex_bin: config.codex_bin.clone(),
         launch_mode: Some(config.launch_mode.persisted_state_value().to_string()),
         ws_url: None,
-        thread_id: None,
-        thread_path: None,
+        thread_id: resume_thread_id.clone(),
+        thread_path: resume_thread_path.clone(),
         pid: 0,
         app_server_pid: None,
         app_server_pgid: None,
@@ -601,9 +620,13 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         last_turn_status: None,
         last_error: None,
         thread_subscription_status: Some(
-            ThreadSubscriptionStatus::WaitingForThread
-                .as_str()
-                .to_string(),
+            if resume_thread_id.is_some() {
+                ThreadSubscriptionStatus::WaitingForTurn
+            } else {
+                ThreadSubscriptionStatus::WaitingForThread
+            }
+            .as_str()
+            .to_string(),
         ),
         thread_subscription_attempts: 0,
         thread_subscription_last_error: None,
@@ -666,6 +689,12 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
     }
     if config.create_initial_thread {
         child.arg("--create-initial-thread");
+    }
+    if let Some(thread_id) = resume_thread_id.as_deref() {
+        child.arg("--resume-thread-id").arg(thread_id);
+    }
+    if let Some(thread_path) = resume_thread_path.as_deref() {
+        child.arg("--resume-thread-path").arg(thread_path);
     }
     if config.launch_mode != BridgeLaunchMode::Tui {
         child
@@ -743,6 +772,14 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
 pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     let pid = std::process::id();
     crate::codex_attachments::cleanup_session_tmpdir(&config.session_id);
+    let resume_thread_id = normalize_optional_string(config.resume_thread_id.clone());
+    let resume_thread_path = normalize_optional_string(config.resume_thread_path.clone());
+    if config.create_initial_thread && resume_thread_id.is_some() {
+        bail!("create_initial_thread cannot be combined with resume_thread_id");
+    }
+    if resume_thread_path.is_some() && resume_thread_id.is_none() {
+        bail!("resume_thread_path requires resume_thread_id");
+    }
     let initial_state = BridgeStateFile {
         schema_version: BRIDGE_STATE_SCHEMA_VERSION,
         session_id: config.session_id.clone(),
@@ -750,8 +787,8 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         codex_bin: config.codex_bin.clone(),
         launch_mode: Some(config.launch_mode.persisted_state_value().to_string()),
         ws_url: None,
-        thread_id: None,
-        thread_path: None,
+        thread_id: resume_thread_id.clone(),
+        thread_path: resume_thread_path.clone(),
         pid,
         app_server_pid: None,
         app_server_pgid: None,
@@ -762,9 +799,13 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         last_turn_status: None,
         last_error: None,
         thread_subscription_status: Some(
-            ThreadSubscriptionStatus::WaitingForThread
-                .as_str()
-                .to_string(),
+            if resume_thread_id.is_some() {
+                ThreadSubscriptionStatus::WaitingForTurn
+            } else {
+                ThreadSubscriptionStatus::WaitingForThread
+            }
+            .as_str()
+            .to_string(),
         ),
         thread_subscription_attempts: 0,
         thread_subscription_last_error: None,
@@ -792,6 +833,56 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     // Initialize the protocol handshake. Legacy TUI-attached startup creates
     // the thread later; prestart paths create it below.
     initialize_client(&mut client).await?;
+
+    let mut startup_subscribed_thread_id: Option<String> = None;
+    let mut startup_resume_response: Option<Value> = None;
+    if let Some(thread_id) = resume_thread_id.clone() {
+        match resume_startup_thread_with_retry(
+            &mut client,
+            &config,
+            &mut starting_state,
+            &thread_id,
+            resume_thread_path.as_deref(),
+        )
+        .await
+        {
+            Ok(response) => {
+                let resume_thread = response.get("thread").cloned().unwrap_or(Value::Null);
+                if codex_thread_value_is_subagent(&resume_thread) {
+                    let resume_thread_id = extract_string(&resume_thread, &["id"])
+                        .unwrap_or_else(|| thread_id.clone());
+                    let error_text = format!(
+                        "thread/resume returned Codex subagent thread {resume_thread_id}; refusing to adopt as managed primary"
+                    );
+                    starting_state.status = "error".to_string();
+                    starting_state.last_error = Some(error_text.clone());
+                    let _ = write_state_file(&config.state_file, &starting_state);
+                    bail!("{error_text}");
+                }
+                starting_state.thread_id =
+                    extract_string(&resume_thread, &["id"]).or_else(|| Some(thread_id.clone()));
+                starting_state.thread_path = extract_string(&resume_thread, &["path"])
+                    .or_else(|| config.resume_thread_path.clone());
+                starting_state.thread_subscription_status =
+                    Some(ThreadSubscriptionStatus::Subscribed.as_str().to_string());
+                startup_subscribed_thread_id = starting_state.thread_id.clone();
+                write_state_file(&config.state_file, &starting_state)?;
+                sync_thread_binding(
+                    &config,
+                    None,
+                    starting_state.thread_path.as_deref(),
+                    &config.session_id,
+                );
+                startup_resume_response = Some(response);
+            }
+            Err(err) => {
+                starting_state.status = "error".to_string();
+                starting_state.last_error = Some(format!("thread/resume failed: {err}"));
+                let _ = write_state_file(&config.state_file, &starting_state);
+                bail!("thread/resume failed in bridge: {err}");
+            }
+        }
+    }
 
     // Initial thread creation path: create the thread ourselves so the session
     // is driveable before a visible TUI attaches.
@@ -842,7 +933,9 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
 
     let initial_thread_id = starting_state.thread_id.clone();
     let initial_thread_path = starting_state.thread_path.clone();
-    let initial_subscription_status = if initial_thread_id.is_some() {
+    let initial_subscription_status = if startup_subscribed_thread_id.is_some() {
+        ThreadSubscriptionStatus::Subscribed
+    } else if initial_thread_id.is_some() {
         ThreadSubscriptionStatus::WaitingForTurn
     } else {
         ThreadSubscriptionStatus::WaitingForThread
@@ -931,13 +1024,16 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         live_transcript_seq: 0,
         live_transcript_text: String::new(),
         runtime_tracker: CodexRuntimeTracker::default(),
-        subscribed_thread_id: None,
+        subscribed_thread_id: startup_subscribed_thread_id,
         rejected_thread_ids: BTreeSet::new(),
     };
     // Mark ready so the CLI can read ws_url and launch the TUI. Prestart
     // launches already have a thread id; legacy TUI launches capture it later
     // from thread/started notifications.
     write_state_file(&context.state_file, &context.state)?;
+    if let Some(response) = startup_resume_response.as_ref() {
+        apply_thread_resume_snapshot(&config, &mut context, response).await?;
+    }
     if config.create_initial_thread && context.state.thread_id.is_some() {
         let startup_phase = context.runtime_tracker.current_phase_update();
         emit_runtime_updates(&config, &mut context, vec![startup_phase]).await;
@@ -1778,6 +1874,38 @@ fn resolve_bridge_paths(
     })
 }
 
+pub fn codex_managed_bind_rejection_reason(
+    session_id: &str,
+    candidate_path: &str,
+    state_root_override: Option<&Path>,
+) -> Result<Option<String>> {
+    let paths = resolve_bridge_paths(state_root_override, session_id, None)?;
+    if !paths.state_file.exists() {
+        return Ok(None);
+    }
+    let state = read_state_file(&paths.state_file)?;
+    let Some(state_thread_path) = normalize_optional_string(state.thread_path) else {
+        return Ok(None);
+    };
+    let state_canonical = normalize_binding_path(&state_thread_path);
+    let candidate_canonical = normalize_binding_path(candidate_path);
+    if state_canonical == candidate_canonical {
+        return Ok(None);
+    }
+    let reason = if state
+        .last_error
+        .as_deref()
+        .is_some_and(|value| value.contains(PROVIDER_THREAD_SWITCHED_REASON))
+    {
+        PROVIDER_THREAD_SWITCHED_REASON
+    } else {
+        "managed_thread_path_mismatch"
+    };
+    Ok(Some(format!(
+        "{reason}: refusing to bind Codex transcript {candidate_canonical} to managed session {session_id}; bridge primary thread_path is {state_canonical}"
+    )))
+}
+
 fn resolve_bridge_agent_db_path(longhouse_home_override: Option<&Path>) -> Result<PathBuf> {
     match longhouse_home_override {
         Some(home) => Ok(home.join("agent").join("longhouse-shipper.db")),
@@ -2372,7 +2500,18 @@ async fn process_notification(
             if notification_thread_is_subagent(&params) {
                 if let Some(id) = extract_notification_thread_id(&params) {
                     eprintln!("[codex-bridge] ignoring Codex subagent thread candidate: {id}");
+                    context.rejected_thread_ids.insert(id);
                 }
+                return Ok(None);
+            }
+            if let Some(next_id) = different_notification_thread_id(&params, context) {
+                mark_provider_thread_switched(
+                    config,
+                    context,
+                    method,
+                    &next_id,
+                    extract_notification_thread_path(&params),
+                )?;
                 return Ok(None);
             }
             let previous_thread_id = context.state.thread_id.clone();
@@ -2400,7 +2539,20 @@ async fn process_notification(
             }
         }
         "turn/started" | "item/started" | "item/completed" | "thread/status/changed" => {
-            if notification_is_for_different_thread(&params, context) {
+            if let Some(next_id) = different_notification_thread_id(&params, context) {
+                if context.rejected_thread_ids.contains(&next_id) {
+                    eprintln!(
+                        "[codex-bridge] ignoring notification for rejected Codex thread: {next_id}"
+                    );
+                } else {
+                    mark_provider_thread_switched(
+                        config,
+                        context,
+                        method,
+                        &next_id,
+                        extract_notification_thread_path(&params),
+                    )?;
+                }
                 return Ok(None);
             }
             let _ = adopt_thread_identity(
@@ -2437,7 +2589,20 @@ async fn process_notification(
         | "command/exec/outputDelta"
         | "item/fileChange/outputDelta"
         | "item/mcpToolCall/progress" => {
-            if notification_is_for_different_thread(&params, context) {
+            if let Some(next_id) = different_notification_thread_id(&params, context) {
+                if context.rejected_thread_ids.contains(&next_id) {
+                    eprintln!(
+                        "[codex-bridge] ignoring notification for rejected Codex thread: {next_id}"
+                    );
+                } else {
+                    mark_provider_thread_switched(
+                        config,
+                        context,
+                        method,
+                        &next_id,
+                        extract_notification_thread_path(&params),
+                    )?;
+                }
                 return Ok(None);
             }
             if let Some(delta) = extract_live_transcript_delta(method, &params) {
@@ -2458,7 +2623,20 @@ async fn process_notification(
             emit_runtime_updates(config, context, updates).await;
         }
         "turn/completed" => {
-            if notification_is_for_different_thread(&params, context) {
+            if let Some(next_id) = different_notification_thread_id(&params, context) {
+                if context.rejected_thread_ids.contains(&next_id) {
+                    eprintln!(
+                        "[codex-bridge] ignoring notification for rejected Codex thread: {next_id}"
+                    );
+                } else {
+                    mark_provider_thread_switched(
+                        config,
+                        context,
+                        method,
+                        &next_id,
+                        extract_notification_thread_path(&params),
+                    )?;
+                }
                 return Ok(None);
             }
             let completed_turn_id = context.state.active_turn_id.clone();
@@ -2562,6 +2740,11 @@ fn update_thread_subscription_tracking(
 }
 
 fn pending_thread_subscription(context: &mut BridgeContext) -> Result<Option<BridgeFollowup>> {
+    if context.state.thread_subscription_status.as_deref()
+        == Some(ThreadSubscriptionStatus::ProviderThreadSwitched.as_str())
+    {
+        return Ok(None);
+    }
     if let Some(thread_id) = context.state.thread_id.as_deref() {
         if context.rejected_thread_ids.contains(thread_id) {
             return Ok(None);
@@ -2613,18 +2796,17 @@ fn notification_thread_is_subagent(params: &Value) -> bool {
         .unwrap_or(false)
 }
 
-fn notification_is_for_different_thread(params: &Value, context: &BridgeContext) -> bool {
+fn different_notification_thread_id(params: &Value, context: &BridgeContext) -> Option<String> {
     let Some(current_id) = context.state.thread_id.as_deref() else {
-        return false;
+        return None;
     };
     let Some(next_id) = extract_notification_thread_id(params) else {
-        return false;
+        return None;
     };
     if next_id == current_id {
-        return false;
+        return None;
     }
-    eprintln!("[codex-bridge] ignoring notification for non-primary Codex thread: {next_id}");
-    true
+    Some(next_id)
 }
 
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
@@ -2672,6 +2854,74 @@ fn sync_thread_binding(
         }
         Err(e) => eprintln!("[codex-bridge] open shipper DB for binding: {e}"),
     }
+}
+
+fn clear_binding_if_points_to_session(config: &BridgeRunConfig, path: &str, session_id: &str) {
+    let canonical = normalize_binding_path(path);
+    match resolve_bridge_agent_db_path(config.longhouse_home.as_deref())
+        .and_then(|db_path| crate::state::db::open_db(Some(&db_path)))
+    {
+        Ok(conn) => {
+            let sb = crate::state::session_binding::SessionBinding::new(&conn);
+            match sb.get(&canonical) {
+                Ok(Some(bound_session_id)) if bound_session_id == session_id => {
+                    if let Err(e) = sb.unbind(&canonical) {
+                        eprintln!("[codex-bridge] foreign session_binding clear failed: {e}");
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => eprintln!("[codex-bridge] session_binding lookup failed: {e}"),
+            }
+        }
+        Err(e) => eprintln!("[codex-bridge] open shipper DB for binding clear: {e}"),
+    }
+}
+
+fn provider_thread_switched_error(
+    method: &str,
+    current_id: Option<&str>,
+    next_id: &str,
+    next_path: Option<&str>,
+) -> String {
+    format!(
+        "{PROVIDER_THREAD_SWITCHED_REASON}: method={method} controlled_thread={} observed_thread={next_id} observed_path={}",
+        current_id.unwrap_or("unknown"),
+        next_path.unwrap_or("unknown")
+    )
+}
+
+fn mark_provider_thread_switched(
+    config: &BridgeRunConfig,
+    context: &mut BridgeContext,
+    method: &str,
+    next_id: &str,
+    next_path: Option<String>,
+) -> Result<()> {
+    let message = provider_thread_switched_error(
+        method,
+        context.state.thread_id.as_deref(),
+        next_id,
+        next_path.as_deref(),
+    );
+    eprintln!("[codex-bridge] {message}");
+    context.rejected_thread_ids.insert(next_id.to_string());
+    context.state.status = "degraded".to_string();
+    context.state.last_error = Some(message.clone());
+    context.state.active_turn_id = None;
+    context.state.last_turn_status = None;
+    context.state.thread_subscription_status = Some(
+        ThreadSubscriptionStatus::ProviderThreadSwitched
+            .as_str()
+            .to_string(),
+    );
+    context.state.thread_subscription_last_error = Some(message);
+    context.runtime_tracker.active_turn_id = None;
+    context.live_transcript_text.clear();
+    context.live_transcript_seq = 0;
+    if let Some(path) = next_path.as_deref() {
+        clear_binding_if_points_to_session(config, path, &context.state.session_id);
+    }
+    write_state_file(&context.state_file, &context.state)
 }
 
 fn thread_subscription_locked(context: &BridgeContext) -> bool {
@@ -3712,10 +3962,7 @@ async fn handle_bridge_followup(
             thread_id,
             thread_path,
         } => {
-            let params = json!({
-                "threadId": thread_id,
-                "path": thread_path,
-            });
+            let params = thread_resume_params(&thread_id, thread_path.as_deref());
             let mut last_error = None;
             for attempt in 0..=THREAD_SUBSCRIBE_RETRY_ATTEMPTS {
                 context.state.thread_subscription_attempts =
@@ -3811,6 +4058,64 @@ async fn handle_bridge_followup(
             Err(last_error.expect("subscribe retry loop should capture an error"))
         }
     }
+}
+
+fn thread_resume_params(thread_id: &str, thread_path: Option<&str>) -> Value {
+    let mut params = json!({
+        "threadId": thread_id,
+    });
+    if let Some(path) = thread_path {
+        params["path"] = Value::String(path.to_string());
+    }
+    params
+}
+
+async fn resume_startup_thread_with_retry(
+    client: &mut RpcClient,
+    config: &BridgeRunConfig,
+    state: &mut BridgeStateFile,
+    thread_id: &str,
+    thread_path: Option<&str>,
+) -> Result<Value> {
+    let params = thread_resume_params(thread_id, thread_path);
+    let mut last_error = None;
+    for attempt in 0..=THREAD_SUBSCRIBE_RETRY_ATTEMPTS {
+        state.thread_subscription_attempts = state.thread_subscription_attempts.saturating_add(1);
+        state.thread_subscription_status =
+            Some(ThreadSubscriptionStatus::Subscribing.as_str().to_string());
+        state.thread_subscription_last_error = None;
+        state.updated_at = Utc::now().to_rfc3339();
+        write_state_file(&config.state_file, state)?;
+
+        match send_request(client, "thread/resume", params.clone()).await {
+            Ok(response) => return Ok(response),
+            Err(err) => {
+                let error_text = err.to_string();
+                let retryable = is_retryable_thread_subscription_error(&error_text);
+                state.thread_subscription_status = Some(
+                    if retryable {
+                        ThreadSubscriptionStatus::Retrying
+                    } else {
+                        ThreadSubscriptionStatus::Failed
+                    }
+                    .as_str()
+                    .to_string(),
+                );
+                state.thread_subscription_last_error = Some(error_text.clone());
+                state.last_error = Some(format!("thread/resume failed: {error_text}"));
+                state.updated_at = Utc::now().to_rfc3339();
+                let _ = write_state_file(&config.state_file, state);
+                last_error = Some(err);
+                if retryable && attempt < THREAD_SUBSCRIBE_RETRY_ATTEMPTS {
+                    tokio::time::sleep(Duration::from_millis(THREAD_SUBSCRIBE_RETRY_DELAY_MS))
+                        .await;
+                    continue;
+                }
+                break;
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow!("thread/resume retry loop exited without an error")))
 }
 
 async fn apply_thread_resume_snapshot(
@@ -4174,6 +4479,8 @@ mod tests {
             state_file: temp.path().join("bridge-state.json"),
             log_file: temp.path().join("bridge.log"),
             create_initial_thread: false,
+            resume_thread_id: None,
+            resume_thread_path: None,
             launch_mode: BridgeLaunchMode::Tui,
         }
     }
@@ -4220,6 +4527,101 @@ mod tests {
                 .join("codex-bridge")
                 .join("session-123.log")
         );
+    }
+
+    #[test]
+    fn codex_managed_bind_allows_matching_primary_thread_path() {
+        let temp = tempfile::tempdir().unwrap();
+        let session_id = "session-123";
+        let rollout = temp.path().join("primary.jsonl");
+        fs::write(&rollout, "{}\n").unwrap();
+        let state = BridgeStateFile {
+            schema_version: BRIDGE_STATE_SCHEMA_VERSION,
+            session_id: session_id.to_string(),
+            cwd: temp.path().display().to_string(),
+            codex_bin: "codex".to_string(),
+            launch_mode: Some(LAUNCH_MODE_TUI.to_string()),
+            ws_url: Some("ws://127.0.0.1:4800".to_string()),
+            thread_id: Some("thr-primary".to_string()),
+            thread_path: Some(rollout.display().to_string()),
+            pid: 42,
+            app_server_pid: None,
+            app_server_pgid: None,
+            app_server_ws_url: None,
+            status: "ready".to_string(),
+            log_file: temp.path().join("bridge.log").display().to_string(),
+            active_turn_id: None,
+            last_turn_status: None,
+            last_error: None,
+            thread_subscription_status: Some(
+                ThreadSubscriptionStatus::Subscribed.as_str().to_string(),
+            ),
+            thread_subscription_attempts: 1,
+            thread_subscription_last_error: None,
+            updated_at: Utc::now().to_rfc3339(),
+        };
+        write_state_file(&temp.path().join(format!("{session_id}.json")), &state).unwrap();
+
+        assert_eq!(
+            codex_managed_bind_rejection_reason(
+                session_id,
+                &rollout.display().to_string(),
+                Some(temp.path())
+            )
+            .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn codex_managed_bind_rejects_path_mismatch_when_primary_path_is_known() {
+        let temp = tempfile::tempdir().unwrap();
+        let session_id = "session-123";
+        let primary = temp.path().join("primary.jsonl");
+        let resumed = temp.path().join("resumed.jsonl");
+        fs::write(&primary, "{}\n").unwrap();
+        fs::write(&resumed, "{}\n").unwrap();
+        let state = BridgeStateFile {
+            schema_version: BRIDGE_STATE_SCHEMA_VERSION,
+            session_id: session_id.to_string(),
+            cwd: temp.path().display().to_string(),
+            codex_bin: "codex".to_string(),
+            launch_mode: Some(LAUNCH_MODE_TUI.to_string()),
+            ws_url: Some("ws://127.0.0.1:4800".to_string()),
+            thread_id: Some("thr-primary".to_string()),
+            thread_path: Some(primary.display().to_string()),
+            pid: 42,
+            app_server_pid: None,
+            app_server_pgid: None,
+            app_server_ws_url: None,
+            status: "degraded".to_string(),
+            log_file: temp.path().join("bridge.log").display().to_string(),
+            active_turn_id: None,
+            last_turn_status: None,
+            last_error: Some(format!("{PROVIDER_THREAD_SWITCHED_REASON}: test")),
+            thread_subscription_status: Some(
+                ThreadSubscriptionStatus::ProviderThreadSwitched
+                    .as_str()
+                    .to_string(),
+            ),
+            thread_subscription_attempts: 1,
+            thread_subscription_last_error: None,
+            updated_at: Utc::now().to_rfc3339(),
+        };
+        write_state_file(&temp.path().join(format!("{session_id}.json")), &state).unwrap();
+
+        let reason = codex_managed_bind_rejection_reason(
+            session_id,
+            &resumed.display().to_string(),
+            Some(temp.path()),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert!(reason.contains(PROVIDER_THREAD_SWITCHED_REASON));
+        assert!(reason.contains("refusing to bind Codex transcript"));
+        assert!(reason.contains("primary.jsonl"));
+        assert!(reason.contains("resumed.jsonl"));
     }
 
     #[test]
@@ -5354,7 +5756,19 @@ mod tests {
         assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-bad"));
         assert_eq!(
             context.state.thread_subscription_status.as_deref(),
-            Some(ThreadSubscriptionStatus::WaitingForThread.as_str())
+            Some(ThreadSubscriptionStatus::ProviderThreadSwitched.as_str())
+        );
+        assert_eq!(context.state.status, "degraded");
+        assert!(context
+            .state
+            .last_error
+            .as_deref()
+            .is_some_and(|message| message.contains(PROVIDER_THREAD_SWITCHED_REASON)));
+        assert_eq!(context.state.active_turn_id, None);
+        assert_eq!(context.state.last_turn_status, None);
+        assert_eq!(
+            context.state.thread_subscription_last_error.as_deref(),
+            context.state.last_error.as_deref()
         );
         assert_eq!(
             binding.get("/tmp/bad-thread.jsonl").unwrap().as_deref(),
@@ -5363,7 +5777,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_notification_ignores_turn_completed_for_different_thread() {
+    async fn process_notification_degrades_on_unknown_foreign_turn_completed() {
         let temp = tempfile::tempdir().unwrap();
         let config = make_test_run_config(&temp);
         let mut context = make_test_context(&temp);
@@ -5391,11 +5805,23 @@ mod tests {
         .unwrap();
 
         assert_eq!(followup, None);
-        assert_eq!(context.state.active_turn_id.as_deref(), Some("turn-live"));
+        assert_eq!(context.state.thread_id.as_deref(), Some("thr-live"));
         assert_eq!(
-            context.runtime_tracker.active_turn_id.as_deref(),
-            Some("turn-live")
+            context.state.thread_path.as_deref(),
+            Some("/tmp/thread-live.jsonl")
         );
+        assert_eq!(context.state.status, "degraded");
+        assert_eq!(context.state.active_turn_id, None);
+        assert_eq!(context.runtime_tracker.active_turn_id, None);
+        assert_eq!(
+            context.state.thread_subscription_status.as_deref(),
+            Some(ThreadSubscriptionStatus::ProviderThreadSwitched.as_str())
+        );
+        assert!(context
+            .state
+            .last_error
+            .as_deref()
+            .is_some_and(|message| message.contains("observed_thread=thr-child")));
     }
 
     #[tokio::test]
@@ -5432,6 +5858,7 @@ mod tests {
         assert_eq!(context.state.thread_id, None);
         assert_eq!(context.state.thread_path, None);
         assert_eq!(context.runtime.thread_id, None);
+        assert!(context.rejected_thread_ids.contains("thr-child"));
     }
 
     #[tokio::test]
@@ -5468,6 +5895,147 @@ mod tests {
         assert_eq!(context.state.thread_id, None);
         assert_eq!(context.state.thread_path, None);
         assert_eq!(context.runtime.thread_id, None);
+        assert!(context.rejected_thread_ids.contains("thr-child"));
+    }
+
+    #[tokio::test]
+    async fn process_notification_ignores_rejected_subagent_turn_without_degrading_parent() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+        context.state.thread_id = Some("thr-parent".to_string());
+        context.state.thread_path = Some("/tmp/parent.jsonl".to_string());
+        context.runtime.thread_id = Some("thr-parent".to_string());
+
+        let subagent = process_notification(
+            &json!({
+                "method": "thread/started",
+                "params": {
+                    "thread": {
+                        "id": "thr-child",
+                        "path": "/tmp/child.jsonl",
+                        "source": {
+                            "subagent": {
+                                "thread_spawn": {
+                                    "parent_thread_id": "thr-parent",
+                                    "depth": 1
+                                }
+                            }
+                        }
+                    }
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+        assert_eq!(subagent, None);
+        assert!(context.rejected_thread_ids.contains("thr-child"));
+
+        let turn = process_notification(
+            &json!({
+                "method": "turn/started",
+                "params": {
+                    "threadId": "thr-child",
+                    "turn": {
+                        "id": "turn-child",
+                        "status": "inProgress"
+                    }
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(turn, None);
+        assert_eq!(context.state.status, "ready");
+        assert_eq!(context.state.thread_id.as_deref(), Some("thr-parent"));
+        assert_eq!(
+            context.state.thread_path.as_deref(),
+            Some("/tmp/parent.jsonl")
+        );
+        assert_eq!(context.state.last_error, None);
+        assert_eq!(context.state.active_turn_id, None);
+    }
+
+    #[tokio::test]
+    async fn process_notification_degrades_on_foreign_root_thread_started_without_rebinding() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+        let parent_path = temp.path().join("parent.jsonl");
+        let resumed_path = temp.path().join("resumed.jsonl");
+        fs::write(&parent_path, "{}\n").unwrap();
+        fs::write(&resumed_path, "{}\n").unwrap();
+        let parent = parent_path.display().to_string();
+        let resumed = resumed_path.display().to_string();
+        context.state.thread_id = Some("thr-parent".to_string());
+        context.state.thread_path = Some(parent.clone());
+        context.runtime.thread_id = Some("thr-parent".to_string());
+        context.subscribed_thread_id = Some("thr-parent".to_string());
+
+        let db_path = resolve_bridge_agent_db_path(Some(temp.path())).unwrap();
+        let conn = crate::state::db::open_db(Some(&db_path)).unwrap();
+        let binding = crate::state::session_binding::SessionBinding::new(&conn);
+        binding
+            .bind(
+                &normalize_binding_path(&parent),
+                &context.state.session_id,
+                "codex",
+            )
+            .unwrap();
+        binding
+            .bind(
+                &normalize_binding_path(&resumed),
+                &context.state.session_id,
+                "codex",
+            )
+            .unwrap();
+
+        let followup = process_notification(
+            &json!({
+                "method": "thread/started",
+                "params": {
+                    "thread": {
+                        "id": "thr-resumed",
+                        "path": resumed
+                    }
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(followup, None);
+        assert_eq!(context.state.thread_id.as_deref(), Some("thr-parent"));
+        assert_eq!(context.state.thread_path.as_deref(), Some(parent.as_str()));
+        assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-parent"));
+        assert_eq!(context.state.status, "degraded");
+        assert_eq!(
+            context.state.thread_subscription_status.as_deref(),
+            Some(ThreadSubscriptionStatus::ProviderThreadSwitched.as_str())
+        );
+        assert!(context
+            .state
+            .last_error
+            .as_deref()
+            .is_some_and(|message| message.contains("observed_thread=thr-resumed")));
+        assert_eq!(
+            binding
+                .get(&normalize_binding_path(&parent))
+                .unwrap()
+                .as_deref(),
+            Some(context.state.session_id.as_str())
+        );
+        assert_eq!(
+            binding.get(&normalize_binding_path(&resumed)).unwrap(),
+            None
+        );
     }
 
     #[tokio::test]
@@ -5924,6 +6492,31 @@ mod tests {
         assert_eq!(
             payload["file_len_hint"].as_u64(),
             Some(fs::metadata(&rollout_path).unwrap().len())
+        );
+    }
+
+    #[test]
+    fn thread_resume_params_omits_missing_path() {
+        let params = thread_resume_params("thr-live", None);
+
+        assert_eq!(
+            params.get("threadId").and_then(Value::as_str),
+            Some("thr-live")
+        );
+        assert!(params.get("path").is_none());
+    }
+
+    #[test]
+    fn thread_resume_params_includes_path_when_available() {
+        let params = thread_resume_params("thr-live", Some("/tmp/thread.jsonl"));
+
+        assert_eq!(
+            params.get("threadId").and_then(Value::as_str),
+            Some("thr-live")
+        );
+        assert_eq!(
+            params.get("path").and_then(Value::as_str),
+            Some("/tmp/thread.jsonl")
         );
     }
 

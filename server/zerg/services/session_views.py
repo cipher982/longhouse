@@ -24,8 +24,11 @@ from sqlalchemy import and_
 
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionLaunchAttempt
+from zerg.models.agents import SessionThread
+from zerg.models.agents import SessionThreadAlias
 from zerg.models.agents import SessionTurn
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
@@ -95,6 +98,8 @@ def build_session_capabilities_response(
     runtime_display=None,
     runtime_facts=None,
     kernel_capabilities: KernelSessionCapabilities | None = None,
+    can_continue: bool = False,
+    continue_targets: list[SessionContinueTarget] | None = None,
 ) -> SessionCapabilitiesResponse:
     if capability_flags is None:
         raise RuntimeError("capability_flags is required; the kernel adapter must build them")
@@ -152,6 +157,8 @@ def build_session_capabilities_response(
         can_terminate=(bool(kernel_capabilities.can_terminate) and control_available if kernel_capabilities is not None else False),
         can_tail_output=(kernel_capabilities.can_tail_output if kernel_capabilities is not None else False),
         can_resume=(bool(kernel_capabilities.can_resume) and not lifecycle_closed if kernel_capabilities is not None else False),
+        can_continue=bool(can_continue) and not lifecycle_closed,
+        continue_targets=continue_targets or [],
         attach_images=_attach_images_capability(capability_flags, live_control_available=effective_live_control),
     )
 
@@ -210,6 +217,59 @@ def _attach_images_capability(capability_flags, *, live_control_available: bool 
         return False
     live = bool(capability_flags.live_control_available) if live_control_available is None else bool(live_control_available)
     return live
+
+
+def _native_continue_target(db, session: AgentSession) -> SessionContinueTarget | None:
+    if (session.provider or "").strip().lower() != "codex":
+        return None
+    thread = (
+        db.query(SessionThread)
+        .filter(SessionThread.session_id == session.id, SessionThread.is_primary == 1)
+        .order_by(SessionThread.created_at.asc(), SessionThread.id.asc())
+        .first()
+    )
+    if thread is None:
+        return None
+    provider_thread_id = (
+        db.query(SessionThreadAlias.alias_value)
+        .filter(SessionThreadAlias.thread_id == thread.id)
+        .filter(SessionThreadAlias.provider == session.provider)
+        .filter(SessionThreadAlias.alias_kind == "provider_session_id")
+        .order_by(SessionThreadAlias.last_seen_at.desc(), SessionThreadAlias.id.desc())
+        .limit(1)
+        .scalar()
+    )
+    provider_thread_id = str(provider_thread_id).strip() if provider_thread_id else ""
+    if not provider_thread_id or provider_thread_id == str(session.id):
+        return None
+    source_path = (
+        db.query(SessionThreadAlias.alias_value)
+        .filter(SessionThreadAlias.thread_id == thread.id)
+        .filter(SessionThreadAlias.provider == session.provider)
+        .filter(SessionThreadAlias.alias_kind == "source_path")
+        .order_by(SessionThreadAlias.last_seen_at.desc(), SessionThreadAlias.id.desc())
+        .limit(1)
+        .scalar()
+    )
+    if not source_path:
+        source_path = (
+            db.query(AgentSourceLine.source_path)
+            .filter(AgentSourceLine.session_id == session.id)
+            .filter((AgentSourceLine.thread_id == thread.id) | (AgentSourceLine.thread_id.is_(None)))
+            .order_by(AgentSourceLine.created_at.desc(), AgentSourceLine.id.desc())
+            .limit(1)
+            .scalar()
+        )
+    source_path = str(source_path).strip() if source_path else ""
+    if not source_path:
+        return None
+    return SessionContinueTarget(
+        provider=session.provider,
+        device_id=session.device_id,
+        cwd=session.cwd,
+        carry_context="native",
+        native_resume_available=True,
+    )
 
 
 def _provider_label(session: AgentSession | None) -> str | None:
@@ -455,6 +515,16 @@ class SessionControlResponse(BaseModel):
     attach_command: Optional[str] = Field(None, description="Local reattach command for managed-local sessions")
 
 
+class SessionContinueTarget(BaseModel):
+    """Compact native continuation target exposed to web/iOS clients."""
+
+    provider: str = Field(..., description="Provider that can resume this target")
+    device_id: str | None = Field(None, description="Recorded source device id for the session")
+    cwd: str | None = Field(None, description="Recorded working directory for the session")
+    carry_context: Literal["native"] = Field("native", description="Continuation context strategy")
+    native_resume_available: bool = Field(True, description="True when provider-native resume data exists")
+
+
 class SessionCapabilitiesResponse(BaseModel):
     live_control_available: bool = Field(False, description="True when Longhouse can inject into the live session now")
     host_reattach_available: bool = Field(False, description="True when this session can be resumed from its host terminal")
@@ -505,7 +575,7 @@ class SessionCapabilitiesResponse(BaseModel):
     )
     staleness_reason: Optional[str] = Field(
         None,
-        description="When live_control_available is False, why: e.g. no_run, connection_released, process_ended, imported_only",
+        description=("When live_control_available is False, why: e.g. no_run, connection_released, process_ended, imported_only"),
     )
     can_send_input: bool = Field(False, description="Kernel: connection grants send-input capability and is currently live")
     can_interrupt: bool = Field(False, description="Kernel: connection grants interrupt capability and is currently live")
@@ -515,6 +585,14 @@ class SessionCapabilitiesResponse(BaseModel):
     attach_images: bool = Field(
         False,
         description="True when the session can accept image attachments on input (codex_app_server only)",
+    )
+    can_continue: bool = Field(
+        False,
+        description="True when Longhouse has a native continuation target for this session",
+    )
+    continue_targets: list[SessionContinueTarget] = Field(
+        default_factory=list,
+        description="Compact continuation targets available to clients",
     )
 
 
@@ -650,7 +728,10 @@ class SessionResponse(UTCBaseModel):
     user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
     launch_state: Optional[RemoteLaunchLifecycleState] = Field(
         None,
-        description="Remote-launch lifecycle: launching|live|launching_unknown|launch_failed|launch_orphaned; null when there is no launch attempt",
+        description=(
+            "Remote-launch lifecycle: launching|live|launching_unknown|"
+            "launch_failed|launch_orphaned; null when there is no launch attempt"
+        ),
     )
     launch_error_code: Optional[RemoteLaunchErrorCode] = Field(
         None,
@@ -691,7 +772,7 @@ class SessionsListResponse(BaseModel):
     total: int
     has_real_sessions: bool = Field(
         True,
-        description="True if any non-demo sessions exist (device_id != 'demo-mac'). False means only demo-seeded data is present.",
+        description=("True if any non-demo sessions exist (device_id != 'demo-mac'). " "False means only demo-seeded data is present."),
     )
 
 
@@ -1282,6 +1363,8 @@ def build_session_response(
     effective_capability_flags = capability_flags
     effective_launch_attempt = _latest_launch_attempt(store.db, session.id) if launch_attempt is _LAUNCH_ATTEMPT_MISSING else launch_attempt
     launch_lifecycle = project_remote_launch_lifecycle(effective_launch_attempt)
+    continue_target = _native_continue_target(store.db, session)
+    continue_targets = [continue_target] if continue_target is not None else []
     return SessionResponse(
         id=str(session.id),
         provider=session.provider,
@@ -1337,6 +1420,8 @@ def build_session_response(
             runtime_display=runtime_display,
             runtime_facts=runtime_facts,
             kernel_capabilities=kernel_capabilities,
+            can_continue=continue_target is not None,
+            continue_targets=continue_targets,
         ),
         runtime_display=runtime_display,
         transcript_preview=transcript_preview_response,
@@ -1474,6 +1559,8 @@ def build_active_session_response(
     # Session-identity-kernel cleanup: legacy capability re-projection was
     # removed; the kernel ``capability_flags`` is already the truth.
     effective_capability_flags = capability_flags
+    continue_target = _native_continue_target(store.db, session)
+    continue_targets = [continue_target] if continue_target is not None else []
 
     return ActiveSessionResponse(
         id=str(session.id),
@@ -1514,6 +1601,8 @@ def build_active_session_response(
             runtime_display=runtime_display,
             runtime_facts=runtime_facts,
             kernel_capabilities=kernel_capabilities,
+            can_continue=continue_target is not None,
+            continue_targets=continue_targets,
         ),
         runtime_display=runtime_display,
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
