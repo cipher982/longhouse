@@ -24,7 +24,7 @@ def _write_exe(path: Path, text: str) -> Path:
 def _fake_opencode(path: Path) -> Path:
     return _write_exe(
         path,
-        r'''#!/usr/bin/env python3
+        r"""#!/usr/bin/env python3
 import base64
 import http.server
 import json
@@ -125,14 +125,14 @@ server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 print(f"opencode server listening on http://127.0.0.1:{server.server_address[1]}", flush=True)
 server.serve_forever()
-''',
+""",
     )
 
 
 def _fake_claude(path: Path) -> Path:
     return _write_exe(
         path,
-        r'''#!/usr/bin/env python3
+        r"""#!/usr/bin/env python3
 import json
 import os
 import sys
@@ -189,7 +189,71 @@ if args == ["--channels", "--help"]:
 
 print("unexpected fake claude args: " + json.dumps(args), file=sys.stderr)
 raise SystemExit(2)
-''',
+""",
+    )
+
+
+def _fake_antigravity(path: Path) -> Path:
+    return _write_exe(
+        path,
+        r"""#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+if args == ["--version"]:
+    print("1.0.2-fake")
+    raise SystemExit(0)
+
+if args == ["--help"]:
+    if os.environ.get("FAKE_AGY_MISSING_PLUGIN_HELP") == "1":
+        print("--print --prompt-interactive --conversation")
+    else:
+        print("--print --prompt-interactive --conversation plugin")
+    raise SystemExit(0)
+
+if args == ["plugin", "--help"]:
+    print("install <target>")
+    print("list")
+    print("validate")
+    raise SystemExit(0)
+
+def installed_marker():
+    return Path(os.environ.get("HOME", ".")) / ".fake-agy-plugins.json"
+
+if len(args) == 3 and args[:2] == ["plugin", "validate"]:
+    root = Path(args[2])
+    if not (root / "plugin.json").is_file():
+        print("missing plugin.json", file=sys.stderr)
+        raise SystemExit(1)
+    print("[ok] " + str(root))
+    raise SystemExit(0)
+
+if len(args) == 3 and args[:2] == ["plugin", "install"]:
+    if os.environ.get("FAKE_AGY_INSTALL_FAIL") == "1":
+        print("install failed", file=sys.stderr)
+        raise SystemExit(1)
+    root = Path(args[2])
+    name = json.loads((root / "plugin.json").read_text()).get("name")
+    marker = installed_marker()
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.write_text(json.dumps({"imports": [{"name": name}]}))
+    print("[ok] " + str(root))
+    raise SystemExit(0)
+
+if args == ["plugin", "list"]:
+    marker = installed_marker()
+    if marker.exists():
+        print(marker.read_text())
+    else:
+        print(json.dumps({"imports": []}))
+    raise SystemExit(0)
+
+print("unexpected fake agy args: " + json.dumps(args), file=sys.stderr)
+raise SystemExit(2)
+""",
     )
 
 
@@ -293,6 +357,45 @@ def test_claude_live_canary_can_go_green_with_fake_binary() -> None:
         assert payload["canaries"]["command_shape"]["status"] == "pass"
         assert payload["canaries"]["channels_shape"]["status"] == "pass"
         assert payload["canaries"]["detached_pty_shape"]["status"] == "pass"
+
+
+def test_antigravity_live_canary_can_go_green_with_fake_binary() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_antigravity(root / "bin" / "agy")
+        result, payload = _run_provider_canary(root, provider="antigravity", fake_bin=fake_bin)
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["provider"] == "antigravity"
+        assert payload["provider_version"] == "1.0.2-fake"
+        assert payload["verdict"] == "green"
+        assert payload["canaries"]["command_shape"]["status"] == "pass"
+        assert payload["canaries"]["plugin_contract"]["status"] == "pass"
+        assert payload["canaries"]["global_hooks_contract"]["status"] == "pass"
+        assert set(payload["canaries"]["global_hooks_contract"]["events"]) == {
+            "PostInvocation",
+            "PostToolUse",
+            "PreInvocation",
+            "PreToolUse",
+            "Stop",
+        }
+        assert "longhouse-runtime" in json.dumps(payload["canaries"]["plugin_contract"])
+
+
+def test_antigravity_live_canary_fails_when_plugin_install_fails() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_antigravity(root / "bin" / "agy")
+        result, payload = _run_provider_canary(
+            root,
+            provider="antigravity",
+            fake_bin=fake_bin,
+            extra_env={"FAKE_AGY_INSTALL_FAIL": "1"},
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "antigravity_plugin_install_failed"
 
 
 def test_claude_live_canary_accepts_api_key_auth() -> None:
@@ -429,6 +532,8 @@ def main() -> int:
     tests = [
         test_opencode_live_canary_can_go_green_with_fake_server,
         test_claude_live_canary_can_go_green_with_fake_binary,
+        test_antigravity_live_canary_can_go_green_with_fake_binary,
+        test_antigravity_live_canary_fails_when_plugin_install_fails,
         test_claude_live_canary_accepts_api_key_auth,
         test_claude_live_canary_turns_yellow_when_not_logged_in,
         test_claude_auth_failures_do_not_publish_raw_identifiers,
