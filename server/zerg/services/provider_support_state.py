@@ -42,10 +42,13 @@ EVIDENCE_RANK = {
 
 def collect_provider_support_state(
     *,
-    provider_clis: Mapping[str, Any],
-    provider_release_status: Mapping[str, Any],
-    control_channel: Mapping[str, Any],
+    provider_clis: Mapping[str, Any] | None,
+    provider_release_status: Mapping[str, Any] | None,
+    control_channel: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
+    provider_clis = dict(provider_clis or {})
+    provider_release_status = dict(provider_release_status or {})
+    control_channel = dict(control_channel or {})
     release_statuses = dict(provider_release_status.get("statuses") or {})
     live_ops_by_provider = dict(control_channel.get("control_operations_by_provider") or {})
     raw_control_status = str(control_channel.get("status") or "").strip()
