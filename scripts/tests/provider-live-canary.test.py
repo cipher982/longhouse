@@ -342,6 +342,12 @@ def test_opencode_live_canary_stays_yellow_until_prompt_execution_is_proven() ->
         assert payload["canaries"]["session_create"]["tokens"]["input"] == 0
         assert payload["canaries"]["session_abort"]["status"] == "pass"
         assert payload["canaries"]["prompt_async_execution_contract"]["status"] == "not_run"
+        assert set(payload["operation_evidence"]) == {"interrupt", "launch_local", "reattach", "send_input"}
+        assert payload["operation_evidence"]["launch_local"]["level"] == "live_no_token"
+        assert payload["operation_evidence"]["reattach"]["level"] == "live_no_token"
+        assert payload["operation_evidence"]["send_input"]["status"] == "pass"
+        assert "API-surface proof" in payload["operation_evidence"]["send_input"]["message"]
+        assert payload["operation_evidence"]["interrupt"]["status"] == "pass"
 
 
 def test_claude_live_canary_stays_yellow_until_live_token_contract_is_proven() -> None:
@@ -361,6 +367,9 @@ def test_claude_live_canary_stays_yellow_until_live_token_contract_is_proven() -
         assert payload["canaries"]["channels_shape"]["status"] == "pass"
         assert payload["canaries"]["detached_pty_shape"]["status"] == "pass"
         assert payload["canaries"]["live_token_contract"]["status"] == "not_run"
+        assert set(payload["operation_evidence"]) == {"launch_local"}
+        assert payload["operation_evidence"]["launch_local"]["status"] == "pass"
+        assert payload["operation_evidence"]["launch_local"]["level"] == "live_no_token"
 
 
 def test_antigravity_live_canary_stays_yellow_until_loop_invocation_is_proven() -> None:
@@ -386,6 +395,8 @@ def test_antigravity_live_canary_stays_yellow_until_loop_invocation_is_proven() 
             "Stop",
         }
         assert "longhouse-runtime" in json.dumps(payload["canaries"]["plugin_contract"])
+        assert set(payload["operation_evidence"]) == {"launch_local"}
+        assert payload["operation_evidence"]["launch_local"]["level"] == "live_no_token"
 
 
 def test_antigravity_live_canary_fails_when_plugin_install_fails() -> None:
@@ -522,6 +533,9 @@ def test_opencode_live_canary_fails_when_schema_drops_prompt_async() -> None:
         assert payload["failure_code"] == "opencode_schema_probe_failed"
         failures = payload["canaries"]["schema_probe"]["failures"]
         assert failures[0]["failure_code"] == "opencode_schema_missing_path"
+        assert payload["operation_evidence"]["send_input"]["status"] == "fail"
+        assert payload["operation_evidence"]["send_input"]["level"] == "none"
+        assert "prompt_async_execution_contract" not in payload["operation_evidence"]
 
 
 def test_opencode_live_canary_accepts_empty_successful_abort_response() -> None:

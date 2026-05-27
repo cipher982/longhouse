@@ -24,7 +24,7 @@ def _write_exe(path: Path, text: str) -> Path:
 def _fake_codex(path: Path) -> Path:
     return _write_exe(
         path,
-        r'''#!/usr/bin/env python3
+        r"""#!/usr/bin/env python3
 import json
 import os
 import sys
@@ -44,14 +44,14 @@ if "resume" in args:
 
 print("fake codex command", json.dumps(args))
 raise SystemExit(0)
-''',
+""",
     )
 
 
 def _fake_engine(path: Path) -> Path:
     return _write_exe(
         path,
-        r'''#!/usr/bin/env python3
+        r"""#!/usr/bin/env python3
 import json
 import os
 import sys
@@ -129,16 +129,59 @@ if args and args[0] == "codex-app-server-canary":
             text = "■ No active thread is available.\n"
         Path(remote_log).write_text(text, encoding="utf-8")
     if jsonl_log:
+        events = [
+            {
+                "direction": "client_request",
+                "payload": {
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {"clientInfo": {"name": "test"}},
+                },
+            },
+            {
+                "direction": "server_message",
+                "payload": {
+                    "id": 1,
+                    "result": {"platformFamily": "unix", "userAgent": "fake/1.0"},
+                },
+            },
+            {
+                "direction": "client_request",
+                "payload": {
+                    "id": 2,
+                    "method": "thread/start",
+                    "params": {"cwd": "/tmp/work"},
+                },
+            },
+            {
+                "direction": "server_message",
+                "payload": {
+                    "method": "thread/started",
+                    "params": {"thread": {"id": "thread_raw"}},
+                },
+            },
+            {
+                "direction": "server_message",
+                "payload": {
+                    "id": 2,
+                    "result": {
+                        "thread": {"id": "thread_raw", "path": "/tmp/thread.jsonl"},
+                    },
+                },
+            },
+            {
+                "direction": "server_message",
+                "payload": {
+                    "method": "turn/completed",
+                    "params": {
+                        "threadId": "thread_raw",
+                        "turn": {"id": "turn_raw", "status": "completed"},
+                    },
+                },
+            },
+        ]
         Path(jsonl_log).write_text(
-            "\n".join([
-                json.dumps({"direction": "client_request", "payload": {"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "test"}}}}),
-                json.dumps({"direction": "server_message", "payload": {"id": 1, "result": {"platformFamily": "unix", "userAgent": "fake/1.0"}}}),
-                json.dumps({"direction": "client_request", "payload": {"id": 2, "method": "thread/start", "params": {"cwd": "/tmp/work"}}}),
-                json.dumps({"direction": "server_message", "payload": {"method": "thread/started", "params": {"thread": {"id": "thread_raw"}}}}),
-                json.dumps({"direction": "server_message", "payload": {"id": 2, "result": {"thread": {"id": "thread_raw", "path": "/tmp/thread.jsonl"}}}}),
-                json.dumps({"direction": "server_message", "payload": {"method": "turn/completed", "params": {"threadId": "thread_raw", "turn": {"id": "turn_raw", "status": "completed"}}}}),
-            ])
-            + "\n",
+            "\n".join(json.dumps(event) for event in events) + "\n",
             encoding="utf-8",
         )
     print(json.dumps({
@@ -154,14 +197,14 @@ if args and args[0] == "codex-app-server-canary":
 
 print("unexpected fake engine args: " + json.dumps(args), file=sys.stderr)
 raise SystemExit(2)
-''',
+""",
     )
 
 
 def _fake_script(path: Path) -> Path:
     return _write_exe(
         path,
-        r'''#!/usr/bin/env python3
+        r"""#!/usr/bin/env python3
 import os
 import subprocess
 import sys
@@ -180,14 +223,14 @@ with recording.open("a", encoding="utf-8") as handle:
     handle.write(result.stdout)
     handle.write(result.stderr)
 raise SystemExit(result.returncode)
-''',
+""",
     )
 
 
 def _fake_timeout(path: Path) -> Path:
     return _write_exe(
         path,
-        r'''#!/usr/bin/env python3
+        r"""#!/usr/bin/env python3
 import os
 import sys
 
@@ -195,7 +238,7 @@ if len(sys.argv) < 3:
     raise SystemExit(2)
 command = sys.argv[2:]
 os.execv(command[0], command)
-''',
+""",
     )
 
 
@@ -283,6 +326,16 @@ def test_full_fake_canary_can_go_green() -> None:
         assert payload["verdict"] == "green"
         for canary in payload["canaries"].values():
             assert canary["status"] == "pass"
+        assert set(payload["operation_evidence"]) == {
+            "launch_local",
+            "launch_remote",
+            "reattach",
+            "tail_output",
+        }
+        assert payload["operation_evidence"]["launch_local"]["canary"] == "managed_tui_attach"
+        assert payload["operation_evidence"]["launch_remote"]["canary"] == "detached_ui"
+        assert payload["operation_evidence"]["reattach"]["level"] == "live_no_token"
+        assert payload["operation_evidence"]["tail_output"]["status"] == "pass"
 
         attach_args = json.loads(fixture["codex_args"].read_text(encoding="utf-8"))
         assert attach_args[:2] == ["-c", "check_for_update_on_startup=false"]
@@ -308,6 +361,9 @@ def test_raw_fresh_remote_warning_is_yellow() -> None:
         assert result.returncode == 0, result.stderr + result.stdout
         assert payload["verdict"] == "yellow"
         assert payload["canaries"]["raw_fresh_remote"]["status"] == "warn"
+        assert set(payload["operation_evidence"]) == {"tail_output"}
+        assert payload["operation_evidence"]["tail_output"]["status"] == "warn"
+        assert payload["operation_evidence"]["tail_output"]["level"] == "live_no_token"
         assert "No active thread is available." in payload["canaries"]["raw_fresh_remote"]["evidence"]
         fingerprints = payload["canaries"]["raw_fresh_remote"]["protocol_fingerprints"]
         assert fingerprints["responses"]["initialize"]["platformFamily"] == "str"
@@ -329,6 +385,9 @@ def test_managed_tui_attach_active_thread_error_is_red() -> None:
         assert result.returncode == 1
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "managed_tui_attach_active_thread_error"
+        assert payload["operation_evidence"]["launch_local"]["status"] == "fail"
+        assert payload["operation_evidence"]["launch_local"]["level"] == "none"
+        assert payload["operation_evidence"]["reattach"]["status"] == "fail"
 
 
 def test_forbidden_longhouse_codex_path_is_red() -> None:
@@ -345,6 +404,25 @@ def test_forbidden_longhouse_codex_path_is_red() -> None:
         assert result.returncode == 1
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "longhouse_codex_launcher"
+        assert payload["operation_evidence"]["launch_local"]["status"] == "fail"
+        assert payload["operation_evidence"]["launch_local"]["level"] == "none"
+
+
+def test_codex_launch_local_failure_evidence_is_not_overwritten_by_later_canary() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fixture = _fixture(root)
+        forbidden = _fake_codex(root / "bin" / "longhouse-codex")
+        fixture["codex"] = forbidden
+        result, payload = _run_canary(
+            root,
+            fixture,
+            ["--run-managed-tui-attach", "--source-review-status", "pass"],
+        )
+        assert result.returncode == 1
+        assert payload["operation_evidence"]["launch_local"]["status"] == "fail"
+        assert payload["operation_evidence"]["launch_local"]["failure_code"] == "longhouse_codex_launcher"
+        assert payload["operation_evidence"]["reattach"]["status"] == "pass"
 
 
 def test_longhouse_codex_bin_env_requires_explicit_override() -> None:
@@ -394,6 +472,7 @@ def main() -> int:
         test_raw_fresh_remote_warning_is_yellow,
         test_managed_tui_attach_active_thread_error_is_red,
         test_forbidden_longhouse_codex_path_is_red,
+        test_codex_launch_local_failure_evidence_is_not_overwritten_by_later_canary,
         test_longhouse_codex_bin_env_requires_explicit_override,
         test_release_artifact_can_use_upstream_version_without_local_binary_identity,
     ]
