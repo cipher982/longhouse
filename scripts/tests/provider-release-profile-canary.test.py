@@ -79,6 +79,7 @@ def test_each_managed_provider_emits_profile_artifact() -> None:
             assert payload["verdict"] == "yellow"
             assert payload["failure_code"] == "insufficient_coverage"
             assert payload["canaries"]["contract_profile"]["status"] == "pass"
+            assert payload["canaries"]["contract_profile"]["operation_evidence"]
             assert payload["canaries"]["binary_identity"]["status"] == "pass"
             assert payload["canaries"]["live_contract"]["status"] == "not_run"
 

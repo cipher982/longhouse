@@ -105,12 +105,15 @@ Required canaries:
 An operation can be advertised only when all applicable gates pass:
 
 1. The shared manifest declares the intended operation.
-2. Provider-specific execution code exists.
-3. Hermetic Longhouse control E2E passes.
-4. Real upstream release probe passes or the operation is explicitly marked
+2. The shared manifest carries per-operation evidence under
+   `operation_evidence`; first-class target support and proof level are separate
+   facts.
+3. Provider-specific execution code exists.
+4. Hermetic Longhouse control E2E passes.
+5. Real upstream release probe passes or the operation is explicitly marked
    "source-reviewed only" in the provider release artifact.
-5. Dogfood local-health exposes the operation in `control_operations_by_provider`.
-6. Runtime Host rejects unsupported operation intents instead of silently
+6. Dogfood local-health exposes the operation in `control_operations_by_provider`.
+7. Runtime Host rejects unsupported operation intents instead of silently
    falling back to a weaker behavior.
 
 No provider should move from "send" to "steer" because its send path happens to

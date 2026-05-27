@@ -8,7 +8,9 @@ Provider-specific launch/control code still owns how an operation runs.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from collections.abc import Mapping
 from dataclasses import dataclass
+from dataclasses import field
 
 from zerg.managed_provider_contract_manifest import managed_provider_contract_items
 from zerg.session_execution_home import ManagedSessionTransport
@@ -44,6 +46,10 @@ class ManagedProviderContract:
     # Expected machine-control channel operation names. The engine still owns
     # the live supports[] handshake; this field documents the provider ceiling.
     machine_control_supports: tuple[str, ...] = ()
+    # Per-operation evidence is intentionally separate from the support flag.
+    # A provider can be first-class by design while still carrying a lower proof
+    # level until scheduled live canaries promote the evidence.
+    operation_evidence: Mapping[str, Mapping[str, str]] = field(default_factory=dict)
 
     @property
     def control_planes(self) -> tuple[str, ...]:
@@ -58,6 +64,9 @@ class ManagedProviderContract:
             "can_tail_output": int(self.tail_output),
             "can_resume": int(self.can_resume),
         }
+
+    def operation_evidence_for(self, operation: str) -> Mapping[str, str]:
+        return self.operation_evidence.get(operation, {})
 
 
 def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderContract:
@@ -78,6 +87,11 @@ def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderCont
         transcript_binding=bool(item.get("transcript_binding", True)),
         can_resume=bool(item.get("can_resume", False)),
         machine_control_supports=tuple(str(value) for value in item.get("machine_control_supports") or ()),
+        operation_evidence={
+            str(operation): {str(key): str(value) for key, value in dict(evidence).items()}
+            for operation, evidence in dict(item.get("operation_evidence") or {}).items()
+            if isinstance(evidence, dict)
+        },
     )
 
 

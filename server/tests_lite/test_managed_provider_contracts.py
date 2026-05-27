@@ -37,6 +37,9 @@ def _contract_snapshot():
             "runtime_phase": contract.runtime_phase,
             "transcript_binding": contract.transcript_binding,
             "can_resume": contract.can_resume,
+            "operation_evidence_levels": {
+                operation: evidence.get("level") for operation, evidence in sorted(contract.operation_evidence.items())
+            },
             "machine_control_supports": contract.machine_control_supports,
         }
         for contract in all_managed_provider_contracts()
@@ -65,6 +68,18 @@ def test_managed_provider_contract_manifest_snapshot():
             "runtime_phase": True,
             "transcript_binding": True,
             "can_resume": True,
+            "operation_evidence_levels": {
+                "interrupt": "hermetic",
+                "launch_local": "live_no_token",
+                "launch_remote": "live_no_token",
+                "reattach": "live_no_token",
+                "runtime_phase": "hermetic",
+                "send_input": "hermetic",
+                "steer_active_turn": "hermetic",
+                "tail_output": "live_no_token",
+                "terminate": "hermetic",
+                "transcript_binding": "hermetic",
+            },
             "machine_control_supports": (
                 "codex.send",
                 "codex.interrupt",
@@ -88,6 +103,18 @@ def test_managed_provider_contract_manifest_snapshot():
             "runtime_phase": True,
             "transcript_binding": True,
             "can_resume": True,
+            "operation_evidence_levels": {
+                "interrupt": "hermetic",
+                "launch_local": "live_no_token",
+                "launch_remote": "hermetic",
+                "reattach": "hermetic",
+                "runtime_phase": "hermetic",
+                "send_input": "hermetic",
+                "steer_active_turn": "manual_live_token",
+                "tail_output": "hermetic",
+                "terminate": "hermetic",
+                "transcript_binding": "hermetic",
+            },
             "machine_control_supports": ("claude.send", "claude.interrupt", "claude.steer", "claude.launch"),
         },
         "opencode": {
@@ -105,6 +132,18 @@ def test_managed_provider_contract_manifest_snapshot():
             "runtime_phase": True,
             "transcript_binding": True,
             "can_resume": True,
+            "operation_evidence_levels": {
+                "interrupt": "live_no_token",
+                "launch_local": "live_no_token",
+                "launch_remote": "hermetic",
+                "reattach": "live_no_token",
+                "runtime_phase": "hermetic",
+                "send_input": "live_no_token",
+                "steer_active_turn": "none",
+                "tail_output": "hermetic",
+                "terminate": "hermetic",
+                "transcript_binding": "hermetic",
+            },
             "machine_control_supports": ("opencode.send", "opencode.interrupt", "opencode.launch"),
         },
         "antigravity": {
@@ -122,6 +161,18 @@ def test_managed_provider_contract_manifest_snapshot():
             "runtime_phase": True,
             "transcript_binding": True,
             "can_resume": False,
+            "operation_evidence_levels": {
+                "interrupt": "none",
+                "launch_local": "live_no_token",
+                "launch_remote": "none",
+                "reattach": "none",
+                "runtime_phase": "hermetic",
+                "send_input": "hermetic",
+                "steer_active_turn": "none",
+                "tail_output": "hermetic",
+                "terminate": "none",
+                "transcript_binding": "hermetic",
+            },
             "machine_control_supports": ("antigravity.send",),
         },
     }
@@ -175,6 +226,8 @@ def test_claude_contract_is_first_class_channel_control_provider():
     assert claude.send_input is True
     assert claude.interrupt is True
     assert claude.steer_active_turn is True
+    assert claude.operation_evidence_for("steer_active_turn")["level"] == "manual_live_token"
+    assert "scheduled live token canary" in claude.operation_evidence_for("steer_active_turn")["next"]
     assert claude.machine_control_supports == ("claude.send", "claude.interrupt", "claude.steer", "claude.launch")
 
 
@@ -210,6 +263,8 @@ def test_antigravity_contract_is_hook_inbox_send_only():
     assert contract.tail_output is True
     assert contract.runtime_phase is True
     assert contract.transcript_binding is True
+    assert contract.operation_evidence_for("send_input")["level"] == "hermetic"
+    assert contract.operation_evidence_for("steer_active_turn")["level"] == "none"
     assert contract.machine_control_supports == ("antigravity.send",)
     assert contract.connection_capabilities == {
         "can_send_input": 1,

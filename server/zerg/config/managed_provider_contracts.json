@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "providers": [
     {
       "provider": "codex",
@@ -19,6 +20,56 @@
       "runtime_phase": true,
       "transcript_binding": true,
       "can_resume": true,
+      "operation_evidence": {
+        "launch_local": {
+          "level": "live_no_token",
+          "source": "scripts/qa/codex-provider-release-canary.py managed_tui_attach",
+          "next": "promote to live_token when scheduled prompt canary is budgeted"
+        },
+        "launch_remote": {
+          "level": "live_no_token",
+          "source": "scripts/qa/codex-provider-release-canary.py detached_ui",
+          "next": "prove through Runtime Host remote launch smoke"
+        },
+        "reattach": {
+          "level": "live_no_token",
+          "source": "scripts/qa/codex-provider-release-canary.py managed_tui_attach --remote",
+          "next": "assert resume after process restart"
+        },
+        "send_input": {
+          "level": "hermetic",
+          "source": "engine codex_bridge IPC turn/start tests",
+          "next": "promote with live token send transcript canary"
+        },
+        "interrupt": {
+          "level": "hermetic",
+          "source": "engine codex_bridge turn/interrupt tests",
+          "next": "promote with live token interrupt canary"
+        },
+        "steer_active_turn": {
+          "level": "hermetic",
+          "source": "engine codex_bridge turn/steer active-turn tests",
+          "next": "promote with live token steer transcript canary"
+        },
+        "terminate": {
+          "level": "hermetic",
+          "source": "engine bridge stop and process cleanup tests"
+        },
+        "tail_output": {
+          "level": "live_no_token",
+          "source": "Codex bridge rollout/transcript binding canaries"
+        },
+        "runtime_phase": {
+          "level": "hermetic",
+          "source": "engine codex_bridge runtime event reducer tests",
+          "next": "promote with live runtime phase canary"
+        },
+        "transcript_binding": {
+          "level": "hermetic",
+          "source": "Codex hook and rollout ingestion tests",
+          "next": "promote with live transcript assertion"
+        }
+      },
       "machine_control_supports": ["codex.send", "codex.interrupt", "codex.steer", "codex.launch", "codex.continue"]
     },
     {
@@ -40,6 +91,55 @@
       "runtime_phase": true,
       "transcript_binding": true,
       "can_resume": true,
+      "operation_evidence": {
+        "launch_local": {
+          "level": "live_no_token",
+          "source": "scripts/qa/provider-live-canary.py --provider claude binary/auth/channel/PTY checks",
+          "next": "promote with detached channel launch transcript canary"
+        },
+        "launch_remote": {
+          "level": "hermetic",
+          "source": "provider-control-e2e Claude fake process plus Machine Agent claude.launch support tests",
+          "next": "promote with Runtime Host remote launch against real Claude"
+        },
+        "reattach": {
+          "level": "hermetic",
+          "source": "Claude channel bridge session state and resume unit coverage",
+          "next": "prove launch, process restart, reattach, send against same session id"
+        },
+        "send_input": {
+          "level": "hermetic",
+          "source": "scripts/qa/provider-control-e2e-canary.py Claude channel send delivery"
+        },
+        "interrupt": {
+          "level": "hermetic",
+          "source": "scripts/qa/provider-control-e2e-canary.py Claude channel interrupt sends SIGINT"
+        },
+        "steer_active_turn": {
+          "level": "manual_live_token",
+          "source": "make managed-claude-poc delayed intent=steer transcript assertion",
+          "next": "promote to scheduled live token canary"
+        },
+        "terminate": {
+          "level": "hermetic",
+          "source": "Claude channel/process control tests",
+          "next": "prove graceful process cleanup in live remote launch lane"
+        },
+        "tail_output": {
+          "level": "hermetic",
+          "source": "Claude transcript ingest and channel observation tests"
+        },
+        "runtime_phase": {
+          "level": "hermetic",
+          "source": "Claude hooks/channel runtime phase tests",
+          "next": "prove freshness in live active-turn canary"
+        },
+        "transcript_binding": {
+          "level": "hermetic",
+          "source": "Claude hook transcript binding tests",
+          "next": "promote with live transcript assertion"
+        }
+      },
       "machine_control_supports": ["claude.send", "claude.interrupt", "claude.steer", "claude.launch"]
     },
     {
@@ -61,6 +161,56 @@
       "runtime_phase": true,
       "transcript_binding": true,
       "can_resume": true,
+      "operation_evidence": {
+        "launch_local": {
+          "level": "live_no_token",
+          "source": "scripts/qa/provider-live-canary.py --provider opencode server readiness/schema/session checks",
+          "next": "promote with token-spending prompt transcript canary"
+        },
+        "launch_remote": {
+          "level": "hermetic",
+          "source": "provider-control-e2e OpenCode fake server bridge launch",
+          "next": "promote with Runtime Host remote launch against real OpenCode"
+        },
+        "reattach": {
+          "level": "live_no_token",
+          "source": "provider-live-canary OpenCode attach command shape",
+          "next": "prove attach to created provider session id"
+        },
+        "send_input": {
+          "level": "live_no_token",
+          "source": "provider-live-canary OpenCode /doc prompt_async schema",
+          "next": "promote with token-spending prompt_async transcript canary"
+        },
+        "interrupt": {
+          "level": "live_no_token",
+          "source": "provider-live-canary OpenCode abort endpoint check",
+          "next": "promote with live active-turn abort canary"
+        },
+        "steer_active_turn": {
+          "level": "none",
+          "source": "unsupported until OpenCode active-turn injection semantics are proven"
+        },
+        "terminate": {
+          "level": "hermetic",
+          "source": "OpenCode server bridge stop/cleanup tests"
+        },
+        "tail_output": {
+          "level": "hermetic",
+          "source": "OpenCode plugin transcript observation tests",
+          "next": "promote with live transcript assertion"
+        },
+        "runtime_phase": {
+          "level": "hermetic",
+          "source": "OpenCode plugin runtime event tests",
+          "next": "prove freshness in live active-turn canary"
+        },
+        "transcript_binding": {
+          "level": "hermetic",
+          "source": "OpenCode plugin/transcript observation tests",
+          "next": "promote with live provider session assertion"
+        }
+      },
       "machine_control_supports": ["opencode.send", "opencode.interrupt", "opencode.launch"]
     },
     {
@@ -82,6 +232,53 @@
       "runtime_phase": true,
       "transcript_binding": true,
       "can_resume": false,
+      "operation_evidence": {
+        "launch_local": {
+          "level": "live_no_token",
+          "source": "scripts/qa/provider-live-canary.py --provider antigravity version/help/plugin checks",
+          "next": "prove real agy loop invocation"
+        },
+        "launch_remote": {
+          "level": "none",
+          "source": "unsupported until Antigravity launch semantics are proven"
+        },
+        "reattach": {
+          "level": "none",
+          "source": "unsupported until Antigravity exposes stable reattach"
+        },
+        "send_input": {
+          "level": "hermetic",
+          "source": "provider-control-e2e Antigravity hook inbox PreInvocation/PostInvocation/Stop checks",
+          "next": "promote with real agy loop-level hook canary"
+        },
+        "interrupt": {
+          "level": "none",
+          "source": "unsupported until graceful stop semantics are proven"
+        },
+        "steer_active_turn": {
+          "level": "none",
+          "source": "unsupported until bounded active-turn injection is proven"
+        },
+        "terminate": {
+          "level": "none",
+          "source": "unsupported until process termination policy is designed"
+        },
+        "tail_output": {
+          "level": "hermetic",
+          "source": "Antigravity hook transcript binding tests",
+          "next": "promote with real agy transcript canary"
+        },
+        "runtime_phase": {
+          "level": "hermetic",
+          "source": "Antigravity hook runtime outbox tests",
+          "next": "promote with real agy phase canary"
+        },
+        "transcript_binding": {
+          "level": "hermetic",
+          "source": "Antigravity hook binding tests",
+          "next": "promote with real agy transcript assertion"
+        }
+      },
       "machine_control_supports": ["antigravity.send"]
     }
   ]

@@ -29,6 +29,12 @@ actually uses and the failure mode it can prove.
 
 ## Capability Meanings
 
+First-class is a target capability class, not a transport shape. Codex reaches
+it through an app-server bridge; Claude reaches it through the native channel
+bridge. Do not describe Claude as a lower tier just because it does not use the
+Codex transport. The separate question is whether each promised operation has
+hermetic, no-token live, manual live-token, or scheduled live-token proof.
+
 `send_input` means Longhouse can deliver a user message to the provider session.
 It may be idle-turn input, async prompt input, or a provider-native channel
 message, depending on the provider.
@@ -190,6 +196,17 @@ Provider contract facts live in
 manifest for managed-provider contracts and provider CLI discovery; the Rust
 Machine Agent embeds the same manifest for `supports[]` advertisement. Provider
 execution remains provider-specific code.
+
+The manifest is intentionally two-axis:
+
+- operation booleans describe what Longhouse intends and implements for that
+  provider
+- `operation_evidence` describes how strongly each operation has been proven
+  today
+
+That separation prevents false downgrades like "Claude is 1.5 because it uses
+channels" and false upgrades like "OpenCode steer is supported because send
+works while a process is busy."
 
 The manifest carries these fields:
 

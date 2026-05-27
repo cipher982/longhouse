@@ -129,6 +129,7 @@ def run_contract_profile(args: argparse.Namespace, contract: dict[str, Any]) -> 
         interrupt=contract["interrupt"],
         steer_active_turn=contract["steer_active_turn"],
         reattach=contract["reattach"],
+        operation_evidence=contract["operation_evidence"],
         machine_control_supports=contract["machine_control_supports"],
     )
 
