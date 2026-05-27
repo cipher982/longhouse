@@ -52,7 +52,16 @@ private extension SessionDetail {
           "loopMode": "\(loopMode.rawValue)"
         }
         """
-        return try! JSONDecoder().decode(SessionDetail.self, from: Data(json.utf8))
+        do {
+            return try JSONDecoder().decode(SessionDetail.self, from: Data(json.utf8))
+        } catch {
+            print("--- [SessionDetail.mock decoding failure] ---")
+            print(error)
+            print("JSON:")
+            print(json)
+            print("---------------------------------------------")
+            fatalError("Failed to decode SessionDetail mock: \(error)")
+        }
     }
 }
 
