@@ -82,6 +82,10 @@ LIVENESS_MODEL_CODEX_BRIDGE = "codex_bridge"
 LIVENESS_MODEL_PROCESS_SCAN = "process_scan"
 LIVENESS_MODEL_ENGINE_STATUS = "engine_status"
 CODEX_LAUNCH_CAPABILITY = "codex.launch"
+LAUNCH_CAPABILITY_BY_PROVIDER = {
+    "codex": "codex.launch",
+    "claude": "claude.launch",
+}
 
 
 def _utc_now() -> datetime:
@@ -3463,6 +3467,9 @@ def _collect_control_channel_health(engine_status: dict[str, Any]) -> dict[str, 
     supports = [str(item) for item in list(raw_control.get("supports") or []) if str(item).strip()]
     status = str(raw_control.get("status") or "disabled").strip() or "disabled"
     can_launch_codex = status == "connected" and CODEX_LAUNCH_CAPABILITY in supports
+    launchable_providers = sorted(
+        provider for provider, capability in LAUNCH_CAPABILITY_BY_PROVIDER.items() if status == "connected" and capability in supports
+    )
     launch_blocked_by = None
     if not can_launch_codex:
         launch_blocked_by = "no_codex_support" if status == "connected" else "control_down"
@@ -3479,6 +3486,8 @@ def _collect_control_channel_health(engine_status: dict[str, Any]) -> dict[str, 
         "reconnect_backoff_seconds": raw_control.get("reconnect_backoff_seconds"),
         "supports": supports,
         "can_launch_codex": can_launch_codex,
+        "can_launch_claude": "claude" in launchable_providers,
+        "launchable_providers": launchable_providers,
         "launch_blocked_by": launch_blocked_by,
     }
 

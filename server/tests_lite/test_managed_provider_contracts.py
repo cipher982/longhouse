@@ -6,6 +6,7 @@ from zerg.services.managed_provider_contracts import all_managed_provider_contra
 from zerg.services.managed_provider_contracts import contract_for_control_plane
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import control_plane_for_provider
+from zerg.services.managed_provider_contracts import machine_control_capability_for_command
 from zerg.services.managed_provider_contracts import managed_provider_names
 from zerg.services.managed_provider_contracts import managed_transport_for_control_plane
 from zerg.services.managed_provider_contracts import provider_for_control_plane
@@ -49,19 +50,19 @@ def test_codex_contract_is_current_remote_launch_engine_channel_provider():
     assert codex.interrupt is True
     assert codex.steer_active_turn is True
     assert codex.machine_control_supports == ("codex.send", "codex.interrupt", "codex.steer", "codex.launch")
-    assert remote_launch_supported_providers() == frozenset({"codex"})
+    assert remote_launch_supported_providers() == frozenset({"codex", "claude"})
 
 
-def test_claude_contract_is_first_class_local_control_without_remote_launch_yet():
+def test_claude_contract_is_first_class_channel_control_provider():
     claude = contract_for_provider("claude")
 
     assert claude is not None
     assert claude.launch_local is True
-    assert claude.launch_remote is False
+    assert claude.launch_remote is True
     assert claude.send_input is True
     assert claude.interrupt is True
     assert claude.steer_active_turn is True
-    assert claude.machine_control_supports == ()
+    assert claude.machine_control_supports == ("claude.send", "claude.interrupt", "claude.steer", "claude.launch")
 
 
 @pytest.mark.parametrize("provider", ["opencode", "antigravity"])
@@ -96,3 +97,20 @@ def test_control_plane_aliases_are_explicit_contract_not_scattered_literals():
     assert "claude_channel_bridge" in steer_control_planes()
     assert "opencode_process" not in steer_control_planes()
     assert "antigravity_process" not in steer_control_planes()
+
+
+@pytest.mark.parametrize(
+    ("provider", "command_type", "capability"),
+    [
+        ("codex", "session.send_text", "codex.send"),
+        ("codex", "session.interrupt", "codex.interrupt"),
+        ("codex", "session.steer_text", "codex.steer"),
+        ("claude", "session.send_text", "claude.send"),
+        ("claude", "session.interrupt", "claude.interrupt"),
+        ("claude", "session.steer_text", "claude.steer"),
+        ("opencode", "session.send_text", None),
+        ("antigravity", "session.send_text", None),
+    ],
+)
+def test_machine_control_capability_for_command_uses_provider_contract(provider, command_type, capability):
+    assert machine_control_capability_for_command(provider, command_type) == capability

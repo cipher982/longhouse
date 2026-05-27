@@ -94,6 +94,8 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
         typer.echo("Control Channel")
         typer.echo(f"  status: {control_channel.get('status') or '-'}")
         typer.echo(f"  ws url: {control_channel.get('ws_url') or '-'}")
+        launchable = ", ".join(control_channel.get("launchable_providers") or []) or "-"
+        typer.echo(f"  launch providers: {launchable}")
         typer.echo(f"  codex launch: {'yes' if control_channel.get('can_launch_codex') else 'no'}")
         if control_channel.get("launch_blocked_by"):
             typer.echo(f"  launch blocked by: {control_channel['launch_blocked_by']}")

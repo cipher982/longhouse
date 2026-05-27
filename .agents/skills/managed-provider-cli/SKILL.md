@@ -24,8 +24,8 @@ Use this skill when a task touches how Longhouse starts, observes, steers, or re
   control operations. Steer uses `claude-channel send --meta intent=steer` and
   Runtime Host must gate explicit `intent=steer` on a fresh active runtime
   phase; idle channel injection is not steer.
-- Claude's remaining gap is product wiring, not provider capability: remote
-  launch still needs a Machine Agent `claude.launch` path.
+- Machine Agent remote launch uses the `claude.launch` support bit and must
+  wait for Claude channel state before Runtime Host records the launch as live.
 - No detached bridge daemon, bridge state file, or flock sidecar should be required for Claude liveness.
 - Claude liveness in local health comes from process scanning, especially `local_health._collect_managed_sessions_by_process`.
 

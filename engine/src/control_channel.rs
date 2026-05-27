@@ -8,6 +8,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use futures_util::{Sink, SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::{json, Value};
+use std::process::Stdio;
+use tokio::process::Command;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use tokio_tungstenite::connect_async;
@@ -29,6 +31,7 @@ const COMMAND_INTERRUPT: &str = "session.interrupt";
 const COMMAND_STEER_TEXT: &str = "session.steer_text";
 const COMMAND_LAUNCH: &str = "session.launch";
 const DEFAULT_CODEX_BIN: &str = "codex";
+const DEFAULT_LONGHOUSE_BIN: &str = "longhouse";
 const LAUNCH_START_TIMEOUT_SECS: u64 = 45;
 const COMPLETED_COMMAND_CACHE_CAPACITY: usize = 256;
 const COMPLETED_COMMAND_CACHE_TTL_SECS: u64 = 5 * 60;
@@ -42,12 +45,16 @@ const CONTROL_HEARTBEAT_LATE_WARN_MS: u128 = 500;
 const CONTROL_RECONNECT_SHORT_MAX_BACKOFF_SECS: u64 = 5;
 const CONTROL_RECONNECT_SUSTAINED_MAX_BACKOFF_SECS: u64 = 30;
 const CONTROL_RECONNECT_SHORT_WINDOW_SECS: u64 = 60;
-const CONTROL_SUPPORTS: [&str; 5] = [
+const CONTROL_SUPPORTS: [&str; 9] = [
     "codex.send",
     "codex.interrupt",
     "codex.steer",
     "codex.launch",
     "codex.continue",
+    "claude.send",
+    "claude.interrupt",
+    "claude.steer",
+    "claude.launch",
 ];
 
 #[derive(Clone, Debug)]
@@ -521,7 +528,7 @@ async fn execute_command(
     match command_type.as_str() {
         COMMAND_LAUNCH => {
             let provider = payload_required_string(&payload, "provider")?;
-            if provider != "codex" {
+            if provider != "codex" && provider != "claude" {
                 return Err(CommandError {
                     code: "provider_unsupported".to_string(),
                     message: format!("provider={provider} is not supported by this engine build"),
@@ -547,6 +554,11 @@ async fn execute_command(
                 message: "Machine Agent has no device token configured".to_string(),
             })?;
             let resume_target = payload_resume_target(&payload)?;
+
+            if provider == "claude" {
+                return launch_claude_channel_session(session_id.clone(), cwd, api_url, api_token)
+                    .await;
+            }
 
             let summary = cmd_codex_bridge_start(BridgeStartConfig {
                 session_id: session_id.clone(),
@@ -592,6 +604,23 @@ async fn execute_command(
         }
         COMMAND_SEND_TEXT => {
             let text = payload_required_string(&payload, "text")?;
+            let provider = payload_optional_string(&payload, "provider")
+                .unwrap_or_else(|| "codex".to_string());
+            if provider == "claude" {
+                return run_claude_channel_command(
+                    vec![
+                        "claude-channel".to_string(),
+                        "send".to_string(),
+                        "--session-id".to_string(),
+                        session_id,
+                        "--text".to_string(),
+                        text,
+                    ],
+                    LAUNCH_START_TIMEOUT_SECS,
+                )
+                .await
+                .map(|output| cli_output_result(output, "claude", "claude_channel_bridge"));
+            }
             validate_codex_bridge_attached(&session_id, None)
                 .map_err(CommandError::session_not_attached)?;
             let summary = cmd_codex_bridge_send(BridgeSendConfig {
@@ -615,6 +644,21 @@ async fn execute_command(
             }))
         }
         COMMAND_INTERRUPT => {
+            let provider = payload_optional_string(&payload, "provider")
+                .unwrap_or_else(|| "codex".to_string());
+            if provider == "claude" {
+                return run_claude_channel_command(
+                    vec![
+                        "claude-channel".to_string(),
+                        "interrupt".to_string(),
+                        "--session-id".to_string(),
+                        session_id,
+                    ],
+                    LAUNCH_START_TIMEOUT_SECS,
+                )
+                .await
+                .map(|output| cli_output_result(output, "claude", "claude_channel_bridge"));
+            }
             validate_codex_bridge_attached(&session_id, None)
                 .map_err(CommandError::session_not_attached)?;
             cmd_codex_bridge_interrupt(BridgeInterruptConfig {
@@ -633,6 +677,25 @@ async fn execute_command(
         }
         COMMAND_STEER_TEXT => {
             let text = payload_required_string(&payload, "text")?;
+            let provider = payload_optional_string(&payload, "provider")
+                .unwrap_or_else(|| "codex".to_string());
+            if provider == "claude" {
+                return run_claude_channel_command(
+                    vec![
+                        "claude-channel".to_string(),
+                        "send".to_string(),
+                        "--session-id".to_string(),
+                        session_id,
+                        "--text".to_string(),
+                        text,
+                        "--meta".to_string(),
+                        "intent=steer".to_string(),
+                    ],
+                    LAUNCH_START_TIMEOUT_SECS,
+                )
+                .await
+                .map(|output| cli_output_result(output, "claude", "claude_channel_bridge"));
+            }
             validate_codex_bridge_attached(&session_id, None)
                 .map_err(CommandError::session_not_attached)?;
             match cmd_codex_bridge_steer(BridgeSteerConfig {
@@ -662,6 +725,138 @@ async fn execute_command(
             message: format!("Unsupported command_type={other}"),
         }),
     }
+}
+
+struct CliCommandOutput {
+    exit_code: i32,
+    stdout: String,
+    stderr: String,
+}
+
+async fn run_longhouse_command(
+    args: Vec<String>,
+    timeout_secs: u64,
+    envs: Vec<(&str, String)>,
+) -> std::result::Result<CliCommandOutput, CommandError> {
+    let mut command = Command::new(DEFAULT_LONGHOUSE_BIN);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+
+    let child = command.spawn().map_err(|err| CommandError {
+        code: "provider_launch_failed".to_string(),
+        message: format!("failed to start longhouse command: {err}"),
+    })?;
+    let output = tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait_with_output())
+        .await
+        .map_err(|_| CommandError {
+            code: "provider_launch_failed".to_string(),
+            message: format!("longhouse command timed out after {timeout_secs} seconds"),
+        })?
+        .map_err(|err| CommandError {
+            code: "provider_launch_failed".to_string(),
+            message: format!("longhouse command failed: {err}"),
+        })?;
+
+    Ok(CliCommandOutput {
+        exit_code: output.status.code().unwrap_or(1),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    })
+}
+
+async fn run_claude_channel_command(
+    args: Vec<String>,
+    timeout_secs: u64,
+) -> std::result::Result<CliCommandOutput, CommandError> {
+    let output = run_longhouse_command(args, timeout_secs, Vec::new()).await?;
+    if output.exit_code != 0 {
+        return Err(CommandError {
+            code: "command_failed".to_string(),
+            message: nonempty_cli_error(&output),
+        });
+    }
+    Ok(output)
+}
+
+async fn launch_claude_channel_session(
+    session_id: String,
+    cwd: PathBuf,
+    api_url: String,
+    api_token: String,
+) -> std::result::Result<Value, CommandError> {
+    let output = run_longhouse_command(
+        vec![
+            "claude-channel".to_string(),
+            "launch".to_string(),
+            "--session-id".to_string(),
+            session_id.clone(),
+            "--provider-session-id".to_string(),
+            session_id.clone(),
+            "--cwd".to_string(),
+            cwd.display().to_string(),
+            "--api-url".to_string(),
+            api_url,
+            "--wait-ready-secs".to_string(),
+            LAUNCH_START_TIMEOUT_SECS.to_string(),
+        ],
+        LAUNCH_START_TIMEOUT_SECS + 5,
+        vec![("LONGHOUSE_CLAUDE_REMOTE_LAUNCH_TOKEN", api_token)],
+    )
+    .await?;
+    if output.exit_code != 0 {
+        return Err(CommandError {
+            code: "provider_launch_failed".to_string(),
+            message: nonempty_cli_error(&output),
+        });
+    }
+    let payload: Value =
+        serde_json::from_str(output.stdout.trim()).map_err(|err| CommandError {
+            code: "provider_launch_failed".to_string(),
+            message: format!(
+                "Claude launch returned invalid JSON: {err}; stderr={}",
+                output.stderr.trim()
+            ),
+        })?;
+    Ok(json!({
+        "session_id": payload.get("session_id").and_then(Value::as_str).unwrap_or(&session_id),
+        "provider": "claude",
+        "transport": "claude_channel_bridge",
+        "provider_session_id": payload
+            .get("provider_session_id")
+            .and_then(Value::as_str)
+            .unwrap_or(&session_id),
+        "pid": payload.get("pid").cloned().unwrap_or(Value::Null),
+        "log_path": payload.get("log_path").cloned().unwrap_or(Value::Null),
+    }))
+}
+
+fn cli_output_result(output: CliCommandOutput, provider: &str, transport: &str) -> Value {
+    json!({
+        "exit_code": output.exit_code,
+        "stdout": output.stdout,
+        "stderr": output.stderr,
+        "provider": provider,
+        "transport": transport,
+    })
+}
+
+fn nonempty_cli_error(output: &CliCommandOutput) -> String {
+    let stderr = output.stderr.trim();
+    if !stderr.is_empty() {
+        return stderr.to_string();
+    }
+    let stdout = output.stdout.trim();
+    if !stdout.is_empty() {
+        return stdout.to_string();
+    }
+    format!("longhouse command exited {}", output.exit_code)
 }
 
 struct CachedCommandResult {
@@ -835,6 +1030,15 @@ fn payload_resume_target(
     }))
 }
 
+fn payload_optional_string(payload: &Value, key: &'static str) -> Option<String> {
+    payload
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 fn command_error(command_id: &str, code: &str, message: &str) -> Value {
     json!({
         "type": "command_result",
@@ -961,6 +1165,7 @@ mod tests {
             Some("connect_failed")
         );
         assert!(disconnected.supports.contains(&"codex.launch".to_string()));
+        assert!(disconnected.supports.contains(&"claude.launch".to_string()));
 
         status.set_connected("wss://example.test/api/agents/control/ws");
         let connected = status.snapshot();
@@ -1182,7 +1387,7 @@ mod tests {
                 "session_id": "00000000-0000-0000-0000-000000000003",
                 "command_type": COMMAND_LAUNCH,
                 "payload": {
-                    "provider": "claude",
+                    "provider": "gemini",
                     "cwd": "/tmp",
                 },
             }),
@@ -1193,5 +1398,30 @@ mod tests {
 
         assert_eq!(result["ok"], false);
         assert_eq!(result["error"]["code"], "provider_unsupported");
+    }
+
+    #[tokio::test]
+    async fn claude_launch_requires_device_token_before_spawning() {
+        let mut config = test_config();
+        config.api_token = None;
+        let mut cache = command_cache();
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-launch-claude-no-token",
+                "session_id": "00000000-0000-0000-0000-000000000004",
+                "command_type": COMMAND_LAUNCH,
+                "payload": {
+                    "provider": "claude",
+                    "cwd": "/tmp",
+                },
+            }),
+            &mut cache,
+            &config,
+        )
+        .await;
+
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"]["code"], "provider_launch_failed");
     }
 }

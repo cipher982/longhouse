@@ -335,6 +335,54 @@ def serve(
     )
 
 
+@app.command("launch", hidden=True)
+def launch(
+    session_id: str = typer.Option(..., "--session-id", help="Longhouse session ID."),
+    provider_session_id: str | None = typer.Option(None, "--provider-session-id", help="Claude provider session ID."),
+    cwd: Path = typer.Option(..., "--cwd", exists=True, file_okay=False, dir_okay=True, resolve_path=True),
+    api_url: str = typer.Option(..., "--api-url", help="Longhouse API URL."),
+    api_token: str = typer.Option(
+        ...,
+        "--api-token",
+        envvar="LONGHOUSE_CLAUDE_REMOTE_LAUNCH_TOKEN",
+        help="Longhouse device token.",
+    ),
+    claude_dir: Path | None = typer.Option(None, "--claude-dir", file_okay=False, dir_okay=True, resolve_path=True),
+    wait_ready_secs: float = typer.Option(20.0, "--wait-ready-secs", min=0.1),
+) -> None:
+    """Launch a detached Claude channel session for the Machine Agent control path."""
+
+    from zerg.cli.claude import _launch_detached_native_claude_channel
+
+    normalized_provider_session_id = str(provider_session_id or session_id).strip()
+    try:
+        result = _launch_detached_native_claude_channel(
+            session_id=session_id,
+            provider_session_id=normalized_provider_session_id,
+            cwd=cwd,
+            base_url=api_url,
+            token=api_token,
+            config_dir=claude_dir,
+            wait_ready_secs=wait_ready_secs,
+        )
+    except Exception as exc:
+        typer.echo(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "provider_launch_failed",
+                        "message": str(exc),
+                    },
+                }
+            ),
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(json.dumps(result, default=str))
+
+
 @app.command("send")
 def send(
     session_id: str = typer.Option(..., "--session-id", help="Longhouse session ID."),

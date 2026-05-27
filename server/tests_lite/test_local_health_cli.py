@@ -473,6 +473,8 @@ def test_collect_local_health_surfaces_control_channel_status(monkeypatch, tmp_p
     control = snapshot["control_channel"]
     assert control["status"] == "disconnected"
     assert control["can_launch_codex"] is False
+    assert control["can_launch_claude"] is False
+    assert control["launchable_providers"] == []
     assert control["launch_blocked_by"] == "control_down"
     assert control["last_error_code"] == "connect_failed"
     assert control["supports"] == ["codex.send", "codex.launch"]
@@ -489,7 +491,7 @@ def test_collect_local_health_marks_connected_control_channel_launch_ready(monke
                 "enabled": True,
                 "status": "connected",
                 "ws_url": "wss://david010.longhouse.ai/api/agents/control/ws",
-                "supports": ["codex.launch"],
+                "supports": ["codex.launch", "claude.launch"],
             }
         },
     )
@@ -497,6 +499,8 @@ def test_collect_local_health_marks_connected_control_channel_launch_ready(monke
     snapshot = local_health_service.collect_local_health(tmp_path)
 
     assert snapshot["control_channel"]["can_launch_codex"] is True
+    assert snapshot["control_channel"]["can_launch_claude"] is True
+    assert snapshot["control_channel"]["launchable_providers"] == ["claude", "codex"]
     assert snapshot["control_channel"]["launch_blocked_by"] is None
 
 

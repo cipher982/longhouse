@@ -12,8 +12,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
-from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.live_session_dispatch import supports_live_text_dispatch_metadata
+from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_LEGACY_RUNNER
@@ -27,6 +27,7 @@ def _session(**overrides):
     values = {
         "id": uuid4(),
         "device_id": "cinder",
+        "provider": "codex",
         "execution_home": "managed_local",
         "managed_transport": "codex_app_server",
         "source_runner_id": 17,
@@ -137,6 +138,29 @@ def test_select_managed_control_transport_prefers_engine_channel_when_supported(
     asyncio.run(_run())
 
 
+def test_select_managed_control_transport_supports_claude_engine_channel():
+    async def _run():
+        await _clear_machine_registry()
+        try:
+            await _connect_fake_engine(owner_id=42, supports=["claude.send"])
+            assert (
+                select_managed_control_transport(
+                    _session(
+                        provider="claude",
+                        managed_transport="claude_channel_bridge",
+                        source_runner_id=None,
+                    ),
+                    owner_id=42,
+                    command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+                )
+                == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
+            )
+        finally:
+            await _clear_machine_registry()
+
+    asyncio.run(_run())
+
+
 def test_dispatch_managed_control_command_uses_legacy_runner(monkeypatch):
     dispatcher = _FakeRunnerDispatcher()
     monkeypatch.setattr("zerg.services.managed_control_dispatcher.get_runner_job_dispatcher", lambda: dispatcher)
@@ -222,7 +246,7 @@ def test_dispatch_managed_control_command_uses_engine_channel_when_connected():
             assert result.transport == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
             assert result.data == {"stdout": "accepted", "exit_code": 0, "stderr": ""}
             assert websocket.sent[0]["command_type"] == MANAGED_CONTROL_COMMAND_SEND_TEXT
-            assert websocket.sent[0]["payload"] == {"text": "continue"}
+            assert websocket.sent[0]["payload"] == {"provider": "codex", "text": "continue"}
             assert (
                 websocket.sent[0]["command_id"]
                 == f"managed-control:{session.id}:session.send_text:req-123"
@@ -273,6 +297,20 @@ def test_live_text_dispatch_metadata_accepts_engine_channel_without_runner_metad
         assert (
             supports_live_text_dispatch_metadata(
                 _session(source_runner_id=None),
+                owner_id=42,
+            )
+            is True
+        )
+
+    asyncio.run(_run())
+
+
+def test_live_text_dispatch_metadata_accepts_claude_engine_channel_without_runner_metadata():
+    async def _run():
+        await _connect_fake_engine(owner_id=42, supports=["claude.send"])
+        assert (
+            supports_live_text_dispatch_metadata(
+                _session(provider="claude", managed_transport="claude_channel_bridge", source_runner_id=None),
                 owner_id=42,
             )
             is True

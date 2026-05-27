@@ -9,7 +9,6 @@ from pydantic import Field
 
 from zerg.utils.time import UTCBaseModel
 
-
 ControlChannelStatus = Literal["connected", "disconnected"]
 LaunchBlockedBy = Literal[
     "control_down",
@@ -35,6 +34,10 @@ class MachineDirectoryEntry(UTCBaseModel):
     can_launch_codex: bool = Field(
         ...,
         description="Derived launch readiness for Codex v1. Browser/iOS should gate Start on this field.",
+    )
+    launchable_providers: list[str] = Field(
+        default_factory=list,
+        description="Providers this Machine Agent can remote-launch now, derived from live supports[].",
     )
     launch_blocked_by: LaunchBlockedBy | None = Field(
         default=None,
