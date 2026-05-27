@@ -91,8 +91,7 @@ def _resolve_runner(db: Session, owner_id: int, target: str, *, required: bool =
 def _require_runner_ready(runner, *, owner_id: int) -> None:
     if runner.status == "revoked":
         raise ManagedLocalLaunchError(
-            f"Remote command Runner '{runner.name}' has been revoked. This is separate from the Machine Agent "
-            "that ships transcripts.",
+            f"Remote command Runner '{runner.name}' has been revoked. This is separate from the Machine Agent " "that ships transcripts.",
             status_code=409,
         )
 
@@ -107,8 +106,7 @@ def _require_runner_ready(runner, *, owner_id: int) -> None:
     capabilities = runner.capabilities or []
     if "exec.full" not in capabilities:
         raise ManagedLocalLaunchError(
-            f"Remote command Runner '{runner.name}' must have exec.full capability for "
-            "browser-launched managed sessions",
+            f"Remote command Runner '{runner.name}' must have exec.full capability for " "browser-launched managed sessions",
             status_code=400,
         )
 
@@ -150,8 +148,7 @@ def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchPar
 
     if provider == "claude" and params.native_claude_channels_available is False:
         raise ManagedLocalLaunchError(
-            "Native Claude channels are unavailable on this machine. Longhouse now requires "
-            "the local Claude channel bridge.",
+            "Native Claude channels are unavailable on this machine. Longhouse now requires " "the local Claude channel bridge.",
             status_code=412,
         )
 
@@ -229,7 +226,10 @@ def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchPar
         control_plane = "antigravity_process"
     else:
         control_plane = "claude_channel_bridge"
-    process_observe_only = provider in {"opencode", "antigravity"}
+    # OpenCode is now first-class managed: longhouse owns `opencode serve`
+    # and drives upstream HTTP via `longhouse opencode-bridge`. Antigravity
+    # remains observe-only for now.
+    process_observe_only = provider in {"antigravity"}
     record_connection(
         db,
         run=run,
