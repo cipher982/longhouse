@@ -141,7 +141,8 @@ def live_canary_placeholder(provider: str) -> dict[str, Any]:
         ),
         "claude": (
             "claude_channel_live_contract",
-            "Needs live channel launch/send/steer/interrupt canary evidence.",
+            "scripts/qa/provider-live-canary.py --provider claude owns the no-token binary/auth/channel-shape canary; "
+            "detached launch and active-turn steer still need live evidence.",
         ),
         "opencode": (
             "opencode_server_live_contract",

@@ -129,6 +129,70 @@ server.serve_forever()
     )
 
 
+def _fake_claude(path: Path) -> Path:
+    return _write_exe(
+        path,
+        r'''#!/usr/bin/env python3
+import json
+import os
+import sys
+
+args = sys.argv[1:]
+if args == ["--version"]:
+    print("2.9.9-fake (Claude Code)")
+    raise SystemExit(0)
+
+if args == ["auth", "status", "--json"]:
+    if os.environ.get("FAKE_CLAUDE_AUTH_NONZERO") == "1":
+        print("email=should-not-appear@example.com orgId=org-secret", file=sys.stderr)
+        raise SystemExit(1)
+    if os.environ.get("FAKE_CLAUDE_AUTH_INVALID_JSON") == "1":
+        print("email=should-not-appear@example.com orgId=org-secret")
+        raise SystemExit(0)
+    if os.environ.get("FAKE_CLAUDE_NOT_LOGGED_IN") == "1":
+        print(json.dumps({"loggedIn": False, "authMethod": "", "apiProvider": ""}))
+        raise SystemExit(0)
+    if os.environ.get("FAKE_CLAUDE_API_AUTH") == "1":
+        print(json.dumps({
+            "loggedIn": True,
+            "authMethod": "apiKey",
+            "apiProvider": "anthropic",
+            "email": "should-not-appear@example.com",
+            "orgId": "org-secret",
+        }))
+        raise SystemExit(0)
+    print(json.dumps({
+        "loggedIn": True,
+        "authMethod": "claude.ai",
+        "apiProvider": "firstParty",
+        "email": "should-not-appear@example.com",
+        "orgId": "org-secret",
+        "subscriptionType": "pro",
+    }))
+    raise SystemExit(0)
+
+if args == ["--help"]:
+    if os.environ.get("FAKE_CLAUDE_MISSING_SESSION_ID") == "1":
+        print("--resume --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
+    else:
+        print("--session-id --resume --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
+    raise SystemExit(0)
+
+if args == ["--channels", "--help"]:
+    if os.environ.get("FAKE_CLAUDE_BAD_CHANNELS") == "1":
+        print("unknown option --channels", file=sys.stderr)
+        raise SystemExit(1)
+    print("--channels entries must be tagged: --help", file=sys.stderr)
+    print("  plugin:<name>@<marketplace>  — plugin-provided channel", file=sys.stderr)
+    print("  server:<name>                — manually configured MCP server", file=sys.stderr)
+    raise SystemExit(1)
+
+print("unexpected fake claude args: " + json.dumps(args), file=sys.stderr)
+raise SystemExit(2)
+''',
+    )
+
+
 def _run_canary(root: Path, fake_bin: Path, extra_env: dict[str, str] | None = None):
     artifact = root / "artifact.json"
     env = os.environ.copy()
@@ -142,6 +206,43 @@ def _run_canary(root: Path, fake_bin: Path, extra_env: dict[str, str] | None = N
             str(REPO_ROOT),
             "--provider",
             "opencode",
+            "--provider-bin",
+            str(fake_bin),
+            "--artifact",
+            str(artifact),
+            "--evidence-root",
+            str(root / "evidence"),
+            "--json",
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    return result, payload
+
+
+def _run_provider_canary(
+    root: Path,
+    *,
+    provider: str,
+    fake_bin: Path,
+    extra_env: dict[str, str] | None = None,
+):
+    artifact = root / "artifact.json"
+    env = os.environ.copy()
+    if extra_env:
+        env.update(extra_env)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(CANARY),
+            "--repo-root",
+            str(REPO_ROOT),
+            "--provider",
+            provider,
             "--provider-bin",
             str(fake_bin),
             "--artifact",
@@ -177,6 +278,129 @@ def test_opencode_live_canary_can_go_green_with_fake_server() -> None:
         assert payload["canaries"]["session_abort"]["status"] == "pass"
 
 
+def test_claude_live_canary_can_go_green_with_fake_binary() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_claude(root / "bin" / "claude")
+        result, payload = _run_provider_canary(root, provider="claude", fake_bin=fake_bin)
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["provider"] == "claude"
+        assert payload["provider_version"] == "2.9.9-fake (Claude Code)"
+        assert payload["verdict"] == "green"
+        assert payload["canaries"]["auth_status"]["status"] == "pass"
+        assert "email" not in payload["canaries"]["auth_status"]["auth"]
+        assert payload["canaries"]["command_shape"]["status"] == "pass"
+        assert payload["canaries"]["channels_shape"]["status"] == "pass"
+        assert payload["canaries"]["detached_pty_shape"]["status"] == "pass"
+
+
+def test_claude_live_canary_accepts_api_key_auth() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_claude(root / "bin" / "claude")
+        result, payload = _run_provider_canary(
+            root,
+            provider="claude",
+            fake_bin=fake_bin,
+            extra_env={"FAKE_CLAUDE_API_AUTH": "1"},
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["verdict"] == "green"
+        assert payload["canaries"]["auth_status"]["status"] == "pass"
+        auth = payload["canaries"]["auth_status"]["auth"]
+        assert auth["apiProvider"] == "anthropic"
+        assert "email" not in auth
+        assert "orgId" not in auth
+
+
+def test_claude_live_canary_turns_yellow_when_not_logged_in() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_claude(root / "bin" / "claude")
+        result, payload = _run_provider_canary(
+            root,
+            provider="claude",
+            fake_bin=fake_bin,
+            extra_env={"FAKE_CLAUDE_NOT_LOGGED_IN": "1"},
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["verdict"] == "yellow"
+        assert payload["canaries"]["auth_status"]["status"] == "warn"
+        assert payload["canaries"]["auth_status"]["reason"] == "claude_auth_not_logged_in"
+
+
+def test_claude_auth_failures_do_not_publish_raw_identifiers() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_claude(root / "bin" / "claude")
+        result, payload = _run_provider_canary(
+            root,
+            provider="claude",
+            fake_bin=fake_bin,
+            extra_env={"FAKE_CLAUDE_AUTH_INVALID_JSON": "1"},
+        )
+
+        serialized = json.dumps(payload)
+        assert result.returncode == 1
+        assert payload["failure_code"] == "claude_auth_status_invalid_json"
+        assert "should-not-appear@example.com" not in serialized
+        assert "org-secret" not in serialized
+
+
+def test_claude_auth_nonzero_does_not_publish_raw_identifiers() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_claude(root / "bin" / "claude")
+        result, payload = _run_provider_canary(
+            root,
+            provider="claude",
+            fake_bin=fake_bin,
+            extra_env={"FAKE_CLAUDE_AUTH_NONZERO": "1"},
+        )
+
+        serialized = json.dumps(payload)
+        assert result.returncode == 0
+        assert payload["verdict"] == "yellow"
+        assert "should-not-appear@example.com" not in serialized
+        assert "org-secret" not in serialized
+
+
+def test_claude_live_canary_fails_when_channels_contract_is_missing() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_claude(root / "bin" / "claude")
+        result, payload = _run_provider_canary(
+            root,
+            provider="claude",
+            fake_bin=fake_bin,
+            extra_env={"FAKE_CLAUDE_BAD_CHANNELS": "1"},
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "claude_channels_contract_missing"
+
+
+def test_claude_live_canary_fails_when_session_flag_is_missing() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_claude(root / "bin" / "claude")
+        result, payload = _run_provider_canary(
+            root,
+            provider="claude",
+            fake_bin=fake_bin,
+            extra_env={"FAKE_CLAUDE_MISSING_SESSION_ID": "1"},
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "claude_command_contract_missing"
+        assert payload["canaries"]["command_shape"]["missing"] == ["--session-id"]
+
+
 def test_opencode_live_canary_fails_when_schema_drops_prompt_async() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -204,6 +428,13 @@ def test_opencode_live_canary_accepts_empty_successful_abort_response() -> None:
 def main() -> int:
     tests = [
         test_opencode_live_canary_can_go_green_with_fake_server,
+        test_claude_live_canary_can_go_green_with_fake_binary,
+        test_claude_live_canary_accepts_api_key_auth,
+        test_claude_live_canary_turns_yellow_when_not_logged_in,
+        test_claude_auth_failures_do_not_publish_raw_identifiers,
+        test_claude_auth_nonzero_does_not_publish_raw_identifiers,
+        test_claude_live_canary_fails_when_channels_contract_is_missing,
+        test_claude_live_canary_fails_when_session_flag_is_missing,
         test_opencode_live_canary_fails_when_schema_drops_prompt_async,
         test_opencode_live_canary_accepts_empty_successful_abort_response,
     ]
