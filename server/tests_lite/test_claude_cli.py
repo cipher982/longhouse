@@ -15,6 +15,7 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg.cli import claude as claude_cli
 from zerg.cli.main import app
+from zerg.services.claude_channel_bridge import build_claude_channel_state_file
 from zerg.services.managed_session_contracts import list_managed_session_contracts
 from zerg.session_loop_mode import SessionLoopMode
 
@@ -434,9 +435,16 @@ def test_launch_detached_native_claude_channel_waits_for_channel_state(monkeypat
     assert popen_calls[0]["cmd"][0] == "script"
     assert popen_calls[0]["stdout"] == claude_cli.subprocess.DEVNULL
     assert popen_calls[0]["stderr"] == claude_cli.subprocess.DEVNULL
+    assert popen_calls[0]["env"]["LONGHOUSE_HOOK_TOKEN"] == "zdt_test_token"
     command_text = " ".join(popen_calls[0]["cmd"])
     assert "claude" in command_text
     assert "11111111-1111-4111-8111-111111111111" in command_text
+    assert "zdt_test_token" not in command_text
+
+
+def test_claude_channel_state_file_rejects_non_uuid_session_id(tmp_path):
+    with pytest.raises(ValueError, match="valid UUID"):
+        build_claude_channel_state_file(session_id="../../escape", state_root=tmp_path)
 
 
 def test_run_claude_auth_status_uses_bare_claude(monkeypatch):

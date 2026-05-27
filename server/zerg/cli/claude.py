@@ -324,9 +324,10 @@ def _run_native_claude_tui(
         cwd=str(cwd),
         resume=False,
         hook_url=base_url,
-        hook_token=token,
     )
-    completed = subprocess.run(shlex.split(command), check=False, cwd=str(cwd))
+    env = os.environ.copy()
+    env["LONGHOUSE_HOOK_TOKEN"] = token
+    completed = subprocess.run(shlex.split(command), check=False, cwd=str(cwd), env=env)
     exit_code = int(completed.returncode)
     _post_claude_terminal_signal(
         base_url=base_url,
@@ -362,6 +363,7 @@ def _build_detached_claude_pty_command(command: str, log_path: Path) -> list[str
 
     if shutil.which("script") is None:
         raise _NativeClaudeError("Detached Claude launch requires script(1) to provide a pseudo-terminal")
+    # macOS ships BSD script(1); Linux dogfood uses util-linux script(1).
     if sys.platform == "darwin":
         return ["script", "-q", str(log_path), *shlex.split(command)]
     return ["script", "-q", "-c", command, str(log_path)]
@@ -389,18 +391,20 @@ def _launch_detached_native_claude_channel(
         cwd=str(cwd),
         resume=False,
         hook_url=base_url,
-        hook_token=token,
     )
     log_path = _remote_launch_log_path(session_id=session_id, config_dir=config_dir)
     process: subprocess.Popen | None = None
     try:
         pty_command = _build_detached_claude_pty_command(command, log_path)
+        env = os.environ.copy()
+        env["LONGHOUSE_HOOK_TOKEN"] = token
         process = subprocess.Popen(
             pty_command,
             cwd=str(cwd),
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env=env,
             start_new_session=True,
         )
         state = wait_for_claude_channel_state(

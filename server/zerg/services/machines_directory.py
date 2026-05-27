@@ -115,7 +115,7 @@ def build_machines_directory(
             supports=supports,
             can_launch_codex=can_launch_codex,
             launchable_providers=launchable_providers,
-            launch_blocked_by=None if can_launch_codex else LAUNCH_BLOCKED_NO_CODEX_SUPPORT,
+            launch_blocked_by=None if launchable_providers else LAUNCH_BLOCKED_NO_CODEX_SUPPORT,
             last_seen_at=conn_info.last_seen_at,
             engine_build=conn_info.engine_build,
         )

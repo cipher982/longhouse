@@ -7,6 +7,7 @@ import shlex
 import time
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from zerg.services.managed_local_shell import build_managed_local_shell_prelude
 from zerg.services.managed_session_env import build_managed_session_env_exports
@@ -124,6 +125,10 @@ def build_claude_channel_state_file(
     normalized = str(session_id or "").strip()
     if not normalized:
         raise ValueError("session_id must not be empty")
+    try:
+        normalized = str(UUID(normalized))
+    except ValueError as exc:
+        raise ValueError("session_id must be a valid UUID") from exc
     return resolve_claude_channel_state_root(state_root=state_root, claude_dir=claude_dir) / "sessions" / f"{normalized}.json"
 
 
@@ -178,7 +183,6 @@ def build_claude_channel_exec_command(
     cwd: str,
     resume: bool,
     hook_url: str | None = None,
-    hook_token: str | None = None,
     claude_command: str = "claude",
 ) -> str:
     """Build the native Claude launch/resume shell command for channel sessions."""
@@ -211,8 +215,6 @@ def build_claude_channel_exec_command(
     ]
     if hook_url:
         inner.append(f"export LONGHOUSE_HOOK_URL={_quote(str(hook_url).strip())}")
-    if hook_token:
-        inner.append(f"export LONGHOUSE_HOOK_TOKEN={_quote(str(hook_token).strip())}")
     inner.append("exec " + " ".join(_quote(part) for part in command_bits))
     return f"zsh -lc {_quote('; '.join(inner))}"
 

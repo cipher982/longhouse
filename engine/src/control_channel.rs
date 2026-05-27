@@ -608,14 +608,7 @@ async fn execute_command(
                 .unwrap_or_else(|| "codex".to_string());
             if provider == "claude" {
                 return run_claude_channel_command(
-                    vec![
-                        "claude-channel".to_string(),
-                        "send".to_string(),
-                        "--session-id".to_string(),
-                        session_id,
-                        "--text".to_string(),
-                        text,
-                    ],
+                    claude_channel_args(COMMAND_SEND_TEXT, &session_id, Some(text))?,
                     LAUNCH_START_TIMEOUT_SECS,
                 )
                 .await
@@ -648,12 +641,7 @@ async fn execute_command(
                 .unwrap_or_else(|| "codex".to_string());
             if provider == "claude" {
                 return run_claude_channel_command(
-                    vec![
-                        "claude-channel".to_string(),
-                        "interrupt".to_string(),
-                        "--session-id".to_string(),
-                        session_id,
-                    ],
+                    claude_channel_args(COMMAND_INTERRUPT, &session_id, None)?,
                     LAUNCH_START_TIMEOUT_SECS,
                 )
                 .await
@@ -681,16 +669,7 @@ async fn execute_command(
                 .unwrap_or_else(|| "codex".to_string());
             if provider == "claude" {
                 return run_claude_channel_command(
-                    vec![
-                        "claude-channel".to_string(),
-                        "send".to_string(),
-                        "--session-id".to_string(),
-                        session_id,
-                        "--text".to_string(),
-                        text,
-                        "--meta".to_string(),
-                        "intent=steer".to_string(),
-                    ],
+                    claude_channel_args(COMMAND_STEER_TEXT, &session_id, Some(text))?,
                     LAUNCH_START_TIMEOUT_SECS,
                 )
                 .await
@@ -723,6 +702,49 @@ async fn execute_command(
         other => Err(CommandError {
             code: "unsupported_command".to_string(),
             message: format!("Unsupported command_type={other}"),
+        }),
+    }
+}
+
+fn claude_channel_args(
+    command_type: &str,
+    session_id: &str,
+    text: Option<String>,
+) -> std::result::Result<Vec<String>, CommandError> {
+    match command_type {
+        COMMAND_SEND_TEXT => Ok(vec![
+            "claude-channel".to_string(),
+            "send".to_string(),
+            "--session-id".to_string(),
+            session_id.to_string(),
+            "--text".to_string(),
+            text.ok_or_else(|| CommandError {
+                code: "invalid_command".to_string(),
+                message: "text is required".to_string(),
+            })?,
+        ]),
+        COMMAND_INTERRUPT => Ok(vec![
+            "claude-channel".to_string(),
+            "interrupt".to_string(),
+            "--session-id".to_string(),
+            session_id.to_string(),
+        ]),
+        COMMAND_STEER_TEXT => Ok(vec![
+            "claude-channel".to_string(),
+            "send".to_string(),
+            "--session-id".to_string(),
+            session_id.to_string(),
+            "--text".to_string(),
+            text.ok_or_else(|| CommandError {
+                code: "invalid_command".to_string(),
+                message: "text is required".to_string(),
+            })?,
+            "--meta".to_string(),
+            "intent=steer".to_string(),
+        ]),
+        _ => Err(CommandError {
+            code: "unsupported_command".to_string(),
+            message: format!("unsupported Claude channel command {command_type}"),
         }),
     }
 }
@@ -806,7 +828,7 @@ async fn launch_claude_channel_session(
             "--wait-ready-secs".to_string(),
             LAUNCH_START_TIMEOUT_SECS.to_string(),
         ],
-        LAUNCH_START_TIMEOUT_SECS + 5,
+        LAUNCH_START_TIMEOUT_SECS * 2,
         vec![("LONGHOUSE_CLAUDE_REMOTE_LAUNCH_TOKEN", api_token)],
     )
     .await?;
@@ -1423,5 +1445,57 @@ mod tests {
 
         assert_eq!(result["ok"], false);
         assert_eq!(result["error"]["code"], "provider_launch_failed");
+    }
+
+    #[test]
+    fn claude_channel_args_route_send_interrupt_and_steer() {
+        assert_eq!(
+            claude_channel_args(
+                COMMAND_SEND_TEXT,
+                "11111111-1111-4111-8111-111111111111",
+                Some("hello".to_string())
+            )
+            .unwrap(),
+            vec![
+                "claude-channel",
+                "send",
+                "--session-id",
+                "11111111-1111-4111-8111-111111111111",
+                "--text",
+                "hello",
+            ]
+        );
+        assert_eq!(
+            claude_channel_args(
+                COMMAND_INTERRUPT,
+                "11111111-1111-4111-8111-111111111111",
+                None
+            )
+            .unwrap(),
+            vec![
+                "claude-channel",
+                "interrupt",
+                "--session-id",
+                "11111111-1111-4111-8111-111111111111",
+            ]
+        );
+        assert_eq!(
+            claude_channel_args(
+                COMMAND_STEER_TEXT,
+                "11111111-1111-4111-8111-111111111111",
+                Some("course correct".to_string())
+            )
+            .unwrap(),
+            vec![
+                "claude-channel",
+                "send",
+                "--session-id",
+                "11111111-1111-4111-8111-111111111111",
+                "--text",
+                "course correct",
+                "--meta",
+                "intent=steer",
+            ]
+        );
     }
 }

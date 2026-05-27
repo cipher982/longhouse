@@ -136,6 +136,21 @@ def test_directory_surfaces_online_machine_without_codex_launch_as_blocked(tmp_p
     assert entries[0].launch_blocked_by == "no_codex_support"
 
 
+def test_directory_does_not_block_claude_only_launchable_machine(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+    registry = MachineControlChannelRegistry()
+    _register(registry, owner_id=OWNER_ID, device_id="claude-host", supports=("claude.launch",))
+
+    with SessionLocal() as db:
+        entries = build_machines_directory(db, owner_id=OWNER_ID, registry=registry)
+
+    assert len(entries) == 1
+    assert entries[0].can_launch_codex is False
+    assert entries[0].launchable_providers == ("claude",)
+    assert entries[0].launch_blocked_by is None
+
+
 def test_directory_prefers_online_record_over_persisted_row(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user(SessionLocal)
