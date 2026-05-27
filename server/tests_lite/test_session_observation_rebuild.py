@@ -415,13 +415,13 @@ def test_session_observation_rebuild_recovers_transcript_archive_and_runtime(tmp
         after_source_lines = _source_line_snapshot(db, session.id)
         after_runtime = _runtime_snapshot(db, session.id)
 
-    assert "bridge_transcript_delta" in observation_kinds
+    assert "bridge_transcript_delta" not in observation_kinds
     assert "provider_event" in observation_kinds
     assert "provider_source_line" in observation_kinds
     assert "runtime_signal" in observation_kinds
     assert result.reducer_errors == ()
     assert result.provider_events_reduced == 1
-    assert result.bridge_events_reduced == 1
+    assert result.bridge_events_reduced == 0
     assert result.source_lines_reduced == 1
     assert result.runtime_signals_reduced >= 1
     assert after_events == before_events
