@@ -71,6 +71,11 @@ downgraded with the failed evidence attached.
 | OpenCode | First-class if server API remains stable | OpenCode server bridge | Machine Agent `opencode.launch` | Server prompt API | Server abort API | Only after async/TUI prompt semantics prove active-turn delivery | `opencode attach` | OpenCode OpenAPI + live server canary |
 | Antigravity | Controlled wrapper with explicit limits | Stock `agy` + Longhouse plugin | Only after launch semantics are proven | Hook inbox / next-invocation injection | Only if graceful stop is proven | Only if active-turn injection is proven | Provider-supported reattach if exposed | Hook schema + inbox canary |
 
+`scripts/qa/provider-release-profile-canary.py` now emits the shared
+Sauron-facing release artifact for every managed provider. Provider-specific
+live canary fields remain yellow/not-run until the live probes named above are
+implemented.
+
 ## Provider Contracts
 
 ### Codex
