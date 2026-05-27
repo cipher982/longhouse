@@ -2500,13 +2500,33 @@ async fn process_notification(
                 return Ok(None);
             }
             if let Some(next_id) = different_notification_thread_id(&params, context) {
-                mark_provider_thread_switched(
-                    config,
-                    context,
-                    method,
-                    &next_id,
-                    extract_notification_thread_path(&params),
-                )?;
+                let next_path = extract_notification_thread_path(&params);
+                if unused_prestarted_tui_thread_can_yield(context) {
+                    let previous_thread_id = context.state.thread_id.clone();
+                    if adopt_thread_identity(
+                        config,
+                        context,
+                        Some(next_id.clone()),
+                        next_path,
+                        false,
+                    )? {
+                        eprintln!(
+                            "[codex-bridge] adopted TUI thread {next_id} over unused prestarted thread {}",
+                            previous_thread_id.as_deref().unwrap_or("unknown")
+                        );
+                        emit_runtime_updates(
+                            config,
+                            context,
+                            vec![context.runtime_tracker.current_phase_update()],
+                        )
+                        .await;
+                    }
+                    if followup.is_none() {
+                        followup = pending_thread_subscription(context)?;
+                    }
+                    return Ok(followup);
+                }
+                mark_provider_thread_switched(config, context, method, &next_id, next_path)?;
                 return Ok(None);
             }
             let previous_thread_id = context.state.thread_id.clone();
@@ -2802,6 +2822,32 @@ fn different_notification_thread_id(params: &Value, context: &BridgeContext) -> 
         return None;
     }
     Some(next_id)
+}
+
+fn unused_prestarted_tui_thread_can_yield(context: &BridgeContext) -> bool {
+    if context.state.launch_mode.as_deref() != Some(LAUNCH_MODE_TUI) {
+        return false;
+    }
+    if thread_subscription_locked(context) {
+        return false;
+    }
+    if context.state.active_turn_id.is_some()
+        || context.state.last_turn_status.is_some()
+        || context.runtime_tracker.active_turn_id.is_some()
+    {
+        return false;
+    }
+    if context.state.thread_subscription_status.as_deref()
+        == Some(ThreadSubscriptionStatus::ProviderThreadSwitched.as_str())
+    {
+        return false;
+    }
+    context
+        .state
+        .thread_path
+        .as_deref()
+        .map(|path| !thread_rollout_is_ready(path))
+        .unwrap_or(true)
 }
 
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
@@ -5784,6 +5830,120 @@ mod tests {
             context.state.thread_subscription_status.as_deref(),
             Some(ThreadSubscriptionStatus::ReadyToSubscribe.as_str())
         );
+    }
+
+    #[tokio::test]
+    async fn process_notification_adopts_tui_thread_when_prestarted_thread_unused() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+        let stale_prestart_path = temp.path().join("missing-prestarted-rollout.jsonl");
+        let tui_rollout_path = temp.path().join("tui-rollout.jsonl");
+        let tui_rollout_path_string = tui_rollout_path.display().to_string();
+        fs::write(&tui_rollout_path, "{\"ok\":true}\n").unwrap();
+        context.state.launch_mode = Some(LAUNCH_MODE_TUI.to_string());
+        context.state.thread_id = Some("thr-prestarted".to_string());
+        context.state.thread_path = Some(stale_prestart_path.display().to_string());
+        context.runtime.thread_id = Some("thr-prestarted".to_string());
+        context.state.thread_subscription_status = Some(
+            ThreadSubscriptionStatus::WaitingForTurn
+                .as_str()
+                .to_string(),
+        );
+
+        let followup = process_notification(
+            &json!({
+                "method": "thread/started",
+                "params": {
+                    "thread": {
+                        "id": "thr-tui",
+                        "path": tui_rollout_path_string
+                    }
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            followup,
+            Some(BridgeFollowup::SubscribeThread {
+                thread_id: "thr-tui".to_string(),
+                thread_path: Some(tui_rollout_path_string.clone()),
+            })
+        );
+        assert_eq!(context.state.thread_id.as_deref(), Some("thr-tui"));
+        assert_eq!(
+            context.state.thread_path.as_deref(),
+            Some(tui_rollout_path_string.as_str())
+        );
+        assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-tui"));
+        assert_eq!(context.state.status, "ready");
+        assert_eq!(context.state.last_error, None);
+        assert!(!context.rejected_thread_ids.contains("thr-tui"));
+        assert_eq!(
+            context.state.thread_subscription_status.as_deref(),
+            Some(ThreadSubscriptionStatus::ReadyToSubscribe.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn process_notification_does_not_replace_materialized_prestarted_thread() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+        let prestarted_rollout_path = temp.path().join("prestarted-rollout.jsonl");
+        let tui_rollout_path = temp.path().join("tui-rollout.jsonl");
+        let prestarted_rollout_path_string = prestarted_rollout_path.display().to_string();
+        let tui_rollout_path_string = tui_rollout_path.display().to_string();
+        fs::write(&prestarted_rollout_path, "{\"ok\":true}\n").unwrap();
+        fs::write(&tui_rollout_path, "{\"ok\":true}\n").unwrap();
+        context.state.launch_mode = Some(LAUNCH_MODE_TUI.to_string());
+        context.state.thread_id = Some("thr-prestarted".to_string());
+        context.state.thread_path = Some(prestarted_rollout_path_string.clone());
+        context.runtime.thread_id = Some("thr-prestarted".to_string());
+        context.state.thread_subscription_status = Some(
+            ThreadSubscriptionStatus::WaitingForTurn
+                .as_str()
+                .to_string(),
+        );
+
+        let followup = process_notification(
+            &json!({
+                "method": "thread/started",
+                "params": {
+                    "thread": {
+                        "id": "thr-tui",
+                        "path": tui_rollout_path_string
+                    }
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(followup, None);
+        assert_eq!(context.state.thread_id.as_deref(), Some("thr-prestarted"));
+        assert_eq!(
+            context.state.thread_path.as_deref(),
+            Some(prestarted_rollout_path_string.as_str())
+        );
+        assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-prestarted"));
+        assert_eq!(
+            context.state.thread_subscription_status.as_deref(),
+            Some(ThreadSubscriptionStatus::ProviderThreadSwitched.as_str())
+        );
+        assert_eq!(context.state.status, "degraded");
+        assert!(context
+            .state
+            .last_error
+            .as_deref()
+            .is_some_and(|message| message.contains(PROVIDER_THREAD_SWITCHED_REASON)));
+        assert!(context.rejected_thread_ids.contains("thr-tui"));
     }
 
     #[tokio::test]
