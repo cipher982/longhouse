@@ -114,16 +114,31 @@ def text_fragments(value: Any) -> list[str]:
     return []
 
 
+def transcript_line_counts(session_id: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for path in transcript_paths(session_id):
+        try:
+            counts[str(path)] = len(path.read_text(encoding="utf-8", errors="replace").splitlines())
+        except OSError:
+            continue
+    return counts
+
+
 def assistant_transcript_contains(
     session_id: str,
     expected: str,
+    *,
+    after_line_counts: dict[str, int] | None = None,
 ) -> tuple[bool, str | None, int | None, str | None]:
     for path in transcript_paths(session_id):
         try:
             lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             continue
+        first_candidate_line = int((after_line_counts or {}).get(str(path), 0) or 0) + 1
         for index, line in enumerate(lines, start=1):
+            if index < first_candidate_line:
+                continue
             try:
                 row = json.loads(line)
             except json.JSONDecodeError:
@@ -132,7 +147,8 @@ def assistant_transcript_contains(
                 continue
             fragments = text_fragments(row.get("message"))
             if any(expected in fragment for fragment in fragments):
-                return True, str(path), index, row.get("timestamp") if isinstance(row.get("timestamp"), str) else None
+                timestamp = row.get("timestamp")
+                return True, str(path), index, timestamp if isinstance(timestamp, str) else None
     return False, None, None, None
 
 
@@ -146,7 +162,13 @@ def read_json_file(path: Path | None) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
-def run_probe(session_id: str, *, output_dir: Path, run_id: str, duration_secs: float) -> subprocess.CompletedProcess[str]:
+def run_probe(
+    session_id: str,
+    *,
+    output_dir: Path,
+    run_id: str,
+    duration_secs: float,
+) -> subprocess.CompletedProcess[str]:
     probe = ROOT / "scripts" / "ops" / "probe-managed-claude-truth.py"
     return subprocess.run(
         [
@@ -170,9 +192,16 @@ def run_probe(session_id: str, *, output_dir: Path, run_id: str, duration_secs: 
     )
 
 
-def channel_send(session_id: str, text: str) -> subprocess.CompletedProcess[str]:
+def build_channel_send_command(session_id: str, text: str, *, meta: dict[str, str] | None = None) -> list[str]:
+    command = ["longhouse", "claude-channel", "send", "--session-id", session_id, "--text", text]
+    for key, value in (meta or {}).items():
+        command.extend(["--meta", f"{key}={value}"])
+    return command
+
+
+def channel_send(session_id: str, text: str, *, meta: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["longhouse", "claude-channel", "send", "--session-id", session_id, "--text", text],
+        build_channel_send_command(session_id, text, meta=meta),
         cwd=str(ROOT),
         text=True,
         capture_output=True,
@@ -189,6 +218,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", default="claude-sonnet-4-6", help="Per-process ANTHROPIC_MODEL override.")
     parser.add_argument("--prompt", default="Please reply with exactly: LONGHOUSE CLAUDE PROFILE READY")
     parser.add_argument("--expected", default="LONGHOUSE CLAUDE PROFILE READY")
+    parser.add_argument(
+        "--steer-text",
+        help="Optional active-turn channel correction to send after the initial prompt.",
+    )
+    parser.add_argument(
+        "--steer-expected",
+        help="Assistant text that must appear in a new transcript row after --steer-text is sent.",
+    )
+    parser.add_argument(
+        "--steer-delay-secs",
+        type=float,
+        default=2.0,
+        help="Seconds after prompt send before injecting --steer-text with intent=steer metadata.",
+    )
     parser.add_argument("--run-id", default=run_id_now())
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--launch-timeout-secs", type=float, default=45.0)
@@ -209,7 +252,12 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Optional path to write the managed session id as soon as Claude prints it.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.steer_delay_secs < 0:
+        parser.error("--steer-delay-secs must be >= 0")
+    if args.steer_text and not args.steer_expected:
+        parser.error("--steer-expected is required when --steer-text is set")
+    return args
 
 
 def main() -> int:
@@ -235,7 +283,15 @@ def main() -> int:
         env["ANTHROPIC_MODEL"] = args.model
 
     master_fd, slave_fd = pty.openpty()
-    proc = subprocess.Popen(command, cwd=str(ROOT), env=env, stdin=slave_fd, stdout=slave_fd, stderr=slave_fd, close_fds=True)
+    proc = subprocess.Popen(
+        command,
+        cwd=str(ROOT),
+        env=env,
+        stdin=slave_fd,
+        stdout=slave_fd,
+        stderr=slave_fd,
+        close_fds=True,
+    )
     os.close(slave_fd)
     set_nonblocking(master_fd)
     selector = selectors.DefaultSelector()
@@ -249,6 +305,9 @@ def main() -> int:
     confirmed_workspace_trust = False
     confirmed_warning = False
     sent_prompt = False
+    prompt_sent_at: float | None = None
+    steer_sent = False
+    steer_transcript_cursor: dict[str, int] | None = None
     observed_expected = False
     exit_sent = False
     probe_proc: subprocess.Popen[str] | None = None
@@ -322,19 +381,44 @@ def main() -> int:
                             stderr=send.stderr[-1000:],
                         )
                         sent_prompt = True
+                        prompt_sent_at = time.monotonic()
 
-            if session_id and sent_prompt and not observed_expected:
+            if (
+                session_id
+                and sent_prompt
+                and args.steer_text
+                and not steer_sent
+                and prompt_sent_at is not None
+                and time.monotonic() >= prompt_sent_at + args.steer_delay_secs
+            ):
+                steer_transcript_cursor = transcript_line_counts(session_id)
+                steer = channel_send(session_id, args.steer_text, meta={"intent": "steer"})
+                recorder.write(
+                    "steer_sent",
+                    session_id=session_id,
+                    returncode=steer.returncode,
+                    stdout=steer.stdout[-1000:],
+                    stderr=steer.stderr[-1000:],
+                    transcript_cursor=steer_transcript_cursor,
+                )
+                steer_sent = True
+
+            if session_id and sent_prompt and (not args.steer_text or steer_sent) and not observed_expected:
                 (
                     observed_expected,
                     transcript_path,
                     transcript_line,
                     transcript_timestamp,
-                ) = assistant_transcript_contains(session_id, args.expected)
+                ) = assistant_transcript_contains(
+                    session_id,
+                    args.steer_expected if args.steer_text else args.expected,
+                    after_line_counts=steer_transcript_cursor if args.steer_text else None,
+                )
                 if observed_expected:
                     recorder.write(
                         "assistant_transcript_observed",
                         session_id=session_id,
-                        expected=args.expected,
+                        expected=args.steer_expected if args.steer_text else args.expected,
                         transcript_path=transcript_path,
                         transcript_line=transcript_line,
                         transcript_timestamp=transcript_timestamp,
@@ -366,20 +450,40 @@ def main() -> int:
         except subprocess.TimeoutExpired:
             probe_proc.terminate()
             stdout, stderr = probe_proc.communicate(timeout=10)
-        recorder.write("live_probe_finished", session_id=session_id, returncode=probe_proc.returncode, stdout=(stdout or "")[-1000:], stderr=(stderr or "")[-1000:])
+        recorder.write(
+            "live_probe_finished",
+            session_id=session_id,
+            returncode=probe_proc.returncode,
+            stdout=(stdout or "")[-1000:],
+            stderr=(stderr or "")[-1000:],
+        )
 
     post_close_summary = None
     if session_id and not args.skip_post_close_probe:
         post_close_dir = output_dir / "post_close_probe"
-        post = run_probe(session_id, output_dir=post_close_dir, run_id=f"{args.run_id}-post-close", duration_secs=args.post_close_probe_secs)
+        post = run_probe(
+            session_id,
+            output_dir=post_close_dir,
+            run_id=f"{args.run_id}-post-close",
+            duration_secs=args.post_close_probe_secs,
+        )
         post_close_summary = post_close_dir / "summary.json"
-        recorder.write("post_close_probe_finished", session_id=session_id, returncode=post.returncode, stdout=post.stdout[-1000:], stderr=post.stderr[-1000:])
+        recorder.write(
+            "post_close_probe_finished",
+            session_id=session_id,
+            returncode=post.returncode,
+            stdout=post.stdout[-1000:],
+            stderr=post.stderr[-1000:],
+        )
     post_close_data = read_json_file(post_close_summary)
 
     summary = {
         "run_id": args.run_id,
         "session_id": session_id,
         "sent_prompt": sent_prompt,
+        "steer_requested": bool(args.steer_text),
+        "steer_sent": steer_sent,
+        "steer_expected": args.steer_expected,
         "observed_expected": observed_expected,
         "process_returncode": proc.returncode,
         "terminal_log": str(terminal_log),
@@ -397,30 +501,48 @@ def main() -> int:
     }
     summary["post_close_skipped"] = args.skip_post_close_probe
     summary["expected_terminal_source_ok"] = (
-        True
-        if args.skip_post_close_probe
-        else summary.get("hosted_terminal_source") == "claude_channel_wrapper"
+        True if args.skip_post_close_probe else summary.get("hosted_terminal_source") == "claude_channel_wrapper"
     )
+    success = bool(
+        session_id
+        and sent_prompt
+        and (not args.steer_text or steer_sent)
+        and observed_expected
+        and proc.returncode == 0
+        and summary["expected_terminal_source_ok"]
+    )
+    summary["success"] = success
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    hosted_terminal = (
+        f"{summary.get('hosted_terminal_state') or '-'} / "
+        f"{summary.get('hosted_terminal_reason') or '-'} / "
+        f"{summary.get('hosted_terminal_source') or '-'}"
+    )
+    write_serializer = (
+        f"{summary.get('hosted_write_serializer_avg_wait_ms')} / {summary.get('hosted_write_serializer_max_wait_ms')}"
+    )
     lines = [
         "# Managed Claude POC",
         "",
         f"- Run: `{args.run_id}`",
         f"- Session: `{session_id or '-'}`",
         f"- Prompt sent: `{sent_prompt}`",
+        f"- Steer requested: `{summary.get('steer_requested')}`",
+        f"- Steer sent: `{summary.get('steer_sent')}`",
         f"- Expected response observed: `{observed_expected}`",
+        f"- Success: `{success}`",
         f"- Process return code: `{proc.returncode}`",
-        f"- Hosted terminal: `{summary.get('hosted_terminal_state') or '-'}` / `{summary.get('hosted_terminal_reason') or '-'}` / `{summary.get('hosted_terminal_source') or '-'}`",
+        f"- Hosted terminal: `{hosted_terminal}`",
         f"- Expected graceful terminal source: `{summary.get('expected_terminal_source_ok')}`",
         f"- Hosted archive events: `{summary.get('hosted_archive_event_count')}`",
         f"- Hosted assistant archive events: `{summary.get('hosted_archive_assistant_events')}`",
         f"- Hosted terminal event sources: `{', '.join(summary.get('hosted_terminal_event_sources') or []) or '-'}`",
-        f"- Hosted WriteSerializer avg/max wait ms: `{summary.get('hosted_write_serializer_avg_wait_ms')}` / `{summary.get('hosted_write_serializer_max_wait_ms')}`",
+        f"- Hosted WriteSerializer avg/max wait ms: `{write_serializer}`",
         f"- Terminal log: `{terminal_log}`",
     ]
     (output_dir / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print(output_dir / "summary.md")
-    return 0 if session_id and sent_prompt and observed_expected and proc.returncode == 0 and summary["expected_terminal_source_ok"] else 1
+    return 0 if success else 1
 
 
 if __name__ == "__main__":
