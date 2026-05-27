@@ -267,6 +267,7 @@ validate-build-identity: ## @internal Build identity freshness check
 
 validate-managed-codex-contract: ## @internal Guard against reintroducing packaged managed Codex runtimes
 	@bash scripts/qa/check-managed-codex-contract.sh
+	@python3 scripts/tests/managed-codex-contract.test.py
 
 validate-ws: ## @internal WebSocket contract check
 	@cd server && \
