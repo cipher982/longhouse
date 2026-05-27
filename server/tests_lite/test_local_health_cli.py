@@ -1279,6 +1279,7 @@ def test_collect_local_health_flags_detached_managed_session(monkeypatch, tmp_pa
         "orphan_bridge_count": 0,
         "latest_activity_at": "2026-04-17T17:31:00Z",
     }
+
     assert snapshot["managed_sessions"] == [
         {
             "session_id": "sess-detached",

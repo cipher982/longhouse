@@ -30,7 +30,6 @@ from zerg.cli._common import open_session_url as _open_session_url
 from zerg.cli._managed_contract import record_managed_provider_contract
 from zerg.cli._managed_contract import remove_managed_provider_contract
 from zerg.provider_cli_contract import CODEX_BIN_ENV
-from zerg.provider_cli_contract import LEGACY_MANAGED_CODEX_LAUNCHER_MARKER
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_CODEX_BIN_FLAG
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_MISSING
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
@@ -271,9 +270,6 @@ def _collect_codex_doctor(
 ) -> dict[str, object]:
     resolution = _resolve_codex_binary_with_source(codex_bin)
     resolved_codex_bin = resolution["path"]
-    home = Path.home()
-    legacy_launcher = home / ".local" / "bin" / "longhouse-codex"
-    legacy_runtime_dir = home / ".longhouse" / "runtimes" / "codex"
     resolved_state_root = state_root or _default_codex_bridge_state_root()
     bridge_states = _read_codex_bridge_states(resolved_state_root, check_readyz=check_readyz)
     return {
@@ -283,17 +279,6 @@ def _collect_codex_doctor(
             "version": _codex_version(resolved_codex_bin),
             "env_override": os.environ.get(CODEX_BIN_ENV),
         },
-        "legacy_artifacts": {
-            "launcher": {
-                "path": str(legacy_launcher),
-                "exists": legacy_launcher.exists(),
-                "legacy_marker": _legacy_codex_launcher_has_marker(legacy_launcher),
-            },
-            "managed_runtime_dir": {
-                "path": str(legacy_runtime_dir),
-                "exists": legacy_runtime_dir.exists(),
-            },
-        },
         "bridge": {
             "state_root": str(resolved_state_root),
             "state_root_exists": resolved_state_root.exists(),
@@ -301,13 +286,6 @@ def _collect_codex_doctor(
             "sessions": bridge_states,
         },
     }
-
-
-def _legacy_codex_launcher_has_marker(path: Path) -> bool:
-    try:
-        return path.is_file() and LEGACY_MANAGED_CODEX_LAUNCHER_MARKER in path.read_text(errors="ignore")
-    except OSError:
-        return False
 
 
 def _render_codex_doctor(payload: dict[str, object], *, json_output: bool) -> None:
@@ -324,16 +302,6 @@ def _render_codex_doctor(payload: dict[str, object], *, json_output: bool) -> No
     if version.get("error"):
         typer.echo(f"  version error: {version['error']}")
     typer.echo(f"  {CODEX_BIN_ENV}: {binary.get('env_override') or '-'}")
-
-    artifacts = dict(payload["legacy_artifacts"])
-    launcher = dict(artifacts["launcher"])
-    runtime = dict(artifacts["managed_runtime_dir"])
-    typer.echo("")
-    typer.echo("Legacy artifacts")
-    typer.echo(f"  longhouse-codex: {'present' if launcher.get('exists') else 'absent'} ({launcher.get('path')})")
-    if launcher.get("exists"):
-        typer.echo(f"    legacy marker: {'yes' if launcher.get('legacy_marker') else 'no'}")
-    typer.echo(f"  managed runtime dir: {'present' if runtime.get('exists') else 'absent'} ({runtime.get('path')})")
 
     bridge = dict(payload["bridge"])
     sessions = list(bridge.get("sessions") or [])
@@ -1018,7 +986,7 @@ def codex_doctor(
         help="Actively probe each bridge relay readyz endpoint. Off by default to keep doctor fast.",
     ),
 ) -> None:
-    """Inspect the managed Codex binary, legacy artifacts, and bridge state."""
+    """Inspect the managed Codex binary and bridge state."""
 
     try:
         payload = _collect_codex_doctor(codex_bin=codex_bin, state_root=state_root, check_readyz=check_readyz)

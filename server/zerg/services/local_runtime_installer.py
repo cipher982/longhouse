@@ -34,6 +34,8 @@ from zerg.services.shipper import load_token
 from zerg.services.shipper import sanitize_machine_name
 from zerg.services.shipper import save_token
 
+_OBSOLETE_CLAUDE_MANAGED_LOCAL_PROVIDERS = ("codex-bridge", "opencode", "antigravity")
+
 
 @dataclass(frozen=True)
 class HookInstallResult:
@@ -97,7 +99,8 @@ def _guard_stable_home_control_plane_target(
 
     runner = dict(readiness.get("runner") or {})
     runner_name = str(runner.get("runner_name") or "").strip() or "unknown"
-    runner_urls = ", ".join(str(item) for item in list(runner.get("runner_urls") or []) if str(item).strip()) or "unknown"
+    runner_url_items = [str(item) for item in list(runner.get("runner_urls") or []) if str(item).strip()]
+    runner_urls = ", ".join(runner_url_items) or "unknown"
     raise RuntimeError(
         "Refusing to point the stable Longhouse home at a local control plane while the machine runner is "
         f"enrolled as `{runner_name}` against `{runner_urls}`. "
@@ -156,28 +159,55 @@ def _service_targets_state_root(service_info: dict[str, object], state_root: Pat
     return service_home.resolve(strict=False) == state_root.expanduser().resolve(strict=False)
 
 
-def _is_legacy_managed_codex_launcher(path: Path) -> bool:
+def _is_obsolete_managed_codex_launcher(path: Path) -> bool:
     try:
         return path.is_file() and LEGACY_MANAGED_CODEX_LAUNCHER_MARKER in path.read_text(errors="ignore")
     except OSError:
         return False
 
 
-def _cleanup_legacy_managed_codex_runtime(config_dir: Path) -> None:
-    launcher_path = Path.home() / ".local" / "bin" / "longhouse-codex"
-    if _is_legacy_managed_codex_launcher(launcher_path):
-        try:
-            launcher_path.unlink()
-        except OSError:
-            pass
-
-    runtime_dir = config_dir / "runtimes" / "codex"
+def _remove_local_artifact(path: Path) -> None:
     try:
-        shutil.rmtree(runtime_dir)
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+        else:
+            shutil.rmtree(path)
     except FileNotFoundError:
         pass
     except OSError:
         pass
+
+
+def _cleanup_obsolete_managed_codex_runtime(config_dir: Path) -> None:
+    launcher_path = Path.home() / ".local" / "bin" / "longhouse-codex"
+    if _is_obsolete_managed_codex_launcher(launcher_path):
+        _remove_local_artifact(launcher_path)
+
+    _remove_local_artifact(config_dir / "runtimes" / "codex")
+
+
+def _obsolete_claude_managed_local_root(
+    *,
+    config_dir: Path,
+    claude_dir: str | None,
+) -> Path | None:
+    if claude_dir:
+        return Path(claude_dir).expanduser() / "managed-local"
+    if _is_stable_home(config_dir):
+        return Path.home() / ".claude" / "managed-local"
+    return None
+
+
+def _cleanup_obsolete_claude_managed_local_state(
+    *,
+    config_dir: Path,
+    claude_dir: str | None,
+) -> None:
+    root = _obsolete_claude_managed_local_root(config_dir=config_dir, claude_dir=claude_dir)
+    if root is None:
+        return
+    for provider in _OBSOLETE_CLAUDE_MANAGED_LOCAL_PROVIDERS:
+        _remove_local_artifact(root / provider)
 
 
 def _reconcile_launch_artifacts(
@@ -248,8 +278,9 @@ def _install_local_runtime_artifacts(
 
     engine_runtime = ensure_runtime_binary(RuntimeComponent.ENGINE)
     home_mode = classify_longhouse_home(config_dir)
+    _cleanup_obsolete_claude_managed_local_state(config_dir=config_dir, claude_dir=claude_dir)
     if home_mode == "stable":
-        _cleanup_legacy_managed_codex_runtime(config_dir)
+        _cleanup_obsolete_managed_codex_runtime(config_dir)
     if home_mode == "scratch":
         desktop_app_result = None
         if menubar:
@@ -424,20 +455,26 @@ def reconcile_local_runtime(
         raise RuntimeError(f"Failed to read existing machine state at {state_path}: {error}")
 
     resolved_url = runtime_url if runtime_url is not None else (current_state.runtime_url if current_state else None)
-    resolved_name = machine_name if machine_name is not None else (current_state.machine_name if current_state else None)
-    resolved_menubar = menubar if menubar is not None else (current_state.desktop_app_enabled if current_state else None)
+    if machine_name is not None:
+        resolved_name = machine_name
+    else:
+        resolved_name = current_state.machine_name if current_state else None
+    if menubar is not None:
+        resolved_menubar = menubar
+    else:
+        resolved_menubar = current_state.desktop_app_enabled if current_state else None
     resolved_topology_intent = (
         topology_intent if topology_intent is not None else (current_state.topology_intent if current_state else None)
     )
 
     if not resolved_url:
-        raise RuntimeError(
-            f"Machine state missing runtime_url at {state_path}. " "Run `longhouse connect --install` once to configure this machine."
-        )
+        repair_hint = "Run `longhouse connect --install` once to configure this machine."
+        message = f"Machine state missing runtime_url at {state_path}. {repair_hint}"
+        raise RuntimeError(message)
     if not resolved_name:
-        raise RuntimeError(
-            f"Machine state missing machine_name at {state_path}. " "Run `longhouse connect --install` once to configure this machine."
-        )
+        repair_hint = "Run `longhouse connect --install` once to configure this machine."
+        message = f"Machine state missing machine_name at {state_path}. {repair_hint}"
+        raise RuntimeError(message)
 
     _guard_stable_home_control_plane_target(
         state_root=config_dir,
