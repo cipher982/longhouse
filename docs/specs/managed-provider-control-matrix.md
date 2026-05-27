@@ -102,6 +102,7 @@ Next Claude gaps:
    rejection, and `interrupt`.
 2. Dogfood detached launch on Linux; macOS requires a `script(1)` PTY wrapper
    because stock Claude falls into print-mode behavior without a terminal.
+   Hook tokens are passed through process env, not argv or PTY log text.
 
 ### OpenCode
 

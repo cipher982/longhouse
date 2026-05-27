@@ -27,6 +27,8 @@ Use this skill when a task touches how Longhouse starts, observes, steers, or re
 - Machine Agent remote launch uses the `claude.launch` support bit and must
   run stock Claude under a PTY wrapper with `--channels server:longhouse-channel`
   and wait for Claude channel state before Runtime Host records the launch as live.
+- Claude hook tokens must be passed through process env, never embedded in
+  shell commands or PTY launch logs.
 - No detached bridge daemon, bridge state file, or flock sidecar should be required for Claude liveness.
 - Claude liveness in local health comes from process scanning, especially `local_health._collect_managed_sessions_by_process`.
 
