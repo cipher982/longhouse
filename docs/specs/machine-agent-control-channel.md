@@ -229,7 +229,7 @@ Target behavior:
 
 - `session.send_text` routes through the Codex app-server bridge/relay.
 - `session.interrupt` routes through the same bridge.
-- `session.steer_text` remains Codex-only.
+- `session.steer_text` routes through the Codex bridge for active turns.
 - Verification uses the same hook/runtime observations currently used by
   `managed_local_control.py`.
 
@@ -281,8 +281,8 @@ should call one managed-control dispatch service that:
 
 - checks current session capability
 - chooses an explicit transport:
-  - `engine_channel` for supported Codex sessions on machines with online engine
-    control
+  - `engine_channel` for supported Machine Agent provider-control operations on
+    machines with online engine control
   - `legacy_runner` for sessions that still require Runner
 - sends one command frame or Runner job
 - waits up to the existing short timeout

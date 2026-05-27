@@ -138,12 +138,11 @@ old `managed_transport` enum:
   can_send_input`. A live attached connection without the send capability
   does not show a reply affordance.
 - `can_queue_next_input` = same as `reply_to_live_session_available`.
-- `can_steer_active_turn` = `live_control_available AND provider == "codex"
-  AND best_connection.control_plane == "codex_bridge" AND runtime phase in
-  {thinking, running}`. Today's writers stamp `control_plane="codex_bridge"`
-  for the Codex managed control channel; the legacy
-  `ManagedSessionTransport.CODEX_APP_SERVER` enum string is not what the
-  kernel records.
+- `can_steer_active_turn` = `live_control_available AND can_send_input AND
+  best_connection.control_plane is in the managed-provider contract registry's
+  steerable control planes`. Today that includes Codex `codex_bridge` and
+  Claude `claude_channel_bridge`; it intentionally excludes OpenCode and
+  Antigravity until their active-turn injection semantics are proven.
 
 ### Runtime overlay rule: down-gate only
 
