@@ -105,12 +105,12 @@ injection is steer. If runtime phase is stale or idle, `intent=steer` returns
 
 Next Claude gaps:
 
-1. Extend the hermetic canary into a real upstream Claude channel lane for
-   release-drift review. The local control-path canary already proves
-   `send`, `intent=steer` channel delivery, and `interrupt`.
-2. Add an API/runtime canary for active-turn steer injection and idle steer
-   rejection. Channel metadata delivery is not the same as proving a fresh
-   running turn accepted corrective input.
+1. Extend the no-token live canary into detached channel launch readiness. The
+   current live lane proves binary/auth/flag/channel-parser shape without
+   starting a model turn.
+2. Add a token-spending or controlled live canary for active-turn steer
+   injection. The API/runtime tests prove idle steer rejection and active-phase
+   dispatch gating, but not provider-side text acceptance during a real turn.
 3. Dogfood detached launch on Linux; macOS requires a `script(1)` PTY wrapper
    because stock Claude falls into print-mode behavior without a terminal.
    Hook tokens are passed through process env, not argv or PTY log text.

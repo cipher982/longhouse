@@ -19,6 +19,7 @@ import secrets
 import shutil
 import signal
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -58,6 +59,15 @@ def _command_evidence(result: subprocess.CompletedProcess[str]) -> dict[str, Any
         "returncode": result.returncode,
         "stdout": (result.stdout or "")[-4000:],
         "stderr": (result.stderr or "")[-4000:],
+    }
+
+
+def _metadata_only_command_evidence(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    return {
+        "argv": list(result.args) if isinstance(result.args, list) else result.args,
+        "returncode": result.returncode,
+        "stdout_chars": len(result.stdout or ""),
+        "stderr_chars": len(result.stderr or ""),
     }
 
 
@@ -250,6 +260,169 @@ def _run_attach_shape(binary: str) -> dict[str, Any]:
             evidence=_command_evidence(result),
         )
     return _status("pass", evidence=_command_evidence(result))
+
+
+def _run_claude_auth_status(binary: str) -> dict[str, Any]:
+    try:
+        result = subprocess.run(
+            [binary, "auth", "status", "--json"],
+            text=True,
+            capture_output=True,
+            timeout=8,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return _fail(
+            "claude_auth_status_failed",
+            f"{type(exc).__name__}: {exc}",
+            argv=[binary, "auth", "status", "--json"],
+        )
+    evidence = _metadata_only_command_evidence(result)
+    if result.returncode != 0:
+        return _status(
+            "warn",
+            reason="claude_auth_status_nonzero",
+            message="Claude auth status is unavailable; release compatibility can still be source-reviewed.",
+            evidence=evidence,
+        )
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return _fail(
+            "claude_auth_status_invalid_json",
+            "claude auth status --json returned invalid JSON",
+            evidence=evidence,
+        )
+    auth_summary = {
+        "loggedIn": bool(payload.get("loggedIn")),
+        "authMethod": str(payload.get("authMethod") or ""),
+        "apiProvider": str(payload.get("apiProvider") or ""),
+        "subscriptionType": str(payload.get("subscriptionType") or ""),
+    }
+    # Do not publish email/org identifiers into Sauron-facing artifacts.
+    if auth_summary["loggedIn"]:
+        return _status("pass", auth=auth_summary)
+    return _status(
+        "warn",
+        reason="claude_auth_not_logged_in",
+        message="Claude is not logged in on this machine.",
+        auth=auth_summary,
+    )
+
+
+def _run_claude_command_shape(binary: str) -> dict[str, Any]:
+    try:
+        result = subprocess.run(
+            [binary, "--help"],
+            text=True,
+            capture_output=True,
+            timeout=8,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return _fail("claude_help_failed", f"{type(exc).__name__}: {exc}", argv=[binary, "--help"])
+    evidence = _command_evidence(result)
+    if result.returncode != 0:
+        return _fail("claude_help_failed", "claude --help failed", evidence=evidence)
+    output = f"{result.stdout}\n{result.stderr}"
+    required_tokens = (
+        "--session-id",
+        "--resume",
+        "--dangerously-skip-permissions",
+        "--mcp-config",
+        "--strict-mcp-config",
+        "--permission-mode",
+    )
+    missing = [token for token in required_tokens if token not in output]
+    if missing:
+        return _fail(
+            "claude_command_contract_missing",
+            "claude --help is missing expected launch/session flags",
+            missing=missing,
+            evidence=evidence,
+        )
+    return _status("pass", evidence=evidence)
+
+
+def _run_claude_channels_shape(binary: str) -> dict[str, Any]:
+    argv = [binary, "--channels", "--help"]
+    try:
+        result = subprocess.run(
+            argv,
+            text=True,
+            capture_output=True,
+            timeout=8,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return _fail("claude_channels_probe_failed", f"{type(exc).__name__}: {exc}", argv=argv)
+    output = f"{result.stdout}\n{result.stderr}"
+    if "unknown option --channels" in output or "Unknown option '--channels'" in output:
+        return _fail(
+            "claude_channels_contract_missing",
+            "Claude does not recognize the hidden --channels option.",
+            evidence=_command_evidence(result),
+        )
+    required_tokens = ("server:", "plugin:")
+    missing = [token for token in required_tokens if token not in output]
+    if missing:
+        return _status(
+            "warn",
+            reason="claude_channels_contract_unconfirmed",
+            message="Claude recognized --channels, but the tagged-channel help shape could not be confirmed.",
+            missing=missing,
+            evidence=_command_evidence(result),
+        )
+    return _status("pass", evidence=_command_evidence(result))
+
+
+def _run_claude_pty_wrapper_shape() -> dict[str, Any]:
+    if sys.platform != "darwin":
+        return _status("pass", platform=sys.platform, reason="pty_wrapper_not_required")
+    script_path = shutil.which("script")
+    if not script_path:
+        return _fail(
+            "claude_detached_pty_unavailable",
+            "Detached Claude launch on macOS requires script(1), but it was not found on PATH.",
+        )
+    return _status("pass", script_path=script_path, platform=sys.platform)
+
+
+def run_claude_live_canary(args: argparse.Namespace, _root: Path) -> dict[str, Any]:
+    binary = _resolve_provider_binary(args, "claude")
+    if not binary:
+        return {
+            "provider": "claude",
+            "provider_version": None,
+            "canaries": {
+                "binary_identity": _fail("provider_binary_not_found", "claude binary was not found on PATH")
+            },
+        }
+    version, version_evidence = _run_version(binary)
+    if not version:
+        return {
+            "provider": "claude",
+            "provider_version": None,
+            "canaries": {
+                "binary_identity": _fail(
+                    "provider_version_failed",
+                    "claude --version failed",
+                    path=binary,
+                    evidence=version_evidence,
+                )
+            },
+        }
+    return {
+        "provider": "claude",
+        "provider_version": version,
+        "canaries": {
+            "binary_identity": _status("pass", path=binary, version=version, evidence=version_evidence),
+            "auth_status": _run_claude_auth_status(binary),
+            "command_shape": _run_claude_command_shape(binary),
+            "channels_shape": _run_claude_channels_shape(binary),
+            "detached_pty_shape": _run_claude_pty_wrapper_shape(),
+        },
+    }
 
 
 def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
@@ -446,6 +619,8 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
 
 
 def run_provider(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    if args.provider == "claude":
+        return run_claude_live_canary(args, root)
     if args.provider == "opencode":
         return run_opencode_live_canary(args, root)
     return {

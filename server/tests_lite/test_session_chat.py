@@ -24,6 +24,7 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.device_token import DeviceToken
 from zerg.models.enums import UserRole
@@ -113,7 +114,12 @@ def _mark_session_live(db, session, *, owner_id: int, phase: str = "idle") -> No
     key = runtime_key_for_session(str(session.provider or "claude"), str(session.id))
     state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == key).first()
     if state is None:
-        state = SessionRuntimeState(runtime_key=key, session_id=session.id, provider=str(session.provider or "claude"), device_id=session.device_id)
+        state = SessionRuntimeState(
+            runtime_key=key,
+            session_id=session.id,
+            provider=str(session.provider or "claude"),
+            device_id=session.device_id,
+        )
         db.add(state)
     state.phase = phase
     state.phase_source = "semantic"
@@ -174,6 +180,53 @@ def _seed_kernel_session(session_local, *, provider: str, with_kernel_rows: bool
             db.commit()
             db.refresh(session)
     return sid
+
+
+def _seed_live_input_session(session_local, *, provider: str = "claude", phase: str = "idle"):
+    source_session_id = uuid4()
+    provider_session_id = f"{provider}-input-{uuid4().hex[:8]}"
+    with session_local() as db:
+        user = User(email=f"{provider}-input-{uuid4().hex[:6]}@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        store = AgentsStore(db)
+        started_at = datetime.now(timezone.utc)
+        store.ingest_session(
+            SessionIngest(
+                id=source_session_id,
+                provider=provider,
+                environment="Cinder",
+                project="session-input",
+                device_id="agent-device",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                provider_session_id=provider_session_id,
+                started_at=started_at,
+                ended_at=started_at,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="Started before Longhouse input test",
+                        timestamp=started_at,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+        source_session = store.get_session(source_session_id)
+        assert source_session is not None
+        source_session.execution_home = "managed_local"
+        source_session.managed_transport = "claude_channel_bridge" if provider == "claude" else "codex_app_server"
+        source_session.source_runner_id = 1
+        source_session.source_runner_name = "agent-device"
+        source_session.managed_session_name = f"lh-{provider}-input"
+        db.commit()
+        _mark_session_live(db, source_session, owner_id=user.id, phase=phase)
+        return source_session_id, user.id
 
 
 @pytest.mark.parametrize("terminal_state", ["finished", "host_expired"])
@@ -424,6 +477,72 @@ def test_managed_local_codex_live_send_requires_host_attach(tmp_path):
         )
         assert response.status_code == 409, response.text
         assert response.json()["detail"] == "This live session needs host attach before Longhouse can continue it."
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_explicit_claude_steer_rejects_idle_turn_without_dispatch(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    source_session_id, user_id = _seed_live_input_session(session_local, provider="claude", phase="idle")
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="claude-steer-idle@test.local", role=UserRole.USER.value),
+    )
+
+    async def fail_steer(**_kwargs):
+        pytest.fail("idle intent=steer must be rejected before dispatch")
+
+    monkeypatch.setattr("zerg.services.managed_local_control.steer_text_to_managed_local_session", fail_steer)
+
+    try:
+        response = client.post(
+            f"/api/sessions/{source_session_id}/input",
+            json={"text": "correct the active turn", "intent": "steer"},
+        )
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"]["error_code"] == "turn_not_active"
+        with session_local() as db:
+            assert db.query(SessionInput).filter(SessionInput.session_id == source_session_id).count() == 0
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_explicit_claude_steer_dispatches_during_active_turn(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    source_session_id, user_id = _seed_live_input_session(session_local, provider="claude", phase="running")
+    calls: list[dict[str, object]] = []
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="claude-steer-active@test.local", role=UserRole.USER.value),
+    )
+
+    async def fake_steer(*, db, owner_id, session, text, commis_id=None):
+        calls.append(
+            {
+                "owner_id": owner_id,
+                "session_id": str(session.id),
+                "text": text,
+                "commis_id": commis_id,
+            }
+        )
+        return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+    monkeypatch.setattr("zerg.services.managed_local_control.steer_text_to_managed_local_session", fake_steer)
+
+    try:
+        response = client.post(
+            f"/api/sessions/{source_session_id}/input",
+            json={"text": "correct the active turn", "intent": "steer"},
+        )
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["outcome"] == "sent"
+        assert payload["intent"] == "steer"
+        assert len(calls) == 1
+        assert calls[0]["owner_id"] == user_id
+        assert calls[0]["session_id"] == str(source_session_id)
+        assert calls[0]["text"] == "correct the active turn"
+        assert calls[0]["commis_id"]
     finally:
         api_app_ref.dependency_overrides = {}
 def test_agents_send_live_route_ignores_device_mismatch_and_dispatches(monkeypatch, tmp_path):

@@ -119,9 +119,15 @@ work while an agent is busy. Steer needs active-phase proof and idle rejection.
 ## Next Implementation Slices
 
 1. Add a provider live-canary dispatcher that can run one provider or all
-   providers and emit one Sauron-facing artifact per provider. The initial
-   dispatcher exists for OpenCode at `scripts/qa/provider-live-canary.py`.
-2. Extend the OpenCode server probe from the initial no-token lane. It is the
+   providers and emit one Sauron-facing artifact per provider. The dispatcher
+   currently covers OpenCode and Claude at
+   `scripts/qa/provider-live-canary.py`.
+2. Extend the Claude lane beyond the initial no-token checks. The current lane
+   proves binary identity, redacted auth shape, required launch/session flags,
+   hidden `--channels` tagged-channel parsing, and macOS PTY wrapper availability.
+   Detached channel launch readiness and active-turn steer still need live
+   evidence.
+3. Extend the OpenCode server probe from the initial no-token lane. It is the
    lowest-risk live canary:
    `opencode serve --hostname 127.0.0.1 --port 0 --pure`, `/global/health`,
    `/doc`, session create, attach `--help` command shape, and abort are checked
@@ -129,9 +135,6 @@ work while an agent is busy. Steer needs active-phase proof and idle rejection.
    token-spending lane can verify `prompt_async` execution if needed; the
    current lane verifies the endpoint is present in OpenCode's OpenAPI
    document.
-3. Extend the Claude canary from bridge-only to detached launch readiness. Keep
-   active-turn steer as a separate manual or scheduled lane because it may spend
-   provider tokens.
 4. Extend the Antigravity canary from generated-hook proof to real `agy` plugin
    install plus loop behavior.
 5. Fold the existing Codex release canary into the same artifact shape without
