@@ -611,6 +611,11 @@ def test_collect_local_health_degrades_for_old_outbox_file(monkeypatch, tmp_path
 def test_collect_local_health_classifies_deleted_cwd_hook_spawn_errors(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service,
+        "_utc_now",
+        lambda: datetime(2026, 5, 27, 14, 45, tzinfo=timezone.utc),
+    )
     state_root = tmp_path / ".longhouse"
     claude_dir = tmp_path / ".claude"
     _write_engine_status(state_root, age_seconds=5)
@@ -645,8 +650,53 @@ def test_collect_local_health_classifies_deleted_cwd_hook_spawn_errors(monkeypat
     diagnostics = snapshot["provider_hook_diagnostics"]
     assert diagnostics["state"] == "session_cwd_missing"
     assert diagnostics["deleted_cwd_error_count"] == 1
+    assert diagnostics["actionable_deleted_cwd_error_count"] == 1
     assert diagnostics["latest"]["session_id"] == "session-1"
     assert diagnostics["latest"]["cwd"] == str(missing_cwd)
+
+
+def test_collect_local_health_keeps_stale_deleted_cwd_hook_errors_informational(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service,
+        "_utc_now",
+        lambda: datetime(2026, 5, 27, 18, 0, tzinfo=timezone.utc),
+    )
+    state_root = tmp_path / ".longhouse"
+    claude_dir = tmp_path / ".claude"
+    _write_engine_status(state_root, age_seconds=5)
+
+    transcript = claude_dir / "projects" / "-tmp-project" / "session-1.jsonl"
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    transcript.write_text(
+        json.dumps(
+            {
+                "type": "system",
+                "subtype": "stop_hook_summary",
+                "timestamp": "2026-05-27T14:35:24Z",
+                "cwd": str(tmp_path / "deleted-cwd"),
+                "sessionId": "session-1",
+                "hookInfos": [{"command": "/Users/test/.claude/hooks/longhouse-hook.sh", "durationMs": 2}],
+                "hookErrors": [
+                    "Failed with non-blocking status code: Error occurred while executing hook command: "
+                    "ENOENT: no such file or directory, posix_spawn '/bin/sh'"
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    snapshot = local_health_service.collect_local_health(state_root)
+
+    assert snapshot["health_state"] == "healthy"
+    assert "provider_session_cwd_missing" not in snapshot["reasons"]
+    diagnostics = snapshot["provider_hook_diagnostics"]
+    assert diagnostics["state"] == "stale_session_cwd_missing"
+    assert diagnostics["deleted_cwd_error_count"] == 1
+    assert diagnostics["actionable_deleted_cwd_error_count"] == 0
+    assert diagnostics["latest_actionable"] is None
 
 
 def test_fast_local_health_skips_provider_hook_transcript_scan(monkeypatch, tmp_path: Path):
