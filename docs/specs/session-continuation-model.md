@@ -1,6 +1,6 @@
 # Session Continuation Model
 
-Status: Phase 0 spec
+Status: Phase 2 implemented
 Owner: Longhouse session core + managed provider CLIs
 Created: 2026-05-27
 Related:
@@ -158,10 +158,8 @@ Request:
 
 ```json
 {
-  "provider": "codex",
-  "host_id": "this-device",
+  "device_id": "this-device",
   "cwd": "/Users/davidrose/git/zerg/longhouse",
-  "carry_context": "native",
   "client_request_id": "uuid"
 }
 ```
@@ -171,12 +169,9 @@ Response:
 ```json
 {
   "session_id": "same-session-id",
-  "thread_id": "primary-thread-id",
-  "launch_attempt_id": 123,
-  "state": "pending",
-  "provider": "codex",
-  "host_id": "this-device",
-  "native_resume_available": true
+  "launch_state": "live",
+  "launch_error_code": null,
+  "launch_error_message": null
 }
 ```
 
@@ -278,6 +273,8 @@ Review:
 
 ### Phase 2: Same-Provider Continue Kernel/API
 
+Status: implemented in branch `session-continuation`.
+
 Goal: allow Longhouse to start a new same-provider run on an existing durable
 session/thread.
 
@@ -312,6 +309,26 @@ Tests:
 - API route tests for machine route and browser wrapper.
 - Machine-control command serialization tests for native Codex resume payload.
 - Capability projection tests for `can_continue` and target selection.
+
+Implementation notes:
+
+- `POST /api/sessions/{session_id}/continue` and
+  `POST /api/agents/sessions/{session_id}/continue` reuse
+  `SessionLaunchAttempt` with `continue-*` command ids.
+- The Machine Agent now advertises `codex.continue`; servers do not send native
+  resume payloads to older engines that only know `codex.launch`.
+- The control-channel `session.launch` payload accepts `mode=continue` plus a
+  `resume.thread_id` / `resume.thread_path` target. Fresh launches still create
+  the initial thread.
+- `codex-bridge start/run` accepts `--resume-thread-id` and
+  `--resume-thread-path`. Resume launches call Codex `thread/resume` during
+  bridge startup before Longhouse marks the continuation live.
+- Successful continuation keeps the same Longhouse session/thread, records a
+  `longhouse_continued` run, attaches a fresh `codex_bridge` connection, and
+  refreshes provider thread/source-path aliases.
+- Session capability responses now expose `can_continue` and compact native
+  `continue_targets` for Codex sessions with resolvable provider thread id and
+  source path evidence.
 
 Review:
 

@@ -106,6 +106,10 @@ pub struct BridgeStartConfig {
     /// When true, the bridge's run loop invokes `thread/start` itself before
     /// marking the bridge ready. This is independent from launch lifecycle.
     pub create_initial_thread: bool,
+    /// Existing Codex thread id to resume instead of creating a fresh thread.
+    pub resume_thread_id: Option<String>,
+    /// Existing Codex rollout/transcript path paired with `resume_thread_id`.
+    pub resume_thread_path: Option<String>,
     pub launch_mode: BridgeLaunchMode,
 }
 
@@ -129,6 +133,10 @@ pub struct BridgeRunConfig {
     /// When true, the bridge calls `thread/start` itself instead of waiting
     /// for a TUI attach.
     pub create_initial_thread: bool,
+    /// Existing Codex thread id to resume instead of creating a fresh thread.
+    pub resume_thread_id: Option<String>,
+    /// Existing Codex rollout/transcript path paired with `resume_thread_id`.
+    pub resume_thread_path: Option<String>,
     pub launch_mode: BridgeLaunchMode,
 }
 
@@ -572,6 +580,14 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
     if config.cwd.as_os_str().is_empty() || !config.cwd.is_dir() {
         bail!("cwd does not exist: {}", config.cwd.display());
     }
+    let resume_thread_id = normalize_optional_string(config.resume_thread_id.clone());
+    let resume_thread_path = normalize_optional_string(config.resume_thread_path.clone());
+    if config.create_initial_thread && resume_thread_id.is_some() {
+        bail!("create_initial_thread cannot be combined with resume_thread_id");
+    }
+    if resume_thread_path.is_some() && resume_thread_id.is_none() {
+        bail!("resume_thread_path requires resume_thread_id");
+    }
 
     let paths = resolve_bridge_paths(
         config.state_root.as_deref(),
@@ -592,8 +608,8 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         codex_bin: config.codex_bin.clone(),
         launch_mode: Some(config.launch_mode.persisted_state_value().to_string()),
         ws_url: None,
-        thread_id: None,
-        thread_path: None,
+        thread_id: resume_thread_id.clone(),
+        thread_path: resume_thread_path.clone(),
         pid: 0,
         app_server_pid: None,
         app_server_pgid: None,
@@ -604,9 +620,13 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         last_turn_status: None,
         last_error: None,
         thread_subscription_status: Some(
-            ThreadSubscriptionStatus::WaitingForThread
-                .as_str()
-                .to_string(),
+            if resume_thread_id.is_some() {
+                ThreadSubscriptionStatus::WaitingForTurn
+            } else {
+                ThreadSubscriptionStatus::WaitingForThread
+            }
+            .as_str()
+            .to_string(),
         ),
         thread_subscription_attempts: 0,
         thread_subscription_last_error: None,
@@ -669,6 +689,12 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
     }
     if config.create_initial_thread {
         child.arg("--create-initial-thread");
+    }
+    if let Some(thread_id) = resume_thread_id.as_deref() {
+        child.arg("--resume-thread-id").arg(thread_id);
+    }
+    if let Some(thread_path) = resume_thread_path.as_deref() {
+        child.arg("--resume-thread-path").arg(thread_path);
     }
     if config.launch_mode != BridgeLaunchMode::Tui {
         child
@@ -746,6 +772,14 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
 pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     let pid = std::process::id();
     crate::codex_attachments::cleanup_session_tmpdir(&config.session_id);
+    let resume_thread_id = normalize_optional_string(config.resume_thread_id.clone());
+    let resume_thread_path = normalize_optional_string(config.resume_thread_path.clone());
+    if config.create_initial_thread && resume_thread_id.is_some() {
+        bail!("create_initial_thread cannot be combined with resume_thread_id");
+    }
+    if resume_thread_path.is_some() && resume_thread_id.is_none() {
+        bail!("resume_thread_path requires resume_thread_id");
+    }
     let initial_state = BridgeStateFile {
         schema_version: BRIDGE_STATE_SCHEMA_VERSION,
         session_id: config.session_id.clone(),
@@ -753,8 +787,8 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         codex_bin: config.codex_bin.clone(),
         launch_mode: Some(config.launch_mode.persisted_state_value().to_string()),
         ws_url: None,
-        thread_id: None,
-        thread_path: None,
+        thread_id: resume_thread_id.clone(),
+        thread_path: resume_thread_path.clone(),
         pid,
         app_server_pid: None,
         app_server_pgid: None,
@@ -765,9 +799,13 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         last_turn_status: None,
         last_error: None,
         thread_subscription_status: Some(
-            ThreadSubscriptionStatus::WaitingForThread
-                .as_str()
-                .to_string(),
+            if resume_thread_id.is_some() {
+                ThreadSubscriptionStatus::WaitingForTurn
+            } else {
+                ThreadSubscriptionStatus::WaitingForThread
+            }
+            .as_str()
+            .to_string(),
         ),
         thread_subscription_attempts: 0,
         thread_subscription_last_error: None,
@@ -795,6 +833,50 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     // Initialize the protocol handshake. Legacy TUI-attached startup creates
     // the thread later; prestart paths create it below.
     initialize_client(&mut client).await?;
+
+    let mut startup_subscribed_thread_id: Option<String> = None;
+    if let Some(thread_id) = resume_thread_id.clone() {
+        let params = json!({
+            "threadId": thread_id,
+            "path": resume_thread_path,
+        });
+        match send_request(&mut client, "thread/resume", params).await {
+            Ok(response) => {
+                let resume_thread = response.get("thread").cloned().unwrap_or(Value::Null);
+                if codex_thread_value_is_subagent(&resume_thread) {
+                    let resume_thread_id = extract_string(&resume_thread, &["id"])
+                        .unwrap_or_else(|| thread_id.clone());
+                    let error_text = format!(
+                        "thread/resume returned Codex subagent thread {resume_thread_id}; refusing to adopt as managed primary"
+                    );
+                    starting_state.status = "error".to_string();
+                    starting_state.last_error = Some(error_text.clone());
+                    let _ = write_state_file(&config.state_file, &starting_state);
+                    bail!("{error_text}");
+                }
+                starting_state.thread_id =
+                    extract_string(&resume_thread, &["id"]).or_else(|| Some(thread_id.clone()));
+                starting_state.thread_path = extract_string(&resume_thread, &["path"])
+                    .or_else(|| config.resume_thread_path.clone());
+                starting_state.thread_subscription_status =
+                    Some(ThreadSubscriptionStatus::Subscribed.as_str().to_string());
+                startup_subscribed_thread_id = starting_state.thread_id.clone();
+                write_state_file(&config.state_file, &starting_state)?;
+                sync_thread_binding(
+                    &config,
+                    None,
+                    starting_state.thread_path.as_deref(),
+                    &config.session_id,
+                );
+            }
+            Err(err) => {
+                starting_state.status = "error".to_string();
+                starting_state.last_error = Some(format!("thread/resume failed: {err}"));
+                let _ = write_state_file(&config.state_file, &starting_state);
+                bail!("thread/resume failed in bridge: {err}");
+            }
+        }
+    }
 
     // Initial thread creation path: create the thread ourselves so the session
     // is driveable before a visible TUI attaches.
@@ -845,7 +927,9 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
 
     let initial_thread_id = starting_state.thread_id.clone();
     let initial_thread_path = starting_state.thread_path.clone();
-    let initial_subscription_status = if initial_thread_id.is_some() {
+    let initial_subscription_status = if startup_subscribed_thread_id.is_some() {
+        ThreadSubscriptionStatus::Subscribed
+    } else if initial_thread_id.is_some() {
         ThreadSubscriptionStatus::WaitingForTurn
     } else {
         ThreadSubscriptionStatus::WaitingForThread
@@ -934,7 +1018,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         live_transcript_seq: 0,
         live_transcript_text: String::new(),
         runtime_tracker: CodexRuntimeTracker::default(),
-        subscribed_thread_id: None,
+        subscribed_thread_id: startup_subscribed_thread_id,
         rejected_thread_ids: BTreeSet::new(),
     };
     // Mark ready so the CLI can read ws_url and launch the TUI. Prestart
@@ -4331,6 +4415,8 @@ mod tests {
             state_file: temp.path().join("bridge-state.json"),
             log_file: temp.path().join("bridge.log"),
             create_initial_thread: false,
+            resume_thread_id: None,
+            resume_thread_path: None,
             launch_mode: BridgeLaunchMode::Tui,
         }
     }
