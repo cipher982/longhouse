@@ -487,7 +487,7 @@ mod tests {
     #[test]
     fn skip_legacy_headless_launch_without_tui_even_after_grace() {
         let mut obs = base_obs();
-        obs.launch_mode = Some(codex_bridge::LEGACY_LAUNCH_MODE_HEADLESS.to_string());
+        obs.launch_mode = Some(codex_bridge::LEGACY_LAUNCH_MODE_HEADLESS.to_string()); // LEGACY_HEADLESS_COMPAT_OK
         let now = Instant::now();
         let first = now - Duration::from_secs(130);
 
