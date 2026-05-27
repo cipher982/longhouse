@@ -16,6 +16,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import shutil
 import signal
 import subprocess
@@ -31,6 +32,8 @@ from typing import Any
 
 PROVIDER_STATUS_SCHEMA_VERSION = 1
 _OPENCODE_SERVER_LOG_RE = re.compile(r"opencode server listening on (?P<url>http://127\.0\.0\.1:\d+)")
+_ANTIGRAVITY_PLUGIN_NAME = "longhouse-runtime"
+_ANTIGRAVITY_HOOK_EVENTS = ("PreInvocation", "PreToolUse", "PostToolUse", "PostInvocation", "Stop")
 
 
 def _repo_root_from_script() -> Path:
@@ -388,15 +391,218 @@ def _run_claude_pty_wrapper_shape() -> dict[str, Any]:
     return _status("pass", script_path=script_path, platform=sys.platform)
 
 
+def _run_antigravity_command_shape(binary: str) -> dict[str, Any]:
+    probes = [
+        ([binary, "--help"], ("--print", "--prompt-interactive", "--conversation", "plugin")),
+        ([binary, "plugin", "--help"], ("install <target>", "list", "validate")),
+    ]
+    evidence: list[dict[str, Any]] = []
+    missing_by_probe: list[dict[str, Any]] = []
+    for argv, required_tokens in probes:
+        try:
+            result = subprocess.run(
+                argv,
+                text=True,
+                capture_output=True,
+                timeout=8,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            return _fail("antigravity_help_failed", f"{type(exc).__name__}: {exc}", argv=argv)
+        output = f"{result.stdout}\n{result.stderr}"
+        evidence.append(_command_evidence(result))
+        if result.returncode != 0:
+            return _fail("antigravity_help_failed", "Antigravity help command failed", evidence=evidence)
+        missing = [token for token in required_tokens if token not in output]
+        if missing:
+            missing_by_probe.append({"argv": argv, "missing": missing})
+    if missing_by_probe:
+        return _fail(
+            "antigravity_command_contract_missing",
+            "Antigravity help output is missing expected CLI/plugin controls",
+            missing_by_probe=missing_by_probe,
+            evidence=evidence,
+        )
+    return _status("pass", evidence=evidence)
+
+
+def _antigravity_hook_config(hook_script: Path) -> dict[str, Any]:
+    command_prefix = shlex.quote(str(hook_script))
+    return {
+        "PreInvocation": [
+            {"type": "command", "command": f"{command_prefix} PreInvocation", "timeout": 5},
+        ],
+        "PreToolUse": [
+            {
+                "matcher": "*",
+                "hooks": [{"type": "command", "command": f"{command_prefix} PreToolUse", "timeout": 5}],
+            },
+        ],
+        "PostToolUse": [
+            {
+                "matcher": "*",
+                "hooks": [{"type": "command", "command": f"{command_prefix} PostToolUse", "timeout": 5}],
+            },
+        ],
+        "PostInvocation": [
+            {"type": "command", "command": f"{command_prefix} PostInvocation", "timeout": 5},
+        ],
+        "Stop": [
+            {"type": "command", "command": f"{command_prefix} Stop", "timeout": 5},
+        ],
+    }
+
+
+def _write_antigravity_canary_plugin(root: Path) -> tuple[Path, Path]:
+    plugin_root = root / _ANTIGRAVITY_PLUGIN_NAME
+    plugin_root.mkdir(parents=True, exist_ok=True)
+    hook_script = plugin_root / "longhouse-antigravity-hook.sh"
+    hook_script.write_text(
+        "\n".join(
+            [
+                "#!/bin/sh",
+                'case "${1:-}" in',
+                "  PreInvocation) printf '{\"injectSteps\":[]}\\n' ;;",
+                '  PostInvocation) printf \'{"injectSteps":[],"terminationBehavior":""}\\n\' ;;',
+                '  Stop) printf \'{"decision":"allow","reason":""}\\n\' ;;',
+                "  *) printf '{}\\n' ;;",
+                "esac",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    hook_script.chmod(0o755)
+    (plugin_root / "plugin.json").write_text(
+        json.dumps({"name": _ANTIGRAVITY_PLUGIN_NAME}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    hooks = {_ANTIGRAVITY_PLUGIN_NAME: _antigravity_hook_config(hook_script)}
+    (plugin_root / "hooks.json").write_text(json.dumps(hooks, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    global_hooks_path = root / "global-hooks.json"
+    global_hooks_path.write_text(json.dumps(hooks, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return plugin_root, global_hooks_path
+
+
+def _run_antigravity_global_hooks_contract(global_hooks_path: Path) -> dict[str, Any]:
+    try:
+        hooks = json.loads(global_hooks_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return _fail("antigravity_global_hooks_invalid", f"{type(exc).__name__}: {exc}")
+    provider_hooks = hooks.get(_ANTIGRAVITY_PLUGIN_NAME)
+    if not isinstance(provider_hooks, dict):
+        return _fail(
+            "antigravity_global_hooks_missing",
+            "Generated Antigravity global hooks config is missing the Longhouse runtime entry",
+            global_hooks_path=str(global_hooks_path),
+        )
+    missing = [event for event in _ANTIGRAVITY_HOOK_EVENTS if event not in provider_hooks]
+    if missing:
+        return _fail(
+            "antigravity_global_hooks_events_missing",
+            "Generated Antigravity global hooks config is missing required events",
+            missing=missing,
+            global_hooks_path=str(global_hooks_path),
+        )
+    return _status(
+        "pass",
+        global_hooks_path=str(global_hooks_path),
+        events=sorted(provider_hooks),
+        note="Antigravity plugin install/list is upstream evidence; global hooks are a Longhouse config contract.",
+    )
+
+
+def _run_antigravity_plugin_command(
+    argv: list[str],
+    *,
+    home: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    if home is not None:
+        home.mkdir(parents=True, exist_ok=True)
+        env["HOME"] = str(home)
+    return subprocess.run(
+        argv,
+        text=True,
+        capture_output=True,
+        timeout=12,
+        check=False,
+        env=env,
+    )
+
+
+def _run_antigravity_plugin_contract(binary: str, root: Path) -> dict[str, Any]:
+    plugin_root, _global_hooks_path = _write_antigravity_canary_plugin(root / "plugin")
+    isolated_home = root / "home"
+
+    try:
+        validate = _run_antigravity_plugin_command([binary, "plugin", "validate", str(plugin_root)])
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return _fail("antigravity_plugin_validate_failed", f"{type(exc).__name__}: {exc}")
+    if validate.returncode != 0:
+        return _fail(
+            "antigravity_plugin_validate_failed",
+            "agy plugin validate rejected the Longhouse runtime plugin shape",
+            evidence=_command_evidence(validate),
+            plugin_root=str(plugin_root),
+        )
+
+    try:
+        install = _run_antigravity_plugin_command(
+            [binary, "plugin", "install", str(plugin_root)],
+            home=isolated_home,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return _fail("antigravity_plugin_install_failed", f"{type(exc).__name__}: {exc}")
+    if install.returncode != 0:
+        return _fail(
+            "antigravity_plugin_install_failed",
+            "agy plugin install rejected the Longhouse runtime plugin shape",
+            evidence=_command_evidence(install),
+            plugin_root=str(plugin_root),
+            isolated_home=str(isolated_home),
+        )
+
+    try:
+        listed = _run_antigravity_plugin_command([binary, "plugin", "list"], home=isolated_home)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return _fail("antigravity_plugin_list_failed", f"{type(exc).__name__}: {exc}")
+    if listed.returncode != 0:
+        return _fail(
+            "antigravity_plugin_list_failed",
+            "agy plugin list failed after isolated install",
+            evidence=_command_evidence(listed),
+            isolated_home=str(isolated_home),
+        )
+    if _ANTIGRAVITY_PLUGIN_NAME not in f"{listed.stdout}\n{listed.stderr}":
+        return _fail(
+            "antigravity_plugin_install_not_listed",
+            "agy plugin list did not show the isolated Longhouse runtime plugin install",
+            evidence=_command_evidence(listed),
+            isolated_home=str(isolated_home),
+        )
+
+    return _status(
+        "pass",
+        plugin_root=str(plugin_root),
+        isolated_home=str(isolated_home),
+        validate_evidence=_command_evidence(validate),
+        install_evidence=_command_evidence(install),
+        list_evidence=_command_evidence(listed),
+        note=(
+            "agy may report hook components as skipped here; "
+            "Longhouse wires Antigravity hooks through the global hooks config."
+        ),
+    )
+
+
 def run_claude_live_canary(args: argparse.Namespace, _root: Path) -> dict[str, Any]:
     binary = _resolve_provider_binary(args, "claude")
     if not binary:
         return {
             "provider": "claude",
             "provider_version": None,
-            "canaries": {
-                "binary_identity": _fail("provider_binary_not_found", "claude binary was not found on PATH")
-            },
+            "canaries": {"binary_identity": _fail("provider_binary_not_found", "claude binary was not found on PATH")},
         }
     version, version_evidence = _run_version(binary)
     if not version:
@@ -594,8 +800,10 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
             method="POST",
             path=f"/session/{urllib.parse.quote(provider_session_id, safe='')}/abort",
         )
-        abort_ok = abort_result is True or abort_result is None or (
-            isinstance(abort_result, dict) and abort_result.get("ok") is True
+        abort_ok = (
+            abort_result is True
+            or abort_result is None
+            or (isinstance(abort_result, dict) and abort_result.get("ok") is True)
         )
         if not abort_ok:
             canaries["session_abort"] = _fail(
@@ -618,11 +826,49 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
         _stop_process_group(process)
 
 
+def run_antigravity_live_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    binary = _resolve_provider_binary(args, "agy")
+    if not binary:
+        return {
+            "provider": "antigravity",
+            "provider_version": None,
+            "canaries": {"binary_identity": _fail("provider_binary_not_found", "agy binary was not found on PATH")},
+        }
+
+    version, version_evidence = _run_version(binary)
+    if not version:
+        return {
+            "provider": "antigravity",
+            "provider_version": None,
+            "canaries": {
+                "binary_identity": _fail(
+                    "provider_version_failed",
+                    "agy --version failed",
+                    path=binary,
+                    evidence=version_evidence,
+                )
+            },
+        }
+
+    return {
+        "provider": "antigravity",
+        "provider_version": version,
+        "canaries": {
+            "binary_identity": _status("pass", path=binary, version=version, evidence=version_evidence),
+            "command_shape": _run_antigravity_command_shape(binary),
+            "plugin_contract": _run_antigravity_plugin_contract(binary, root),
+            "global_hooks_contract": _run_antigravity_global_hooks_contract(root / "plugin" / "global-hooks.json"),
+        },
+    }
+
+
 def run_provider(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     if args.provider == "claude":
         return run_claude_live_canary(args, root)
     if args.provider == "opencode":
         return run_opencode_live_canary(args, root)
+    if args.provider == "antigravity":
+        return run_antigravity_live_canary(args, root)
     return {
         "provider": args.provider,
         "provider_version": None,
