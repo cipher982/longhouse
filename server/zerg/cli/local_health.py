@@ -115,14 +115,21 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
 
     provider_release_status = dict(snapshot.get("provider_release_status") or {})
     release_statuses = dict(provider_release_status.get("statuses") or {})
-    if release_statuses:
+    if release_statuses or provider_release_status.get("skipped_reason"):
         typer.echo("")
         typer.echo("Provider Release Status")
+    if provider_release_status.get("skipped_reason"):
+        typer.echo(f"  skipped: {provider_release_status.get('skipped_reason')}")
+    if release_statuses:
         for provider, raw_info in sorted(release_statuses.items()):
             info = dict(raw_info or {})
             typer.echo(f"  {provider}: {info.get('status') or '-'}")
             if info.get("verdict"):
                 typer.echo(f"    verdict: {info.get('verdict')}")
+            if info.get("schema_status") and info.get("schema_status") != "ok":
+                typer.echo(f"    schema: {info.get('schema_status')}")
+            if info.get("freshness_status") and info.get("freshness_status") != "fresh":
+                typer.echo(f"    freshness: {info.get('freshness_status')}")
             if info.get("artifact_version") or info.get("current_version"):
                 current_version = info.get("current_version") or "-"
                 artifact_version = info.get("artifact_version") or "-"

@@ -3292,10 +3292,17 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         if "provider_release_blocked" not in reasons:
             reasons.append("provider_release_blocked")
         suggested_actions.append("Upgrade or downgrade the affected provider CLI before starting managed sessions.")
+        health_state = "broken"
+        severity = "red"
+        headline = "Installed provider release is blocked"
+    elif int(provider_release_status.get("warning_count") or 0) > 0:
+        if "provider_release_warning" not in reasons:
+            reasons.append("provider_release_warning")
+        suggested_actions.append("Review provider release status before starting or upgrading managed sessions.")
         if health_state == "healthy":
             health_state = "degraded"
             severity = "yellow"
-            headline = "Installed provider release is blocked"
+            headline = "Provider release status needs attention"
     build_identity = _collect_build_identity(engine_status=engine_status)
 
     return {
