@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 from datetime import UTC
 from datetime import datetime
@@ -27,9 +28,17 @@ PROVIDER_RELEASE_STATUS_URL_ENV = "LONGHOUSE_PROVIDER_RELEASE_STATUS_URL"
 CODEX_RELEASE_STATUS_FILE_ENV = "LONGHOUSE_CODEX_RELEASE_STATUS_FILE"
 CODEX_RELEASE_STATUS_URL_ENV = "LONGHOUSE_CODEX_RELEASE_STATUS_URL"
 PROVIDER_RELEASE_STATUS_MAX_AGE_SECONDS_ENV = "LONGHOUSE_PROVIDER_RELEASE_STATUS_MAX_AGE_SECONDS"
+PROVIDER_RELEASE_STATUS_CONFIG_FILE_ENV = "LONGHOUSE_PROVIDER_RELEASE_STATUS_CONFIG"
 PROVIDER_STATUS_SCHEMA_VERSION = 1
 DEFAULT_PROVIDER_RELEASE_STATUS_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
+_CONFIG_KEYS = (
+    PROVIDER_RELEASE_STATUS_DIR_ENV,
+    PROVIDER_RELEASE_STATUS_URL_ENV,
+    CODEX_RELEASE_STATUS_FILE_ENV,
+    CODEX_RELEASE_STATUS_URL_ENV,
+    PROVIDER_RELEASE_STATUS_MAX_AGE_SECONDS_ENV,
+)
 
 
 def normalize_provider_version(raw: Any) -> str | None:
@@ -40,8 +49,88 @@ def normalize_provider_version(raw: Any) -> str | None:
     return match.group(0) if match else text
 
 
+def provider_release_status_config_path() -> Path:
+    raw = os.getenv(PROVIDER_RELEASE_STATUS_CONFIG_FILE_ENV, "").strip()
+    if raw:
+        return Path(raw).expanduser()
+    return Path.home() / ".config" / "longhouse" / "provider-release-status.env"
+
+
+def _provider_release_config_paths() -> list[Path]:
+    paths = [provider_release_status_config_path()]
+    if os.name != "nt" and not os.getenv(PROVIDER_RELEASE_STATUS_CONFIG_FILE_ENV, "").strip():
+        paths.append(Path("/etc/longhouse/provider-release-status.env"))
+    return paths
+
+
+def _parse_config_value(raw: str) -> str:
+    value = raw.strip()
+    if not value:
+        return ""
+    try:
+        parsed = shlex.split(value, comments=False, posix=True)
+    except ValueError:
+        return value.strip("\"'")
+    if len(parsed) == 1:
+        return parsed[0]
+    return value.strip("\"'")
+
+
+def _read_provider_release_config() -> dict[str, str]:
+    config: dict[str, str] = {}
+    for path in _provider_release_config_paths():
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            continue
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export ") :].strip()
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            normalized_key = key.strip()
+            if normalized_key in _CONFIG_KEYS:
+                parsed = _parse_config_value(value)
+                if parsed:
+                    config[normalized_key] = parsed
+    return config
+
+
+def _configured_value(key: str) -> str | None:
+    raw = os.getenv(key, "").strip()
+    if raw:
+        return raw
+    return _read_provider_release_config().get(key)
+
+
+def persist_provider_release_status_config_from_env(config_path: Path | None = None) -> Path | None:
+    settings = {key: value for key in _CONFIG_KEYS if (value := os.getenv(key, "").strip())}
+    if not settings:
+        return None
+
+    path = config_path or provider_release_status_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [
+        "# Longhouse provider release-status feed.",
+        "# Written by local runtime install from explicit environment settings.",
+    ]
+    rows.extend(f"{key}={shlex.quote(value)}" for key, value in sorted(settings.items()))
+    payload = "\n".join(rows) + "\n"
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp_path.write_text(payload, encoding="utf-8")
+    tmp_path.chmod(0o600)
+    tmp_path.replace(path)
+    return path
+
+
 def _max_artifact_age_seconds() -> int:
-    raw = os.getenv(PROVIDER_RELEASE_STATUS_MAX_AGE_SECONDS_ENV)
+    raw = _configured_value(PROVIDER_RELEASE_STATUS_MAX_AGE_SECONDS_ENV)
     if not raw:
         return DEFAULT_PROVIDER_RELEASE_STATUS_MAX_AGE_SECONDS
     try:
@@ -100,10 +189,10 @@ def _read_json_url(url: str) -> tuple[dict[str, Any] | None, str | None]:
 def _provider_file_candidates(provider: str) -> list[tuple[Path, bool]]:
     candidates: list[tuple[Path, bool]] = []
     if provider == "codex":
-        raw = os.getenv(CODEX_RELEASE_STATUS_FILE_ENV)
+        raw = _configured_value(CODEX_RELEASE_STATUS_FILE_ENV)
         if raw:
             candidates.append((Path(raw).expanduser(), True))
-    status_dir = os.getenv(PROVIDER_RELEASE_STATUS_DIR_ENV)
+    status_dir = _configured_value(PROVIDER_RELEASE_STATUS_DIR_ENV)
     if status_dir:
         root = Path(status_dir).expanduser()
         candidates.append((root / f"{provider}.json", False))
@@ -114,10 +203,10 @@ def _provider_file_candidates(provider: str) -> list[tuple[Path, bool]]:
 def _provider_url_candidates(provider: str) -> list[str]:
     candidates: list[str] = []
     if provider == "codex":
-        raw = os.getenv(CODEX_RELEASE_STATUS_URL_ENV)
+        raw = _configured_value(CODEX_RELEASE_STATUS_URL_ENV)
         if raw:
             candidates.append(raw)
-    raw = os.getenv(PROVIDER_RELEASE_STATUS_URL_ENV)
+    raw = _configured_value(PROVIDER_RELEASE_STATUS_URL_ENV)
     if raw:
         candidates.append(raw.format(provider=provider) if "{provider}" in raw else raw.rstrip("/") + f"/{provider}")
     return candidates
