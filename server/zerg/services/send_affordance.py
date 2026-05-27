@@ -91,7 +91,9 @@ def project_send_affordance(
     if live and bool(capability_flags.can_send_input):
         provider = (provider_label or "").strip().lower()
         control_plane = (capability_flags.control_plane or "").strip()
-        can_steer = provider == "codex" and control_plane == "codex_bridge"
+        can_steer = (provider == "codex" and control_plane == "codex_bridge") or (
+            provider == "opencode" and control_plane == "opencode_process"
+        )
         default_intent: InputIntent
         if can_steer and is_executing:
             default_intent = "steer"

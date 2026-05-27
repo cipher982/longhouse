@@ -452,6 +452,48 @@ def test_resolve_target_session_id_picks_newest(monkeypatch, tmp_path):
     assert sid == "newer-2"
 
 
+def test_resolve_target_session_id_handles_iso_and_nested_time(monkeypatch):
+    """Newer opencode builds embed timestamps under `time.{updated,created}`.
+
+    Order must still surface the most-recent session even when fields are
+    ISO-8601 strings or nested under a `time` object.
+    """
+
+    listing = [
+        {"id": "iso-old", "updated": "2026-01-01T00:00:00Z"},
+        {"id": "nested-newest", "time": {"updated": "2026-05-01T12:00:00+00:00"}},
+        {"id": "iso-middle", "updated": "2026-03-15T10:30:00Z"},
+        {"id": "no-time-at-all"},
+    ]
+
+    class FakeClient:
+        def get(self, path):
+            class R:
+                status_code = 200
+
+                def raise_for_status(self):
+                    return None
+
+                def json(self):
+                    return listing
+
+            return R()
+
+    sid = bridge_cli._resolve_target_session_id(
+        FakeClient(),  # type: ignore[arg-type]
+        explicit=None,
+        fallback=None,
+        create_if_missing=False,
+    )
+    assert sid == "nested-newest"
+
+
+def test_session_sort_timestamp_falls_back_to_zero_for_garbage():
+    assert bridge_cli._session_sort_timestamp({}) == 0.0
+    assert bridge_cli._session_sort_timestamp({"updated": "not-a-date"}) == 0.0
+    assert bridge_cli._session_sort_timestamp({"updated": 12345.6}) == 12345.6
+
+
 def test_format_error_includes_status():
     request = httpx.Request("POST", "http://example/abort")
     response = httpx.Response(500, text="boom", request=request)

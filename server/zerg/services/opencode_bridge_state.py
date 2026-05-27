@@ -113,9 +113,23 @@ def write_opencode_bridge_state(
     state_path = build_opencode_bridge_state_file(session_id=sid, state_root=state_root, config_dir=config_dir)
     state_path.parent.mkdir(parents=True, exist_ok=True)
     body = json.dumps(payload, indent=2) + "\n"
-    fd = os.open(state_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(body)
+    # Atomic publish: write to a per-pid temp file with 0600 perms, fsync,
+    # then rename. Concurrent readers either see the previous file or the
+    # complete new file — never a half-written truncation.
+    tmp_path = state_path.with_name(f"{state_path.name}.tmp.{os.getpid()}")
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(body)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, state_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except FileNotFoundError:
+            pass
+        raise
     return state_path
 
 

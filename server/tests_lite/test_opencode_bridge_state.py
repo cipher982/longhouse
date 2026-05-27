@@ -121,3 +121,63 @@ def test_wait_for_state_returns_when_ready(tmp_path):
 def test_wait_for_state_times_out(tmp_path):
     with pytest.raises(FileNotFoundError):
         bs.wait_for_opencode_bridge_state(session_id="missing", timeout_secs=0.2, state_root=tmp_path)
+
+
+def test_write_state_uses_atomic_rename(tmp_path):
+    """A failed write must not leave a half-written state file in place."""
+
+    bs.write_opencode_bridge_state(
+        session_id="sess",
+        server_url="http://127.0.0.1:1",
+        server_password="first-password",
+        cwd=str(tmp_path),
+        opencode_pid=1,
+        state_root=tmp_path,
+    )
+    state_path = bs.build_opencode_bridge_state_file(session_id="sess", state_root=tmp_path)
+    original_text = state_path.read_text()
+
+    # Force fdopen.write to fail mid-publish: this simulates an interrupted
+    # second writer. The original file must remain readable and intact.
+    real_fdopen = os.fdopen
+
+    def boom(*args, **kwargs):
+        fh = real_fdopen(*args, **kwargs)
+
+        class _BoomWriter:
+            def __getattr__(self, name):
+                return getattr(fh, name)
+
+            def write(self, *_a, **_kw):
+                raise OSError("disk full")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                fh.close()
+                return False
+
+        return _BoomWriter()
+
+    import zerg.services.opencode_bridge_state as svc
+
+    svc.os.fdopen = boom  # type: ignore[attr-defined]
+    try:
+        with pytest.raises(OSError):
+            bs.write_opencode_bridge_state(
+                session_id="sess",
+                server_url="http://127.0.0.1:1",
+                server_password="second-password",
+                cwd=str(tmp_path),
+                opencode_pid=2,
+                state_root=tmp_path,
+            )
+    finally:
+        svc.os.fdopen = real_fdopen  # type: ignore[attr-defined]
+
+    # Original payload survived.
+    assert state_path.read_text() == original_text
+    # No leftover temp files.
+    leftovers = [p for p in state_path.parent.iterdir() if ".tmp." in p.name]
+    assert leftovers == []
