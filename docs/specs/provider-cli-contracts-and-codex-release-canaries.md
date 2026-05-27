@@ -248,6 +248,11 @@ Initial product contract:
   fake provider endpoints where needed. It is not a source-drift substitute for
   real upstream release probes; it is the regression gate for Longhouse's
   command/control implementation.
+- `server/zerg/config/managed_provider_contracts.json` separates operation
+  support from `operation_evidence`, so the shared contract can say Claude
+  active-turn steer is first-class channel support while still requiring a
+  scheduled live-token canary before the release artifact claims that proof
+  level.
 - `scripts/qa/provider-live-canary.py --provider claude` probes the installed
   upstream Claude Code binary without executing a prompt: binary version,
   redacted auth shape, required launch/session flags, hidden `--channels`
