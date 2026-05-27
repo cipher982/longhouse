@@ -66,6 +66,12 @@ def arg_value(name, default=None):
     return args[index + 1]
 
 if args[:2] == ["codex-bridge", "start"]:
+    if "--create-initial-thread" not in args:
+        print("missing --create-initial-thread", file=sys.stderr)
+        raise SystemExit(2)
+    if "--auto-approve" not in args:
+        print("missing --auto-approve", file=sys.stderr)
+        raise SystemExit(2)
     session_id = arg_value("--session-id")
     isolation_root = Path(arg_value("--isolation-root"))
     state_root = isolation_root / "codex-bridge"
@@ -75,6 +81,9 @@ if args[:2] == ["codex-bridge", "start"]:
     thread_id = "thread_fake"
     ws_url = "ws://127.0.0.1:65535/fake"
     launch_mode = "detached_ui" if arg_value("--launch-mode") == "detached-ui" else "tui"
+    if "detached-ui" in str(isolation_root) and launch_mode != "detached_ui":
+        print("detached bridge missing --launch-mode detached-ui", file=sys.stderr)
+        raise SystemExit(2)
     state = {
         "schema_version": 1,
         "session_id": session_id,

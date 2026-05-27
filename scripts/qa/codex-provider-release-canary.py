@@ -48,9 +48,10 @@ def _run(
     )
 
 
-def _redact_argv(argv: Any) -> Any:
+def _redact_argv(argv: Any, secrets: list[str] | None = None) -> Any:
     if not isinstance(argv, list):
         return argv
+    secrets = [secret for secret in (secrets or []) if secret]
     redacted: list[Any] = []
     redact_next = False
     for item in argv:
@@ -58,18 +59,28 @@ def _redact_argv(argv: Any) -> Any:
             redacted.append("<redacted>")
             redact_next = False
             continue
-        redacted.append(item)
+        redacted.append("<redacted>" if item in secrets else item)
         if item in {"--token", "--agents-token"}:
             redact_next = True
     return redacted
 
 
-def _command_evidence(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+def _redact_text(text: str, secrets: list[str] | None = None) -> str:
+    redacted = text
+    for secret in secrets or []:
+        if secret:
+            redacted = redacted.replace(secret, "<redacted>")
+    return redacted
+
+
+def _command_evidence(
+    result: subprocess.CompletedProcess[str], *, secrets: list[str] | None = None
+) -> dict[str, Any]:
     return {
-        "argv": _redact_argv(result.args),
+        "argv": _redact_argv(result.args, secrets),
         "returncode": result.returncode,
-        "stdout": result.stdout[-4000:],
-        "stderr": result.stderr[-4000:],
+        "stdout": _redact_text(result.stdout[-4000:], secrets),
+        "stderr": _redact_text(result.stderr[-4000:], secrets),
     }
 
 
@@ -263,7 +274,15 @@ def run_raw_fresh_remote(args: argparse.Namespace, evidence_root: Path, codex_bi
         )
 
     remote_log = remote_tui_log.read_text(encoding="utf-8", errors="replace") if remote_tui_log.exists() else ""
-    summary = _load_json_stdout(result)
+    try:
+        summary = _load_json_stdout(result)
+    except ValueError as exc:
+        return _fail(
+            "raw_fresh_remote_bad_json",
+            str(exc),
+            evidence_root=str(root),
+            evidence=_command_evidence(result),
+        )
     if ACTIVE_THREAD_ERROR in remote_log:
         return _status(
             "warn",
@@ -316,6 +335,7 @@ def _start_bridge(
         "--log-file",
         str(log_file),
         "--create-initial-thread",
+        "--auto-approve",
         "--approval-policy",
         "never",
         "--sandbox",
@@ -331,8 +351,18 @@ def _start_bridge(
 
     result = _run(command, cwd=args.repo_root, timeout=args.bridge_start_timeout_secs + 20)
     if result.returncode != 0:
-        raise RuntimeError(json.dumps(_command_evidence(result)))
-    summary = _load_json_stdout(result)
+        raise RuntimeError(json.dumps(_command_evidence(result, secrets=[args.agents_token])))
+    try:
+        summary = _load_json_stdout(result)
+    except ValueError as exc:
+        raise RuntimeError(
+            json.dumps(
+                {
+                    "error": str(exc),
+                    "evidence": _command_evidence(result, secrets=[args.agents_token]),
+                }
+            )
+        ) from exc
     return summary, result, isolation_root
 
 
@@ -520,15 +550,21 @@ def classify_artifact(
     source_status = source_review.get("status")
     if source_status == "fail":
         return "red", "source_review_failed", "block_upgrade_recommendation"
-    source_warning = source_status in {"warn", "not_run", None}
-    first_warning: str | None = None
+    if source_status in {"not_run", None}:
+        return "yellow", "insufficient_coverage", "investigate_before_upgrade"
+    first_warn: str | None = None
+    first_not_run: str | None = None
     for name, canary in canaries.items():
         status = canary.get("status")
         if status == "fail":
             return "red", str(canary.get("failure_code") or name), "block_upgrade_recommendation"
-        if status in {"warn", "not_run"} and first_warning is None:
-            first_warning = name
-    if source_warning or first_warning:
+        if status == "not_run" and first_not_run is None:
+            first_not_run = name
+        if status == "warn" and first_warn is None:
+            first_warn = name
+    if first_not_run:
+        return "yellow", "insufficient_coverage", "investigate_before_upgrade"
+    if source_status == "warn" or first_warn:
         return "yellow", None, "investigate_before_upgrade"
     return "green", None, "upgrade_allowed"
 
@@ -557,6 +593,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--source-review-status",
         choices=["not_run", "pass", "warn", "fail"],
         default="not_run",
+        help="Sauron source-review result. not_run keeps the artifact yellow with insufficient_coverage.",
     )
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--canary-timeout-secs", type=int, default=90)
