@@ -327,6 +327,158 @@ async def test_generate_summary_impl_releases_db_connection_during_llm_call(tmp_
 
 
 @pytest.mark.asyncio
+async def test_generate_summary_impl_bootstraps_from_bounded_message_tail(tmp_path, monkeypatch):
+    import zerg.services.session_summaries as summaries
+
+    factory = _make_db(tmp_path, "summary_bounded_tail.db")
+
+    db = factory()
+    session = AgentSession(
+        provider="claude",
+        environment="test",
+        project="zerg",
+        started_at=datetime.now(timezone.utc),
+        transcript_revision=9,
+        summary_revision=0,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    for idx in range(6):
+        db.add(
+            AgentEvent(
+                session_id=session.id,
+                role="user" if idx % 2 == 0 else "assistant",
+                content_text=f"message-{idx}-long-text",
+                timestamp=datetime.now(timezone.utc),
+            )
+        )
+    db.add(
+        AgentEvent(
+            session_id=session.id,
+            role="tool",
+            content_text="tool result should be ignored",
+            tool_output_text="x" * 100_000,
+            timestamp=datetime.now(timezone.utc),
+        )
+    )
+    db.commit()
+    session_id = str(session.id)
+    db.close()
+
+    captured_events: list[dict] = []
+
+    async def _fake_incremental_summary(**kwargs):
+        captured_events.extend(kwargs["new_events"])
+        return SimpleNamespace(summary="Summarized recent tail", title="Recent Tail")
+
+    client = SimpleNamespace(close=AsyncMock())
+    settings = SimpleNamespace(testing=False, llm_disabled=False)
+
+    monkeypatch.setattr(summaries, "SUMMARY_EVENT_LOAD_LIMIT", 3)
+    monkeypatch.setattr(summaries, "SUMMARY_EVENT_TEXT_MAX_CHARS", 8)
+    monkeypatch.setattr("zerg.services.session_processing.incremental_summary", _fake_incremental_summary)
+
+    with (
+        patch("zerg.database.get_session_factory", return_value=factory),
+        patch("zerg.services.session_summaries.get_settings", return_value=settings),
+        patch(
+            "zerg.models_config.get_llm_client_for_use_case",
+            return_value=(client, "test-model", "test-provider"),
+        ),
+    ):
+        await summaries.generate_summary_impl(session_id)
+
+    assert [event["content_text"] for event in captured_events] == ["message-", "message-", "message-"]
+    assert {event["role"] for event in captured_events} == {"assistant", "user"}
+    assert all(event["tool_output_text"] is None for event in captured_events)
+
+    verify_db = factory()
+    refreshed = verify_db.query(AgentSession).filter(AgentSession.id == session_id).one()
+    verify_db.close()
+
+    assert refreshed.summary_revision == 9
+    assert refreshed.last_summarized_event_id is not None
+    client.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_generate_summary_impl_chunks_cursor_backlog_without_marking_current(tmp_path, monkeypatch):
+    import zerg.services.session_summaries as summaries
+
+    factory = _make_db(tmp_path, "summary_cursor_chunk.db")
+
+    db = factory()
+    session = AgentSession(
+        provider="codex",
+        environment="test",
+        project="zerg",
+        started_at=datetime.now(timezone.utc),
+        transcript_revision=10,
+        summary_revision=4,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    first = AgentEvent(
+        session_id=session.id,
+        role="user",
+        content_text="already summarized",
+        timestamp=datetime.now(timezone.utc),
+    )
+    db.add(first)
+    db.commit()
+    db.refresh(first)
+    session.last_summarized_event_id = first.id
+    for idx in range(5):
+        db.add(
+            AgentEvent(
+                session_id=session.id,
+                role="assistant" if idx % 2 else "user",
+                content_text=f"new message {idx}",
+                timestamp=datetime.now(timezone.utc),
+            )
+        )
+    db.commit()
+    session_id = str(session.id)
+    cursor_id = first.id
+    db.close()
+
+    captured_events: list[dict] = []
+
+    async def _fake_incremental_summary(**kwargs):
+        captured_events.extend(kwargs["new_events"])
+        return SimpleNamespace(summary="Chunk summary", title="Chunk")
+
+    client = SimpleNamespace(close=AsyncMock())
+    settings = SimpleNamespace(testing=False, llm_disabled=False)
+
+    monkeypatch.setattr(summaries, "SUMMARY_EVENT_LOAD_LIMIT", 2)
+    monkeypatch.setattr("zerg.services.session_processing.incremental_summary", _fake_incremental_summary)
+
+    with (
+        patch("zerg.database.get_session_factory", return_value=factory),
+        patch("zerg.services.session_summaries.get_settings", return_value=settings),
+        patch(
+            "zerg.models_config.get_llm_client_for_use_case",
+            return_value=(client, "test-model", "test-provider"),
+        ),
+    ):
+        await summaries.generate_summary_impl(session_id)
+
+    assert [event["content_text"] for event in captured_events] == ["new message 0", "new message 1"]
+
+    verify_db = factory()
+    refreshed = verify_db.query(AgentSession).filter(AgentSession.id == session_id).one()
+    verify_db.close()
+
+    assert refreshed.summary_revision == 4
+    assert refreshed.last_summarized_event_id is not None
+    assert refreshed.last_summarized_event_id > cursor_id
+    client.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_generate_summary_impl_does_not_overwrite_with_placeholder_result(tmp_path, monkeypatch):
     from zerg.services.session_summaries import generate_summary_impl
 
