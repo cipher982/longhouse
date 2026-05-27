@@ -8,6 +8,7 @@ from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import control_plane_for_provider
 from zerg.services.managed_provider_contracts import managed_provider_names
 from zerg.services.managed_provider_contracts import managed_transport_for_control_plane
+from zerg.services.managed_provider_contracts import provider_for_control_plane
 from zerg.services.managed_provider_contracts import remote_launch_supported_providers
 from zerg.services.managed_provider_contracts import steer_control_planes
 from zerg.session_execution_home import ManagedSessionTransport
@@ -90,6 +91,7 @@ def test_control_plane_aliases_are_explicit_contract_not_scattered_literals():
 
     assert codex is not None
     assert codex.provider == "codex"
+    assert provider_for_control_plane("codex_app_server") == "codex"
     assert "codex_app_server" in steer_control_planes()
     assert "claude_channel_bridge" in steer_control_planes()
     assert "opencode_process" not in steer_control_planes()
