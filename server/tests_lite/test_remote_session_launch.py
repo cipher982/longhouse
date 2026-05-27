@@ -278,6 +278,48 @@ def test_happy_path_inserts_live_claude_channel_session(tmp_path):
     assert sent["payload"]["provider"] == "claude"
 
 
+def test_happy_path_inserts_live_opencode_server_bridge_session(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("opencode.launch",))
+
+    with SessionLocal() as db:
+        result = asyncio.run(
+            launch_remote_session(
+                db,
+                RemoteLaunchParams(
+                    owner_id=OWNER_ID,
+                    device_id="cinder",
+                    provider="opencode",
+                    cwd="/Users/me/repo",
+                ),
+                registry=registry,
+            )
+        )
+
+    assert result.launch_state == "live"
+    with SessionLocal() as db:
+        row = db.get(AgentSession, result.session_id)
+        assert row is not None
+        connection = db.query(SessionConnection).one()
+        assert row.provider == "opencode"
+        assert row.managed_transport == "opencode_server_bridge"
+        assert row.source_runner_id is None
+        assert connection.control_plane == "opencode_server_bridge"
+        assert connection.can_send_input == 1
+        assert connection.can_interrupt == 1
+        assert connection.can_terminate == 1
+        assert connection.can_tail_output == 1
+        assert connection.can_resume == 1
+
+    assert len(registry.sent) == 1
+    sent = registry.sent[0]
+    assert sent["command_type"] == "session.launch"
+    assert sent["session_id"] == str(result.session_id)
+    assert sent["payload"]["provider"] == "opencode"
+
+
 def test_offline_machine_returns_409_no_row(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)
@@ -317,11 +359,11 @@ def test_provider_without_remote_launch_contract_rejected(tmp_path):
                 launch_remote_session(
                     db,
                     RemoteLaunchParams(
-                        owner_id=OWNER_ID,
-                        device_id="cinder",
-                        provider="opencode",
-                        cwd="/Users/me/repo",
-                    ),
+                    owner_id=OWNER_ID,
+                    device_id="cinder",
+                    provider="antigravity",
+                    cwd="/Users/me/repo",
+                ),
                     registry=registry,
                 )
             )

@@ -74,6 +74,19 @@ def test_build_managed_local_attach_command_uses_opencode_bridge_for_opencode_pr
     assert "exec longhouse opencode-bridge inspect --session-id session-123" in inner
 
 
+def test_build_managed_local_attach_command_uses_opencode_server_bridge():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.OPENCODE_SERVER_BRIDGE.value,
+    )
+
+    command = build_managed_local_attach_command(session=session)
+    assert command is not None
+    inner = _wrapped_inner(command)
+    assert "command -v opencode" in inner
+    assert "exec longhouse opencode-channel attach --session-id session-123" in inner
+
+
 def test_build_managed_local_attach_command_is_empty_for_antigravity_process():
     session = SimpleNamespace(
         id="session-123",
@@ -155,6 +168,18 @@ def test_build_managed_local_send_text_command_uses_local_bridge_for_claude_chan
     assert "exec longhouse claude-channel send --session-id session-123 --text continue" in inner
 
 
+def test_build_managed_local_send_text_command_uses_opencode_server_bridge():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.OPENCODE_SERVER_BRIDGE.value,
+        provider="opencode",
+    )
+
+    command = build_managed_local_send_text_command(session=session, text="continue")
+    inner = _wrapped_inner(command)
+    assert "exec longhouse opencode-channel send --session-id session-123 --text continue" in inner
+
+
 def test_build_managed_local_steer_text_command_uses_local_bridge_for_claude_channel_transport():
     session = SimpleNamespace(
         id="session-123",
@@ -212,6 +237,17 @@ def test_build_managed_local_interrupt_command_uses_local_bridge_for_claude_chan
     assert "exec longhouse claude-channel interrupt --session-id session-123" in inner
 
 
+def test_build_managed_local_interrupt_command_uses_opencode_server_bridge():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.OPENCODE_SERVER_BRIDGE.value,
+    )
+
+    command = build_managed_local_interrupt_command(session=session)
+    inner = _wrapped_inner(command)
+    assert "exec longhouse opencode-channel interrupt --session-id session-123" in inner
+
+
 def test_build_managed_local_send_text_command_rejects_unsupported_transport():
     session = SimpleNamespace(
         id="session-123",
@@ -231,6 +267,16 @@ def test_build_managed_local_send_text_command_uses_opencode_bridge_for_opencode
     command = build_managed_local_send_text_command(session=session, text="continue")
     inner = _wrapped_inner(command)
     assert "exec longhouse opencode-bridge send --session-id session-123 --text continue" in inner
+
+
+def test_build_managed_local_steer_text_command_rejects_opencode_server_bridge():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.OPENCODE_SERVER_BRIDGE.value,
+    )
+
+    with pytest.raises(ManagedLocalTransportError, match="opencode_server_bridge"):
+        build_managed_local_steer_text_command(session=session, text="continue")
 
 
 def test_build_managed_local_send_text_command_rejects_antigravity_process():
@@ -294,5 +340,5 @@ def test_build_managed_local_interrupt_command_rejects_antigravity_process():
 def test_transport_for_provider():
     assert ManagedSessionTransport.for_provider("codex") == ManagedSessionTransport.CODEX_APP_SERVER
     assert ManagedSessionTransport.for_provider("claude") == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE
-    assert ManagedSessionTransport.for_provider("opencode") == ManagedSessionTransport.OPENCODE_PROCESS
+    assert ManagedSessionTransport.for_provider("opencode") == ManagedSessionTransport.OPENCODE_SERVER_BRIDGE
     assert ManagedSessionTransport.for_provider("antigravity") == ManagedSessionTransport.ANTIGRAVITY_PROCESS

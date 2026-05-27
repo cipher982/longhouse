@@ -24,6 +24,7 @@ class ManagedSessionTransport(str, Enum):
 
     CLAUDE_CHANNEL_BRIDGE = "claude_channel_bridge"
     CODEX_APP_SERVER = "codex_app_server"
+    OPENCODE_SERVER_BRIDGE = "opencode_server_bridge"
     OPENCODE_PROCESS = "opencode_process"
     ANTIGRAVITY_PROCESS = "antigravity_process"
 

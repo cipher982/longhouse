@@ -772,84 +772,40 @@ def opencode(
 
     opencode_args = tuple(str(arg) for arg in (ctx.args or ()))
     is_interactive = _interactive_stdio()
-    command_config_content_path: Path | None = None
-    command_launch_script_path: Path | None = None
-    if not attach or not is_interactive:
-        try:
-            command_config_content_path = _write_opencode_runtime_config_content(
-                config_dir=resolved_config_dir,
-                runtime_events_url=_managed_runtime_events_url(resolved_url),
-                token=resolved_token,
-                session_id=result.session_id,
-                device_id=machine_name,
-            )
-            command_launch_script_path = _write_opencode_launch_script(
-                config_dir=resolved_config_dir,
-                session_id=result.session_id,
-                device_id=machine_name,
-                opencode_bin=resolved_opencode_bin,
-                cwd=cwd,
-                runtime_events_url=_managed_runtime_events_url(resolved_url),
-                token=resolved_token,
-                config_content_path=command_config_content_path,
-            )
-        except _OpenCodeLaunchError as exc:
-            typer.secho(str(exc), fg=typer.colors.RED)
-            raise typer.Exit(code=1) from exc
-    command = _build_opencode_command(
-        session_id=result.session_id,
-        machine_name=machine_name,
-        opencode_bin=resolved_opencode_bin,
-        cwd=cwd,
-        opencode_args=opencode_args,
-        config_content_path=command_config_content_path,
-        launch_script_path=command_launch_script_path,
-    )
-    if not (attach and is_interactive):
-        try:
-            record_managed_provider_contract(
-                provider="opencode",
-                session_id=result.session_id,
-                cwd=cwd,
-                config_dir=resolved_config_dir,
-                launch_mode="launch_script",
-                provider_binary_path=resolved_opencode_bin,
-                provider_binary_source=_opencode_binary_source(opencode_bin, resolved_opencode_bin),
-                control_kind="opencode_launch_script",
-            )
-        except Exception as exc:
-            typer.secho(
-                f"Longhouse warning: could not record managed-session contract: {exc}",
-                fg=typer.colors.YELLOW,
-                err=True,
-            )
-    if not attach:
-        typer.echo(f"Run: {command}")
-        typer.secho(
-            "Note: --no-attach prints a launch script. Managed remote control "
-            "(longhouse opencode-bridge send/interrupt/steer) requires the "
-            "default attached path so Longhouse can capture the OpenCode "
-            "server URL + password.",
-            fg=typer.colors.YELLOW,
+    try:
+        from zerg.cli.opencode_channel import OpenCodeServerBridgeError
+        from zerg.cli.opencode_channel import launch_opencode_server_bridge
+        from zerg.cli.opencode_channel import run_opencode_attach
+
+        launch_opencode_server_bridge(
+            session_id=result.session_id,
+            cwd=cwd,
+            api_url=resolved_url,
+            api_token=resolved_token,
+            device_id=machine_name,
+            display_name=name,
+            opencode_bin=resolved_opencode_bin,
+            config_dir=resolved_config_dir,
         )
+    except (_OpenCodeLaunchError, OpenCodeServerBridgeError) as exc:
+        typer.secho(str(exc), fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+
+    attach_command = f"longhouse opencode-channel attach --session-id {result.session_id}"
+    if not attach:
+        typer.echo(f"Run: {attach_command}")
         return
     if not is_interactive:
-        typer.secho("Skipping OpenCode launch because stdin/stdout are not TTYs.", fg=typer.colors.YELLOW)
-        typer.echo(f"Run: {command}")
+        typer.secho("Skipping OpenCode attach because stdin/stdout are not TTYs.", fg=typer.colors.YELLOW)
+        typer.echo(f"Run: {attach_command}")
         return
 
-    typer.echo("Launching managed OpenCode (`opencode serve`)...")
-    typer.echo("  attach a TUI from another shell with: `opencode tui attach <url> --password $OPENCODE_SERVER_PASSWORD`")
-    exit_code = _run_native_opencode(
+    typer.echo("Attaching OpenCode...")
+    exit_code = run_opencode_attach(
         session_id=result.session_id,
-        machine_name=machine_name,
         opencode_bin=resolved_opencode_bin,
-        cwd=cwd,
-        opencode_args=opencode_args,
-        url=resolved_url,
-        token=resolved_token,
         config_dir=resolved_config_dir,
-        opencode_bin_source=_opencode_binary_source(opencode_bin, resolved_opencode_bin),
+        extra_args=opencode_args,
     )
     if exit_code != 0:
         typer.secho(f"OpenCode exited with code {exit_code}.", fg=typer.colors.YELLOW)

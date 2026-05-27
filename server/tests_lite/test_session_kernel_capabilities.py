@@ -161,6 +161,32 @@ def test_live_send_capable_channel_bridges_can_steer_active_turn(db, control_pla
     assert caps.can_steer_active_turn is True
 
 
+def test_opencode_server_bridge_projects_live_send_without_steer(db):
+    s = _make_session(db, provider="opencode")
+    t = _make_thread(db, s)
+    r = _make_run(db, t)
+    _make_conn(
+        db,
+        r,
+        control_plane="opencode_server_bridge",
+        state="attached",
+        caps={"send": 1, "interrupt": 1, "terminate": 1, "tail": 1, "resume": 1},
+    )
+    db.commit()
+
+    caps = project_session_capabilities(db, session_id=s.id)
+
+    assert caps.live_control_available is True
+    assert caps.host_reattach_available is True
+    assert caps.managed_transport.value == "opencode_server_bridge"
+    assert caps.can_send_input is True
+    assert caps.can_interrupt is True
+    assert caps.can_terminate is True
+    assert caps.can_tail_output is True
+    assert caps.can_resume is True
+    assert caps.can_steer_active_turn is False
+
+
 def test_detached_claude_channel_bridge_cannot_steer_until_reattached(db):
     s = _make_session(db, provider="claude")
     t = _make_thread(db, s)
@@ -195,7 +221,10 @@ def test_degraded_claude_channel_bridge_still_projects_steer_when_send_capable(d
     assert caps.can_steer_active_turn is True
 
 
-@pytest.mark.parametrize("control_plane", ["log_tail", "opencode_process", "antigravity_process"])
+@pytest.mark.parametrize(
+    "control_plane",
+    ["log_tail", "opencode_server_bridge", "opencode_process", "antigravity_process"],
+)
 def test_non_injection_control_planes_do_not_project_steer(db, control_plane):
     s = _make_session(db, provider="opencode")
     t = _make_thread(db, s)

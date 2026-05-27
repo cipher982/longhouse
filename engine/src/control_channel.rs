@@ -24,6 +24,8 @@ use crate::codex_bridge::{
     BridgeLaunchMode, BridgeSendConfig, BridgeStartConfig, BridgeSteerConfig, BridgeSteerError,
 };
 use crate::config::ShipperConfig;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 const COMMAND_SEND_TEXT: &str = "session.send_text";
@@ -45,17 +47,20 @@ const CONTROL_HEARTBEAT_LATE_WARN_MS: u128 = 500;
 const CONTROL_RECONNECT_SHORT_MAX_BACKOFF_SECS: u64 = 5;
 const CONTROL_RECONNECT_SUSTAINED_MAX_BACKOFF_SECS: u64 = 30;
 const CONTROL_RECONNECT_SHORT_WINDOW_SECS: u64 = 60;
-const CONTROL_SUPPORTS: [&str; 9] = [
+const CODEX_SUPPORTS: [&str; 5] = [
     "codex.send",
     "codex.interrupt",
     "codex.steer",
     "codex.launch",
     "codex.continue",
+];
+const CLAUDE_SUPPORTS: [&str; 4] = [
     "claude.send",
     "claude.interrupt",
     "claude.steer",
     "claude.launch",
 ];
+const OPENCODE_SUPPORTS: [&str; 3] = ["opencode.send", "opencode.interrupt", "opencode.launch"];
 
 #[derive(Clone, Debug)]
 pub struct ControlChannelStatus {
@@ -144,10 +149,7 @@ impl ControlChannelStatus {
             last_write_elapsed_ms: inner.last_write_elapsed_ms,
             max_write_elapsed_ms: inner.max_write_elapsed_ms,
             supports: if inner.enabled {
-                CONTROL_SUPPORTS
-                    .iter()
-                    .map(|item| item.to_string())
-                    .collect()
+                control_supports()
             } else {
                 Vec::new()
             },
@@ -248,6 +250,54 @@ fn duration_millis_u64(duration: Duration) -> u64 {
 
 fn timestamp_now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+fn is_executable(path: &std::path::Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
+}
+
+fn command_exists_in_path(command: &str, path_value: Option<&std::ffi::OsStr>) -> bool {
+    if command.contains(std::path::MAIN_SEPARATOR) {
+        return is_executable(std::path::Path::new(command));
+    }
+    let Some(path_value) = path_value else {
+        return false;
+    };
+    std::env::split_paths(path_value)
+        .map(|dir| dir.join(command))
+        .any(|candidate| is_executable(&candidate))
+}
+
+fn control_supports_for_path(path_value: Option<&std::ffi::OsStr>) -> Vec<String> {
+    let mut supports = Vec::new();
+    let longhouse_available = command_exists_in_path(DEFAULT_LONGHOUSE_BIN, path_value);
+    if command_exists_in_path(DEFAULT_CODEX_BIN, path_value) {
+        supports.extend(CODEX_SUPPORTS.iter().map(|item| item.to_string()));
+    }
+    if longhouse_available && command_exists_in_path("claude", path_value) {
+        supports.extend(CLAUDE_SUPPORTS.iter().map(|item| item.to_string()));
+    }
+    if longhouse_available && command_exists_in_path("opencode", path_value) {
+        supports.extend(OPENCODE_SUPPORTS.iter().map(|item| item.to_string()));
+    }
+    supports
+}
+
+fn control_supports() -> Vec<String> {
+    control_supports_for_path(std::env::var_os("PATH").as_deref())
 }
 
 pub fn spawn_control_channel(
@@ -364,7 +414,7 @@ async fn run_once(
         "device_id": config.machine_name,
         "machine_name": config.machine_name,
         "engine_build": build_identity::COMMIT_SHORT,
-        "supports": CONTROL_SUPPORTS,
+        "supports": control_supports(),
     });
     send_control_message(
         &mut stream,
@@ -528,7 +578,7 @@ async fn execute_command(
     match command_type.as_str() {
         COMMAND_LAUNCH => {
             let provider = payload_required_string(&payload, "provider")?;
-            if provider != "codex" && provider != "claude" {
+            if provider != "codex" && provider != "claude" && provider != "opencode" {
                 return Err(CommandError {
                     code: "provider_unsupported".to_string(),
                     message: format!("provider={provider} is not supported by this engine build"),
@@ -558,6 +608,17 @@ async fn execute_command(
             if provider == "claude" {
                 return launch_claude_channel_session(session_id.clone(), cwd, api_url, api_token)
                     .await;
+            }
+            if provider == "opencode" {
+                return launch_opencode_server_session(
+                    session_id.clone(),
+                    cwd,
+                    api_url,
+                    api_token,
+                    config.machine_name.clone(),
+                    payload_optional_string(&payload, "display_name"),
+                )
+                .await;
             }
 
             let summary = cmd_codex_bridge_start(BridgeStartConfig {
@@ -614,6 +675,14 @@ async fn execute_command(
                 .await
                 .map(|output| cli_output_result(output, "claude", "claude_channel_bridge"));
             }
+            if provider == "opencode" {
+                return run_opencode_channel_command(
+                    opencode_channel_args(COMMAND_SEND_TEXT, &session_id, Some(text))?,
+                    LAUNCH_START_TIMEOUT_SECS,
+                )
+                .await
+                .map(|output| cli_output_result(output, "opencode", "opencode_server_bridge"));
+            }
             validate_codex_bridge_attached(&session_id, None)
                 .map_err(CommandError::session_not_attached)?;
             let summary = cmd_codex_bridge_send(BridgeSendConfig {
@@ -647,6 +716,14 @@ async fn execute_command(
                 .await
                 .map(|output| cli_output_result(output, "claude", "claude_channel_bridge"));
             }
+            if provider == "opencode" {
+                return run_opencode_channel_command(
+                    opencode_channel_args(COMMAND_INTERRUPT, &session_id, None)?,
+                    LAUNCH_START_TIMEOUT_SECS,
+                )
+                .await
+                .map(|output| cli_output_result(output, "opencode", "opencode_server_bridge"));
+            }
             validate_codex_bridge_attached(&session_id, None)
                 .map_err(CommandError::session_not_attached)?;
             cmd_codex_bridge_interrupt(BridgeInterruptConfig {
@@ -674,6 +751,13 @@ async fn execute_command(
                 )
                 .await
                 .map(|output| cli_output_result(output, "claude", "claude_channel_bridge"));
+            }
+            if provider == "opencode" {
+                return Err(CommandError {
+                    code: "unsupported_command".to_string(),
+                    message: "OpenCode server bridge does not support active-turn steer"
+                        .to_string(),
+                });
             }
             validate_codex_bridge_attached(&session_id, None)
                 .map_err(CommandError::session_not_attached)?;
@@ -749,6 +833,36 @@ fn claude_channel_args(
     }
 }
 
+fn opencode_channel_args(
+    command_type: &str,
+    session_id: &str,
+    text: Option<String>,
+) -> std::result::Result<Vec<String>, CommandError> {
+    match command_type {
+        COMMAND_SEND_TEXT => Ok(vec![
+            "opencode-channel".to_string(),
+            "send".to_string(),
+            "--session-id".to_string(),
+            session_id.to_string(),
+            "--text".to_string(),
+            text.ok_or_else(|| CommandError {
+                code: "invalid_command".to_string(),
+                message: "text is required".to_string(),
+            })?,
+        ]),
+        COMMAND_INTERRUPT => Ok(vec![
+            "opencode-channel".to_string(),
+            "interrupt".to_string(),
+            "--session-id".to_string(),
+            session_id.to_string(),
+        ]),
+        _ => Err(CommandError {
+            code: "unsupported_command".to_string(),
+            message: format!("unsupported OpenCode channel command {command_type}"),
+        }),
+    }
+}
+
 struct CliCommandOutput {
     exit_code: i32,
     stdout: String,
@@ -794,6 +908,20 @@ async fn run_longhouse_command(
 }
 
 async fn run_claude_channel_command(
+    args: Vec<String>,
+    timeout_secs: u64,
+) -> std::result::Result<CliCommandOutput, CommandError> {
+    let output = run_longhouse_command(args, timeout_secs, Vec::new()).await?;
+    if output.exit_code != 0 {
+        return Err(CommandError {
+            code: "command_failed".to_string(),
+            message: nonempty_cli_error(&output),
+        });
+    }
+    Ok(output)
+}
+
+async fn run_opencode_channel_command(
     args: Vec<String>,
     timeout_secs: u64,
 ) -> std::result::Result<CliCommandOutput, CommandError> {
@@ -854,6 +982,66 @@ async fn launch_claude_channel_session(
             .get("provider_session_id")
             .and_then(Value::as_str)
             .unwrap_or(&session_id),
+        "pid": payload.get("pid").cloned().unwrap_or(Value::Null),
+        "log_path": payload.get("log_path").cloned().unwrap_or(Value::Null),
+    }))
+}
+
+async fn launch_opencode_server_session(
+    session_id: String,
+    cwd: PathBuf,
+    api_url: String,
+    api_token: String,
+    machine_name: String,
+    display_name: Option<String>,
+) -> std::result::Result<Value, CommandError> {
+    let mut args = vec![
+        "opencode-channel".to_string(),
+        "launch".to_string(),
+        "--session-id".to_string(),
+        session_id.clone(),
+        "--cwd".to_string(),
+        cwd.display().to_string(),
+        "--api-url".to_string(),
+        api_url,
+        "--device-id".to_string(),
+        machine_name,
+        "--wait-ready-secs".to_string(),
+        LAUNCH_START_TIMEOUT_SECS.to_string(),
+    ];
+    if let Some(display_name) = display_name {
+        args.push("--display-name".to_string());
+        args.push(display_name);
+    }
+    let output = run_longhouse_command(
+        args,
+        LAUNCH_START_TIMEOUT_SECS * 2,
+        vec![("LONGHOUSE_OPENCODE_REMOTE_LAUNCH_TOKEN", api_token)],
+    )
+    .await?;
+    if output.exit_code != 0 {
+        return Err(CommandError {
+            code: "provider_launch_failed".to_string(),
+            message: nonempty_cli_error(&output),
+        });
+    }
+    let payload: Value =
+        serde_json::from_str(output.stdout.trim()).map_err(|err| CommandError {
+            code: "provider_launch_failed".to_string(),
+            message: format!(
+                "OpenCode launch returned invalid JSON: {err}; stderr={}",
+                output.stderr.trim()
+            ),
+        })?;
+    Ok(json!({
+        "session_id": payload.get("session_id").and_then(Value::as_str).unwrap_or(&session_id),
+        "provider": "opencode",
+        "transport": "opencode_server_bridge",
+        "provider_session_id": payload
+            .get("provider_session_id")
+            .and_then(Value::as_str)
+            .unwrap_or(&session_id),
+        "server_url": payload.get("server_url").cloned().unwrap_or(Value::Null),
         "pid": payload.get("pid").cloned().unwrap_or(Value::Null),
         "log_path": payload.get("log_path").cloned().unwrap_or(Value::Null),
     }))
@@ -1186,8 +1374,7 @@ mod tests {
             disconnected.last_error_code.as_deref(),
             Some("connect_failed")
         );
-        assert!(disconnected.supports.contains(&"codex.launch".to_string()));
-        assert!(disconnected.supports.contains(&"claude.launch".to_string()));
+        assert_eq!(disconnected.supports, control_supports());
 
         status.set_connected("wss://example.test/api/agents/control/ws");
         let connected = status.snapshot();
@@ -1199,12 +1386,7 @@ mod tests {
 
     #[test]
     fn control_channel_advertises_codex_continue() {
-        let status = new_control_channel_status();
-        status.set_connected("wss://example.test/api/agents/control/ws");
-        assert!(status
-            .snapshot()
-            .supports
-            .contains(&"codex.continue".to_string()));
+        assert!(CODEX_SUPPORTS.contains(&"codex.continue"));
     }
 
     #[test]
@@ -1248,6 +1430,53 @@ mod tests {
 
         assert_eq!(err.code, "invalid_command");
         assert!(err.message.contains("mode=continue"));
+    }
+
+    #[test]
+    fn control_supports_are_gated_by_installed_provider_commands() {
+        let unique = format!(
+            "lh-control-supports-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let dir = std::env::temp_dir().join(unique);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        fn write_executable(dir: &std::path::Path, name: &str) {
+            let path = dir.join(name);
+            std::fs::write(&path, "#!/bin/sh\nexit 0\n").unwrap();
+            #[cfg(unix)]
+            {
+                let mut perms = std::fs::metadata(&path).unwrap().permissions();
+                perms.set_mode(0o755);
+                std::fs::set_permissions(&path, perms).unwrap();
+            }
+        }
+
+        write_executable(&dir, "longhouse");
+        write_executable(&dir, "opencode");
+        let supports = control_supports_for_path(Some(dir.as_os_str()));
+        assert_eq!(
+            supports,
+            vec![
+                "opencode.send".to_string(),
+                "opencode.interrupt".to_string(),
+                "opencode.launch".to_string(),
+            ]
+        );
+
+        write_executable(&dir, "codex");
+        write_executable(&dir, "claude");
+        let supports = control_supports_for_path(Some(dir.as_os_str()));
+        assert!(supports.contains(&"codex.launch".to_string()));
+        assert!(supports.contains(&"codex.continue".to_string()));
+        assert!(supports.contains(&"claude.launch".to_string()));
+        assert!(supports.contains(&"opencode.launch".to_string()));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]
@@ -1496,6 +1725,50 @@ mod tests {
                 "--meta",
                 "intent=steer",
             ]
+        );
+    }
+
+    #[test]
+    fn opencode_channel_args_route_send_and_interrupt_without_steer() {
+        assert_eq!(
+            opencode_channel_args(
+                COMMAND_SEND_TEXT,
+                "11111111-1111-4111-8111-111111111111",
+                Some("hello".to_string())
+            )
+            .unwrap(),
+            vec![
+                "opencode-channel",
+                "send",
+                "--session-id",
+                "11111111-1111-4111-8111-111111111111",
+                "--text",
+                "hello",
+            ]
+        );
+        assert_eq!(
+            opencode_channel_args(
+                COMMAND_INTERRUPT,
+                "11111111-1111-4111-8111-111111111111",
+                None
+            )
+            .unwrap(),
+            vec![
+                "opencode-channel",
+                "interrupt",
+                "--session-id",
+                "11111111-1111-4111-8111-111111111111",
+            ]
+        );
+        assert_eq!(
+            opencode_channel_args(
+                COMMAND_STEER_TEXT,
+                "11111111-1111-4111-8111-111111111111",
+                Some("course correct".to_string())
+            )
+            .unwrap_err()
+            .code,
+            "unsupported_command"
         );
     }
 }

@@ -633,6 +633,7 @@ def list_managed_completed_turns(
                     "claude_channel_bridge",
                     "codex_bridge",
                     "codex_app_server",
+                    "opencode_server_bridge",
                     "opencode_process",
                     "antigravity_process",
                 )

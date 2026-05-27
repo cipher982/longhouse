@@ -52,15 +52,17 @@ def _build_engine_bridge_shell_command(
 
 def _build_longhouse_cli_shell_command(
     *,
+    command_group: str = "claude-channel",
     subcommand: str,
     args: tuple[str, ...] = (),
     required_commands: tuple[str, ...] = ("longhouse",),
-    namespace: str = "claude-channel",
+    namespace: str | None = None,
 ) -> str:
+    group = namespace or command_group
     invocation = " ".join(
         [
             "longhouse",
-            namespace,
+            group,
             subcommand,
             *args,
         ]
@@ -119,10 +121,6 @@ def build_managed_local_attach_command(*, session: AgentSession, db: Session | N
             exec_engine=True,
         )
 
-    # OpenCode managed sessions: longhouse owns `opencode serve`. The host
-    # reattach command attaches a TUI to the captured server URL using the
-    # bridge-stored password; no remote command surface is needed because
-    # the user is already on the host machine.
     if transport == ManagedSessionTransport.OPENCODE_PROCESS.value:
         return _build_longhouse_cli_shell_command(
             subcommand="inspect",
@@ -130,7 +128,14 @@ def build_managed_local_attach_command(*, session: AgentSession, db: Session | N
             namespace="opencode-bridge",
         )
 
-    # Antigravity remains observe-only for now — tail-logs only.
+    if transport == ManagedSessionTransport.OPENCODE_SERVER_BRIDGE.value:
+        return _build_longhouse_cli_shell_command(
+            command_group="opencode-channel",
+            subcommand="attach",
+            args=("--session-id", shlex.quote(session_id)),
+            required_commands=("longhouse", "opencode"),
+        )
+
     if transport == ManagedSessionTransport.ANTIGRAVITY_PROCESS.value:
         return None
 
@@ -170,11 +175,17 @@ def build_managed_local_attach_command(*, session: AgentSession, db: Session | N
 def build_managed_local_interrupt_command(*, session: AgentSession) -> str:
     """Build a command to interrupt the active turn on a managed-local session."""
     transport = _resolve_transport(getattr(session, "managed_transport", None))
-    if transport == ManagedSessionTransport.ANTIGRAVITY_PROCESS:
-        raise ManagedLocalTransportError("antigravity_process does not support remote interrupts yet")
     session_id = str(getattr(session, "id", "") or "").strip()
     if not session_id:
         raise ManagedLocalTransportError("Managed local session is missing session ID")
+    if transport == ManagedSessionTransport.OPENCODE_SERVER_BRIDGE:
+        return _build_longhouse_cli_shell_command(
+            command_group="opencode-channel",
+            subcommand="interrupt",
+            args=("--session-id", shlex.quote(session_id)),
+        )
+    if transport == ManagedSessionTransport.ANTIGRAVITY_PROCESS:
+        raise ManagedLocalTransportError("antigravity_process does not support remote interrupts yet")
     if transport == ManagedSessionTransport.CODEX_APP_SERVER:
         return _build_engine_bridge_shell_command(
             session_id=session_id,
@@ -222,11 +233,21 @@ def build_managed_local_send_text_command(
     attachments: Sequence[Mapping[str, Any]] | None = None,
 ) -> str:
     transport = _resolve_transport(getattr(session, "managed_transport", None))
-    if transport == ManagedSessionTransport.ANTIGRAVITY_PROCESS:
-        raise ManagedLocalTransportError("antigravity_process does not support remote text sends yet")
     session_id = str(getattr(session, "id", "") or "").strip()
     if not session_id:
         raise ManagedLocalTransportError("Managed local session is missing session ID")
+    if transport == ManagedSessionTransport.OPENCODE_SERVER_BRIDGE:
+        if attachments:
+            raise ManagedLocalTransportError(
+                "Attachments are only supported on codex_app_server transports",
+            )
+        return _build_longhouse_cli_shell_command(
+            command_group="opencode-channel",
+            subcommand="send",
+            args=("--session-id", shlex.quote(session_id), "--text", shlex.quote(text)),
+        )
+    if transport == ManagedSessionTransport.ANTIGRAVITY_PROCESS:
+        raise ManagedLocalTransportError("antigravity_process does not support remote text sends yet")
     attach_args = _attachment_args(attachments, transport=transport)
     if transport == ManagedSessionTransport.CODEX_APP_SERVER:
         return _build_engine_bridge_shell_command(
@@ -260,6 +281,8 @@ def build_managed_local_steer_text_command(
     injects a channel send with intent=steer metadata.
     """
     transport = _resolve_transport(getattr(session, "managed_transport", None))
+    if transport == ManagedSessionTransport.OPENCODE_SERVER_BRIDGE:
+        raise ManagedLocalTransportError("Mid-turn steer is not supported on opencode_server_bridge transports")
     if transport == ManagedSessionTransport.ANTIGRAVITY_PROCESS:
         raise ManagedLocalTransportError("Mid-turn steer is not supported on antigravity_process transports")
     session_id = str(getattr(session, "id", "") or "").strip()

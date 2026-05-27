@@ -19,6 +19,7 @@ os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-value")
 
 from zerg.cli import opencode as opencode_cli
 from zerg.cli import _managed_contract
+from zerg.cli import opencode_channel
 from zerg.cli._common import ManagedLocalLaunchResponse
 from zerg.cli.main import app
 from zerg.services import opencode_bridge_state as bridge_state
@@ -30,7 +31,7 @@ def _isolate_longhouse_home(monkeypatch, tmp_path):
     monkeypatch.setenv("LONGHOUSE_HOME", str(tmp_path / ".longhouse"))
 
 
-def _stub_managed_launch(monkeypatch):
+def _stub_managed_launch(monkeypatch, launch_calls: list[dict] | None = None):
     monkeypatch.setattr(
         opencode_cli,
         "_load_api_credentials",
@@ -41,12 +42,14 @@ def _stub_managed_launch(monkeypatch):
     monkeypatch.setattr(opencode_cli, "get_machine_name_label", lambda: "work-laptop")
 
     def fake_launch(**kwargs):
+        if launch_calls is not None:
+            launch_calls.append(kwargs)
         return ManagedLocalLaunchResponse(
             session_id="session-123",
             provider_session_id="provider-123",
             attach_command="",
             source_runner_name="work-laptop",
-            managed_transport="opencode_process",
+            managed_transport="opencode_server_bridge",
         )
 
     monkeypatch.setattr(opencode_cli, "_launch_managed_local_from_api", fake_launch)
@@ -54,44 +57,56 @@ def _stub_managed_launch(monkeypatch):
 
 def test_opencode_command_launches_managed_session_and_passes_extra_args(monkeypatch, tmp_path):
     runner = CliRunner()
-    run_calls: list[dict] = []
-    _stub_managed_launch(monkeypatch)
+    launch_calls: list[dict] = []
+    bridge_calls: list[dict] = []
+    attach_calls: list[dict] = []
+    _stub_managed_launch(monkeypatch, launch_calls)
     monkeypatch.setattr(opencode_cli, "_interactive_stdio", lambda: True)
-    monkeypatch.setattr(opencode_cli, "_run_native_opencode", lambda **kwargs: run_calls.append(kwargs) or 0)
+    monkeypatch.setattr(
+        opencode_channel,
+        "launch_opencode_server_bridge",
+        lambda **kwargs: bridge_calls.append(kwargs) or {},
+    )
+    monkeypatch.setattr(opencode_channel, "run_opencode_attach", lambda **kwargs: attach_calls.append(kwargs) or 0)
 
     result = runner.invoke(
         app,
-        ["opencode", "--cwd", str(tmp_path), "--project", "demo", "--", "serve", "--port", "0"],
+        [
+            "opencode",
+            "--cwd",
+            str(tmp_path),
+            "--project",
+            "demo",
+            "--",
+            "--log-level",
+            "debug",
+        ],
     )
 
     assert result.exit_code == 0, result.output
-    assert run_calls == [
+    assert launch_calls[0]["cwd"] == tmp_path
+    assert launch_calls[0]["machine_name"] == "work-laptop"
+    assert bridge_calls == [
         {
             "session_id": "session-123",
-            "machine_name": "work-laptop",
+            "api_url": "https://longhouse.test",
+            "api_token": "zdt_test_token",
+            "device_id": "work-laptop",
+            "display_name": None,
             "opencode_bin": "/opt/homebrew/bin/opencode",
             "cwd": tmp_path,
-            "opencode_args": ("serve", "--port", "0"),
-            "url": "https://longhouse.test",
-            "token": "zdt_test_token",
             "config_dir": None,
             "opencode_bin_source": "PATH",
         }
     ]
-
-
-def test_opencode_command_defaults_to_serve_when_no_args(monkeypatch, tmp_path):
-    runner = CliRunner()
-    run_calls: list[dict] = []
-    _stub_managed_launch(monkeypatch)
-    monkeypatch.setattr(opencode_cli, "_interactive_stdio", lambda: True)
-    monkeypatch.setattr(opencode_cli, "_run_native_opencode", lambda **kwargs: run_calls.append(kwargs) or 0)
-
-    result = runner.invoke(app, ["opencode", "--cwd", str(tmp_path)])
-
-    assert result.exit_code == 0, result.output
-    # No `--` means user passed nothing; launcher itself decides serve coercion.
-    assert run_calls[0]["opencode_args"] == ()
+    assert attach_calls == [
+        {
+            "session_id": "session-123",
+            "opencode_bin": "/opt/homebrew/bin/opencode",
+            "config_dir": None,
+            "extra_args": ("--log-level", "debug"),
+        }
+    ]
 
 
 def test_ensure_managed_serve_args_defaults_when_empty():
@@ -119,23 +134,25 @@ def test_ensure_managed_serve_args_rejects_other_subcommand():
         opencode_cli._ensure_managed_serve_args(("tui",))
 
 
-def test_opencode_no_attach_prints_tokenless_launch_script_command(monkeypatch, tmp_path):
+def test_opencode_no_attach_prints_tokenless_attach_command(monkeypatch, tmp_path):
     runner = CliRunner()
-    launch_script = tmp_path / "session-123.launch.sh"
-    config_content = tmp_path / "session-123.config-content.json"
-    config_content.write_text('{"plugin":[]}\n', encoding="utf-8")
+    bridge_calls: list[dict] = []
 
     _stub_managed_launch(monkeypatch)
-    monkeypatch.setattr(opencode_cli, "_write_opencode_runtime_config_content", lambda **_kwargs: config_content)
-    monkeypatch.setattr(opencode_cli, "_write_opencode_launch_script", lambda **_kwargs: launch_script)
     monkeypatch.setattr(opencode_cli, "_interactive_stdio", lambda: True)
-    monkeypatch.setattr(opencode_cli, "_run_native_opencode", lambda **_kwargs: pytest.fail("should not attach"))
+    monkeypatch.setattr(
+        opencode_channel,
+        "launch_opencode_server_bridge",
+        lambda **kwargs: bridge_calls.append(kwargs) or {},
+    )
+    monkeypatch.setattr(opencode_channel, "run_opencode_attach", lambda **_kwargs: pytest.fail("should not attach"))
 
     result = runner.invoke(app, ["opencode", "--no-attach", "--cwd", str(tmp_path), "--", "serve"])
 
     assert result.exit_code == 0, result.output
-    assert str(launch_script) in result.output
+    assert "longhouse opencode-channel attach --session-id session-123" in result.output
     assert "zdt_test_token" not in result.output
+    assert bridge_calls[0]["api_token"] == "zdt_test_token"
 
 
 def test_opencode_launch_api_wrapper_sets_provider(monkeypatch, tmp_path):
@@ -148,7 +165,7 @@ def test_opencode_launch_api_wrapper_sets_provider(monkeypatch, tmp_path):
             provider_session_id="provider-123",
             attach_command="",
             source_runner_name="work-laptop",
-            managed_transport="opencode_process",
+            managed_transport="opencode_server_bridge",
         )
 
     monkeypatch.setattr(opencode_cli.managed_local_cli, "_launch_managed_local_from_api", fake_launch)

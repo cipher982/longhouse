@@ -33,7 +33,7 @@ class MachineDirectoryEntry(UTCBaseModel):
     )
     can_launch_codex: bool = Field(
         ...,
-        description="Derived launch readiness for Codex v1. Browser/iOS should gate Start on this field.",
+        description="Compatibility flag for Codex launch readiness. Prefer launchable_providers for provider-agnostic launch.",
     )
     launchable_providers: list[str] = Field(
         default_factory=list,
@@ -41,7 +41,7 @@ class MachineDirectoryEntry(UTCBaseModel):
     )
     launch_blocked_by: LaunchBlockedBy | None = Field(
         default=None,
-        description="Machine-readable reason Codex launch is unavailable; null when can_launch_codex is true.",
+        description="Machine-readable reason no provider can be launched; null when launchable_providers is non-empty.",
     )
     last_seen_at: datetime | None = Field(
         default=None,

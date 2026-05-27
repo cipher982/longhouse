@@ -235,17 +235,20 @@ engine. Pull the reusable bridge operations behind internal Rust functions.
 
 ### Claude
 
-Claude is out of scope for the first engine-control migration.
+Claude control goes through the local Claude channel helper exposed by the
+Python CLI. The engine advertises `claude.launch/send/interrupt/steer` only
+when the local `claude` binary and Longhouse CLI are available, and dispatches
+through the typed `claude-channel` adapter. Do not recreate a detached Claude
+bridge daemon.
 
-Today Claude control goes through the local Claude channel helper exposed by the
-Python CLI and delivered through Runner. Moving that shell-out into Rust is not
-real simplification. Claude should remain an explicit `legacy_runner` transport
-until either:
+### OpenCode
 
-- a native Rust Claude channel client exists, or
-- we decide the Python helper is acceptable as a narrow, typed engine adapter.
-
-Do not recreate a detached Claude bridge daemon.
+OpenCode control goes through the local OpenCode server bridge exposed by the
+Python CLI. The engine advertises `opencode.launch/send/interrupt` only when
+the stock `opencode` binary and Longhouse CLI are available, starts
+`opencode serve` through `opencode-channel launch`, and drives the provider via
+OpenCode's localhost server API. Do not advertise `opencode.steer` until
+active-turn injection is proven.
 
 ### Future Providers
 

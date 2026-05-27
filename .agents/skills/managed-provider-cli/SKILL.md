@@ -61,14 +61,31 @@ Hard Codex contract:
 - Do not download Codex release assets or patch a custom Codex fork.
 - Install/repair code may remove old managed-Codex artifacts conservatively.
 
+### OpenCode
+
+- `longhouse opencode` starts stock upstream `opencode serve` on localhost
+  through Longhouse's `opencode_server_bridge`, then attaches the TUI with
+  stock `opencode attach`.
+- OpenCode server-bridge send and interrupt are first-class local control
+  operations. Active-turn steer is not advertised until OpenCode exposes and
+  proves a true mid-turn injection semantic.
+- Bridge state lives under `~/.claude/managed-local/opencode-server/` and
+  stores the local server password in a 0600 state file so `longhouse
+  opencode-channel attach/send/interrupt` can reconnect without printing
+  secrets. Runtime hook tokens must not be written to the bridge state or
+  server log.
+- OpenCode launch is idempotent per Longhouse session id. A retry must reuse a
+  live state file instead of spawning a second `opencode serve`.
+- Machine Agent should only advertise `opencode.*` control support when the
+  stock `opencode` binary is present on PATH.
+
 ### Gemini And Future CLIs
 
 - Start from the same ownership rule: Longhouse can own the wrapper/control path, but the provider CLI remains user-owned unless the product decision explicitly changes.
 - Do not infer one provider's liveness/control model from another provider. Split behavior when the provider mechanics differ.
-- OpenCode and Antigravity currently have managed local wrappers plus runtime
-  observation, not live send/interrupt/steer. Treat `opencode_process` and
-  `antigravity_process` as observe-only until a named control plane such as an
-  OpenCode server bridge or Antigravity hook inbox is implemented.
+- Antigravity currently has a managed local wrapper plus runtime observation,
+  not live send/interrupt/steer. Treat `antigravity_process` as observe-only
+  until a named control plane such as an Antigravity hook inbox is implemented.
 
 ## Workflows
 

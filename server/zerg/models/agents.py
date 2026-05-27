@@ -310,6 +310,7 @@ class AgentSession(AgentsBase):
                 "codex_bridge": "codex_app_server",
                 "codex_app_server": "codex_app_server",
                 "claude_channel_bridge": "claude_channel_bridge",
+                "opencode_server_bridge": "opencode_server_bridge",
                 "opencode_process": "opencode_process",
                 "antigravity_process": "antigravity_process",
             }
@@ -1380,6 +1381,7 @@ _CONTROL_PLANE_TO_TRANSPORT = {
     "codex_bridge": "codex_app_server",
     "codex_app_server": "codex_app_server",
     "claude_channel_bridge": "claude_channel_bridge",
+    "opencode_server_bridge": "opencode_server_bridge",
     "opencode_process": "opencode_process",
     "antigravity_process": "antigravity_process",
 }
