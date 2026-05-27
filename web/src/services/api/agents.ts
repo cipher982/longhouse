@@ -175,6 +175,11 @@ export interface SessionCapabilities {
   composer_placeholder?: string;
   composer_disabled_reason?: string | null;
   send_disabled_reason?: SendDisabledReason | null;
+  can_send_input?: boolean;
+  can_interrupt?: boolean;
+  can_terminate?: boolean;
+  can_tail_output?: boolean;
+  can_resume?: boolean;
   /**
    * True when this session accepts image attachments on input. Today this is
    * codex_app_server + live_control_available; the server is the source of

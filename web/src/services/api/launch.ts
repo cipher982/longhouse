@@ -64,7 +64,7 @@ export type RemoteSessionLaunchResponse = {
 export type RemoteSessionContinueRequest = {
   device_id?: string | null;
   cwd?: string | null;
-  client_request_id?: string | null;
+  client_request_id: string;
 };
 
 export async function launchRemoteSession(
@@ -78,7 +78,7 @@ export async function launchRemoteSession(
 
 export async function continueRemoteSession(
   sessionId: string,
-  body: RemoteSessionContinueRequest = {},
+  body: RemoteSessionContinueRequest,
 ): Promise<RemoteSessionLaunchResponse> {
   return request<RemoteSessionLaunchResponse>(`/sessions/${sessionId}/continue`, {
     method: "POST",
