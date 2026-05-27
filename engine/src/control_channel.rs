@@ -1519,6 +1519,45 @@ mod tests {
     }
 
     #[test]
+    fn managed_provider_contract_manifest_includes_operation_evidence() {
+        let payload: Value = serde_json::from_str(MANAGED_PROVIDER_CONTRACTS_JSON).unwrap();
+        assert_eq!(payload["schema_version"].as_u64(), Some(1));
+        let providers = payload["providers"].as_array().unwrap();
+        for provider in providers {
+            let provider_name = provider["provider"].as_str().unwrap();
+            let evidence = provider["operation_evidence"].as_object().unwrap();
+            for operation in [
+                "launch_local",
+                "launch_remote",
+                "reattach",
+                "send_input",
+                "interrupt",
+                "steer_active_turn",
+                "terminate",
+                "tail_output",
+                "runtime_phase",
+                "transcript_binding",
+            ] {
+                let supported = provider[operation].as_bool().unwrap();
+                let level = evidence[operation]["level"].as_str().unwrap();
+                assert!(
+                    !evidence[operation]["source"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .trim()
+                        .is_empty(),
+                    "{provider_name}.{operation} missing evidence source"
+                );
+                assert_eq!(
+                    level == "none",
+                    !supported,
+                    "{provider_name}.{operation} support and evidence level diverged"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn control_supports_are_gated_by_installed_provider_commands() {
         let unique = format!(
             "lh-control-supports-{}-{}",
