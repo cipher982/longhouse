@@ -153,6 +153,19 @@ def write_managed_session_contract(
     return path
 
 
+def remove_managed_session_contract(
+    *,
+    provider: str,
+    session_id: str,
+    base_dir: str | Path | None = None,
+) -> None:
+    path = build_managed_session_contract_path(provider=provider, session_id=session_id, base_dir=base_dir)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+
+
 def list_managed_session_contracts(
     base_dir: str | Path | None = None,
     *,
@@ -220,7 +233,7 @@ def collect_managed_session_contract_diagnostics(
     return diagnostics
 
 
-def capture_provider_version(provider_binary_path: str | None, *, timeout_seconds: float = 5.0) -> str | None:
+def capture_provider_version(provider_binary_path: str | None, *, timeout_seconds: float = 1.0) -> str | None:
     binary = _normalize_optional_string(provider_binary_path)
     if binary is None:
         return None
@@ -337,6 +350,7 @@ __all__ = [
     "current_path_file_identity",
     "list_managed_session_contracts",
     "managed_session_contract_root",
+    "remove_managed_session_contract",
     "verify_managed_session_contracts",
     "write_managed_session_contract",
 ]

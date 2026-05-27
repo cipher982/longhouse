@@ -524,6 +524,7 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     bridge_calls: list[dict[str, object]] = []
     native_tui_calls: list[tuple[str, str, str, str, bool, str | None, str | None, str | None]] = []
     stop_calls: list[dict[str, object]] = []
+    provider_home = tmp_path / ".claude"
 
     monkeypatch.setattr(
         codex_cli,
@@ -574,6 +575,8 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
             "codex",
             "--cwd",
             str(tmp_path),
+            "--config-dir",
+            str(provider_home),
             "--project",
             "demo",
             "--loop-mode",
@@ -610,11 +613,7 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     assert native_tui_calls == [
         ("session-123", "/tmp/codex", "ws://127.0.0.1:4800", str(tmp_path), False, None, None, "thr_123")
     ]
-    contracts = list_managed_session_contracts(tmp_path / ".longhouse")
-    assert contracts[0]["provider"] == "codex"
-    assert contracts[0]["workspace"]["cwd"] == str(tmp_path)
-    assert contracts[0]["control"]["state_path"] == "/tmp/state.json"
-    assert contracts[0]["launch_mode"] == "tui"
+    assert list_managed_session_contracts(tmp_path / ".longhouse") == []
     assert stop_calls == [
         {
             "session_id": "session-123",
@@ -663,6 +662,7 @@ def test_codex_command_fails_before_tui_when_prestart_lacks_thread(monkeypatch, 
 
 def test_codex_command_no_attach_prints_attach_command(monkeypatch, tmp_path):
     runner = CliRunner()
+    provider_home = tmp_path / ".claude"
 
     monkeypatch.setattr(
         codex_cli,
@@ -688,12 +688,18 @@ def test_codex_command_no_attach_prints_attach_command(monkeypatch, tmp_path):
         lambda **_kwargs: ("thr_123", "ws://127.0.0.1:4800", "/tmp/state.json"),
     )
 
-    result = runner.invoke(app, ["codex", "--cwd", str(tmp_path), "--no-attach"])
+    result = runner.invoke(app, ["codex", "--cwd", str(tmp_path), "--config-dir", str(provider_home), "--no-attach"])
 
     assert result.exit_code == 0, result.output
     assert "Attach: LONGHOUSE_MANAGED_SESSION_ID=session-123" in result.output
     assert "/tmp/codex -c check_for_update_on_startup=false" in result.output
     assert "resume thr_123" not in result.output
+    contracts = list_managed_session_contracts(tmp_path / ".longhouse")
+    assert contracts[0]["provider"] == "codex"
+    assert contracts[0]["workspace"]["cwd"] == str(tmp_path)
+    assert contracts[0]["control"]["state_path"] == "/tmp/state.json"
+    assert contracts[0]["launch_mode"] == "detached_ui"
+    assert not (provider_home / "managed-local" / "contracts").exists()
 
 
 def test_codex_command_preserves_bridge_when_active_turn_survives(monkeypatch, tmp_path):

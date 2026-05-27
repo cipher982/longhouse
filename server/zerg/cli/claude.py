@@ -23,6 +23,7 @@ from zerg.cli._common import interactive_stdio as _interactive_stdio
 from zerg.cli._common import load_api_credentials
 from zerg.cli._common import open_session_url as _open_session_url
 from zerg.cli._managed_contract import record_managed_provider_contract
+from zerg.cli._managed_contract import remove_managed_provider_contract
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
 from zerg.services.claude_channel_bridge import CLAUDE_CHANNEL_SERVER_NAME
 from zerg.services.claude_channel_bridge import build_claude_channel_exec_command
@@ -462,6 +463,12 @@ def _finalize_native_claude_launch(
         base_url=base_url,
         token=token,
     )
+    remove_managed_provider_contract(
+        provider="claude",
+        session_id=result.session_id,
+        config_dir=config_dir,
+        config_dir_is_provider_home=True,
+    )
     if exit_code != 0:
         typer.secho(
             f"Native Claude exited with code {exit_code}. Run the printed attach command manually.",
@@ -600,6 +607,7 @@ def claude(
             provider_binary_path=shutil.which("claude"),
             provider_binary_source=PROVIDER_CLI_SOURCE_PATH,
             control_kind="claude_channel_bridge",
+            config_dir_is_provider_home=True,
         )
     except Exception as exc:
         typer.secho(
