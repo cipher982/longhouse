@@ -15,6 +15,8 @@ from uuid import uuid4
 
 import typer
 
+from zerg.services.longhouse_paths import get_managed_local_dir
+
 app = typer.Typer(no_args_is_help=True, help="Antigravity hook-inbox control commands")
 _MESSAGE_TTL = timedelta(minutes=5)
 _MAX_MESSAGE_BYTES = 64 * 1024
@@ -25,7 +27,7 @@ def _now_iso() -> str:
 
 
 def _antigravity_runtime_dir(config_dir: Path | None = None) -> Path:
-    return (config_dir or (Path.home() / ".claude")) / "managed-local" / "antigravity"
+    return get_managed_local_dir("antigravity", base_dir=config_dir)
 
 
 def _ensure_private_dir(path: Path) -> None:
