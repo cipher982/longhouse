@@ -84,7 +84,7 @@ def upsert_session_live_preview(db: Session, candidate: LivePreviewCandidate) ->
     now = datetime.now(timezone.utc)
     if existing is not None and existing.last_observation_id == candidate.last_observation_id:
         return False
-    if existing is not None and existing.superseded_at is not None and existing.turn_key == candidate.turn_key:
+    if existing is not None and existing.superseded_at is not None:
         superseded_at = normalize_utc(existing.superseded_at)
         candidate_at = normalize_utc(candidate.preview_observed_at)
         if superseded_at is not None and candidate_at is not None and candidate_at <= superseded_at:
@@ -169,8 +169,9 @@ def load_session_live_preview_map(db: Session, session_ids: list[UUID]) -> dict[
         timestamp = normalize_utc(row.preview_observed_at)
         if timestamp is None:
             continue
+        event_id = int(row.seq) if row.seq is not None else int(timestamp.timestamp() * 1000)
         previews[str(row.session_id)] = TranscriptPreview(
-            event_id=int(row.seq or 0),
+            event_id=event_id,
             text=text,
             event_origin=row.event_origin or EVENT_ORIGIN_LIVE_PROVISIONAL,
             timestamp=timestamp,

@@ -718,6 +718,8 @@ def _load_workspace_transcript_preview_payload(
     from zerg.services.provisional_events import EVENT_ORIGIN_DURABLE
     from zerg.services.provisional_events import TranscriptPreview
     from zerg.services.provisional_events import durable_transcript_event_predicate
+
+    # Default path reads the compact projection; the legacy observation scan is only a kill-switch fallback.
     from zerg.services.provisional_events import load_active_provisional_preview_map
     from zerg.services.session_views import build_session_transcript_preview_response
 
