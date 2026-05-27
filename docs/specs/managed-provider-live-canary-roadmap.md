@@ -138,9 +138,9 @@ work while an agent is busy. Steer needs active-phase proof and idle rejection.
    token-spending lane can verify `prompt_async` execution if needed; the
    current lane verifies the endpoint is present in OpenCode's OpenAPI
    document.
-4. Extend the Antigravity canary from real `agy` version/help/plugin
-   validate/install/list plus Longhouse global-hook config proof to loop-level
-   hook behavior against the upstream runtime.
+4. Extend the Antigravity canary from its current yellow state -- real `agy`
+   version/help/plugin validate/install/list plus Longhouse global-hook config
+   proof -- to loop-level hook behavior against the upstream runtime.
 5. Fold the existing Codex release canary into the same artifact shape without
    deleting its Codex-specific app-server checks.
 
