@@ -629,9 +629,15 @@ def _check_provider_support() -> list[CheckResult]:
         version = dict(info.get("version_readiness") or {})
         live_ops = ", ".join(str(item) for item in list(capabilities.get("live_control_operations") or [])) or "-"
         minimum_level = str(proof.get("minimum_evidence_level") or "-")
+        release_failed_ops = ", ".join(str(item) for item in list(proof.get("release_failed_operations") or []))
+        release_gap_ops = ", ".join(str(item) for item in list(proof.get("release_gap_operations") or []))
         version_state = str(version.get("state") or "-")
         state = str(info.get("state") or "unknown")
         detail = f"live={live_ops}; proof_min={minimum_level}; version={version_state}"
+        if release_failed_ops:
+            detail = f"{detail}; release_failed={release_failed_ops}"
+        elif release_gap_ops:
+            detail = f"{detail}; release_gaps={release_gap_ops}"
         if state in {"blocked", "provider_cli_missing"}:
             results.append(CheckResult(WARN, f"{provider} managed support {state}", detail))
         elif state == "needs_attention":

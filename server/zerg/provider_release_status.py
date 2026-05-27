@@ -259,6 +259,34 @@ def _normalize_provider_artifact(provider: str, payload: dict[str, Any]) -> dict
     return payload
 
 
+def _normalize_operation_evidence(raw: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return {}
+
+    evidence: dict[str, dict[str, Any]] = {}
+    for operation, raw_info in raw.items():
+        if not isinstance(operation, str) or not operation.strip() or not isinstance(raw_info, dict):
+            continue
+        info = {
+            key: value
+            for key, value in raw_info.items()
+            if key
+            in {
+                "status",
+                "level",
+                "source",
+                "failure_code",
+                "message",
+                "generated_at",
+                "canary",
+                "canaries",
+                "next",
+            }
+        }
+        evidence[operation.strip()] = info
+    return evidence
+
+
 def _provider_version_from_cli(path: str | None) -> tuple[str | None, str | None]:
     if not path:
         return None, "provider CLI path missing"
@@ -373,6 +401,7 @@ def _status_for_provider(provider: str, provider_cli: dict[str, Any]) -> dict[st
         "generated_at": generated_at,
         "generated_at_age_seconds": generated_at_age_seconds,
         "freshness_status": freshness_status,
+        "operation_evidence": _normalize_operation_evidence(artifact.get("operation_evidence")),
         "evidence_root": artifact.get("evidence_root"),
         "source": source,
     }

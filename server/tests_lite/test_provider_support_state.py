@@ -94,3 +94,106 @@ def test_support_state_tolerates_missing_health_sections() -> None:
     assert support["summary"]["providers_count"] == 4
     assert support["providers"]["claude"]["state"] == "provider_cli_missing"
     assert support["providers"]["codex"]["version_readiness"]["state"] == "not_configured"
+
+
+def test_support_state_applies_release_operation_evidence_demotions() -> None:
+    support = collect_provider_support_state(
+        provider_clis={"claude": {"path": "/Users/test/.local/bin/claude", "source": "PATH"}},
+        provider_release_status={
+            "statuses": {
+                "claude": {
+                    "status": "ok",
+                    "risk": "none",
+                    "verdict": "green",
+                    "generated_at": "2026-05-27T00:00:00Z",
+                    "operation_evidence": {
+                        "steer_active_turn": {
+                            "status": "fail",
+                            "level": "none",
+                            "source": "scheduled Claude live steer canary",
+                            "failure_code": "steer_transcript_missing",
+                        }
+                    },
+                }
+            }
+        },
+        control_channel={
+            "status": "connected",
+            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "launch"]},
+        },
+    )
+
+    claude = support["providers"]["claude"]
+    steer = claude["operations"]["steer_active_turn"]
+    assert claude["state"] == "needs_attention"
+    assert "steer_active_turn" in claude["capabilities"]["supported_operations"]
+    assert steer["target_evidence_level"] == "manual_live_token"
+    assert steer["evidence_level"] == "none"
+    assert steer["evidence_state"] == "release_failed"
+    assert steer["release_evidence"]["failure_code"] == "steer_transcript_missing"
+    assert claude["proof"]["state"] == "release_failed"
+    assert claude["proof"]["release_failed_operations"] == ["steer_active_turn"]
+
+
+def test_support_state_surfaces_release_gaps_without_removing_capability() -> None:
+    support = collect_provider_support_state(
+        provider_clis={"opencode": {"path": "/opt/homebrew/bin/opencode", "source": "PATH"}},
+        provider_release_status={
+            "statuses": {
+                "opencode": {
+                    "status": "ok",
+                    "risk": "none",
+                    "verdict": "green",
+                    "operation_evidence": {
+                        "send_input": {
+                            "status": "not_run",
+                            "level": "none",
+                            "source": "OpenCode prompt_async execution canary",
+                        }
+                    },
+                }
+            }
+        },
+        control_channel={
+            "status": "connected",
+            "control_operations_by_provider": {"opencode": ["send", "interrupt", "launch"]},
+        },
+    )
+
+    opencode = support["providers"]["opencode"]
+    assert opencode["state"] == "ready"
+    assert "send_input" in opencode["capabilities"]["supported_operations"]
+    assert opencode["operations"]["send_input"]["evidence_state"] == "release_gap"
+    assert opencode["proof"]["state"] == "release_incomplete"
+    assert opencode["proof"]["release_gap_operations"] == ["send_input"]
+
+
+def test_support_state_promotes_operation_proof_from_release_evidence() -> None:
+    support = collect_provider_support_state(
+        provider_clis={"claude": {"path": "/Users/test/.local/bin/claude", "source": "PATH"}},
+        provider_release_status={
+            "statuses": {
+                "claude": {
+                    "status": "ok",
+                    "risk": "none",
+                    "verdict": "green",
+                    "operation_evidence": {
+                        "steer_active_turn": {
+                            "status": "pass",
+                            "level": "scheduled_live_token",
+                            "source": "scheduled Claude live steer canary",
+                        }
+                    },
+                }
+            }
+        },
+        control_channel={
+            "status": "connected",
+            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "launch"]},
+        },
+    )
+
+    steer = support["providers"]["claude"]["operations"]["steer_active_turn"]
+    assert steer["target_evidence_level"] == "manual_live_token"
+    assert steer["evidence_level"] == "scheduled_live_token"
+    assert steer["evidence_state"] == "release_proven"
