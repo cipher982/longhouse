@@ -2868,6 +2868,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions/{session_id}/continue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Continue Remote Session Endpoint
+         * @description Continue an existing durable session on a user-owned machine.
+         */
+        post: operations["continue_remote_session_endpoint_sessions__session_id__continue_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sessions/{session_id}/lock": {
         parameters: {
             query?: never;
@@ -3013,6 +3033,26 @@ export interface paths {
          *     source runner. It does not confirm that the provider stopped the turn.
          */
         post: operations["interrupt_live_session_agents_agents_sessions__session_id__interrupt_live_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/continue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Continue Remote Session Agents
+         * @description Machine-facing continuation surface for existing durable sessions.
+         */
+        post: operations["continue_remote_session_agents_agents_sessions__session_id__continue_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7432,6 +7472,27 @@ export interface components {
             total: number;
         };
         /**
+         * RemoteSessionContinueRequest
+         * @description User-initiated request to continue an existing durable session.
+         */
+        RemoteSessionContinueRequest: {
+            /**
+             * Device Id
+             * @description Target enrolled device id; defaults to the session host
+             */
+            device_id?: string | null;
+            /**
+             * Cwd
+             * @description Absolute working directory; defaults to the session cwd
+             */
+            cwd?: string | null;
+            /**
+             * Client Request Id
+             * @description Required idempotency key; repeated calls with the same value return the same attempt
+             */
+            client_request_id: string;
+        };
+        /**
          * RemoteSessionLaunchRequest
          * @description User-initiated remote session launch request.
          */
@@ -8566,6 +8627,51 @@ export interface components {
              * @default false
              */
             attach_images: boolean;
+            /**
+             * Can Continue
+             * @description True when Longhouse has a native continuation target for this session
+             * @default false
+             */
+            can_continue: boolean;
+            /**
+             * Continue Targets
+             * @description Compact continuation targets available to clients
+             */
+            continue_targets?: components["schemas"]["SessionContinueTarget"][];
+        };
+        /**
+         * SessionContinueTarget
+         * @description Compact native continuation target exposed to web/iOS clients.
+         */
+        SessionContinueTarget: {
+            /**
+             * Provider
+             * @description Provider that can resume this target
+             */
+            provider: string;
+            /**
+             * Device Id
+             * @description Recorded source device id for the session
+             */
+            device_id?: string | null;
+            /**
+             * Cwd
+             * @description Recorded working directory for the session
+             */
+            cwd?: string | null;
+            /**
+             * Carry Context
+             * @description Continuation context strategy
+             * @default native
+             * @constant
+             */
+            carry_context: "native";
+            /**
+             * Native Resume Available
+             * @description True when provider-native resume data exists
+             * @default true
+             */
+            native_resume_available: boolean;
         };
         /** SessionControlResponse */
         SessionControlResponse: {
@@ -15526,6 +15632,44 @@ export interface operations {
             };
         };
     };
+    continue_remote_session_endpoint_sessions__session_id__continue_post: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteSessionContinueRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteSessionLaunchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_session_lock_status_sessions__session_id__lock_get: {
         parameters: {
             query?: {
@@ -15793,6 +15937,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionInterruptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    continue_remote_session_agents_agents_sessions__session_id__continue_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoteSessionContinueRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RemoteSessionLaunchResponse"];
                 };
             };
             /** @description Validation Error */

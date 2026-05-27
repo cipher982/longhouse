@@ -124,6 +124,14 @@ export interface SessionControl {
 
 export type SendDisabledReason = "session_closed" | "control_offline" | "input_not_supported" | "read_only";
 
+export interface SessionContinueTarget {
+  provider: string;
+  device_id?: string | null;
+  cwd?: string | null;
+  carry_context: "native";
+  native_resume_available: boolean;
+}
+
 export interface SessionCapabilities {
   live_control_available: boolean;
   host_reattach_available: boolean;
@@ -139,12 +147,19 @@ export interface SessionCapabilities {
   composer_placeholder?: string;
   composer_disabled_reason?: string | null;
   send_disabled_reason?: SendDisabledReason | null;
+  can_send_input?: boolean;
+  can_interrupt?: boolean;
+  can_terminate?: boolean;
+  can_tail_output?: boolean;
+  can_resume?: boolean;
   /**
    * True when this session accepts image attachments on input. Today this is
    * codex_app_server + live_control_available; the server is the source of
    * truth so the web client doesn't have to know the transport set.
-   */
+  */
   attach_images?: boolean;
+  can_continue?: boolean;
+  continue_targets?: SessionContinueTarget[];
 }
 
 export interface AgentSessionsListResponse {

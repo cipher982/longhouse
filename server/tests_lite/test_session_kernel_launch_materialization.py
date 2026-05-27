@@ -263,6 +263,56 @@ def test_bridge_online_then_offline_flips_existing_connection(tmp_path):
     assert rows[0].released_at is not None
 
 
+def test_provider_thread_switched_lease_detaches_existing_connection(tmp_path):
+    from types import SimpleNamespace
+
+    from zerg.models.agents import SessionConnection
+    from zerg.services.agents.kernel_capabilities import project_session_capabilities
+    from zerg.services.managed_control_state import _mirror_connection_state
+    from zerg.services.managed_control_state import upsert_managed_control_leases
+
+    db = _session(tmp_path)
+    session = _make_session_row(db, provider="codex")
+    db.commit()
+
+    _mirror_connection_state(
+        db,
+        session_id=session.id,
+        provider="codex",
+        control_state="online",
+        external_name="laptop-1",
+        device_id="laptop-1",
+    )
+    db.commit()
+    online = db.query(SessionConnection).one()
+    assert online.state == "attached"
+
+    upsert_managed_control_leases(
+        db,
+        [
+            SimpleNamespace(
+                session_id=session.id,
+                provider="codex",
+                state="degraded",
+                bridge_status="degraded",
+                thread_subscription_status="provider_thread_switched",
+                machine_id="laptop-1",
+            )
+        ],
+        device_id="laptop-1",
+        received_at=datetime.now(timezone.utc),
+    )
+    db.commit()
+
+    rows = db.query(SessionConnection).all()
+    assert len(rows) == 1
+    assert rows[0].id == online.id
+    assert rows[0].state == "detached"
+    capabilities = project_session_capabilities(db, session_id=session.id)
+    assert capabilities.live_control_available is False
+    assert capabilities.can_send_input is False
+
+
 def test_update_launch_attempt_state_run_link(tmp_path):
     db = _session(tmp_path)
     session = _make_session_row(db)

@@ -61,10 +61,26 @@ export type RemoteSessionLaunchResponse = {
   launch_error_message: string | null;
 };
 
+export type RemoteSessionContinueRequest = {
+  device_id?: string | null;
+  cwd?: string | null;
+  client_request_id: string;
+};
+
 export async function launchRemoteSession(
   body: RemoteSessionLaunchRequest,
 ): Promise<RemoteSessionLaunchResponse> {
   return request<RemoteSessionLaunchResponse>("/sessions/launch", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function continueRemoteSession(
+  sessionId: string,
+  body: RemoteSessionContinueRequest,
+): Promise<RemoteSessionLaunchResponse> {
+  return request<RemoteSessionLaunchResponse>(`/sessions/${sessionId}/continue`, {
     method: "POST",
     body: JSON.stringify(body),
   });

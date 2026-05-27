@@ -24,21 +24,28 @@ from zerg.database import Base  # noqa: E402
 from zerg.database import get_db  # noqa: E402
 from zerg.database import make_engine  # noqa: E402
 from zerg.dependencies.agents_auth import require_single_tenant  # noqa: E402
+from zerg.dependencies.agents_auth import verify_agents_token  # noqa: E402
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user  # noqa: E402
 from zerg.models import User  # noqa: E402
 from zerg.models.agents import AgentSession  # noqa: E402
+from zerg.models.agents import AgentSourceLine  # noqa: E402
 from zerg.models.agents import SessionConnection  # noqa: E402
 from zerg.models.agents import SessionLaunchAttempt  # noqa: E402
 from zerg.models.agents import SessionRun  # noqa: E402
+from zerg.models.agents import SessionThreadAlias  # noqa: E402
 from zerg.models.device_token import DeviceToken  # noqa: E402
 from zerg.services.agents.kernel_writes import ensure_primary_thread  # noqa: E402
 from zerg.services.agents.kernel_writes import record_run  # noqa: E402
+from zerg.services.agents.kernel_writes import record_thread_alias  # noqa: E402
+from zerg.services.agents.kernel_writes import upsert_connection_for_run  # noqa: E402
 from zerg.services.live_session_dispatch import supports_live_text_dispatch_metadata  # noqa: E402
 from zerg.services.machine_control_channel import MachineControlChannelRegistry  # noqa: E402
 from zerg.services.machine_control_channel import MachineControlCommandResponse  # noqa: E402
 from zerg.services.machine_control_channel import get_machine_control_channel_registry  # noqa: E402
+from zerg.services.remote_session_launch import RemoteContinueParams  # noqa: E402
 from zerg.services.remote_session_launch import RemoteLaunchError  # noqa: E402
 from zerg.services.remote_session_launch import RemoteLaunchParams  # noqa: E402
+from zerg.services.remote_session_launch import continue_remote_session  # noqa: E402
 from zerg.services.remote_session_launch import launch_remote_session  # noqa: E402
 from zerg.services.remote_session_launch import reap_orphaned_launches  # noqa: E402
 from zerg.services.remote_session_launch import reconcile_launch_from_command_result  # noqa: E402
@@ -105,6 +112,65 @@ def _register_online(
             websocket=_FakeWebSocket(),
         )
     )
+
+
+def _seed_continuable_codex_session(
+    db,
+    *,
+    session_id=None,
+    device_id: str | None = "cinder",
+    provider_thread_id: str = "thread-abc",
+    thread_path: str = "/Users/me/.codex/sessions/thread-abc.jsonl",
+    ended: bool = True,
+):
+    now = datetime.now(timezone.utc)
+    sid = session_id or uuid4()
+    session = AgentSession(
+        id=sid,
+        provider="codex",
+        environment="development",
+        project="repo",
+        device_id=device_id,
+        device_name=device_id,
+        cwd="/Users/me/repo",
+        git_repo="git@example.test/repo.git",
+        git_branch="main",
+        started_at=now,
+        ended_at=now if ended else None,
+        last_activity_at=now,
+        thread_root_session_id=sid,
+        continued_from_session_id=None,
+        continuation_kind="local",
+        origin_label=device_id,
+        user_messages=1,
+        assistant_messages=1,
+        tool_calls=0,
+        is_writable_head=1,
+        is_sidechain=0,
+    )
+    db.add(session)
+    db.flush()
+    thread = ensure_primary_thread(db, session)
+    record_thread_alias(
+        db,
+        thread=thread,
+        provider="codex",
+        alias_kind="provider_session_id",
+        alias_value=provider_thread_id,
+    )
+    db.add(
+        AgentSourceLine(
+            session_id=session.id,
+            thread_id=thread.id,
+            source_path=thread_path,
+            source_offset=0,
+            branch_id=0,
+            raw_json='{"type":"message"}',
+            line_hash=f"hash-{sid}",
+        )
+    )
+    db.commit()
+    return session.id
 
 
 class _StubRegistry(MachineControlChannelRegistry):
@@ -373,6 +439,23 @@ def _make_browser_client(SessionLocal, *, owner_id: int = OWNER_ID):
     return TestClient(app, backend="asyncio"), api_app
 
 
+def _make_agents_client(SessionLocal, *, owner_id: int = OWNER_ID, device_id: str = "cinder"):
+    from zerg.main import api_app
+    from zerg.main import app
+
+    def override_db():
+        with SessionLocal() as db:
+            yield db
+
+    def override_verify_agents_token():
+        return SimpleNamespace(owner_id=owner_id, device_id=device_id)
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+    api_app.dependency_overrides[require_single_tenant] = lambda: None
+    return TestClient(app, backend="asyncio"), api_app
+
+
 def _patch_registry(registry):
     import zerg.services.remote_session_launch as module
 
@@ -408,6 +491,63 @@ def test_http_endpoint_happy_path(tmp_path):
     body = resp.json()
     assert body["launch_state"] == "live"
     assert body["session_id"]
+
+
+def test_http_continue_endpoint_happy_path(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.continue",))
+    with SessionLocal() as db:
+        session_id = _seed_continuable_codex_session(db)
+
+    original, module = _patch_registry(registry)
+    try:
+        client, api_app = _make_browser_client(SessionLocal)
+        try:
+            resp = client.post(
+                f"/api/sessions/{session_id}/continue",
+                json={"client_request_id": "tap-continue"},
+            )
+        finally:
+            api_app.dependency_overrides.clear()
+    finally:
+        module.get_machine_control_channel_registry = original
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["session_id"] == str(session_id)
+    assert body["launch_state"] == "live"
+    assert registry.sent[0]["payload"]["mode"] == "continue"
+
+
+def test_agents_continue_endpoint_happy_path(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.continue",))
+    with SessionLocal() as db:
+        session_id = _seed_continuable_codex_session(db)
+
+    original, module = _patch_registry(registry)
+    try:
+        client, api_app = _make_agents_client(SessionLocal)
+        try:
+            resp = client.post(
+                f"/api/agents/sessions/{session_id}/continue",
+                json={"client_request_id": "agent-continue"},
+                headers={"X-Agents-Token": "dev"},
+            )
+        finally:
+            api_app.dependency_overrides.clear()
+    finally:
+        module.get_machine_control_channel_registry = original
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["session_id"] == str(session_id)
+    assert body["launch_state"] == "live"
+    assert registry.sent[0]["payload"]["mode"] == "continue"
 
 
 def test_client_request_id_is_idempotent(tmp_path):
@@ -525,6 +665,311 @@ def test_launched_codex_workspace_exposes_live_engine_control(tmp_path):
     assert workspace.session.capabilities.can_steer_active_turn is True
 
 
+def test_continue_session_dispatches_resume_payload_and_attaches_new_run(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.launch", "codex.continue"))
+
+    with SessionLocal() as db:
+        session_id = _seed_continuable_codex_session(db)
+        thread = ensure_primary_thread(db, db.get(AgentSession, session_id))
+        existing_run = record_run(db, thread=thread, provider="codex", host_id="cinder", cwd="/Users/me/repo")
+        existing_connection = upsert_connection_for_run(
+            db,
+            run=existing_run,
+            control_plane="codex_bridge",
+            acquisition_kind="spawned_control",
+            state="attached",
+            external_name="cinder",
+            can_send_input=0,
+            can_interrupt=1,
+            can_terminate=1,
+            can_tail_output=1,
+            can_resume=1,
+        )
+        degraded_run = record_run(db, thread=thread, provider="codex", host_id="cinder", cwd="/Users/me/repo")
+        degraded_connection = upsert_connection_for_run(
+            db,
+            run=degraded_run,
+            control_plane="codex_bridge",
+            acquisition_kind="spawned_control",
+            state="degraded",
+            external_name="cinder",
+            can_send_input=0,
+            can_interrupt=1,
+            can_terminate=1,
+            can_tail_output=1,
+            can_resume=1,
+        )
+        existing_run_id = existing_run.id
+        existing_connection_id = existing_connection.id
+        degraded_run_id = degraded_run.id
+        degraded_connection_id = degraded_connection.id
+        db.commit()
+
+    with SessionLocal() as db:
+        result = asyncio.run(
+            continue_remote_session(
+                db,
+                RemoteContinueParams(
+                    owner_id=OWNER_ID,
+                    session_id=session_id,
+                    client_request_id="continue-1",
+                ),
+                registry=registry,
+            )
+        )
+
+    assert result.session_id == session_id
+    assert result.launch_state == "live"
+    assert len(registry.sent) == 1
+    sent = registry.sent[0]
+    assert sent["command_type"] == "session.launch"
+    assert sent["session_id"] == str(session_id)
+    assert sent["command_id"].startswith("continue-")
+    assert sent["payload"]["mode"] == "continue"
+    assert sent["payload"]["resume"] == {
+        "thread_id": "thread-abc",
+        "thread_path": "/Users/me/.codex/sessions/thread-abc.jsonl",
+    }
+
+    with SessionLocal() as db:
+        session = db.get(AgentSession, session_id)
+        assert session is not None
+        assert session.ended_at is None
+        assert db.query(AgentSession).count() == 1
+        attempt = _latest_attempt(db, session_id)
+        assert attempt.state == "adopted"
+        assert attempt.run_id is not None
+        assert attempt.run_id != existing_run_id
+        assert attempt.run_id != degraded_run_id
+        assert db.query(SessionRun).count() == 3
+        assert db.get(SessionRun, attempt.run_id).launch_origin == "longhouse_continued"
+        released_run = db.get(SessionRun, existing_run_id)
+        assert released_run.ended_at is not None
+        released_connection = db.get(SessionConnection, existing_connection_id)
+        assert released_connection.state == "released"
+        assert released_connection.can_send_input == 0
+        assert released_connection.can_interrupt == 0
+        assert released_connection.released_at is not None
+        released_degraded_run = db.get(SessionRun, degraded_run_id)
+        assert released_degraded_run.ended_at is not None
+        released_degraded_connection = db.get(SessionConnection, degraded_connection_id)
+        assert released_degraded_connection.state == "released"
+        assert released_degraded_connection.can_interrupt == 0
+        assert released_degraded_connection.released_at is not None
+        live_connection = (
+            db.query(SessionConnection)
+            .join(SessionRun, SessionConnection.run_id == SessionRun.id)
+            .filter(SessionRun.thread_id == attempt.thread_id)
+            .filter(SessionConnection.state == "attached")
+            .one()
+        )
+        assert live_connection.can_send_input == 1
+        workspace = build_session_workspace(db=db, session_id=session_id, owner_id=OWNER_ID)
+        assert workspace.session.capabilities.can_continue is True
+        assert workspace.session.capabilities.continue_targets[0].carry_context == "native"
+
+
+def test_continue_session_is_idempotent_by_client_request_id(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.continue",))
+
+    with SessionLocal() as db:
+        session_id = _seed_continuable_codex_session(db)
+
+    params = RemoteContinueParams(owner_id=OWNER_ID, session_id=session_id, client_request_id="continue-same")
+    with SessionLocal() as db:
+        first = asyncio.run(continue_remote_session(db, params, registry=registry))
+    with SessionLocal() as db:
+        second = asyncio.run(continue_remote_session(db, params, registry=registry))
+
+    assert first.session_id == second.session_id
+    assert len(registry.sent) == 1
+
+
+def test_continue_requires_client_request_id(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.continue",))
+
+    with SessionLocal() as db:
+        session_id = _seed_continuable_codex_session(db)
+        with pytest.raises(RemoteLaunchError) as excinfo:
+            asyncio.run(
+                continue_remote_session(
+                    db,
+                    RemoteContinueParams(owner_id=OWNER_ID, session_id=session_id, client_request_id=""),
+                    registry=registry,
+                )
+            )
+
+    assert excinfo.value.code == "invalid_request"
+    assert excinfo.value.status_code == 400
+    assert registry.sent == []
+
+
+def test_continue_requires_source_session_device_owned_by_user(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal, owner_id=OWNER_ID, device_id="cinder")
+    _seed_user_and_device(SessionLocal, owner_id=OWNER_ID + 1, device_id="not-mine")
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.continue",))
+
+    with SessionLocal() as db:
+        session_id = _seed_continuable_codex_session(db, device_id="not-mine")
+        with pytest.raises(RemoteLaunchError) as excinfo:
+            asyncio.run(
+                continue_remote_session(
+                    db,
+                    RemoteContinueParams(
+                        owner_id=OWNER_ID,
+                        session_id=session_id,
+                        device_id="cinder",
+                        client_request_id="continue-owned-source",
+                    ),
+                    registry=registry,
+                )
+            )
+
+    assert excinfo.value.code == "device_not_enrolled"
+    assert excinfo.value.status_code == 404
+    assert registry.sent == []
+
+
+def test_continue_rejects_session_without_recorded_source_host(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal, owner_id=OWNER_ID, device_id="cinder")
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.continue",))
+
+    with SessionLocal() as db:
+        session_id = _seed_continuable_codex_session(db, device_id=None)
+        with pytest.raises(RemoteLaunchError) as excinfo:
+            asyncio.run(
+                continue_remote_session(
+                    db,
+                    RemoteContinueParams(
+                        owner_id=OWNER_ID,
+                        session_id=session_id,
+                        device_id="cinder",
+                        client_request_id="continue-null-source-host",
+                    ),
+                    registry=registry,
+                )
+            )
+
+    assert excinfo.value.code == "invalid_request"
+    assert excinfo.value.status_code == 409
+    assert registry.sent == []
+
+
+def test_continue_requires_continue_capability(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.launch",))
+
+    with SessionLocal() as db:
+        session_id = _seed_continuable_codex_session(db)
+        with pytest.raises(RemoteLaunchError) as excinfo:
+            asyncio.run(
+                continue_remote_session(
+                    db,
+                    RemoteContinueParams(
+                        owner_id=OWNER_ID,
+                        session_id=session_id,
+                        client_request_id="continue-capability",
+                    ),
+                    registry=registry,
+                )
+            )
+
+    assert excinfo.value.code == "provider_unsupported"
+    assert excinfo.value.status_code == 409
+    assert registry.sent == []
+
+
+def test_continue_rejects_missing_resume_identity(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.continue",))
+
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        sid = uuid4()
+        db.add(
+            AgentSession(
+                id=sid,
+                provider="codex",
+                environment="development",
+                project="repo",
+                device_id="cinder",
+                cwd="/Users/me/repo",
+                started_at=now,
+                ended_at=now,
+                thread_root_session_id=sid,
+                continued_from_session_id=None,
+                continuation_kind="local",
+                origin_label="cinder",
+                user_messages=0,
+                assistant_messages=0,
+                tool_calls=0,
+                is_writable_head=1,
+                is_sidechain=0,
+            )
+        )
+        db.commit()
+        with pytest.raises(RemoteLaunchError) as excinfo:
+            asyncio.run(
+                continue_remote_session(
+                    db,
+                    RemoteContinueParams(
+                        owner_id=OWNER_ID,
+                        session_id=sid,
+                        client_request_id="continue-missing-identity",
+                    ),
+                    registry=registry,
+                )
+            )
+
+    assert excinfo.value.code == "invalid_request"
+    assert excinfo.value.status_code == 409
+    assert registry.sent == []
+
+
+def test_continue_rejects_legacy_session_id_as_provider_thread_id(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.continue",))
+
+    with SessionLocal() as db:
+        sid = uuid4()
+        session_id = _seed_continuable_codex_session(db, session_id=sid, provider_thread_id=str(sid))
+        with pytest.raises(RemoteLaunchError) as excinfo:
+            asyncio.run(
+                continue_remote_session(
+                    db,
+                    RemoteContinueParams(
+                        owner_id=OWNER_ID,
+                        session_id=session_id,
+                        client_request_id="continue-legacy-thread-id",
+                    ),
+                    registry=registry,
+                )
+            )
+
+    assert excinfo.value.code == "invalid_request"
+    assert excinfo.value.status_code == 409
+    assert registry.sent == []
+
+
 def test_late_result_reconciliation_moves_unknown_to_live(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)
@@ -585,6 +1030,68 @@ def test_late_result_reconciliation_moves_unknown_to_live(tmp_path):
         )
     assert duplicate is True
     with SessionLocal() as db:
+        assert db.query(SessionRun).count() == 1
+        assert db.query(SessionConnection).count() == 1
+
+
+def test_late_continue_result_reconciliation_keeps_existing_session_live(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+
+    class _TimeoutRegistry(_StubRegistry):
+        async def send_command(self, **kwargs):
+            self.sent.append(kwargs)
+            return MachineControlCommandResponse(transport_ok=False, error="timed out")
+
+    registry = _TimeoutRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.continue",))
+    with SessionLocal() as db:
+        session_id = _seed_continuable_codex_session(db)
+        result = asyncio.run(
+            continue_remote_session(
+                db,
+                RemoteContinueParams(
+                    owner_id=OWNER_ID,
+                    session_id=session_id,
+                    client_request_id="continue-timeout",
+                ),
+                registry=registry,
+            )
+        )
+    assert result.launch_state == "launching_unknown"
+    command_id = registry.sent[-1]["command_id"]
+    assert command_id.startswith("continue-")
+    with SessionLocal() as db:
+        assert (
+            db.query(SessionThreadAlias)
+            .filter(SessionThreadAlias.alias_kind == "source_path")
+            .filter(SessionThreadAlias.alias_value == "/Users/me/.codex/sessions/thread-abc.jsonl")
+            .count()
+        ) == 1
+
+    with SessionLocal() as db:
+        reconciled = reconcile_launch_from_command_result(
+            db,
+            {
+                "type": "command_result",
+                "command_id": command_id,
+                "ok": True,
+                "result": {
+                    "session_id": str(session_id),
+                    "thread_id": "thread-abc",
+                    "thread_path": "/Users/me/.codex/sessions/thread-abc.jsonl",
+                },
+            },
+        )
+
+    assert reconciled is True
+    with SessionLocal() as db:
+        session = db.get(AgentSession, session_id)
+        attempt = _latest_attempt(db, session_id)
+        assert session.ended_at is None
+        assert attempt.state == "adopted"
+        assert attempt.run_id is not None
+        assert db.query(AgentSession).count() == 1
         assert db.query(SessionRun).count() == 1
         assert db.query(SessionConnection).count() == 1
 

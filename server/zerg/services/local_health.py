@@ -1632,6 +1632,9 @@ def _codex_bridge_reason_codes(
 ) -> list[str]:
     reason_codes: list[str] = []
     rollout_missing_after_turn = bool(state_thread_path and not Path(state_thread_path).exists() and has_turn_activity)
+    provider_thread_switched = thread_subscription_status == "provider_thread_switched" or any(
+        "provider_thread_switched" in str(value or "") for value in (last_error, thread_subscription_last_error)
+    )
     thread_subscription_failed = thread_subscription_status == "failed"
     thread_subscription_transitional = thread_subscription_status in _THREAD_SUBSCRIPTION_TRANSIENT_STATES
     thread_subscription_issue = bool(last_error or thread_subscription_failed)
@@ -1642,7 +1645,9 @@ def _codex_bridge_reason_codes(
     if rollout_missing_after_turn and not thread_subscription_transitional:
         thread_subscription_issue = True
 
-    if thread_subscription_issue:
+    if provider_thread_switched:
+        reason_codes.append("provider_thread_switched")
+    elif thread_subscription_issue:
         if (
             bridge_thread_is_subagent
             or _looks_like_subagent_control_error(last_error)

@@ -1177,7 +1177,7 @@ class SessionRun(AgentsBase):
         String(32),
         nullable=False,
         server_default=text("'longhouse_spawned'"),
-    )  # longhouse_spawned | external_adopted
+    )  # longhouse_spawned | longhouse_continued | external_adopted
 
     started_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     ended_at = Column(DateTime(timezone=True), nullable=True)

@@ -1,6 +1,6 @@
 import * as React from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,6 +21,9 @@ const workspaceMocks = vi.hoisted(() => ({
 const secondClockMocks = vi.hoisted(() => ({
   useSecondClock: vi.fn(),
 }));
+const launchApiMocks = vi.hoisted(() => ({
+  continueRemoteSession: vi.fn(),
+}));
 
 vi.mock("../../hooks/useSessionWorkspace", () => ({
   useSessionWorkspace: workspaceMocks.useSessionWorkspace,
@@ -32,6 +35,14 @@ vi.mock("../../hooks/useSecondClock", () => ({
 vi.mock("../../lib/readiness-contract", () => ({
   useReadinessFlag: vi.fn(),
 }));
+
+vi.mock("../../services/api/launch", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../services/api/launch")>();
+  return {
+    ...actual,
+    continueRemoteSession: launchApiMocks.continueRemoteSession,
+  };
+});
 
 vi.mock("../../components/SessionChat", () => ({
   SessionChat: ({
@@ -239,6 +250,12 @@ function mockWorkspaceState({
 describe("SessionDetailPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    launchApiMocks.continueRemoteSession.mockResolvedValue({
+      session_id: "session-codex",
+      launch_state: "live",
+      launch_error_code: null,
+      launch_error_message: null,
+    });
     secondClockMocks.useSecondClock.mockReturnValue(
       Date.parse("2026-03-22T22:04:30Z"),
     );
@@ -461,6 +478,84 @@ describe("SessionDetailPage", () => {
       "data-disabled-reason",
       "Longhouse can see this Codex session, but cannot send prompts until the engine reconnects.",
     );
+  });
+
+  it("continues an offline session with the native continuation target", async () => {
+    const user = userEvent.setup();
+    launchApiMocks.continueRemoteSession.mockResolvedValueOnce({
+      session_id: "session-codex",
+      launch_state: "launching",
+      launch_error_code: null,
+      launch_error_message: null,
+    });
+    const session = makeSession({
+      ended_at: null,
+      status: "active",
+      presence_state: null,
+      active_tool: null,
+      runtime_source: null,
+      confidence: null,
+      display_phase: null,
+      last_live_at: null,
+      runtime_display: makeRuntimeDisplay({
+        truth_tier: "stale",
+        signal_tier: "transcript_progress",
+        state: null,
+        tone: "inactive",
+        headline: "Inactive",
+        detail: null,
+        phase_label: "Inactive",
+        compact_tool_label: null,
+        is_live: false,
+        is_executing: false,
+        needs_attention: false,
+        is_idle: false,
+        is_managed_local_truth: true,
+        has_signal: true,
+        control_path: "managed",
+        activity_recency: "stale",
+        lifecycle: "open",
+        host_state: "offline",
+      }),
+      capabilities: makeCapabilities({
+        live_control_available: false,
+        host_reattach_available: false,
+        reply_to_live_session_available: false,
+        can_send_input: false,
+        can_continue: true,
+        continue_targets: [
+          {
+            provider: "codex",
+            device_id: "cinder",
+            cwd: "/Users/davidrose/git/zerg",
+            carry_context: "native",
+            native_resume_available: true,
+          },
+        ],
+      }),
+    });
+    mockWorkspaceState({ session, model: buildTimelineModel([]) });
+
+    renderSessionDetailPage();
+    const continueButton = screen.getByTestId("session-continue-button");
+    await user.click(continueButton);
+
+    await waitFor(() => {
+      expect(launchApiMocks.continueRemoteSession).toHaveBeenCalledWith(
+        "session-codex",
+        expect.objectContaining({
+          device_id: "cinder",
+          cwd: "/Users/davidrose/git/zerg",
+          client_request_id: expect.stringMatching(/^continue-/),
+        }),
+      );
+    });
+    expect(screen.getByTestId("launch-pending-banner")).toHaveTextContent(
+      "Starting session on cinder",
+    );
+    expect(continueButton).toBeDisabled();
+    await user.click(continueButton);
+    expect(launchApiMocks.continueRemoteSession).toHaveBeenCalledTimes(1);
   });
 
   it("keeps unresolved live tool calls pending from the row into the inspector", () => {
