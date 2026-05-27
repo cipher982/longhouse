@@ -170,9 +170,16 @@ def test_codex_doctor_reports_binary_legacy_artifacts_and_bridge_state(monkeypat
     launcher.write_text(f"#!/bin/sh\n{codex_cli.LEGACY_MANAGED_CODEX_LAUNCHER_MARKER}\n")
     runtime_dir = home / ".longhouse" / "runtimes" / "codex"
     runtime_dir.mkdir(parents=True)
-    legacy_bridge_dir = home / ".claude" / "managed-local" / "codex-bridge"
+    claude_home = tmp_path / "claude-profile"
+    legacy_bridge_dir = claude_home / "managed-local" / "codex-bridge"
     legacy_bridge_dir.mkdir(parents=True)
     (legacy_bridge_dir / "old-session.json").write_text("{}")
+    legacy_opencode_dir = claude_home / "managed-local" / "opencode" / "bridge" / "sessions"
+    legacy_opencode_dir.mkdir(parents=True)
+    (legacy_opencode_dir / "old-opencode.json").write_text("{}")
+    legacy_antigravity_dir = claude_home / "managed-local" / "antigravity" / "plugins" / "longhouse-runtime"
+    legacy_antigravity_dir.mkdir(parents=True)
+    (legacy_antigravity_dir / "plugin.json").write_text("{}")
     state_root = tmp_path / "bridge"
     state_root.mkdir()
     state_file = state_root / "session-123.json"
@@ -198,6 +205,7 @@ def test_codex_doctor_reports_binary_legacy_artifacts_and_bridge_state(monkeypat
     state_file.with_suffix(".lock").touch()
 
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_home))
     monkeypatch.delenv(codex_cli.CODEX_BIN_ENV, raising=False)
     monkeypatch.setattr(
         codex_cli.subprocess,
@@ -219,7 +227,7 @@ def test_codex_doctor_reports_binary_legacy_artifacts_and_bridge_state(monkeypat
     assert set(payload["legacy_artifacts"]) == {
         "launcher",
         "managed_runtime_dir",
-        "claude_managed_bridge_state",
+        "claude_managed_local_state",
     }
     assert set(payload["bridge"]) == {"state_root", "state_root_exists", "readyz_checked", "sessions"}
     assert payload["codex_binary"]["path"] == str(codex_bin.resolve())
@@ -228,13 +236,14 @@ def test_codex_doctor_reports_binary_legacy_artifacts_and_bridge_state(monkeypat
     assert payload["legacy_artifacts"]["launcher"]["exists"] is True
     assert payload["legacy_artifacts"]["launcher"]["legacy_marker"] is True
     assert payload["legacy_artifacts"]["managed_runtime_dir"]["exists"] is True
-    assert payload["legacy_artifacts"]["claude_managed_bridge_state"] == {
-        "path": str(legacy_bridge_dir),
-        "exists": True,
-        "state_file_count": 1,
-        "active_truth": False,
-        "note": "Stale pre-migration Codex bridge state only; not used for active liveness.",
-    }
+    legacy_state = payload["legacy_artifacts"]["claude_managed_local_state"]
+    assert legacy_state["active_truth"] is False
+    assert legacy_state["providers"]["codex_bridge"]["path"] == str(legacy_bridge_dir)
+    assert legacy_state["providers"]["codex_bridge"]["state_file_count"] == 1
+    assert legacy_state["providers"]["opencode"]["path"] == str(claude_home / "managed-local" / "opencode")
+    assert legacy_state["providers"]["opencode"]["state_file_count"] == 1
+    assert legacy_state["providers"]["antigravity"]["path"] == str(claude_home / "managed-local" / "antigravity")
+    assert legacy_state["providers"]["antigravity"]["state_file_count"] == 1
     assert payload["bridge"]["state_root"] == str(state_root)
     assert set(payload["bridge"]["sessions"][0]) == {
         "session_id",

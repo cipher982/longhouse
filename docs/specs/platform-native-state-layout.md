@@ -33,6 +33,17 @@ Do not land that as a simple helper rename. It is a compatibility migration
 because active bridge sessions have state files, locks, sockets, and process
 coordinates in the current tree.
 
+Current trees in scope:
+
+- `machine/`: device token, machine state, and state journal
+- `agent/`: engine status, transcript wake socket, outboxes, shipper DB, and
+  flight recorder unless `LONGHOUSE_ENGINE_FLIGHT_RECORDER_DIR` overrides it
+- `agent/logs/`: engine logs
+- `managed-local/codex-bridge/`: Codex bridge state, logs, locks, and sockets
+- `managed-local/opencode/`: OpenCode runtime staging plus bridge session state
+- `managed-local/antigravity/`: Antigravity runtime plugin staging
+- `config.toml`: local runtime config
+
 ## Constraints For Tier 2
 
 - Explicit `LONGHOUSE_HOME` or test `base_dir` must dominate isolation. Runtime
@@ -44,3 +55,6 @@ coordinates in the current tree.
 - Do not read old and new bridge state as equal active truth. If a transition
   needs old-state visibility, expose it as legacy/stale evidence with explicit
   user repair or cleanup guidance.
+- Engine path defaults are compiled into `longhouse-engine`. Any split that
+  changes engine-visible paths needs a local engine refresh after merge, not
+  just a Python CLI reinstall.

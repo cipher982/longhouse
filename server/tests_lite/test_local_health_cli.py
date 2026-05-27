@@ -968,12 +968,20 @@ def test_collect_local_health_flags_detached_managed_session(monkeypatch, tmp_pa
     assert snapshot["orphan_bridges"] == []
 
 
-def test_collect_local_health_reports_legacy_claude_codex_bridge_state(monkeypatch, tmp_path: Path):
+def test_collect_local_health_reports_legacy_claude_managed_local_state(monkeypatch, tmp_path: Path):
     base_dir = tmp_path / ".longhouse"
-    legacy_state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
-    legacy_state_dir.mkdir(parents=True)
-    (legacy_state_dir / "old-session.json").write_text("{}")
-    (legacy_state_dir / "old-session.tmp").write_text("{}")
+    legacy_bridge_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    legacy_bridge_dir.mkdir(parents=True)
+    (legacy_bridge_dir / "old-session.json").write_text("{}")
+    (legacy_bridge_dir / "old-session.tmp").write_text("{}")
+    (legacy_bridge_dir / "old-session.lock").write_text("")
+    (legacy_bridge_dir / "nested").mkdir()
+    legacy_opencode_dir = tmp_path / ".claude" / "managed-local" / "opencode" / "bridge" / "sessions"
+    legacy_opencode_dir.mkdir(parents=True)
+    (legacy_opencode_dir / "old-opencode.json").write_text("{}")
+    legacy_antigravity_dir = tmp_path / ".claude" / "managed-local" / "antigravity" / "plugins" / "longhouse-runtime"
+    legacy_antigravity_dir.mkdir(parents=True)
+    (legacy_antigravity_dir / "plugin.json").write_text("{}")
 
     _disable_real_runner_env(monkeypatch, base_dir)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
@@ -981,14 +989,15 @@ def test_collect_local_health_reports_legacy_claude_codex_bridge_state(monkeypat
 
     snapshot = local_health_service.collect_local_health(base_dir)
 
-    legacy = snapshot["legacy_runtime_state"]["codex_bridge"]
-    assert legacy == {
-        "path": str(legacy_state_dir),
-        "exists": True,
-        "state_file_count": 1,
-        "active_truth": False,
-        "note": "Stale pre-migration Codex bridge state only; not used for active liveness.",
-    }
+    legacy = snapshot["legacy_runtime_state"]
+    assert legacy["codex_bridge"]["path"] == str(legacy_bridge_dir)
+    assert legacy["codex_bridge"]["exists"] is True
+    assert legacy["codex_bridge"]["state_file_count"] == 1
+    assert legacy["codex_bridge"]["active_truth"] is False
+    assert legacy["opencode"]["path"] == str(tmp_path / ".claude" / "managed-local" / "opencode")
+    assert legacy["opencode"]["state_file_count"] == 1
+    assert legacy["antigravity"]["path"] == str(tmp_path / ".claude" / "managed-local" / "antigravity")
+    assert legacy["antigravity"]["state_file_count"] == 1
     assert snapshot["managed_sessions"] == []
     assert snapshot["orphan_bridges"] == []
 
