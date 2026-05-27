@@ -654,8 +654,12 @@ def _wait_for_antigravity_pending_message(config_dir: Path, session_id: str, *, 
     deadline = time.monotonic() + timeout_secs
     while time.monotonic() < deadline:
         messages = sorted(inbox_dir.glob("msg-*.json")) if inbox_dir.exists() else []
-        if messages:
-            return messages[0]
+        for message in messages:
+            try:
+                json.loads(message.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            return message
         time.sleep(0.05)
     raise TimeoutError(f"Timed out waiting for Antigravity inbox message in {inbox_dir}")
 
