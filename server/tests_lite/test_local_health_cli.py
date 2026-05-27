@@ -537,6 +537,64 @@ def test_collect_local_health_degrades_for_old_outbox_file(monkeypatch, tmp_path
     assert "outbox_stuck" in snapshot["reasons"]
 
 
+def test_collect_local_health_classifies_deleted_cwd_hook_spawn_errors(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    state_root = tmp_path / ".longhouse"
+    claude_dir = tmp_path / ".claude"
+    _write_engine_status(state_root, age_seconds=5)
+
+    missing_cwd = tmp_path / "deleted-cwd"
+    transcript = claude_dir / "projects" / "-tmp-project" / "session-1.jsonl"
+    transcript.parent.mkdir(parents=True, exist_ok=True)
+    transcript.write_text(
+        json.dumps(
+            {
+                "type": "system",
+                "subtype": "stop_hook_summary",
+                "timestamp": "2026-05-27T14:35:24Z",
+                "cwd": str(missing_cwd),
+                "sessionId": "session-1",
+                "hookInfos": [{"command": "/Users/test/.claude/hooks/longhouse-hook.sh", "durationMs": 2}],
+                "hookErrors": [
+                    "Failed with non-blocking status code: Error occurred while executing hook command: "
+                    "ENOENT: no such file or directory, posix_spawn '/bin/sh'"
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    snapshot = local_health_service.collect_local_health(state_root)
+
+    assert snapshot["health_state"] == "degraded"
+    assert snapshot["headline"] == "A provider session working directory disappeared"
+    assert "provider_hook_cwd_missing" in snapshot["reasons"]
+    diagnostics = snapshot["provider_hook_diagnostics"]
+    assert diagnostics["state"] == "session_cwd_missing"
+    assert diagnostics["deleted_cwd_error_count"] == 1
+    assert diagnostics["latest"]["session_id"] == "session-1"
+    assert diagnostics["latest"]["cwd"] == str(missing_cwd)
+
+
+def test_fast_local_health_skips_provider_hook_transcript_scan(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    state_root = tmp_path / ".longhouse"
+    _write_engine_status(state_root, age_seconds=5)
+    monkeypatch.setattr(
+        local_health_service,
+        "_recent_claude_transcript_paths",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("fast local-health must not scan transcripts")),
+    )
+
+    snapshot = local_health_service.collect_local_health(state_root, fast=True)
+
+    assert snapshot["provider_hook_diagnostics"]["state"] == "skipped"
+    assert snapshot["provider_hook_diagnostics"]["skipped_reason"] == "fast_local_health"
+
+
 def test_collect_local_health_surfaces_codex_provider_cli(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))

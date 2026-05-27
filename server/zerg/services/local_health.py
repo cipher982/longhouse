@@ -67,6 +67,9 @@ ACTIVITY_RECENCY_BANDS = [
     ("1-6h", timedelta(hours=6)),
 ]
 RECENT_TOUCH_LIMIT = 4
+PROVIDER_HOOK_DIAGNOSTIC_WINDOW = timedelta(hours=24)
+PROVIDER_HOOK_DIAGNOSTIC_FILE_LIMIT = 24
+PROVIDER_HOOK_DIAGNOSTIC_EVENT_LIMIT = 8
 _PROCESS_SNAPSHOT: tuple[list[dict[str, Any]], list[dict[str, Any]]] | None = None
 
 CONTROL_PATH_MANAGED = "managed"
@@ -270,6 +273,162 @@ def _collect_provider_clis() -> dict[str, Any]:
             "resolution_error": antigravity_resolution_error,
             "env_override": antigravity_env_candidate,
         },
+    }
+
+
+_SHELL_SPAWN_ENOENT_PATTERNS = (
+    "posix_spawn '/bin/sh'",
+    "spawn /bin/sh ENOENT",
+    "spawnSync /bin/sh ENOENT",
+)
+
+
+def _provider_config_dir_for_hook_diagnostics(base_dir: Path) -> Path | None:
+    env_dir = _normalize_optional_string(os.environ.get("CLAUDE_CONFIG_DIR"))
+    if env_dir is not None:
+        return Path(env_dir).expanduser()
+    resolved = base_dir.expanduser().resolve(strict=False)
+    if resolved == _canonical_stable_home():
+        return Path.home() / ".claude"
+    if base_dir.name == ".longhouse":
+        return base_dir.parent / ".claude"
+    return None
+
+
+def _hook_error_looks_like_deleted_cwd_spawn(error: str | None) -> bool:
+    normalized = str(error or "")
+    return any(pattern in normalized for pattern in _SHELL_SPAWN_ENOENT_PATTERNS)
+
+
+def _hook_error_commands_from_payload(payload: Mapping[str, Any]) -> list[str]:
+    attachment = payload.get("attachment")
+    if isinstance(attachment, Mapping):
+        command = _normalize_optional_string(attachment.get("command"))
+        return [command] if command else []
+    hook_infos = payload.get("hookInfos")
+    if isinstance(hook_infos, list):
+        commands: list[str] = []
+        for item in hook_infos:
+            if not isinstance(item, Mapping):
+                continue
+            command = _normalize_optional_string(item.get("command"))
+            if command:
+                commands.append(command)
+        return commands
+    return []
+
+
+def _hook_errors_from_payload(payload: Mapping[str, Any]) -> list[str]:
+    attachment = payload.get("attachment")
+    if isinstance(attachment, Mapping):
+        stderr = _normalize_optional_string(attachment.get("stderr"))
+        return [stderr] if stderr else []
+    hook_errors = payload.get("hookErrors")
+    if isinstance(hook_errors, list):
+        return [str(item) for item in hook_errors if str(item or "").strip()]
+    return []
+
+
+def _hook_diagnostic_event_from_payload(payload: Mapping[str, Any], *, source_path: Path) -> dict[str, Any] | None:
+    errors = _hook_errors_from_payload(payload)
+    if not any(_hook_error_looks_like_deleted_cwd_spawn(error) for error in errors):
+        return None
+    cwd = _normalize_optional_string(payload.get("cwd"))
+    cwd_exists = Path(cwd).expanduser().exists() if cwd else None
+    if cwd_exists is not False:
+        return None
+    return {
+        "session_id": _normalize_optional_string(payload.get("sessionId")),
+        "provider": "claude",
+        "cwd": cwd,
+        "cwd_exists": cwd_exists,
+        "timestamp": _normalize_optional_string(payload.get("timestamp")),
+        "source_path": str(source_path),
+        "commands": _hook_error_commands_from_payload(payload),
+        "errors": errors,
+    }
+
+
+def _recent_claude_transcript_paths(provider_config_dir: Path, *, now: datetime) -> list[Path]:
+    projects_dir = provider_config_dir / "projects"
+    if not projects_dir.exists():
+        return []
+    cutoff = now.timestamp() - PROVIDER_HOOK_DIAGNOSTIC_WINDOW.total_seconds()
+    candidates: list[tuple[float, Path]] = []
+    try:
+        for path in projects_dir.rglob("*.jsonl"):
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                continue
+            if mtime >= cutoff:
+                candidates.append((mtime, path))
+    except OSError:
+        return []
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return [path for _, path in candidates[:PROVIDER_HOOK_DIAGNOSTIC_FILE_LIMIT]]
+
+
+def _collect_provider_hook_diagnostics(base_dir: Path, *, now: datetime, fast: bool) -> dict[str, Any]:
+    if fast:
+        return {
+            "schema_version": 1,
+            "state": "skipped",
+            "skipped_reason": "fast_local_health",
+            "recent_error_count": 0,
+            "deleted_cwd_error_count": 0,
+            "events": [],
+        }
+
+    provider_config_dir = _provider_config_dir_for_hook_diagnostics(base_dir)
+    if provider_config_dir is None:
+        return {
+            "schema_version": 1,
+            "state": "skipped",
+            "skipped_reason": "non_standard_longhouse_home",
+            "recent_error_count": 0,
+            "deleted_cwd_error_count": 0,
+            "events": [],
+        }
+
+    paths = _recent_claude_transcript_paths(provider_config_dir, now=now)
+    events: list[dict[str, Any]] = []
+    recent_error_count = 0
+    for path in paths:
+        try:
+            with path.open(encoding="utf-8") as handle:
+                for raw_line in handle:
+                    if not any(pattern in raw_line for pattern in _SHELL_SPAWN_ENOENT_PATTERNS):
+                        continue
+                    try:
+                        payload = json.loads(raw_line)
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(payload, Mapping):
+                        continue
+                    recent_error_count += 1
+                    event = _hook_diagnostic_event_from_payload(payload, source_path=path)
+                    if event is not None:
+                        events.append(event)
+        except OSError:
+            continue
+
+    events.sort(
+        key=lambda item: _parse_rfc3339(item.get("timestamp")) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    events = events[:PROVIDER_HOOK_DIAGNOSTIC_EVENT_LIMIT]
+    state = "session_cwd_missing" if events else "healthy"
+    return {
+        "schema_version": 1,
+        "state": state,
+        "provider_config_dir": str(provider_config_dir),
+        "scan_window_seconds": int(PROVIDER_HOOK_DIAGNOSTIC_WINDOW.total_seconds()),
+        "scanned_files": len(paths),
+        "recent_error_count": recent_error_count,
+        "deleted_cwd_error_count": len(events),
+        "events": events,
+        "latest": events[0] if events else None,
     }
 
 
@@ -2932,6 +3091,8 @@ def _degraded_health_headline(
         headline = "Longhouse local status needs a newer engine"
     elif "engine_status_sessions_invalid" in reasons:
         headline = "Longhouse local status has invalid session data"
+    elif "provider_hook_cwd_missing" in reasons:
+        headline = "A provider session working directory disappeared"
     elif "managed_session_detached" in reasons:
         if managed_detached == 1 and managed_attached == 0:
             headline = "Managed session is running in background"
@@ -3278,6 +3439,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
     launch_readiness = _collect_launch_readiness(resolved_base_dir, service=service)
     transport_sample, transport_assessment = _collect_transport_health(engine_status)
     control_channel = _collect_control_channel_health(engine_status)
+    provider_hook_diagnostics = _collect_provider_hook_diagnostics(resolved_base_dir, now=now, fast=fast)
     health_state, severity, headline, reasons, suggested_actions = _classify_health(
         service=service,
         engine_status=engine_status,
@@ -3288,6 +3450,21 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         managed_summary=managed_summary,
         managed_sessions=managed_sessions,
     )
+    if provider_hook_diagnostics.get("state") == "session_cwd_missing":
+        if "provider_hook_cwd_missing" not in reasons:
+            reasons.append("provider_hook_cwd_missing")
+        latest_hook_issue = provider_hook_diagnostics.get("latest")
+        latest_cwd = latest_hook_issue.get("cwd") if isinstance(latest_hook_issue, Mapping) else None
+        action = (
+            f"Restart or reattach the affected provider session from an existing directory; missing cwd: {latest_cwd}"
+            if latest_cwd
+            else "Restart or reattach the affected provider session from an existing directory."
+        )
+        suggested_actions.append(action)
+        if health_state == "healthy":
+            health_state = "degraded"
+            severity = "yellow"
+            headline = "A provider session working directory disappeared"
     if int(provider_release_status.get("blocking_count") or 0) > 0:
         if "provider_release_blocked" not in reasons:
             reasons.append("provider_release_blocked")
@@ -3324,6 +3501,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         "outbox": outbox,
         "provider_clis": provider_clis,
         "provider_release_status": provider_release_status,
+        "provider_hook_diagnostics": provider_hook_diagnostics,
         "activity_summary": activity_summary,
         "managed_summary": managed_summary,
         "managed_sessions": managed_sessions,
