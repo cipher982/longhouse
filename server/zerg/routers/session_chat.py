@@ -879,9 +879,9 @@ async def _dispatch_steer_input(
 ) -> SessionInputResponse:
     """Send a mid-turn steer, surfacing turn-ended races as a structured 409.
 
-    Codex's own guidance: do not silently fall back to queue when the user
-    chose intent=steer — the intent is corrective, and a silent queue could
-    cause the message to land later than desired without the user noticing.
+    Do not silently fall back to queue when the user chose intent=steer: the
+    intent is corrective, and a silent queue could cause the message to land
+    later than desired without the user noticing.
     """
     from zerg.services.managed_local_control import MANAGED_LOCAL_STEER_TURN_ENDED
     from zerg.services.managed_local_control import steer_text_to_managed_local_session

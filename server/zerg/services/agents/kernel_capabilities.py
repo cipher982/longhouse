@@ -35,6 +35,15 @@ _STATE_PRIORITY = {
     "ended": 1,
 }
 
+_STEER_CONTROL_PLANES = frozenset(
+    {
+        "codex_bridge",
+        "codex_app_server",
+        "claude_channel_bridge",
+        "opencode_process",
+    }
+)
+
 
 @dataclass(frozen=True)
 class KernelSessionCapabilities:
@@ -80,7 +89,8 @@ class KernelSessionCapabilities:
 
     @property
     def can_steer_active_turn(self) -> bool:
-        return bool(self.live_control_available and self.control_plane in ("codex_bridge", "opencode_process"))
+        control_plane = (self.control_plane or "").strip()
+        return bool(self.live_control_available and self.can_send_input and control_plane in _STEER_CONTROL_PLANES)
 
     @property
     def execution_home(self):
@@ -112,7 +122,13 @@ class KernelSessionCapabilities:
 
 
 def _connection_capability_count(conn: SessionConnection) -> int:
-    return int(bool(conn.can_send_input) + bool(conn.can_interrupt) + bool(conn.can_terminate) + bool(conn.can_tail_output))
+    capabilities = (
+        conn.can_send_input,
+        conn.can_interrupt,
+        conn.can_terminate,
+        conn.can_tail_output,
+    )
+    return sum(1 for capability in capabilities if capability)
 
 
 def _connection_sort_key(conn: SessionConnection) -> tuple:
@@ -240,7 +256,12 @@ def _imported_payload(
     run_ended: bool,
     best: Optional[SessionConnection],
 ) -> KernelSessionCapabilities:
-    label, live, reattach, observe, search, reason = _label_for(has_thread=has_thread, has_run=has_run, run_ended=run_ended, best=best)
+    label, live, reattach, observe, search, reason = _label_for(
+        has_thread=has_thread,
+        has_run=has_run,
+        run_ended=run_ended,
+        best=best,
+    )
     return KernelSessionCapabilities(
         session_id=sid,
         thread_id=thread_id,
@@ -272,10 +293,22 @@ def _payload_from_rows(
     if thread is None:
         return _imported_payload(sid=sid, has_thread=False, has_run=False, run_ended=False, best=None)
     if latest_run is None:
-        return _imported_payload(sid=sid, thread_id=str(thread.id), has_thread=True, has_run=False, run_ended=False, best=None)
+        return _imported_payload(
+            sid=sid,
+            thread_id=str(thread.id),
+            has_thread=True,
+            has_run=False,
+            run_ended=False,
+            best=None,
+        )
     best = _select_best_connection(connections)
     run_ended = latest_run.ended_at is not None
-    label, live, reattach, observe, search, reason = _label_for(has_thread=True, has_run=True, run_ended=run_ended, best=best)
+    label, live, reattach, observe, search, reason = _label_for(
+        has_thread=True,
+        has_run=True,
+        run_ended=run_ended,
+        best=best,
+    )
     if best is None:
         return KernelSessionCapabilities(
             session_id=sid,

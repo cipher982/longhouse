@@ -14,9 +14,8 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-value")
 os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-value")
 
-from zerg.services.session_views import build_session_capabilities_response
-
 from tests_lite._capability_test_helper import build_session_capabilities
+from zerg.services.session_views import build_session_capabilities_response
 
 
 def _session(**overrides):
@@ -104,6 +103,24 @@ def test_active_steerable_session_exposes_steer_as_primary_intent():
     assert response.default_input_intent == "steer"
     assert response.composer_enabled is True
     assert response.send_disabled_reason is None
+
+
+def test_active_claude_channel_session_exposes_steer_as_primary_intent():
+    session = _session(
+        provider="claude",
+        managed_transport="claude_channel_bridge",
+    )
+
+    response = build_session_capabilities_response(
+        session=session,
+        capability_flags=build_session_capabilities(session),
+        runtime_display=_runtime(state="running", is_executing=True),
+    )
+
+    assert response.input_mode == "live"
+    assert response.default_input_intent == "steer"
+    assert response.can_steer_active_turn is True
+    assert response.composer_placeholder == "Send a message to the live Claude session..."
 
 
 def test_offline_managed_session_exposes_disabled_composer_reason():

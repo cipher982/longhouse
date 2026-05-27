@@ -261,7 +261,8 @@ def build_managed_local_steer_text_command(
 
     Supported on codex_app_server (engine codex-bridge) and on
     opencode_process (longhouse opencode-bridge steer, which performs
-    abort -> wait idle -> send under the hood).
+    abort -> wait idle -> send under the hood). claude_channel_bridge
+    injects a channel send with intent=steer metadata.
     """
     transport = _resolve_transport(getattr(session, "managed_transport", None))
     if transport == ManagedSessionTransport.ANTIGRAVITY_PROCESS:
@@ -269,25 +270,26 @@ def build_managed_local_steer_text_command(
     session_id = str(getattr(session, "id", "") or "").strip()
     if not session_id:
         raise ManagedLocalTransportError("Managed local session is missing session ID")
+    attach_args = _attachment_args(attachments, transport=transport)
     if transport == ManagedSessionTransport.CODEX_APP_SERVER:
-        attach_args = _attachment_args(attachments, transport=transport)
         return _build_engine_bridge_shell_command(
             session_id=session_id,
             subcommand="steer",
             args=("--text", shlex.quote(text), *attach_args),
         )
     if transport == ManagedSessionTransport.OPENCODE_PROCESS:
-        if attachments:
-            raise ManagedLocalTransportError(
-                "Attachments are not supported on opencode_process steer commands",
-            )
         return _build_longhouse_cli_shell_command(
             subcommand="steer",
             args=("--session-id", shlex.quote(session_id), "--text", shlex.quote(text)),
             namespace="opencode-bridge",
         )
+    if transport == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE:
+        return _build_longhouse_cli_shell_command(
+            subcommand="send",
+            args=("--session-id", shlex.quote(session_id), "--text", shlex.quote(text), "--meta", "intent=steer"),
+        )
     raise ManagedLocalTransportError(
-        "Mid-turn steer is only supported on codex_app_server and opencode_process transports",
+        f"Mid-turn steer is not supported on {transport.value} transports",
     )
 
 

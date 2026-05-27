@@ -21,7 +21,6 @@ from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_execution_home import infer_execution_home
 
-
 _LIVE_CONTROL_TRANSPORTS = frozenset(
     {
         ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE,
@@ -42,6 +41,18 @@ def _coerce_managed_transport(value: str | None) -> ManagedSessionTransport | No
 def _execution_home_label(execution_home: SessionExecutionHome) -> str | None:
     if execution_home == SessionExecutionHome.MANAGED_LOCAL:
         return "On this Mac"
+    return None
+
+
+def _control_plane_for_transport(managed_transport: ManagedSessionTransport | None) -> str | None:
+    if managed_transport == ManagedSessionTransport.CODEX_APP_SERVER:
+        return "codex_bridge"
+    if managed_transport == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE:
+        return "claude_channel_bridge"
+    if managed_transport == ManagedSessionTransport.OPENCODE_PROCESS:
+        return "opencode_process"
+    if managed_transport == ManagedSessionTransport.ANTIGRAVITY_PROCESS:
+        return "antigravity_process"
     return None
 
 
@@ -91,7 +102,7 @@ def build_session_capabilities(session: Any) -> KernelSessionCapabilities:
         thread_id=None,
         run_id=None,
         connection_id=None,
-        control_plane="codex_bridge" if managed_transport == ManagedSessionTransport.CODEX_APP_SERVER else None,
+        control_plane=_control_plane_for_transport(managed_transport),
         connection_state="attached" if live_control_available else "detached",
         control_label=control_label,
         live_control_available=live_control_available,
