@@ -132,13 +132,13 @@ async function findEngineControlSessionIdViaAgentsApi(request: APIRequestContext
   const body = await response.json();
   const sessions = Array.isArray(body?.sessions) ? body.sessions : [];
   for (const session of sessions) {
-    const source = session?.runtime_facts?.control?.source;
-    const state = session?.runtime_facts?.control?.state;
+    const controlPath = session?.runtime_display?.control_path;
+    const hostState = session?.runtime_display?.host_state;
     const liveControlAvailable = session?.capabilities?.live_control_available;
     if (
       typeof session?.id === "string" &&
-      source === "machine_control_ws" &&
-      state === "online" &&
+      controlPath === "managed" &&
+      hostState === "online" &&
       liveControlAvailable === true
     ) {
       return session.id;
@@ -157,7 +157,7 @@ async function findClosedSessionIdViaAgentsApi(request: APIRequestContext): Prom
   const body = await response.json();
   const sessions = Array.isArray(body?.sessions) ? body.sessions : [];
   for (const session of sessions) {
-    const lifecycle = session?.runtime_facts?.lifecycle?.state ?? session?.runtime_display?.lifecycle;
+    const lifecycle = session?.runtime_display?.lifecycle;
     if (typeof session?.id === "string" && lifecycle === "closed") {
       return session.id;
     }
@@ -559,8 +559,8 @@ test("managed engine-control session stays enabled in workspace projection", asy
 
   const workspace = await workspaceResponse.json();
   const session = workspace?.session;
-  expect(session?.runtime_facts?.control?.source).toBe("machine_control_ws");
-  expect(session?.runtime_facts?.control?.state).toBe("online");
+  expect(session?.runtime_display?.control_path).toBe("managed");
+  expect(session?.runtime_display?.host_state).toBe("online");
   expect(session?.capabilities?.live_control_available).toBe(true);
   expect(session?.capabilities?.composer_enabled).toBe(true);
   expect(session?.capabilities?.composer_disabled_reason ?? null).toBeNull();
@@ -588,7 +588,7 @@ test("closed session workspace projection never exposes live composer", async ({
 
   const workspace = await workspaceResponse.json();
   const session = workspace?.session;
-  expect(session?.runtime_facts?.lifecycle?.state ?? session?.runtime_display?.lifecycle).toBe("closed");
+  expect(session?.runtime_display?.lifecycle).toBe("closed");
   expect(session?.capabilities?.live_control_available).toBe(false);
   expect(session?.capabilities?.reply_to_live_session_available).toBe(false);
   expect(session?.capabilities?.can_queue_next_input).toBe(false);
