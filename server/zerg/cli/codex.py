@@ -387,6 +387,7 @@ def _start_native_codex_bridge(
     codex_bin: str,
     model: str | None = None,
     model_reasoning_effort: str | None = None,
+    create_initial_thread: bool = False,
 ) -> tuple[str, str, str | None]:
     try:
         engine = get_engine_executable()
@@ -411,6 +412,8 @@ def _start_native_codex_bridge(
         cmd += ["--model", model]
     if model_reasoning_effort:
         cmd += ["--model-reasoning-effort", model_reasoning_effort]
+    if create_initial_thread:
+        cmd.append("--create-initial-thread")
     cmd.append("--json")
     completed = subprocess.run(
         cmd,
@@ -430,8 +433,9 @@ def _start_native_codex_bridge(
     ws_url = str(payload.get("ws_url") or "").strip()
     if not ws_url:
         raise _NativeBridgeError("Native Codex bridge did not return ws_url")
-    # thread_id may be empty at launch — the TUI creates the thread after attaching.
     thread_id = str(payload.get("thread_id") or "").strip()
+    if create_initial_thread and not thread_id:
+        raise _NativeBridgeError("Native Codex bridge did not return thread_id")
     state_file = str(payload.get("state_file") or "").strip() or None
     return thread_id, ws_url, state_file
 
@@ -634,15 +638,18 @@ def _run_native_codex_tui(
     bypass_approvals: bool = False,
     model: str | None = None,
     model_reasoning_effort: str | None = None,
+    thread_id: str | None = None,
 ) -> int:
-    # Connect TUI to the bridge's app-server. The TUI calls thread/start which
-    # creates the thread; the bridge daemon observes the thread/started notification
-    # and posts idle once it knows which thread to drive.
+    # Connect TUI to the bridge's app-server. When a thread_id is present, the
+    # TUI resumes the bridge-created thread instead of using Codex's fresh
+    # remote-TUI startup path.
     cmd = [codex_bin, "-c", _CODEX_DISABLE_UPDATE_CHECK_CONFIG]
     if model_reasoning_effort:
         cmd += ["-c", f"model_reasoning_effort={model_reasoning_effort}"]
     if model:
         cmd += ["--model", model]
+    if thread_id:
+        cmd += ["resume", thread_id]
     if bypass_approvals:
         cmd.append("--dangerously-bypass-approvals-and-sandbox")
     cmd += ["--enable", "tui_app_server", "--remote", ws_url]
@@ -845,6 +852,7 @@ def codex(
             codex_bin=resolved_codex_bin,
             model=model,
             model_reasoning_effort=model_reasoning_effort,
+            create_initial_thread=True,
         )
     except _NativeBridgeError as exc:
         typer.secho(f"Codex bridge failed: {exc}", fg=typer.colors.RED)
@@ -865,6 +873,7 @@ def codex(
         model=model,
         model_reasoning_effort=model_reasoning_effort,
         session_id=result.session_id,
+        thread_id=thread_id or None,
     )
     if not attach:
         typer.echo(f"Attach: {attach_cmd}")
@@ -886,6 +895,7 @@ def codex(
             bypass_approvals=bypass_approvals,
             model=model,
             model_reasoning_effort=model_reasoning_effort,
+            thread_id=thread_id or None,
         )
     finally:
         _restore_signal_handlers(previous_handlers)

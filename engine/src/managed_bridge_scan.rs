@@ -203,6 +203,8 @@ mod tests {
         let commands = vec![
             "/opt/homebrew/bin/codex --enable tui_app_server --remote ws://127.0.0.1:65268"
                 .to_string(),
+            "/opt/homebrew/bin/codex resume thr_123 --enable tui_app_server --remote ws://127.0.0.1:65269"
+                .to_string(),
             "/bin/bash".to_string(),
             "node /opt/homebrew/bin/codex -c foo=bar app-server --listen ws://127.0.0.1:0"
                 .to_string(),
@@ -210,6 +212,10 @@ mod tests {
         assert!(codex_tui_process_attached(
             &commands,
             "ws://127.0.0.1:65268"
+        ));
+        assert!(codex_tui_process_attached(
+            &commands,
+            "ws://127.0.0.1:65269"
         ));
         assert!(!codex_tui_process_attached(
             &commands,

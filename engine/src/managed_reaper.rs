@@ -456,6 +456,22 @@ mod tests {
     }
 
     #[test]
+    fn prestarted_tui_bridge_without_attachment_uses_grace_window() {
+        let mut obs = base_obs();
+        obs.launch_mode = Some(codex_bridge::LAUNCH_MODE_TUI.to_string());
+        obs.thread_id = Some("prestarted-thread".to_string());
+        obs.has_tui_attachment = false;
+        let now = Instant::now();
+        let grace = Duration::from_secs(120);
+
+        assert_eq!(decide(&obs, None, now, grace), ReapDecision::Track);
+        assert_eq!(
+            decide(&obs, Some(now - Duration::from_secs(130)), now, grace),
+            ReapDecision::Reap
+        );
+    }
+
+    #[test]
     fn skip_detached_ui_launch_without_tui_even_after_grace() {
         let mut obs = base_obs();
         obs.launch_mode = Some(codex_bridge::LAUNCH_MODE_DETACHED_UI.to_string());

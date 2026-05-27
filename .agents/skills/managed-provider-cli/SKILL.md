@@ -76,6 +76,8 @@ Hard Codex contract:
 3. Inspect rollout JSONL for the thread before trusting `last_turn_status`.
 4. Check app-server `readyz` and whether the relay URL was logged.
 5. For `longhouse-engine codex-bridge start` repros, prefer `--isolation-root <tmp-dir>`. It maps bridge state to `<tmp-dir>/codex-bridge` and Longhouse state to `<tmp-dir>/longhouse`. If you use lower-level flags, set both `--state-root` and `--longhouse-home`; `--state-root` alone is intentionally rejected on start.
+6. Codex v0.133 can print `No active thread is available.` during fresh remote-TUI startup before `StartupThreadStarted` installs the active thread. Verify bridge state, thread id, readyz, and rollout progress before treating that line as a managed-control failure.
+7. Do not kill Codex processes by broad `ps | grep codex app-server` matches. Use the bridge state file's exact `session_id`, `pid`, `app_server_pid`, `app_server_pgid`, and `ws_url`, then stop through `longhouse-engine codex-bridge stop --session-id ...` or an isolated repro state root.
 
 ### Change Managed Provider Code
 

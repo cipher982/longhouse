@@ -19,7 +19,7 @@ use crate::build_identity;
 use crate::codex_bridge::{
     cmd_codex_bridge_interrupt, cmd_codex_bridge_send, cmd_codex_bridge_start,
     cmd_codex_bridge_steer, validate_codex_bridge_attached, BridgeInterruptConfig,
-    BridgeSendConfig, BridgeStartConfig, BridgeSteerConfig, BridgeSteerError,
+    BridgeLaunchMode, BridgeSendConfig, BridgeStartConfig, BridgeSteerConfig, BridgeSteerError,
 };
 use crate::config::ShipperConfig;
 use std::path::PathBuf;
@@ -564,7 +564,8 @@ async fn execute_command(
                 start_timeout_secs: LAUNCH_START_TIMEOUT_SECS,
                 // Detached-UI remote launch: there is no visible TUI to create
                 // a thread, so we ask the bridge to call thread/start itself.
-                start_thread: true,
+                create_initial_thread: true,
+                launch_mode: BridgeLaunchMode::DetachedUi,
             })
             .await
             .map_err(|err| CommandError {
