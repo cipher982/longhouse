@@ -361,6 +361,32 @@ def test_longhouse_codex_bin_env_requires_explicit_override() -> None:
         assert payload["failure_code"] == "codex_bin_override_set"
 
 
+def test_release_artifact_can_use_upstream_version_without_local_binary_identity() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fixture = _fixture(root)
+        result, payload = _run_canary(
+            root,
+            fixture,
+            [
+                "--provider-version",
+                "rust-v0.134.0",
+                "--skip-binary-identity",
+                "--source-review-status",
+                "pass",
+                "--source-review-note",
+                "release triage report is in report.md",
+            ],
+            {"LONGHOUSE_CODEX_BIN": str(fixture["codex"])},
+        )
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["verdict"] == "yellow"
+        assert payload["failure_code"] == "insufficient_coverage"
+        assert payload["codex_version"] == "rust-v0.134.0"
+        assert payload["canaries"]["binary_identity"]["status"] == "not_run"
+        assert payload["source_review"]["note"] == "release triage report is in report.md"
+
+
 def main() -> int:
     tests = [
         test_full_fake_canary_can_go_green,
@@ -368,6 +394,7 @@ def main() -> int:
         test_managed_resume_active_thread_error_is_red,
         test_forbidden_longhouse_codex_path_is_red,
         test_longhouse_codex_bin_env_requires_explicit_override,
+        test_release_artifact_can_use_upstream_version_without_local_binary_identity,
     ]
     for test in tests:
         test()
