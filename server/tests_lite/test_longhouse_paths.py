@@ -4,6 +4,7 @@ from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_log_dir
 from zerg.services.longhouse_paths import get_agent_outbox_dir
 from zerg.services.longhouse_paths import get_agent_status_path
+from zerg.services.longhouse_paths import get_legacy_claude_managed_local_dir
 from zerg.services.longhouse_paths import is_stable_longhouse_home
 from zerg.services.longhouse_paths import resolve_longhouse_home
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
@@ -56,3 +57,28 @@ def test_agent_state_paths_live_under_agent_dir(tmp_path):
     assert get_agent_status_path(tmp_path) == tmp_path / "agent" / "engine-status.json"
     assert get_agent_db_path(tmp_path) == tmp_path / "agent" / "longhouse-shipper.db"
     assert get_agent_log_dir(tmp_path) == tmp_path / "agent" / "logs"
+
+
+def test_legacy_claude_managed_local_prefers_claude_config_dir(tmp_path, monkeypatch):
+    claude_home = tmp_path / "claude-profile"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_home))
+
+    assert get_legacy_claude_managed_local_dir("codex-bridge") == (claude_home / "managed-local" / "codex-bridge")
+
+
+def test_legacy_claude_managed_local_uses_sibling_for_longhouse_home(tmp_path, monkeypatch):
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+
+    assert get_legacy_claude_managed_local_dir("opencode", base_dir=tmp_path / ".longhouse") == (
+        tmp_path / ".claude" / "managed-local" / "opencode"
+    )
+
+
+def test_legacy_claude_managed_local_uses_real_claude_home_for_non_default_home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+
+    assert get_legacy_claude_managed_local_dir("antigravity", base_dir=tmp_path / "lh-state") == (
+        home / ".claude" / "managed-local" / "antigravity"
+    )

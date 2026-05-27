@@ -4558,6 +4558,29 @@ mod tests {
     }
 
     #[test]
+    fn default_bridge_writer_and_scanner_use_same_state_dir() {
+        let temp = tempfile::tempdir().unwrap();
+        let home = temp.path().join("home");
+        let longhouse_home = temp.path().join("isolated-longhouse");
+        temp_env::with_vars(
+            [
+                ("HOME", Some(home.display().to_string())),
+                ("LONGHOUSE_HOME", Some(longhouse_home.display().to_string())),
+                ("CLAUDE_CONFIG_DIR", None::<String>),
+            ],
+            || {
+                let paths = resolve_bridge_paths(None, "session-123", None).unwrap();
+                assert_eq!(
+                    paths.state_file.parent().unwrap(),
+                    crate::managed_bridge_scan::default_codex_bridge_state_dir()
+                        .unwrap()
+                        .as_path()
+                );
+            },
+        );
+    }
+
+    #[test]
     fn resolve_bridge_paths_maps_claude_config_dir_to_longhouse_sibling() {
         let temp = tempfile::tempdir().unwrap();
         let home = temp.path().join("home");
