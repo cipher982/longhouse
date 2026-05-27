@@ -400,7 +400,10 @@ pub fn leases_from_observations(
             continue;
         }
         let overlay = phase_overlay.get(&obs.session_id);
-        let thread_failed = obs.thread_subscription_status.as_deref() == Some("failed");
+        let thread_failed = matches!(
+            obs.thread_subscription_status.as_deref(),
+            Some("failed") | Some("provider_thread_switched")
+        );
         let has_bridge_error = obs
             .last_error
             .as_deref()
@@ -1404,6 +1407,26 @@ mod tests {
             .unwrap();
         assert_eq!(degraded_lease.state, "degraded");
         assert_eq!(detached_lease.state, "detached");
+    }
+
+    #[test]
+    fn leases_from_observations_marks_provider_thread_switch_as_degraded() {
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let now = Utc::now();
+
+        let mut obs = test_observation("provider-switch-session", "ws://127.0.0.1:45679/session");
+        obs.thread_subscription_status = Some("provider_thread_switched".to_string());
+
+        let leases = leases_from_observations(&conn, "cinder", &[obs], now);
+
+        assert_eq!(leases.len(), 1);
+        assert_eq!(leases[0].state, "degraded");
+        assert_eq!(
+            leases[0].thread_subscription_status.as_deref(),
+            Some("provider_thread_switched")
+        );
+        assert_eq!(leases[0].phase, None);
     }
 
     #[test]

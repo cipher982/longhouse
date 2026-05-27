@@ -216,6 +216,8 @@ Tests:
 
 ### Phase 1: Codex Split-Brain Guardrail
 
+Status: implemented in branch `session-continuation`.
+
 Goal: prevent silent archive/control divergence when manual Codex `/resume`
 switches the TUI to a different non-subagent provider thread.
 
@@ -258,6 +260,17 @@ Tests:
   rollout path.
 - Backend capability test proving a degraded/released connection projects no
   `can_send_input`.
+
+Implementation notes:
+
+- The bridge now writes `provider_thread_switched` into the state file and stops
+  reporting the session as `ready` when it observes a different provider root
+  thread.
+- Codex hook-driven `bind` refuses to move a managed session to a different
+  rollout path once the bridge state has a primary `thread_path`.
+- Server heartbeat projection maps `provider_thread_switched` to offline control
+  for the affected kernel connection so user send paths do not treat the
+  placeholder as live.
 
 Review:
 

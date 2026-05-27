@@ -179,10 +179,14 @@ def _lease_control_state(
     if state == "attached":
         if bridge not in _CONTROL_READY_BRIDGE_STATUSES:
             return "degraded", "bridge_unavailable"
+        if thread == "provider_thread_switched":
+            return "offline", "provider_thread_switched"
         if thread == "failed":
             return "degraded", "thread_subscription_failed"
         return "online", None
     if state == "degraded":
+        if thread == "provider_thread_switched":
+            return "offline", "provider_thread_switched"
         return "degraded", "degraded"
     if state == "detached":
         return "offline", "detached"

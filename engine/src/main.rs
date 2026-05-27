@@ -1020,6 +1020,16 @@ fn main() -> anyhow::Result<()> {
                 .unwrap_or_else(|_| path.clone())
                 .to_string_lossy()
                 .to_string();
+            if provider.eq_ignore_ascii_case("codex") {
+                if let Some(reason) = codex_bridge::codex_managed_bind_rejection_reason(
+                    &session_id,
+                    &canonical,
+                    None,
+                )? {
+                    eprintln!("{reason}");
+                    return Ok(());
+                }
+            }
             sb.bind(&canonical, &session_id, &provider)?;
             eprintln!("Bound {} → {}", canonical, session_id);
         }
