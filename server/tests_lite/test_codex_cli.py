@@ -159,27 +159,13 @@ def test_emit_warp_cli_agent_event_skips_non_warp_terminal(monkeypatch, tmp_path
     assert output.getvalue() == ""
 
 
-def test_codex_doctor_reports_binary_legacy_artifacts_and_bridge_state(monkeypatch, tmp_path):
+def test_codex_doctor_reports_binary_and_bridge_state(monkeypatch, tmp_path):
     runner = CliRunner()
     home = tmp_path / "home"
     codex_bin = tmp_path / "codex"
     codex_bin.write_text("#!/bin/sh\necho codex-cli 9.9.9\n")
     codex_bin.chmod(0o755)
-    launcher = home / ".local" / "bin" / "longhouse-codex"
-    launcher.parent.mkdir(parents=True, exist_ok=True)
-    launcher.write_text(f"#!/bin/sh\n{codex_cli.LEGACY_MANAGED_CODEX_LAUNCHER_MARKER}\n")
-    runtime_dir = home / ".longhouse" / "runtimes" / "codex"
-    runtime_dir.mkdir(parents=True)
     claude_home = tmp_path / "claude-profile"
-    legacy_bridge_dir = claude_home / "managed-local" / "codex-bridge"
-    legacy_bridge_dir.mkdir(parents=True)
-    (legacy_bridge_dir / "old-session.json").write_text("{}")
-    legacy_opencode_dir = claude_home / "managed-local" / "opencode" / "bridge" / "sessions"
-    legacy_opencode_dir.mkdir(parents=True)
-    (legacy_opencode_dir / "old-opencode.json").write_text("{}")
-    legacy_antigravity_dir = claude_home / "managed-local" / "antigravity" / "plugins" / "longhouse-runtime"
-    legacy_antigravity_dir.mkdir(parents=True)
-    (legacy_antigravity_dir / "plugin.json").write_text("{}")
     state_root = tmp_path / "bridge"
     state_root.mkdir()
     state_file = state_root / "session-123.json"
@@ -222,28 +208,12 @@ def test_codex_doctor_reports_binary_legacy_artifacts_and_bridge_state(monkeypat
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert set(payload) == {"codex_binary", "legacy_artifacts", "bridge"}
+    assert set(payload) == {"codex_binary", "bridge"}
     assert set(payload["codex_binary"]) == {"path", "source", "version", "env_override"}
-    assert set(payload["legacy_artifacts"]) == {
-        "launcher",
-        "managed_runtime_dir",
-        "claude_managed_local_state",
-    }
     assert set(payload["bridge"]) == {"state_root", "state_root_exists", "readyz_checked", "sessions"}
     assert payload["codex_binary"]["path"] == str(codex_bin.resolve())
     assert payload["codex_binary"]["source"] == "--codex-bin"
     assert payload["codex_binary"]["version"] == {"ok": True, "value": "codex-cli 9.9.9", "error": None}
-    assert payload["legacy_artifacts"]["launcher"]["exists"] is True
-    assert payload["legacy_artifacts"]["launcher"]["legacy_marker"] is True
-    assert payload["legacy_artifacts"]["managed_runtime_dir"]["exists"] is True
-    legacy_state = payload["legacy_artifacts"]["claude_managed_local_state"]
-    assert legacy_state["active_truth"] is False
-    assert legacy_state["providers"]["codex_bridge"]["path"] == str(legacy_bridge_dir)
-    assert legacy_state["providers"]["codex_bridge"]["state_file_count"] == 1
-    assert legacy_state["providers"]["opencode"]["path"] == str(claude_home / "managed-local" / "opencode")
-    assert legacy_state["providers"]["opencode"]["state_file_count"] == 1
-    assert legacy_state["providers"]["antigravity"]["path"] == str(claude_home / "managed-local" / "antigravity")
-    assert legacy_state["providers"]["antigravity"]["state_file_count"] == 1
     assert payload["bridge"]["state_root"] == str(state_root)
     assert set(payload["bridge"]["sessions"][0]) == {
         "session_id",

@@ -34,12 +34,10 @@ from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_MISSING
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PROCESS
 from zerg.provider_release_status import collect_provider_release_status
-from zerg.services.longhouse_paths import LEGACY_CLAUDE_MANAGED_LOCAL_PROVIDERS
 from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_log_dir
 from zerg.services.longhouse_paths import get_agent_outbox_dir
 from zerg.services.longhouse_paths import get_agent_status_path
-from zerg.services.longhouse_paths import get_legacy_claude_managed_local_dir
 from zerg.services.longhouse_paths import get_managed_local_dir
 from zerg.services.longhouse_paths import resolve_longhouse_home
 from zerg.services.machine_repair import recommended_machine_repair_command
@@ -1217,29 +1215,6 @@ def _collect_update_info() -> dict[str, Any]:
 
 def _codex_bridge_state_dir(base_dir: Path) -> Path:
     return get_managed_local_dir("codex-bridge", base_dir=base_dir)
-
-
-def _count_legacy_json_files(state_dir: Path) -> int:
-    if not state_dir.exists():
-        return 0
-    try:
-        return sum(1 for path in state_dir.rglob("*.json") if not path.name.endswith(".tmp"))
-    except OSError:
-        return 0
-
-
-def _collect_legacy_runtime_state(base_dir: Path) -> dict[str, Any]:
-    state: dict[str, Any] = {}
-    for key, provider in LEGACY_CLAUDE_MANAGED_LOCAL_PROVIDERS.items():
-        legacy_dir = get_legacy_claude_managed_local_dir(provider, base_dir=base_dir)
-        state[key] = {
-            "path": str(legacy_dir),
-            "exists": legacy_dir.exists(),
-            "state_file_count": _count_legacy_json_files(legacy_dir),
-            "active_truth": False,
-            "note": "Stale pre-migration managed-local state only; not used for active liveness.",
-        }
-    return state
 
 
 def _compute_process_snapshot() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -3340,7 +3315,6 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
     provider_clis = _collect_provider_clis()
     provider_release_status = collect_provider_release_status(provider_clis, fast=fast)
     activity_summary = _collect_activity_summary(resolved_base_dir, now=now)
-    legacy_runtime_state = _collect_legacy_runtime_state(resolved_base_dir)
     managed_summary, managed_sessions, orphan_bridges, unmanaged_processes = _collect_managed_session_sources(
         resolved_base_dir,
         engine_status=engine_status,
@@ -3397,7 +3371,6 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         "provider_clis": provider_clis,
         "provider_release_status": provider_release_status,
         "activity_summary": activity_summary,
-        "legacy_runtime_state": legacy_runtime_state,
         "managed_summary": managed_summary,
         "managed_sessions": managed_sessions,
         "unmanaged_processes": unmanaged_processes,

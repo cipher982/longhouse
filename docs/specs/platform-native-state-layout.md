@@ -14,9 +14,10 @@ including `LONGHOUSE_HOME` and provider-home-derived scratch layouts.
   and bridge state live under the Longhouse home.
 - Codex bridge readers and writers use the same `managed-local/codex-bridge`
   directory resolved from the Longhouse home.
-- Legacy `~/.claude/managed-local/codex-bridge` files are stale pre-migration
-  state. They may be reported by doctor surfaces, but they are not active
-  liveness truth.
+- Obsolete `~/.claude/managed-local/{codex-bridge,opencode,antigravity}`
+  directories contain only Longhouse-owned derived runtime state and may be
+  removed by repair/install cleanup. Raw provider transcript/session logs are
+  out of scope and must not be touched.
 
 ## Deferred Split
 
@@ -29,9 +30,8 @@ A later platform-native split should separate:
   bridge credentials
 - cache: platform cache dir
 
-Do not land that as a simple helper rename. It is a compatibility migration
-because active bridge sessions have state files, locks, sockets, and process
-coordinates in the current tree.
+Do not land that as a simple helper rename. It changes where active bridge
+sessions keep state files, locks, sockets, and process coordinates.
 
 Current trees in scope:
 
@@ -53,8 +53,9 @@ Current trees in scope:
 - Runtime directories containing live bridge credentials must be private
   (`0700` parents, `0600` files).
 - Do not read old and new bridge state as equal active truth. If a transition
-  needs old-state visibility, expose it as legacy/stale evidence with explicit
-  user repair or cleanup guidance.
+  leaves obsolete Longhouse-owned telemetry behind, remove it through explicit
+  repair/install cleanup instead of adding reporting surfaces or secondary
+  truth channels.
 - Engine path defaults are compiled into `longhouse-engine`. Any split that
   changes engine-visible paths needs a local engine refresh after merge, not
   just a Python CLI reinstall.
