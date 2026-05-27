@@ -44,6 +44,19 @@ dim()   { printf '\033[2m%s\033[0m\n' "$*"; }
 pass() { PASS=$((PASS + 1)); green "  PASS: $1"; }
 fail() { FAIL=$((FAIL + 1)); red   "  FAIL: $1"; }
 
+wait_for_pid_exit() {
+    local pid="$1"
+    local label="$2"
+    for _ in $(seq 1 20); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            return 0
+        fi
+        sleep 0.2
+    done
+    fail "$label still running after stop (pid=$pid)"
+    return 1
+}
+
 cleanup() {
     for pid in "${CLEANUP_PIDS[@]}"; do
         kill "$pid" 2>/dev/null || true
@@ -190,16 +203,27 @@ if [ -f "$DETACHED_STATE_FILE" ]; then
         pass "detached-ui bridge created thread and IPC socket"
     else
         fail "detached-ui state launch_mode='$DETACHED_LAUNCH_MODE' thread='$DETACHED_THREAD_ID' ipc='$DETACHED_IPC'"
+        dim "$DETACHED_OUTPUT"
+        dim "  log: $(tail -10 "$DETACHED_LOG_FILE" 2>/dev/null || echo '(empty)')"
     fi
 else
     fail "detached-ui state file not found"
+    dim "$DETACHED_OUTPUT"
+    dim "  log: $(tail -10 "$DETACHED_LOG_FILE" 2>/dev/null || echo '(empty)')"
 fi
 
-"$ENGINE" codex-bridge stop \
+DETACHED_STOP_OUTPUT=$("$ENGINE" codex-bridge stop \
     --session-id "$DETACHED_SESSION_ID" \
     --state-root "$DETACHED_STATE_ROOT" \
     --reason bridge_e2e_detached_ui \
-    >/dev/null 2>&1 || true
+    2>&1) || {
+    fail "detached-ui bridge stop failed"
+    dim "$DETACHED_STOP_OUTPUT"
+    kill "$DETACHED_PID" 2>/dev/null || true
+}
+if [ -n "$DETACHED_PID" ]; then
+    wait_for_pid_exit "$DETACHED_PID" "detached-ui bridge" || kill "$DETACHED_PID" 2>/dev/null || true
+fi
 
 echo "─── Test 5: Turn submit ───"
 
@@ -326,12 +350,18 @@ else
     fi
 fi
 
-# Stop bridge from tests 1-9 before CLI entry point test.
-"$ENGINE" codex-bridge stop \
+MAIN_STOP_OUTPUT=$("$ENGINE" codex-bridge stop \
     --session-id "$SESSION_ID" \
     --state-root "$STATE_ROOT" \
     --reason bridge_e2e_main \
-    >/dev/null 2>&1 || kill "$BRIDGE_PID" 2>/dev/null || true
+    2>&1) || {
+    fail "main bridge stop failed"
+    dim "$MAIN_STOP_OUTPUT"
+    kill "$BRIDGE_PID" 2>/dev/null || true
+}
+if [ -n "$BRIDGE_PID" ]; then
+    wait_for_pid_exit "$BRIDGE_PID" "main bridge" || kill "$BRIDGE_PID" 2>/dev/null || true
+fi
 sleep 1
 
 echo "─── Test 10: CLI entry point (longhouse codex --no-attach) ───"
@@ -390,7 +420,7 @@ if [ -z "$TUI_WS_URL" ] || [ -z "$CLI_THREAD_ID" ]; then
 else
     # Run codex TUI under `script` to provide a pseudo-TTY (codex requires a real terminal).
     # We're not testing interactivity, just that it connects without crashing.
-    TUI_LOG="/tmp/bridge-e2e-tui.log"
+    TUI_LOG="$ISOLATION_ROOT/bridge-e2e-tui.log"
     if command -v script &>/dev/null; then
         # macOS `script` syntax: script -q output_file command...
         script -q "$TUI_LOG" "$CODEX_BIN" -c check_for_update_on_startup=false resume "$CLI_THREAD_ID" --enable tui_app_server --remote "$TUI_WS_URL" --no-alt-screen &
