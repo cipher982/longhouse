@@ -177,16 +177,24 @@ def _status_for_provider(provider: str, provider_cli: dict[str, Any]) -> dict[st
     artifact, source = _load_provider_artifact(provider)
     if artifact is None:
         attempts = list(source.get("attempts") or [])
-        optional_missing_only = bool(attempts) and all(
+        missing_only = bool(attempts) and all(
             (attempt.get("source") == "file" and attempt.get("required") is False and attempt.get("error") == "missing")
             or (attempt.get("source") == "url" and attempt.get("error") == "missing")
             for attempt in attempts
         )
+        has_url_attempt = any(attempt.get("source") == "url" for attempt in attempts)
+        configured_without_artifact = missing_only and has_url_attempt
+        if configured_without_artifact:
+            status = "no_artifact"
+        elif not attempts or missing_only:
+            status = "not_configured"
+        else:
+            status = "unavailable"
         return {
             "provider": provider,
-            "configured": bool(attempts) and not optional_missing_only,
-            "status": "not_configured" if not attempts or optional_missing_only else "unavailable",
-            "risk": "none" if not attempts or optional_missing_only else "warning",
+            "configured": configured_without_artifact or (bool(attempts) and not missing_only),
+            "status": status,
+            "risk": "none" if not attempts or missing_only else "warning",
             "source": source,
         }
 
