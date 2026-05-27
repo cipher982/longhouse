@@ -522,6 +522,7 @@ class ConfigureTestSessionRuntimeRequest(BaseModel):
             "codex_app_server",
             "opencode_server_bridge",
             "opencode_process",
+            "antigravity_hook_inbox",
             "antigravity_process",
         ]
     ] = None

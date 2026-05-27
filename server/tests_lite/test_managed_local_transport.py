@@ -96,6 +96,15 @@ def test_build_managed_local_attach_command_is_empty_for_antigravity_process():
     assert build_managed_local_attach_command(session=session) is None
 
 
+def test_build_managed_local_attach_command_is_empty_for_antigravity_hook_inbox():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.ANTIGRAVITY_HOOK_INBOX.value,
+    )
+
+    assert build_managed_local_attach_command(session=session) is None
+
+
 def test_build_managed_local_send_text_command_uses_engine_bridge_for_codex_app_server():
     session = SimpleNamespace(
         id="session-123",
@@ -178,6 +187,18 @@ def test_build_managed_local_send_text_command_uses_opencode_server_bridge():
     command = build_managed_local_send_text_command(session=session, text="continue")
     inner = _wrapped_inner(command)
     assert "exec longhouse opencode-channel send --session-id session-123 --text continue" in inner
+
+
+def test_build_managed_local_send_text_command_uses_antigravity_hook_inbox():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.ANTIGRAVITY_HOOK_INBOX.value,
+        provider="antigravity",
+    )
+
+    command = build_managed_local_send_text_command(session=session, text="continue")
+    inner = _wrapped_inner(command)
+    assert "exec longhouse antigravity-channel send --session-id session-123 --text continue" in inner
 
 
 def test_build_managed_local_steer_text_command_uses_local_bridge_for_claude_channel_transport():
@@ -289,6 +310,16 @@ def test_build_managed_local_send_text_command_rejects_antigravity_process():
         build_managed_local_send_text_command(session=session, text="continue")
 
 
+def test_build_managed_local_steer_text_command_rejects_antigravity_hook_inbox():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.ANTIGRAVITY_HOOK_INBOX.value,
+    )
+
+    with pytest.raises(ManagedLocalTransportError, match="antigravity_hook_inbox"):
+        build_managed_local_steer_text_command(session=session, text="continue")
+
+
 def test_build_managed_local_interrupt_command_uses_opencode_bridge_for_opencode_process():
     session = SimpleNamespace(
         id="session-123",
@@ -337,8 +368,18 @@ def test_build_managed_local_interrupt_command_rejects_antigravity_process():
         build_managed_local_interrupt_command(session=session)
 
 
+def test_build_managed_local_interrupt_command_rejects_antigravity_hook_inbox():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.ANTIGRAVITY_HOOK_INBOX.value,
+    )
+
+    with pytest.raises(ManagedLocalTransportError, match="does not support remote interrupts yet"):
+        build_managed_local_interrupt_command(session=session)
+
+
 def test_transport_for_provider():
     assert ManagedSessionTransport.for_provider("codex") == ManagedSessionTransport.CODEX_APP_SERVER
     assert ManagedSessionTransport.for_provider("claude") == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE
     assert ManagedSessionTransport.for_provider("opencode") == ManagedSessionTransport.OPENCODE_SERVER_BRIDGE
-    assert ManagedSessionTransport.for_provider("antigravity") == ManagedSessionTransport.ANTIGRAVITY_PROCESS
+    assert ManagedSessionTransport.for_provider("antigravity") == ManagedSessionTransport.ANTIGRAVITY_HOOK_INBOX

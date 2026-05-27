@@ -136,7 +136,10 @@ def build_managed_local_attach_command(*, session: AgentSession, db: Session | N
             required_commands=("longhouse", "opencode"),
         )
 
-    if transport == ManagedSessionTransport.ANTIGRAVITY_PROCESS.value:
+    if transport in (
+        ManagedSessionTransport.ANTIGRAVITY_PROCESS.value,
+        ManagedSessionTransport.ANTIGRAVITY_HOOK_INBOX.value,
+    ):
         return None
 
     if transport != ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value:
@@ -184,6 +187,8 @@ def build_managed_local_interrupt_command(*, session: AgentSession) -> str:
             subcommand="interrupt",
             args=("--session-id", shlex.quote(session_id)),
         )
+    if transport == ManagedSessionTransport.ANTIGRAVITY_HOOK_INBOX:
+        raise ManagedLocalTransportError("antigravity_hook_inbox does not support remote interrupts yet")
     if transport == ManagedSessionTransport.ANTIGRAVITY_PROCESS:
         raise ManagedLocalTransportError("antigravity_process does not support remote interrupts yet")
     if transport == ManagedSessionTransport.CODEX_APP_SERVER:
@@ -246,6 +251,16 @@ def build_managed_local_send_text_command(
             subcommand="send",
             args=("--session-id", shlex.quote(session_id), "--text", shlex.quote(text)),
         )
+    if transport == ManagedSessionTransport.ANTIGRAVITY_HOOK_INBOX:
+        if attachments:
+            raise ManagedLocalTransportError(
+                "Attachments are only supported on codex_app_server transports",
+            )
+        return _build_longhouse_cli_shell_command(
+            command_group="antigravity-channel",
+            subcommand="send",
+            args=("--session-id", shlex.quote(session_id), "--text", shlex.quote(text)),
+        )
     if transport == ManagedSessionTransport.ANTIGRAVITY_PROCESS:
         raise ManagedLocalTransportError("antigravity_process does not support remote text sends yet")
     attach_args = _attachment_args(attachments, transport=transport)
@@ -283,6 +298,8 @@ def build_managed_local_steer_text_command(
     transport = _resolve_transport(getattr(session, "managed_transport", None))
     if transport == ManagedSessionTransport.OPENCODE_SERVER_BRIDGE:
         raise ManagedLocalTransportError("Mid-turn steer is not supported on opencode_server_bridge transports")
+    if transport == ManagedSessionTransport.ANTIGRAVITY_HOOK_INBOX:
+        raise ManagedLocalTransportError("Mid-turn steer is not supported on antigravity_hook_inbox transports")
     if transport == ManagedSessionTransport.ANTIGRAVITY_PROCESS:
         raise ManagedLocalTransportError("Mid-turn steer is not supported on antigravity_process transports")
     session_id = str(getattr(session, "id", "") or "").strip()

@@ -29,8 +29,8 @@ session rather than act on an existing one.
 - No session migration between machines. Sessions run where launched.
 - No workspace filesystem sync, rsync, or git auto-commit on launch.
 - No Longhouse-provisioned runtime. Machines are user-owned.
-- No Antigravity remote launch until its control path is more than an
-  observe-only process wrapper.
+- No Antigravity remote launch until launch/reattach semantics are proven
+  beyond the send-only hook inbox.
 - No "queue launch until machine comes online." Machine must be online at
   request time. Queueing is a jobs product.
 - No generic remote shell. `session.launch` spawns one Longhouse-managed

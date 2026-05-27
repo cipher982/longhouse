@@ -26,6 +26,7 @@ class ManagedSessionTransport(str, Enum):
     CODEX_APP_SERVER = "codex_app_server"
     OPENCODE_SERVER_BRIDGE = "opencode_server_bridge"
     OPENCODE_PROCESS = "opencode_process"
+    ANTIGRAVITY_HOOK_INBOX = "antigravity_hook_inbox"
     ANTIGRAVITY_PROCESS = "antigravity_process"
 
     @staticmethod

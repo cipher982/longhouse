@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from cryptography.fernet import Fernet
@@ -17,6 +18,7 @@ os.environ.setdefault("JWT_SECRET", "test-jwt-secret-value")
 os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-value")
 
 from zerg.cli import antigravity as antigravity_cli
+from zerg.cli import antigravity_channel
 from zerg.cli._common import ManagedLocalLaunchResponse
 from zerg.cli.main import app
 from zerg.services.managed_session_contracts import list_managed_session_contracts
@@ -52,7 +54,7 @@ def test_antigravity_command_launches_managed_session_and_passes_extra_args(monk
             provider_session_id="provider-123",
             attach_command="",
             source_runner_name="work-laptop",
-            managed_transport="antigravity_process",
+            managed_transport="antigravity_hook_inbox",
         )
 
     monkeypatch.setattr(antigravity_cli, "_launch_managed_local_from_api", fake_launch)
@@ -116,7 +118,7 @@ def test_agy_command_alias_launches_managed_session(monkeypatch, tmp_path):
             provider_session_id="provider-123",
             attach_command="",
             source_runner_name="work-laptop",
-            managed_transport="antigravity_process",
+            managed_transport="antigravity_hook_inbox",
         )
 
     monkeypatch.setattr(antigravity_cli, "_launch_managed_local_from_api", fake_launch)
@@ -162,7 +164,7 @@ def test_antigravity_no_attach_prints_tokenless_launch_script_command(monkeypatc
             provider_session_id="provider-123",
             attach_command="",
             source_runner_name="work-laptop",
-            managed_transport="antigravity_process",
+            managed_transport="antigravity_hook_inbox",
         ),
     )
     monkeypatch.setattr(antigravity_cli, "_interactive_stdio", lambda: True)
@@ -199,7 +201,7 @@ def test_antigravity_launch_api_wrapper_sets_provider(monkeypatch, tmp_path):
             provider_session_id="provider-123",
             attach_command="",
             source_runner_name="work-laptop",
-            managed_transport="antigravity_process",
+            managed_transport="antigravity_hook_inbox",
         )
 
     monkeypatch.setattr(antigravity_cli.managed_local_cli, "_launch_managed_local_from_api", fake_launch)
@@ -255,6 +257,12 @@ def test_run_native_antigravity_exports_managed_session_env(monkeypatch, tmp_pat
     assert calls[0]["env"]["LONGHOUSE_DEVICE_ID"] == "work-laptop"
     assert calls[0]["env"]["LONGHOUSE_RUNTIME_EVENTS_URL"] == "https://longhouse.test/api/agents/runtime/events/batch"
     assert calls[0]["env"]["LONGHOUSE_RUNTIME_TOKEN"] == "zdt_test_token"
+    assert calls[0]["env"]["LONGHOUSE_ANTIGRAVITY_STATE_DIR"] == str(
+        tmp_path / "config" / "managed-local" / "antigravity" / "sessions"
+    )
+    assert calls[0]["env"]["LONGHOUSE_ANTIGRAVITY_INBOX_DIR"] == str(
+        tmp_path / "config" / "managed-local" / "antigravity" / "inbox" / "session-123"
+    )
     assert runtime_events[0]["url"] == "https://longhouse.test"
     assert runtime_events[0]["token"] == "zdt_test_token"
     assert runtime_events[0]["event"]["kind"] == "terminal_signal"
@@ -328,6 +336,174 @@ def test_antigravity_hook_script_writes_outbox_without_jq(tmp_path):
     assert payload["tool_name"] == "shell"
     assert payload["provider"] == "antigravity"
     assert payload["step_index"] == "7"
+
+
+def test_antigravity_hook_claims_inbox_message_and_injects_preinvocation(tmp_path):
+    config_dir = tmp_path / ".claude"
+    plugin_root = antigravity_cli._ensure_antigravity_runtime_plugin(
+        config_dir=config_dir,
+        antigravity_cli_root=tmp_path / ".gemini" / "antigravity-cli",
+        engine_path="/bin/true",
+        global_hooks_path=tmp_path / ".gemini" / "config" / "hooks.json",
+    )
+    script = plugin_root / "longhouse-antigravity-hook.sh"
+    queued = antigravity_channel.enqueue_antigravity_message(
+        session_id="session-123",
+        text="remote follow-up",
+        config_dir=config_dir,
+    )
+    inbox_dir = antigravity_channel.antigravity_inbox_dir("session-123", config_dir)
+    state_dir = antigravity_channel.antigravity_state_dir(config_dir)
+    assert oct((config_dir / "managed-local" / "antigravity").stat().st_mode & 0o777) == "0o700"
+    assert oct((config_dir / "managed-local" / "antigravity" / "inbox").stat().st_mode & 0o777) == "0o700"
+    assert oct(inbox_dir.stat().st_mode & 0o777) == "0o700"
+    assert oct(Path(str(queued["path"])).stat().st_mode & 0o777) == "0o600"
+
+    result = subprocess.run(
+        [str(script), "PreInvocation"],
+        input=json.dumps(
+            {
+                "conversationId": "ag-provider-session",
+                "workspacePaths": [str(tmp_path)],
+                "transcriptPath": str(tmp_path / "transcript.jsonl"),
+                "stepIdx": 8,
+            }
+        ),
+        text=True,
+        capture_output=True,
+        check=False,
+        env={
+            "LONGHOUSE_HOOK_PYTHON": sys.executable,
+            "LONGHOUSE_ENGINE": "/bin/true",
+            "LONGHOUSE_MANAGED_SESSION_ID": "session-123",
+            "LONGHOUSE_ANTIGRAVITY_INBOX_DIR": str(inbox_dir),
+            "LONGHOUSE_ANTIGRAVITY_STATE_DIR": str(state_dir),
+            "PATH": os.defpath,
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"injectSteps": [{"userMessage": "remote follow-up"}]}
+    assert not list(inbox_dir.glob("msg-*.json"))
+    claimed = antigravity_channel.wait_for_antigravity_message_claim(
+        session_id="session-123",
+        message_id=str(queued["message_id"]),
+        timeout_secs=0,
+        config_dir=config_dir,
+    )
+    assert claimed is not None
+    assert claimed["hook_event"] == "PreInvocation"
+    assert claimed["conversation_id"] == "ag-provider-session"
+    assert claimed["step_index"] == "8"
+    state = json.loads((state_dir / "session-123.json").read_text(encoding="utf-8"))
+    assert state["conversation_id"] == "ag-provider-session"
+    assert state["transcript_path"] == str(tmp_path / "transcript.jsonl")
+
+
+def test_antigravity_channel_timeout_removes_unclaimed_message(tmp_path):
+    runner = CliRunner()
+    config_dir = tmp_path / ".claude"
+
+    result = runner.invoke(
+        app,
+        [
+            "antigravity-channel",
+            "send",
+            "--config-dir",
+            str(config_dir),
+            "--session-id",
+            "session-123",
+            "--text",
+            "will timeout",
+            "--wait-claimed-secs",
+            "0",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "did not claim queued input" in result.output
+    inbox_dir = antigravity_channel.antigravity_inbox_dir("session-123", config_dir)
+    assert not list(inbox_dir.glob("msg-*.json"))
+
+
+def test_antigravity_hook_claims_postinvocation_message_and_forces_continue(tmp_path):
+    config_dir = tmp_path / ".claude"
+    plugin_root = antigravity_cli._ensure_antigravity_runtime_plugin(
+        config_dir=config_dir,
+        antigravity_cli_root=tmp_path / ".gemini" / "antigravity-cli",
+        engine_path="/bin/true",
+        global_hooks_path=tmp_path / ".gemini" / "config" / "hooks.json",
+    )
+    script = plugin_root / "longhouse-antigravity-hook.sh"
+    antigravity_channel.enqueue_antigravity_message(
+        session_id="session-123",
+        text="continue after response",
+        config_dir=config_dir,
+    )
+
+    result = subprocess.run(
+        [str(script), "PostInvocation"],
+        input=json.dumps({"conversationId": "ag-provider-session", "stepIdx": 9}),
+        text=True,
+        capture_output=True,
+        check=False,
+        env={
+            "LONGHOUSE_HOOK_PYTHON": sys.executable,
+            "LONGHOUSE_ENGINE": "/bin/true",
+            "LONGHOUSE_MANAGED_SESSION_ID": "session-123",
+            "LONGHOUSE_ANTIGRAVITY_INBOX_DIR": str(
+                antigravity_channel.antigravity_inbox_dir("session-123", config_dir)
+            ),
+            "LONGHOUSE_ANTIGRAVITY_STATE_DIR": str(antigravity_channel.antigravity_state_dir(config_dir)),
+            "PATH": os.defpath,
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "injectSteps": [{"userMessage": "continue after response"}],
+        "terminationBehavior": "force_continue",
+    }
+
+
+def test_antigravity_stop_hook_continues_when_inbox_has_pending_input(tmp_path):
+    config_dir = tmp_path / ".claude"
+    plugin_root = antigravity_cli._ensure_antigravity_runtime_plugin(
+        config_dir=config_dir,
+        antigravity_cli_root=tmp_path / ".gemini" / "antigravity-cli",
+        engine_path="/bin/true",
+        global_hooks_path=tmp_path / ".gemini" / "config" / "hooks.json",
+    )
+    script = plugin_root / "longhouse-antigravity-hook.sh"
+    antigravity_channel.enqueue_antigravity_message(
+        session_id="session-123",
+        text="do not idle yet",
+        config_dir=config_dir,
+    )
+
+    result = subprocess.run(
+        [str(script), "Stop"],
+        input=json.dumps({"conversationId": "ag-provider-session", "fullyIdle": True}),
+        text=True,
+        capture_output=True,
+        check=False,
+        env={
+            "LONGHOUSE_HOOK_PYTHON": sys.executable,
+            "LONGHOUSE_ENGINE": "/bin/true",
+            "LONGHOUSE_MANAGED_SESSION_ID": "session-123",
+            "LONGHOUSE_ANTIGRAVITY_INBOX_DIR": str(
+                antigravity_channel.antigravity_inbox_dir("session-123", config_dir)
+            ),
+            "LONGHOUSE_ANTIGRAVITY_STATE_DIR": str(antigravity_channel.antigravity_state_dir(config_dir)),
+            "PATH": os.defpath,
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "decision": "continue",
+        "reason": "Longhouse queued input is waiting in the managed Antigravity inbox.",
+    }
 
 
 def test_antigravity_hook_binds_transcript_in_same_longhouse_home(tmp_path):
@@ -445,7 +621,10 @@ def test_launch_script_closes_session_without_printing_token(monkeypatch, tmp_pa
     )
 
     assert oct(launch_script.stat().st_mode & 0o777) == "0o700"
-    assert "terminal_signal" in launch_script.read_text(encoding="utf-8")
+    launch_text = launch_script.read_text(encoding="utf-8")
+    assert "terminal_signal" in launch_text
+    assert "LONGHOUSE_ANTIGRAVITY_STATE_DIR=" in launch_text
+    assert "LONGHOUSE_ANTIGRAVITY_INBOX_DIR=" in launch_text
     assert str(launch_script) in command
     assert "zdt_test_token" not in command
 

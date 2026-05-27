@@ -61,6 +61,7 @@ const CLAUDE_SUPPORTS: [&str; 4] = [
     "claude.launch",
 ];
 const OPENCODE_SUPPORTS: [&str; 3] = ["opencode.send", "opencode.interrupt", "opencode.launch"];
+const ANTIGRAVITY_SUPPORTS: [&str; 1] = ["antigravity.send"];
 
 #[derive(Clone, Debug)]
 pub struct ControlChannelStatus {
@@ -292,6 +293,9 @@ fn control_supports_for_path(path_value: Option<&std::ffi::OsStr>) -> Vec<String
     }
     if longhouse_available && command_exists_in_path("opencode", path_value) {
         supports.extend(OPENCODE_SUPPORTS.iter().map(|item| item.to_string()));
+    }
+    if longhouse_available && command_exists_in_path("agy", path_value) {
+        supports.extend(ANTIGRAVITY_SUPPORTS.iter().map(|item| item.to_string()));
     }
     supports
 }
@@ -683,6 +687,14 @@ async fn execute_command(
                 .await
                 .map(|output| cli_output_result(output, "opencode", "opencode_server_bridge"));
             }
+            if provider == "antigravity" {
+                return run_antigravity_channel_command(
+                    antigravity_channel_args(COMMAND_SEND_TEXT, &session_id, Some(text))?,
+                    LAUNCH_START_TIMEOUT_SECS,
+                )
+                .await
+                .map(|output| cli_output_result(output, "antigravity", "antigravity_hook_inbox"));
+            }
             validate_codex_bridge_attached(&session_id, None)
                 .map_err(CommandError::session_not_attached)?;
             let summary = cmd_codex_bridge_send(BridgeSendConfig {
@@ -724,6 +736,13 @@ async fn execute_command(
                 .await
                 .map(|output| cli_output_result(output, "opencode", "opencode_server_bridge"));
             }
+            if provider == "antigravity" {
+                return Err(CommandError {
+                    code: "unsupported_command".to_string(),
+                    message: "Antigravity hook inbox does not support remote interrupts"
+                        .to_string(),
+                });
+            }
             validate_codex_bridge_attached(&session_id, None)
                 .map_err(CommandError::session_not_attached)?;
             cmd_codex_bridge_interrupt(BridgeInterruptConfig {
@@ -756,6 +775,13 @@ async fn execute_command(
                 return Err(CommandError {
                     code: "unsupported_command".to_string(),
                     message: "OpenCode server bridge does not support active-turn steer"
+                        .to_string(),
+                });
+            }
+            if provider == "antigravity" {
+                return Err(CommandError {
+                    code: "unsupported_command".to_string(),
+                    message: "Antigravity hook inbox does not support active-turn steer"
                         .to_string(),
                 });
             }
@@ -863,6 +889,30 @@ fn opencode_channel_args(
     }
 }
 
+fn antigravity_channel_args(
+    command_type: &str,
+    session_id: &str,
+    text: Option<String>,
+) -> std::result::Result<Vec<String>, CommandError> {
+    match command_type {
+        COMMAND_SEND_TEXT => Ok(vec![
+            "antigravity-channel".to_string(),
+            "send".to_string(),
+            "--session-id".to_string(),
+            session_id.to_string(),
+            "--text".to_string(),
+            text.ok_or_else(|| CommandError {
+                code: "invalid_command".to_string(),
+                message: "text is required".to_string(),
+            })?,
+        ]),
+        _ => Err(CommandError {
+            code: "unsupported_command".to_string(),
+            message: format!("unsupported Antigravity channel command {command_type}"),
+        }),
+    }
+}
+
 struct CliCommandOutput {
     exit_code: i32,
     stdout: String,
@@ -922,6 +972,20 @@ async fn run_claude_channel_command(
 }
 
 async fn run_opencode_channel_command(
+    args: Vec<String>,
+    timeout_secs: u64,
+) -> std::result::Result<CliCommandOutput, CommandError> {
+    let output = run_longhouse_command(args, timeout_secs, Vec::new()).await?;
+    if output.exit_code != 0 {
+        return Err(CommandError {
+            code: "command_failed".to_string(),
+            message: nonempty_cli_error(&output),
+        });
+    }
+    Ok(output)
+}
+
+async fn run_antigravity_channel_command(
     args: Vec<String>,
     timeout_secs: u64,
 ) -> std::result::Result<CliCommandOutput, CommandError> {
@@ -1470,11 +1534,16 @@ mod tests {
 
         write_executable(&dir, "codex");
         write_executable(&dir, "claude");
+        write_executable(&dir, "agy");
         let supports = control_supports_for_path(Some(dir.as_os_str()));
         assert!(supports.contains(&"codex.launch".to_string()));
         assert!(supports.contains(&"codex.continue".to_string()));
         assert!(supports.contains(&"claude.launch".to_string()));
         assert!(supports.contains(&"opencode.launch".to_string()));
+        assert!(supports.contains(&"antigravity.send".to_string()));
+        assert!(!supports.contains(&"antigravity.interrupt".to_string()));
+        assert!(!supports.contains(&"antigravity.steer".to_string()));
+        assert!(!supports.contains(&"antigravity.launch".to_string()));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1762,6 +1831,46 @@ mod tests {
         );
         assert_eq!(
             opencode_channel_args(
+                COMMAND_STEER_TEXT,
+                "11111111-1111-4111-8111-111111111111",
+                Some("course correct".to_string())
+            )
+            .unwrap_err()
+            .code,
+            "unsupported_command"
+        );
+    }
+
+    #[test]
+    fn antigravity_channel_args_route_send_only() {
+        assert_eq!(
+            antigravity_channel_args(
+                COMMAND_SEND_TEXT,
+                "11111111-1111-4111-8111-111111111111",
+                Some("hello".to_string())
+            )
+            .unwrap(),
+            vec![
+                "antigravity-channel",
+                "send",
+                "--session-id",
+                "11111111-1111-4111-8111-111111111111",
+                "--text",
+                "hello",
+            ]
+        );
+        assert_eq!(
+            antigravity_channel_args(
+                COMMAND_INTERRUPT,
+                "11111111-1111-4111-8111-111111111111",
+                None
+            )
+            .unwrap_err()
+            .code,
+            "unsupported_command"
+        );
+        assert_eq!(
+            antigravity_channel_args(
                 COMMAND_STEER_TEXT,
                 "11111111-1111-4111-8111-111111111111",
                 Some("course correct".to_string())

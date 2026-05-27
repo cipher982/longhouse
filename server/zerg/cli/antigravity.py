@@ -27,6 +27,8 @@ from zerg.cli._common import load_api_credentials as _load_api_credentials
 from zerg.cli._common import open_session_url as _open_session_url
 from zerg.cli._managed_contract import record_managed_provider_contract
 from zerg.cli._managed_contract import remove_managed_provider_contract
+from zerg.cli.antigravity_channel import antigravity_inbox_dir
+from zerg.cli.antigravity_channel import antigravity_state_dir
 from zerg.provider_cli_contract import ANTIGRAVITY_BIN_ENV
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_ANTIGRAVITY_BIN_FLAG
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_MISSING
@@ -92,6 +94,7 @@ import json
 import os
 import subprocess
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -105,6 +108,49 @@ def default_response(event: str) -> dict:
     if event == "Stop":
         return {"decision": "allow", "reason": ""}
     return {}
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def parse_utc(value: str):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def ensure_private_dir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    try:
+        path.chmod(0o700)
+    except OSError:
+        pass
+
+
+def write_private_json(path: Path, payload: dict) -> None:
+    ensure_private_dir(path.parent)
+    fd, tmp_name = tempfile.mkstemp(prefix=".tmp.", dir=str(path.parent))
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            json.dump(payload, file, separators=(",", ":"))
+            file.write("\\n")
+        tmp_path.chmod(0o600)
+        tmp_path.replace(path)
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+    except Exception:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def write_presence_outbox(longhouse_home: str, payload: dict) -> None:
@@ -125,6 +171,122 @@ def write_presence_outbox(longhouse_home: str, payload: dict) -> None:
             pass
 
 
+def write_session_state(state_dir: str, payload: dict) -> None:
+    if not state_dir or not payload.get("session_id"):
+        return
+    try:
+        write_private_json(Path(state_dir) / f"{payload['session_id']}.json", payload)
+    except Exception:
+        pass
+
+
+def pending_message_paths(inbox_dir: str) -> list[Path]:
+    if not inbox_dir:
+        return []
+    try:
+        root = Path(inbox_dir)
+        if root.exists():
+            ensure_private_dir(root)
+        return sorted(root.glob("msg-*.json"), key=lambda path: path.name)
+    except Exception:
+        return []
+
+
+def is_safe_message_path(path: Path) -> bool:
+    try:
+        stat = path.stat()
+    except OSError:
+        return False
+    if not path.is_file():
+        return False
+    if hasattr(os, "geteuid") and stat.st_uid != os.geteuid():
+        return False
+    return (stat.st_mode & 0o077) == 0
+
+
+def read_message(path: Path) -> dict | None:
+    if not is_safe_message_path(path):
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def inbox_has_pending(inbox_dir: str) -> bool:
+    return bool(pending_message_paths(inbox_dir))
+
+
+def claim_inbox_messages(
+    *,
+    inbox_dir: str,
+    session_id: str,
+    event: str,
+    conversation_id: str,
+    step_index: str,
+    limit: int = 4,
+) -> list[str]:
+    texts: list[str] = []
+    if not inbox_dir or not session_id:
+        return texts
+    claimed_dir = Path(inbox_dir) / "claimed"
+    for path in pending_message_paths(inbox_dir)[:limit]:
+        payload = read_message(path)
+        if not payload:
+            continue
+        expires_at = parse_utc(str(payload.get("expires_at") or ""))
+        if expires_at is not None and expires_at < datetime.now(timezone.utc):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            continue
+        text = str(payload.get("text") or "")
+        if not text.strip():
+            continue
+        message_id = str(payload.get("id") or path.stem.replace("msg-", ""))
+        claim_path = claimed_dir / f"claimed-{path.name}"
+        try:
+            ensure_private_dir(claimed_dir)
+            path.replace(claim_path)
+        except OSError:
+            continue
+        payload.update(
+            {
+                "id": message_id,
+                "session_id": session_id,
+                "claimed_at": now_iso(),
+                "claimed_by": "longhouse-antigravity-hook",
+                "hook_event": event,
+                "conversation_id": conversation_id,
+                "step_index": step_index,
+            }
+        )
+        try:
+            write_private_json(claim_path, payload)
+        except Exception:
+            pass
+        texts.append(text)
+    return texts
+
+
+def hook_response(event: str, texts: list[str], inbox_dir: str) -> dict:
+    if event == "PreInvocation":
+        return {"injectSteps": [{"userMessage": text} for text in texts]}
+    if event == "PostInvocation":
+        return {
+            "injectSteps": [{"userMessage": text} for text in texts],
+            "terminationBehavior": "force_continue" if texts else "",
+        }
+    if event == "Stop" and inbox_has_pending(inbox_dir):
+        return {
+            "decision": "continue",
+            "reason": "Longhouse queued input is waiting in the managed Antigravity inbox.",
+        }
+    return default_response(event)
+
+
 event = os.environ.get("LONGHOUSE_HOOK_EVENT", "")
 try:
     data = json.loads(os.environ.get("LONGHOUSE_HOOK_INPUT") or "{}")
@@ -140,6 +302,8 @@ transcript = str(data.get("transcriptPath") or "")
 step_index = str(data.get("stepIdx") or data.get("step_index") or "")
 managed_session_id = os.environ.get("LONGHOUSE_MANAGED_SESSION_ID") or ""
 session_id = managed_session_id or conversation_id
+state_dir = os.environ.get("LONGHOUSE_ANTIGRAVITY_STATE_DIR") or ""
+inbox_dir = os.environ.get("LONGHOUSE_ANTIGRAVITY_INBOX_DIR") or ""
 
 state = ""
 if event == "PreInvocation":
@@ -164,6 +328,19 @@ if state and session_id:
             "provider": "antigravity",
             "transcript_path": transcript,
             "step_index": step_index,
+        },
+    )
+    write_session_state(
+        state_dir,
+        {
+            "session_id": session_id,
+            "provider_session_id": conversation_id,
+            "conversation_id": conversation_id,
+            "cwd": cwd,
+            "transcript_path": transcript,
+            "step_index": step_index,
+            "state": state,
+            "updated_at": now_iso(),
         },
     )
     if managed_session_id and transcript:
@@ -193,7 +370,17 @@ if state and session_id:
         except Exception:
             pass
 
-print(json.dumps(default_response(event), separators=(",", ":")))
+claimed_texts: list[str] = []
+if event in {"PreInvocation", "PostInvocation"}:
+    claimed_texts = claim_inbox_messages(
+        inbox_dir=inbox_dir,
+        session_id=session_id,
+        event=event,
+        conversation_id=conversation_id,
+        step_index=step_index,
+    )
+
+print(json.dumps(hook_response(event, claimed_texts, inbox_dir), separators=(",", ":")))
 PY
 exit 0
 """
@@ -389,7 +576,8 @@ def _ensure_antigravity_runtime_plugin(
         )
         if completed.returncode != 0:
             detail = (completed.stderr or "").strip()
-            raise _AntigravityLaunchError("Could not install Longhouse Antigravity plugin" + (f": {detail}" if detail else "."))
+            message = "Could not install Longhouse Antigravity plugin"
+            raise _AntigravityLaunchError(message + (f": {detail}" if detail else "."))
     return staged_root
 
 
@@ -407,12 +595,16 @@ def _write_antigravity_launch_script(
     runtime_dir = _antigravity_runtime_dir(config_dir)
     runtime_dir.mkdir(parents=True, exist_ok=True)
     script_path = runtime_dir / f"{session_id}.launch.sh"
+    state_dir = antigravity_state_dir(config_dir)
+    inbox_dir = antigravity_inbox_dir(session_id, config_dir)
     script = f"""#!/bin/sh
 export LONGHOUSE_MANAGED_SESSION_ID={shlex.quote(session_id)}
 export LONGHOUSE_DEVICE_ID={shlex.quote(device_id)}
 export LONGHOUSE_RUNTIME_EVENTS_URL={shlex.quote(runtime_events_url)}
 export LONGHOUSE_RUNTIME_TOKEN={shlex.quote(token)}
 export LONGHOUSE_HOOK_PYTHON={shlex.quote(sys.executable)}
+export LONGHOUSE_ANTIGRAVITY_STATE_DIR={shlex.quote(str(state_dir))}
+export LONGHOUSE_ANTIGRAVITY_INBOX_DIR={shlex.quote(str(inbox_dir))}
 cd {shlex.quote(str(cwd))} || exit 1
 {shlex.quote(antigravity_bin)} "$@"
 status=$?
@@ -545,6 +737,8 @@ def _run_native_antigravity(
     env["LONGHOUSE_RUNTIME_EVENTS_URL"] = _managed_runtime_events_url(url)
     env["LONGHOUSE_RUNTIME_TOKEN"] = token
     env["LONGHOUSE_HOOK_PYTHON"] = sys.executable
+    env["LONGHOUSE_ANTIGRAVITY_STATE_DIR"] = str(antigravity_state_dir(config_dir))
+    env["LONGHOUSE_ANTIGRAVITY_INBOX_DIR"] = str(antigravity_inbox_dir(session_id, config_dir))
     launched = False
     returncode = 1
     try:

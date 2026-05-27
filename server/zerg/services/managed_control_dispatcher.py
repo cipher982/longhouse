@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
+from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import machine_control_capability_for_command
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.session_execution_home import SessionExecutionHome
@@ -50,7 +51,12 @@ def _session_uses_engine_control(
 ) -> bool:
     if owner_id is None or command_type is None:
         return False
-    capability = machine_control_capability_for_command(getattr(session, "provider", None), command_type)
+    provider = str(getattr(session, "provider", "") or "").strip().lower()
+    contract = contract_for_provider(provider)
+    transport = str(getattr(session, "managed_transport", "") or "").strip()
+    if contract is not None and transport and transport != contract.managed_transport.value:
+        return False
+    capability = machine_control_capability_for_command(provider, command_type)
     device_id = _session_device_id(session)
     if capability is None or device_id is None:
         return False
