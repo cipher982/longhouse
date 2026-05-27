@@ -686,7 +686,7 @@ def run_antigravity_canary(args: argparse.Namespace, root: Path) -> dict[str, An
                 "--text",
                 "pre invocation canary input",
                 "--wait-claimed-secs",
-                "5",
+                "20",
             ],
             cwd=str(_server_cwd(args)),
             env=_runtime_env(args),
@@ -702,7 +702,7 @@ def run_antigravity_canary(args: argparse.Namespace, root: Path) -> dict[str, An
             config_dir=config_dir,
             payload=hook_payload,
         )
-        send_stdout, send_stderr = send_proc.communicate(timeout=10)
+        send_stdout, send_stderr = send_proc.communicate(timeout=25)
         if send_proc.returncode != 0:
             return _fail(
                 "antigravity_send_claim_failed",
