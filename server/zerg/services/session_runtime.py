@@ -25,6 +25,8 @@ from zerg.metrics import managed_codex_runtime_observations_total
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
+from zerg.services.session_live_previews import live_preview_candidate_from_runtime_event
+from zerg.services.session_live_previews import upsert_session_live_preview
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_observations import record_runtime_observation
 from zerg.utils.time import normalize_utc
@@ -611,6 +613,10 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
 
         accepted += 1
         if bridge_transcript_event:
+            observation_id = f"runtime:{event.source}:{event.dedupe_key}"
+            preview_candidate = live_preview_candidate_from_runtime_event(event, observation_id=observation_id)
+            if preview_candidate is not None:
+                upsert_session_live_preview(db, preview_candidate)
             outcome = "stored_live_overlay"
             _record_managed_codex_runtime_observation(event, outcome)
             if event.session_id is not None:

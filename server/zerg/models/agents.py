@@ -120,6 +120,12 @@ class AgentSession(AgentsBase):
     branches = relationship("AgentSessionBranch", back_populates="session", cascade="all, delete-orphan")
     events = relationship("AgentEvent", back_populates="session", cascade="all, delete-orphan")
     source_lines = relationship("AgentSourceLine", back_populates="session", cascade="all, delete-orphan")
+    live_preview = relationship(
+        "SessionLivePreview",
+        back_populates="session",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
     def __init__(self, **kwargs):
         # provider_session_id is read-only (returns str(self.id)) — drop it.
@@ -688,6 +694,44 @@ class SessionObservation(AgentsBase):
         ),
         Index("ix_session_observations_domain_kind", "source_domain", "kind", "observed_at"),
         Index("ix_session_observations_source_cursor", "source", "source_cursor"),
+    )
+
+
+class SessionLivePreview(AgentsBase):
+    """Compact read model for live transcript preview rendering."""
+
+    __tablename__ = "session_live_previews"
+
+    session_id = Column(
+        GUID(),
+        ForeignKey("sessions.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    thread_id = Column(String(255), nullable=True)
+    turn_key = Column(String(512), nullable=False)
+    seq = Column(Integer, nullable=True)
+    preview_text = Column(Text, nullable=False)
+    provisional_cursor = Column(String(512), nullable=True)
+    provisional_complete = Column(Integer, nullable=False, server_default=text("0"))
+    event_origin = Column(String(32), nullable=False, server_default=text("'live_provisional'"))
+    preview_observed_at = Column(DateTime(timezone=True), nullable=False)
+    preview_updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    source = Column(String(128), nullable=False)
+    last_observation_id = Column(String(512), nullable=False)
+    superseded_at = Column(DateTime(timezone=True), nullable=True)
+    superseded_by_event_id = Column(Integer, nullable=True)
+    superseded_reason = Column(String(64), nullable=True)
+
+    session = relationship("AgentSession", back_populates="live_preview")
+
+    __table_args__ = (
+        Index("ix_session_live_previews_updated", "preview_updated_at"),
+        Index("ix_session_live_previews_observation", "last_observation_id"),
     )
 
 
