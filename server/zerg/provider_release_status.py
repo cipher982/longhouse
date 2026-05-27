@@ -82,7 +82,11 @@ def _read_json_url(url: str) -> tuple[dict[str, Any] | None, str | None]:
     try:
         with urlopen(Request(url, method="GET"), timeout=1.5) as response:
             raw = response.read(512 * 1024)
-    except (HTTPError, URLError, TimeoutError, OSError, ValueError) as exc:
+    except HTTPError as exc:
+        if exc.code == 404:
+            return None, "missing"
+        return None, f"{type(exc).__name__}: {exc}"
+    except (URLError, TimeoutError, OSError, ValueError) as exc:
         return None, f"{type(exc).__name__}: {exc}"
     try:
         payload = json.loads(raw.decode("utf-8"))
@@ -125,13 +129,30 @@ def _load_provider_artifact(provider: str) -> tuple[dict[str, Any] | None, dict[
         payload, error = _read_json_file(path)
         attempts.append({"source": "file", "path": str(path), "error": error, "required": required})
         if payload is not None:
-            return payload, {"source": "file", "path": str(path), "attempts": attempts}
+            return _normalize_provider_artifact(provider, payload), {
+                "source": "file",
+                "path": str(path),
+                "attempts": attempts,
+            }
     for url in _provider_url_candidates(provider):
         payload, error = _read_json_url(url)
         attempts.append({"source": "url", "url": url, "error": error})
         if payload is not None:
-            return payload, {"source": "url", "url": url, "attempts": attempts}
+            return _normalize_provider_artifact(provider, payload), {"source": "url", "url": url, "attempts": attempts}
     return None, {"source": "none", "attempts": attempts}
+
+
+def _normalize_provider_artifact(provider: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Accept raw artifacts and Sauron API envelopes.
+
+    The jobs pack writes raw JSON artifacts, while the Sauron runtime exposes
+    them as ``{"provider": "...", "artifact": {...}}`` for API clarity.
+    Local health should classify the inner artifact, not the transport wrapper.
+    """
+    embedded = payload.get("artifact")
+    if isinstance(embedded, dict) and str(payload.get("provider") or "").strip().lower() == provider:
+        return dict(embedded)
+    return payload
 
 
 def _provider_version_from_cli(path: str | None) -> tuple[str | None, str | None]:
@@ -157,7 +178,8 @@ def _status_for_provider(provider: str, provider_cli: dict[str, Any]) -> dict[st
     if artifact is None:
         attempts = list(source.get("attempts") or [])
         optional_missing_only = bool(attempts) and all(
-            attempt.get("source") == "file" and attempt.get("required") is False and attempt.get("error") == "missing"
+            (attempt.get("source") == "file" and attempt.get("required") is False and attempt.get("error") == "missing")
+            or (attempt.get("source") == "url" and attempt.get("error") == "missing")
             for attempt in attempts
         )
         return {
