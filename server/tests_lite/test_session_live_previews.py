@@ -237,3 +237,42 @@ def test_superseded_projection_row_is_retained_but_not_loaded(tmp_path):
     assert row.superseded_by_event_id is None
     assert row.superseded_reason is None
     assert preview.text == "fresh turn"
+
+
+def test_late_same_turn_delta_does_not_resurrect_superseded_projection(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "late_superseded_same_turn.db")
+    now = datetime(2026, 5, 27, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=1))
+        ingest_runtime_events(
+            db,
+            [_bridge_event(session_id=session.id, occurred_at=now, seq=1, live_text="live before durable")],
+        )
+        supersede_session_live_preview(
+            db,
+            session_id=session.id,
+            durable_at=now + timedelta(seconds=5),
+            durable_event_id=123,
+        )
+
+        ingest_runtime_events(
+            db,
+            [
+                _bridge_event(
+                    session_id=session.id,
+                    occurred_at=now + timedelta(seconds=2),
+                    seq=2,
+                    live_text="late stale same turn",
+                )
+            ],
+        )
+        db.commit()
+
+        row = db.get(SessionLivePreview, session.id)
+        preview_map = load_session_live_preview_map(db, [session.id])
+
+    assert row is not None
+    assert row.preview_text == "live before durable"
+    assert row.superseded_at is not None
+    assert preview_map == {}

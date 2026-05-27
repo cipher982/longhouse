@@ -7,13 +7,16 @@ Covers:
 """
 
 import asyncio
+import json
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from time import monotonic
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event as sqlalchemy_event
 
 from zerg.database import Base
 from zerg.database import get_db
@@ -22,21 +25,23 @@ from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
-
-# UnmanagedSessionBinding was removed in the session-identity-kernel cleanup;
-# the two tests that seeded it are skipped further down. Stub the symbol so
-# any stray references during collection don't NameError.
-UnmanagedSessionBinding = None  # type: ignore[assignment]
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
+from zerg.services.session_observations import OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.timeline_session_listing import build_timeline_cards_from_thread_rows
 from zerg.services.timeline_session_listing import list_timeline_sessions_for_browser
 from zerg.session_execution_home import SessionExecutionHome
+
+# UnmanagedSessionBinding was removed in the session-identity-kernel cleanup;
+# the two tests that seeded it are skipped further down. Stub the symbol so
+# any stray references during collection don't NameError.
+UnmanagedSessionBinding = None  # type: ignore[assignment]
 
 
 def _make_db(tmp_path, name="timeline_runtime_overlay.db"):
@@ -384,9 +389,9 @@ def test_sessions_list_uses_recent_activity_anchor_for_old_live_session(tmp_path
         assert top["display_phase"] == "Running bash"
         assert top["confidence"] == "live"
         assert top["runtime_display"] == {
-                "truth_tier": "fresh",
-                "signal_tier": "phase_signal",
-                "state": "running",
+            "truth_tier": "fresh",
+            "signal_tier": "phase_signal",
+            "state": "running",
             "tone": "running",
             "headline": "Active",
             "detail": None,
@@ -521,6 +526,81 @@ def test_timeline_compatibility_cards_include_bridge_transcript_preview(tmp_path
     assert result.response.sessions[0].transcript_preview is not None
     assert result.response.sessions[0].transcript_preview.text == "timeline compat"
     assert result.response.sessions[0].transcript_preview.is_stale is False
+
+
+def test_timeline_cards_read_projection_not_large_observation_history(tmp_path):
+    factory = _make_db(tmp_path, "codex_bridge_transcript_projection_hot_path.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            provider="codex",
+            project="codex-live-hot-path",
+            started_at=now - timedelta(minutes=10),
+            execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
+            managed_transport="codex_app_server",
+        )
+        _ingest_bridge_transcript(
+            db,
+            session_id=session.id,
+            occurred_at=now,
+            text="projection preview",
+            seq=2000,
+        )
+        payload = {
+            "kind": "progress_signal",
+            "payload": {
+                "progress_kind": "bridge_live_transcript_delta",
+                "thread_id": "thread-1",
+                "turn_id": "turn-1",
+                "seq": 1,
+                "live_text": "x" * 2048,
+            },
+        }
+        db.bulk_save_objects(
+            [
+                SessionObservation(
+                    observation_id=f"runtime:codex_bridge_live:history:{session.id}:{idx}",
+                    session_id=session.id,
+                    runtime_key=f"codex:{session.id}",
+                    provider="codex",
+                    source_domain="runtime",
+                    source="codex_bridge_live",
+                    kind=OBS_KIND_BRIDGE_TRANSCRIPT_DELTA,
+                    observed_at=now - timedelta(seconds=idx + 1),
+                    received_at=now - timedelta(seconds=idx + 1),
+                    payload_json=json.dumps(payload),
+                )
+                for idx in range(1200)
+            ]
+        )
+        db.commit()
+
+        statements: list[str] = []
+
+        def _collect_statement(_conn, _cursor, statement, _parameters, _context, _executemany):
+            statements.append(statement)
+
+        bind = db.get_bind()
+        sqlalchemy_event.listen(bind, "before_cursor_execute", _collect_statement)
+        started = monotonic()
+        try:
+            cards = build_timeline_cards_from_thread_rows(
+                db=db,
+                thread_rows=((str(session.thread_root_session_id or session.id), str(session.id), now),),
+            )
+        finally:
+            elapsed = monotonic() - started
+            sqlalchemy_event.remove(bind, "before_cursor_execute", _collect_statement)
+    finally:
+        db.close()
+
+    assert cards[0].head.transcript_preview is not None
+    assert cards[0].head.transcript_preview.text == "projection preview"
+    assert elapsed < 0.5
+    assert not any("session_observations" in statement.lower() for statement in statements)
 
 
 def test_sessions_list_hides_bridge_transcript_preview_after_durable_activity_catches_up(tmp_path):

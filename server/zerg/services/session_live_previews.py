@@ -84,6 +84,11 @@ def upsert_session_live_preview(db: Session, candidate: LivePreviewCandidate) ->
     now = datetime.now(timezone.utc)
     if existing is not None and existing.last_observation_id == candidate.last_observation_id:
         return False
+    if existing is not None and existing.superseded_at is not None and existing.turn_key == candidate.turn_key:
+        superseded_at = normalize_utc(existing.superseded_at)
+        candidate_at = normalize_utc(candidate.preview_observed_at)
+        if superseded_at is not None and candidate_at is not None and candidate_at <= superseded_at:
+            return False
     if existing is not None and not _candidate_should_replace(candidate, existing):
         return False
 
@@ -140,7 +145,7 @@ def supersede_session_live_preview(
         return False
 
     now = datetime.now(timezone.utc)
-    row.superseded_at = now
+    row.superseded_at = normalized_durable_at
     row.preview_updated_at = now
     row.superseded_by_event_id = durable_event_id
     row.superseded_reason = reason

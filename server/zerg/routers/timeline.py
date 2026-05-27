@@ -686,7 +686,12 @@ def _load_workspace_signature(
 
     live_preview_updated_at_column = func.max(SessionLivePreview.preview_updated_at)
     live_preview_session_filter = SessionLivePreview.session_id.in_(thread_session_ids)
-    live_preview_updated_at = db.query(live_preview_updated_at_column).filter(live_preview_session_filter).scalar()
+    live_preview_updated_at = (
+        db.query(live_preview_updated_at_column)
+        .filter(live_preview_session_filter)
+        .filter(SessionLivePreview.superseded_at.is_(None))
+        .scalar()
+    )
 
     return (
         str(thread_root_id),
