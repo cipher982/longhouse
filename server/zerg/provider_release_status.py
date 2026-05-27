@@ -11,6 +11,8 @@ import json
 import os
 import re
 import subprocess
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
@@ -22,8 +24,10 @@ PROVIDER_RELEASE_STATUS_DIR_ENV = "LONGHOUSE_PROVIDER_RELEASE_STATUS_DIR"
 PROVIDER_RELEASE_STATUS_URL_ENV = "LONGHOUSE_PROVIDER_RELEASE_STATUS_URL"
 CODEX_RELEASE_STATUS_FILE_ENV = "LONGHOUSE_CODEX_RELEASE_STATUS_FILE"
 CODEX_RELEASE_STATUS_URL_ENV = "LONGHOUSE_CODEX_RELEASE_STATUS_URL"
+PROVIDER_RELEASE_STATUS_MAX_AGE_SECONDS_ENV = "LONGHOUSE_PROVIDER_RELEASE_STATUS_MAX_AGE_SECONDS"
 PROVIDER_STATUS_SCHEMA_VERSION = 1
-_VERSION_RE = re.compile(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?")
+DEFAULT_PROVIDER_RELEASE_STATUS_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
+_VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
 
 
 def normalize_provider_version(raw: Any) -> str | None:
@@ -32,6 +36,32 @@ def normalize_provider_version(raw: Any) -> str | None:
         return None
     match = _VERSION_RE.search(text)
     return match.group(0) if match else text
+
+
+def _max_artifact_age_seconds() -> int:
+    raw = os.getenv(PROVIDER_RELEASE_STATUS_MAX_AGE_SECONDS_ENV)
+    if not raw:
+        return DEFAULT_PROVIDER_RELEASE_STATUS_MAX_AGE_SECONDS
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_PROVIDER_RELEASE_STATUS_MAX_AGE_SECONDS
+    return value if value > 0 else DEFAULT_PROVIDER_RELEASE_STATUS_MAX_AGE_SECONDS
+
+
+def _parse_rfc3339(raw: Any) -> datetime | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _read_json_file(path: Path) -> tuple[dict[str, Any] | None, str | None]:
@@ -110,7 +140,7 @@ def _provider_version_from_cli(path: str | None) -> tuple[str | None, str | None
             [path, "--version"],
             text=True,
             capture_output=True,
-            timeout=2.0,
+            timeout=8.0,
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -127,39 +157,76 @@ def _status_for_provider(provider: str, provider_cli: dict[str, Any]) -> dict[st
             "provider": provider,
             "configured": bool(source.get("attempts")),
             "status": "not_configured" if not source.get("attempts") else "unavailable",
+            "risk": "none" if not source.get("attempts") else "warning",
             "source": source,
         }
+
+    schema_version = artifact.get("schema_version")
+    schema_status = "ok" if schema_version == PROVIDER_STATUS_SCHEMA_VERSION else "mismatch"
+    generated_at = artifact.get("generated_at")
+    generated_at_dt = _parse_rfc3339(generated_at)
+    generated_at_age_seconds: int | None = None
+    freshness_status = "fresh"
+    if generated_at_dt is None:
+        freshness_status = "missing"
+    else:
+        generated_at_age_seconds = int((datetime.now(UTC) - generated_at_dt).total_seconds())
+        if generated_at_age_seconds > _max_artifact_age_seconds():
+            freshness_status = "stale"
 
     current_version, version_error = _provider_version_from_cli(provider_cli.get("path"))
     artifact_version = artifact.get("codex_version") or artifact.get("provider_version")
     normalized_current = normalize_provider_version(current_version)
     normalized_artifact = normalize_provider_version(artifact_version)
-    local_version_matches = bool(normalized_current and normalized_artifact and normalized_current == normalized_artifact)
+    versions_available = bool(normalized_current and normalized_artifact)
+    local_version_matches = versions_available and normalized_current == normalized_artifact
     verdict = str(artifact.get("verdict") or "unknown").lower()
 
-    if verdict == "red" and local_version_matches:
+    risk = "none"
+    if version_error:
+        status = "unknown_local_version"
+        risk = "warning"
+    elif verdict == "red" and local_version_matches:
         status = "blocked"
+        risk = "blocking"
     elif verdict == "yellow" and local_version_matches:
         status = "caution"
-    elif verdict in {"green", "yellow", "red"}:
+        risk = "warning"
+    elif verdict == "green" and local_version_matches:
         status = "ok"
+    elif versions_available and not local_version_matches:
+        status = "unknown_for_current_version"
+        risk = "warning"
     else:
         status = "unknown"
+        risk = "warning"
+
+    if schema_status != "ok" and risk == "none":
+        status = "schema_mismatch"
+        risk = "warning"
+    if freshness_status != "fresh" and risk == "none":
+        status = "stale"
+        risk = "warning"
 
     return {
         "provider": provider,
         "configured": True,
         "status": status,
+        "risk": risk,
         "verdict": verdict,
         "failure_code": artifact.get("failure_code"),
         "recommendation": artifact.get("recommendation"),
+        "artifact_schema_version": schema_version,
+        "schema_status": schema_status,
         "artifact_version": artifact_version,
         "current_version": current_version,
         "normalized_artifact_version": normalized_artifact,
         "normalized_current_version": normalized_current,
         "local_version_matches": local_version_matches,
         "version_error": version_error,
-        "generated_at": artifact.get("generated_at"),
+        "generated_at": generated_at,
+        "generated_at_age_seconds": generated_at_age_seconds,
+        "freshness_status": freshness_status,
         "evidence_root": artifact.get("evidence_root"),
         "source": source,
     }
@@ -184,8 +251,8 @@ def collect_provider_release_status(
     for provider in ("codex",):
         statuses[provider] = _status_for_provider(provider, dict(provider_clis.get(provider) or {}))
 
-    blocking_count = sum(1 for item in statuses.values() if item.get("status") == "blocked")
-    warning_count = sum(1 for item in statuses.values() if item.get("status") == "caution")
+    blocking_count = sum(1 for item in statuses.values() if item.get("risk") == "blocking")
+    warning_count = sum(1 for item in statuses.values() if item.get("risk") == "warning")
     enabled = any(item.get("configured") for item in statuses.values())
     return {
         "schema_version": PROVIDER_STATUS_SCHEMA_VERSION,

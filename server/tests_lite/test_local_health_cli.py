@@ -589,11 +589,35 @@ def test_collect_local_health_degrades_for_blocked_provider_release(monkeypatch,
 
     snapshot = local_health_service.collect_local_health(tmp_path)
 
-    assert snapshot["health_state"] == "degraded"
-    assert snapshot["severity"] == "yellow"
+    assert snapshot["health_state"] == "broken"
+    assert snapshot["severity"] == "red"
     assert snapshot["headline"] == "Installed provider release is blocked"
     assert "provider_release_blocked" in snapshot["reasons"]
     assert snapshot["provider_release_status"]["statuses"]["codex"]["status"] == "blocked"
+
+
+def test_collect_local_health_degrades_for_provider_release_warning(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service,
+        "collect_provider_release_status",
+        lambda provider_clis, *, fast: {
+            "schema_version": 1,
+            "enabled": True,
+            "blocking_count": 0,
+            "warning_count": 1,
+            "statuses": {"codex": {"status": "unknown_for_current_version", "risk": "warning"}},
+        },
+    )
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "degraded"
+    assert snapshot["severity"] == "yellow"
+    assert snapshot["headline"] == "Provider release status needs attention"
+    assert "provider_release_warning" in snapshot["reasons"]
 
 
 def test_collect_local_health_surfaces_opencode_provider_cli(monkeypatch, tmp_path: Path):
