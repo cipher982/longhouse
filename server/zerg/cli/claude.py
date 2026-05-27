@@ -7,6 +7,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 from datetime import datetime
 from datetime import timezone
 from hashlib import sha256
@@ -356,6 +357,16 @@ def _terminate_detached_process(process: subprocess.Popen) -> None:
             return
 
 
+def _build_detached_claude_pty_command(command: str, log_path: Path) -> list[str]:
+    """Wrap Claude in script(1) so stock Claude sees a PTY even without a visible terminal."""
+
+    if shutil.which("script") is None:
+        raise _NativeClaudeError("Detached Claude launch requires script(1) to provide a pseudo-terminal")
+    if sys.platform == "darwin":
+        return ["script", "-q", str(log_path), *shlex.split(command)]
+    return ["script", "-q", "-c", command, str(log_path)]
+
+
 def _launch_detached_native_claude_channel(
     *,
     session_id: str,
@@ -381,15 +392,15 @@ def _launch_detached_native_claude_channel(
         hook_token=token,
     )
     log_path = _remote_launch_log_path(session_id=session_id, config_dir=config_dir)
-    log_file = log_path.open("ab")
     process: subprocess.Popen | None = None
     try:
+        pty_command = _build_detached_claude_pty_command(command, log_path)
         process = subprocess.Popen(
-            shlex.split(command),
+            pty_command,
             cwd=str(cwd),
             stdin=subprocess.DEVNULL,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
         state = wait_for_claude_channel_state(
@@ -400,8 +411,6 @@ def _launch_detached_native_claude_channel(
         if process is not None:
             _terminate_detached_process(process)
         raise
-    finally:
-        log_file.close()
 
     return {
         "session_id": session_id,

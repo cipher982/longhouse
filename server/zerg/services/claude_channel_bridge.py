@@ -97,10 +97,7 @@ def install_claude_channel_mcp_server(
             if project_mcp_servers.pop(CLAUDE_CHANNEL_SERVER_NAME, None) is not None:
                 removed_from.append(str(project_key))
         if removed_from:
-            actions.append(
-                f"Removed project-local MCP server {CLAUDE_CHANNEL_SERVER_NAME} "
-                f"from {len(removed_from)} Claude project(s)"
-            )
+            actions.append(f"Removed project-local MCP server {CLAUDE_CHANNEL_SERVER_NAME} " f"from {len(removed_from)} Claude project(s)")
 
     if actions:
         _write_json_object(user_config_path, settings)
@@ -127,11 +124,7 @@ def build_claude_channel_state_file(
     normalized = str(session_id or "").strip()
     if not normalized:
         raise ValueError("session_id must not be empty")
-    return (
-        resolve_claude_channel_state_root(state_root=state_root, claude_dir=claude_dir)
-        / "sessions"
-        / f"{normalized}.json"
-    )
+    return resolve_claude_channel_state_root(state_root=state_root, claude_dir=claude_dir) / "sessions" / f"{normalized}.json"
 
 
 def read_claude_channel_state(
@@ -206,7 +199,7 @@ def build_claude_channel_exec_command(
         "--dangerously-skip-permissions",
         target_flag,
         provider_sid,
-        "--dangerously-load-development-channels",
+        "--channels",
         f"server:{CLAUDE_CHANNEL_SERVER_NAME}",
     ]
     inner = [

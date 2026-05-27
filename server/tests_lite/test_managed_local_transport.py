@@ -58,7 +58,7 @@ def test_build_managed_local_attach_command_uses_native_claude_session_id_for_ch
     assert "export LONGHOUSE_PROVIDER_SESSION_ID=provider-123" in inner
     assert (
         "exec claude --dangerously-skip-permissions --session-id provider-123 "
-        "--dangerously-load-development-channels server:longhouse-channel" in inner
+        "--channels server:longhouse-channel" in inner
     )
 
 
