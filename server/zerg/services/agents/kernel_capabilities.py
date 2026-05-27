@@ -80,7 +80,7 @@ class KernelSessionCapabilities:
 
     @property
     def can_steer_active_turn(self) -> bool:
-        return bool(self.live_control_available and self.control_plane == "codex_bridge")
+        return bool(self.live_control_available and self.control_plane in ("codex_bridge", "opencode_process"))
 
     @property
     def execution_home(self):

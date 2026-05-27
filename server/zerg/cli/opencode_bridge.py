@@ -25,6 +25,8 @@ import json
 import os
 import signal
 import time
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 
@@ -89,6 +91,48 @@ def _resolve_state(
         ) from exc
 
 
+def _session_sort_timestamp(item: dict[str, Any]) -> float:
+    """Best-effort newest-first ordering across opencode payload shapes.
+
+    Newer opencode builds embed timestamps under ``time.{updated,created}``
+    (numeric ms epoch). Older builds expose top-level ``updated``/``created``
+    or ISO strings. Walk all known fields, parse numeric and ISO-8601 forms,
+    and fall back to 0.0 when nothing parses — the enumerate index breaks
+    ties deterministically at the call site.
+    """
+
+    candidates: list[Any] = []
+    time_obj = item.get("time")
+    if isinstance(time_obj, dict):
+        for key in ("updated", "updatedAt", "modified", "created", "createdAt"):
+            if key in time_obj:
+                candidates.append(time_obj[key])
+    for key in ("updated", "updatedAt", "modified", "created", "createdAt"):
+        if key in item:
+            candidates.append(item[key])
+    for value in candidates:
+        if value is None:
+            continue
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped:
+                continue
+            try:
+                return float(stripped)
+            except ValueError:
+                pass
+            try:
+                parsed = datetime.fromisoformat(stripped.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.timestamp()
+    return 0.0
+
+
 def _list_sessions(client: httpx.Client) -> list[dict[str, Any]]:
     resp = client.get("/session")
     resp.raise_for_status()
@@ -110,19 +154,12 @@ def _resolve_target_session_id(
         return candidate
     sessions = _list_sessions(client)
     if sessions:
-        # Newest-first: opencode returns sessions ordered by recent activity
-        # but does not guarantee the order, so fall back to created-at when present.
-        def _key(item: dict[str, Any]) -> float:
-            for field in ("updated", "updatedAt", "created", "createdAt"):
-                value = item.get(field)
-                try:
-                    return float(value) if value is not None else 0.0
-                except (TypeError, ValueError):
-                    continue
-            return 0.0
-
-        ordered = sorted(sessions, key=_key, reverse=True)
-        sid = str(ordered[0].get("id") or "").strip()
+        ordered = sorted(
+            enumerate(sessions),
+            key=lambda pair: (_session_sort_timestamp(pair[1]), pair[0]),
+            reverse=True,
+        )
+        sid = str(ordered[0][1].get("id") or "").strip()
         if sid:
             return sid
     if not create_if_missing:
