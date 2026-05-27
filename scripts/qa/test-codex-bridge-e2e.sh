@@ -9,12 +9,13 @@
 #
 # What it tests (the actual user journey):
 #   1-3. Bridge start — codex app-server spawns, rollout seeded, state ready
-#   4-5. Turn submit  — send prompt, verify turn completes
-#   6.   Transcript   — events shipped to backend
-#   7.   Loop continue — second prompt on same thread
-#   8.   Interrupt    — cancel active turn mid-flight
-#   9.   CLI entry    — `longhouse codex --no-attach` (the real user command)
-#   10.  TUI attach   — `codex --remote` connects without crashing
+#   4.   Detached UI  — browser/iOS launch mode creates a prestarted thread
+#   5-6. Turn submit  — send prompt, verify turn completes
+#   7.   Transcript   — events shipped to backend
+#   8.   Loop continue — second prompt on same thread
+#   9.   Interrupt    — cancel active turn mid-flight
+#   10.  CLI entry    — `longhouse codex --no-attach` (the real user command)
+#   11.  TUI attach   — `codex resume <thread> --remote` connects without crashing
 
 set -euo pipefail
 
@@ -23,8 +24,12 @@ ENGINE="${ENGINE:-longhouse-engine}"
 CODEX_BIN="${CODEX_BIN:-$(command -v codex 2>/dev/null || echo "")}"
 SESSION_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
 CWD="${BRIDGE_TEST_CWD:-/tmp/bridge-e2e-test}"
-STATE_ROOT="/tmp/bridge-e2e-state"
-LOG_FILE="/tmp/bridge-e2e.log"
+ISOLATION_ROOT="/tmp/bridge-e2e-isolation"
+STATE_ROOT="$ISOLATION_ROOT/codex-bridge"
+LOG_FILE="$ISOLATION_ROOT/bridge-e2e.log"
+DETACHED_ISOLATION_ROOT="/tmp/bridge-e2e-detached-isolation"
+DETACHED_STATE_ROOT="$DETACHED_ISOLATION_ROOT/codex-bridge"
+DETACHED_LOG_FILE="$DETACHED_ISOLATION_ROOT/bridge-e2e-detached.log"
 DEVICE_TOKEN="${DEVICE_TOKEN:-}"
 PASS=0
 FAIL=0
@@ -43,7 +48,7 @@ cleanup() {
     for pid in "${CLEANUP_PIDS[@]}"; do
         kill "$pid" 2>/dev/null || true
     done
-    rm -rf "$STATE_ROOT" "$LOG_FILE" 2>/dev/null || true
+    rm -rf "$ISOLATION_ROOT" "$DETACHED_ISOLATION_ROOT" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -88,7 +93,7 @@ if [ -z "$DEVICE_TOKEN" ]; then
     exit 1
 fi
 
-mkdir -p "$CWD" "$STATE_ROOT"
+mkdir -p "$CWD" "$ISOLATION_ROOT" "$DETACHED_ISOLATION_ROOT"
 
 echo "─── Test 1: Bridge start ───"
 
@@ -100,8 +105,9 @@ BRIDGE_OUTPUT=$("$ENGINE" codex-bridge start \
     --codex-bin "$CODEX_BIN" \
     --json \
     --auto-approve \
-    --state-root "$STATE_ROOT" \
+    --isolation-root "$ISOLATION_ROOT" \
     --log-file "$LOG_FILE" \
+    --create-initial-thread \
     2>&1) || {
     fail "bridge start failed: $BRIDGE_OUTPUT"
     exit 1
@@ -140,16 +146,62 @@ echo "─── Test 3: Bridge state is ready ───"
 
 if [ -f "$STATE_FILE" ]; then
     STATUS=$(python3 -c "import json; print(json.load(open('$STATE_FILE'))['status'])" 2>/dev/null || echo "")
-    if [ "$STATUS" = "ready" ]; then
-        pass "bridge state is 'ready'"
+    LAUNCH_MODE=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('launch_mode',''))" 2>/dev/null || echo "")
+    if [ "$STATUS" = "ready" ] && [ "$LAUNCH_MODE" = "tui" ] && [ -n "$THREAD_ID" ]; then
+        pass "bridge state is ready with launch_mode=tui and prestarted thread"
     else
-        fail "bridge state is '$STATUS', expected 'ready'"
+        fail "bridge state status='$STATUS' launch_mode='$LAUNCH_MODE' thread='$THREAD_ID'"
     fi
 else
     fail "state file not found at $STATE_FILE"
 fi
 
-echo "─── Test 4: Turn submit ───"
+echo "─── Test 4: Detached UI bridge start ───"
+
+DETACHED_SESSION_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
+DETACHED_OUTPUT=$("$ENGINE" codex-bridge start \
+    --session-id "$DETACHED_SESSION_ID" \
+    --cwd "$CWD" \
+    --url "$API_URL" \
+    --token "$DEVICE_TOKEN" \
+    --codex-bin "$CODEX_BIN" \
+    --json \
+    --auto-approve \
+    --isolation-root "$DETACHED_ISOLATION_ROOT" \
+    --log-file "$DETACHED_LOG_FILE" \
+    --create-initial-thread \
+    --launch-mode detached-ui \
+    2>&1) || {
+    fail "detached-ui bridge start failed: $DETACHED_OUTPUT"
+    exit 1
+}
+
+DETACHED_THREAD_ID=$(echo "$DETACHED_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['thread_id'])" 2>/dev/null || echo "")
+DETACHED_PID=$(echo "$DETACHED_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['pid'])" 2>/dev/null || echo "")
+DETACHED_STATE_FILE=$(echo "$DETACHED_OUTPUT" | python3 -c "import sys,json; print(json.load(sys.stdin)['state_file'])" 2>/dev/null || echo "")
+if [ -n "$DETACHED_PID" ]; then
+    CLEANUP_PIDS+=("$DETACHED_PID")
+fi
+
+if [ -f "$DETACHED_STATE_FILE" ]; then
+    DETACHED_LAUNCH_MODE=$(python3 -c "import json; print(json.load(open('$DETACHED_STATE_FILE')).get('launch_mode',''))" 2>/dev/null || echo "")
+    DETACHED_IPC="${DETACHED_STATE_FILE%.json}.sock"
+    if [ "$DETACHED_LAUNCH_MODE" = "detached_ui" ] && [ -n "$DETACHED_THREAD_ID" ] && [ -S "$DETACHED_IPC" ]; then
+        pass "detached-ui bridge created thread and IPC socket"
+    else
+        fail "detached-ui state launch_mode='$DETACHED_LAUNCH_MODE' thread='$DETACHED_THREAD_ID' ipc='$DETACHED_IPC'"
+    fi
+else
+    fail "detached-ui state file not found"
+fi
+
+"$ENGINE" codex-bridge stop \
+    --session-id "$DETACHED_SESSION_ID" \
+    --state-root "$DETACHED_STATE_ROOT" \
+    --reason bridge_e2e_detached_ui \
+    >/dev/null 2>&1 || true
+
+echo "─── Test 5: Turn submit ───"
 
 SEND_OUTPUT=$("$ENGINE" codex-bridge send \
     --session-id "$SESSION_ID" \
@@ -165,7 +217,7 @@ else
     fail "unexpected send output: $SEND_OUTPUT"
 fi
 
-echo "─── Test 5: Turn completes ───"
+echo "─── Test 6: Turn completes ───"
 
 # Poll bridge state for turn completion (max 30s)
 for i in $(seq 1 30); do
@@ -183,7 +235,7 @@ else
     fail "turn did not complete within 30s (status=$TURN_STATUS active=$ACTIVE)"
 fi
 
-echo "─── Test 6: Transcript shipped ───"
+echo "─── Test 7: Transcript shipped ───"
 
 # Give ingest a moment
 sleep 2
@@ -211,7 +263,7 @@ else
     fail "could not verify transcript shipping"
 fi
 
-echo "─── Test 7: Loop continue (second turn) ───"
+echo "─── Test 8: Loop continue (second turn) ───"
 
 SEND2_OUTPUT=$("$ENGINE" codex-bridge send \
     --session-id "$SESSION_ID" \
@@ -243,7 +295,7 @@ else
     fail "second turn did not complete within 30s"
 fi
 
-echo "─── Test 8: Interrupt ───"
+echo "─── Test 9: Interrupt ───"
 
 # Start a long turn we can interrupt
 "$ENGINE" codex-bridge send \
@@ -274,16 +326,21 @@ else
     fi
 fi
 
-# Kill bridge from tests 1-8 before CLI entry point test
-kill "$BRIDGE_PID" 2>/dev/null || true
+# Stop bridge from tests 1-9 before CLI entry point test.
+"$ENGINE" codex-bridge stop \
+    --session-id "$SESSION_ID" \
+    --state-root "$STATE_ROOT" \
+    --reason bridge_e2e_main \
+    >/dev/null 2>&1 || kill "$BRIDGE_PID" 2>/dev/null || true
 sleep 1
 
-echo "─── Test 9: CLI entry point (longhouse codex --no-attach) ───"
+echo "─── Test 10: CLI entry point (longhouse codex --no-attach) ───"
 
 # This tests the REAL user entry point: longhouse codex
 # It exercises: API session creation, native bridge start, output formatting
 CLI_SESSION_ID=""
 CLI_WS_URL=""
+CLI_THREAD_ID=""
 LONGHOUSE_BIN="${LONGHOUSE_BIN:-$(command -v longhouse 2>/dev/null || echo "")}"
 if [ -z "$LONGHOUSE_BIN" ]; then
     fail "longhouse CLI not found"
@@ -301,10 +358,11 @@ else
     if [ -n "$CLI_OUTPUT" ]; then
         # Verify expected output fields
         CLI_SESSION_ID=$(echo "$CLI_OUTPUT" | grep "Session ID:" | head -1 | awk '{print $NF}')
+        CLI_THREAD_ID=$(echo "$CLI_OUTPUT" | grep "Codex thread:" | head -1 | awk '{print $NF}')
         CLI_WS_URL=$(echo "$CLI_OUTPUT" | grep "Remote target:" | awk '{print $NF}')
         CLI_ATTACH_CMD=$(echo "$CLI_OUTPUT" | grep "Attach:")
 
-        if [ -n "$CLI_SESSION_ID" ] && [ -n "$CLI_WS_URL" ] && [ -n "$CLI_ATTACH_CMD" ]; then
+        if [ -n "$CLI_SESSION_ID" ] && [ -n "$CLI_THREAD_ID" ] && [ -n "$CLI_WS_URL" ] && [ -n "$CLI_ATTACH_CMD" ] && echo "$CLI_ATTACH_CMD" | grep -q " resume $CLI_THREAD_ID "; then
             pass "CLI launched session $CLI_SESSION_ID with ws=$CLI_WS_URL"
 
             # Find and track the bridge daemon PID for cleanup
@@ -322,27 +380,31 @@ else
     fi
 fi
 
-echo "─── Test 10: TUI attach smoke (codex --remote connects) ───"
+echo "─── Test 11: TUI resume attach smoke (codex resume --remote connects) ───"
 
-# Test the exact CLI-created session from test 9.
+# Test the exact CLI-created session from test 10.
 TUI_WS_URL="${CLI_WS_URL:-}"
 
-if [ -z "$TUI_WS_URL" ]; then
-    fail "no CLI-created WebSocket URL available for TUI test"
+if [ -z "$TUI_WS_URL" ] || [ -z "$CLI_THREAD_ID" ]; then
+    fail "no CLI-created WebSocket URL/thread available for TUI test"
 else
     # Run codex TUI under `script` to provide a pseudo-TTY (codex requires a real terminal).
     # We're not testing interactivity, just that it connects without crashing.
     TUI_LOG="/tmp/bridge-e2e-tui.log"
     if command -v script &>/dev/null; then
         # macOS `script` syntax: script -q output_file command...
-        script -q "$TUI_LOG" "$CODEX_BIN" --enable tui_app_server --remote "$TUI_WS_URL" &
+        script -q "$TUI_LOG" "$CODEX_BIN" -c check_for_update_on_startup=false resume "$CLI_THREAD_ID" --enable tui_app_server --remote "$TUI_WS_URL" --no-alt-screen &
         TUI_PID=$!
         CLEANUP_PIDS+=("$TUI_PID")
 
         # Wait 5 seconds — if TUI is still running, the connection succeeded
         sleep 5
         if kill -0 "$TUI_PID" 2>/dev/null; then
-            pass "TUI connected via pseudo-TTY and stayed alive for 5s (pid=$TUI_PID)"
+            if grep -q "No active thread is available" "$TUI_LOG" 2>/dev/null; then
+                fail "TUI resume attach showed active-thread startup error"
+            else
+                pass "TUI resume connected via pseudo-TTY and stayed alive for 5s (pid=$TUI_PID)"
+            fi
             kill "$TUI_PID" 2>/dev/null || true
         else
             if wait "$TUI_PID" 2>/dev/null; then
@@ -351,7 +413,11 @@ else
                 TUI_EXIT=$?
             fi
             if [ "$TUI_EXIT" -eq 0 ]; then
-                pass "TUI exited cleanly"
+                if grep -q "No active thread is available" "$TUI_LOG" 2>/dev/null; then
+                    fail "TUI resume attach showed active-thread startup error"
+                else
+                    pass "TUI resume exited cleanly"
+                fi
             else
                 fail "TUI crashed with exit code $TUI_EXIT"
                 dim "  log: $(tail -5 "$TUI_LOG" 2>/dev/null || echo '(empty)')"
