@@ -22,6 +22,7 @@ os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg import managed_phase_contract
+from zerg import provider_release_status
 from zerg.cli import local_health as local_health_cli
 from zerg.cli import local_health_fast
 from zerg.cli.main import app
@@ -261,6 +262,16 @@ def _contract_tool_name(case: managed_phase_contract.ManagedPhaseDefinition) -> 
 
 def _disable_real_runner_env(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(local_health_service, "_candidate_runner_env_paths", lambda: [tmp_path / "missing-runner.env"])
+    for env_name in (
+        local_health_service.CODEX_BIN_ENV,
+        local_health_service.OPENCODE_BIN_ENV,
+        local_health_service.ANTIGRAVITY_BIN_ENV,
+        provider_release_status.CODEX_RELEASE_STATUS_FILE_ENV,
+        provider_release_status.CODEX_RELEASE_STATUS_URL_ENV,
+        provider_release_status.PROVIDER_RELEASE_STATUS_DIR_ENV,
+        provider_release_status.PROVIDER_RELEASE_STATUS_URL_ENV,
+    ):
+        monkeypatch.delenv(env_name, raising=False)
     # Stub the live process scan by default so tests don't pick up the dev
     # box's real Claude/Codex processes. Tests that want process-scan output
     # override this explicitly.
@@ -544,6 +555,45 @@ def test_collect_local_health_surfaces_codex_provider_cli(monkeypatch, tmp_path:
         "resolution_error": None,
         "env_override": None,
     }
+
+
+def test_collect_local_health_degrades_for_blocked_provider_release(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service.shutil,
+        "which",
+        lambda name: "/opt/homebrew/bin/codex" if name == "codex" else None,
+    )
+    monkeypatch.setattr(
+        local_health_service,
+        "collect_provider_release_status",
+        lambda provider_clis, *, fast: {
+            "schema_version": 1,
+            "enabled": True,
+            "blocking_count": 1,
+            "warning_count": 0,
+            "statuses": {
+                "codex": {
+                    "status": "blocked",
+                    "verdict": "red",
+                    "failure_code": "managed_resume_active_thread_error",
+                    "artifact_version": "0.133.0",
+                    "current_version": "codex-cli 0.133.0",
+                    "local_version_matches": True,
+                }
+            },
+        },
+    )
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "degraded"
+    assert snapshot["severity"] == "yellow"
+    assert snapshot["headline"] == "Installed provider release is blocked"
+    assert "provider_release_blocked" in snapshot["reasons"]
+    assert snapshot["provider_release_status"]["statuses"]["codex"]["status"] == "blocked"
 
 
 def test_collect_local_health_surfaces_opencode_provider_cli(monkeypatch, tmp_path: Path):

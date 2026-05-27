@@ -113,6 +113,25 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
             if info.get("resolution_error"):
                 typer.echo(f"    resolution error: {info['resolution_error']}")
 
+    provider_release_status = dict(snapshot.get("provider_release_status") or {})
+    release_statuses = dict(provider_release_status.get("statuses") or {})
+    if release_statuses:
+        typer.echo("")
+        typer.echo("Provider Release Status")
+        for provider, raw_info in sorted(release_statuses.items()):
+            info = dict(raw_info or {})
+            typer.echo(f"  {provider}: {info.get('status') or '-'}")
+            if info.get("verdict"):
+                typer.echo(f"    verdict: {info.get('verdict')}")
+            if info.get("artifact_version") or info.get("current_version"):
+                current_version = info.get("current_version") or "-"
+                artifact_version = info.get("artifact_version") or "-"
+                typer.echo(f"    version: local={current_version} artifact={artifact_version}")
+            if info.get("failure_code"):
+                typer.echo(f"    failure: {info.get('failure_code')}")
+            if info.get("evidence_root"):
+                typer.echo(f"    evidence: {info.get('evidence_root')}")
+
     typer.echo("")
     typer.echo("Outbox")
     typer.echo(f"  path: {outbox.get('path', '-')}")
