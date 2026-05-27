@@ -293,7 +293,7 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
             provider_session_id="provider-123",
             attach_command=(
                 "zsh -lc 'exec claude --dangerously-skip-permissions --session-id provider-123 "
-                "--dangerously-load-development-channels server:longhouse-channel'"
+                "--channels server:longhouse-channel'"
             ),
             source_runner_name="work-laptop",
             managed_transport="claude_channel_bridge",
@@ -341,7 +341,7 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
     assert "Longhouse Claude session launched on this machine." in result.output
     assert (
         "Attach: zsh -lc 'exec claude --dangerously-skip-permissions --session-id provider-123 "
-        "--dangerously-load-development-channels server:longhouse-channel'" in result.output
+        "--channels server:longhouse-channel'" in result.output
     )
     assert "Preparing native Claude bridge..." in result.output
     assert "Opening session in browser..." in result.output
@@ -408,6 +408,7 @@ def test_launch_detached_native_claude_channel_waits_for_channel_state(monkeypat
         "_ensure_native_claude_prereqs",
         lambda **kwargs: prereq_calls.append(kwargs),
     )
+    monkeypatch.setattr(claude_cli.shutil, "which", lambda command: "/usr/bin/script" if command == "script" else None)
     monkeypatch.setattr(claude_cli.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(
         claude_cli,
@@ -430,6 +431,9 @@ def test_launch_detached_native_claude_channel_waits_for_channel_state(monkeypat
     assert result["channel_state"] == {"ready": True, "port": 49200}
     assert prereq_calls[0]["base_url"] == "https://longhouse.test"
     assert popen_calls[0]["cwd"] == str(tmp_path)
+    assert popen_calls[0]["cmd"][0] == "script"
+    assert popen_calls[0]["stdout"] == claude_cli.subprocess.DEVNULL
+    assert popen_calls[0]["stderr"] == claude_cli.subprocess.DEVNULL
     command_text = " ".join(popen_calls[0]["cmd"])
     assert "claude" in command_text
     assert "11111111-1111-4111-8111-111111111111" in command_text

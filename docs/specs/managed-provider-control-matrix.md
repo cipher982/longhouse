@@ -54,7 +54,7 @@ the upstream provider can support.
 | Provider | Local Launch | Remote Launch | Send | Interrupt | Steer | Runtime | Transcript | Current Truth |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Codex | Yes, `longhouse codex` | Yes, engine `session.launch` | Yes, engine channel | Yes, engine channel | Yes, engine channel with active-turn errors | Bridge/runtime events | Hooks + rollout | First-class |
-| Claude | Yes, `longhouse claude` | Yes, Machine Agent `claude.launch` with channel-ready handshake | Yes, `claude-channel send` | Yes, `claude-channel interrupt` | Yes, gated by fresh active runtime phase, delivered through channel metadata | Channel/hooks/process scan | Claude channel + transcript ingest | First-class channel control |
+| Claude | Yes, `longhouse claude` | Yes, Machine Agent `claude.launch` with PTY-backed `--channels` channel-ready handshake | Yes, `claude-channel send` | Yes, `claude-channel interrupt` | Yes, gated by fresh active runtime phase, delivered through channel metadata | Channel/hooks/process scan | Claude channel + transcript ingest | First-class channel control |
 | OpenCode | Yes, `longhouse opencode` | No | No | No | No | OpenCode plugin runtime events | Plugin/transcript observation | Observe-only managed wrapper |
 | Antigravity | Yes, `longhouse antigravity` / `longhouse agy` | No | No | No | No | JSON hooks + runtime outbox | Hook binding to transcript path | Observe-only managed wrapper |
 
@@ -100,8 +100,8 @@ Next Claude gaps:
 
 1. Add a canary that proves channel `launch`, `send`, active-turn `steer`, idle steer
    rejection, and `interrupt`.
-2. Dogfood detached launch on macOS and Linux to confirm stock Claude does not
-   require an externally visible terminal when the channel-ready state appears.
+2. Dogfood detached launch on Linux; macOS requires a `script(1)` PTY wrapper
+   because stock Claude falls into print-mode behavior without a terminal.
 
 ### OpenCode
 
