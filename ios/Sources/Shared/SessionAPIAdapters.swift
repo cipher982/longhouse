@@ -108,78 +108,6 @@ extension APISessionTranscriptPreviewResponse {
     }
 }
 
-extension APIHostObservationResponse {
-    var hostObservation: HostObservation {
-        HostObservation(state: state ?? "unknown", lastSeenAt: lastSeenAt, source: source)
-    }
-}
-
-extension APIProcessObservationResponse {
-    var processObservation: ProcessObservation {
-        ProcessObservation(
-            status: status ?? "unknown",
-            pid: pid,
-            processStartTime: processStartTime,
-            observedAt: observedAt,
-            lastSeenAt: lastSeenAt,
-            sourceMtime: sourceMtime,
-            sourcePath: sourcePath,
-            reason: reason,
-            source: source
-        )
-    }
-}
-
-extension APIPhaseObservationResponse {
-    var phaseObservation: PhaseObservation {
-        PhaseObservation(kind: kind, tool: tool, source: source, observedAt: observedAt, expiresAt: expiresAt)
-    }
-}
-
-extension APIActivityObservationResponse {
-    var activityObservation: ActivityObservation {
-        ActivityObservation(
-            lastTranscriptAt: lastTranscriptAt,
-            lastRuntimeSignalAt: lastRuntimeSignalAt,
-            lastProgressAt: lastProgressAt
-        )
-    }
-}
-
-extension APILifecycleFactResponse {
-    var lifecycleFact: LifecycleFact {
-        LifecycleFact(state: state ?? "unknown", reason: reason, observedAt: observedAt)
-    }
-}
-
-extension APIControlObservationResponse {
-    var controlObservation: ControlObservation {
-        ControlObservation(
-            state: state,
-            reason: reason,
-            source: source,
-            lastSeenAt: lastSeenAt,
-            expiresAt: expiresAt,
-            transport: transport
-        )
-    }
-}
-
-extension APISessionLivenessFactsResponse {
-    var sessionLivenessFacts: SessionLivenessFacts {
-        SessionLivenessFacts(
-            controlPath: controlPath,
-            control: control?.controlObservation,
-            processState: processState,
-            host: host.hostObservation,
-            process: process.processObservation,
-            phase: phase.phaseObservation,
-            activity: activity.activityObservation,
-            lifecycle: lifecycle.lifecycleFact
-        )
-    }
-}
-
 extension APITimelineBadgePresentationResponse {
     var timelineBadgePresentation: TimelineBadgePresentation {
         TimelineBadgePresentation(label: label, tone: tone)
@@ -223,7 +151,6 @@ extension APISessionResponse {
             originLabel: originLabel,
             capabilities: capabilities.sessionCapabilities,
             runtimeDisplay: runtimeDisplay.sessionRuntimeDisplay,
-            runtimeFacts: runtimeFacts?.sessionLivenessFacts,
             loopMode: loopMode.flatMap(SessionLoopMode.init(rawValue:)),
             transcriptPreview: transcriptPreview?.sessionTranscriptPreview
         )
@@ -405,7 +332,6 @@ extension APITimelineSessionCardResponse {
             hostReattachAvailable: head.capabilities.hostReattachAvailable,
             replyToLiveSessionAvailable: head.capabilities.replyToLiveSessionAvailable,
             runtimeDisplay: head.runtimeDisplay.sessionRuntimeDisplay,
-            runtimeFacts: head.runtimeFacts?.sessionLivenessFacts,
             timelineCard: head.timelineCard.timelineCardPresentation
         )
     }

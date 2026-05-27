@@ -25,9 +25,6 @@ function isCardClosed(card: TimelineSessionCard): boolean {
   const session = card.head;
   const status = session?.timeline_card?.status;
   if (status?.tone === "closed" || status?.label === "Closed") return true;
-  const lifecycle = session?.runtime_facts?.lifecycle?.state;
-  if (lifecycle === "closed") return true;
-  if (lifecycle === "open") return false;
   return isSessionClosed(session);
 }
 

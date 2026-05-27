@@ -1217,9 +1217,6 @@ def test_heartbeat_attached_managed_codex_lease_materializes_control_without_run
             control_overlay=control,
         )
         assert response.runtime_display is None
-        assert response.runtime_facts is not None
-        assert response.runtime_facts.phase.kind is None
-        assert response.runtime_facts.control.state == "online"
         assert response.capabilities.live_control_available is True
 
     engine.dispose()
@@ -1594,9 +1591,6 @@ def test_heartbeat_managed_lease_writes_control_state_without_phase_dependency(t
             control_overlay=control,
         )
         assert response.runtime_display is None
-        assert response.runtime_facts is not None
-        assert response.runtime_facts.phase.kind is None
-        assert response.runtime_facts.control.state == "online"
         assert response.capabilities.live_control_available is True
 
     engine.dispose()
@@ -1892,9 +1886,6 @@ def test_heartbeat_reattach_does_not_clear_explicit_session_ended_runtime_termin
         assert state.terminal_source == "engine_attached_lease"
         assert stored_session.ended_at is not None
         assert stored_session.ended_at.replace(tzinfo=timezone.utc) == ended_at
-        assert response.runtime_facts is not None
-        assert response.runtime_facts.lifecycle.state == "closed"
-        assert response.runtime_facts.control.state == "online"
         assert response.capabilities.live_control_available is False
 
     engine.dispose()
@@ -1960,11 +1951,6 @@ def test_heartbeat_detached_managed_codex_lease_is_recoverable_control_loss(tmp_
         assert control.control_state == "offline"
         assert control.reason == "detached"
         assert response.runtime_display is None
-        assert response.runtime_facts is not None
-        assert response.runtime_facts.phase.kind is None
-        assert response.runtime_facts.lifecycle.state == "open"
-        assert response.runtime_facts.control.state == "offline"
-        assert response.runtime_facts.control.reason == "detached"
         assert response.capabilities.live_control_available is False
         assert response.capabilities.host_reattach_available is True
 
@@ -3258,9 +3244,6 @@ def test_heartbeat_managed_reattach_reopens_synthetic_process_gone_terminal(tmp_
 
         assert control.control_state == "online"
         assert response.runtime_display is None
-        assert response.runtime_facts is not None
-        assert response.runtime_facts.lifecycle.state == "open"
-        assert response.runtime_facts.control.state == "online"
         assert response.capabilities.live_control_available is True
 
     engine.dispose()

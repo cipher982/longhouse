@@ -852,7 +852,6 @@ def test_list_timeline_sessions_default_cards_open_writable_head_and_keep_thread
     assert top.timeline_anchor_at > response.sessions[1].timeline_anchor_at
     assert response.sessions[1].thread_id == str(recent_single.id)
     assert top.root.runtime_display == raw_root.runtime_display
-    assert top.root.runtime_facts == raw_root.runtime_facts
     assert top.root.timeline_card == raw_root.timeline_card
     assert top.root.capabilities == raw_root.capabilities
     assert top.root.timeline_anchor_at == raw_root.timeline_anchor_at

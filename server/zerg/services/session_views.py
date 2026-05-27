@@ -273,7 +273,7 @@ def build_session_runtime_display_response(
     )
 
 
-def build_session_liveness_facts_response(
+def derive_session_liveness_facts(
     *,
     runtime_overlay: SessionRuntimeView | None,
     capability_flags,
@@ -283,7 +283,12 @@ def build_session_liveness_facts_response(
     binding_terminal_reason: str | None = None,
     control_overlay=None,
     now: datetime | None = None,
-) -> SessionLivenessFactsResponse | None:
+):
+    """Internal-only liveness-facts dataclass used to gate timeline_card and capabilities.
+
+    Liveness facts are not part of the public response contract; clients consume
+    ``runtime_display`` and ``timeline_card`` instead.
+    """
     has_liveness_evidence = (
         runtime_overlay is not None
         or control_overlay is not None
@@ -293,7 +298,7 @@ def build_session_liveness_facts_response(
     )
     if not has_liveness_evidence:
         return None
-    facts = build_session_liveness_facts(
+    return build_session_liveness_facts(
         runtime_view=runtime_overlay,
         capabilities=capability_flags,
         last_activity_at=last_activity_at,
@@ -303,56 +308,11 @@ def build_session_liveness_facts_response(
         control_overlay=control_overlay,
         now=now,
     )
-    return SessionLivenessFactsResponse(
-        control_path=facts.control_path,
-        control=ControlObservationResponse(
-            state=facts.control.state,
-            reason=facts.control.reason,
-            source=facts.control.source,
-            last_seen_at=facts.control.last_seen_at,
-            expires_at=facts.control.expires_at,
-            transport=facts.control.transport,
-        ),
-        process_state=facts.process_state,
-        host=HostObservationResponse(
-            state=facts.host.state,
-            last_seen_at=facts.host.last_seen_at,
-            source=facts.host.source,
-        ),
-        process=ProcessObservationResponse(
-            status=facts.process.status,
-            pid=facts.process.pid,
-            process_start_time=facts.process.process_start_time,
-            observed_at=facts.process.observed_at,
-            last_seen_at=facts.process.last_seen_at,
-            source_mtime=facts.process.source_mtime,
-            source_path=facts.process.source_path,
-            reason=facts.process.reason,
-            source=facts.process.source,
-        ),
-        phase=PhaseObservationResponse(
-            kind=facts.phase.kind,
-            tool=facts.phase.tool,
-            source=facts.phase.source,
-            observed_at=facts.phase.observed_at,
-            expires_at=facts.phase.expires_at,
-        ),
-        activity=ActivityObservationResponse(
-            last_transcript_at=facts.activity.last_transcript_at,
-            last_runtime_signal_at=facts.activity.last_runtime_signal_at,
-            last_progress_at=facts.activity.last_progress_at,
-        ),
-        lifecycle=LifecycleFactResponse(
-            state=facts.lifecycle.state,
-            reason=facts.lifecycle.reason,
-            observed_at=facts.lifecycle.observed_at,
-        ),
-    )
 
 
 def build_session_timeline_card_response(
     *,
-    runtime_facts: SessionLivenessFactsResponse | None,
+    runtime_facts,
     capability_flags,
     runtime_display: SessionRuntimeDisplayResponse | None = None,
 ) -> TimelineCardPresentationResponse:
@@ -390,7 +350,7 @@ def _timeline_status_from_display(
     )
 
 
-def _timeline_status_from_liveness_facts(runtime_facts: SessionLivenessFactsResponse | None) -> TimelineStatusPresentationResponse:
+def _timeline_status_from_liveness_facts(runtime_facts) -> TimelineStatusPresentationResponse:
     if runtime_facts is None:
         return TimelineStatusPresentationResponse(label="No live signal", tone="inactive", seen_at=None, seen_at_prefix="Checked")
 
@@ -613,79 +573,6 @@ class SessionTranscriptPreviewResponse(UTCBaseModel):
     )
 
 
-class HostObservationResponse(UTCBaseModel):
-    state: str = Field("unknown", description="Observed host state: online|stale|offline|unknown")
-    last_seen_at: Optional[datetime] = Field(None, description="When the host last heartbeated, when known")
-    source: Optional[str] = Field(None, description="Observation source, e.g. machine_heartbeat")
-
-
-class ProcessObservationResponse(UTCBaseModel):
-    status: str = Field("unknown", description="Observed process state: observed|not_observed|unknown")
-    pid: Optional[int] = Field(None, description="Observed process id, when known")
-    process_start_time: Optional[datetime] = Field(None, description="Observed process start time, when known")
-    observed_at: Optional[datetime] = Field(None, description="When this process binding was observed")
-    last_seen_at: Optional[datetime] = Field(None, description="Server time when this binding was last reported")
-    source_mtime: Optional[datetime] = Field(None, description="Transcript mtime seen with the process observation")
-    source_path: Optional[str] = Field(None, description="Transcript path tied to this observation")
-    reason: Optional[str] = Field(None, description="Why the status is not observed or unknown")
-    source: Optional[str] = Field(None, description="Observation source, e.g. machine_process_scan")
-
-
-class PhaseObservationResponse(UTCBaseModel):
-    kind: Optional[str] = Field(None, description="Observed phase kind, when a semantic phase signal exists")
-    tool: Optional[str] = Field(None, description="Observed active tool for the phase, when known")
-    source: Optional[str] = Field(None, description="Phase observation source")
-    observed_at: Optional[datetime] = Field(None, description="When the phase was observed")
-    expires_at: Optional[datetime] = Field(None, description="Producer/debouncer freshness budget, not lifecycle truth")
-
-
-class ControlObservationResponse(UTCBaseModel):
-    state: str = Field("unknown", description="Observed control state: online|degraded|offline|unknown|none")
-    reason: Optional[str] = Field(None, description="Typed reason when control is not online")
-    source: Optional[str] = Field(None, description="Observation source, e.g. machine_heartbeat")
-    last_seen_at: Optional[datetime] = Field(None, description="When the control path was last seen")
-    expires_at: Optional[datetime] = Field(None, description="Control freshness expiry")
-    transport: Optional[str] = Field(None, description="Managed transport for this control path")
-
-
-class ActivityObservationResponse(UTCBaseModel):
-    last_transcript_at: Optional[datetime] = Field(None, description="Last transcript event/activity timestamp")
-    last_runtime_signal_at: Optional[datetime] = Field(None, description="Last semantic runtime signal timestamp")
-    last_progress_at: Optional[datetime] = Field(None, description="Last progress-only signal timestamp")
-
-
-class LifecycleFactResponse(UTCBaseModel):
-    state: str = Field("unknown", description="Observed lifecycle state: open|closed|unknown")
-    reason: Optional[str] = Field(None, description="Reason for the lifecycle state when known")
-    observed_at: Optional[datetime] = Field(None, description="When the lifecycle fact was observed")
-
-
-class SessionLivenessFactsResponse(UTCBaseModel):
-    """Observed facts only.
-
-    This contract is intentionally orthogonal to ``runtime_display``. Clients
-    should render these facts with timestamps/sources, not reconcile them with
-    display labels or use them as a second display state machine.
-    """
-
-    control_path: str = Field(..., description="Does Longhouse own a control path? managed|unmanaged")
-    # Compatibility backstop for mixed-version clients/fixtures; response builders
-    # should always pass the explicit control observation from liveness facts.
-    control: ControlObservationResponse = Field(
-        default_factory=ControlObservationResponse,
-        description="Observed managed-control availability",
-    )
-    process_state: Literal["running", "closed", "unknown"] = Field(
-        ...,
-        description="Observed provider-process state",
-    )
-    host: HostObservationResponse
-    process: ProcessObservationResponse
-    phase: PhaseObservationResponse
-    activity: ActivityObservationResponse
-    lifecycle: LifecycleFactResponse
-
-
 class TimelineBadgePresentationResponse(UTCBaseModel):
     label: str = Field(..., description="Stable user-facing badge label")
     tone: str = Field(..., description="Stable visual tone token for clients")
@@ -762,7 +649,6 @@ class SessionResponse(UTCBaseModel):
     control: Optional[SessionControlResponse] = Field(None, description="Host-control and managed-launch debugging detail")
     capabilities: SessionCapabilitiesResponse = Field(..., description="Canonical session capability flags")
     runtime_display: SessionRuntimeDisplayResponse = Field(..., description="Server-derived display state for clients")
-    runtime_facts: Optional[SessionLivenessFactsResponse] = Field(None, description="Observed liveness facts with timestamps and sources")
     transcript_preview: Optional[SessionTranscriptPreviewResponse] = Field(
         None,
         description="Latest renderable transcript preview sourced from the event ledger.",
@@ -902,7 +788,6 @@ class ActiveSessionResponse(UTCBaseModel):
     control: Optional[SessionControlResponse] = Field(None, description="Host-control and managed-launch debugging detail")
     capabilities: SessionCapabilitiesResponse = Field(..., description="Canonical session capability flags")
     runtime_display: Optional[SessionRuntimeDisplayResponse] = Field(None, description="Server-derived display state for clients")
-    runtime_facts: Optional[SessionLivenessFactsResponse] = Field(None, description="Observed liveness facts with timestamps and sources")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.ASSIST, description="Session loop mode: assist|autopilot")
 
 
@@ -1369,7 +1254,7 @@ def build_session_response(
         has_pending_response_turn=has_pending_response_turn,
         now=current_now,
     )
-    runtime_facts = build_session_liveness_facts_response(
+    runtime_facts = derive_session_liveness_facts(
         runtime_overlay=runtime_overlay,
         capability_flags=capability_flags,
         last_activity_at=last_activity_at,
@@ -1440,7 +1325,6 @@ def build_session_response(
             kernel_capabilities=kernel_capabilities,
         ),
         runtime_display=runtime_display,
-        runtime_facts=runtime_facts,
         transcript_preview=transcript_preview_response,
         timeline_card=build_session_timeline_card_response(
             runtime_facts=runtime_facts,
@@ -1564,7 +1448,7 @@ def build_active_session_response(
         binding_host_state=binding_host_state,
         binding_terminal_reason=binding_terminal_reason,
     )
-    runtime_facts = build_session_liveness_facts_response(
+    runtime_facts = derive_session_liveness_facts(
         runtime_overlay=runtime_overlay,
         capability_flags=capability_flags,
         last_activity_at=last_activity_at,
@@ -1619,7 +1503,6 @@ def build_active_session_response(
             kernel_capabilities=kernel_capabilities,
         ),
         runtime_display=runtime_display,
-        runtime_facts=runtime_facts,
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
     )
 
