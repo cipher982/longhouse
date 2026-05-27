@@ -89,11 +89,7 @@ def project_send_affordance(
     has_managed_control_path = bool(capability_flags.live_control_available or capability_flags.host_reattach_available)
 
     if live and bool(capability_flags.can_send_input):
-        provider = (provider_label or "").strip().lower()
-        control_plane = (capability_flags.control_plane or "").strip()
-        can_steer = (provider == "codex" and control_plane == "codex_bridge") or (
-            provider == "opencode" and control_plane == "opencode_process"
-        )
+        can_steer = bool(capability_flags.can_steer_active_turn)
         default_intent: InputIntent
         if can_steer and is_executing:
             default_intent = "steer"

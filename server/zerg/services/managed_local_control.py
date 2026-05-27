@@ -683,11 +683,11 @@ async def steer_text_to_managed_local_session(
     timeout_secs: int = 15,
     attachments: list[dict] | None = None,
 ) -> ManagedLocalSendResult:
-    """Inject mid-turn steer text into the currently active Codex turn.
+    """Inject mid-turn steer text into the currently active managed turn.
 
-    Claude channel has no steer primitive today — the transport helper will
-    raise if called on a non-codex transport. Callers should gate on
-    `can_steer_active_turn`.
+    Codex app-server and Claude channel bridge both support live injection.
+    The transport helper raises for process-only observe transports. Callers
+    should gate on `can_steer_active_turn`.
 
     Turn-ended races (active turn ended between the UI's capability check
     and this dispatch) surface as `ManagedLocalSendResult(ok=False,
@@ -721,7 +721,7 @@ async def steer_text_to_managed_local_session(
         command=command,
         timeout_secs=timeout_secs,
         command_type=MANAGED_CONTROL_COMMAND_STEER_TEXT,
-        payload={"text": text},
+        payload={"text": text, "intent": "steer"},
         commis_id=commis_id,
         run_id=None,
         failure_message="Failed to dispatch steer command",

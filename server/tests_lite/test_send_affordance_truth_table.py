@@ -57,11 +57,11 @@ def test_live_executing_codex_bridge_uses_steer_intent():
     assert affordance.send_disabled_reason is None
 
 
-def test_live_executing_non_steerable_transport_uses_queue_intent():
+def test_live_executing_claude_channel_bridge_uses_steer_intent():
     affordance = _project(_caps(control_plane="claude_channel_bridge"), provider_label="Claude", is_executing=True)
 
     assert affordance.input_mode == "live"
-    assert affordance.default_input_intent == "queue"
+    assert affordance.default_input_intent == "steer"
     assert affordance.composer_placeholder == "Send a message to the live Claude session..."
     assert affordance.send_disabled_reason is None
 

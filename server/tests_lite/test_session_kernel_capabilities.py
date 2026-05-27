@@ -146,6 +146,34 @@ def test_managed_attached_grants_live(db):
     assert caps.can_tail_output is True
 
 
+@pytest.mark.parametrize("control_plane", ["codex_bridge", "claude_channel_bridge"])
+def test_live_send_capable_channel_bridges_can_steer_active_turn(db, control_plane):
+    s = _make_session(db, provider="claude" if control_plane == "claude_channel_bridge" else "codex")
+    t = _make_thread(db, s)
+    r = _make_run(db, t)
+    _make_conn(db, r, control_plane=control_plane, state="attached", caps={"send": 1, "interrupt": 1, "tail": 1})
+    db.commit()
+
+    caps = project_session_capabilities(db, session_id=s.id)
+
+    assert caps.live_control_available is True
+    assert caps.can_send_input is True
+    assert caps.can_steer_active_turn is True
+
+
+@pytest.mark.parametrize("control_plane", ["log_tail", "opencode_process", "antigravity_process"])
+def test_non_injection_control_planes_do_not_project_steer(db, control_plane):
+    s = _make_session(db, provider="opencode")
+    t = _make_thread(db, s)
+    r = _make_run(db, t)
+    _make_conn(db, r, control_plane=control_plane, state="attached", caps={"send": 1, "interrupt": 1, "tail": 1})
+    db.commit()
+
+    caps = project_session_capabilities(db, session_id=s.id)
+
+    assert caps.can_steer_active_turn is False
+
+
 def test_managed_degraded_still_live(db):
     s = _make_session(db)
     t = _make_thread(db, s)
@@ -189,6 +217,7 @@ def test_steerable_attached_without_bits_is_still_live(db):
     assert caps.can_send_input is False
     assert caps.can_interrupt is False
     assert caps.can_tail_output is False
+    assert caps.can_steer_active_turn is False
 
 
 def test_steerable_detached_without_bits_is_still_reattach(db):

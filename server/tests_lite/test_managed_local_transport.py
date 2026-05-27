@@ -18,6 +18,7 @@ from zerg.services.managed_local_transport import ManagedLocalTransportError
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.managed_local_transport import build_managed_local_interrupt_command
 from zerg.services.managed_local_transport import build_managed_local_send_text_command
+from zerg.services.managed_local_transport import build_managed_local_steer_text_command
 from zerg.session_execution_home import ManagedSessionTransport
 
 
@@ -152,6 +153,40 @@ def test_build_managed_local_send_text_command_uses_local_bridge_for_claude_chan
     command = build_managed_local_send_text_command(session=session, text="continue")
     inner = _wrapped_inner(command)
     assert "exec longhouse claude-channel send --session-id session-123 --text continue" in inner
+
+
+def test_build_managed_local_steer_text_command_uses_local_bridge_for_claude_channel_transport():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value,
+        provider="claude",
+    )
+
+    command = build_managed_local_steer_text_command(session=session, text="continue")
+    inner = _wrapped_inner(command)
+    assert "exec longhouse claude-channel send --session-id session-123 --text continue --meta intent=steer" in inner
+
+
+def test_build_managed_local_steer_text_command_rejects_attachments_for_claude_channel():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value,
+        provider="claude",
+    )
+
+    with pytest.raises(ManagedLocalTransportError, match="Attachments are only supported"):
+        build_managed_local_steer_text_command(
+            session=session,
+            text="continue",
+            attachments=[
+                {
+                    "id": "x",
+                    "mime_type": "image/png",
+                    "sha256": "a" * 64,
+                    "blob_url": "/x",
+                }
+            ],
+        )
 
 
 def test_build_managed_local_interrupt_command_uses_engine_bridge_for_codex_app_server():

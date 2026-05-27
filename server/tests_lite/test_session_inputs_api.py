@@ -819,10 +819,23 @@ def _seed_codex_session(session_local):
     return session_id, user_id
 
 
-def test_intent_steer_requires_codex_capability(monkeypatch, tmp_path):
-    """Claude-channel sessions cannot steer; must return 409 steer_unsupported."""
+def test_intent_steer_requires_steerable_capability(monkeypatch, tmp_path):
+    """Live send-capable transports without live-injection support return 409 steer_unsupported."""
+    from zerg.models.agents import SessionConnection
+    from zerg.models.agents import SessionRun
+    from zerg.models.agents import SessionThread
+
     session_local = _make_db(tmp_path)
-    session_id, user_id = _seed_live_session(session_local)  # defaults to claude_channel_bridge
+    session_id, user_id = _seed_live_session(session_local)
+    with session_local() as db:
+        thread = (
+            db.query(SessionThread).filter(SessionThread.session_id == session_id, SessionThread.is_primary == 1).one()
+        )
+        run = db.query(SessionRun).filter(SessionRun.thread_id == thread.id, SessionRun.ended_at.is_(None)).one()
+        conn = db.query(SessionConnection).filter(SessionConnection.run_id == run.id).one()
+        conn.control_plane = "opencode_process"
+        conn.acquisition_kind = "spawned_control"
+        db.commit()
     _stub_dispatch(monkeypatch)
 
     client, api_app_ref = _make_client(
@@ -841,7 +854,39 @@ def test_intent_steer_requires_codex_capability(monkeypatch, tmp_path):
         api_app_ref.dependency_overrides = {}
 
 
-def test_intent_steer_success_returns_sent(monkeypatch, tmp_path):
+def test_intent_steer_success_returns_sent_for_claude_channel(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+
+    async def fake_steer(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+        from zerg.services.managed_local_control import ManagedLocalSendResult
+
+        assert session.provider == "claude"
+        return ManagedLocalSendResult(ok=True, exit_code=0)
+
+    monkeypatch.setattr(
+        "zerg.services.managed_local_control.steer_text_to_managed_local_session",
+        fake_steer,
+    )
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        resp = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "redirect to failing test", "intent": "steer"},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["outcome"] == "sent"
+        assert body["intent"] == "steer"
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_intent_steer_success_returns_sent_for_codex_bridge(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_codex_session(session_local)
 
