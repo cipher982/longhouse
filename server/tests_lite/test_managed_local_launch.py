@@ -276,7 +276,8 @@ def test_this_device_launch_creates_native_claude_session(monkeypatch, tmp_path)
     assert payload["source_runner_id"] == runner.id
     assert payload["source_runner_name"] == "cinder"
     assert payload["managed_session_name"] == "Demo-session"
-    assert "server:longhouse-channel" in payload["attach_command"]
+    assert "--dangerously-load-development-channels server:longhouse-channel" in payload["attach_command"]
+    assert "--channels server:longhouse-channel" not in payload["attach_command"]
     assert session.managed_transport == "claude_channel_bridge"
     assert session.source_runner_id == runner.id
     assert runtime_state.phase == "idle"

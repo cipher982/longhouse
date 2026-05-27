@@ -16,6 +16,7 @@ os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg.services.claude_channel_bridge import CLAUDE_CHANNEL_SERVER_NAME
+from zerg.services.claude_channel_bridge import build_claude_channel_exec_command
 from zerg.services.claude_channel_bridge import build_claude_channel_state_file
 from zerg.services.claude_channel_bridge import install_claude_channel_mcp_server
 from zerg.services.claude_channel_bridge import resolve_claude_user_config_path
@@ -81,6 +82,19 @@ def test_install_claude_channel_mcp_server_writes_user_scope_entry(tmp_path):
     }
     assert CLAUDE_CHANNEL_SERVER_NAME not in data["projects"]["/tmp/other-project"]["mcpServers"]
     assert str(workspace.resolve()) not in data["projects"]
+
+
+def test_build_claude_channel_exec_command_uses_development_channel_flag():
+    command = build_claude_channel_exec_command(
+        provider_session_id="provider-123",
+        longhouse_session_id="11111111-1111-1111-1111-111111111111",
+        cwd="/tmp/demo",
+        resume=False,
+        claude_command="claude",
+    )
+
+    assert "--dangerously-load-development-channels server:longhouse-channel" in command
+    assert "--channels server:longhouse-channel" not in command
 
 
 def test_claude_channel_bridge_emits_channel_notification_after_init(tmp_path):

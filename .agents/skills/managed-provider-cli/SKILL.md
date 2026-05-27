@@ -25,8 +25,12 @@ Use this skill when a task touches how Longhouse starts, observes, steers, or re
   Runtime Host must gate explicit `intent=steer` on a fresh active runtime
   phase; idle channel injection is not steer.
 - Machine Agent remote launch uses the `claude.launch` support bit and must
-  run stock Claude under a PTY wrapper with `--channels server:longhouse-channel`
-  and wait for Claude channel state before Runtime Host records the launch as live.
+  run stock Claude under a PTY wrapper with
+  `--dangerously-load-development-channels server:longhouse-channel` and wait
+  for Claude channel state before Runtime Host records the launch as live.
+  Longhouse's channel is a private MCP server, not an Anthropic allowlisted
+  channel plugin; do not silently fall back to unmanaged/import-only launch if
+  Claude rejects this control path.
 - Claude hook tokens must be passed through process env, never embedded in
   shell commands or PTY launch logs.
 - No detached bridge daemon, bridge state file, or flock sidecar should be required for Claude liveness.

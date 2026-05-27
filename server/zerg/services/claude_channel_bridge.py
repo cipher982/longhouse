@@ -13,6 +13,7 @@ from zerg.services.managed_local_shell import build_managed_local_shell_prelude
 from zerg.services.managed_session_env import build_managed_session_env_exports
 
 CLAUDE_CHANNEL_SERVER_NAME = "longhouse-channel"
+CLAUDE_CHANNEL_DEVELOPMENT_FLAG = "--dangerously-load-development-channels"
 
 
 def _quote(value: str) -> str:
@@ -98,7 +99,7 @@ def install_claude_channel_mcp_server(
             if project_mcp_servers.pop(CLAUDE_CHANNEL_SERVER_NAME, None) is not None:
                 removed_from.append(str(project_key))
         if removed_from:
-            actions.append(f"Removed project-local MCP server {CLAUDE_CHANNEL_SERVER_NAME} " f"from {len(removed_from)} Claude project(s)")
+            actions.append(f"Removed project-local MCP server {CLAUDE_CHANNEL_SERVER_NAME} from {len(removed_from)} Claude project(s)")
 
     if actions:
         _write_json_object(user_config_path, settings)
@@ -203,7 +204,7 @@ def build_claude_channel_exec_command(
         "--dangerously-skip-permissions",
         target_flag,
         provider_sid,
-        "--channels",
+        CLAUDE_CHANNEL_DEVELOPMENT_FLAG,
         f"server:{CLAUDE_CHANNEL_SERVER_NAME}",
     ]
     inner = [
@@ -220,6 +221,7 @@ def build_claude_channel_exec_command(
 
 
 __all__ = [
+    "CLAUDE_CHANNEL_DEVELOPMENT_FLAG",
     "CLAUDE_CHANNEL_SERVER_NAME",
     "build_claude_channel_exec_command",
     "build_claude_channel_state_file",

@@ -255,8 +255,9 @@ Initial product contract:
   level.
 - `scripts/qa/provider-live-canary.py --provider claude` probes the installed
   upstream Claude Code binary without executing a prompt: binary version,
-  redacted auth shape, required launch/session flags, hidden `--channels`
-  tagged-channel parsing, and local PTY wrapper availability. It remains
+  redacted auth shape, required launch/session flags, the development-channel
+  tagged server contract for Longhouse's private MCP channel, and local PTY
+  wrapper availability. It remains
   Yellow until scheduled live-token evidence proves detached launch,
   active-turn steer delivery, idle steer rejection, interrupt, and reattach.
 - `scripts/qa/provider-live-canary.py --provider opencode` probes the installed
