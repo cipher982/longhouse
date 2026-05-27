@@ -145,7 +145,7 @@ def live_canary_placeholder(provider: str) -> dict[str, Any]:
         ),
         "opencode": (
             "opencode_server_live_contract",
-            "Needs live server launch/send/interrupt/attach canary evidence.",
+            "scripts/qa/provider-live-canary.py --provider opencode owns the live server schema/session/abort canary.",
         ),
         "antigravity": (
             "antigravity_hook_inbox_live_contract",
@@ -156,7 +156,10 @@ def live_canary_placeholder(provider: str) -> dict[str, Any]:
     return _status("not_run", canary=name, reason=reason)
 
 
-def classify_artifact(canaries: dict[str, dict[str, Any]], source_review: dict[str, Any]) -> tuple[str, str | None, str]:
+def classify_artifact(
+    canaries: dict[str, dict[str, Any]],
+    source_review: dict[str, Any],
+) -> tuple[str, str | None, str]:
     source_status = source_review.get("status")
     if source_status == "fail":
         return "red", "source_review_failed", "block_upgrade_recommendation"

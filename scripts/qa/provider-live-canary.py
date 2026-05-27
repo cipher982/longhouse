@@ -1,0 +1,507 @@
+#!/usr/bin/env python3
+"""Live upstream managed-provider canaries.
+
+These canaries exercise the installed upstream provider binary directly. They
+are the source-drift layer above the hermetic Longhouse control E2E canaries.
+The OpenCode lane intentionally avoids prompt execution so it can run without
+spending model tokens.
+"""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import hashlib
+import json
+import os
+import re
+import secrets
+import shutil
+import signal
+import subprocess
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import UTC
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+PROVIDER_STATUS_SCHEMA_VERSION = 1
+_OPENCODE_SERVER_LOG_RE = re.compile(r"opencode server listening on (?P<url>http://127\.0\.0\.1:\d+)")
+
+
+def _repo_root_from_script() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _status(status: str, **fields: Any) -> dict[str, Any]:
+    payload = {"status": status}
+    payload.update(fields)
+    return payload
+
+
+def _fail(code: str, message: str, **fields: Any) -> dict[str, Any]:
+    payload = {"status": "fail", "failure_code": code, "message": message}
+    payload.update(fields)
+    return payload
+
+
+def _command_evidence(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    return {
+        "argv": list(result.args) if isinstance(result.args, list) else result.args,
+        "returncode": result.returncode,
+        "stdout": (result.stdout or "")[-4000:],
+        "stderr": (result.stderr or "")[-4000:],
+    }
+
+
+def _run_version(binary: str) -> tuple[str | None, dict[str, Any]]:
+    try:
+        result = subprocess.run(
+            [binary, "--version"],
+            text=True,
+            capture_output=True,
+            timeout=8,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return None, {"argv": [binary, "--version"], "error": f"{type(exc).__name__}: {exc}"}
+    evidence = _command_evidence(result)
+    if result.returncode != 0:
+        return None, evidence
+    return (result.stdout or result.stderr).strip() or None, evidence
+
+
+def _resolve_provider_binary(args: argparse.Namespace, binary_name: str) -> str | None:
+    if args.provider_bin:
+        path = Path(args.provider_bin).expanduser()
+        return str(path) if path.is_file() else None
+    return shutil.which(binary_name)
+
+
+def _classify(canaries: dict[str, dict[str, Any]]) -> tuple[str, str | None, str]:
+    first_not_run: str | None = None
+    first_warn: str | None = None
+    for name, canary in canaries.items():
+        status = canary.get("status")
+        if status == "fail":
+            return "red", str(canary.get("failure_code") or name), "block_upgrade_recommendation"
+        if status == "not_run" and first_not_run is None:
+            first_not_run = name
+        if status == "warn" and first_warn is None:
+            first_warn = name
+    if first_not_run:
+        return "yellow", "insufficient_coverage", "investigate_before_upgrade"
+    if first_warn:
+        return "yellow", None, "investigate_before_upgrade"
+    return "green", None, "upgrade_allowed"
+
+
+def _tail_text(path: Path, *, max_chars: int = 4000) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")[-max_chars:]
+    except OSError:
+        return ""
+
+
+def _wait_for_opencode_server_url(log_path: Path, process: subprocess.Popen[str], *, timeout_secs: float) -> str:
+    deadline = time.monotonic() + timeout_secs
+    while time.monotonic() < deadline:
+        match = _OPENCODE_SERVER_LOG_RE.search(_tail_text(log_path))
+        if match:
+            return match.group("url")
+        if process.poll() is not None:
+            detail = _tail_text(log_path).strip()
+            raise RuntimeError(f"OpenCode server exited before ready: {detail}")
+        time.sleep(0.1)
+    detail = _tail_text(log_path).strip()
+    raise TimeoutError(f"Timed out waiting for OpenCode server URL: {detail}")
+
+
+def _basic_auth_header(username: str, password: str) -> str:
+    return "Basic " + base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+
+
+def _request_json(
+    *,
+    server_url: str,
+    username: str,
+    password: str,
+    method: str,
+    path: str,
+    query: dict[str, str] | None = None,
+    payload: dict[str, Any] | None = None,
+    timeout: int = 8,
+) -> Any:
+    suffix = path if path.startswith("/") else f"/{path}"
+    url = f"{server_url.rstrip('/')}{suffix}"
+    if query:
+        url = f"{url}?{urllib.parse.urlencode(query)}"
+    data = None if payload is None else json.dumps(payload).encode("utf-8")
+    headers = {
+        "Accept": "application/json",
+        "Authorization": _basic_auth_header(username, password),
+    }
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read()
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise RuntimeError(f"{method} {path} failed: {exc}") from exc
+    if not body:
+        return None
+    try:
+        return json.loads(body.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{method} {path} returned invalid JSON") from exc
+
+
+def _doc_path_summary(doc: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for path, methods in sorted((doc.get("paths") or {}).items()):
+        if not isinstance(methods, dict):
+            continue
+        rows.append(
+            {
+                "path": path,
+                "methods": sorted(methods.keys()),
+                "operation_ids": [
+                    operation.get("operationId")
+                    for operation in methods.values()
+                    if isinstance(operation, dict) and operation.get("operationId")
+                ],
+            }
+        )
+    return rows
+
+
+def _require_doc_operation(doc: dict[str, Any], path: str, method: str, operation_id: str) -> dict[str, Any] | None:
+    operation = ((doc.get("paths") or {}).get(path) or {}).get(method.lower())
+    if not isinstance(operation, dict):
+        return _fail("opencode_schema_missing_path", f"OpenCode /doc is missing {method.upper()} {path}")
+    observed = str(operation.get("operationId") or "")
+    if observed != operation_id:
+        return _fail(
+            "opencode_schema_operation_mismatch",
+            f"OpenCode /doc operation mismatch for {method.upper()} {path}",
+            expected=operation_id,
+            observed=observed,
+        )
+    return None
+
+
+def _stop_process_group(process: subprocess.Popen[str] | None) -> None:
+    if process is None or process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except OSError:
+        process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except OSError:
+            process.kill()
+
+
+def _run_attach_shape(binary: str) -> dict[str, Any]:
+    try:
+        result = subprocess.run(
+            [binary, "attach", "--help"],
+            text=True,
+            capture_output=True,
+            timeout=8,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return _fail("opencode_attach_help_failed", f"{type(exc).__name__}: {exc}", argv=[binary, "attach", "--help"])
+    output = f"{result.stdout}\n{result.stderr}"
+    if result.returncode != 0:
+        return _fail(
+            "opencode_attach_help_failed",
+            "opencode attach --help failed",
+            evidence=_command_evidence(result),
+        )
+    required_tokens = (
+        "-s, --session",
+        "--password",
+        "--username",
+        "OPENCODE_SERVER_PASSWORD",
+        "OPENCODE_SERVER_USERNAME",
+    )
+    missing = [token for token in required_tokens if token not in output]
+    if missing:
+        return _fail(
+            "opencode_attach_contract_missing",
+            "opencode attach help is missing expected auth/session flags",
+            missing=missing,
+            evidence=_command_evidence(result),
+        )
+    return _status("pass", evidence=_command_evidence(result))
+
+
+def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    binary = _resolve_provider_binary(args, "opencode")
+    if not binary:
+        return {
+            "provider": "opencode",
+            "provider_version": None,
+            "canaries": {
+                "binary_identity": _fail("provider_binary_not_found", "opencode binary was not found on PATH")
+            },
+        }
+
+    version, version_evidence = _run_version(binary)
+    if not version:
+        return {
+            "provider": "opencode",
+            "provider_version": None,
+            "canaries": {
+                "binary_identity": _fail(
+                    "provider_version_failed",
+                    "opencode --version failed",
+                    path=binary,
+                    evidence=version_evidence,
+                )
+            },
+        }
+
+    workspace = root / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    log_path = root / "opencode-server.log"
+    doc_summary_path = root / "opencode-doc-paths.json"
+    username = "opencode"
+    password = secrets.token_urlsafe(24)
+    env = os.environ.copy()
+    env["OPENCODE_SERVER_USERNAME"] = username
+    env["OPENCODE_SERVER_PASSWORD"] = password
+
+    process: subprocess.Popen[str] | None = None
+    canaries: dict[str, dict[str, Any]] = {
+        "binary_identity": _status("pass", path=binary, version=version, evidence=version_evidence),
+        "attach_command_shape": _run_attach_shape(binary),
+    }
+    try:
+        cmd = [binary, "serve", "--hostname", "127.0.0.1", "--port", "0", "--pure"]
+        with log_path.open("w", encoding="utf-8") as log_file:
+            process = subprocess.Popen(
+                cmd,
+                cwd=str(workspace),
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                text=True,
+                start_new_session=True,
+            )
+        server_url = _wait_for_opencode_server_url(log_path, process, timeout_secs=args.wait_ready_secs)
+
+        health = _request_json(
+            server_url=server_url,
+            username=username,
+            password=password,
+            method="GET",
+            path="/global/health",
+        )
+        if not isinstance(health, dict) or health.get("healthy") is not True:
+            canaries["server_startup"] = _fail(
+                "opencode_health_not_ready",
+                "OpenCode server health check did not report healthy",
+                health=health,
+            )
+            return {"provider": "opencode", "provider_version": version, "canaries": canaries}
+        canaries["server_startup"] = _status(
+            "pass",
+            server_url=server_url,
+            health=health,
+            log_path=str(log_path),
+        )
+
+        doc = _request_json(
+            server_url=server_url,
+            username=username,
+            password=password,
+            method="GET",
+            path="/doc",
+        )
+        if not isinstance(doc, dict):
+            canaries["schema_probe"] = _fail("opencode_doc_invalid", "OpenCode /doc did not return an object")
+            return {"provider": "opencode", "provider_version": version, "canaries": canaries}
+        doc_summary = _doc_path_summary(doc)
+        doc_summary_path.write_text(json.dumps(doc_summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        doc_hash = hashlib.sha256(json.dumps(doc_summary, sort_keys=True).encode("utf-8")).hexdigest()
+        required_operations = [
+            ("/global/health", "get", "global.health"),
+            ("/session", "post", "session.create"),
+            ("/session/{sessionID}", "get", "session.get"),
+            ("/session/{sessionID}/prompt_async", "post", "session.prompt_async"),
+            ("/session/{sessionID}/abort", "post", "session.abort"),
+        ]
+        failures = [
+            failure
+            for path, method, operation_id in required_operations
+            if (failure := _require_doc_operation(doc, path, method, operation_id)) is not None
+        ]
+        if failures:
+            canaries["schema_probe"] = _fail(
+                "opencode_schema_probe_failed",
+                "OpenCode /doc is missing required Longhouse server-bridge operations",
+                failures=failures,
+                doc_summary_path=str(doc_summary_path),
+                doc_summary_sha256=doc_hash,
+            )
+            return {"provider": "opencode", "provider_version": version, "canaries": canaries}
+        canaries["schema_probe"] = _status(
+            "pass",
+            required_operations=[
+                {"path": path, "method": method, "operation_id": operation_id}
+                for path, method, operation_id in required_operations
+            ],
+            doc_path_count=len(doc_summary),
+            doc_summary_path=str(doc_summary_path),
+            doc_summary_sha256=doc_hash,
+        )
+
+        session = _request_json(
+            server_url=server_url,
+            username=username,
+            password=password,
+            method="POST",
+            path="/session",
+            query={"directory": str(workspace)},
+            payload={"title": "Longhouse OpenCode live canary"},
+        )
+        provider_session_id = str(session.get("id") or "") if isinstance(session, dict) else ""
+        if not provider_session_id:
+            canaries["session_create"] = _fail(
+                "opencode_session_create_missing_id",
+                "OpenCode session.create returned no session id",
+                session=session,
+            )
+            return {"provider": "opencode", "provider_version": version, "canaries": canaries}
+        canaries["session_create"] = _status(
+            "pass",
+            provider_session_id=provider_session_id,
+            cost=session.get("cost") if isinstance(session, dict) else None,
+            tokens=session.get("tokens") if isinstance(session, dict) else None,
+        )
+
+        fetched_session = _request_json(
+            server_url=server_url,
+            username=username,
+            password=password,
+            method="GET",
+            path=f"/session/{urllib.parse.quote(provider_session_id, safe='')}",
+        )
+        if not isinstance(fetched_session, dict) or fetched_session.get("id") != provider_session_id:
+            canaries["session_get"] = _fail(
+                "opencode_session_get_mismatch",
+                "OpenCode session.get did not return the created session",
+                session=fetched_session,
+            )
+            return {"provider": "opencode", "provider_version": version, "canaries": canaries}
+        canaries["session_get"] = _status("pass", provider_session_id=provider_session_id)
+
+        abort_result = _request_json(
+            server_url=server_url,
+            username=username,
+            password=password,
+            method="POST",
+            path=f"/session/{urllib.parse.quote(provider_session_id, safe='')}/abort",
+        )
+        abort_ok = abort_result is True or abort_result is None or (
+            isinstance(abort_result, dict) and abort_result.get("ok") is True
+        )
+        if not abort_ok:
+            canaries["session_abort"] = _fail(
+                "opencode_session_abort_failed",
+                "OpenCode session.abort did not return a successful response shape",
+                result=abort_result,
+            )
+            return {"provider": "opencode", "provider_version": version, "canaries": canaries}
+        canaries["session_abort"] = _status("pass", provider_session_id=provider_session_id)
+        return {"provider": "opencode", "provider_version": version, "canaries": canaries}
+    except Exception as exc:  # noqa: BLE001
+        canaries["live_contract"] = _fail(
+            "opencode_live_canary_exception",
+            f"{type(exc).__name__}: {exc}",
+            log_path=str(log_path),
+            log_tail=_tail_text(log_path),
+        )
+        return {"provider": "opencode", "provider_version": version, "canaries": canaries}
+    finally:
+        _stop_process_group(process)
+
+
+def run_provider(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    if args.provider == "opencode":
+        return run_opencode_live_canary(args, root)
+    return {
+        "provider": args.provider,
+        "provider_version": None,
+        "canaries": {
+            "live_contract": _status(
+                "not_run",
+                reason=f"{args.provider} live canary is not implemented in this dispatcher yet.",
+            )
+        },
+    }
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo-root", type=Path, default=_repo_root_from_script())
+    parser.add_argument("--provider", choices=["codex", "claude", "opencode", "antigravity"], required=True)
+    parser.add_argument("--provider-bin")
+    parser.add_argument("--artifact", type=Path)
+    parser.add_argument("--evidence-root", type=Path)
+    parser.add_argument("--wait-ready-secs", type=float, default=15.0)
+    parser.add_argument("--json", action="store_true")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    args.repo_root = args.repo_root.resolve()
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    evidence_root = args.evidence_root or args.repo_root / ".build/canaries/provider-live" / args.provider / timestamp
+    artifact_path = args.artifact or evidence_root / "provider-live-canary.json"
+    evidence_root.mkdir(parents=True, exist_ok=True)
+
+    provider_result = run_provider(args, evidence_root)
+    canaries = provider_result["canaries"]
+    verdict, failure_code, recommendation = _classify(canaries)
+    artifact = {
+        "schema_version": PROVIDER_STATUS_SCHEMA_VERSION,
+        "artifact_kind": "provider_live_canary",
+        "provider": provider_result["provider"],
+        "provider_version": provider_result.get("provider_version"),
+        "generated_at": _now_iso(),
+        "verdict": verdict,
+        "failure_code": failure_code,
+        "recommendation": recommendation,
+        "canaries": canaries,
+        "evidence_root": str(evidence_root),
+    }
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if args.json:
+        print(json.dumps(artifact, indent=2, sort_keys=True))
+    return 0 if artifact["verdict"] != "red" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

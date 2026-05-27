@@ -279,6 +279,7 @@ validate-provider-cli-canaries: ## @internal Provider release canary wrapper tes
 	@python3 scripts/tests/codex-provider-release-canary.test.py
 	@python3 scripts/tests/provider-release-profile-canary.test.py
 	@python3 scripts/tests/provider-control-e2e-canary.test.py
+	@python3 scripts/tests/provider-live-canary.test.py
 
 validate-ws: ## @internal WebSocket contract check
 	@cd server && \
