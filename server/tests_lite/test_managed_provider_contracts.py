@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from zerg.managed_provider_contract_manifest import _validate_operation_evidence
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
 from zerg.services.managed_provider_contracts import all_managed_provider_contracts
@@ -46,9 +47,64 @@ def _contract_snapshot():
     }
 
 
+def _manifest_item(provider: str = "test") -> dict:
+    return {
+        "provider": provider,
+        "launch_local": True,
+        "launch_remote": True,
+        "reattach": True,
+        "send_input": True,
+        "interrupt": True,
+        "steer_active_turn": True,
+        "terminate": True,
+        "tail_output": True,
+        "runtime_phase": True,
+        "transcript_binding": True,
+        "operation_evidence": {
+            "launch_local": {"level": "hermetic", "source": "test"},
+            "launch_remote": {"level": "hermetic", "source": "test"},
+            "reattach": {"level": "hermetic", "source": "test"},
+            "send_input": {"level": "hermetic", "source": "test"},
+            "interrupt": {"level": "hermetic", "source": "test"},
+            "steer_active_turn": {"level": "hermetic", "source": "test"},
+            "terminate": {"level": "hermetic", "source": "test"},
+            "tail_output": {"level": "hermetic", "source": "test"},
+            "runtime_phase": {"level": "hermetic", "source": "test"},
+            "transcript_binding": {"level": "hermetic", "source": "test"},
+        },
+    }
+
+
 def test_managed_provider_contract_matrix_covers_launch_scope_providers():
     assert managed_provider_names() == frozenset({"codex", "claude", "opencode", "antigravity"})
     assert {contract.provider for contract in all_managed_provider_contracts()} == managed_provider_names()
+
+
+@pytest.mark.parametrize(
+    ("mutator", "message"),
+    [
+        (lambda item: item.pop("operation_evidence"), "operation_evidence must be an object"),
+        (lambda item: item["operation_evidence"].pop("send_input"), "operation_evidence missing send_input"),
+        (lambda item: item["operation_evidence"].__setitem__("made_up", {"level": "none", "source": "x"}), "unknown keys made_up"),
+        (lambda item: item["operation_evidence"]["send_input"].__setitem__("level", "bogus"), "level must be one of"),
+        (lambda item: item["operation_evidence"]["send_input"].__setitem__("source", ""), "source must be a non-empty string"),
+        (lambda item: item["operation_evidence"]["send_input"].__setitem__("level", "none"), "supported operation send_input"),
+        (
+            lambda item: (
+                item.__setitem__("steer_active_turn", False),
+                item["operation_evidence"]["steer_active_turn"].__setitem__("level", "hermetic"),
+            ),
+            "unsupported operation steer_active_turn",
+        ),
+        (lambda item: item["operation_evidence"]["send_input"].__setitem__("next", ""), "next must be a non-empty string"),
+    ],
+)
+def test_operation_evidence_validation_rejects_drift(mutator, message):
+    item = _manifest_item()
+    mutator(item)
+
+    with pytest.raises(ValueError, match=message):
+        _validate_operation_evidence(item)
 
 
 def test_managed_provider_contract_manifest_snapshot():
