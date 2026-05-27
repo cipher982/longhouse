@@ -25,8 +25,12 @@ from zerg.cli._common import ensure_managed_launch_preflight as _ensure_managed_
 from zerg.cli._common import interactive_stdio as _interactive_stdio
 from zerg.cli._common import load_api_credentials as _load_api_credentials
 from zerg.cli._common import open_session_url as _open_session_url
+from zerg.cli._managed_contract import record_managed_provider_contract
+from zerg.cli._managed_contract import remove_managed_provider_contract
 from zerg.provider_cli_contract import ANTIGRAVITY_BIN_ENV
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_ANTIGRAVITY_BIN_FLAG
+from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_MISSING
+from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
 from zerg.services.longhouse_paths import get_managed_local_dir
 from zerg.services.longhouse_paths import resolve_longhouse_home
 from zerg.services.session_continuity import get_machine_name_label
@@ -222,6 +226,14 @@ def _resolve_antigravity_binary(explicit: str | None = None) -> str | None:
     if env_candidate:
         return _resolve_explicit_antigravity_binary(env_candidate, source=ANTIGRAVITY_BIN_ENV)
     return shutil.which("agy")
+
+
+def _antigravity_binary_source(explicit: str | None, resolved: str | None) -> str:
+    if str(explicit or "").strip():
+        return PROVIDER_CLI_SOURCE_ANTIGRAVITY_BIN_FLAG
+    if str(os.environ.get(ANTIGRAVITY_BIN_ENV) or "").strip():
+        return ANTIGRAVITY_BIN_ENV
+    return PROVIDER_CLI_SOURCE_PATH if resolved else PROVIDER_CLI_SOURCE_MISSING
 
 
 def _launch_managed_local_from_api(
@@ -560,6 +572,7 @@ def _run_native_antigravity(
             )
         except _AntigravityLaunchError as exc:
             typer.secho(f"Longhouse runtime event warning: {exc}", fg=typer.colors.YELLOW, err=True)
+        remove_managed_provider_contract(provider="antigravity", session_id=session_id, config_dir=config_dir)
 
 
 def antigravity(
@@ -646,6 +659,7 @@ def antigravity(
         url=resolved_url,
         machine_name=machine_name,
         config_dir=resolved_config_dir,
+        config_dir_is_provider_home=False,
         exit_code=managed_local_cli.EXIT_SETUP_FAILED,
     )
     typer.echo(f"Longhouse: {resolved_url}")
@@ -702,16 +716,36 @@ def antigravity(
         return
 
     typer.echo("Launching Antigravity...")
-    exit_code = _run_native_antigravity(
-        session_id=result.session_id,
-        machine_name=machine_name,
-        antigravity_bin=resolved_antigravity_bin,
-        cwd=cwd,
-        antigravity_args=antigravity_args,
-        url=resolved_url,
-        token=resolved_token,
-        config_dir=resolved_config_dir,
-    )
+    try:
+        record_managed_provider_contract(
+            provider="antigravity",
+            session_id=result.session_id,
+            cwd=cwd,
+            config_dir=resolved_config_dir,
+            launch_mode="tui",
+            provider_binary_path=resolved_antigravity_bin,
+            provider_binary_source=_antigravity_binary_source(antigravity_bin, resolved_antigravity_bin),
+            control_kind="antigravity_process",
+        )
+    except Exception as exc:
+        typer.secho(
+            f"Longhouse warning: could not record managed-session contract: {exc}",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+    try:
+        exit_code = _run_native_antigravity(
+            session_id=result.session_id,
+            machine_name=machine_name,
+            antigravity_bin=resolved_antigravity_bin,
+            cwd=cwd,
+            antigravity_args=antigravity_args,
+            url=resolved_url,
+            token=resolved_token,
+            config_dir=resolved_config_dir,
+        )
+    finally:
+        remove_managed_provider_contract(provider="antigravity", session_id=result.session_id, config_dir=resolved_config_dir)
     if exit_code != 0:
         typer.secho(f"Antigravity exited with code {exit_code}.", fg=typer.colors.YELLOW)
         raise typer.Exit(code=exit_code)

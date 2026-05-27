@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import subprocess
 from datetime import datetime
 from datetime import timezone
@@ -21,6 +22,9 @@ from zerg.cli._common import git_output
 from zerg.cli._common import interactive_stdio as _interactive_stdio
 from zerg.cli._common import load_api_credentials
 from zerg.cli._common import open_session_url as _open_session_url
+from zerg.cli._managed_contract import record_managed_provider_contract
+from zerg.cli._managed_contract import remove_managed_provider_contract
+from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
 from zerg.services.claude_channel_bridge import CLAUDE_CHANNEL_SERVER_NAME
 from zerg.services.claude_channel_bridge import build_claude_channel_exec_command
 from zerg.services.claude_channel_bridge import install_claude_channel_mcp_server
@@ -156,6 +160,7 @@ def _load_api_credentials(
         token=token,
         config_dir=config_dir,
         exit_code=exit_code,
+        config_dir_is_provider_home=True,
         resolve_url=get_zerg_url,
         resolve_token=load_token,
     )
@@ -362,8 +367,7 @@ def _post_claude_terminal_signal(
     except Exception as exc:
         if queued_path is not None:
             typer.secho(
-                f"Could not confirm Claude terminal lifecycle event before timeout ({exc}). "
-                "Queued for Machine Agent retry.",
+                f"Could not confirm Claude terminal lifecycle event before timeout ({exc}). " "Queued for Machine Agent retry.",
                 fg=typer.colors.YELLOW,
             )
             return False
@@ -406,9 +410,7 @@ def _queue_claude_terminal_runtime_event(event: dict) -> Path | None:
     try:
         outbox_dir = get_agent_runtime_events_outbox_dir()
         outbox_dir.mkdir(parents=True, exist_ok=True)
-        file_digest = sha256(f"{event.get('source', '')}:{event.get('dedupe_key', '')}".encode("utf-8")).hexdigest()[
-            :32
-        ]
+        file_digest = sha256(f"{event.get('source', '')}:{event.get('dedupe_key', '')}".encode("utf-8")).hexdigest()[:32]
         final_path = outbox_dir / f"rte.{file_digest}.json"
         tmp_path = outbox_dir / f".tmp.{file_digest}.{os.getpid()}"
         payload = json.dumps(event, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
@@ -455,13 +457,39 @@ def _finalize_native_claude_launch(
         return
 
     typer.echo("Launching native Claude...")
-    exit_code = _run_native_claude_tui(
-        session_id=result.session_id,
-        provider_session_id=result.provider_session_id,
-        cwd=cwd,
-        base_url=base_url,
-        token=token,
-    )
+    try:
+        record_managed_provider_contract(
+            provider="claude",
+            session_id=result.session_id,
+            cwd=cwd,
+            config_dir=config_dir,
+            launch_mode="tui",
+            provider_binary_path=shutil.which("claude"),
+            provider_binary_source=PROVIDER_CLI_SOURCE_PATH,
+            control_kind="claude_channel_bridge",
+            config_dir_is_provider_home=True,
+        )
+    except Exception as exc:
+        typer.secho(
+            f"Longhouse warning: could not record managed-session contract: {exc}",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+    try:
+        exit_code = _run_native_claude_tui(
+            session_id=result.session_id,
+            provider_session_id=result.provider_session_id,
+            cwd=cwd,
+            base_url=base_url,
+            token=token,
+        )
+    finally:
+        remove_managed_provider_contract(
+            provider="claude",
+            session_id=result.session_id,
+            config_dir=config_dir,
+            config_dir_is_provider_home=True,
+        )
     if exit_code != 0:
         typer.secho(
             f"Native Claude exited with code {exit_code}. Run the printed attach command manually.",
@@ -534,8 +562,7 @@ def claude(
         native_claude_channels_detail = f"forced by {_FORCE_NATIVE_CLAUDE_CHANNELS_ENV}"
         force_flag_capable_path = False
         typer.secho(
-            f"Forcing native Claude channels via {_FORCE_NATIVE_CLAUDE_CHANNELS_ENV}=1. "
-            "This is a private unsupported local experiment.",
+            f"Forcing native Claude channels via {_FORCE_NATIVE_CLAUDE_CHANNELS_ENV}=1. " "This is a private unsupported local experiment.",
             fg=typer.colors.YELLOW,
         )
     elif force_flag_capable_path:

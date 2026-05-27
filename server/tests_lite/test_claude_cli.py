@@ -15,7 +15,13 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg.cli import claude as claude_cli
 from zerg.cli.main import app
+from zerg.services.managed_session_contracts import list_managed_session_contracts
 from zerg.session_loop_mode import SessionLoopMode
+
+
+@pytest.fixture(autouse=True)
+def _isolate_longhouse_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("LONGHOUSE_HOME", str(tmp_path / ".longhouse"))
 
 
 class _FakeResponse:
@@ -265,6 +271,7 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
     open_calls: list[str] = []
     prepare_calls: list[tuple[str, str, str, str | None]] = []
     native_launch_calls: list[tuple[str, str, str, str, str]] = []
+    provider_home = tmp_path / ".claude"
 
     monkeypatch.setattr(
         claude_cli,
@@ -318,6 +325,8 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
             "claude",
             "--cwd",
             str(tmp_path),
+            "--config-dir",
+            str(provider_home),
             "--project",
             "demo",
             "--loop-mode",
@@ -337,11 +346,47 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
     assert "Preparing native Claude bridge..." in result.output
     assert "Opening session in browser..." in result.output
     assert "Launching native Claude..." in result.output
-    assert prepare_calls == [("https://longhouse.test", "zdt_test_token", str(tmp_path), None)]
+    assert prepare_calls == [("https://longhouse.test", "zdt_test_token", str(tmp_path), str(provider_home))]
     assert native_launch_calls == [
         ("session-123", "provider-123", str(tmp_path), "https://longhouse.test", "zdt_test_token")
     ]
     assert open_calls == ["https://longhouse.test/timeline/session-123"]
+    assert list_managed_session_contracts(tmp_path / ".longhouse") == []
+    assert not (provider_home / "managed-local" / "contracts").exists()
+
+
+def test_claude_no_attach_does_not_record_unlaunched_provider_contract(monkeypatch, tmp_path):
+    runner = CliRunner()
+    provider_home = tmp_path / ".claude"
+
+    monkeypatch.setattr(
+        claude_cli, "_load_api_credentials", lambda **_kwargs: ("https://longhouse.test", "zdt_test_token")
+    )
+    monkeypatch.setattr(claude_cli, "_detect_native_claude_channels_available", lambda: (True, "ok"))
+    monkeypatch.setattr(claude_cli, "_ensure_managed_launch_preflight", lambda **_kwargs: None)
+    monkeypatch.setattr(claude_cli, "get_machine_name_label", lambda: "work-laptop")
+    monkeypatch.setattr(claude_cli, "_collect_claude_launch_env", lambda: {})
+    monkeypatch.setattr(claude_cli, "_ensure_native_claude_prereqs", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        claude_cli,
+        "_launch_managed_local_from_api",
+        lambda **_kwargs: claude_cli.ManagedLocalLaunchResponse(
+            session_id="session-123",
+            provider_session_id="provider-123",
+            attach_command="attach",
+            source_runner_name="work-laptop",
+            managed_transport="claude_channel_bridge",
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        ["claude", "--cwd", str(tmp_path), "--config-dir", str(provider_home), "--no-attach"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert list_managed_session_contracts(tmp_path / ".longhouse") == []
+    assert not (provider_home / "managed-local" / "contracts").exists()
 
 
 def test_run_claude_auth_status_uses_bare_claude(monkeypatch):
