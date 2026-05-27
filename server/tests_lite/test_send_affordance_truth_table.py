@@ -83,6 +83,22 @@ def test_live_executing_non_steerable_transport_uses_queue_intent():
     assert affordance.send_disabled_reason is None
 
 
+def test_live_executing_antigravity_hook_inbox_uses_queue_intent_not_steer():
+    caps = _caps(
+        control_plane="antigravity_hook_inbox",
+        can_interrupt=False,
+        can_terminate=False,
+        can_resume=False,
+    )
+    assert caps.can_steer_active_turn is False
+
+    affordance = _project(caps, provider_label="Antigravity", is_executing=True)
+
+    assert affordance.input_mode == "live"
+    assert affordance.default_input_intent == "queue"
+    assert affordance.send_disabled_reason is None
+
+
 def test_closed_lifecycle_overrides_live_send_capability():
     affordance = _project(
         _caps(),

@@ -80,6 +80,11 @@ def test_managed_provider_contract_matrix_covers_launch_scope_providers():
     assert {contract.provider for contract in all_managed_provider_contracts()} == managed_provider_names()
 
 
+def test_provider_cli_catalog_matches_managed_provider_contracts():
+    assert set(PROVIDER_CLI_BINARY_BY_PROVIDER) == managed_provider_names()
+    assert set(PROVIDER_CLI_ENV_BY_PROVIDER) == managed_provider_names()
+
+
 @pytest.mark.parametrize(
     ("mutator", "message"),
     [
@@ -158,11 +163,11 @@ def test_managed_provider_contract_manifest_snapshot():
             "tail_output": True,
             "runtime_phase": True,
             "transcript_binding": True,
-            "can_resume": True,
+            "can_resume": False,
             "operation_evidence_levels": {
                 "interrupt": "hermetic",
                 "launch_local": "live_no_token",
-                "launch_remote": "hermetic",
+                "launch_remote": "source_review",
                 "reattach": "hermetic",
                 "runtime_phase": "hermetic",
                 "send_input": "hermetic",
@@ -187,7 +192,7 @@ def test_managed_provider_contract_manifest_snapshot():
             "tail_output": True,
             "runtime_phase": True,
             "transcript_binding": True,
-            "can_resume": True,
+            "can_resume": False,
             "operation_evidence_levels": {
                 "interrupt": "live_no_token",
                 "launch_local": "live_no_token",
@@ -302,7 +307,7 @@ def test_opencode_contract_is_server_bridge_control_provider_without_active_turn
         "can_interrupt": 1,
         "can_terminate": 1,
         "can_tail_output": 1,
-        "can_resume": 1,
+        "can_resume": 0,
     }
 
 

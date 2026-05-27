@@ -265,7 +265,7 @@ Both return:
     "device_id": "cinder-abc123",
     "machine_name": "cinder",
     "online": true,
-    "supports": ["codex.send", "codex.interrupt", "codex.steer", "codex.launch"],
+    "supports": ["codex.send", "codex.interrupt", "codex.steer", "codex.launch", "codex.continue"],
     "last_seen_at": "2026-05-12T13:44:22Z",
     "engine_build": "29db1495"
   }

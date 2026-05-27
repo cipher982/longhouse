@@ -34,7 +34,7 @@ split:
 - No session migration between machines.
 - No workspace sync, rsync, or git automation.
 - No provider binary management.
-- No Claude launch until Claude has a native managed control path.
+- No provider launch without a provider-specific managed control path.
 - No machine-management dashboard in this epic.
 - No metrics dashboard or generalized SLA platform.
 
@@ -60,7 +60,7 @@ enum:
 ```json
 {
   "control_channel_status": "connected",
-  "supports": ["codex.send", "codex.interrupt", "codex.steer", "codex.launch"],
+  "supports": ["codex.send", "codex.interrupt", "codex.steer", "codex.launch", "codex.continue"],
   "can_launch_codex": true,
   "launch_blocked_by": null
 }
