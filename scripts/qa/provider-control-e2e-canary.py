@@ -69,6 +69,11 @@ def _server_python_cmd(args: argparse.Namespace) -> list[str]:
     return ["uv", "run", "python"]
 
 
+def _hook_python(args: argparse.Namespace) -> str:
+    cmd = _server_python_cmd(args)
+    return cmd[0] if len(cmd) == 1 else sys.executable
+
+
 def _runtime_env(args: argparse.Namespace, extra: dict[str, str] | None = None) -> dict[str, str]:
     env = os.environ.copy()
     env.setdefault("DATABASE_URL", "sqlite://")
@@ -591,6 +596,7 @@ def _install_antigravity_hook(args: argparse.Namespace, root: Path, config_dir: 
 
 
 def _invoke_antigravity_hook(
+    args: argparse.Namespace,
     script: Path,
     event: str,
     *,
@@ -599,7 +605,7 @@ def _invoke_antigravity_hook(
     payload: dict[str, Any],
 ) -> subprocess.CompletedProcess[str]:
     from_env = {
-        "LONGHOUSE_HOOK_PYTHON": sys.executable,
+        "LONGHOUSE_HOOK_PYTHON": _hook_python(args),
         "LONGHOUSE_ENGINE": "/bin/true",
         "LONGHOUSE_MANAGED_SESSION_ID": session_id,
         "LONGHOUSE_ANTIGRAVITY_INBOX_DIR": str(config_dir / "managed-local" / "antigravity" / "inbox" / session_id),
@@ -664,6 +670,17 @@ def _wait_for_antigravity_pending_message(config_dir: Path, session_id: str, *, 
     raise TimeoutError(f"Timed out waiting for Antigravity inbox message in {inbox_dir}")
 
 
+def _antigravity_claimed_files(config_dir: Path, session_id: str) -> list[dict[str, Any]]:
+    claimed_dir = config_dir / "managed-local" / "antigravity" / "inbox" / session_id / "claimed"
+    claims: list[dict[str, Any]] = []
+    for path in sorted(claimed_dir.glob("*.json")) if claimed_dir.exists() else []:
+        try:
+            claims.append({"path": str(path), "payload": json.loads(path.read_text(encoding="utf-8"))})
+        except (OSError, json.JSONDecodeError) as exc:
+            claims.append({"path": str(path), "error": f"{type(exc).__name__}: {exc}"})
+    return claims
+
+
 def run_antigravity_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     session_id = "antigravity-canary-session"
     config_dir = root / ".claude"
@@ -690,7 +707,7 @@ def run_antigravity_canary(args: argparse.Namespace, root: Path) -> dict[str, An
                 "--text",
                 "pre invocation canary input",
                 "--wait-claimed-secs",
-                "20",
+                "45",
             ],
             cwd=str(_server_cwd(args)),
             env=_runtime_env(args),
@@ -699,22 +716,29 @@ def run_antigravity_canary(args: argparse.Namespace, root: Path) -> dict[str, An
             stderr=subprocess.PIPE,
         )
         _wait_for_antigravity_pending_message(config_dir, session_id)
+        time.sleep(0.1)
         pre = _invoke_antigravity_hook(
+            args,
             script,
             "PreInvocation",
             session_id=session_id,
             config_dir=config_dir,
             payload=hook_payload,
         )
-        send_stdout, send_stderr = send_proc.communicate(timeout=25)
+        pre_payload = json.loads(pre.stdout or "{}")
+        send_stdout, send_stderr = send_proc.communicate(timeout=50)
         if send_proc.returncode != 0:
             return _fail(
                 "antigravity_send_claim_failed",
                 "antigravity-channel send did not observe a claim",
                 stdout=send_stdout,
                 stderr=send_stderr,
+                pre_returncode=pre.returncode,
+                pre_stdout=pre.stdout,
+                pre_stderr=pre.stderr,
+                pre_payload=pre_payload,
+                claimed_files=_antigravity_claimed_files(config_dir, session_id),
             )
-        pre_payload = json.loads(pre.stdout or "{}")
         if pre_payload.get("injectSteps") != [{"userMessage": "pre invocation canary input"}]:
             return _fail(
                 "antigravity_pre_injection_missing",
@@ -725,6 +749,7 @@ def run_antigravity_canary(args: argparse.Namespace, root: Path) -> dict[str, An
 
         _enqueue_antigravity_direct(args, session_id, "post invocation canary input", config_dir)
         post = _invoke_antigravity_hook(
+            args,
             script,
             "PostInvocation",
             session_id=session_id,
@@ -741,6 +766,7 @@ def run_antigravity_canary(args: argparse.Namespace, root: Path) -> dict[str, An
 
         _enqueue_antigravity_direct(args, session_id, "stop canary input", config_dir)
         stop = _invoke_antigravity_hook(
+            args,
             script,
             "Stop",
             session_id=session_id,

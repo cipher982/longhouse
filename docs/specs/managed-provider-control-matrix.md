@@ -250,7 +250,8 @@ Consumers:
 
 ## E2E Contract For Each First-Class Provider
 
-Before a provider is marked first-class, tests must prove:
+Before a first-class provider target is marked Green/release-ready, tests must
+prove:
 
 1. Local attached launch creates a managed session and runtime events.
 2. Detached/remote launch creates a live session without a visible terminal.

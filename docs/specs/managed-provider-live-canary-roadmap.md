@@ -45,6 +45,11 @@ Do not build a generic "agent app" adapter that assumes every provider behaves
 like Codex. Longhouse should use a shared registry for facts and
 provider-specific code for behavior.
 
+The release canary color is evidence maturity, not a provider support tier.
+Claude channel control is first-class even when its scheduled live-token canary
+is Yellow; Yellow means "manual/source/hermetic proof exists, but the automated
+release-drift proof is not yet Green."
+
 ### App Server Plane
 
 Providers: Codex, OpenCode.
@@ -128,8 +133,9 @@ work while an agent is busy. Steer needs active-phase proof and idle rejection.
 2. Extend the Claude lane beyond the initial no-token checks. The current lane
    proves binary identity, redacted auth shape, required launch/session flags,
    hidden `--channels` tagged-channel parsing, and macOS PTY wrapper availability,
-   but intentionally remains Yellow until scheduled live-token evidence proves
-   the full channel contract.
+   but the release-drift artifact intentionally remains Yellow until scheduled
+   live-token evidence proves the full channel contract. That Yellow status is
+   not a downgrade from first-class Claude channel control.
    The operator live POC at `make managed-claude-poc` can now run an optional
    delayed `intent=steer` injection with `ARGS="--steer-text ..."` and requires
    the assistant transcript to contain the expected steered response. Detached
