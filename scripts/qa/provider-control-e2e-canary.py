@@ -595,6 +595,24 @@ def _install_antigravity_hook(args: argparse.Namespace, root: Path, config_dir: 
     return Path(result.stdout.strip()) / "longhouse-antigravity-hook.sh"
 
 
+def _longhouse_home_from_provider_config(config_dir: Path) -> Path:
+    if config_dir.name in {".claude", ".codex", ".gemini"}:
+        return config_dir.parent / ".longhouse"
+    return config_dir
+
+
+def _antigravity_runtime_dir(config_dir: Path) -> Path:
+    return _longhouse_home_from_provider_config(config_dir) / "managed-local" / "antigravity"
+
+
+def _antigravity_inbox_dir(config_dir: Path, session_id: str) -> Path:
+    return _antigravity_runtime_dir(config_dir) / "inbox" / session_id
+
+
+def _antigravity_state_dir(config_dir: Path) -> Path:
+    return _antigravity_runtime_dir(config_dir) / "sessions"
+
+
 def _invoke_antigravity_hook(
     args: argparse.Namespace,
     script: Path,
@@ -608,8 +626,8 @@ def _invoke_antigravity_hook(
         "LONGHOUSE_HOOK_PYTHON": _hook_python(args),
         "LONGHOUSE_ENGINE": "/bin/true",
         "LONGHOUSE_MANAGED_SESSION_ID": session_id,
-        "LONGHOUSE_ANTIGRAVITY_INBOX_DIR": str(config_dir / "managed-local" / "antigravity" / "inbox" / session_id),
-        "LONGHOUSE_ANTIGRAVITY_STATE_DIR": str(config_dir / "managed-local" / "antigravity" / "sessions"),
+        "LONGHOUSE_ANTIGRAVITY_INBOX_DIR": str(_antigravity_inbox_dir(config_dir, session_id)),
+        "LONGHOUSE_ANTIGRAVITY_STATE_DIR": str(_antigravity_state_dir(config_dir)),
         "PATH": os.defpath,
     }
     return subprocess.run(
@@ -656,7 +674,7 @@ def _enqueue_antigravity_direct(
 
 
 def _antigravity_pending_files(config_dir: Path, session_id: str) -> list[dict[str, Any]]:
-    inbox_dir = config_dir / "managed-local" / "antigravity" / "inbox" / session_id
+    inbox_dir = _antigravity_inbox_dir(config_dir, session_id)
     euid = os.geteuid() if hasattr(os, "geteuid") else None
     pending: list[dict[str, Any]] = []
     for path in sorted(inbox_dir.glob("msg-*.json")) if inbox_dir.exists() else []:
@@ -681,7 +699,7 @@ def _antigravity_pending_files(config_dir: Path, session_id: str) -> list[dict[s
 
 
 def _wait_for_antigravity_pending_message(config_dir: Path, session_id: str, *, timeout_secs: float = 10.0) -> Path:
-    inbox_dir = config_dir / "managed-local" / "antigravity" / "inbox" / session_id
+    inbox_dir = _antigravity_inbox_dir(config_dir, session_id)
     deadline = time.monotonic() + timeout_secs
     while time.monotonic() < deadline:
         for entry in _antigravity_pending_files(config_dir, session_id):
@@ -692,7 +710,7 @@ def _wait_for_antigravity_pending_message(config_dir: Path, session_id: str, *, 
 
 
 def _antigravity_claimed_files(config_dir: Path, session_id: str) -> list[dict[str, Any]]:
-    claimed_dir = config_dir / "managed-local" / "antigravity" / "inbox" / session_id / "claimed"
+    claimed_dir = _antigravity_inbox_dir(config_dir, session_id) / "claimed"
     claims: list[dict[str, Any]] = []
     for path in sorted(claimed_dir.glob("*.json")) if claimed_dir.exists() else []:
         try:

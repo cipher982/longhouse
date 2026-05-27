@@ -180,6 +180,18 @@ def write_session_state(state_dir: str, payload: dict) -> None:
         pass
 
 
+def default_antigravity_state_dir(longhouse_home: str) -> str:
+    if not longhouse_home:
+        return ""
+    return str(Path(longhouse_home) / "managed-local" / "antigravity" / "sessions")
+
+
+def default_antigravity_inbox_dir(longhouse_home: str, session_id: str) -> str:
+    if not longhouse_home or not session_id:
+        return ""
+    return str(Path(longhouse_home) / "managed-local" / "antigravity" / "inbox" / session_id)
+
+
 def pending_message_paths(inbox_dir: str) -> list[Path]:
     if not inbox_dir:
         return []
@@ -302,8 +314,12 @@ transcript = str(data.get("transcriptPath") or "")
 step_index = str(data.get("stepIdx") or data.get("step_index") or "")
 managed_session_id = os.environ.get("LONGHOUSE_MANAGED_SESSION_ID") or ""
 session_id = managed_session_id or conversation_id
-state_dir = os.environ.get("LONGHOUSE_ANTIGRAVITY_STATE_DIR") or ""
-inbox_dir = os.environ.get("LONGHOUSE_ANTIGRAVITY_INBOX_DIR") or ""
+longhouse_home = os.environ.get("LONGHOUSE_HOOK_HOME", "")
+state_dir = os.environ.get("LONGHOUSE_ANTIGRAVITY_STATE_DIR") or default_antigravity_state_dir(longhouse_home)
+inbox_dir = os.environ.get("LONGHOUSE_ANTIGRAVITY_INBOX_DIR") or default_antigravity_inbox_dir(
+    longhouse_home,
+    session_id,
+)
 
 state = ""
 if event == "PreInvocation":
@@ -317,7 +333,6 @@ elif event == "Stop":
     state = "idle" if fully_idle is True or str(fully_idle).lower() in {"1", "true"} else "running"
 
 if state and session_id:
-    longhouse_home = os.environ.get("LONGHOUSE_HOOK_HOME", "")
     write_presence_outbox(
         longhouse_home,
         {

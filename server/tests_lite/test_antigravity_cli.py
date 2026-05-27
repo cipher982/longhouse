@@ -354,8 +354,11 @@ def test_antigravity_hook_claims_inbox_message_and_injects_preinvocation(tmp_pat
     )
     inbox_dir = antigravity_channel.antigravity_inbox_dir("session-123", config_dir)
     state_dir = antigravity_channel.antigravity_state_dir(config_dir)
-    assert oct((config_dir / "managed-local" / "antigravity").stat().st_mode & 0o777) == "0o700"
-    assert oct((config_dir / "managed-local" / "antigravity" / "inbox").stat().st_mode & 0o777) == "0o700"
+    runtime_dir = tmp_path / ".longhouse" / "managed-local" / "antigravity"
+    assert inbox_dir == runtime_dir / "inbox" / "session-123"
+    assert state_dir == runtime_dir / "sessions"
+    assert oct(runtime_dir.stat().st_mode & 0o777) == "0o700"
+    assert oct((runtime_dir / "inbox").stat().st_mode & 0o777) == "0o700"
     assert oct(inbox_dir.stat().st_mode & 0o777) == "0o700"
     assert oct(Path(str(queued["path"])).stat().st_mode & 0o777) == "0o600"
 
@@ -398,6 +401,39 @@ def test_antigravity_hook_claims_inbox_message_and_injects_preinvocation(tmp_pat
     state = json.loads((state_dir / "session-123.json").read_text(encoding="utf-8"))
     assert state["conversation_id"] == "ag-provider-session"
     assert state["transcript_path"] == str(tmp_path / "transcript.jsonl")
+
+
+def test_antigravity_hook_derives_canonical_inbox_from_longhouse_home(tmp_path):
+    config_dir = tmp_path / ".claude"
+    plugin_root = antigravity_cli._ensure_antigravity_runtime_plugin(
+        config_dir=config_dir,
+        antigravity_cli_root=tmp_path / ".gemini" / "antigravity-cli",
+        engine_path="/bin/true",
+        global_hooks_path=tmp_path / ".gemini" / "config" / "hooks.json",
+    )
+    script = plugin_root / "longhouse-antigravity-hook.sh"
+    antigravity_channel.enqueue_antigravity_message(
+        session_id="session-123",
+        text="fallback inbox",
+        config_dir=config_dir,
+    )
+
+    result = subprocess.run(
+        [str(script), "PreInvocation"],
+        input=json.dumps({"conversationId": "ag-provider-session", "stepIdx": 8}),
+        text=True,
+        capture_output=True,
+        check=False,
+        env={
+            "LONGHOUSE_HOOK_PYTHON": sys.executable,
+            "LONGHOUSE_ENGINE": "/bin/true",
+            "LONGHOUSE_MANAGED_SESSION_ID": "session-123",
+            "PATH": os.defpath,
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"injectSteps": [{"userMessage": "fallback inbox"}]}
 
 
 def test_antigravity_channel_timeout_removes_unclaimed_message(tmp_path):
