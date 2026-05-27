@@ -27,6 +27,7 @@ from zerg.cli import local_health as local_health_cli
 from zerg.cli import local_health_fast
 from zerg.cli.main import app
 from zerg.services import local_health as local_health_service
+from zerg.services import managed_session_contracts
 from zerg.services import session_runtime
 from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_outbox_dir
@@ -570,7 +571,7 @@ def test_collect_local_health_classifies_deleted_cwd_hook_spawn_errors(monkeypat
 
     assert snapshot["health_state"] == "degraded"
     assert snapshot["headline"] == "A provider session working directory disappeared"
-    assert "provider_hook_cwd_missing" in snapshot["reasons"]
+    assert "provider_session_cwd_missing" in snapshot["reasons"]
     diagnostics = snapshot["provider_hook_diagnostics"]
     assert diagnostics["state"] == "session_cwd_missing"
     assert diagnostics["deleted_cwd_error_count"] == 1
@@ -593,6 +594,47 @@ def test_fast_local_health_skips_provider_hook_transcript_scan(monkeypatch, tmp_
 
     assert snapshot["provider_hook_diagnostics"]["state"] == "skipped"
     assert snapshot["provider_hook_diagnostics"]["skipped_reason"] == "fast_local_health"
+
+
+def test_collect_local_health_classifies_missing_cwd_from_managed_session_contract(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(tmp_path, age_seconds=5)
+    missing_cwd = tmp_path / "deleted-workspace"
+    contract = managed_session_contracts.build_managed_session_contract(
+        session_id="sess-contract",
+        provider="codex",
+        cwd=missing_cwd,
+        control_kind="codex_bridge",
+    )
+    managed_session_contracts.write_managed_session_contract(contract, base_dir=tmp_path)
+    _write_managed_session_state_rows(
+        tmp_path,
+        [
+            (
+                "sess-contract",
+                "codex",
+                str(missing_cwd),
+                "deleted-workspace",
+                "idle",
+                None,
+                "codex_bridge",
+                "2026-05-27T14:35:24Z",
+                "2026-05-27T14:35:24Z",
+            )
+        ],
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "degraded"
+    assert snapshot["headline"] == "A provider session working directory disappeared"
+    assert "provider_session_cwd_missing" in snapshot["reasons"]
+    assert snapshot["managed_session_contracts"]["issues"][0]["reason"] == "provider_session_cwd_missing"
+    assert (
+        f"Restart or reattach the affected provider session from an existing directory; missing cwd: {missing_cwd}"
+        in snapshot["suggested_actions"]
+    )
 
 
 def test_collect_local_health_surfaces_codex_provider_cli(monkeypatch, tmp_path: Path):
