@@ -36,6 +36,7 @@ class ManagedSessionContractIssue:
     reason: str
     session_id: str | None
     provider: str | None
+    created_at: str | None
     severity: str
     headline: str
     action: str
@@ -47,6 +48,7 @@ class ManagedSessionContractIssue:
             "reason": self.reason,
             "session_id": self.session_id,
             "provider": self.provider,
+            "created_at": self.created_at,
             "severity": self.severity,
             "headline": self.headline,
             "action": self.action,
@@ -135,6 +137,7 @@ def write_managed_session_contract(
 
     path = build_managed_session_contract_path(provider=provider, session_id=session_id, base_dir=base_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
+    _chmod_private_contract_dirs(path)
     body = json.dumps(dict(contract), indent=2, sort_keys=True) + "\n"
     tmp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}")
     fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
@@ -210,6 +213,7 @@ def verify_managed_session_contracts(
     for contract in contracts:
         issues.extend(_issues_for_contract(contract))
 
+    issues.sort(key=lambda issue: (issue.created_at or "", issue.source_path), reverse=True)
     serialized_issues = [issue.to_dict() for issue in issues]
     return {
         "schema_version": DIAGNOSTIC_SCHEMA_VERSION,
@@ -258,6 +262,7 @@ def _issues_for_contract(contract: Mapping[str, Any]) -> list[ManagedSessionCont
 
     session_id = _normalize_optional_string(contract.get("session_id"))
     provider = _normalize_optional_string(contract.get("provider"))
+    created_at = _normalize_optional_string(contract.get("created_at"))
     workspace = contract.get("workspace")
     control = contract.get("control")
     workspace_map = workspace if isinstance(workspace, Mapping) else {}
@@ -274,6 +279,7 @@ def _issues_for_contract(contract: Mapping[str, Any]) -> list[ManagedSessionCont
                     reason=REASON_PROVIDER_SESSION_CWD_MISSING,
                     session_id=session_id,
                     provider=provider,
+                    created_at=created_at,
                     severity="yellow",
                     headline="A provider session working directory disappeared",
                     action=("Restart or reattach the affected provider session from an existing directory; " f"missing cwd: {cwd}"),
@@ -289,6 +295,7 @@ def _issues_for_contract(contract: Mapping[str, Any]) -> list[ManagedSessionCont
                         reason=REASON_PROVIDER_SESSION_CWD_REPLACED,
                         session_id=session_id,
                         provider=provider,
+                        created_at=created_at,
                         severity="yellow",
                         headline="A provider session working directory was replaced",
                         action=(
@@ -311,6 +318,7 @@ def _issues_for_contract(contract: Mapping[str, Any]) -> list[ManagedSessionCont
                 reason=REASON_BRIDGE_STATE_PATH_MISSING,
                 session_id=session_id,
                 provider=provider,
+                created_at=created_at,
                 severity="yellow",
                 headline="A managed provider bridge state file is missing",
                 action=f"Restart or detach the affected managed session; missing bridge state: {state_path}",
@@ -325,6 +333,15 @@ def _safe_component(value: str | None, *, fallback: str) -> str:
     normalized = _normalize_optional_string(value) or fallback
     safe = _SAFE_PATH_COMPONENT_RE.sub("-", normalized).strip(".-")
     return safe or fallback
+
+
+def _chmod_private_contract_dirs(path: Path) -> None:
+    root = path.parent.parent
+    for directory in (root.parent, root, path.parent):
+        try:
+            directory.chmod(0o700)
+        except OSError:
+            pass
 
 
 def _normalize_optional_string(value: object) -> str | None:

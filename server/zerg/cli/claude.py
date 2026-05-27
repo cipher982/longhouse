@@ -160,6 +160,7 @@ def _load_api_credentials(
         token=token,
         config_dir=config_dir,
         exit_code=exit_code,
+        config_dir_is_provider_home=True,
         resolve_url=get_zerg_url,
         resolve_token=load_token,
     )
@@ -456,19 +457,39 @@ def _finalize_native_claude_launch(
         return
 
     typer.echo("Launching native Claude...")
-    exit_code = _run_native_claude_tui(
-        session_id=result.session_id,
-        provider_session_id=result.provider_session_id,
-        cwd=cwd,
-        base_url=base_url,
-        token=token,
-    )
-    remove_managed_provider_contract(
-        provider="claude",
-        session_id=result.session_id,
-        config_dir=config_dir,
-        config_dir_is_provider_home=True,
-    )
+    try:
+        record_managed_provider_contract(
+            provider="claude",
+            session_id=result.session_id,
+            cwd=cwd,
+            config_dir=config_dir,
+            launch_mode="tui",
+            provider_binary_path=shutil.which("claude"),
+            provider_binary_source=PROVIDER_CLI_SOURCE_PATH,
+            control_kind="claude_channel_bridge",
+            config_dir_is_provider_home=True,
+        )
+    except Exception as exc:
+        typer.secho(
+            f"Longhouse warning: could not record managed-session contract: {exc}",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+    try:
+        exit_code = _run_native_claude_tui(
+            session_id=result.session_id,
+            provider_session_id=result.provider_session_id,
+            cwd=cwd,
+            base_url=base_url,
+            token=token,
+        )
+    finally:
+        remove_managed_provider_contract(
+            provider="claude",
+            session_id=result.session_id,
+            config_dir=config_dir,
+            config_dir_is_provider_home=True,
+        )
     if exit_code != 0:
         typer.secho(
             f"Native Claude exited with code {exit_code}. Run the printed attach command manually.",
@@ -597,24 +618,6 @@ def claude(
             fg=typer.colors.RED,
         )
         raise typer.Exit(code=EXIT_SETUP_FAILED)
-    try:
-        record_managed_provider_contract(
-            provider="claude",
-            session_id=result.session_id,
-            cwd=cwd,
-            config_dir=resolved_config_dir,
-            launch_mode="tui" if attach else "detached_ui",
-            provider_binary_path=shutil.which("claude"),
-            provider_binary_source=PROVIDER_CLI_SOURCE_PATH,
-            control_kind="claude_channel_bridge",
-            config_dir_is_provider_home=True,
-        )
-    except Exception as exc:
-        typer.secho(
-            f"Longhouse warning: could not record managed-session contract: {exc}",
-            fg=typer.colors.YELLOW,
-            err=True,
-        )
     _finalize_native_claude_launch(
         base_url=resolved_url,
         token=resolved_token,

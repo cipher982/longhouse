@@ -814,6 +814,7 @@ def codex(
         token=token,
         config_dir=resolved_config_dir,
         exit_code=managed_local_cli.EXIT_SETUP_FAILED,
+        config_dir_is_provider_home=True,
     )
     resolved_codex_bin = _resolve_codex_binary(codex_bin)
     if not resolved_codex_bin:
@@ -930,7 +931,7 @@ def codex(
         _restore_signal_handlers(previous_handlers)
     keep_bridge_alive = exit_code != 0 and _active_turn_survived_tui_exit(state_file)
     stop_error = None if keep_bridge_alive else bridge_stopper.stop(reason=_CODEX_STOP_REASON_TERMINAL_DISCONNECTED)
-    if not keep_bridge_alive and stop_error is None:
+    if not keep_bridge_alive:
         remove_managed_provider_contract(
             provider="codex",
             session_id=result.session_id,

@@ -88,10 +88,7 @@ def test_antigravity_command_launches_managed_session_and_passes_extra_args(monk
             "config_dir": None,
         }
     ]
-    contracts = list_managed_session_contracts(tmp_path / ".longhouse")
-    assert contracts[0]["provider"] == "antigravity"
-    assert contracts[0]["workspace"]["cwd"] == str(tmp_path)
-    assert contracts[0]["control"]["kind"] == "antigravity_process"
+    assert list_managed_session_contracts(tmp_path / ".longhouse") == []
 
 
 def test_agy_command_alias_launches_managed_session(monkeypatch, tmp_path):
@@ -189,6 +186,7 @@ def test_antigravity_no_attach_prints_tokenless_launch_script_command(monkeypatc
     assert "zdt_test_token" not in result.output
     assert launch_script_calls[0]["runtime_events_url"] == "https://longhouse.test/api/agents/runtime/events/batch"
     assert launch_script_calls[0]["token"] == "zdt_test_token"
+    assert list_managed_session_contracts(tmp_path / ".longhouse") == []
 
 
 def test_antigravity_launch_api_wrapper_sets_provider(monkeypatch, tmp_path):

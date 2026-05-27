@@ -477,6 +477,17 @@ def _apply_managed_session_contract_diagnostics(
     return dict(issues[0])
 
 
+def _managed_contract_headline(diagnostics: Mapping[str, Any], latest_issue: Mapping[str, Any]) -> str:
+    raw_issues = diagnostics.get("issues")
+    issues = [issue for issue in raw_issues if isinstance(issue, Mapping)] if isinstance(raw_issues, list) else []
+    session_ids = {session_id for issue in issues if (session_id := _normalize_optional_string(issue.get("session_id"))) is not None}
+    if len(session_ids) > 1:
+        return f"{len(session_ids)} managed provider sessions need attention"
+    if len(issues) > 1:
+        return f"{len(issues)} managed provider session issues need attention"
+    return _normalize_optional_string(latest_issue.get("headline")) or "Managed provider session needs attention"
+
+
 _THREAD_SUBSCRIPTION_TRANSIENT_STATES = frozenset(
     {
         "waiting_for_thread",
@@ -3531,7 +3542,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         if health_state == "healthy":
             health_state = "degraded"
             severity = "yellow"
-        headline = _normalize_optional_string(latest_contract_issue.get("headline")) or "Managed provider session needs attention"
+        headline = _managed_contract_headline(managed_session_contracts, latest_contract_issue)
     if int(provider_release_status.get("blocking_count") or 0) > 0:
         if "provider_release_blocked" not in reasons:
             reasons.append("provider_release_blocked")
