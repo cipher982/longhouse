@@ -263,6 +263,7 @@ class WriteSerializer:
         label: str = "",
         priority: int | None = None,
         auto_commit: bool = True,
+        timeout_seconds: float | None = None,
     ) -> T:
         """Submit a write operation. Serialized via a single-writer priority queue.
 
@@ -272,18 +273,25 @@ class WriteSerializer:
             priority: Lower runs sooner once the current writer finishes.
             auto_commit: If True, commit after fn returns. Set False if fn
                          manages its own commits (e.g. chunked ingest).
+            timeout_seconds: Wall-clock timeout for the writer-slot hold.
+                             On timeout the caller gets TimeoutError but the
+                             write continues to completion in the background.
+                             Use only for idempotent/background maintenance
+                             writes; retries may duplicate effects.
 
         Returns:
             Whatever fn returns.
 
         Raises:
             Whatever fn raises (after rollback).
+            TimeoutError if timeout_seconds elapses before the write completes.
         """
         return await self._execute_queued(
             fn,
             label=label,
             priority=priority,
             auto_commit=auto_commit,
+            timeout_seconds=timeout_seconds,
             session_factory=self._resolve_session_factory(),
         )
 
@@ -312,6 +320,7 @@ class WriteSerializer:
         label: str,
         priority: int | None,
         auto_commit: bool,
+        timeout_seconds: float | None,
         session_factory: sessionmaker,
     ) -> T:
         if not self._configured:
@@ -416,7 +425,18 @@ class WriteSerializer:
             task.add_done_callback(self._background_tasks.discard)
 
         try:
-            result = await asyncio.shield(worker_task)
+            if timeout_seconds is None:
+                result = await asyncio.shield(worker_task)
+            else:
+                result = await asyncio.wait_for(asyncio.shield(worker_task), timeout=timeout_seconds)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "WriteSerializer: %s timed out after %.1fs, continuing in background",
+                label or "unlabeled",
+                timeout_seconds,
+            )
+            worker_task.add_done_callback(_schedule_background_finalize)
+            raise
         except asyncio.CancelledError:
             worker_task.add_done_callback(_schedule_background_finalize)
             raise

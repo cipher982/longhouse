@@ -79,7 +79,7 @@ services:
       # E2E test fixtures (for tool stubbing)
       - ../e2e/fixtures:/app/e2e-fixtures:ro
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/readyz"]
       <<: *healthcheck-defaults
       start_period: 2s
     networks:

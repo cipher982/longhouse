@@ -361,20 +361,61 @@ async def lifespan(app: FastAPI):
 
                     async def _live_preview_cleanup_loop() -> None:
                         ws = get_write_serializer()
+                        skips_remaining = 0
                         while True:
                             try:
                                 await asyncio.sleep(60)
+                                # When the queue is under pressure, skip up to 3
+                                # consecutive ticks but force one every 4th iteration
+                                # so cleanup never stops permanently.
+                                if skips_remaining > 0:
+                                    skips_remaining -= 1
+                                    continue
+                                recent_wait = ws.stats.max_queue_wait_ms
+                                if recent_wait > 500:
+                                    skips_remaining = 3
+                                    logger.info(
+                                        "live-preview-cleanup skipping due to queue pressure (max_queue_wait=%.0fms)",
+                                        recent_wait,
+                                    )
+                                    continue
+
+                                # Pre-check: only queue a write if there are rows
+                                # to delete. Avoids holding the serializer lock at
+                                # all for no-op ticks on clean databases.
+                                try:
+                                    from sqlalchemy import text as _sa_text
+
+                                    from zerg.database import default_engine as _def_eng
+
+                                    if _def_eng is not None:
+                                        with _def_eng.connect() as _conn:
+                                            row = _conn.execute(
+                                                _sa_text(
+                                                    "SELECT 1 FROM session_observations "
+                                                    "WHERE source = 'codex_bridge_live' "
+                                                    "AND kind = 'bridge_transcript_delta' "
+                                                    "LIMIT 1"
+                                                )
+                                            ).fetchone()
+                                        if not row:
+                                            continue
+                                except Exception:
+                                    pass  # fall through to full cleanup
+
                                 await ws.execute(
                                     lambda db: cleanup_bridge_transcript_preview_observations(
                                         db,
-                                        batch_size=250,
-                                        max_sessions=5,
-                                        commit=False,
+                                        batch_size=100,
+                                        max_sessions=2,
                                     ),
                                     label="live-preview-cleanup",
+                                    timeout_seconds=5.0,
                                 )
                             except asyncio.CancelledError:
                                 raise
+                            except asyncio.TimeoutError:
+                                logger.warning("live preview cleanup timed out (will retry next tick)")
                             except Exception:  # noqa: BLE001
                                 logger.exception("live preview cleanup tick failed")
 

@@ -281,9 +281,10 @@ def make_write_engine(db_url: str) -> Engine:
 
     parsed = make_url(db_url)
     is_memory = parsed.database in (None, "", ":memory:")
+    _busy_timeout = int(os.getenv("SQLITE_WRITE_BUSY_TIMEOUT_MS", "5000"))
     if is_memory:
-        return make_engine(db_url, busy_timeout_ms=30000)
-    return make_engine(db_url, busy_timeout_ms=30000, pool_size=1, max_overflow=0)
+        return make_engine(db_url, busy_timeout_ms=_busy_timeout)
+    return make_engine(db_url, busy_timeout_ms=_busy_timeout, pool_size=1, max_overflow=0)
 
 
 def get_session_factory() -> sessionmaker:
