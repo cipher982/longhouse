@@ -28,7 +28,9 @@ from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
+from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionLaunchAttempt
+from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
 from zerg.models.device_token import DeviceToken
@@ -157,6 +159,7 @@ def _attach_live_launch_run(
     cwd: str | None = None,
 ) -> None:
     thread = ensure_primary_thread(db, session)
+    now = datetime.now(timezone.utc)
     if provider_thread_id:
         record_thread_alias(
             db,
@@ -173,6 +176,8 @@ def _attach_live_launch_run(
             alias_kind="source_path",
             alias_value=thread_path,
         )
+    if force_new_run:
+        _release_open_runs_for_thread(db, thread=thread, now=now)
     run = (
         record_run(
             db,
@@ -212,6 +217,31 @@ def _attach_live_launch_run(
         run=run,
         clear_expires=True,
     )
+
+
+def _release_open_runs_for_thread(db: Session, *, thread: SessionThread, now: datetime) -> None:
+    run_query = db.query(SessionRun).filter(SessionRun.thread_id == thread.id)
+    open_runs = run_query.filter(SessionRun.ended_at.is_(None)).all()
+    if not open_runs:
+        return
+
+    open_run_ids = [run.id for run in open_runs]
+    for run in open_runs:
+        run.ended_at = now
+    for conn in (
+        db.query(SessionConnection)
+        .filter(SessionConnection.run_id.in_(open_run_ids))
+        .filter(SessionConnection.state.in_(("attached", "degraded")))
+        .all()
+    ):
+        conn.state = "released"
+        conn.released_at = now
+        conn.last_health_at = now
+        conn.can_send_input = 0
+        conn.can_interrupt = 0
+        conn.can_terminate = 0
+        conn.can_tail_output = 0
+        conn.can_resume = 0
 
 
 def _result_resume_thread_id(message: Mapping | None) -> str | None:
@@ -255,7 +285,16 @@ def _latest_source_path(db: Session, *, session: AgentSession, thread: SessionTh
         .limit(1)
         .first()
     )
-    return str(row[0]).strip() if row is not None and row[0] else None
+    source_path = str(row[0]).strip() if row is not None and row[0] else None
+    if source_path:
+        record_thread_alias(
+            db,
+            thread=thread,
+            provider=session.provider,
+            alias_kind="source_path",
+            alias_value=source_path,
+        )
+    return source_path
 
 
 def _resolve_continue_target(db: Session, *, session: AgentSession) -> tuple[SessionThread, str, str]:
@@ -273,7 +312,7 @@ def _resolve_continue_target(db: Session, *, session: AgentSession) -> tuple[Ses
     thread_path = _latest_source_path(db, session=session, thread=thread)
     if not provider_thread_id:
         raise RemoteLaunchError(
-            "Session is missing a Codex thread id; wait for a fresh managed launch to ingest " "thread identity before continuing",
+            "Session is missing a Codex thread id; cannot continue until thread identity is ingested",
             code="invalid_request",
             status_code=409,
         )
@@ -545,6 +584,17 @@ async def continue_remote_session(
         )
 
     _verify_device_owned_by(db, owner_id=params.owner_id, device_id=device_id)
+    source_device_id = (session.device_id or "").strip()
+    if source_device_id:
+        _verify_device_owned_by(db, owner_id=params.owner_id, device_id=source_device_id)
+
+    client_request_id = (params.client_request_id or "").strip() or None
+    if not client_request_id:
+        raise RemoteLaunchError(
+            "client_request_id is required for session continuation",
+            code="invalid_request",
+            status_code=400,
+        )
 
     caps = project_session_capabilities(db, session_id=session.id)
     if caps.live_control_available and caps.can_send_input:
@@ -552,20 +602,18 @@ async def continue_remote_session(
 
     thread, provider_thread_id, thread_path = _resolve_continue_target(db, session=session)
 
-    client_request_id = (params.client_request_id or "").strip() or None
-    if client_request_id:
-        existing = (
-            db.query(SessionLaunchAttempt)
-            .filter(SessionLaunchAttempt.session_id == session.id)
-            .filter(SessionLaunchAttempt.client_request_id == client_request_id)
-            .filter(SessionLaunchAttempt.owner_id == params.owner_id)
-            .filter(SessionLaunchAttempt.host_id == device_id)
-            .filter(SessionLaunchAttempt.provider == provider)
-            .order_by(SessionLaunchAttempt.created_at.desc(), SessionLaunchAttempt.id.desc())
-            .first()
-        )
-        if existing is not None:
-            return _launch_result_for_attempt(existing)
+    existing = (
+        db.query(SessionLaunchAttempt)
+        .filter(SessionLaunchAttempt.session_id == session.id)
+        .filter(SessionLaunchAttempt.client_request_id == client_request_id)
+        .filter(SessionLaunchAttempt.owner_id == params.owner_id)
+        .filter(SessionLaunchAttempt.host_id == device_id)
+        .filter(SessionLaunchAttempt.provider == provider)
+        .order_by(SessionLaunchAttempt.created_at.desc(), SessionLaunchAttempt.id.desc())
+        .first()
+    )
+    if existing is not None:
+        return _launch_result_for_attempt(existing)
 
     reg = registry or get_machine_control_channel_registry()
     info = reg.info(owner_id=params.owner_id, device_id=device_id)

@@ -138,11 +138,11 @@ class RemoteSessionContinueRequest(BaseModel):
         description="Target enrolled device id; defaults to the session host",
     )
     cwd: str | None = Field(None, min_length=1, description="Absolute working directory; defaults to the session cwd")
-    client_request_id: str | None = Field(
-        None,
+    client_request_id: str = Field(
+        ...,
         min_length=1,
         max_length=64,
-        description="Optional idempotency key; repeated calls with the same value return the same attempt",
+        description="Required idempotency key; repeated calls with the same value return the same attempt",
     )
 
 

@@ -32,10 +32,12 @@ from zerg.models.agents import AgentSourceLine  # noqa: E402
 from zerg.models.agents import SessionConnection  # noqa: E402
 from zerg.models.agents import SessionLaunchAttempt  # noqa: E402
 from zerg.models.agents import SessionRun  # noqa: E402
+from zerg.models.agents import SessionThreadAlias  # noqa: E402
 from zerg.models.device_token import DeviceToken  # noqa: E402
 from zerg.services.agents.kernel_writes import ensure_primary_thread  # noqa: E402
 from zerg.services.agents.kernel_writes import record_run  # noqa: E402
 from zerg.services.agents.kernel_writes import record_thread_alias  # noqa: E402
+from zerg.services.agents.kernel_writes import upsert_connection_for_run  # noqa: E402
 from zerg.services.live_session_dispatch import supports_live_text_dispatch_metadata  # noqa: E402
 from zerg.services.machine_control_channel import MachineControlChannelRegistry  # noqa: E402
 from zerg.services.machine_control_channel import MachineControlCommandResponse  # noqa: E402
@@ -672,8 +674,22 @@ def test_continue_session_dispatches_resume_payload_and_attaches_new_run(tmp_pat
     with SessionLocal() as db:
         session_id = _seed_continuable_codex_session(db)
         thread = ensure_primary_thread(db, db.get(AgentSession, session_id))
-        ended_run = record_run(db, thread=thread, provider="codex", host_id="cinder", cwd="/Users/me/repo")
-        ended_run.ended_at = datetime.now(timezone.utc)
+        existing_run = record_run(db, thread=thread, provider="codex", host_id="cinder", cwd="/Users/me/repo")
+        existing_connection = upsert_connection_for_run(
+            db,
+            run=existing_run,
+            control_plane="codex_bridge",
+            acquisition_kind="spawned_control",
+            state="attached",
+            external_name="cinder",
+            can_send_input=0,
+            can_interrupt=1,
+            can_terminate=1,
+            can_tail_output=1,
+            can_resume=1,
+        )
+        existing_run_id = existing_run.id
+        existing_connection_id = existing_connection.id
         db.commit()
 
     with SessionLocal() as db:
@@ -710,8 +726,16 @@ def test_continue_session_dispatches_resume_payload_and_attaches_new_run(tmp_pat
         attempt = _latest_attempt(db, session_id)
         assert attempt.state == "adopted"
         assert attempt.run_id is not None
+        assert attempt.run_id != existing_run_id
         assert db.query(SessionRun).count() == 2
         assert db.get(SessionRun, attempt.run_id).launch_origin == "longhouse_continued"
+        released_run = db.get(SessionRun, existing_run_id)
+        assert released_run.ended_at is not None
+        released_connection = db.get(SessionConnection, existing_connection_id)
+        assert released_connection.state == "released"
+        assert released_connection.can_send_input == 0
+        assert released_connection.can_interrupt == 0
+        assert released_connection.released_at is not None
         live_connection = (
             db.query(SessionConnection)
             .join(SessionRun, SessionConnection.run_id == SessionRun.id)
@@ -744,6 +768,56 @@ def test_continue_session_is_idempotent_by_client_request_id(tmp_path):
     assert len(registry.sent) == 1
 
 
+def test_continue_requires_client_request_id(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.continue",))
+
+    with SessionLocal() as db:
+        session_id = _seed_continuable_codex_session(db)
+        with pytest.raises(RemoteLaunchError) as excinfo:
+            asyncio.run(
+                continue_remote_session(
+                    db,
+                    RemoteContinueParams(owner_id=OWNER_ID, session_id=session_id),
+                    registry=registry,
+                )
+            )
+
+    assert excinfo.value.code == "invalid_request"
+    assert excinfo.value.status_code == 400
+    assert registry.sent == []
+
+
+def test_continue_requires_source_session_device_owned_by_user(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal, owner_id=OWNER_ID, device_id="cinder")
+    _seed_user_and_device(SessionLocal, owner_id=OWNER_ID + 1, device_id="not-mine")
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.continue",))
+
+    with SessionLocal() as db:
+        session_id = _seed_continuable_codex_session(db, device_id="not-mine")
+        with pytest.raises(RemoteLaunchError) as excinfo:
+            asyncio.run(
+                continue_remote_session(
+                    db,
+                    RemoteContinueParams(
+                        owner_id=OWNER_ID,
+                        session_id=session_id,
+                        device_id="cinder",
+                        client_request_id="continue-owned-source",
+                    ),
+                    registry=registry,
+                )
+            )
+
+    assert excinfo.value.code == "device_not_enrolled"
+    assert excinfo.value.status_code == 404
+    assert registry.sent == []
+
+
 def test_continue_requires_continue_capability(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)
@@ -756,7 +830,11 @@ def test_continue_requires_continue_capability(tmp_path):
             asyncio.run(
                 continue_remote_session(
                     db,
-                    RemoteContinueParams(owner_id=OWNER_ID, session_id=session_id),
+                    RemoteContinueParams(
+                        owner_id=OWNER_ID,
+                        session_id=session_id,
+                        client_request_id="continue-capability",
+                    ),
                     registry=registry,
                 )
             )
@@ -801,7 +879,11 @@ def test_continue_rejects_missing_resume_identity(tmp_path):
             asyncio.run(
                 continue_remote_session(
                     db,
-                    RemoteContinueParams(owner_id=OWNER_ID, session_id=sid),
+                    RemoteContinueParams(
+                        owner_id=OWNER_ID,
+                        session_id=sid,
+                        client_request_id="continue-missing-identity",
+                    ),
                     registry=registry,
                 )
             )
@@ -891,13 +973,24 @@ def test_late_continue_result_reconciliation_keeps_existing_session_live(tmp_pat
         result = asyncio.run(
             continue_remote_session(
                 db,
-                RemoteContinueParams(owner_id=OWNER_ID, session_id=session_id),
+                RemoteContinueParams(
+                    owner_id=OWNER_ID,
+                    session_id=session_id,
+                    client_request_id="continue-timeout",
+                ),
                 registry=registry,
             )
         )
     assert result.launch_state == "launching_unknown"
     command_id = registry.sent[-1]["command_id"]
     assert command_id.startswith("continue-")
+    with SessionLocal() as db:
+        assert (
+            db.query(SessionThreadAlias)
+            .filter(SessionThreadAlias.alias_kind == "source_path")
+            .filter(SessionThreadAlias.alias_value == "/Users/me/.codex/sessions/thread-abc.jsonl")
+            .count()
+        ) == 1
 
     with SessionLocal() as db:
         reconciled = reconcile_launch_from_command_result(
