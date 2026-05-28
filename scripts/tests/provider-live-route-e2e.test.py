@@ -192,8 +192,30 @@ def test_route_e2e_requires_match_and_typed_mismatch() -> None:
         assert result.returncode == 0, result.stderr + result.stdout
         assert payload["verdict"] == "green"
         assert payload["engine_build"] == "test-build"
+        assert payload["mismatch_providers"] == ["claude"]
         assert [result["provider"] for result in payload["results"]] == ["claude", "opencode"]
         assert [result["status"] for result in payload["results"]] == ["pass", "pass"]
+        assert [(request["provider"], request["expected_provider_version"]) for request in state.requests] == [
+            ("claude", "2.1.153"),
+            ("claude", "9.9.9-longhouse-route-e2e"),
+            ("opencode", "1.15.11"),
+        ]
+    finally:
+        server.shutdown()
+
+
+def test_route_e2e_can_run_typed_mismatch_for_every_provider() -> None:
+    state = _ServerState()
+    server, api_url = _run_server(state)
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            token_file, proof_dir = _write_inputs(root)
+            result, payload = _run_harness(root, api_url, token_file, proof_dir, "--mismatch-provider", "all")
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["verdict"] == "green"
+        assert payload["mismatch_providers"] == ["claude", "opencode"]
         assert [(request["provider"], request["expected_provider_version"]) for request in state.requests] == [
             ("claude", "2.1.153"),
             ("claude", "9.9.9-longhouse-route-e2e"),
@@ -226,7 +248,6 @@ def test_route_e2e_retries_transient_match_failure() -> None:
             ("claude", "9.9.9-longhouse-route-e2e"),
             ("opencode", "1.15.11"),
             ("opencode", "1.15.11"),
-            ("opencode", "9.9.9-longhouse-route-e2e"),
         ]
     finally:
         server.shutdown()
@@ -252,6 +273,7 @@ def test_route_e2e_fails_when_mismatch_is_not_typed() -> None:
 def main() -> int:
     tests = [
         test_route_e2e_requires_match_and_typed_mismatch,
+        test_route_e2e_can_run_typed_mismatch_for_every_provider,
         test_route_e2e_retries_transient_match_failure,
         test_route_e2e_fails_when_mismatch_is_not_typed,
     ]
