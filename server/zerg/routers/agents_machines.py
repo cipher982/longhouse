@@ -8,6 +8,8 @@ operator dashboards.
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
@@ -35,6 +37,8 @@ router = APIRouter(prefix="/agents/machines", tags=["agents"])
 
 PROVIDER_LIVE_PROOF_COMMAND = "provider.live_proof"
 PROVIDER_LIVE_PROOF_COMMAND_HEADROOM_SECS = 15
+_PROVIDER_LIVE_PROOF_IN_FLIGHT: set[tuple[int, str, str]] = set()
+_PROVIDER_LIVE_PROOF_IN_FLIGHT_LOCK = asyncio.Lock()
 
 
 @router.get("", response_model=MachineDirectoryResponse)
@@ -96,23 +100,37 @@ async def run_provider_live_proof(
             detail=f"Machine Agent does not advertise {capability}",
         )
 
+    in_flight_key = (owner_id, device_id, request.provider)
+    if not await _claim_provider_live_proof(in_flight_key):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Provider live proof already in flight for {device_id}/{request.provider}",
+        )
+
     machine_timeout_secs = _provider_live_proof_machine_timeout_secs(request)
-    command = await registry.send_command(
-        owner_id=owner_id,
-        device_id=device_id,
-        session_id=None,
-        command_type=PROVIDER_LIVE_PROOF_COMMAND,
-        payload=request.model_dump(exclude_none=True),
-        timeout_secs=machine_timeout_secs + PROVIDER_LIVE_PROOF_COMMAND_HEADROOM_SECS,
-    )
+    try:
+        command = await registry.send_command(
+            owner_id=owner_id,
+            device_id=device_id,
+            session_id=None,
+            command_type=PROVIDER_LIVE_PROOF_COMMAND,
+            payload=request.model_dump(exclude_none=True),
+            timeout_secs=machine_timeout_secs + PROVIDER_LIVE_PROOF_COMMAND_HEADROOM_SECS,
+        )
+    finally:
+        await _release_provider_live_proof(in_flight_key)
     if not command.transport_ok:
         raise HTTPException(status_code=503, detail=command.error or "Machine control command failed")
     message = dict(command.message or {})
     if not message.get("ok"):
         error = message.get("error") if isinstance(message.get("error"), dict) else {}
+        error_message = error.get("message") or "Machine Agent provider live proof failed"
         raise HTTPException(
             status_code=502,
-            detail=error.get("message") or "Machine Agent provider live proof failed",
+            detail={
+                "code": error.get("code") or "machine_agent_provider_live_proof_failed",
+                "message": error_message,
+            },
         )
     result = message.get("result")
     if not isinstance(result, dict):
@@ -132,3 +150,16 @@ def _provider_live_proof_machine_timeout_secs(request: ProviderLiveProofRequest)
     if request.run_live_token_contract:
         return min(request.live_token_timeout_secs + 60, 900)
     return 120
+
+
+async def _claim_provider_live_proof(key: tuple[int, str, str]) -> bool:
+    async with _PROVIDER_LIVE_PROOF_IN_FLIGHT_LOCK:
+        if key in _PROVIDER_LIVE_PROOF_IN_FLIGHT:
+            return False
+        _PROVIDER_LIVE_PROOF_IN_FLIGHT.add(key)
+        return True
+
+
+async def _release_provider_live_proof(key: tuple[int, str, str]) -> None:
+    async with _PROVIDER_LIVE_PROOF_IN_FLIGHT_LOCK:
+        _PROVIDER_LIVE_PROOF_IN_FLIGHT.discard(key)

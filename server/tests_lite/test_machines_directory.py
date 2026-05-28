@@ -97,6 +97,28 @@ class _CompletingWebSocket:
         )
 
 
+class _FailingWebSocket:
+    def __init__(self, registry: MachineControlChannelRegistry, *, owner_id: int, device_id: str):
+        self.registry = registry
+        self.owner_id = owner_id
+        self.device_id = device_id
+
+    async def send_json(self, message):
+        await self.registry.complete_command(
+            {
+                "type": "command_result",
+                "command_id": message["command_id"],
+                "ok": False,
+                "error": {
+                    "code": "provider_version_mismatch",
+                    "message": "provider live proof version mismatch",
+                },
+            },
+            owner_id=self.owner_id,
+            device_id=self.device_id,
+        )
+
+
 def _register(
     registry: MachineControlChannelRegistry,
     *,
@@ -388,6 +410,7 @@ def test_provider_live_proof_route_dispatches_typed_machine_command(tmp_path):
                 "/api/agents/machines/cinder/provider-live-proof",
                 json={
                     "provider": "claude",
+                    "expected_provider_version": "2.1.153",
                     "run_live_token_contract": True,
                     "live_token_timeout_secs": 17,
                 },
@@ -407,6 +430,7 @@ def test_provider_live_proof_route_dispatches_typed_machine_command(tmp_path):
     assert "session_id" not in sent
     assert sent["command_type"] == "provider.live_proof"
     assert sent["payload"]["provider"] == "claude"
+    assert sent["payload"]["expected_provider_version"] == "2.1.153"
     assert sent["payload"]["run_live_token_contract"] is True
     assert sent["payload"]["live_token_timeout_secs"] == 17
     assert "timeout_secs" not in sent["payload"]
@@ -433,6 +457,68 @@ def test_provider_live_proof_route_rejects_machine_without_provider_support(tmp_
 
     assert resp.status_code == 409
     assert "claude.live_proof" in resp.text
+
+
+def test_provider_live_proof_route_rejects_duplicate_in_flight_request(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+    registry = MachineControlChannelRegistry()
+    _register(registry, owner_id=OWNER_ID, device_id="cinder", supports=("claude.live_proof",))
+
+    original, module = _swap_agents_machines_registry(registry)
+    in_flight_key = (OWNER_ID, "cinder", "claude")
+    module._PROVIDER_LIVE_PROOF_IN_FLIGHT.add(in_flight_key)
+    try:
+        client, api_app = _make_agents_client(SessionLocal)
+        try:
+            resp = client.post(
+                "/api/agents/machines/cinder/provider-live-proof",
+                json={"provider": "claude"},
+            )
+        finally:
+            api_app.dependency_overrides.clear()
+    finally:
+        module._PROVIDER_LIVE_PROOF_IN_FLIGHT.discard(in_flight_key)
+        module.get_machine_control_channel_registry = original
+
+    assert resp.status_code == 409
+    assert "already in flight" in resp.text
+
+
+def test_provider_live_proof_route_preserves_machine_error_code(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+    registry = MachineControlChannelRegistry()
+    websocket = _FailingWebSocket(registry, owner_id=OWNER_ID, device_id="cinder")
+    _register(
+        registry,
+        owner_id=OWNER_ID,
+        device_id="cinder",
+        supports=("claude.live_proof",),
+        websocket=websocket,
+    )
+
+    original, module = _swap_agents_machines_registry(registry)
+    try:
+        client, api_app = _make_agents_client(SessionLocal)
+        try:
+            resp = client.post(
+                "/api/agents/machines/cinder/provider-live-proof",
+                json={
+                    "provider": "claude",
+                    "expected_provider_version": "2.1.153",
+                },
+            )
+        finally:
+            api_app.dependency_overrides.clear()
+    finally:
+        module.get_machine_control_channel_registry = original
+
+    assert resp.status_code == 502
+    assert resp.json()["detail"] == {
+        "code": "provider_version_mismatch",
+        "message": "provider live proof version mismatch",
+    }
 
 
 def test_machines_route_returns_empty_for_unknown_user(tmp_path):
