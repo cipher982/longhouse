@@ -44,6 +44,17 @@ def canary_command(
         float,
         typer.Option("--wait-ready-secs", help="Seconds to wait for provider local servers to become ready."),
     ] = 15.0,
+    run_live_token_contract: Annotated[
+        bool,
+        typer.Option(
+            "--run-live-token-contract",
+            help="For OpenCode, spend a small model call to prove assistant response execution.",
+        ),
+    ] = False,
+    live_token_timeout_secs: Annotated[
+        int,
+        typer.Option("--live-token-timeout-secs", help="Seconds to wait for an opt-in live-token provider turn."),
+    ] = 120,
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Emit machine-readable JSON."),
@@ -58,6 +69,8 @@ def canary_command(
         artifact=artifact,
         evidence_root=evidence_root,
         wait_ready_secs=wait_ready_secs,
+        run_live_token_contract=run_live_token_contract,
+        live_token_timeout_secs=live_token_timeout_secs,
         json=json_output,
     )
     result = run_provider_live_canary(args)

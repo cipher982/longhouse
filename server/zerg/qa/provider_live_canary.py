@@ -51,6 +51,12 @@ _OPENCODE_PROMPT_ASYNC_MESSAGE = " ".join(
         "token-spending assistant-response proof is future work.",
     )
 )
+_OPENCODE_ASSISTANT_RESPONSE_MESSAGE = " ".join(
+    (
+        "Live-token behavior proof: OpenCode returned an assistant response",
+        "and session.messages exposed the assistant text marker.",
+    )
+)
 _CLAUDE_CHANNEL_UNCONFIRMED_MESSAGE = (
     "Claude recognized the development channel flag, but launch help did not confirm the session-control shape."
 )
@@ -219,8 +225,10 @@ def _entry_from_canary_group(
     canaries: dict[str, dict[str, Any]],
     required: list[str],
     canary_name: str,
+    level: str | None = None,
     source: str | None = None,
     message: str | None = None,
+    next_note: str | None = None,
 ) -> dict[str, Any] | None:
     status, detail = _group_operation_status(canaries, required)
     if not status:
@@ -231,10 +239,11 @@ def _entry_from_canary_group(
         status=status,
         canary=canary_name,
         canaries=required,
-        level="none" if status == "fail" else None,
+        level="none" if status == "fail" else level,
         source=source,
         message=message or (detail or {}).get("message"),
         failure_code=(detail or {}).get("failure_code"),
+        next_note=next_note,
     )
 
 
@@ -294,17 +303,64 @@ def _opencode_operation_evidence(
     if reattach:
         evidence["reattach"] = reattach
 
-    send_failure = _schema_probe_failed_for(canaries, "/session/{sessionID}/prompt_async", "session.prompt_async")
-    if send_failure:
+    prompt_failure = _schema_probe_failed_for(canaries, "/session/{sessionID}/message", "session.prompt")
+    prompt_async_failure = _schema_probe_failed_for(
+        canaries,
+        "/session/{sessionID}/prompt_async",
+        "session.prompt_async",
+    )
+    if prompt_failure:
+        evidence["send_input"] = _operation_entry(
+            contract,
+            "send_input",
+            status="fail",
+            canary="opencode_prompt_schema",
+            level="none",
+            failure_code=prompt_failure.get("failure_code") or "opencode_prompt_schema_failed",
+            message=prompt_failure.get("message"),
+        )
+    elif prompt_async_failure:
         evidence["send_input"] = _operation_entry(
             contract,
             "send_input",
             status="fail",
             canary="opencode_prompt_async_schema",
             level="none",
-            failure_code=send_failure.get("failure_code") or "opencode_prompt_async_schema_failed",
-            message=send_failure.get("message"),
+            failure_code=prompt_async_failure.get("failure_code") or "opencode_prompt_async_schema_failed",
+            message=prompt_async_failure.get("message"),
         )
+    elif (canaries.get("assistant_response_contract") or {}).get("status") in {"pass", "fail", "warn"}:
+        assistant_send = _entry_from_canary_group(
+            contract,
+            "send_input",
+            canaries=canaries,
+            required=[
+                "binary_identity",
+                "schema_probe",
+                "prompt_async_no_reply_delivery",
+                "assistant_response_contract",
+            ],
+            canary_name="opencode_assistant_response_contract",
+            level="manual_live_token",
+            source="longhouse provider-live canary --provider opencode --run-live-token-contract",
+            message=_OPENCODE_ASSISTANT_RESPONSE_MESSAGE,
+            next_note="promote with future live-token active-turn abort and process-restart reattach canaries",
+        )
+        if assistant_send:
+            evidence["send_input"] = assistant_send
+        transcript_binding = _entry_from_canary_group(
+            contract,
+            "transcript_binding",
+            canaries=canaries,
+            required=["assistant_response_contract"],
+            canary_name="opencode_assistant_response_contract",
+            level="manual_live_token",
+            source="longhouse provider-live canary --provider opencode --run-live-token-contract",
+            message="Live-token proof: assistant response marker was visible through session.messages.",
+            next_note="promote with future live-token active-turn abort and process-restart reattach canaries",
+        )
+        if transcript_binding:
+            evidence["transcript_binding"] = transcript_binding
     elif canaries.get("prompt_async_no_reply_delivery"):
         send_input = _entry_from_canary_group(
             contract,
@@ -592,6 +648,28 @@ def _messages_contain_text(messages: Any, expected_text: str) -> bool:
     return False
 
 
+def _assistant_message_contains_text(message: Any, expected_text: str) -> bool:
+    if not isinstance(message, dict):
+        return False
+    info = message.get("info")
+    if not isinstance(info, dict) or info.get("role") != "assistant":
+        return False
+    for part in message.get("parts") or []:
+        if not isinstance(part, dict):
+            continue
+        # Real models may quote or lightly wrap the marker; the noReply path
+        # above stays exact because OpenCode should persist user input verbatim.
+        if part.get("type") == "text" and expected_text in str(part.get("text") or ""):
+            return True
+    return False
+
+
+def _messages_contain_assistant_text(messages: Any, expected_text: str) -> bool:
+    if not isinstance(messages, list):
+        return False
+    return any(_assistant_message_contains_text(item, expected_text) for item in messages)
+
+
 def _run_opencode_prompt_async_no_reply_delivery(
     *,
     server_url: str,
@@ -660,6 +738,93 @@ def _run_opencode_prompt_async_no_reply_delivery(
         provider_session_id=provider_session_id,
         observed_message_count=len(messages) if isinstance(messages, list) else None,
         poll_attempts=poll_attempts,
+        elapsed_ms=int((time.monotonic() - started) * 1000),
+    )
+
+
+def _run_opencode_assistant_response_contract(
+    *,
+    server_url: str,
+    username: str,
+    password: str,
+    provider_session_id: str,
+    workspace: Path,
+    timeout_secs: int,
+) -> dict[str, Any]:
+    started = time.monotonic()
+    marker = f"LONGHOUSE_OPENCODE_LIVE_{secrets.token_hex(16)}"
+    prompt = f"Reply with exactly this token and no other text: {marker}"
+    try:
+        response = _request_json(
+            server_url=server_url,
+            username=username,
+            password=password,
+            method="POST",
+            path=f"/session/{urllib.parse.quote(provider_session_id, safe='')}/message",
+            query={"directory": str(workspace)},
+            payload={"parts": [{"type": "text", "text": prompt}]},
+            timeout=timeout_secs,
+        )
+    except RuntimeError as exc:
+        return _fail(
+            "opencode_assistant_response_request_failed",
+            f"OpenCode live-token assistant response request failed: {exc}",
+            provider_session_id=provider_session_id,
+            request_phase="post_session_message",
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+        )
+
+    if not _assistant_message_contains_text(response, marker):
+        return _fail(
+            "opencode_assistant_response_marker_missing",
+            "OpenCode returned an assistant response, but it did not contain the expected marker.",
+            provider_session_id=provider_session_id,
+            request_phase="post_session_message",
+            response_role=(response.get("info") or {}).get("role") if isinstance(response, dict) else None,
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+        )
+
+    try:
+        messages = _request_json(
+            server_url=server_url,
+            username=username,
+            password=password,
+            method="GET",
+            path=f"/session/{urllib.parse.quote(provider_session_id, safe='')}/message",
+            query={"directory": str(workspace), "limit": "20"},
+            timeout=timeout_secs,
+        )
+    except RuntimeError as exc:
+        return _fail(
+            "opencode_assistant_response_request_failed",
+            f"OpenCode session.messages request failed after live-token assistant response: {exc}",
+            provider_session_id=provider_session_id,
+            request_phase="get_session_messages",
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+        )
+
+    if not _messages_contain_assistant_text(messages, marker):
+        return _fail(
+            "opencode_assistant_response_transcript_missing",
+            "OpenCode returned the assistant marker, but session.messages did not expose it.",
+            provider_session_id=provider_session_id,
+            observed_message_count=len(messages) if isinstance(messages, list) else None,
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+        )
+
+    info = response.get("info") if isinstance(response, dict) else {}
+    tokens = info.get("tokens") if isinstance(info, dict) else None
+    return _status(
+        "pass",
+        provider_session_id=provider_session_id,
+        assistant_message_id=info.get("id") if isinstance(info, dict) else None,
+        provider_id=info.get("providerID") if isinstance(info, dict) else None,
+        model_id=info.get("modelID") if isinstance(info, dict) else None,
+        finish=info.get("finish") if isinstance(info, dict) else None,
+        cost=info.get("cost") if isinstance(info, dict) else None,
+        tokens=tokens,
+        observed_message_count=len(messages) if isinstance(messages, list) else None,
+        message_marker_sha256=hashlib.sha256(marker.encode("utf-8")).hexdigest(),
         elapsed_ms=int((time.monotonic() - started) * 1000),
     )
 
@@ -1194,6 +1359,8 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
             ("/session/{sessionID}/prompt_async", "post", "session.prompt_async"),
             ("/session/{sessionID}/abort", "post", "session.abort"),
         ]
+        if bool(getattr(args, "run_live_token_contract", False)):
+            required_operations.append(("/session/{sessionID}/message", "post", "session.prompt"))
         failures = [
             failure
             for path, method, operation_id in required_operations
@@ -1276,6 +1443,21 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
         if canaries["prompt_async_no_reply_delivery"]["status"] != "pass":
             return {"provider": "opencode", "provider_version": version, "canaries": canaries}
 
+        if bool(getattr(args, "run_live_token_contract", False)):
+            canaries["assistant_response_contract"] = _run_opencode_assistant_response_contract(
+                server_url=server_url,
+                username=username,
+                password=password,
+                provider_session_id=provider_session_id,
+                workspace=workspace,
+                timeout_secs=int(getattr(args, "live_token_timeout_secs", 120) or 120),
+            )
+        else:
+            canaries["assistant_response_contract"] = _status(
+                "not_run",
+                reason="Pass --run-live-token-contract to spend tokens and prove assistant response execution.",
+            )
+
         abort_result = _request_json(
             server_url=server_url,
             username=username,
@@ -1293,14 +1475,25 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
             )
             return {"provider": "opencode", "provider_version": version, "canaries": canaries}
         canaries["session_abort"] = _status("pass", provider_session_id=provider_session_id)
-        canaries["prompt_async_execution_contract"] = _status(
-            "not_run",
-            reason=(
-                "OpenCode no-token live canary proves prompt_async noReply delivery into session.messages; "
-                "scheduled live-token evidence must prove assistant response execution, transcript binding, "
-                "active-turn abort, and process-restart reattach."
-            ),
-        )
+        if canaries.get("assistant_response_contract", {}).get("status") == "pass":
+            canaries["prompt_async_execution_contract"] = _status(
+                "pass",
+                canary="assistant_response_contract",
+                reason="Live-token assistant response execution and transcript binding passed.",
+            )
+            canaries["active_turn_abort_and_reattach_contract"] = _status(
+                "not_run",
+                reason="Future live-token evidence still must prove active-turn abort and process-restart reattach.",
+            )
+        else:
+            canaries["prompt_async_execution_contract"] = _status(
+                "not_run",
+                reason=(
+                    "OpenCode no-token live canary proves prompt_async noReply delivery into session.messages; "
+                    "pass --run-live-token-contract to prove assistant response execution and transcript binding. "
+                    "Remaining future proof must cover active-turn abort and process-restart reattach."
+                ),
+            )
         return {"provider": "opencode", "provider_version": version, "canaries": canaries}
     except Exception as exc:  # noqa: BLE001
         canaries["live_contract"] = _fail(
@@ -1387,6 +1580,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifact", type=Path)
     parser.add_argument("--evidence-root", type=Path)
     parser.add_argument("--wait-ready-secs", type=float, default=15.0)
+    parser.add_argument(
+        "--run-live-token-contract",
+        action="store_true",
+        help="For OpenCode, spend a small model call to prove assistant response execution.",
+    )
+    parser.add_argument("--live-token-timeout-secs", type=int, default=120)
     parser.add_argument("--json", action="store_true")
     return parser
 
@@ -1401,6 +1600,10 @@ def run_provider_live_canary(args: argparse.Namespace | Mapping[str, Any]) -> di
         args.evidence_root = Path(args.evidence_root).expanduser()
     if args.artifact is not None:
         args.artifact = Path(args.artifact).expanduser()
+    if not hasattr(args, "run_live_token_contract"):
+        args.run_live_token_contract = False
+    if not hasattr(args, "live_token_timeout_secs"):
+        args.live_token_timeout_secs = 120
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     evidence_root = args.evidence_root or _default_evidence_root(args.repo_root, args.provider, timestamp)
     artifact_path = args.artifact or evidence_root / "provider-live-canary.json"

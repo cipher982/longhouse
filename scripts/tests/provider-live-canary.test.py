@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -29,6 +30,7 @@ import base64
 import http.server
 import json
 import os
+import re
 import signal
 import sys
 from urllib.parse import urlparse
@@ -77,7 +79,10 @@ def make_doc():
         "/global/health": {"get": {"operationId": "global.health"}},
         "/session": {"post": {"operationId": "session.create"}},
         "/session/{sessionID}": {"get": {"operationId": "session.get"}},
-        "/session/{sessionID}/message": {"get": {"operationId": "session.messages"}},
+        "/session/{sessionID}/message": {
+            "get": {"operationId": "session.messages"},
+            "post": {"operationId": "session.prompt"},
+        },
         "/session/{sessionID}/prompt_async": {"post": prompt_async_operation},
         "/session/{sessionID}/abort": {"post": {"operationId": "session.abort"}},
     }
@@ -85,6 +90,8 @@ def make_doc():
         paths.pop("/session/{sessionID}/prompt_async")
     if os.environ.get("FAKE_OPENCODE_OMIT_MESSAGES") == "1":
         paths.pop("/session/{sessionID}/message")
+    if os.environ.get("FAKE_OPENCODE_OMIT_MESSAGE_POST") == "1":
+        paths["/session/{sessionID}/message"].pop("post")
     return {"openapi": "3.1.0", "paths": paths}
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -123,6 +130,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json({"id": provider_session_id})
             return
         if parsed.path == f"/session/{provider_session_id}/message":
+            has_assistant = any((item.get("info") or {}).get("role") == "assistant" for item in messages)
+            if os.environ.get("FAKE_OPENCODE_MESSAGE_GET_500") == "1" and has_assistant:
+                self._json({"error": "boom"}, 500)
+                return
             self._json(messages)
             return
         self._json({"error": "not found"}, 404)
@@ -152,6 +163,43 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     "parts": payload.get("parts") or [],
                 })
             self._empty()
+            return
+        if parsed.path == f"/session/{provider_session_id}/message":
+            if os.environ.get("FAKE_OPENCODE_MESSAGE_POST_500") == "1":
+                self._json({"error": "boom"}, 500)
+                return
+            length = int(self.headers.get("Content-Length") or "0")
+            body = self.rfile.read(length) if length else b"{}"
+            payload = json.loads(body.decode("utf-8") or "{}")
+            prompt_text = " ".join(
+                str(part.get("text") or "")
+                for part in payload.get("parts") or []
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+            match = re.search(r"LONGHOUSE_OPENCODE_LIVE_[0-9a-f]+", prompt_text)
+            marker = match.group(0) if match else "missing-marker"
+            response_text = "wrong-marker" if os.environ.get("FAKE_OPENCODE_BAD_ASSISTANT_MARKER") == "1" else marker
+            user_message = {
+                "info": {"id": "msg_fake_live_user", "sessionID": provider_session_id, "role": "user"},
+                "parts": payload.get("parts") or [],
+            }
+            assistant_message = {
+                "info": {
+                    "id": "msg_fake_live_assistant",
+                    "sessionID": provider_session_id,
+                    "role": "assistant",
+                    "providerID": "fake",
+                    "modelID": "fake-model",
+                    "finish": "stop",
+                    "cost": 0.001,
+                    "tokens": {"input": 1, "output": 1, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+                },
+                "parts": [{"type": "text", "text": response_text}],
+            }
+            messages.append(user_message)
+            if os.environ.get("FAKE_OPENCODE_DROP_ASSISTANT_TRANSCRIPT") != "1":
+                messages.append(assistant_message)
+            self._json(assistant_message)
             return
         if parsed.path == f"/session/{provider_session_id}/abort":
             if os.environ.get("FAKE_OPENCODE_EMPTY_ABORT") == "1":
@@ -295,7 +343,12 @@ raise SystemExit(2)
     )
 
 
-def _run_canary(root: Path, fake_bin: Path, extra_env: dict[str, str] | None = None):
+def _run_canary(
+    root: Path,
+    fake_bin: Path,
+    extra_env: dict[str, str] | None = None,
+    extra_args: list[str] | None = None,
+):
     artifact = root / "artifact.json"
     env = os.environ.copy()
     if extra_env:
@@ -315,6 +368,7 @@ def _run_canary(root: Path, fake_bin: Path, extra_env: dict[str, str] | None = N
             "--evidence-root",
             str(root / "evidence"),
             "--json",
+            *(extra_args or []),
         ],
         cwd=REPO_ROOT,
         env=env,
@@ -607,6 +661,26 @@ def test_opencode_live_canary_fails_when_noreply_schema_is_missing() -> None:
         assert failures[0]["property"] == "noReply"
 
 
+def test_opencode_live_token_contract_fails_when_message_post_schema_is_missing() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_opencode(root / "bin" / "opencode")
+        result, payload = _run_canary(
+            root,
+            fake_bin,
+            {"FAKE_OPENCODE_OMIT_MESSAGE_POST": "1"},
+            extra_args=["--run-live-token-contract"],
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "opencode_schema_probe_failed"
+        failures = payload["canaries"]["schema_probe"]["failures"]
+        assert failures[0]["failure_code"] == "opencode_schema_missing_path"
+        assert failures[0]["expected"] == "session.prompt"
+        assert payload["operation_evidence"]["send_input"]["canary"] == "opencode_prompt_schema"
+
+
 def test_opencode_live_canary_accepts_empty_successful_abort_response() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -647,6 +721,102 @@ def test_opencode_live_canary_fails_when_prompt_async_delivery_is_not_observed()
         assert payload["operation_evidence"]["send_input"]["level"] == "none"
 
 
+def test_opencode_live_token_contract_proves_assistant_response_but_stays_yellow() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_opencode(root / "bin" / "opencode")
+        result, payload = _run_canary(root, fake_bin, extra_args=["--run-live-token-contract"])
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["verdict"] == "yellow"
+        assert payload["failure_code"] == "insufficient_coverage"
+        assert payload["canaries"]["assistant_response_contract"]["status"] == "pass"
+        assert payload["canaries"]["prompt_async_execution_contract"]["status"] == "pass"
+        assert payload["canaries"]["active_turn_abort_and_reattach_contract"]["status"] == "not_run"
+        assert payload["operation_evidence"]["send_input"]["status"] == "pass"
+        assert payload["operation_evidence"]["send_input"]["level"] == "manual_live_token"
+        assert payload["operation_evidence"]["send_input"]["canary"] == "opencode_assistant_response_contract"
+        assert payload["operation_evidence"]["transcript_binding"]["status"] == "pass"
+        assert payload["operation_evidence"]["transcript_binding"]["level"] == "manual_live_token"
+        serialized = json.dumps(payload)
+        assert "Reply with exactly this token" not in serialized
+
+
+def test_opencode_live_token_contract_failure_is_send_input_evidence() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_opencode(root / "bin" / "opencode")
+        result, payload = _run_canary(
+            root,
+            fake_bin,
+            {"FAKE_OPENCODE_BAD_ASSISTANT_MARKER": "1"},
+            extra_args=["--run-live-token-contract"],
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "opencode_assistant_response_marker_missing"
+        assert payload["canaries"]["assistant_response_contract"]["status"] == "fail"
+        assert payload["operation_evidence"]["send_input"]["status"] == "fail"
+        assert payload["operation_evidence"]["send_input"]["level"] == "none"
+        assert payload["operation_evidence"]["send_input"]["failure_code"] == "opencode_assistant_response_marker_missing"
+
+
+def test_opencode_live_token_contract_reports_post_request_failure() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_opencode(root / "bin" / "opencode")
+        result, payload = _run_canary(
+            root,
+            fake_bin,
+            {"FAKE_OPENCODE_MESSAGE_POST_500": "1"},
+            extra_args=["--run-live-token-contract"],
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "opencode_assistant_response_request_failed"
+        assert payload["canaries"]["assistant_response_contract"]["request_phase"] == "post_session_message"
+        assert payload["canaries"]["session_abort"]["status"] == "pass"
+        assert payload["operation_evidence"]["interrupt"]["status"] == "pass"
+
+
+def test_opencode_live_token_contract_reports_get_messages_failure() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_opencode(root / "bin" / "opencode")
+        result, payload = _run_canary(
+            root,
+            fake_bin,
+            {"FAKE_OPENCODE_MESSAGE_GET_500": "1"},
+            extra_args=["--run-live-token-contract"],
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "opencode_assistant_response_request_failed"
+        assert payload["canaries"]["assistant_response_contract"]["request_phase"] == "get_session_messages"
+        assert payload["canaries"]["session_abort"]["status"] == "pass"
+
+
+def test_opencode_live_token_contract_reports_transcript_missing() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_opencode(root / "bin" / "opencode")
+        result, payload = _run_canary(
+            root,
+            fake_bin,
+            {"FAKE_OPENCODE_DROP_ASSISTANT_TRANSCRIPT": "1"},
+            extra_args=["--run-live-token-contract"],
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "opencode_assistant_response_transcript_missing"
+        assert payload["canaries"]["assistant_response_contract"]["status"] == "fail"
+        assert payload["canaries"]["session_abort"]["status"] == "pass"
+
+
 def main() -> int:
     tests = [
         test_opencode_live_canary_stays_yellow_until_prompt_execution_is_proven,
@@ -662,9 +832,15 @@ def main() -> int:
         test_opencode_live_canary_fails_when_schema_drops_prompt_async,
         test_opencode_live_canary_fails_when_schema_drops_session_messages,
         test_opencode_live_canary_fails_when_noreply_schema_is_missing,
+        test_opencode_live_token_contract_fails_when_message_post_schema_is_missing,
         test_opencode_live_canary_accepts_empty_successful_abort_response,
         test_opencode_live_canary_reports_prompt_async_request_failure_on_send_input,
         test_opencode_live_canary_fails_when_prompt_async_delivery_is_not_observed,
+        test_opencode_live_token_contract_proves_assistant_response_but_stays_yellow,
+        test_opencode_live_token_contract_failure_is_send_input_evidence,
+        test_opencode_live_token_contract_reports_post_request_failure,
+        test_opencode_live_token_contract_reports_get_messages_failure,
+        test_opencode_live_token_contract_reports_transcript_missing,
     ]
     for test in tests:
         test()

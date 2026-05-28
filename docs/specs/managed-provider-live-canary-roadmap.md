@@ -169,10 +169,12 @@ gate by itself.
    `opencode serve --hostname 127.0.0.1 --port 0 --pure`, `/global/health`,
    `/doc`, session create, attach `--help` command shape, `prompt_async`
    noReply delivery through `session.messages`, and abort are checked without
-   relying on a visible terminal or model tokens. A later token-spending lane
-   must verify assistant response execution before the provider-live verdict can
-   be Green; the current lane proves user-message delivery and therefore still
-   stays Yellow.
+   relying on a visible terminal or model tokens. The opt-in
+   `--run-live-token-contract` lane spends a small model call and proves
+   assistant response execution plus transcript binding. The provider-live
+   verdict still stays Yellow until future evidence also proves active-turn
+   abort and process-restart reattach; no scheduled OpenCode token-spending
+   lane exists until we add an explicit budgeted Sauron/CI job.
 4. Extend the Antigravity canary from its current yellow state -- real `agy`
    version/help/plugin validate/install/list plus Longhouse global-hook config
    proof -- to loop-level hook behavior against the upstream runtime.
