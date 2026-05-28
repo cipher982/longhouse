@@ -35,6 +35,7 @@ from zerg.models.user import User
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
+from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_inputs import INPUT_STATUS_CANCELLED
@@ -206,6 +207,82 @@ def _stub_dispatch(monkeypatch, *, emit_verified_user_event: bool = False):
     return calls
 
 
+class _AutoCompletingMachineWebSocket:
+    def __init__(self):
+        self.sent: list[dict[str, object]] = []
+
+    async def send_json(self, message):
+        self.sent.append(message)
+        await get_machine_control_channel_registry().complete_command(
+            {
+                "type": "command_result",
+                "command_id": message["command_id"],
+                "ok": True,
+                "result": {
+                    "exit_code": 0,
+                    "stdout": "",
+                    "stderr": "",
+                    "turn_id": "antigravity-turn-1",
+                },
+            }
+        )
+
+
+async def _clear_machine_control_registry() -> None:
+    await get_machine_control_channel_registry().clear_for_tests()
+
+
+async def _register_fake_machine_control(
+    *,
+    owner_id: int,
+    supports: list[str],
+) -> _AutoCompletingMachineWebSocket:
+    websocket = _AutoCompletingMachineWebSocket()
+    await get_machine_control_channel_registry().register(
+        owner_id=owner_id,
+        device_id="cinder",
+        machine_name="cinder",
+        engine_build="test-engine",
+        supports=supports,
+        websocket=websocket,
+    )
+    return websocket
+
+
+def _seed_antigravity_session(session_local):
+    from zerg.models.agents import SessionConnection
+    from zerg.models.agents import SessionRun
+    from zerg.models.agents import SessionRuntimeState
+    from zerg.models.agents import SessionThread
+
+    session_id, user_id = _seed_live_session(session_local)
+    with session_local() as db:
+        session = db.query(AgentSession).filter_by(id=session_id).one()
+        session.provider = "antigravity"
+        session.managed_transport = "antigravity_hook_inbox"
+        session.source_runner_id = None
+        session.source_runner_name = None
+        db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).delete(
+            synchronize_session=False
+        )
+        thread = (
+            db.query(SessionThread).filter(SessionThread.session_id == session.id, SessionThread.is_primary == 1).one()
+        )
+        thread.provider = "antigravity"
+        run = db.query(SessionRun).filter(SessionRun.thread_id == thread.id, SessionRun.ended_at.is_(None)).one()
+        run.provider = "antigravity"
+        conn = db.query(SessionConnection).filter(SessionConnection.run_id == run.id).one()
+        conn.control_plane = "antigravity_hook_inbox"
+        conn.can_send_input = 1
+        conn.can_interrupt = 0
+        conn.can_terminate = 0
+        conn.can_tail_output = 1
+        conn.can_resume = 0
+        db.commit()
+        _seed_live_runtime_state(db, session)
+    return session_id, user_id
+
+
 def test_session_input_api_schema_exposes_typed_lifecycle_contract():
     from zerg.routers.session_chat import QueuedInputSummary
     from zerg.routers.session_chat import SessionInputRequest
@@ -323,6 +400,68 @@ def test_auto_input_links_session_turn_to_verified_user_event(monkeypatch, tmp_p
             assert event.content_text == "linked from ios"
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
+        api_app_ref.dependency_overrides = {}
+
+
+def test_antigravity_auto_input_routes_through_machine_control(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_antigravity_session(session_local)
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=user_id, supports=["antigravity.send"]))
+
+    class FailingRunnerDispatcher:
+        async def dispatch_job(self, **_kwargs):
+            raise AssertionError("Antigravity send must use Machine Agent control, not legacy runner dispatch")
+
+    monkeypatch.setattr(
+        "zerg.services.managed_control_dispatcher.get_runner_job_dispatcher",
+        lambda: FailingRunnerDispatcher(),
+    )
+    monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_lock_release", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        "zerg.services.session_chat_impl._schedule_managed_local_active_phase_observation",
+        lambda **_kwargs: None,
+    )
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        resp = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "ship through agy hooks", "intent": "auto", "client_request_id": "agy-send-1"},
+        )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["outcome"] == "sent"
+        assert body["intent"] == "auto"
+        assert len(websocket.sent) == 1
+        frame = websocket.sent[0]
+        assert frame["command_type"] == "session.send_text"
+        assert frame["session_id"] == str(session_id)
+        assert str(frame["command_id"]).startswith(f"managed-control:{session_id}:session.send_text:")
+        assert frame["payload"] == {
+            "provider": "antigravity",
+            "text": "ship through agy hooks",
+        }
+
+        with session_local() as db:
+            session = db.query(AgentSession).filter_by(id=session_id).one()
+            assert session.source_runner_id is None
+            row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
+            assert row.status == INPUT_STATUS_DELIVERED
+            assert row.client_request_id == "agy-send-1"
+            turn = (
+                db.query(SessionTurn)
+                .filter(SessionTurn.session_id == session_id, SessionTurn.request_id == row.delivery_request_id)
+                .one()
+            )
+            assert turn.session_input_id == row.id
+            assert turn.send_accepted_at is not None
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+        asyncio.run(_clear_machine_control_registry())
         api_app_ref.dependency_overrides = {}
 
 
@@ -851,6 +990,37 @@ def test_intent_steer_requires_steerable_capability(monkeypatch, tmp_path):
         detail = resp.json()["detail"]
         assert detail["error_code"] == "steer_unsupported"
     finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_antigravity_steer_intent_is_rejected_before_machine_control(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_antigravity_session(session_local)
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=user_id, supports=["antigravity.send"]))
+
+    async def fail_steer(**_kwargs):
+        raise AssertionError("Antigravity does not advertise steer and must reject before dispatch")
+
+    monkeypatch.setattr(
+        "zerg.services.managed_local_control.steer_text_to_managed_local_session",
+        fail_steer,
+    )
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        resp = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "mid-turn change", "intent": "steer"},
+        )
+        assert resp.status_code == 409, resp.text
+        detail = resp.json()["detail"]
+        assert detail["error_code"] == "steer_unsupported"
+        assert websocket.sent == []
+    finally:
+        asyncio.run(_clear_machine_control_registry())
         api_app_ref.dependency_overrides = {}
 
 
