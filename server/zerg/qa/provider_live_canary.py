@@ -364,15 +364,6 @@ def _opencode_operation_evidence(
         )
         if transcript_binding:
             evidence["transcript_binding"] = transcript_binding
-    elif canaries.get("schema_probe", {}).get("status") == "pass":
-        evidence["send_input"] = _operation_entry(
-            contract,
-            "send_input",
-            status="pass",
-            canary="opencode_prompt_async_schema",
-            canaries=["schema_probe"],
-            message=_OPENCODE_PROMPT_ASYNC_MESSAGE,
-        )
 
     interrupt_failure = _schema_probe_failed_for(canaries, "/session/{sessionID}/abort", "session.abort")
     if interrupt_failure:
