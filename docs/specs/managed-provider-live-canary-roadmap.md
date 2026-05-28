@@ -1,8 +1,8 @@
 # Managed Provider Live Canary Roadmap
 
-Status: Draft
+Status: Current contract
 Owner: Machine Agent + managed provider CLI surfaces
-Updated: 2026-05-27
+Updated: 2026-05-28
 Related: `managed-provider-control-matrix.md`, `provider-cli-contracts-and-codex-release-canaries.md`
 
 ## Purpose
@@ -14,31 +14,7 @@ provider surface Longhouse depends on.
 This document defines the missing layer: real upstream release probes and the
 promotion rules for full provider support.
 
-## Current Dogfood Evidence
-
-Local versions observed on David's machine:
-
-| Provider | Local Version | Installed Control Family |
-| --- | --- | --- |
-| Codex | `codex-cli 0.134.0` | app server bridge |
-| Claude Code | `2.1.152` | native channel / MCP bridge |
-| OpenCode | `1.15.11` | local HTTP server bridge |
-| Antigravity | `1.0.2` | hook inbox |
-
-Dogfood health on 2026-05-27 proves operation advertisement but not full
-shipping health. The control channel advertised:
-
-```text
-codex: send, interrupt, steer, launch, continue
-claude: send, interrupt, steer, launch
-opencode: send, interrupt, launch
-antigravity: send
-```
-
-The Antigravity send advertisement was later corrected: the hook-inbox
-implementation exists, but `antigravity.send` stays unadvertised until a real
-upstream `agy` loop proof shows queued input is claimed and honored through
-`injectSteps`.
+## Shipping Shape
 
 Provider release status is interpreted against the installed local version.
 Newer upstream artifacts remain visible as candidate release status, but do
@@ -144,78 +120,25 @@ itself. Shared provider release-profile artifacts must include top-level
 operation evidence so each unsupported operation, source-reviewed operation,
 and missing live release proof is machine-readable.
 
-## Next Implementation Slices
+## Implemented Proof Loop
 
-1. Add a provider live-canary dispatcher that can run one provider or all
-   providers and emit one local live-proof artifact per provider. The
-   dispatcher covers Claude, OpenCode, and Antigravity; the repo script
-   `scripts/qa/provider-live-canary.py` is a wrapper for source-checkout jobs.
-   `longhouse provider-live publish` runs the shared canaries on a
-   dogfood machine and publishes stable sidecars under
-   `LONGHOUSE_PROVIDER_LIVE_PROOF_DIR` or the default
-   `~/.longhouse/provider-live-proof` for local-health to consume;
-   `scripts/qa/provider-live-proof-publish.py` is now a repo wrapper around the
-   packaged publisher. `make dogfood-refresh` runs the publisher before its
-   final local-health snapshot; `make dogfood-check` stays read-only and reports
-   the latest sidecars. The publisher creates the directory on first write;
-   reader precedence is explicit env, persisted provider-status config, then
-   the Longhouse-home default.
-2. Extend the Claude lane beyond the initial no-token checks. The current lane
-   proves binary identity, redacted auth shape, required launch/session flags,
-   development-channel tagged server parsing, and macOS PTY wrapper
-   availability without spending provider tokens. Scheduled release-canary
-   evidence owns continuous proof of provider execution, transcript binding,
-   and active-turn steer.
-   The operator live POC at `make managed-claude-poc` can now run an optional
-   delayed `intent=steer` injection with `ARGS="--steer-text ..."` and requires
-   the assistant transcript to contain the expected steered response. The same
-   PTY/channel/probe loop belongs to the explicit release-canary lane, not the
-   daily provider-live publisher. That lane splits channel launch, channel
-   prompt delivery, provider execution, and active-turn steer so provider-side
-   auth/API failures do not get misclassified as Longhouse channel failures.
-   Idle steer rejection and interrupt remain optional-skipped live-provider
-   contracts until they have their own repeatable upstream proof. Detached
-   remote launch still needs a repeatable live gate against a healthy Runtime
-   Host.
-3. Extend the OpenCode server probe from the initial no-token lane. It is the
-   lowest-risk live canary:
-   `opencode serve --hostname 127.0.0.1 --port 0 --pure`, `/global/health`,
-   `/doc`, session create, attach `--help` command shape, `prompt_async`
-   noReply delivery through `session.messages`, process-restart session
-   recovery, and abort are checked without relying on a visible terminal or
-   model tokens. Assistant response execution, transcript binding, and abort
-   during an in-flight message turn belong to the explicit release-canary lane,
-   not the default provider-live publisher.
-4. Keep the Antigravity release-canary lane scoped to send: real `agy`
-   version/help/plugin validate/install/list, Longhouse global-hook config,
-   and loop-level hook behavior against the upstream runtime.
-5. Continue promoting the packaged Codex release canary inside the same local
-   proof feed without deleting its Codex-specific app-server checks.
-6. Use the Machine Agent control channel as the release-runner bridge for
-   provider-capable machines. Runtime Host exposes
-   `POST /api/agents/machines/{device_id}/provider-live-proof`, which dispatches
-   the typed `provider.live_proof` command only to machines that advertise
-   `{provider}.live_proof`. This keeps Sauron and other release automation out
-   of the provider-binary business while still giving them structured
-   no-token artifacts from a real user-owned machine. Release automation
-   should pass `expected_provider_version` for upstream release gates; mismatches
-   are typed application-level conflicts, not green evidence or generic upstream
-   5xx responses, and Runtime Host prevents duplicate in-flight live proofs for
-   the same owner/device/provider. `make dogfood-refresh` now runs the
-   repeatable hosted route proof after publishing local sidecars; it defaults to
-   `auto`, meaning every current valid provider live-proof sidecar is routed
-   through the hosted machine API, and writes the latest route artifact to
-   `~/.longhouse/provider-live-route-e2e/latest.json`. `longhouse local-health`
-   and `longhouse doctor` surface that route proof separately from the local
-   provider sidecars, including coverage so partial provider route proof is
-   visible. Dogfood treats non-red provider verdicts as valid route evidence;
-   yellow provider-readiness remains visible in the sidecar/local-health
-   provider status. `make provider-live-route-e2e` exposes the same harness
-   directly and can run `PROVIDER_LIVE_ROUTE_PROVIDER=all` when the machine
-   should fail hard unless every launch-scope provider has a fresh sidecar. The
-   route harness retries transient hosted dispatch failures per provider, but
-   keeps typed provider-version mismatches and real provider verdict failures
-   strict.
+`longhouse provider-live publish` runs the shared no-token live canaries for
+Claude, OpenCode, and Antigravity, then publishes stable local sidecars under
+`LONGHOUSE_PROVIDER_LIVE_PROOF_DIR` or the default
+`~/.longhouse/provider-live-proof`. Codex stays in its dedicated release canary
+lane because its app-server/TUI bridge proof is provider-specific.
+
+`POST /api/agents/machines/{device_id}/provider-live-proof` dispatches the
+typed `provider.live_proof` command only to machines advertising
+`{provider}.live_proof`. Release automation can pass
+`expected_provider_version`; mismatches are typed application conflicts.
+Runtime Host also deduplicates in-flight proofs per owner/device/provider.
+
+`make dogfood-refresh` publishes local sidecars, runs hosted route proof through
+the Runtime Host -> Machine Agent path, and writes the latest route artifact to
+`~/.longhouse/provider-live-route-e2e/latest.json`. `longhouse local-health`
+and `longhouse doctor` display local provider proof and hosted-route proof as
+separate signals.
 
 ## Reference Surfaces
 

@@ -356,7 +356,7 @@ managed-claude-poc: ## Launch one managed Claude channel POC and capture truth a
 	@./scripts/ops/run-managed-claude-poc.py $(ARGS)
 
 PROVIDER_LIVE_ROUTE_PROVIDER ?= auto
-provider-live-route-e2e: ## Hosted Machine Agent provider-live route E2E (PROVIDER_LIVE_ROUTE_PROVIDER=auto|opencode|all)
+provider-live-route-e2e: ## Hosted Machine Agent provider-live route E2E (PROVIDER_LIVE_ROUTE_PROVIDER=auto|provider|all)
 	@./scripts/qa/provider-live-route-e2e.py --provider "$(PROVIDER_LIVE_ROUTE_PROVIDER)" $(ARGS)
 
 qa-unmanaged: ## Local smoke for bare Claude/Codex compatibility ingest

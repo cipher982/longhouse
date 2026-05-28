@@ -38,7 +38,6 @@ EVIDENCE_RANK = {
     "live_no_token": 3,
     "live_token": 4,
 }
-_LEVEL_BY_RANK = {rank: level for level, rank in EVIDENCE_RANK.items()}
 _RELEASE_GAP_STATUSES = {"fail", "missing", "not_run", "skipped", "stale"}
 
 

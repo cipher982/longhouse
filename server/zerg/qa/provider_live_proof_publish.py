@@ -12,8 +12,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
-import sys
 from collections.abc import Mapping
 from datetime import UTC
 from datetime import datetime
@@ -21,15 +19,15 @@ from pathlib import Path
 from typing import Any
 
 from zerg.provider_live_proof import configured_provider_live_proof_dir
+from zerg.qa.provider_live_canary import SUPPORTED_PROVIDERS as SHARED_LIVE_PROOF_PROVIDERS
 from zerg.qa.provider_live_canary import default_repo_root
 from zerg.qa.provider_live_canary import run_provider_live_canary
 from zerg.services.longhouse_paths import resolve_longhouse_home
 
-DEFAULT_PROVIDERS = ("claude", "opencode", "antigravity")
+DEFAULT_PROVIDERS = SHARED_LIVE_PROOF_PROVIDERS
 SUPPORTED_PROVIDERS = DEFAULT_PROVIDERS
 PROVIDER_STATUS_SCHEMA_VERSION = 1
 LIVE_PROOF_ARTIFACT_KIND = "provider_live_canary"
-CANARY_SCRIPT_HELP = "Debug/test override for the provider-live canary executable."
 
 
 def _default_proof_dir() -> Path:
@@ -55,14 +53,6 @@ def _timestamp() -> str:
     return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
 
 
-def _read_artifact(path: Path) -> dict[str, Any] | None:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
 def _write_artifact(path: Path, artifact: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
@@ -80,8 +70,6 @@ def _fallback_artifact(
     artifact_path: Path,
     evidence_root: Path,
     returncode: int | None,
-    stdout: str = "",
-    stderr: str = "",
     failure_code: str,
     message: str,
 ) -> dict[str, Any]:
@@ -102,8 +90,6 @@ def _fallback_artifact(
                 "message": message,
                 "artifact_path": str(artifact_path),
                 "returncode": returncode,
-                "stdout": stdout[-4000:],
-                "stderr": stderr[-4000:],
             }
         },
         "evidence_root": str(evidence_root),
@@ -129,79 +115,6 @@ def _publish_result(
         "artifact_path": str(artifact.get("artifact_path") or artifact_path),
         "stable_path": str(stable_path),
     }
-
-
-def _run_canary_script(
-    *,
-    args: argparse.Namespace,
-    provider: str,
-    canary_script: Path,
-    evidence_root: Path,
-    artifact_path: Path,
-) -> tuple[int | None, dict[str, Any], bool]:
-    if not canary_script.exists():
-        artifact = _fallback_artifact(
-            provider=provider,
-            artifact_path=artifact_path,
-            evidence_root=evidence_root,
-            returncode=None,
-            failure_code="live_canary_script_missing",
-            message=f"provider live canary script missing at {canary_script}",
-        )
-        _write_artifact(artifact_path, artifact)
-        return None, artifact, True
-
-    argv = [
-        sys.executable,
-        str(canary_script),
-        "--repo-root",
-        str(args.repo_root),
-        "--provider",
-        provider,
-        "--evidence-root",
-        str(evidence_root),
-        "--artifact",
-        str(artifact_path),
-        "--json",
-    ]
-    try:
-        result = subprocess.run(
-            argv,
-            cwd=str(args.repo_root),
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=args.timeout_s,
-        )
-    except subprocess.TimeoutExpired as exc:
-        artifact = _fallback_artifact(
-            provider=provider,
-            artifact_path=artifact_path,
-            evidence_root=evidence_root,
-            returncode=None,
-            stdout=str(exc.stdout or ""),
-            stderr=str(exc.stderr or ""),
-            failure_code="live_canary_timeout",
-            message=f"provider live canary timed out after {args.timeout_s}s",
-        )
-        _write_artifact(artifact_path, artifact)
-        return None, artifact, True
-
-    artifact = _read_artifact(artifact_path)
-    if artifact is None:
-        artifact = _fallback_artifact(
-            provider=provider,
-            artifact_path=artifact_path,
-            evidence_root=evidence_root,
-            returncode=result.returncode,
-            stdout=result.stdout,
-            stderr=result.stderr,
-            failure_code="live_canary_failed_to_emit_artifact",
-            message=f"provider live canary exited {result.returncode} without writing artifact",
-        )
-        _write_artifact(artifact_path, artifact)
-        return result.returncode, artifact, True
-    return result.returncode, artifact, False
 
 
 def _run_packaged_canary(
@@ -244,21 +157,12 @@ def _publish_provider(args: argparse.Namespace, provider: str, run_timestamp: st
     stable_path = args.proof_dir / f"{provider}.json"
     evidence_root.mkdir(parents=True, exist_ok=True)
 
-    if args.canary_script is None:
-        returncode, artifact, used_fallback = _run_packaged_canary(
-            args=args,
-            provider=provider,
-            evidence_root=evidence_root,
-            artifact_path=artifact_path,
-        )
-    else:
-        returncode, artifact, used_fallback = _run_canary_script(
-            args=args,
-            provider=provider,
-            canary_script=args.canary_script,
-            evidence_root=evidence_root,
-            artifact_path=artifact_path,
-        )
+    returncode, artifact, used_fallback = _run_packaged_canary(
+        args=args,
+        provider=provider,
+        evidence_root=evidence_root,
+        artifact_path=artifact_path,
+    )
 
     return _publish_result(
         provider=provider,
@@ -281,9 +185,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--proof-dir", type=Path, default=None)
     parser.add_argument("--evidence-root", type=Path)
-    parser.add_argument("--canary-script", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--wait-ready-secs", type=float, default=15.0)
-    parser.add_argument("--timeout-s", type=float, default=120.0)
     parser.add_argument("--json", action="store_true")
     return parser
 
@@ -297,7 +199,6 @@ def run_provider_live_proof_publish(args: argparse.Namespace | Mapping[str, Any]
     args.proof_dir = args.proof_dir or _default_proof_dir()
     args.proof_dir = args.proof_dir.expanduser().resolve()
     args.evidence_root = (args.evidence_root or _default_evidence_base(args.repo_root)).expanduser().resolve()
-    args.canary_script = None if args.canary_script is None else Path(args.canary_script).expanduser().resolve()
     providers = tuple(args.provider or DEFAULT_PROVIDERS)
     run_timestamp = _timestamp()
 
