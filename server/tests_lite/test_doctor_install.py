@@ -102,12 +102,20 @@ def test_check_provider_support_reports_capability_axes(monkeypatch):
                         "capabilities": {"live_control_operations": ["send", "steer"]},
                         "proof": {"minimum_evidence_level": "source_review"},
                         "version_readiness": {"state": "no_artifact"},
+                        "live_proof": {
+                            "status": "ok",
+                            "version_match": "match",
+                            "freshness_status": "fresh",
+                            "verdict": "yellow",
+                            "failure_code": "insufficient_coverage",
+                        },
                     },
                     "opencode": {
                         "state": "provider_cli_missing",
                         "capabilities": {"live_control_operations": []},
                         "proof": {"minimum_evidence_level": "live_no_token"},
                         "version_readiness": {"state": "not_configured"},
+                        "live_proof": {"status": "not_configured"},
                     },
                 }
             }
@@ -119,9 +127,44 @@ def test_check_provider_support_reports_capability_axes(monkeypatch):
 
     assert labels["claude managed support ready"].status == doctor_cli.PASS
     assert labels["claude managed support ready"].detail == (
-        "live=send, steer; proof_min=source_review; version=no_artifact"
+        "live=send, steer; proof_min=source_review; version=no_artifact; "
+        "local_proof=ok,version=match,freshness=fresh,verdict=yellow,failure=insufficient_coverage"
     )
     assert labels["opencode managed support provider_cli_missing"].status == doctor_cli.WARN
+
+
+def test_check_provider_support_warns_on_stale_local_live_proof(monkeypatch):
+    monkeypatch.setattr(
+        "zerg.services.local_health.collect_local_health",
+        lambda: {
+            "provider_support_state": {
+                "providers": {
+                    "codex": {
+                        "state": "ready",
+                        "capabilities": {"live_control_operations": ["send", "interrupt"]},
+                        "proof": {"minimum_evidence_level": "hermetic"},
+                        "version_readiness": {"state": "installed_release_reviewed"},
+                        "live_proof": {
+                            "status": "stale",
+                            "version_match": "match",
+                            "freshness_status": "stale",
+                            "verdict": "yellow",
+                        },
+                    }
+                }
+            }
+        },
+    )
+
+    results = doctor_cli._check_provider_support()
+
+    assert len(results) == 1
+    assert results[0].status == doctor_cli.WARN
+    assert results[0].label == "codex managed support ready"
+    assert results[0].detail == (
+        "live=send, interrupt; proof_min=hermetic; version=installed_release_reviewed; "
+        "local_proof=stale,version=match,freshness=stale,verdict=yellow"
+    )
 
 
 def test_check_config_does_not_flag_hosted_machine_state_as_local_url_drift(tmp_path, monkeypatch):
