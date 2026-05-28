@@ -128,11 +128,14 @@ Claude, OpenCode, and Antigravity, then publishes stable local sidecars under
 `~/.longhouse/provider-live-proof`. Codex stays in its dedicated release canary
 lane because its app-server/TUI bridge proof is provider-specific.
 
-Antigravity's shared live proof includes binary/help shape, plugin
+Antigravity's shared no-token live proof includes binary/help shape, plugin
 validate/install/list, global hook config, and a script-level hook-inbox claim
-cycle for `PreInvocation`, `PostInvocation`, and `Stop`. That proves the
-Longhouse hook contract but does not advertise `antigravity.send`; promotion
-still requires a real `agy` loop proof showing upstream honors `injectSteps`.
+cycle for `PreInvocation`, `PostInvocation`, and `Stop`. The send promotion is
+owned by the explicit release canary:
+`scripts/qa/provider-control-e2e-canary.py --provider antigravity --antigravity-real-agy-send`.
+That canary spends a real `agy --print` turn and only passes when a marker that
+is absent from the prompt is injected through `PreInvocation` and appears in the
+model-visible response.
 
 `POST /api/agents/machines/{device_id}/provider-live-proof` dispatches the
 typed `provider.live_proof` command only to machines advertising

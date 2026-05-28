@@ -168,10 +168,9 @@ def _live_canary_profile(provider: str) -> tuple[str, str]:
             "longhouse provider-live canary --provider opencode owns the live server schema/session/abort canary.",
         ),
         "antigravity": (
-            "antigravity_hook_inbox_live_contract",
-            "longhouse provider-live canary --provider antigravity owns the live agy version/help/plugin "
-            "validate/install/list canary plus Longhouse global-hook config proof; "
-            "release canaries prove real loop-level hook injection.",
+            "antigravity_real_agy_send",
+            "scripts/qa/provider-control-e2e-canary.py --provider antigravity --antigravity-real-agy-send "
+            "owns real agy loop-level PreInvocation hook-inbox injection proof.",
         ),
     }
     return profiles.get(provider, ("provider_live_contract", "No live canary profile registered."))

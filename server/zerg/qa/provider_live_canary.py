@@ -1532,7 +1532,8 @@ def _run_antigravity_hook_inbox_contract(root: Path) -> dict[str, Any]:
         post_claim_event=post_claim.get("hook_event"),
         note=(
             "Longhouse hook-inbox mechanics passed in an isolated script-level proof; "
-            "real agy loop proof is still required before advertising antigravity.send."
+            "real agy send promotion is owned by "
+            "scripts/qa/provider-control-e2e-canary.py --provider antigravity --antigravity-real-agy-send."
         ),
     )
 
