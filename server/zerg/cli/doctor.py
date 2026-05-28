@@ -630,6 +630,8 @@ def _check_provider_support() -> list[CheckResult]:
         version = dict(info.get("version_readiness") or {})
         live_proof = dict(info.get("live_proof") or {})
         live_ops = ", ".join(str(item) for item in list(capabilities.get("live_control_operations") or [])) or "-"
+        missing_live_items = list(capabilities.get("missing_live_control_operations") or [])
+        missing_live_ops = ", ".join(str(item) for item in missing_live_items)
         minimum_level = str(proof.get("minimum_evidence_level") or "-")
         release_failed_ops = ", ".join(str(item) for item in list(proof.get("release_failed_operations") or []))
         release_gap_ops = ", ".join(str(item) for item in list(proof.get("release_gap_operations") or []))
@@ -639,6 +641,8 @@ def _check_provider_support() -> list[CheckResult]:
         state = str(info.get("state") or "unknown")
         live_proof_detail = _provider_live_proof_detail(live_proof)
         detail = f"live={live_ops}; proof_min={minimum_level}; version={version_state}; local_proof={live_proof_detail}"
+        if missing_live_ops:
+            detail = f"{detail}; missing_live={missing_live_ops}"
         if release_failed_ops:
             detail = f"{detail}; release_failed={release_failed_ops}"
         elif release_gap_ops:
@@ -647,7 +651,7 @@ def _check_provider_support() -> list[CheckResult]:
             detail = f"{detail}; local_proof_failed={local_failed_ops}"
         elif local_gap_ops:
             detail = f"{detail}; local_proof_gaps={local_gap_ops}"
-        if state in {"blocked", "provider_cli_missing"}:
+        if state in {"blocked", "provider_cli_missing", "live_control_not_connected", "live_control_partial"}:
             results.append(CheckResult(WARN, f"{provider} managed support {state}", detail))
         elif state == "needs_attention":
             results.append(CheckResult(WARN, f"{provider} managed support needs attention", detail))

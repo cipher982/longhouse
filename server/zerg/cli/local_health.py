@@ -148,10 +148,13 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
             proof = dict(info.get("proof") or {})
             version = dict(info.get("version_readiness") or {})
             live_ops = list(capabilities.get("live_control_operations") or [])
+            missing_live_ops = list(capabilities.get("missing_live_control_operations") or [])
             supported_ops = list(capabilities.get("supported_operations") or [])
             typer.echo(f"  {provider}: {info.get('state') or '-'}")
             if live_ops:
                 typer.echo(f"    live: {', '.join(str(item) for item in live_ops)}")
+            if missing_live_ops:
+                typer.echo(f"    missing live: {', '.join(str(item) for item in missing_live_ops)}")
             if supported_ops:
                 typer.echo(f"    contract: {', '.join(str(item) for item in supported_ops)}")
             if proof:

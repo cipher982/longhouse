@@ -2681,6 +2681,50 @@ def test_local_health_command_prints_launch_warnings(monkeypatch, tmp_path: Path
     assert "service_generation_mismatch" in result.output
 
 
+def test_local_health_render_prints_missing_provider_live_control(capsys):
+    local_health_cli._render_snapshot(
+        {
+            "severity": "green",
+            "headline": "Longhouse shipping healthy",
+            "health_state": "healthy",
+            "service": {"status": "running", "platform": "macos"},
+            "engine_status": {
+                "path": "/tmp/engine-status.json",
+                "exists": True,
+                "age_seconds": 0,
+                "payload": {},
+            },
+            "outbox": {"path": "/tmp/outbox", "file_count": 0, "oldest_age_seconds": None},
+            "launch_readiness": {"state": "ready", "runner": {}},
+            "provider_support_state": {
+                "providers": {
+                    "claude": {
+                        "state": "live_control_partial",
+                        "capabilities": {
+                            "live_control_operations": ["launch"],
+                            "missing_live_control_operations": ["send", "interrupt", "steer"],
+                            "supported_operations": ["launch_local", "send_input", "interrupt", "steer_active_turn"],
+                        },
+                        "proof": {
+                            "state": "mixed",
+                            "minimum_evidence_level": "source_review",
+                            "minimum_evidence_operations": ["launch_remote"],
+                        },
+                        "version_readiness": {"state": "no_artifact"},
+                    }
+                }
+            },
+        },
+        json_output=False,
+    )
+
+    output = capsys.readouterr().out
+    assert "Provider Support" in output
+    assert "  claude: live_control_partial" in output
+    assert "    live: launch" in output
+    assert "    missing live: send, interrupt, steer" in output
+
+
 def test_collect_local_health_includes_activity_summary(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
