@@ -196,6 +196,13 @@ machine has proven the installed version.
    and loop-level hook behavior against the upstream runtime.
 5. Continue promoting the packaged Codex release canary inside the same local
    proof feed without deleting its Codex-specific app-server checks.
+6. Use the Machine Agent control channel as the release-runner bridge for
+   provider-capable machines. Runtime Host exposes
+   `POST /api/agents/machines/{device_id}/provider-live-proof`, which dispatches
+   the typed `provider.live_proof` command only to machines that advertise
+   `{provider}.live_proof`. This keeps Sauron and other release automation out
+   of the provider-binary business while still giving them structured
+   live-token artifacts from a real user-owned machine.
 
 ## Reference Surfaces
 

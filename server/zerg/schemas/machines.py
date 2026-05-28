@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 from typing import Literal
 
 from pydantic import Field
 
 from zerg.utils.time import UTCBaseModel
+
+ProviderLiveProofProvider = Literal["codex", "claude", "opencode", "antigravity"]
 
 ControlChannelStatus = Literal["connected", "disconnected"]
 LaunchBlockedBy = Literal[
@@ -38,7 +41,7 @@ class MachineDirectoryEntry(UTCBaseModel):
     )
     can_launch_codex: bool = Field(
         ...,
-        description="Compatibility flag for Codex launch readiness. Prefer launchable_providers for provider-agnostic launch.",
+        description=("Compatibility flag for Codex launch readiness. Prefer launchable_providers for provider-agnostic launch."),
     )
     launchable_providers: list[str] = Field(
         default_factory=list,
@@ -60,3 +63,34 @@ class MachineDirectoryEntry(UTCBaseModel):
 
 class MachineDirectoryResponse(UTCBaseModel):
     machines: list[MachineDirectoryEntry] = Field(default_factory=list)
+
+
+class ProviderLiveProofRequest(UTCBaseModel):
+    provider: ProviderLiveProofProvider = Field(..., description="Provider CLI to prove on the target machine.")
+    run_live_token_contract: bool = Field(
+        default=False,
+        description="When true, spend provider/model calls to prove token-backed behavior.",
+    )
+    publish: bool = Field(
+        default=True,
+        description="Publish the proof into the machine's stable local sidecar before returning it.",
+    )
+    live_token_timeout_secs: int = Field(
+        default=120,
+        ge=1,
+        le=600,
+        description="Provider turn timeout passed to the live-token canary lane.",
+    )
+    timeout_secs: int | None = Field(
+        default=None,
+        ge=1,
+        le=900,
+        description=("Optional provider-live process timeout. When omitted, the Machine Agent uses a provider-aware default."),
+    )
+
+
+class ProviderLiveProofResponse(UTCBaseModel):
+    device_id: str = Field(..., description="Machine that executed the proof.")
+    provider: ProviderLiveProofProvider = Field(..., description="Provider that was proved.")
+    command_id: str = Field(..., description="Machine-control command id.")
+    result: dict[str, Any] = Field(..., description="Structured provider-live result returned by the Machine Agent.")
