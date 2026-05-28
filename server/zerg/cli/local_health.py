@@ -194,6 +194,9 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
                 typer.echo(f"    version: local={current_version} artifact={artifact_version}")
             if info.get("failure_code"):
                 typer.echo(f"    failure: {info.get('failure_code')}")
+            override = dict(info.get("local_live_proof_override") or {})
+            if override:
+                typer.echo(f"    advisory: {override.get('reason') or 'local live proof suppresses release warning'}")
             if info.get("evidence_root"):
                 typer.echo(f"    evidence: {info.get('evidence_root')}")
 

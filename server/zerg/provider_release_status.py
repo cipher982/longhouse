@@ -33,6 +33,8 @@ PROVIDER_LIVE_PROOF_DIR_ENV = "LONGHOUSE_PROVIDER_LIVE_PROOF_DIR"
 PROVIDER_STATUS_SCHEMA_VERSION = 1
 DEFAULT_PROVIDER_RELEASE_STATUS_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
+_LOCAL_PROOF_SUPPRESSED_FAILURE_CODES = {"insufficient_coverage"}
+_LOCAL_PROOF_DEMOTABLE_OPERATION_STATUSES = {"missing", "not_run", "skipped", "stale"}
 _CONFIG_KEYS = (
     PROVIDER_RELEASE_STATUS_DIR_ENV,
     PROVIDER_RELEASE_STATUS_URL_ENV,
@@ -409,6 +411,102 @@ def _status_for_provider(provider: str, provider_cli: dict[str, Any]) -> dict[st
     }
 
 
+def _is_blocking_release_status(info: dict[str, Any]) -> bool:
+    return info.get("risk") == "blocking" or info.get("status") == "blocked"
+
+
+def _is_warning_release_status(info: dict[str, Any]) -> bool:
+    return info.get("risk") == "warning"
+
+
+def _local_live_proof_suppresses_release_warning(
+    release_info: dict[str, Any],
+    live_proof_info: dict[str, Any],
+) -> bool:
+    if _is_blocking_release_status(release_info):
+        return False
+    if release_info.get("risk") != "warning":
+        return False
+    if str(release_info.get("failure_code") or "").strip() not in _LOCAL_PROOF_SUPPRESSED_FAILURE_CODES:
+        return False
+    if str(release_info.get("verdict") or "").strip().lower() != "yellow":
+        return False
+    if not live_proof_info.get("applies"):
+        return False
+    if str(live_proof_info.get("status") or "").strip() != "ok":
+        return False
+    if str(live_proof_info.get("verdict") or "").strip().lower() != "green":
+        return False
+    if str(live_proof_info.get("version_match") or "").strip() != "match":
+        return False
+    return str(live_proof_info.get("freshness_status") or "").strip() == "fresh"
+
+
+def _advisory_operation_evidence_for_local_proof(raw_operation_evidence: Any) -> dict[str, Any]:
+    operation_evidence = dict(raw_operation_evidence or {})
+    if not operation_evidence:
+        return {}
+    advisory_evidence: dict[str, Any] = {}
+    for operation, raw_info in operation_evidence.items():
+        info = dict(raw_info or {})
+        status = str(info.get("status") or "").strip()
+        if status in _LOCAL_PROOF_DEMOTABLE_OPERATION_STATUSES:
+            info["original_status"] = status
+            info["status"] = "advisory"
+            info["advisory"] = True
+            info.setdefault("failure_code", "insufficient_coverage")
+        advisory_evidence[operation] = info
+    return advisory_evidence
+
+
+def reconcile_provider_release_status_with_live_proof(
+    provider_release_status: dict[str, Any],
+    provider_live_proof: dict[str, Any],
+) -> dict[str, Any]:
+    """Use fresh green local proof to demote advisory coverage gaps.
+
+    Sauron release artifacts remain the upstream release-safety feed. A local
+    machine can still prove that its installed provider CLI is healthy enough
+    for current Longhouse operations. Only ``yellow/insufficient_coverage`` is
+    suppressible this way; red release blockers and real artifact failures stay
+    dominant.
+    """
+
+    statuses = dict(provider_release_status.get("statuses") or {})
+    live_statuses = dict(provider_live_proof.get("statuses") or {})
+    reconciled_statuses: dict[str, Any] = {}
+    advisory_count = 0
+    for provider, raw_info in statuses.items():
+        info = dict(raw_info or {})
+        live_info = dict(live_statuses.get(provider) or {})
+        if _local_live_proof_suppresses_release_warning(info, live_info):
+            original_status = info.get("status")
+            original_risk = info.get("risk")
+            info["status"] = "caution_local_proven"
+            info["risk"] = "none"
+            info["operation_evidence"] = _advisory_operation_evidence_for_local_proof(info.get("operation_evidence"))
+            info["local_live_proof_override"] = {
+                "reason": "release_coverage_gap_locally_proven",
+                "original_status": original_status,
+                "original_risk": original_risk,
+                "live_proof_status": live_info.get("status"),
+                "live_proof_verdict": live_info.get("verdict"),
+                "live_proof_generated_at": live_info.get("generated_at"),
+                "live_proof_evidence_root": live_info.get("evidence_root"),
+            }
+            advisory_count += 1
+        reconciled_statuses[provider] = info
+
+    blocking_count = sum(1 for item in reconciled_statuses.values() if _is_blocking_release_status(dict(item or {})))
+    warning_count = sum(1 for item in reconciled_statuses.values() if _is_warning_release_status(dict(item or {})))
+    reconciled = dict(provider_release_status)
+    reconciled["statuses"] = reconciled_statuses
+    reconciled["blocking_count"] = blocking_count
+    reconciled["warning_count"] = warning_count
+    reconciled["advisory_count"] = advisory_count
+    return reconciled
+
+
 def collect_provider_release_status(
     provider_clis: dict[str, Any],
     *,
@@ -429,8 +527,8 @@ def collect_provider_release_status(
     for provider in providers:
         statuses[provider] = _status_for_provider(provider, dict(provider_clis.get(provider) or {}))
 
-    blocking_count = sum(1 for item in statuses.values() if item.get("risk") == "blocking")
-    warning_count = sum(1 for item in statuses.values() if item.get("risk") == "warning")
+    blocking_count = sum(1 for item in statuses.values() if _is_blocking_release_status(dict(item or {})))
+    warning_count = sum(1 for item in statuses.values() if _is_warning_release_status(dict(item or {})))
     enabled = any(item.get("configured") for item in statuses.values())
     return {
         "schema_version": PROVIDER_STATUS_SCHEMA_VERSION,

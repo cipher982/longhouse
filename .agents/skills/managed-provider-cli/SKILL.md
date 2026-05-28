@@ -105,6 +105,10 @@ Hard Codex contract:
    - `~/.longhouse/runtimes/codex`
 4. Verify the wrapper is launching the provider binary directly, not a Longhouse-owned payload.
 5. If stale Codex runtime artifacts exist, prefer the existing local runtime cleanup path over ad hoc deletion.
+6. Treat Sauron provider release status and local provider live proof as
+   separate feeds. Fresh green local proof can demote
+   `yellow/insufficient_coverage` to advisory-only for local health, but it
+   never suppresses red release blockers.
 
 ### Debug Codex Bridge Failures
 

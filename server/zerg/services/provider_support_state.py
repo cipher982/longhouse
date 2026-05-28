@@ -225,6 +225,8 @@ def _release_evidence_summary(
         "generated_at": release_evidence.get("generated_at") or release_info.get("generated_at"),
         "canary": release_evidence.get("canary"),
         "canaries": release_evidence.get("canaries"),
+        "advisory": release_evidence.get("advisory"),
+        "original_status": release_evidence.get("original_status"),
     }
 
 
@@ -298,7 +300,8 @@ def _proof_summary(
             release_gap_operations.append(operation)
         elif evidence_state == "local_proof_gap":
             local_proof_gap_operations.append(operation)
-    local_proof_verdict_failed = bool(live_proof_info.get("applies")) and str(live_proof_info.get("verdict") or "").lower() == "red"
+    local_proof_verdict = str(live_proof_info.get("verdict") or "").lower()
+    local_proof_verdict_failed = bool(live_proof_info.get("applies")) and local_proof_verdict == "red"
     # Keep release failures dominant, then local failures, then incomplete
     # evidence. Passing evidence is ranked earlier per operation.
     if release_failed_operations:
@@ -344,6 +347,8 @@ def _version_readiness(release_info: Mapping[str, Any]) -> dict[str, Any]:
         state = "installed_release_needs_attention"
     elif status == "candidate_newer_than_local":
         state = "candidate_release_pending_review"
+    elif status == "caution_local_proven":
+        state = "release_coverage_gap_locally_proven"
     elif status == "ok":
         state = "installed_release_reviewed"
     elif status == "no_artifact":
@@ -361,6 +366,7 @@ def _version_readiness(release_info: Mapping[str, Any]) -> dict[str, Any]:
         "artifact_version": release_info.get("artifact_version"),
         "artifact_version_delta": release_info.get("artifact_version_delta"),
         "failure_code": release_info.get("failure_code"),
+        "local_live_proof_override": release_info.get("local_live_proof_override"),
         "evidence_root": release_info.get("evidence_root"),
     }
 
