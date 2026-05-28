@@ -25,8 +25,9 @@ launch, attach, and Machine Agent remote launch cannot drift apart.
 
 ## Drift Detection
 
-`scripts/qa/provider-live-canary.py --provider claude` must probe the installed
-Claude binary for this exact development-channel launch shape. The no-token
-canary does not prove model execution or live steering; scheduled live-token
-evidence still owns detached launch, active-turn steer delivery, idle steer
-rejection, interrupt, and reattach.
+`longhouse provider-live canary --provider claude` must probe the installed
+Claude binary for this exact development-channel launch shape. The repo script
+`scripts/qa/provider-live-canary.py` is a wrapper around that packaged canary.
+The no-token canary does not prove model execution or live steering; scheduled
+live-token evidence still owns detached launch, active-turn steer delivery, idle
+steer rejection, interrupt, and reattach.

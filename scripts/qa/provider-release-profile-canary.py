@@ -142,16 +142,16 @@ def live_canary_placeholder(provider: str) -> dict[str, Any]:
         ),
         "claude": (
             "claude_channel_live_contract",
-            "scripts/qa/provider-live-canary.py --provider claude owns the no-token binary/auth/channel-shape canary; "
+            "longhouse provider-live canary --provider claude owns the no-token binary/auth/channel-shape canary; "
             "detached launch and active-turn steer still need live evidence.",
         ),
         "opencode": (
             "opencode_server_live_contract",
-            "scripts/qa/provider-live-canary.py --provider opencode owns the live server schema/session/abort canary.",
+            "longhouse provider-live canary --provider opencode owns the live server schema/session/abort canary.",
         ),
         "antigravity": (
             "antigravity_hook_inbox_live_contract",
-            "scripts/qa/provider-live-canary.py --provider antigravity owns the live agy version/help/plugin "
+            "longhouse provider-live canary --provider antigravity owns the live agy version/help/plugin "
             "validate/install/list canary plus Longhouse global-hook config proof; real loop-level hook injection "
             "still needs live evidence.",
         ),

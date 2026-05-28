@@ -31,6 +31,7 @@ from zerg.cli.onboard import onboard
 from zerg.cli.opencode import opencode
 from zerg.cli.opencode_bridge import app as opencode_bridge_app
 from zerg.cli.opencode_channel import app as opencode_channel_app
+from zerg.cli.provider_live import app as provider_live_app
 from zerg.cli.runtime_artifact_smoke import runtime_artifact_install_command
 from zerg.cli.runtime_artifact_smoke import runtime_artifact_smoke_command
 from zerg.cli.serve import serve
@@ -251,6 +252,7 @@ app.add_typer(antigravity_channel_app, name="antigravity-channel", help="Antigra
 app.add_typer(codex_app, name="codex")
 app.add_typer(local_health_app, name="local-health")
 app.add_typer(machine_app, name="machine", help="Machine runtime repair and reconciliation")
+app.add_typer(provider_live_app, name="provider-live", help="Managed-provider live proof canaries")
 
 for command in (serve, status, claude, wall, peers, message, tail, auth, ship, recall):
     app.command()(command)
