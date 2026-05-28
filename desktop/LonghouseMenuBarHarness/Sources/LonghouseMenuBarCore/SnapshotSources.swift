@@ -1,4 +1,5 @@
 import Foundation
+import Dispatch
 
 public protocol HealthSnapshotSource: Sendable {
     func load() throws -> HealthSnapshot
@@ -31,20 +32,30 @@ public struct FixtureHealthSnapshotSource: HealthSnapshotSource {
 }
 
 public struct CLIHealthSnapshotSource: HealthSnapshotSource {
+    public static let defaultCommandTimeoutSeconds: TimeInterval = 20
+
     public let launchPath: String
     public let arguments: [String]
+    public let commandTimeoutSeconds: TimeInterval
     let currentBundlePath: String?
 
     public init() {
         let invocation = LonghouseCLI.defaultHealthInvocation()
         self.launchPath = invocation.launchPath
         self.arguments = invocation.arguments
+        self.commandTimeoutSeconds = Self.defaultCommandTimeoutSeconds
         self.currentBundlePath = nil
     }
 
-    public init(launchPath: String, arguments: [String], currentBundlePath: String? = nil) {
+    public init(
+        launchPath: String,
+        arguments: [String],
+        commandTimeoutSeconds: TimeInterval = Self.defaultCommandTimeoutSeconds,
+        currentBundlePath: String? = nil
+    ) {
         self.launchPath = launchPath
         self.arguments = arguments
+        self.commandTimeoutSeconds = commandTimeoutSeconds
         self.currentBundlePath = currentBundlePath
     }
 
@@ -59,15 +70,44 @@ public struct CLIHealthSnapshotSource: HealthSnapshotSource {
         process.arguments = arguments
         process.environment = LonghouseCLI.environment(prependingExecutablePath: launchPath)
 
-        let stdout = Pipe()
-        let stderr = Pipe()
+        let stdoutURL = Self.temporaryOutputURL(suffix: "stdout")
+        let stderrURL = Self.temporaryOutputURL(suffix: "stderr")
+        FileManager.default.createFile(atPath: stdoutURL.path, contents: nil)
+        FileManager.default.createFile(atPath: stderrURL.path, contents: nil)
+
+        let stdout = try FileHandle(forWritingTo: stdoutURL)
+        let stderr = try FileHandle(forWritingTo: stderrURL)
+        defer {
+            try? FileManager.default.removeItem(at: stdoutURL)
+            try? FileManager.default.removeItem(at: stderrURL)
+        }
+
         process.standardOutput = stdout
         process.standardError = stderr
-        try process.run()
-        process.waitUntilExit()
+        let didExit = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in
+            didExit.signal()
+        }
+        do {
+            try process.run()
+        } catch {
+            try? stdout.close()
+            try? stderr.close()
+            throw error
+        }
+        if didExit.wait(timeout: .now() + commandTimeoutSeconds) == .timedOut {
+            process.terminate()
+            _ = didExit.wait(timeout: .now() + 2)
+            try? stdout.close()
+            try? stderr.close()
+            throw SnapshotSourceError.commandFailed("Longhouse status snapshot timed out after \(Int(commandTimeoutSeconds))s")
+        }
 
-        let output = stdout.fileHandleForReading.readDataToEndOfFile()
-        let errorOutput = stderr.fileHandleForReading.readDataToEndOfFile()
+        try? stdout.close()
+        try? stderr.close()
+
+        let output = try Data(contentsOf: stdoutURL)
+        let errorOutput = try Data(contentsOf: stderrURL)
         guard process.terminationStatus == 0 else {
             let message = String(data: errorOutput, encoding: .utf8) ?? "Longhouse status snapshot failed"
             if shouldSynthesizeSetupRequiredSnapshot(message: message, terminationStatus: process.terminationStatus) {
@@ -76,6 +116,11 @@ public struct CLIHealthSnapshotSource: HealthSnapshotSource {
             throw SnapshotSourceError.commandFailed(message)
         }
         return try HealthSnapshotDecoder.decode(data: output)
+    }
+
+    private static func temporaryOutputURL(suffix: String) -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("longhouse-health-\(UUID().uuidString)-\(suffix)")
     }
 
     private func shouldSynthesizeSetupRequiredSnapshot(message: String, terminationStatus: Int32) -> Bool {

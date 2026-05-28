@@ -142,17 +142,24 @@ public final class SnapshotStore: ObservableObject {
     }
 
     public func staleCachedSnapshotFailureMessage(relativeTo referenceDate: Date) -> String? {
-        guard let snapshot, let loadError else {
+        guard let snapshot else {
             return nil
         }
         guard let collectedAt = snapshot.collectedAtDate else {
-            return "Longhouse status is stale. Refresh failed: \(loadError)"
+            if let loadError {
+                return "Longhouse status is stale. Refresh failed: \(loadError)"
+            }
+            return "Longhouse status is stale. The latest snapshot is missing a timestamp."
         }
-        guard referenceDate.timeIntervalSince(collectedAt) > Self.staleCacheFailureSeconds else {
+        let snapshotAgeSeconds = referenceDate.timeIntervalSince(collectedAt)
+        guard snapshotAgeSeconds > Self.staleCacheFailureSeconds else {
             return nil
         }
         let age = snapshot.snapshotAgeCompactLabel(relativeTo: referenceDate)
-        return "Longhouse status is stale. Last successful update was \(age) ago. Refresh failed: \(loadError)"
+        if let loadError {
+            return "Longhouse status is stale. Last successful update was \(age) ago. Refresh failed: \(loadError)"
+        }
+        return "Longhouse status is stale. Last successful update was \(age) ago. Refresh has not produced a fresh snapshot."
     }
 
     private func startRefresh(reason: SnapshotRefreshReason) {

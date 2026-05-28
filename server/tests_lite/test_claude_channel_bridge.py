@@ -95,6 +95,7 @@ def test_build_claude_channel_exec_command_uses_development_channel_flag():
 
     assert "--dangerously-load-development-channels server:longhouse-channel" in command
     assert "--channels server:longhouse-channel" not in command
+    assert "LONGHOUSE_CHANNEL_CWD=/tmp/demo" in command
 
 
 def test_claude_channel_bridge_emits_channel_notification_after_init(tmp_path):
@@ -122,6 +123,8 @@ def test_claude_channel_bridge_emits_channel_notification_after_init(tmp_path):
             "bridge-test-token",
             "--claude-pid",
             str(os.getpid()),
+            "--cwd",
+            str(server_cwd),
         ],
         cwd=str(server_cwd),
         stdin=subprocess.PIPE,
@@ -169,6 +172,7 @@ def test_claude_channel_bridge_emits_channel_notification_after_init(tmp_path):
         assert state["session_id"] == session_id
         assert state["provider_session_id"] == provider_session_id
         assert state["auth_token"] == "bridge-test-token"
+        assert state["cwd"] == str(server_cwd)
         assert state["ready"] is True
         assert build_claude_channel_state_file(session_id=session_id, state_root=state_root).exists()
 

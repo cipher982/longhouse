@@ -24,15 +24,15 @@ For menu bar/dashboard information architecture work, treat the harness as a **m
 ## Commands
 
 ```bash
-make menubar-harness-full       # one-shot loop: test, render, smoke, manifest
-make menubar-harness-test       # build + Swift tests
-make menubar-harness-fixtures   # render healthy/degraded/broken PNGs
-make menubar-harness-live       # render live local-health PNG
-make menubar-harness-smoke      # boot both app shells and dry-run all controls
-make menubar-harness-xcuitest   # generate the Xcode wrapper and run macOS XCUITests
-make menubar-harness-window     # launch as a normal window
-make menubar-harness-menubar    # launch as a real menu bar extra
-make test-install-macos-ambient # full disposable installer smoke for engine + menu bar on local macOS
+make menubar-harness MODE=full            # one-shot loop: test, render, smoke, manifest
+make menubar-harness MODE=test            # build + Swift tests
+make menubar-harness MODE=render-fixtures # render healthy/degraded/broken PNGs
+make menubar-harness MODE=snapshot-live   # render live local-health PNG
+make menubar-harness MODE=smoke           # boot both app shells and dry-run all controls
+make menubar-harness MODE=xcuitest        # generate the Xcode wrapper and run macOS XCUITests
+make menubar-harness MODE=window-live     # launch as a normal live window
+make menubar-harness MODE=menubar-live    # launch as a real live menu bar extra
+make test-install-macos-ambient           # full disposable installer smoke for engine + menu bar on local macOS
 ```
 
 ## Artifacts

@@ -99,7 +99,8 @@ def install_claude_channel_mcp_server(
             if project_mcp_servers.pop(CLAUDE_CHANNEL_SERVER_NAME, None) is not None:
                 removed_from.append(str(project_key))
         if removed_from:
-            actions.append(f"Removed project-local MCP server {CLAUDE_CHANNEL_SERVER_NAME} from {len(removed_from)} Claude project(s)")
+            message = "Removed project-local MCP server " f"{CLAUDE_CHANNEL_SERVER_NAME} from {len(removed_from)} Claude project(s)"
+            actions.append(message)
 
     if actions:
         _write_json_object(user_config_path, settings)
@@ -130,7 +131,8 @@ def build_claude_channel_state_file(
         normalized = str(UUID(normalized))
     except ValueError as exc:
         raise ValueError("session_id must be a valid UUID") from exc
-    return resolve_claude_channel_state_root(state_root=state_root, claude_dir=claude_dir) / "sessions" / f"{normalized}.json"
+    state_root_path = resolve_claude_channel_state_root(state_root=state_root, claude_dir=claude_dir)
+    return state_root_path / "sessions" / f"{normalized}.json"
 
 
 def read_claude_channel_state(
@@ -213,6 +215,7 @@ def build_claude_channel_exec_command(
         *build_managed_session_env_exports(longhouse_sid),
         f"export LONGHOUSE_CHANNEL_SESSION_ID={_quote(longhouse_sid)}",
         f"export LONGHOUSE_PROVIDER_SESSION_ID={_quote(provider_sid)}",
+        f"export LONGHOUSE_CHANNEL_CWD={_quote(working_dir)}",
     ]
     if hook_url:
         inner.append(f"export LONGHOUSE_HOOK_URL={_quote(str(hook_url).strip())}")

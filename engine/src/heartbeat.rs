@@ -652,6 +652,7 @@ fn resolved_managed_claude_session(
     obs: Option<&ClaudeChannelObservation>,
 ) -> ResolvedLocalSession {
     let provider_session_id = obs.and_then(|obs| obs.provider_session_id.clone());
+    let cwd = obs.and_then(|obs| obs.cwd.clone());
     let process_pid = obs.and_then(|obs| obs.claude_pid);
     let mut join_keys = vec![format!("session_id={}", lease.session_id)];
     if let Some(provider_session_id) = provider_session_id.as_deref() {
@@ -673,7 +674,7 @@ fn resolved_managed_claude_session(
         tool_name: lease.tool_name.clone(),
         phase_observed_at: Some(lease.observed_at.clone()),
         last_activity_at: Some(lease.observed_at.clone()),
-        workspace: ResolvedWorkspace::default(),
+        workspace: workspace_from_cwd(cwd),
         process: ResolvedProcess {
             pid: process_pid,
             process_start_time: None,
@@ -1476,6 +1477,7 @@ mod tests {
             session_id: session_id.to_string(),
             provider_session_id: Some(session_id.to_string()),
             state_file: PathBuf::from("/tmp/live.json"),
+            cwd: Some("/Users/test/git/zeta".to_string()),
             claude_pid: Some(123),
             bridge_pid: Some(124),
             ready: true,
@@ -1487,6 +1489,7 @@ mod tests {
             session_id: "19b68f98-1e31-458e-b78a-6dfd062ead75".to_string(),
             provider_session_id: None,
             state_file: PathBuf::from("/tmp/dead.json"),
+            cwd: None,
             claude_pid: Some(223),
             bridge_pid: Some(224),
             ready: true,
@@ -1628,6 +1631,7 @@ mod tests {
             session_id: "managed-claude".to_string(),
             provider_session_id: Some("claude-provider-session".to_string()),
             state_file: PathBuf::from("/tmp/managed-claude.json"),
+            cwd: None,
             claude_pid: Some(321),
             bridge_pid: Some(322),
             ready: true,
@@ -1736,6 +1740,49 @@ mod tests {
             .join_keys
             .iter()
             .any(|key| key == "source_path=/tmp/claude-unmanaged.jsonl"));
+    }
+
+    #[test]
+    fn resolved_sessions_project_managed_claude_workspace_from_channel_observation() {
+        use crate::managed_claude_scan::ClaudeChannelObservation;
+
+        let obs = ClaudeChannelObservation {
+            session_id: "managed-claude".to_string(),
+            provider_session_id: Some("claude-provider-session".to_string()),
+            state_file: PathBuf::from("/tmp/managed-claude.json"),
+            cwd: Some("/Users/test/git/zeta".to_string()),
+            claude_pid: Some(321),
+            bridge_pid: Some(322),
+            ready: true,
+            updated_at: "2026-05-07T20:03:50Z".to_string(),
+            claude_alive: true,
+            bridge_alive: true,
+        };
+        let lease = ManagedSessionLease {
+            session_id: "managed-claude".to_string(),
+            provider: "claude".to_string(),
+            machine_id: "cinder".to_string(),
+            sequence: 1,
+            state: "attached".to_string(),
+            phase: Some("thinking".to_string()),
+            tool_name: None,
+            bridge_status: Some("ready".to_string()),
+            thread_subscription_status: None,
+            observed_at: "2026-05-05T12:00:00Z".to_string(),
+            lease_ttl_ms: 900_000,
+        };
+
+        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[obs]);
+
+        assert_eq!(sessions.len(), 1);
+        let session = &sessions[0];
+        assert_eq!(session.provider, "claude");
+        assert_eq!(session.control_path, "managed");
+        assert_eq!(session.workspace.label.as_deref(), Some("zeta"));
+        assert_eq!(
+            session.workspace.cwd.as_deref(),
+            Some("/Users/test/git/zeta")
+        );
     }
 
     #[test]

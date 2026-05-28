@@ -2,8 +2,8 @@
 //!
 //! Walks `~/.claude/channels/longhouse/sessions/*.json` and reports the
 //! process facts needed for the engine heartbeat. The state file contains a
-//! session-scoped channel token, so this module deliberately emits only pid and
-//! readiness metadata.
+//! session-scoped channel token, so this module deliberately emits only pid,
+//! cwd, and readiness metadata.
 
 use std::collections::HashMap;
 use std::fs;
@@ -18,6 +18,7 @@ pub struct ClaudeChannelObservation {
     pub session_id: String,
     pub provider_session_id: Option<String>,
     pub state_file: PathBuf,
+    pub cwd: Option<String>,
     pub claude_pid: Option<u32>,
     pub bridge_pid: Option<u32>,
     pub ready: bool,
@@ -30,6 +31,7 @@ pub struct ClaudeChannelObservation {
 struct ClaudeChannelStateFile {
     session_id: Option<String>,
     provider_session_id: Option<String>,
+    cwd: Option<String>,
     claude_pid: Option<u32>,
     bridge_pid: Option<u32>,
     ready: Option<bool>,
@@ -114,11 +116,18 @@ fn collect_observations_from_with_processes(
         let bridge_alive = state
             .bridge_pid
             .is_some_and(|pid| claude_channel_bridge_alive(process_commands, pid));
+        let cwd = state.cwd.or_else(|| {
+            state
+                .claude_pid
+                .filter(|_| claude_alive)
+                .and_then(process_cwd)
+        });
 
         out.push(ClaudeChannelObservation {
             session_id,
             provider_session_id: state.provider_session_id,
             state_file: path,
+            cwd,
             claude_pid: state.claude_pid,
             bridge_pid: state.bridge_pid,
             ready: state.ready.unwrap_or(false),
@@ -142,6 +151,47 @@ fn claude_channel_bridge_alive(process_commands: &HashMap<u32, String>, pid: u32
         command.contains("longhouse")
             && command.contains("claude-channel")
             && command.contains("serve")
+    })
+}
+
+fn process_cwd(pid: u32) -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        fs::read_link(format!("/proc/{pid}/cwd"))
+            .ok()
+            .map(|path| path.display().to_string())
+            .filter(|path| !path.trim().is_empty())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        process_cwd_via_lsof(pid)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn process_cwd_via_lsof(pid: u32) -> Option<String> {
+    let output = Command::new("lsof")
+        .args(["-a", "-p", &pid.to_string(), "-d", "cwd", "-Fn"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_lsof_cwd_output(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(any(test, target_os = "macos"))]
+fn parse_lsof_cwd_output(output: &str) -> Option<String> {
+    output.lines().find_map(|line| {
+        line.strip_prefix('n')
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(str::to_string)
     })
 }
 
@@ -175,6 +225,7 @@ mod tests {
             br#"{
               "session_id": "09b68f98-1e31-458e-b78a-6dfd062ead75",
               "provider_session_id": "09b68f98-1e31-458e-b78a-6dfd062ead75",
+              "cwd": "/Users/test/git/zerg",
               "auth_token": "do-not-emit",
               "claude_pid": 999999,
               "bridge_pid": 999998,
@@ -195,6 +246,7 @@ mod tests {
         );
         assert_eq!(obs.claude_pid, Some(999999));
         assert_eq!(obs.bridge_pid, Some(999998));
+        assert_eq!(obs.cwd.as_deref(), Some("/Users/test/git/zerg"));
         assert!(obs.ready);
         assert!(!obs.claude_alive);
         assert!(!obs.bridge_alive);
@@ -257,5 +309,13 @@ mod tests {
         assert_eq!(observations.len(), 1);
         assert!(!observations[0].claude_alive);
         assert!(!observations[0].bridge_alive);
+    }
+
+    #[test]
+    fn parses_lsof_cwd_output() {
+        assert_eq!(
+            parse_lsof_cwd_output("p11713\nfcwd\nn/Users/test/git/zeta\n").as_deref(),
+            Some("/Users/test/git/zeta")
+        );
     }
 }
