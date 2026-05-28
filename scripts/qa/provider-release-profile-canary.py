@@ -19,6 +19,19 @@ from pathlib import Path
 from typing import Any
 
 PROVIDER_STATUS_SCHEMA_VERSION = 1
+CONTRACT_OPERATIONS = (
+    "launch_local",
+    "launch_remote",
+    "reattach",
+    "send_input",
+    "interrupt",
+    "steer_active_turn",
+    "terminate",
+    "tail_output",
+    "runtime_phase",
+    "transcript_binding",
+)
+_GAP_OPERATION_STATUSES = {"fail", "missing", "not_run", "skipped", "stale"}
 
 
 def _repo_root_from_script() -> Path:
@@ -134,7 +147,12 @@ def run_contract_profile(args: argparse.Namespace, contract: dict[str, Any]) -> 
     )
 
 
-def live_canary_placeholder(provider: str) -> dict[str, Any]:
+def _manifest_operation_evidence(contract: dict[str, Any], operation: str) -> dict[str, Any]:
+    evidence = (contract.get("operation_evidence") or {}).get(operation)
+    return dict(evidence) if isinstance(evidence, dict) else {}
+
+
+def _live_canary_profile(provider: str) -> tuple[str, str]:
     profiles = {
         "codex": (
             "codex_live_contract",
@@ -156,8 +174,172 @@ def live_canary_placeholder(provider: str) -> dict[str, Any]:
             "--run-live-token-contract proves real loop-level hook injection.",
         ),
     }
-    name, reason = profiles.get(provider, ("provider_live_contract", "No live canary profile registered."))
+    return profiles.get(provider, ("provider_live_contract", "No live canary profile registered."))
+
+
+def live_canary_placeholder(provider: str) -> dict[str, Any]:
+    name, reason = _live_canary_profile(provider)
     return _status("not_run", canary=name, reason=reason)
+
+
+def _operation_entry(
+    contract: dict[str, Any],
+    operation: str,
+    *,
+    status: str,
+    canary: str,
+    level: str | None = None,
+    source: str | None = None,
+    message: str | None = None,
+    failure_code: str | None = None,
+) -> dict[str, Any]:
+    target = _manifest_operation_evidence(contract, operation)
+    if status in _GAP_OPERATION_STATUSES or status == "unsupported":
+        effective_level = level or "none"
+    else:
+        effective_level = level or str(target.get("level") or "none")
+    entry: dict[str, Any] = {
+        "status": status,
+        "level": effective_level,
+        "source": source or target.get("source"),
+        "canary": canary,
+    }
+    if failure_code:
+        entry["failure_code"] = failure_code
+    if message:
+        entry["message"] = message
+    if target.get("next"):
+        entry["next"] = target.get("next")
+    return {key: value for key, value in entry.items() if value is not None}
+
+
+def _unsupported_operation_entry(contract: dict[str, Any], operation: str) -> dict[str, Any]:
+    return _operation_entry(
+        contract,
+        operation,
+        status="unsupported",
+        canary="contract_profile",
+        message="Operation is not supported by this provider contract.",
+    )
+
+
+def _source_review_operation_entry(
+    contract: dict[str, Any],
+    operation: str,
+    *,
+    source_review: dict[str, Any],
+) -> dict[str, Any]:
+    status = str(source_review.get("status") or "not_run")
+    note = str(source_review.get("note") or "")
+    if status in {"pass", "warn"}:
+        return _operation_entry(
+            contract,
+            operation,
+            status=status,
+            canary="source_review",
+            level="source_review",
+            message=note,
+        )
+    if status == "fail":
+        return _operation_entry(
+            contract,
+            operation,
+            status="fail",
+            canary="source_review",
+            level="none",
+            failure_code="source_review_failed",
+            message=note,
+        )
+    return _operation_entry(
+        contract,
+        operation,
+        status="not_run",
+        canary="source_review",
+        level="none",
+        failure_code="insufficient_coverage",
+        message=note,
+    )
+
+
+def build_operation_evidence(
+    provider: str,
+    contract: dict[str, Any],
+    canaries: dict[str, dict[str, Any]],
+    source_review: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    evidence: dict[str, dict[str, Any]] = {}
+    live_canary_name, live_canary_reason = _live_canary_profile(provider)
+    binary_identity = canaries.get("binary_identity") or {}
+    live_contract = canaries.get("live_contract") or {}
+    source_review_status = str(source_review.get("status") or "not_run")
+
+    for operation in CONTRACT_OPERATIONS:
+        manifest_evidence = _manifest_operation_evidence(contract, operation)
+        if not manifest_evidence and operation not in contract:
+            continue
+        if not bool(contract.get(operation)):
+            evidence[operation] = _unsupported_operation_entry(contract, operation)
+            continue
+
+        if binary_identity.get("status") == "fail":
+            evidence[operation] = _operation_entry(
+                contract,
+                operation,
+                status="fail",
+                canary="binary_identity",
+                level="none",
+                failure_code=binary_identity.get("failure_code"),
+                message=binary_identity.get("message"),
+            )
+            continue
+
+        if source_review_status == "fail":
+            evidence[operation] = _source_review_operation_entry(
+                contract,
+                operation,
+                source_review=source_review,
+            )
+            continue
+
+        if str(manifest_evidence.get("level") or "") == "source_review":
+            evidence[operation] = _source_review_operation_entry(
+                contract,
+                operation,
+                source_review=source_review,
+            )
+            continue
+
+        live_status = str(live_contract.get("status") or "not_run")
+        if live_status == "fail":
+            evidence[operation] = _operation_entry(
+                contract,
+                operation,
+                status="fail",
+                canary=str(live_contract.get("canary") or live_canary_name),
+                level="none",
+                failure_code=live_contract.get("failure_code") or "live_contract_failed",
+                message=live_contract.get("message") or live_contract.get("reason") or live_canary_reason,
+            )
+        elif live_status in {"pass", "warn"}:
+            evidence[operation] = _operation_entry(
+                contract,
+                operation,
+                status=live_status,
+                canary=str(live_contract.get("canary") or live_canary_name),
+                source=live_contract.get("message") or live_contract.get("reason"),
+            )
+        else:
+            evidence[operation] = _operation_entry(
+                contract,
+                operation,
+                status="not_run",
+                canary=str(live_contract.get("canary") or live_canary_name),
+                level="none",
+                failure_code="insufficient_coverage",
+                message=live_contract.get("reason") or live_canary_reason,
+            )
+
+    return evidence
 
 
 def classify_artifact(
@@ -239,6 +421,7 @@ def main(argv: list[str] | None = None) -> int:
             "status": args.source_review_status,
             "note": args.source_review_note,
         }
+        operation_evidence = build_operation_evidence(args.provider, contract, canaries, source_review)
         verdict, failure_code, recommendation = classify_artifact(canaries, source_review)
         binary_version = canaries["binary_identity"].get("version")
         artifact = {
@@ -251,6 +434,7 @@ def main(argv: list[str] | None = None) -> int:
             "recommendation": recommendation,
             "source_review": source_review,
             "canaries": canaries,
+            "operation_evidence": operation_evidence,
             "evidence_root": str(evidence_root),
         }
 

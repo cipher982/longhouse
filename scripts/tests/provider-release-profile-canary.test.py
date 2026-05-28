@@ -82,7 +82,22 @@ def test_each_managed_provider_emits_profile_artifact() -> None:
             assert payload["canaries"]["contract_profile"]["operation_evidence"]
             assert payload["canaries"]["binary_identity"]["status"] == "pass"
             assert payload["canaries"]["live_contract"]["status"] == "not_run"
-            assert "operation_evidence" not in payload
+            assert payload["operation_evidence"]["launch_local"]["status"] == "not_run"
+            assert payload["operation_evidence"]["launch_local"]["level"] == "none"
+            assert payload["operation_evidence"]["launch_local"]["failure_code"] == "insufficient_coverage"
+
+            if provider == "claude":
+                assert payload["operation_evidence"]["launch_remote"]["status"] == "pass"
+                assert payload["operation_evidence"]["launch_remote"]["level"] == "source_review"
+                assert payload["operation_evidence"]["launch_remote"]["canary"] == "source_review"
+            if provider == "opencode":
+                assert payload["operation_evidence"]["send_input"]["status"] == "not_run"
+                assert payload["operation_evidence"]["send_input"]["canary"] == "opencode_server_live_contract"
+                assert payload["operation_evidence"]["steer_active_turn"]["status"] == "unsupported"
+            if provider == "antigravity":
+                assert payload["operation_evidence"]["send_input"]["status"] == "not_run"
+                assert payload["operation_evidence"]["send_input"]["canary"] == "antigravity_hook_inbox_live_contract"
+                assert payload["operation_evidence"]["launch_remote"]["status"] == "unsupported"
 
 
 def test_profile_canary_can_use_release_version_without_local_binary() -> None:
@@ -105,6 +120,8 @@ def test_profile_canary_can_use_release_version_without_local_binary() -> None:
         assert payload["provider_version"] == "1.2.3"
         assert payload["canaries"]["binary_identity"]["status"] == "not_run"
         assert payload["verdict"] == "yellow"
+        assert payload["operation_evidence"]["launch_remote"]["status"] == "pass"
+        assert payload["operation_evidence"]["steer_active_turn"]["status"] == "not_run"
 
 
 def test_missing_provider_contract_is_red() -> None:
@@ -135,6 +152,34 @@ def test_missing_provider_binary_is_red() -> None:
         assert result.returncode == 1
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "provider_binary_not_found"
+        assert payload["operation_evidence"]["send_input"]["status"] == "fail"
+        assert payload["operation_evidence"]["send_input"]["failure_code"] == "provider_binary_not_found"
+
+
+def test_source_review_failure_marks_supported_operations_failed() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        binary = _fake_provider(root / "bin" / "claude", "2.1.153")
+        result, payload = _run_canary(
+            root,
+            [
+                "--provider",
+                "claude",
+                "--provider-bin",
+                str(binary),
+                "--source-review-status",
+                "fail",
+                "--source-review-note",
+                "Claude channel entrypoint changed",
+            ],
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "source_review_failed"
+        assert payload["operation_evidence"]["send_input"]["status"] == "fail"
+        assert payload["operation_evidence"]["send_input"]["failure_code"] == "source_review_failed"
+        assert payload["operation_evidence"]["launch_remote"]["status"] == "fail"
 
 
 def main() -> int:
@@ -143,6 +188,7 @@ def main() -> int:
         test_profile_canary_can_use_release_version_without_local_binary,
         test_missing_provider_contract_is_red,
         test_missing_provider_binary_is_red,
+        test_source_review_failure_marks_supported_operations_failed,
     ]
     for test in tests:
         test()
