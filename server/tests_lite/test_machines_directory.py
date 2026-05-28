@@ -229,7 +229,7 @@ def test_directory_does_not_block_opencode_only_launchable_machine(tmp_path):
     assert entries[0].launch_blocked_by is None
 
 
-def test_directory_projects_antigravity_send_without_launchability(tmp_path):
+def test_directory_ignores_unproven_antigravity_send_without_launchability(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user(SessionLocal)
     registry = MachineControlChannelRegistry()
@@ -239,7 +239,7 @@ def test_directory_projects_antigravity_send_without_launchability(tmp_path):
         entries = build_machines_directory(db, owner_id=OWNER_ID, registry=registry)
 
     assert len(entries) == 1
-    assert entries[0].control_operations_by_provider == {"antigravity": ("send",)}
+    assert entries[0].control_operations_by_provider == {}
     assert entries[0].can_launch_codex is False
     assert entries[0].launchable_providers == ()
     assert entries[0].launch_blocked_by == "no_launch_support"

@@ -248,7 +248,7 @@
         },
         "send_input": {
           "level": "hermetic",
-          "source": "Antigravity hook-inbox enqueue/claim tests; real agy loop proof belongs to release canaries",
+          "source": "scripts/qa/provider-control-e2e-canary.py Antigravity hook claim cycle proves PreInvocation/PostInvocation injectSteps plus force_continue",
           "next": "promote when Antigravity release-canary real agy hook-inbox injection exists"
         },
         "interrupt": {
@@ -279,7 +279,7 @@
           "next": "promote with real agy transcript assertion"
         }
       },
-      "machine_control_supports": ["antigravity.send"]
+      "machine_control_supports": []
     }
   ]
 }

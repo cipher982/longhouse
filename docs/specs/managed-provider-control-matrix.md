@@ -284,7 +284,7 @@ prove:
 2. Build OpenCode server-bridge sidecar and `opencode-channel send/interrupt`. Done.
 3. Add OpenCode remote launch and attach. Done.
 4. Decide OpenCode steer only after active-turn semantics are proven.
-5. Build Antigravity hook inbox for queued input claimed by active hooks. Done; machine-control send is advertised after real `agy` loop proof.
+5. Build Antigravity hook inbox for queued input claimed by active hooks. Hook-inbox code is done; machine-control send remains gated until real `agy` loop proof exists.
 6. Decide Antigravity interrupt and steer only after hook canaries prove
    bounded behavior.
 7. Move all provider operation truth into the contract registry and remove
