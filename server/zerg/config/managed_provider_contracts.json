@@ -180,7 +180,7 @@
         "send_input": {
           "level": "live_no_token",
           "source": "longhouse provider-live canary OpenCode prompt_async noReply delivery observed through session.messages",
-          "next": "promote with token-spending assistant response transcript canary"
+          "next": "manual proof exists via --run-live-token-contract; promote with future active-turn abort and process-restart reattach canaries"
         },
         "interrupt": {
           "level": "live_no_token",
@@ -208,7 +208,7 @@
         "transcript_binding": {
           "level": "hermetic",
           "source": "OpenCode plugin/transcript observation tests",
-          "next": "promote with live provider session assertion"
+          "next": "manually verify with --run-live-token-contract; promote contract level only after scheduled/budgeted release lane exists"
         }
       },
       "machine_control_supports": ["opencode.send", "opencode.interrupt", "opencode.launch"]

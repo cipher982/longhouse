@@ -282,10 +282,13 @@ Initial product contract:
   active-turn steer delivery, idle steer rejection, interrupt, and reattach.
 - `longhouse provider-live canary --provider opencode` probes the installed
   upstream OpenCode server contract without executing a prompt: binary version,
-  server readiness, `/doc` schema, zero-token session create/get, abort, and
-  attach command shape. It remains Yellow until scheduled live-token evidence
-  proves `prompt_async` execution, transcript binding, active-turn abort, and
-  reattach.
+  server readiness, `/doc` schema, zero-token session create/get,
+  `prompt_async` noReply delivery through `session.messages`, abort, and attach
+  command shape. `--run-live-token-contract` spends a small model call to prove
+  assistant response execution and transcript binding. The artifact remains
+  Yellow until future live-token evidence also proves active-turn abort and
+  process-restart reattach; there is no scheduled OpenCode token-spending lane
+  until we explicitly add a budgeted Sauron/CI job.
 - Runtime Host and local-health may cache it and expose:
   - provider
   - upstream version

@@ -144,12 +144,13 @@ Current OpenCode adapter:
 3. Implement `longhouse opencode-channel send` against
    `/session/:id/prompt_async`; the no-token live canary now proves noReply
    user-message delivery by reading the marker back from
-   `/session/:id/message`.
+   `/session/:id/message`, and the opt-in live-token lane proves assistant
+   response execution plus transcript binding.
 4. Implement interrupt against `/session/:id/abort`.
 5. Implement attach as `opencode attach <server_url> --session <provider_id>`.
-6. Only after assistant response execution + active phase + abort are proven,
-   evaluate whether `steer_active_turn` should use async prompt, TUI prompt
-   append/submit, or remain unsupported.
+6. Only after active phase + active-turn abort are proven, evaluate whether
+   `steer_active_turn` should use async prompt, TUI prompt append/submit, or
+   remain unsupported.
 7. Advertise support bits only when the engine can actually start and control
    the server: `opencode.launch`, `opencode.send`, and
    `opencode.interrupt`. Do not advertise `opencode.steer` yet.
