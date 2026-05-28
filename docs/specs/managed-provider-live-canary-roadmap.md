@@ -32,7 +32,7 @@ shipping health. The control channel advertised:
 codex: send, interrupt, steer, launch, continue
 claude: send, interrupt, steer, launch
 opencode: send, interrupt, launch
-antigravity: -
+antigravity: send
 ```
 
 Provider release status is interpreted against the installed local version.
@@ -95,9 +95,9 @@ Required canaries:
 
 Provider: Antigravity.
 
-Antigravity's stable surface is hooks. Longhouse can queue input and has a hook
-inbox adapter, but machine-control send is not advertised until a real upstream
-`agy` loop proves active hooks claim the queued input at provider-defined loop
+Antigravity's stable surface is hooks. Longhouse queues input through a hook
+inbox adapter, and machine-control send is advertised after a real upstream
+`agy` loop proved active hooks claim queued input at provider-defined loop
 boundaries. That is send support, not interrupt or active-turn steer.
 
 Required canaries:
@@ -191,9 +191,9 @@ machine has proven the installed version.
    can go Green for the no-token tier; the explicit live-token lane proves the
    upstream OpenCode server contract, but no scheduled OpenCode token-spending
    lane exists until we add an explicit budgeted Sauron/CI job.
-4. Extend the Antigravity canary from its current yellow state -- real `agy`
-   version/help/plugin validate/install/list plus Longhouse global-hook config
-   proof -- to loop-level hook behavior against the upstream runtime.
+4. Keep the Antigravity live-token lane green for send: real `agy`
+   version/help/plugin validate/install/list, Longhouse global-hook config,
+   and loop-level hook behavior against the upstream runtime.
 5. Continue promoting the packaged Codex release canary inside the same local
    proof feed without deleting its Codex-specific app-server checks.
 

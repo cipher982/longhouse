@@ -632,6 +632,9 @@ def test_antigravity_hook_binds_transcript_in_same_longhouse_home(tmp_path):
 
 def test_antigravity_runtime_plugin_installs_with_agy(monkeypatch, tmp_path):
     calls: list[list[str]] = []
+    installed_hooks = tmp_path / ".gemini" / "config" / "plugins" / "longhouse-runtime" / "hooks.json"
+    installed_hooks.parent.mkdir(parents=True)
+    installed_hooks.write_text('{"longhouse-runtime":{"PreInvocation":[]}}\n', encoding="utf-8")
 
     def fake_run(cmd, *, check, stdout, stderr, text, timeout):
         calls.append(list(cmd))
@@ -642,6 +645,7 @@ def test_antigravity_runtime_plugin_installs_with_agy(monkeypatch, tmp_path):
 
         return Completed()
 
+    monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr(antigravity_cli.subprocess, "run", fake_run)
 
     plugin_root = antigravity_cli._ensure_antigravity_runtime_plugin(
@@ -656,8 +660,11 @@ def test_antigravity_runtime_plugin_installs_with_agy(monkeypatch, tmp_path):
     assert plugin_root == tmp_path / ".gemini" / "antigravity-cli" / "plugins" / "longhouse-runtime"
     assert calls == [["/usr/local/bin/agy", "plugin", "install", str(source_root)]]
     assert (source_root / "plugin.json").exists()
-    assert (source_root / "hooks.json").exists()
+    assert not (source_root / "hooks.json").exists()
     assert (source_root / "longhouse-antigravity-hook.sh").exists()
+    assert not installed_hooks.exists()
+    global_hooks = json.loads((tmp_path / ".gemini" / "config" / "hooks.json").read_text(encoding="utf-8"))
+    assert str(source_root / "longhouse-antigravity-hook.sh") in json.dumps(global_hooks)
 
 
 def test_launch_script_closes_session_without_printing_token(monkeypatch, tmp_path):

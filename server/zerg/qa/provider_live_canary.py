@@ -69,6 +69,13 @@ _OPENCODE_ACTIVE_ABORT_MESSAGE = " ".join(
         "in-flight message turn and observed MessageAbortedError.",
     )
 )
+_ANTIGRAVITY_LOOP_INVOCATION_MESSAGE = " ".join(
+    (
+        "Live-token behavior proof: a real agy loop invoked Longhouse hooks,",
+        "claimed queued hook-inbox input, and the assistant response included",
+        "the injected marker.",
+    )
+)
 _CLAUDE_CHANNEL_UNCONFIRMED_MESSAGE = (
     "Claude recognized the development channel flag, but launch help did not confirm the session-control shape."
 )
@@ -521,6 +528,7 @@ def _antigravity_operation_evidence(
     contract: dict[str, Any],
     canaries: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
+    evidence: dict[str, dict[str, Any]] = {}
     launch_local = _entry_from_canary_group(
         contract,
         "launch_local",
@@ -528,7 +536,25 @@ def _antigravity_operation_evidence(
         required=["binary_identity", "command_shape", "plugin_contract", "global_hooks_contract"],
         canary_name="antigravity_launch_local_no_token",
     )
-    return {"launch_local": launch_local} if launch_local else {}
+    if launch_local:
+        evidence["launch_local"] = launch_local
+
+    if (canaries.get("loop_invocation_contract") or {}).get("status") in {"pass", "fail"}:
+        send_input = _entry_from_canary_group(
+            contract,
+            "send_input",
+            canaries=canaries,
+            required=["loop_invocation_contract"],
+            canary_name="antigravity_loop_invocation_contract",
+            level="manual_live_token",
+            source="longhouse provider-live canary --provider antigravity --run-live-token-contract",
+            message=_ANTIGRAVITY_LOOP_INVOCATION_MESSAGE,
+            next_note="promote with a scheduled/budgeted live-token release lane",
+        )
+        if send_input:
+            evidence["send_input"] = send_input
+
+    return evidence
 
 
 def _provider_operation_evidence(
@@ -1710,7 +1736,9 @@ def _run_claude_live_token_contracts(args: argparse.Namespace, root: Path) -> di
                 "not_run",
                 reason="Managed Claude live-token session did not launch.",
             ),
-            "idle_steer_rejection_contract": _optional_skipped("Idle steer rejection live provider proof is future work."),
+            "idle_steer_rejection_contract": _optional_skipped(
+                "Idle steer rejection live provider proof is future work.",
+            ),
             "interrupt_contract": _optional_skipped("Claude interrupt live provider proof is future work."),
         }
 
@@ -1929,12 +1957,40 @@ def _run_antigravity_plugin_command(
     )
 
 
+def _antigravity_plugin_argv(binary: str, *args: str) -> list[str]:
+    """Build an agy plugin command that still works under isolated HOME.
+
+    David's dogfood binary may be a tiny wrapper that resolves the real agy as
+    ``$HOME/.local/bin/agy``. The plugin contract intentionally changes HOME to
+    isolate Antigravity config writes, so run that wrapper's underlying binary
+    directly when the wrapper shape is detected.
+    """
+
+    try:
+        path = Path(binary).expanduser()
+        text = path.read_text(encoding="utf-8", errors="ignore")[:512] if path.is_file() else ""
+    except OSError:
+        text = ""
+    if "$HOME/.local/bin/agy" in text and "--dangerously-skip-permissions" in text:
+        direct = Path.home() / ".local" / "bin" / "agy"
+        if direct.is_file() and os.access(direct, os.X_OK):
+            return [str(direct), "--dangerously-skip-permissions", *args]
+    return [binary, *args]
+
+
 def _run_antigravity_plugin_contract(binary: str, root: Path) -> dict[str, Any]:
     plugin_root, _global_hooks_path = _write_antigravity_canary_plugin(root / "plugin")
     isolated_home = root / "home"
 
     try:
-        validate = _run_antigravity_plugin_command([binary, "plugin", "validate", str(plugin_root)])
+        validate = _run_antigravity_plugin_command(
+            _antigravity_plugin_argv(
+                binary,
+                "plugin",
+                "validate",
+                str(plugin_root),
+            ),
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return _fail("antigravity_plugin_validate_failed", f"{type(exc).__name__}: {exc}")
     if validate.returncode != 0:
@@ -1947,7 +2003,7 @@ def _run_antigravity_plugin_contract(binary: str, root: Path) -> dict[str, Any]:
 
     try:
         install = _run_antigravity_plugin_command(
-            [binary, "plugin", "install", str(plugin_root)],
+            _antigravity_plugin_argv(binary, "plugin", "install", str(plugin_root)),
             home=isolated_home,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -1962,7 +2018,7 @@ def _run_antigravity_plugin_contract(binary: str, root: Path) -> dict[str, Any]:
         )
 
     try:
-        listed = _run_antigravity_plugin_command([binary, "plugin", "list"], home=isolated_home)
+        listed = _run_antigravity_plugin_command(_antigravity_plugin_argv(binary, "plugin", "list"), home=isolated_home)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return _fail("antigravity_plugin_list_failed", f"{type(exc).__name__}: {exc}")
     if listed.returncode != 0:
@@ -1988,6 +2044,316 @@ def _run_antigravity_plugin_contract(binary: str, root: Path) -> dict[str, Any]:
         install_evidence=_command_evidence(install),
         list_evidence=_command_evidence(listed),
         note=_ANTIGRAVITY_PLUGIN_NOTE,
+    )
+
+
+def _read_antigravity_claims(inbox_dir: Path) -> list[dict[str, Any]]:
+    claims: list[dict[str, Any]] = []
+    for path in sorted((inbox_dir / "claimed").glob("claimed-msg-*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            claims.append(payload)
+    return claims
+
+
+def _read_antigravity_state(state_dir: Path, session_id: str) -> dict[str, Any]:
+    try:
+        payload = json.loads((state_dir / f"{session_id}.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _antigravity_log_events(log_path: Path) -> list[str]:
+    log_text = _tail_text(log_path, max_chars=20000)
+    return [event for event in _ANTIGRAVITY_HOOK_EVENTS if f"_{event}_" in log_text or f"_{event}" in log_text]
+
+
+def _remove_path(path: Path) -> None:
+    try:
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
+
+
+def _restore_path_from_backup(*, path: Path, backup: Path | None, existed: bool) -> None:
+    _remove_path(path)
+    if not existed or backup is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if backup.is_dir() and not backup.is_symlink():
+        shutil.copytree(backup, path)
+    else:
+        shutil.copy2(backup, path)
+
+
+@contextlib.contextmanager
+def _preserve_antigravity_user_hook_state(
+    *,
+    global_hooks_path: Path,
+    installed_plugin_dir: Path,
+) -> Any:
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    backup_root = global_hooks_path.parent / f".longhouse-antigravity-canary-backup-{timestamp}-{os.getpid()}"
+    backup_root.mkdir(parents=True, exist_ok=True)
+    global_hooks_backup = backup_root / "hooks.json"
+    installed_plugin_backup = backup_root / "installed-plugin"
+    global_hooks_existed = global_hooks_path.exists()
+    installed_plugin_existed = installed_plugin_dir.exists()
+    if global_hooks_existed:
+        shutil.copy2(global_hooks_path, global_hooks_backup)
+    if installed_plugin_existed:
+        shutil.copytree(installed_plugin_dir, installed_plugin_backup)
+
+    restored = False
+    previous_handlers: dict[int, Any] = {}
+
+    def restore() -> None:
+        nonlocal restored
+        if restored:
+            return
+        _restore_path_from_backup(
+            path=global_hooks_path,
+            backup=global_hooks_backup if global_hooks_existed else None,
+            existed=global_hooks_existed,
+        )
+        _restore_path_from_backup(
+            path=installed_plugin_dir,
+            backup=installed_plugin_backup if installed_plugin_existed else None,
+            existed=installed_plugin_existed,
+        )
+        restored = True
+
+    def handle_signal(signum: int, _frame: Any) -> None:
+        restore()
+        previous = previous_handlers.get(signum)
+        if callable(previous):
+            previous(signum, _frame)
+        raise KeyboardInterrupt
+
+    for signum in (signal.SIGINT, signal.SIGTERM):
+        try:
+            previous_handlers[signum] = signal.getsignal(signum)
+            signal.signal(signum, handle_signal)
+        except (ValueError, OSError):
+            pass
+
+    try:
+        yield {"backup_root": str(backup_root)}
+    finally:
+        restore()
+        for signum, previous in previous_handlers.items():
+            with contextlib.suppress(ValueError, OSError):
+                signal.signal(signum, previous)
+        _remove_path(backup_root)
+
+
+def _run_antigravity_loop_invocation_contract(
+    *,
+    binary: str,
+    root: Path,
+    timeout_secs: int,
+) -> dict[str, Any]:
+    from zerg.cli.antigravity import _antigravity_global_hooks_path
+    from zerg.cli.antigravity import _antigravity_installed_plugin_hooks_path
+
+    global_hooks_path = _antigravity_global_hooks_path()
+    installed_plugin_dir = _antigravity_installed_plugin_hooks_path().parent
+    with _preserve_antigravity_user_hook_state(
+        global_hooks_path=global_hooks_path,
+        installed_plugin_dir=installed_plugin_dir,
+    ) as preservation:
+        return _run_antigravity_loop_invocation_contract_inner(
+            binary=binary,
+            root=root,
+            timeout_secs=timeout_secs,
+            preservation=preservation,
+        )
+
+
+def _run_antigravity_loop_invocation_contract_inner(
+    *,
+    binary: str,
+    root: Path,
+    timeout_secs: int,
+    preservation: Mapping[str, Any],
+) -> dict[str, Any]:
+    from zerg.cli.antigravity import _ensure_antigravity_runtime_plugin
+    from zerg.cli.antigravity_channel import antigravity_inbox_dir
+    from zerg.cli.antigravity_channel import antigravity_state_dir
+    from zerg.cli.antigravity_channel import enqueue_antigravity_message
+
+    started = time.monotonic()
+    workspace = root / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    config_dir = root / "longhouse-home"
+    session_id = f"antigravity-live-{secrets.token_hex(8)}"
+    marker = secrets.token_hex(16)
+    base_marker = f"BASE_{marker}"
+    injected_marker = f"INJECTED_{marker}"
+    stdout_path = root / "antigravity-live.stdout.txt"
+    stderr_path = root / "antigravity-live.stderr.txt"
+    log_path = root / "antigravity-live.log"
+
+    try:
+        _ensure_antigravity_runtime_plugin(
+            config_dir=config_dir,
+            antigravity_bin=binary,
+            engine_path="/bin/true",
+        )
+        queued = enqueue_antigravity_message(
+            session_id=session_id,
+            text=f"Add this exact marker to your next answer: {injected_marker}",
+            config_dir=config_dir,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _fail(
+            "antigravity_loop_setup_failed",
+            f"Could not install Antigravity hook plugin or queue input: {type(exc).__name__}: {exc}",
+        )
+
+    state_dir = antigravity_state_dir(config_dir)
+    inbox_dir = antigravity_inbox_dir(session_id, config_dir)
+    prompt = (
+        "Reply in one short line. Include this marker exactly once: "
+        f"{base_marker}. Do not run tools or mention any other marker unless instructed."
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "LONGHOUSE_MANAGED_SESSION_ID": session_id,
+            "LONGHOUSE_DEVICE_ID": "provider-live-canary",
+            "LONGHOUSE_HOOK_PYTHON": sys.executable,
+            "LONGHOUSE_ANTIGRAVITY_STATE_DIR": str(state_dir),
+            "LONGHOUSE_ANTIGRAVITY_INBOX_DIR": str(inbox_dir),
+        }
+    )
+    argv = [
+        binary,
+        "--log-file",
+        str(log_path),
+        "--print-timeout",
+        f"{max(1, int(timeout_secs))}s",
+        "--print",
+        prompt,
+    ]
+    try:
+        completed = subprocess.run(
+            argv,
+            cwd=str(workspace),
+            env=env,
+            text=True,
+            capture_output=True,
+            timeout=max(5, int(timeout_secs) + 10),
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return _fail(
+            "antigravity_loop_timeout",
+            f"agy live-token loop did not finish before timeout: {exc}",
+            argv=argv[:-1] + ["<prompt>"],
+            stdout_path=str(stdout_path),
+            stderr_path=str(stderr_path),
+            log_path=str(log_path),
+            log_tail=_tail_text(log_path),
+        )
+    except OSError as exc:
+        return _fail(
+            "antigravity_loop_launch_failed",
+            f"Could not run agy live-token loop: {type(exc).__name__}: {exc}",
+            argv=argv[:-1] + ["<prompt>"],
+        )
+
+    stdout_path.write_text(completed.stdout or "", encoding="utf-8")
+    stderr_path.write_text(completed.stderr or "", encoding="utf-8")
+    claims = _read_antigravity_claims(inbox_dir)
+    matching_claim = next((claim for claim in claims if claim.get("id") == queued["message_id"]), None)
+    state = _read_antigravity_state(state_dir, session_id)
+    hook_events = _antigravity_log_events(log_path)
+    marker_hash = hashlib.sha256(marker.encode("utf-8")).hexdigest()
+
+    if completed.returncode != 0:
+        return _fail(
+            "antigravity_loop_failed",
+            "agy live-token loop exited unsuccessfully",
+            argv=argv[:-1] + ["<prompt>"],
+            returncode=completed.returncode,
+            stdout_tail=(completed.stdout or "")[-4000:],
+            stderr_tail=(completed.stderr or "")[-4000:],
+            stdout_path=str(stdout_path),
+            stderr_path=str(stderr_path),
+            log_path=str(log_path),
+            log_tail=_tail_text(log_path),
+            message_marker_sha256=marker_hash,
+        )
+    if matching_claim is None:
+        return _fail(
+            "antigravity_loop_claim_missing",
+            "A real agy loop finished without claiming queued Longhouse input.",
+            stdout_tail=(completed.stdout or "")[-4000:],
+            stderr_tail=(completed.stderr or "")[-4000:],
+            claims=claims,
+            inbox_dir=str(inbox_dir),
+            log_path=str(log_path),
+            log_tail=_tail_text(log_path),
+            message_marker_sha256=marker_hash,
+        )
+    if matching_claim.get("hook_event") != "PreInvocation":
+        return _fail(
+            "antigravity_loop_claim_event_unexpected",
+            "agy claimed queued input at an unexpected hook boundary for this live-token proof.",
+            claim=matching_claim,
+            expected_hook_event="PreInvocation",
+            hook_events=hook_events,
+            log_path=str(log_path),
+            log_tail=_tail_text(log_path),
+            message_marker_sha256=marker_hash,
+        )
+    if base_marker not in (completed.stdout or "") or injected_marker not in (completed.stdout or ""):
+        return _fail(
+            "antigravity_injected_marker_missing",
+            "agy claimed queued input, but the assistant response did not include both expected markers.",
+            stdout_tail=(completed.stdout or "")[-4000:],
+            stderr_tail=(completed.stderr or "")[-4000:],
+            claim=matching_claim,
+            hook_events=hook_events,
+            log_path=str(log_path),
+            log_tail=_tail_text(log_path),
+            message_marker_sha256=marker_hash,
+        )
+    if "PreInvocation" not in hook_events:
+        return _fail(
+            "antigravity_preinvocation_log_missing",
+            "agy output proved injection, but the hook log did not show PreInvocation.",
+            hook_events=hook_events,
+            log_path=str(log_path),
+            log_tail=_tail_text(log_path),
+            message_marker_sha256=marker_hash,
+        )
+
+    return _status(
+        "pass",
+        session_id=session_id,
+        provider_session_id=state.get("provider_session_id") or state.get("conversation_id"),
+        transcript_path=state.get("transcript_path"),
+        claimed_at=matching_claim.get("claimed_at"),
+        claimed_hook_event=matching_claim.get("hook_event"),
+        hook_events=hook_events,
+        stdout_path=str(stdout_path),
+        stderr_path=str(stderr_path),
+        log_path=str(log_path),
+        elapsed_ms=int((time.monotonic() - started) * 1000),
+        message_marker_sha256=marker_hash,
+        user_hook_state_backup_root=preservation.get("backup_root"),
+        note=_ANTIGRAVITY_LOOP_INVOCATION_MESSAGE,
     )
 
 
@@ -2265,7 +2631,9 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
                 reason="Assistant response contract did not pass, so active-turn abort proof was not run.",
             )
         else:
-            canaries["active_turn_abort_contract"] = _optional_skipped("Pass --run-live-token-contract to prove active-turn abort.")
+            canaries["active_turn_abort_contract"] = _optional_skipped(
+                "Pass --run-live-token-contract to prove active-turn abort.",
+            )
 
         abort_result = _request_json(
             server_url=server_url,
@@ -2351,24 +2719,29 @@ def run_antigravity_live_canary(args: argparse.Namespace, root: Path) -> dict[st
             },
         }
 
-    return {
-        "provider": "antigravity",
-        "provider_version": version,
-        "canaries": {
-            "binary_identity": _status("pass", path=binary, version=version, evidence=version_evidence),
-            "command_shape": _run_antigravity_command_shape(binary),
-            "plugin_contract": _run_antigravity_plugin_contract(binary, root),
-            "global_hooks_contract": _run_antigravity_global_hooks_contract(root / "plugin" / "global-hooks.json"),
-            "loop_invocation_contract": _status(
-                "not_run",
-                reason=(
-                    "This no-token canary proves agy plugin/config drift only. "
-                    "A real upstream agy loop must invoke PreInvocation/PostInvocation/Stop before "
-                    "Antigravity send can be promoted as behavior-proven."
-                ),
-            ),
-        },
+    canaries = {
+        "binary_identity": _status("pass", path=binary, version=version, evidence=version_evidence),
+        "command_shape": _run_antigravity_command_shape(binary),
+        "plugin_contract": _run_antigravity_plugin_contract(binary, root),
+        "global_hooks_contract": _run_antigravity_global_hooks_contract(root / "plugin" / "global-hooks.json"),
     }
+    if bool(getattr(args, "run_live_token_contract", False)):
+        canaries["loop_invocation_contract"] = _run_antigravity_loop_invocation_contract(
+            binary=binary,
+            root=root / "loop-invocation",
+            timeout_secs=int(getattr(args, "live_token_timeout_secs", 120) or 120),
+        )
+    else:
+        canaries["loop_invocation_contract"] = _status(
+            "not_run",
+            reason=(
+                "This no-token canary proves agy plugin/config drift only. "
+                "Pass --run-live-token-contract to prove a real upstream agy loop invokes "
+                "PreInvocation/PostInvocation/Stop and consumes Longhouse queued input."
+            ),
+        )
+
+    return {"provider": "antigravity", "provider_version": version, "canaries": canaries}
 
 
 def run_provider(args: argparse.Namespace, root: Path) -> dict[str, Any]:

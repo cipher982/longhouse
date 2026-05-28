@@ -48,7 +48,7 @@ def canary_command(
         bool,
         typer.Option(
             "--run-live-token-contract",
-            help="For Claude/OpenCode, spend small model calls to prove opt-in live-token behavior.",
+            help="For Claude/OpenCode/Antigravity, spend small model calls to prove opt-in live-token behavior.",
         ),
     ] = False,
     live_token_timeout_secs: Annotated[
@@ -115,7 +115,7 @@ def publish_command(
         bool,
         typer.Option(
             "--run-live-token-contract",
-            help="For Claude/OpenCode, spend small model calls to prove opt-in live-token behavior.",
+            help="For Claude/OpenCode/Antigravity, spend small model calls to prove opt-in live-token behavior.",
         ),
     ] = False,
     live_token_timeout_secs: Annotated[

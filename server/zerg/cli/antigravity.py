@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shlex
 import shutil
@@ -48,6 +49,7 @@ _ANTIGRAVITY_BIN_OPTION_HELP = " ".join(
         f"(defaults to {ANTIGRAVITY_BIN_ENV}, then `agy` on PATH).",
     ]
 )
+logger = logging.getLogger(__name__)
 
 
 class _AntigravityLaunchError(Exception):
@@ -488,6 +490,10 @@ def _antigravity_global_hooks_path() -> Path:
     return Path.home() / ".gemini" / "config" / "hooks.json"
 
 
+def _antigravity_installed_plugin_hooks_path() -> Path:
+    return Path.home() / ".gemini" / "config" / "plugins" / _ANTIGRAVITY_PLUGIN_NAME / "hooks.json"
+
+
 def _default_engine_path() -> str:
     try:
         from zerg.services.shipper.service import get_engine_executable
@@ -510,6 +516,15 @@ def _write_text_if_changed(path: Path, content: str, *, mode: int | None = None)
     path.write_text(content, encoding="utf-8")
     if mode is not None:
         path.chmod(mode)
+
+
+def _remove_file_if_exists(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        logger.warning("Could not remove stale Antigravity file %s: %s", path, exc)
 
 
 def _antigravity_hook_config(command_prefix: str) -> dict:
@@ -582,7 +597,13 @@ def _ensure_antigravity_runtime_plugin(
     command_prefix = shlex.quote(str(hook_script))
     hook_config = _antigravity_hook_config(command_prefix)
     hooks = {_ANTIGRAVITY_PLUGIN_NAME: hook_config}
-    _write_text_if_changed(plugin_root / "hooks.json", json.dumps(hooks, indent=2) + "\n")
+    if antigravity_bin:
+        # Real agy loads both installed plugin hooks and global hooks. Keep the
+        # plugin as an installable container, and register executable hooks once
+        # through the global hooks file.
+        _remove_file_if_exists(plugin_root / "hooks.json")
+    else:
+        _write_text_if_changed(plugin_root / "hooks.json", json.dumps(hooks, indent=2) + "\n")
     _upsert_antigravity_global_hooks(
         hooks_path=global_hooks_path or _antigravity_global_hooks_path(),
         hook_config=hook_config,
@@ -600,6 +621,7 @@ def _ensure_antigravity_runtime_plugin(
             detail = (completed.stderr or "").strip()
             message = "Could not install Longhouse Antigravity plugin"
             raise _AntigravityLaunchError(message + (f": {detail}" if detail else "."))
+        _remove_file_if_exists(_antigravity_installed_plugin_hooks_path())
     return staged_root
 
 
@@ -961,7 +983,11 @@ def antigravity(
             config_dir=resolved_config_dir,
         )
     finally:
-        remove_managed_provider_contract(provider="antigravity", session_id=result.session_id, config_dir=resolved_config_dir)
+        remove_managed_provider_contract(
+            provider="antigravity",
+            session_id=result.session_id,
+            config_dir=resolved_config_dir,
+        )
     if exit_code != 0:
         typer.secho(f"Antigravity exited with code {exit_code}.", fg=typer.colors.YELLOW)
         raise typer.Exit(code=exit_code)

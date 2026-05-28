@@ -152,8 +152,8 @@ def live_canary_placeholder(provider: str) -> dict[str, Any]:
         "antigravity": (
             "antigravity_hook_inbox_live_contract",
             "longhouse provider-live canary --provider antigravity owns the live agy version/help/plugin "
-            "validate/install/list canary plus Longhouse global-hook config proof; real loop-level hook injection "
-            "still needs live evidence.",
+            "validate/install/list canary plus Longhouse global-hook config proof; "
+            "--run-live-token-contract proves real loop-level hook injection.",
         ),
     }
     name, reason = profiles.get(provider, ("provider_live_contract", "No live canary profile registered."))

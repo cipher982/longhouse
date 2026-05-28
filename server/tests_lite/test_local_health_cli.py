@@ -562,7 +562,7 @@ def test_collect_local_health_marks_opencode_only_control_channel_launch_ready(m
     assert snapshot["control_channel"]["control_operations_by_provider"] == {"opencode": ["launch"]}
 
 
-def test_collect_local_health_filters_unproven_antigravity_send(monkeypatch, tmp_path: Path):
+def test_collect_local_health_projects_antigravity_send_without_launchability(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     _write_engine_status(
@@ -583,7 +583,7 @@ def test_collect_local_health_filters_unproven_antigravity_send(monkeypatch, tmp
     assert snapshot["control_channel"]["can_launch_codex"] is False
     assert snapshot["control_channel"]["launchable_providers"] == []
     assert snapshot["control_channel"]["launch_blocked_by"] == "no_launch_support"
-    assert snapshot["control_channel"]["control_operations_by_provider"] == {}
+    assert snapshot["control_channel"]["control_operations_by_provider"] == {"antigravity": ["send"]}
 
 
 def test_collect_local_health_ignores_fresh_outbox_file(monkeypatch, tmp_path: Path):
