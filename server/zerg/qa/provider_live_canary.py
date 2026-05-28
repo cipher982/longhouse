@@ -33,15 +33,16 @@ from typing import Any
 
 from zerg.provider_live_proof import LIVE_PROOF_ARTIFACT_KIND
 from zerg.provider_live_proof import SUPPORTED_LIVE_PROOF_PROVIDERS
-from zerg.qa.repo_root import default_repo_root
 from zerg.qa.repo_root import provider_live_evidence_base
+from zerg.services.managed_provider_contracts import ManagedProviderContract
+from zerg.services.managed_provider_contracts import contract_for_provider
 
 PROVIDER_STATUS_SCHEMA_VERSION = 1
 _OPENCODE_SERVER_LOG_RE = re.compile(r"opencode server listening on (?P<url>http://127\.0\.0\.1:\d+)")
 _ANTIGRAVITY_PLUGIN_NAME = "longhouse-runtime"
 _ANTIGRAVITY_HOOK_EVENTS = ("PreInvocation", "PreToolUse", "PostToolUse", "PostInvocation", "Stop")
 SUPPORTED_PROVIDERS = SUPPORTED_LIVE_PROOF_PROVIDERS
-_GAP_OPERATION_STATUSES = {"fail", "missing", "not_run", "skipped", "stale"}
+_GAP_OPERATION_STATUSES = {"fail", "missing", "skipped", "stale"}
 _OPENCODE_REATTACH_MESSAGE = " ".join(
     (
         "Process-restart proof: a fresh OpenCode server recovered",
@@ -52,7 +53,7 @@ _OPENCODE_PROMPT_ASYNC_MESSAGE = " ".join(
     (
         "No-token behavior proof: prompt_async accepted a noReply input and",
         "session.messages returned the delivered marker;",
-        "provider-response proof is future work.",
+        "provider-response proof belongs to release canaries.",
     )
 )
 _CLAUDE_CHANNEL_UNCONFIRMED_MESSAGE = (
@@ -63,8 +64,8 @@ _ANTIGRAVITY_PLUGIN_NOTE = (
 )
 
 
-def _default_evidence_root(repo_root: Path, provider: str, timestamp: str) -> Path:
-    return provider_live_evidence_base(repo_root) / provider / timestamp
+def _default_evidence_root(provider: str, timestamp: str) -> Path:
+    return provider_live_evidence_base() / provider / timestamp
 
 
 def _reserve_default_evidence_root(path: Path) -> Path:
@@ -157,27 +158,8 @@ def _provider_binary_identity(
     return binary, version, _status("pass", path=binary, version=version, evidence=evidence)
 
 
-def _provider_contract(repo_root: Path, provider: str) -> dict[str, Any] | None:
-    repo_path = repo_root / "server/zerg/config/managed_provider_contracts.json"
-    package_path = Path(__file__).resolve().parents[1] / "config/managed_provider_contracts.json"
-    path = repo_path if repo_path.exists() else package_path
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-    for item in payload.get("providers") or []:
-        if isinstance(item, dict) and item.get("provider") == provider:
-            return dict(item)
-    return None
-
-
-def _manifest_operation_evidence(contract: dict[str, Any], operation: str) -> dict[str, Any]:
-    evidence = (contract.get("operation_evidence") or {}).get(operation)
-    return dict(evidence) if isinstance(evidence, dict) else {}
-
-
 def _operation_entry(
-    contract: dict[str, Any],
+    contract: ManagedProviderContract,
     operation: str,
     *,
     status: str,
@@ -189,7 +171,7 @@ def _operation_entry(
     failure_code: str | None = None,
     next_note: str | None = None,
 ) -> dict[str, Any]:
-    target = _manifest_operation_evidence(contract, operation)
+    target = dict(contract.operation_evidence_for(operation))
     if status in _GAP_OPERATION_STATUSES:
         effective_level = level or "none"
     else:
@@ -230,7 +212,7 @@ def _group_operation_status(canaries: dict[str, dict[str, Any]], names: list[str
 
 
 def _entry_from_canary_group(
-    contract: dict[str, Any],
+    contract: ManagedProviderContract,
     operation: str,
     *,
     canaries: dict[str, dict[str, Any]],
@@ -275,7 +257,7 @@ def _schema_probe_failed_for(
 
 
 def _claude_operation_evidence(
-    contract: dict[str, Any],
+    contract: ManagedProviderContract,
     canaries: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
     evidence: dict[str, dict[str, Any]] = {}
@@ -293,7 +275,7 @@ def _claude_operation_evidence(
 
 
 def _opencode_operation_evidence(
-    contract: dict[str, Any],
+    contract: ManagedProviderContract,
     canaries: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
     evidence: dict[str, dict[str, Any]] = {}
@@ -421,7 +403,7 @@ def _opencode_operation_evidence(
 
 
 def _antigravity_operation_evidence(
-    contract: dict[str, Any],
+    contract: ManagedProviderContract,
     canaries: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
     evidence: dict[str, dict[str, Any]] = {}
@@ -438,12 +420,8 @@ def _antigravity_operation_evidence(
     return evidence
 
 
-def _provider_operation_evidence(
-    repo_root: Path,
-    provider: str,
-    canaries: dict[str, dict[str, Any]],
-) -> dict[str, dict[str, Any]]:
-    contract = _provider_contract(repo_root, provider)
+def _provider_operation_evidence(provider: str, canaries: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    contract = contract_for_provider(provider)
     if contract is None:
         return {}
     if provider == "claude":
@@ -456,18 +434,13 @@ def _provider_operation_evidence(
 
 
 def _classify(canaries: dict[str, dict[str, Any]]) -> tuple[str, str | None, str]:
-    first_not_run: str | None = None
     first_warn: str | None = None
     for name, canary in canaries.items():
         status = canary.get("status")
         if status == "fail":
             return "red", str(canary.get("failure_code") or name), "block_upgrade_recommendation"
-        if status == "not_run" and first_not_run is None:
-            first_not_run = name
         if status == "warn" and first_warn is None:
             first_warn = name
-    if first_not_run:
-        return "yellow", "insufficient_coverage", "investigate_before_upgrade"
     if first_warn:
         return "yellow", None, "investigate_before_upgrade"
     return "green", None, "upgrade_allowed"
@@ -1781,7 +1754,6 @@ def run_antigravity_live_canary(args: argparse.Namespace, root: Path) -> dict[st
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo-root", type=Path, default=default_repo_root())
     parser.add_argument("--provider", choices=list(SUPPORTED_PROVIDERS), required=True)
     parser.add_argument("--provider-bin")
     parser.add_argument("--artifact", type=Path)
@@ -1796,14 +1768,13 @@ def run_provider_live_canary(args: argparse.Namespace | Mapping[str, Any]) -> di
         args = argparse.Namespace(**dict(args))
     else:
         args = argparse.Namespace(**vars(args))
-    args.repo_root = Path(args.repo_root).expanduser().resolve()
     if args.evidence_root is not None:
         args.evidence_root = Path(args.evidence_root).expanduser()
     if args.artifact is not None:
         args.artifact = Path(args.artifact).expanduser()
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     if args.evidence_root is None:
-        evidence_root = _reserve_default_evidence_root(_default_evidence_root(args.repo_root, args.provider, timestamp))
+        evidence_root = _reserve_default_evidence_root(_default_evidence_root(args.provider, timestamp))
     else:
         evidence_root = args.evidence_root
         evidence_root.mkdir(parents=True, exist_ok=True)
@@ -1818,7 +1789,7 @@ def run_provider_live_canary(args: argparse.Namespace | Mapping[str, Any]) -> di
     else:
         raise ValueError(f"unsupported provider: {args.provider}")
     canaries = provider_result["canaries"]
-    operation_evidence = _provider_operation_evidence(args.repo_root, provider_result["provider"], canaries)
+    operation_evidence = _provider_operation_evidence(provider_result["provider"], canaries)
     verdict, failure_code, recommendation = _classify(canaries)
     artifact = {
         "schema_version": PROVIDER_STATUS_SCHEMA_VERSION,

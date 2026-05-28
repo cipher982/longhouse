@@ -15,6 +15,7 @@ os.environ.setdefault("TESTING", "1")
 from zerg.cli.main import app
 from zerg.qa import provider_live_canary as plc
 from zerg.qa import provider_live_proof_publish as plp
+from zerg.qa import repo_root as qa_repo_root
 from zerg.qa.provider_live_canary import run_provider_live_canary
 
 
@@ -172,13 +173,12 @@ def test_provider_live_canary_cli_writes_packaged_artifact(tmp_path: Path) -> No
     assert payload["failure_code"] is None
 
 
-def test_provider_live_canary_uses_packaged_contracts_without_repo_root(tmp_path: Path) -> None:
+def test_provider_live_canary_uses_packaged_contracts_from_package(tmp_path: Path) -> None:
     fake_bin = _fake_claude(tmp_path / "bin" / "claude")
     artifact_path = tmp_path / "artifact.json"
 
     payload = run_provider_live_canary(
         {
-            "repo_root": str(tmp_path / "not-a-repo"),
             "provider": "claude",
             "provider_bin": str(fake_bin),
             "artifact": str(artifact_path),
@@ -203,7 +203,6 @@ def test_claude_live_canary_fails_when_channels_contract_is_missing(
 
     payload = run_provider_live_canary(
         {
-            "repo_root": str(tmp_path / "not-a-repo"),
             "provider": "claude",
             "provider_bin": str(fake_bin),
             "artifact": str(tmp_path / "artifact.json"),
@@ -226,7 +225,6 @@ def test_claude_live_canary_fails_when_session_flag_is_missing(
 
     payload = run_provider_live_canary(
         {
-            "repo_root": str(tmp_path / "not-a-repo"),
             "provider": "claude",
             "provider_bin": str(fake_bin),
             "artifact": str(tmp_path / "artifact.json"),
@@ -296,10 +294,10 @@ def test_provider_live_canary_installed_default_evidence_uses_longhouse_home(tmp
     fake_bin = _fake_claude(tmp_path / "bin" / "claude")
     longhouse_home = tmp_path / "longhouse-home"
     monkeypatch.setenv("LONGHOUSE_HOME", str(longhouse_home))
+    monkeypatch.setattr(qa_repo_root, "source_repo_root", lambda: None)
 
     payload = run_provider_live_canary(
         {
-            "repo_root": str(tmp_path / "not-a-repo"),
             "provider": "claude",
             "provider_bin": str(fake_bin),
             "artifact": None,
@@ -410,6 +408,40 @@ def test_provider_live_publish_cli_exits_nonzero_on_red_canary(
     assert payload["results"][0]["returncode"] == 1
     assert artifact["verdict"] == "red"
     assert artifact["failure_code"] == "claude_command_contract_missing"
+
+
+def test_provider_live_publish_cli_writes_fallback_when_canary_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def raise_canary(args: dict) -> dict:
+        raise RuntimeError(f"boom for {args['provider']}")
+
+    monkeypatch.setattr(plp, "run_provider_live_canary", raise_canary)
+    proof_dir = tmp_path / "proof"
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "provider-live",
+            "publish",
+            "--provider",
+            "claude",
+            "--proof-dir",
+            str(proof_dir),
+            "--evidence-root",
+            str(tmp_path / "evidence"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    payload = json.loads(result.output)
+    artifact = json.loads((proof_dir / "claude.json").read_text(encoding="utf-8"))
+    assert payload["results"][0]["status"] == "published_fallback"
+    assert artifact["verdict"] == "red"
+    assert artifact["failure_code"] == "live_canary_exception"
+    assert "RuntimeError: boom for claude" in artifact["canaries"]["provider_live_canary"]["message"]
 
 
 def test_provider_live_publish_cli_rejects_unsupported_provider(tmp_path: Path) -> None:

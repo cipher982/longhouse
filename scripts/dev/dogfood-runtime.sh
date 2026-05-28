@@ -280,8 +280,7 @@ publish_provider_live_proof() {
 
   log "==> Publishing provider live proof"
   LONGHOUSE_HOME="$LONGHOUSE_HOME" \
-    longhouse provider-live publish \
-      --repo-root "$ROOT_DIR" || status=$?
+    longhouse provider-live publish || status=$?
   if (( status != 0 )); then
     log "WARN: provider live proof published with failures (exit $status); local-health will show the sidecar state."
     log "Evidence root: $ROOT_DIR/.build/canaries/provider-live"

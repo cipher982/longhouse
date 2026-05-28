@@ -9,7 +9,6 @@ from typing import Annotated
 
 import typer
 
-from zerg.qa.provider_live_canary import default_repo_root
 from zerg.qa.provider_live_canary import run_provider_live_canary
 from zerg.qa.provider_live_proof_publish import SUPPORTED_PROVIDERS
 from zerg.qa.provider_live_proof_publish import publish_exit_code
@@ -27,10 +26,6 @@ def canary_command(
     provider_bin: Annotated[
         str | None,
         typer.Option("--provider-bin", help="Explicit provider binary path for debug/test runs."),
-    ] = None,
-    repo_root: Annotated[
-        Path | None,
-        typer.Option("--repo-root", help="Repo root override; source checkouts are auto-detected when omitted."),
     ] = None,
     evidence_root: Annotated[
         Path | None,
@@ -56,7 +51,6 @@ def canary_command(
         raise typer.Exit(code=2)
 
     args = argparse.Namespace(
-        repo_root=repo_root or default_repo_root(),
         provider=provider,
         provider_bin=provider_bin,
         artifact=artifact,
@@ -86,10 +80,6 @@ def publish_command(
             help="Provider to prove. Repeat to run more than one. Defaults to Claude, OpenCode, and Antigravity.",
         ),
     ] = None,
-    repo_root: Annotated[
-        Path | None,
-        typer.Option("--repo-root", help="Repo root override; source checkouts are auto-detected when omitted."),
-    ] = None,
     proof_dir: Annotated[
         Path | None,
         typer.Option("--proof-dir", help="Stable sidecar directory for local-health."),
@@ -115,7 +105,6 @@ def publish_command(
         raise typer.Exit(code=2)
 
     args = argparse.Namespace(
-        repo_root=repo_root or default_repo_root(),
         provider=provider,
         proof_dir=proof_dir,
         evidence_root=evidence_root,
