@@ -511,18 +511,27 @@ def test_claude_provider_live_token_contract_reports_provider_auth_diagnostic(
     )
 
     assert payload["verdict"] == "red"
-    assert payload["failure_code"] == "claude_assistant_response_timeout"
+    assert payload["failure_code"] == "claude_provider_auth_prompt"
     assert payload["canaries"]["launch_local_contract"]["status"] == "pass"
     assert payload["canaries"]["send_input_contract"]["status"] == "pass"
     execution = payload["canaries"]["transcript_binding_contract"]
     assert execution["status"] == "fail"
-    assert execution["failure_code"] == "claude_assistant_response_timeout"
+    assert execution["failure_code"] == "claude_provider_auth_prompt"
     assert execution["terminal_diagnostic_hint"] == "provider_auth_prompt"
     assert payload["operation_evidence"]["send_input"]["status"] == "pass"
     assert payload["operation_evidence"]["transcript_binding"]["status"] == "fail"
-    assert payload["operation_evidence"]["transcript_binding"]["failure_code"] == "claude_assistant_response_timeout"
-    assert "no expected assistant transcript marker" in payload["operation_evidence"]["transcript_binding"]["message"]
-    assert "steer marker did not appear" in payload["operation_evidence"]["steer_active_turn"]["message"]
+    assert (
+        payload["operation_evidence"]["transcript_binding"]["failure_code"]
+        == "claude_provider_auth_prompt"
+    )
+    assert (
+        "invalid authentication credentials"
+        in payload["operation_evidence"]["transcript_binding"]["message"]
+    )
+    assert (
+        payload["operation_evidence"]["steer_active_turn"]["failure_code"]
+        == "claude_provider_auth_prompt"
+    )
 
 
 def test_claude_provider_live_token_contract_does_not_overclassify_generic_api_text(

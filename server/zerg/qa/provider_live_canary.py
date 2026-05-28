@@ -1782,9 +1782,18 @@ def _run_claude_live_token_contracts(args: argparse.Namespace, root: Path) -> di
             **evidence,
         )
     else:
+        provider_auth_prompt = evidence.get("terminal_diagnostic_hint") == "provider_auth_prompt"
+        provider_failure_code = "claude_provider_auth_prompt" if provider_auth_prompt else "claude_assistant_response_timeout"
+        provider_failure_message = (
+            "Claude launched and accepted channel input, but the provider session "
+            "requested /login or reported invalid authentication credentials before "
+            "an assistant marker appeared."
+            if provider_auth_prompt
+            else "Claude channel accepted the prompt, but no expected assistant transcript marker appeared."
+        )
         provider_execution = _fail(
-            "claude_assistant_response_timeout",
-            "Claude channel accepted the prompt, but no expected assistant transcript marker appeared.",
+            provider_failure_code,
+            provider_failure_message,
             marker_sha256=steer_marker_sha,
             base_marker_sha256=base_marker_sha,
             elapsed_ms=elapsed_ms,
@@ -1799,9 +1808,17 @@ def _run_claude_live_token_contracts(args: argparse.Namespace, root: Path) -> di
                 **evidence,
             )
         else:
+            steer_failure_code = "claude_provider_auth_prompt" if provider_auth_prompt else "claude_steer_transcript_missing"
+            steer_failure_message = (
+                "Claude channel accepted active-turn steer, but the provider session "
+                "requested /login or reported invalid authentication credentials before "
+                "the steer marker appeared."
+                if provider_auth_prompt
+                else "Claude channel accepted active-turn steer, but the steer marker did not appear in transcript."
+            )
             active_turn_steer = _fail(
-                "claude_steer_transcript_missing",
-                "Claude channel accepted active-turn steer, but the steer marker did not appear in transcript.",
+                steer_failure_code,
+                steer_failure_message,
                 marker_sha256=steer_marker_sha,
                 elapsed_ms=elapsed_ms,
                 **evidence,

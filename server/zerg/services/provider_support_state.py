@@ -220,7 +220,8 @@ def _release_evidence_summary(
         "status": release_evidence.get("status"),
         "level": release_evidence.get("level"),
         "source": release_evidence.get("source"),
-        "failure_code": release_evidence.get("failure_code") or release_info.get("failure_code"),
+        "failure_code": release_evidence.get("failure_code")
+        or (release_info.get("failure_code") if _is_gap_or_failure(release_evidence) else None),
         "message": release_evidence.get("message"),
         "generated_at": release_evidence.get("generated_at") or release_info.get("generated_at"),
         "canary": release_evidence.get("canary"),
@@ -241,7 +242,8 @@ def _local_proof_evidence_summary(
         "status": local_proof_evidence.get("status"),
         "level": local_proof_evidence.get("level"),
         "source": local_proof_evidence.get("source"),
-        "failure_code": local_proof_evidence.get("failure_code") or live_proof_info.get("failure_code"),
+        "failure_code": local_proof_evidence.get("failure_code")
+        or (live_proof_info.get("failure_code") if _is_gap_or_failure(local_proof_evidence) else None),
         "message": local_proof_evidence.get("message"),
         "generated_at": local_proof_evidence.get("generated_at") or live_proof_info.get("generated_at"),
         "canary": local_proof_evidence.get("canary"),
