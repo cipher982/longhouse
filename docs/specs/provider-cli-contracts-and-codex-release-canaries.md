@@ -241,16 +241,18 @@ Initial product contract:
 - A local dogfood machine can publish independent live-proof sidecars under
   `LONGHOUSE_PROVIDER_LIVE_PROOF_DIR`, or the default
   `~/.longhouse/provider-live-proof`, by running
-  `scripts/qa/provider-live-proof-publish.py`. The underlying canary is the
-  packaged `longhouse provider-live canary` command; the repo script
-  `scripts/qa/provider-live-canary.py` remains a source-checkout wrapper. `make
-  dogfood-refresh` runs this publisher as part of the dogfood repair loop; `make
-  dogfood-check` only reports the current sidecars. Reader precedence is explicit
-  env, persisted provider-status config, then the Longhouse-home default.
-  Local-health reads those artifacts as operation proof only when the sidecar
-  provider and normalized version match the installed provider CLI. This proof
-  is additive to the support-state projection; it does not overwrite Sauron's
-  release verdict.
+  `longhouse provider-live publish`. The underlying canary is the packaged
+  `longhouse provider-live canary` command; the repo scripts
+  `scripts/qa/provider-live-canary.py` and
+  `scripts/qa/provider-live-proof-publish.py` remain repo wrappers around the
+  packaged commands.
+  `make dogfood-refresh` runs this publisher as part of the dogfood repair loop;
+  `make dogfood-check` only reports the current sidecars. Reader precedence is
+  explicit env, persisted provider-status config, then the Longhouse-home
+  default. Local-health reads those artifacts as operation proof only when the
+  sidecar provider and normalized version match the installed provider CLI. This
+  proof is additive to the support-state projection; it does not overwrite
+  Sauron's release verdict.
 - `scripts/qa/provider-release-profile-canary.py` emits the shared provider
   profile artifact for any managed provider in
   `server/zerg/config/managed_provider_contracts.json`.

@@ -173,3 +173,90 @@ def test_provider_live_canary_installed_default_evidence_uses_longhouse_home(
     assert evidence_root.parent == longhouse_home / "canaries" / "provider-live" / "claude"
     assert Path(payload["artifact_path"]) == evidence_root / "provider-live-canary.json"
     assert Path(payload["artifact_path"]).is_file()
+
+
+def test_provider_live_publish_cli_writes_stable_sidecar(tmp_path: Path) -> None:
+    fake_bin = _fake_claude(tmp_path / "bin" / "claude")
+    proof_dir = tmp_path / "proof"
+    evidence_root = tmp_path / "evidence"
+    env = {
+        "PATH": f"{fake_bin.parent}{os.pathsep}{os.environ.get('PATH', '')}",
+        "LONGHOUSE_HOME": str(tmp_path / "longhouse-home"),
+    }
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "provider-live",
+            "publish",
+            "--provider",
+            "claude",
+            "--proof-dir",
+            str(proof_dir),
+            "--evidence-root",
+            str(evidence_root),
+            "--json",
+        ],
+        env=env,
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    stable = proof_dir / "claude.json"
+    artifact = json.loads(stable.read_text(encoding="utf-8"))
+    assert payload["artifact_kind"] == "provider_live_proof_publish"
+    assert payload["results"][0]["status"] == "published"
+    assert payload["results"][0]["stable_path"] == str(stable)
+    assert artifact["artifact_kind"] == "provider_live_canary"
+    assert artifact["provider"] == "claude"
+    assert artifact["verdict"] == "yellow"
+
+
+def test_provider_live_publish_cli_exits_nonzero_on_red_canary(tmp_path: Path) -> None:
+    fake_bin = _fake_claude(tmp_path / "bin" / "claude")
+    proof_dir = tmp_path / "proof"
+    env = {
+        "PATH": f"{fake_bin.parent}{os.pathsep}{os.environ.get('PATH', '')}",
+        "FAKE_CLAUDE_MISSING_SESSION_ID": "1",
+        "LONGHOUSE_HOME": str(tmp_path / "longhouse-home"),
+    }
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "provider-live",
+            "publish",
+            "--provider",
+            "claude",
+            "--proof-dir",
+            str(proof_dir),
+            "--evidence-root",
+            str(tmp_path / "evidence"),
+            "--json",
+        ],
+        env=env,
+    )
+
+    assert result.exit_code == 1, result.output
+    payload = json.loads(result.output)
+    artifact = json.loads((proof_dir / "claude.json").read_text(encoding="utf-8"))
+    assert payload["results"][0]["returncode"] == 1
+    assert artifact["verdict"] == "red"
+    assert artifact["failure_code"] == "claude_command_contract_missing"
+
+
+def test_provider_live_publish_cli_rejects_unsupported_provider(tmp_path: Path) -> None:
+    result = CliRunner().invoke(
+        app,
+        [
+            "provider-live",
+            "publish",
+            "--provider",
+            "codex",
+            "--proof-dir",
+            str(tmp_path / "proof"),
+        ],
+    )
+
+    assert result.exit_code == 2
+    assert "Unsupported provider" in result.output
