@@ -20,6 +20,7 @@ class _ServerState:
     def __init__(self) -> None:
         self.requests: list[dict] = []
         self.bad_mismatch_shape = False
+        self.provider_verdicts: dict[str, str] = {}
         self.transient_match_failures: dict[str, int] = {}
 
 
@@ -85,7 +86,7 @@ class _Handler(BaseHTTPRequestHandler):
                             "artifact_kind": "provider_live_canary",
                             "provider": provider,
                             "provider_version": expected,
-                            "verdict": "green",
+                            "verdict": self.state.provider_verdicts.get(provider, "green"),
                         },
                         "provider_version_match": {
                             "status": "match",
@@ -226,9 +227,53 @@ def test_route_e2e_can_run_typed_mismatch_for_every_provider() -> None:
         server.shutdown()
 
 
+def test_route_e2e_accepts_yellow_verdict_by_default() -> None:
+    state = _ServerState()
+    state.provider_verdicts["claude"] = "yellow"
+    server, api_url = _run_server(state)
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            token_file, proof_dir = _write_inputs(root)
+            result, payload = _run_harness(root, api_url, token_file, proof_dir)
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["require_verdict"] == "non-red"
+        assert payload["verdict"] == "green"
+        assert payload["results"][0]["provider"] == "claude"
+        assert payload["results"][0]["status"] == "pass"
+        assert payload["results"][0]["verdict"] == "yellow"
+    finally:
+        server.shutdown()
+
+
+def test_route_e2e_rejects_yellow_verdict_when_green_is_required() -> None:
+    state = _ServerState()
+    state.provider_verdicts["claude"] = "yellow"
+    server, api_url = _run_server(state)
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            token_file, proof_dir = _write_inputs(root)
+            result, payload = _run_harness(
+                root,
+                api_url,
+                token_file,
+                proof_dir,
+                "--require-verdict",
+                "green",
+            )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["results"][0]["failure_code"] == "provider_live_verdict_not_green"
+    finally:
+        server.shutdown()
+
+
 def test_route_e2e_retries_transient_match_failure() -> None:
     state = _ServerState()
-    state.transient_match_failures["opencode"] = 1
+    state.transient_match_failures["opencode"] = 5
     server, api_url = _run_server(state)
     try:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -240,12 +285,16 @@ def test_route_e2e_retries_transient_match_failure() -> None:
         assert payload["verdict"] == "green"
         opencode = payload["results"][1]
         assert opencode["provider"] == "opencode"
-        assert opencode["match_attempt_count"] == 2
+        assert opencode["match_attempt_count"] == 6
         assert opencode["match_attempts"][0]["status_code"] == 503
         assert opencode["match_attempts"][0]["retryable"] is True
         assert [(request["provider"], request["expected_provider_version"]) for request in state.requests] == [
             ("claude", "2.1.153"),
             ("claude", "9.9.9-longhouse-route-e2e"),
+            ("opencode", "1.15.11"),
+            ("opencode", "1.15.11"),
+            ("opencode", "1.15.11"),
+            ("opencode", "1.15.11"),
             ("opencode", "1.15.11"),
             ("opencode", "1.15.11"),
         ]
@@ -261,7 +310,7 @@ def test_route_e2e_fails_when_mismatch_is_not_typed() -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             token_file, proof_dir = _write_inputs(root)
-            result, payload = _run_harness(root, api_url, token_file, proof_dir)
+            result, payload = _run_harness(root, api_url, token_file, proof_dir, "--retry-delay-s", "0")
 
         assert result.returncode == 1
         assert payload["verdict"] == "red"
@@ -274,6 +323,8 @@ def main() -> int:
     tests = [
         test_route_e2e_requires_match_and_typed_mismatch,
         test_route_e2e_can_run_typed_mismatch_for_every_provider,
+        test_route_e2e_accepts_yellow_verdict_by_default,
+        test_route_e2e_rejects_yellow_verdict_when_green_is_required,
         test_route_e2e_retries_transient_match_failure,
         test_route_e2e_fails_when_mismatch_is_not_typed,
     ]
