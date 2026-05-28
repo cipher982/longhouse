@@ -22,6 +22,7 @@ from zerg.provider_release_status import _normalize_operation_evidence
 from zerg.provider_release_status import _parse_rfc3339
 from zerg.provider_release_status import _provider_version_from_cli
 from zerg.provider_release_status import normalize_provider_version
+from zerg.services.longhouse_paths import get_provider_live_proof_dir
 from zerg.services.managed_provider_contracts import managed_provider_names
 
 LIVE_PROOF_ARTIFACT_KIND = "provider_live_canary"
@@ -39,16 +40,24 @@ def _read_json_file(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     return payload, None
 
 
-def _proof_file_candidates(provider: str) -> list[Path]:
+def configured_provider_live_proof_dir(base_dir: Path | None = None) -> Path:
     raw = _configured_value(PROVIDER_LIVE_PROOF_DIR_ENV)
-    if not raw:
-        return []
-    return [Path(raw).expanduser() / f"{provider}.json"]
+    if raw:
+        return Path(raw).expanduser()
+    return get_provider_live_proof_dir(base_dir)
 
 
-def _load_live_proof_artifact(provider: str) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+def _proof_file_candidates(provider: str, *, base_dir: Path | None = None) -> list[Path]:
+    return [configured_provider_live_proof_dir(base_dir) / f"{provider}.json"]
+
+
+def _load_live_proof_artifact(
+    provider: str,
+    *,
+    base_dir: Path | None = None,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     attempts: list[dict[str, Any]] = []
-    for path in _proof_file_candidates(provider):
+    for path in _proof_file_candidates(provider, base_dir=base_dir):
         payload, error = _read_json_file(path)
         attempts.append({"source": "file", "path": str(path), "error": error})
         if payload is not None:
@@ -87,8 +96,13 @@ def _version_match_state(
     return "mismatch"
 
 
-def _status_for_provider(provider: str, provider_cli: dict[str, Any]) -> dict[str, Any]:
-    artifact, source = _load_live_proof_artifact(provider)
+def _status_for_provider(
+    provider: str,
+    provider_cli: dict[str, Any],
+    *,
+    base_dir: Path | None = None,
+) -> dict[str, Any]:
+    artifact, source = _load_live_proof_artifact(provider, base_dir=base_dir)
     configured = bool(source.get("attempts"))
     if artifact is None:
         attempts = list(source.get("attempts") or [])
@@ -175,6 +189,7 @@ def collect_provider_live_proof(
     provider_clis: dict[str, Any],
     *,
     fast: bool = False,
+    base_dir: Path | None = None,
 ) -> dict[str, Any]:
     if fast:
         return {
@@ -187,7 +202,11 @@ def collect_provider_live_proof(
     statuses: dict[str, Any] = {}
     providers = sorted(set(provider_clis) | set(managed_provider_names()))
     for provider in providers:
-        statuses[provider] = _status_for_provider(provider, dict(provider_clis.get(provider) or {}))
+        statuses[provider] = _status_for_provider(
+            provider,
+            dict(provider_clis.get(provider) or {}),
+            base_dir=base_dir,
+        )
 
     return {
         "schema_version": PROVIDER_STATUS_SCHEMA_VERSION,
@@ -196,4 +215,4 @@ def collect_provider_live_proof(
     }
 
 
-__all__ = ["LIVE_PROOF_ARTIFACT_KIND", "collect_provider_live_proof"]
+__all__ = ["LIVE_PROOF_ARTIFACT_KIND", "collect_provider_live_proof", "configured_provider_live_proof_dir"]

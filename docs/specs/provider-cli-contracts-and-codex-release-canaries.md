@@ -239,11 +239,16 @@ Initial product contract:
 
 - Sauron publishes one latest-status JSON document per provider.
 - A local dogfood machine can publish independent live-proof sidecars under
-  `LONGHOUSE_PROVIDER_LIVE_PROOF_DIR` by running
-  `scripts/qa/provider-live-proof-publish.py`. Local-health reads those
-  artifacts as operation proof only when the sidecar provider and normalized
-  version match the installed provider CLI. This proof is additive to the
-  support-state projection; it does not overwrite Sauron's release verdict.
+  `LONGHOUSE_PROVIDER_LIVE_PROOF_DIR`, or the default
+  `~/.longhouse/provider-live-proof`, by running
+  `scripts/qa/provider-live-proof-publish.py`. `make dogfood-refresh` runs
+  this publisher as part of the dogfood repair loop; `make dogfood-check` only
+  reports the current sidecars. Reader precedence is explicit env, persisted
+  provider-status config, then the Longhouse-home default. Local-health reads
+  those artifacts as operation proof only when the sidecar provider and
+  normalized version match the installed provider CLI. This proof is additive
+  to the support-state projection; it does not overwrite Sauron's release
+  verdict.
 - `scripts/qa/provider-release-profile-canary.py` emits the shared provider
   profile artifact for any managed provider in
   `server/zerg/config/managed_provider_contracts.json`.

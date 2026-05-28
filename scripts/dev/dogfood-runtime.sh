@@ -20,6 +20,10 @@ SKIP_ENGINE=0
 
 resolve_longhouse_home() {
   local provider_home="$1"
+  if [[ -n "${LONGHOUSE_HOME:-}" ]]; then
+    printf '%s\n' "$LONGHOUSE_HOME"
+    return
+  fi
   local basename
   basename="$(basename "$provider_home")"
   if [[ "$basename" == ".longhouse" ]]; then
@@ -28,8 +32,6 @@ resolve_longhouse_home() {
   fi
   printf '%s\n' "$(dirname "$provider_home")/.longhouse"
 }
-
-LONGHOUSE_HOME="$(resolve_longhouse_home "$CLAUDE_DIR")"
 
 usage() {
   cat <<'EOF'
@@ -268,6 +270,22 @@ run_check() {
   run_repo_longhouse local-health
 }
 
+publish_provider_live_proof() {
+  local status=0
+  require_cmd uv
+  require_cmd python3
+
+  log "==> Publishing provider live proof"
+  log "Proof dir: $PROVIDER_LIVE_PROOF_DIR"
+  LONGHOUSE_PROVIDER_LIVE_PROOF_DIR="$PROVIDER_LIVE_PROOF_DIR" \
+    uv run --project "$SERVER_PROJECT" python "$ROOT_DIR/scripts/qa/provider-live-proof-publish.py" \
+      --repo-root "$ROOT_DIR" || status=$?
+  if (( status != 0 )); then
+    log "WARN: provider live proof published with failures (exit $status); local-health will show the sidecar state."
+    log "Evidence root: $ROOT_DIR/.build/canaries/provider-live"
+  fi
+}
+
 run_refresh() {
   local url
   local machine_name
@@ -309,6 +327,8 @@ run_refresh() {
   fi
 
   log ""
+  publish_provider_live_proof
+  log ""
   run_check
 }
 
@@ -343,6 +363,9 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+LONGHOUSE_HOME="$(resolve_longhouse_home "$CLAUDE_DIR")"
+PROVIDER_LIVE_PROOF_DIR="$LONGHOUSE_HOME/provider-live-proof"
 
 case "$COMMAND" in
   refresh)

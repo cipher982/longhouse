@@ -29,6 +29,35 @@ def _repo_root_from_script() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def _fallback_default_proof_dir() -> Path:
+    env_proof_dir = os.getenv(LIVE_PROOF_DIR_ENV, "").strip()
+    if env_proof_dir:
+        return Path(env_proof_dir).expanduser()
+    longhouse_home = os.getenv("LONGHOUSE_HOME", "").strip()
+    if longhouse_home:
+        return Path(longhouse_home).expanduser() / "provider-live-proof"
+    return Path.home() / ".longhouse" / "provider-live-proof"
+
+
+def _default_proof_dir() -> Path:
+    server_path = str(_repo_root_from_script() / "server")
+    inserted = False
+    if server_path not in sys.path:
+        sys.path.insert(0, server_path)
+        inserted = True
+    try:
+        from zerg.provider_live_proof import configured_provider_live_proof_dir
+    except ImportError:
+        return _fallback_default_proof_dir()
+    finally:
+        if inserted:
+            try:
+                sys.path.remove(server_path)
+            except ValueError:
+                pass
+    return configured_provider_live_proof_dir()
+
+
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
@@ -211,10 +240,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     args.repo_root = args.repo_root.resolve()
-    env_proof_dir = os.getenv(LIVE_PROOF_DIR_ENV, "").strip()
-    args.proof_dir = (args.proof_dir or (Path(env_proof_dir).expanduser() if env_proof_dir else None))
-    if args.proof_dir is None:
-        parser.error(f"--proof-dir or {LIVE_PROOF_DIR_ENV} is required")
+    args.proof_dir = args.proof_dir or _default_proof_dir()
     args.proof_dir = args.proof_dir.expanduser().resolve()
     args.evidence_root = (args.evidence_root or args.repo_root / ".build/canaries/provider-live").resolve()
     providers = tuple(args.provider or DEFAULT_PROVIDERS)

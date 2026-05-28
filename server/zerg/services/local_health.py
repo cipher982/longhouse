@@ -3571,7 +3571,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
     provider_clis = _collect_provider_clis()
     provider_contracts = _collect_provider_contracts()
     provider_release_status = collect_provider_release_status(provider_clis, fast=fast)
-    provider_live_proof = collect_provider_live_proof(provider_clis, fast=fast)
+    provider_live_proof = collect_provider_live_proof(provider_clis, fast=fast, base_dir=resolved_base_dir)
     activity_summary = _collect_activity_summary(resolved_base_dir, now=now)
     managed_summary, managed_sessions, orphan_bridges, unmanaged_processes = _collect_managed_session_sources(
         resolved_base_dir,

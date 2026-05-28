@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -162,7 +163,41 @@ def test_missing_artifact_from_successful_canary_fails_publisher() -> None:
         assert artifact["failure_code"] == "live_canary_failed_to_emit_artifact"
 
 
+def test_defaults_proof_dir_to_longhouse_home() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        fake_repo = root / "repo"
+        longhouse_home = root / ".longhouse-dev"
+        _write_fake_canary(fake_repo / "scripts/qa/provider-live-canary.py")
+        env = os.environ.copy()
+        env.pop("LONGHOUSE_PROVIDER_LIVE_PROOF_DIR", None)
+        env["LONGHOUSE_HOME"] = str(longhouse_home)
+        env["LONGHOUSE_PROVIDER_RELEASE_STATUS_CONFIG"] = str(root / "missing-provider-status.env")
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(PUBLISHER),
+                "--repo-root",
+                str(fake_repo),
+                "--provider",
+                "claude",
+                "--json",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=env,
+        )
+
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+        assert payload["proof_dir"] == str((longhouse_home / "provider-live-proof").resolve())
+        assert (longhouse_home / "provider-live-proof" / "claude.json").exists()
+
+
 if __name__ == "__main__":
     test_publishes_stable_sidecar_from_live_canary()
     test_publishes_fallback_when_canary_is_missing()
     test_missing_artifact_from_successful_canary_fails_publisher()
+    test_defaults_proof_dir_to_longhouse_home()
