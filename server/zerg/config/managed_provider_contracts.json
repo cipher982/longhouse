@@ -109,7 +109,7 @@
         },
         "send_input": {
           "level": "hermetic",
-          "source": "scripts/qa/provider-control-e2e-canary.py Claude channel send delivery; provider-live canary --provider claude token-backed proof proves real channel prompt delivery"
+          "source": "scripts/qa/provider-control-e2e-canary.py Claude channel send delivery; token-spending prompt proof belongs to release canaries"
         },
         "interrupt": {
           "level": "hermetic",
@@ -117,7 +117,7 @@
         },
         "steer_active_turn": {
           "level": "manual_live_token",
-          "source": "make managed-claude-poc and provider-live canary --provider claude token-backed proof delayed intent=steer transcript assertion",
+          "source": "make managed-claude-poc delayed intent=steer transcript assertion",
           "next": "promote to scheduled live token canary"
         },
         "terminate": {
@@ -137,7 +137,7 @@
         "transcript_binding": {
           "level": "hermetic",
           "source": "Claude hook transcript binding tests",
-          "next": "promote with provider-live canary --provider claude token-backed proof live transcript assertion"
+          "next": "promote when Claude release-canary live transcript assertion exists"
         }
       },
       "machine_control_supports": ["claude.send", "claude.interrupt", "claude.steer", "claude.launch"]
@@ -165,7 +165,7 @@
         "launch_local": {
           "level": "live_no_token",
           "source": "longhouse provider-live canary --provider opencode server readiness/schema/session checks",
-          "next": "promote with token-spending prompt transcript canary"
+          "next": "promote with release-canary prompt transcript proof"
         },
         "launch_remote": {
           "level": "hermetic",
@@ -178,14 +178,14 @@
           "next": "promote with a scheduled/budgeted live-token release lane"
         },
         "send_input": {
-          "level": "manual_live_token",
-          "source": "longhouse provider-live canary OpenCode assistant response observed through session.messages",
-          "next": "promote with a scheduled/budgeted live-token release lane"
+          "level": "live_no_token",
+          "source": "longhouse provider-live canary OpenCode prompt_async noReply delivery through session.messages",
+          "next": "promote with release-canary assistant response proof"
         },
         "interrupt": {
-          "level": "manual_live_token",
-          "source": "longhouse provider-live canary OpenCode active-turn abort check",
-          "next": "promote with a scheduled/budgeted live-token release lane"
+          "level": "live_no_token",
+          "source": "longhouse provider-live canary OpenCode abort endpoint against a created session",
+          "next": "promote with release-canary active-turn abort proof"
         },
         "steer_active_turn": {
           "level": "none",
@@ -206,9 +206,9 @@
           "next": "prove freshness in live active-turn canary"
         },
         "transcript_binding": {
-          "level": "manual_live_token",
-          "source": "longhouse provider-live canary OpenCode assistant response transcript assertion",
-          "next": "promote with scheduled release-lane evidence"
+          "level": "live_no_token",
+          "source": "longhouse provider-live canary OpenCode session.messages noReply marker assertion",
+          "next": "promote with release-canary assistant transcript assertion"
         }
       },
       "machine_control_supports": ["opencode.send", "opencode.interrupt", "opencode.launch"]
@@ -247,9 +247,9 @@
           "source": "unsupported until Antigravity exposes stable reattach"
         },
         "send_input": {
-          "level": "manual_live_token",
-          "source": "longhouse provider-live canary --provider antigravity token-backed proof real agy hook-inbox injection",
-          "next": "promote with a scheduled/budgeted live-token release lane"
+          "level": "hermetic",
+          "source": "Antigravity hook-inbox enqueue/claim tests; real agy loop proof belongs to release canaries",
+          "next": "promote when Antigravity release-canary real agy hook-inbox injection exists"
         },
         "interrupt": {
           "level": "none",

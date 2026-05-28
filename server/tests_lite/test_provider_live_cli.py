@@ -164,7 +164,6 @@ parser.add_argument("--evidence-root", required=True)
 parser.add_argument("--repo-root")
 parser.add_argument("--json", action="store_true")
 parser.add_argument("--wait-ready-secs")
-parser.add_argument("--live-token-timeout-secs")
 args = parser.parse_args()
 
 payload = {
@@ -177,9 +176,6 @@ payload = {
     "failure_code": "insufficient_coverage",
     "recommendation": "investigate_before_upgrade",
     "canaries": {"fake": {"status": "not_run"}},
-    "received": {
-        "live_token_timeout_secs": args.live_token_timeout_secs,
-    },
     "artifact_path": args.artifact,
     "evidence_root": args.evidence_root,
 }
@@ -206,7 +202,6 @@ parser.add_argument("--evidence-root", required=True)
 parser.add_argument("--repo-root")
 parser.add_argument("--json", action="store_true")
 parser.add_argument("--wait-ready-secs")
-parser.add_argument("--live-token-timeout-secs")
 args = parser.parse_args()
 
 failure_code = os.environ.get("FAKE_PROVIDER_FAILURE_CODE")
@@ -290,24 +285,10 @@ def test_provider_live_canary_uses_packaged_contracts_without_repo_root(tmp_path
     assert json.loads(artifact_path.read_text(encoding="utf-8")) == payload
 
 
-def _stub_claude_live_contracts(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        plc,
-        "_run_claude_live_token_contracts",
-        lambda *_args, **_kwargs: {
-            "launch_local_contract": {"status": "pass"},
-            "send_input_contract": {"status": "pass"},
-            "transcript_binding_contract": {"status": "pass"},
-            "steer_active_turn_contract": {"status": "pass"},
-        },
-    )
-
-
 def test_claude_live_canary_turns_yellow_when_not_logged_in(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _stub_claude_live_contracts(monkeypatch)
     monkeypatch.setenv("FAKE_CLAUDE_NOT_LOGGED_IN", "1")
     fake_bin = _fake_claude(tmp_path / "bin" / "claude")
 
@@ -332,7 +313,6 @@ def test_claude_auth_invalid_json_does_not_publish_raw_identifiers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _stub_claude_live_contracts(monkeypatch)
     monkeypatch.setenv("FAKE_CLAUDE_AUTH_INVALID_JSON", "1")
     fake_bin = _fake_claude(tmp_path / "bin" / "claude")
 
@@ -359,7 +339,6 @@ def test_claude_auth_nonzero_does_not_publish_raw_identifiers(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _stub_claude_live_contracts(monkeypatch)
     monkeypatch.setenv("FAKE_CLAUDE_AUTH_NONZERO", "1")
     fake_bin = _fake_claude(tmp_path / "bin" / "claude")
 
@@ -386,7 +365,6 @@ def test_claude_live_canary_fails_when_channels_contract_is_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _stub_claude_live_contracts(monkeypatch)
     monkeypatch.setenv("FAKE_CLAUDE_BAD_CHANNELS", "1")
     fake_bin = _fake_claude(tmp_path / "bin" / "claude")
 
@@ -410,7 +388,6 @@ def test_claude_live_canary_fails_when_session_flag_is_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _stub_claude_live_contracts(monkeypatch)
     monkeypatch.setenv("FAKE_CLAUDE_MISSING_SESSION_ID", "1")
     fake_bin = _fake_claude(tmp_path / "bin" / "claude")
 
@@ -449,263 +426,6 @@ def test_antigravity_plugin_argv_unwraps_home_based_debug_wrapper(
         "plugin",
         "list",
     ]
-
-
-def test_antigravity_loop_contract_keeps_injected_marker_out_of_prompt(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from zerg.cli import antigravity as antigravity_cli
-
-    monkeypatch.setattr(antigravity_cli, "_ensure_antigravity_runtime_plugin", lambda **_kwargs: tmp_path / "plugin")
-    prompts: list[str] = []
-
-    def fake_run(argv, *, cwd, env, text, capture_output, timeout, check):
-        prompt = argv[-1]
-        prompts.append(prompt)
-        assert "INJECTED_" not in prompt
-        base_marker = next(part.rstrip(".") for part in prompt.split() if part.startswith("BASE_"))
-        inbox_dir = Path(env["LONGHOUSE_ANTIGRAVITY_INBOX_DIR"])
-        message_path = next(inbox_dir.glob("msg-*.json"))
-        payload = json.loads(message_path.read_text(encoding="utf-8"))
-        injected_marker = next(part for part in payload["text"].split() if part.startswith("INJECTED_"))
-        claimed_dir = inbox_dir / "claimed"
-        claimed_dir.mkdir(parents=True)
-        payload.update(
-            {
-                "claimed_at": "2026-05-28T00:00:00Z",
-                "claimed_by": "longhouse-antigravity-hook",
-                "hook_event": "PreInvocation",
-            }
-        )
-        message_path.replace(claimed_dir / f"claimed-{message_path.name}")
-        (claimed_dir / f"claimed-{message_path.name}").write_text(json.dumps(payload), encoding="utf-8")
-        log_path = Path(argv[argv.index("--log-file") + 1])
-        log_path.write_text('JSON hook "jsonhook__longhouse-runtime_PreInvocation_0_0": executing command\n')
-
-        class Completed:
-            returncode = 0
-            stdout = f"{base_marker} {injected_marker}\n"
-            stderr = ""
-
-        return Completed()
-
-    monkeypatch.setattr(plc.subprocess, "run", fake_run)
-
-    result = plc._run_antigravity_loop_invocation_contract_inner(
-        binary="/tmp/fake-agy",
-        root=tmp_path,
-        timeout_secs=3,
-        preservation={"backup_root": str(tmp_path / "backup")},
-    )
-
-    assert result["status"] == "pass"
-    assert prompts
-    assert result["claimed_hook_event"] == "PreInvocation"
-
-
-def test_antigravity_provider_live_token_contract_records_send_evidence(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fake_bin = _fake_antigravity(tmp_path / "bin" / "agy")
-    artifact_path = tmp_path / "artifact.json"
-    calls: list[dict[str, object]] = []
-
-    def fake_loop_contract(**kwargs):
-        calls.append(kwargs)
-        return {
-            "status": "pass",
-            "session_id": "ag-session",
-            "provider_session_id": "ag-provider-session",
-            "claimed_hook_event": "PreInvocation",
-        }
-
-    monkeypatch.setattr(plc, "_run_antigravity_loop_invocation_contract", fake_loop_contract)
-
-    payload = run_provider_live_canary(
-        {
-            "repo_root": str(tmp_path / "not-a-repo"),
-            "provider": "antigravity",
-            "provider_bin": str(fake_bin),
-            "artifact": str(artifact_path),
-            "evidence_root": str(tmp_path / "evidence"),
-            "wait_ready_secs": 1.0,
-            "live_token_timeout_secs": 17,
-            "json": True,
-        }
-    )
-
-    assert payload["provider"] == "antigravity"
-    assert payload["verdict"] == "green"
-    assert payload["failure_code"] is None
-    assert calls[0]["binary"] == str(fake_bin)
-    assert calls[0]["timeout_secs"] == 17
-    assert payload["canaries"]["loop_invocation_contract"]["status"] == "pass"
-    send_input = payload["operation_evidence"]["send_input"]
-    assert send_input["status"] == "pass"
-    assert send_input["level"] == "manual_live_token"
-    assert send_input["canary"] == "antigravity_loop_invocation_contract"
-
-
-def test_claude_provider_live_token_contract_success_records_control_evidence(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fake_bin = _fake_claude(tmp_path / "bin" / "claude")
-    terminal_log = tmp_path / "terminal.log"
-    terminal_log.write_text("ok\n", encoding="utf-8")
-
-    def fake_run(config):
-        return {
-            "run_id": config.run_id,
-            "session_id": "11111111-1111-4111-8111-111111111111",
-            "channel_ready": True,
-            "development_channel_warning_confirmed": True,
-            "workspace_trust_confirmed": False,
-            "sent_prompt": True,
-            "prompt_send_returncode": 0,
-            "steer_requested": True,
-            "steer_sent": True,
-            "steer_send_returncode": 0,
-            "observed_expected": True,
-            "observed_transcript_path": str(tmp_path / "transcript.jsonl"),
-            "observed_transcript_line": 3,
-            "observed_transcript_timestamp": "2026-05-28T12:00:00Z",
-            "process_returncode": 0,
-            "terminal_log": str(terminal_log),
-            "events_path": str(tmp_path / "events.jsonl"),
-            "hosted_terminal_source": "claude_channel_wrapper",
-        }
-
-    monkeypatch.setattr(plc, "run_managed_claude_live_session", fake_run)
-
-    payload = run_provider_live_canary(
-        {
-            "repo_root": str(tmp_path),
-            "provider": "claude",
-            "provider_bin": str(fake_bin),
-            "artifact": str(tmp_path / "artifact.json"),
-            "evidence_root": str(tmp_path / "evidence"),
-            "wait_ready_secs": 1.0,
-            "live_token_timeout_secs": 12,
-            "json": True,
-        }
-    )
-
-    assert payload["verdict"] == "green"
-    assert payload["failure_code"] is None
-    assert payload["canaries"]["launch_local_contract"]["status"] == "pass"
-    assert payload["canaries"]["send_input_contract"]["status"] == "pass"
-    assert payload["canaries"]["transcript_binding_contract"]["status"] == "pass"
-    assert payload["canaries"]["steer_active_turn_contract"]["status"] == "pass"
-    assert payload["canaries"]["idle_steer_rejection_contract"]["status"] == "optional_skipped"
-    assert payload["canaries"]["interrupt_contract"]["status"] == "optional_skipped"
-    assert payload["operation_evidence"]["send_input"]["status"] == "pass"
-    assert payload["operation_evidence"]["send_input"]["level"] == "manual_live_token"
-    assert payload["operation_evidence"]["transcript_binding"]["status"] == "pass"
-    assert payload["operation_evidence"]["steer_active_turn"]["status"] == "pass"
-
-
-def test_claude_provider_live_token_contract_reports_provider_auth_diagnostic(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fake_bin = _fake_claude(tmp_path / "bin" / "claude")
-    terminal_log = tmp_path / "terminal.log"
-    terminal_log.write_text("Please run /login\nAPI Error: 401 Invalid authentication credentials\n", encoding="utf-8")
-
-    def fake_run(config):
-        return {
-            "run_id": config.run_id,
-            "session_id": "22222222-2222-4222-8222-222222222222",
-            "channel_ready": True,
-            "development_channel_warning_confirmed": True,
-            "workspace_trust_confirmed": False,
-            "sent_prompt": True,
-            "prompt_send_returncode": 0,
-            "steer_requested": True,
-            "steer_sent": True,
-            "steer_send_returncode": 0,
-            "observed_expected": False,
-            "process_returncode": -15,
-            "terminal_log": str(terminal_log),
-            "events_path": str(tmp_path / "events.jsonl"),
-            "hosted_terminal_state": "finished",
-            "hosted_terminal_source": "scanner",
-        }
-
-    monkeypatch.setattr(plc, "run_managed_claude_live_session", fake_run)
-
-    payload = run_provider_live_canary(
-        {
-            "repo_root": str(tmp_path),
-            "provider": "claude",
-            "provider_bin": str(fake_bin),
-            "artifact": str(tmp_path / "artifact.json"),
-            "evidence_root": str(tmp_path / "evidence"),
-            "wait_ready_secs": 1.0,
-            "live_token_timeout_secs": 12,
-            "json": True,
-        }
-    )
-
-    assert payload["verdict"] == "red"
-    assert payload["failure_code"] == "claude_provider_auth_prompt"
-    assert payload["canaries"]["launch_local_contract"]["status"] == "pass"
-    assert payload["canaries"]["send_input_contract"]["status"] == "pass"
-    execution = payload["canaries"]["transcript_binding_contract"]
-    assert execution["status"] == "fail"
-    assert execution["failure_code"] == "claude_provider_auth_prompt"
-    assert execution["terminal_diagnostic_hint"] == "provider_auth_prompt"
-    assert payload["operation_evidence"]["send_input"]["status"] == "pass"
-    assert payload["operation_evidence"]["transcript_binding"]["status"] == "fail"
-    assert payload["operation_evidence"]["transcript_binding"]["failure_code"] == "claude_provider_auth_prompt"
-    assert "invalid authentication credentials" in payload["operation_evidence"]["transcript_binding"]["message"]
-    assert payload["operation_evidence"]["steer_active_turn"]["failure_code"] == "claude_provider_auth_prompt"
-
-
-def test_claude_provider_live_token_contract_does_not_overclassify_generic_api_text(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    fake_bin = _fake_claude(tmp_path / "bin" / "claude")
-    terminal_log = tmp_path / "terminal.log"
-    terminal_log.write_text("The assistant mentioned an API in ordinary output.\n", encoding="utf-8")
-
-    def fake_run(config):
-        return {
-            "run_id": config.run_id,
-            "session_id": "33333333-3333-4333-8333-333333333333",
-            "channel_ready": True,
-            "development_channel_warning_confirmed": True,
-            "sent_prompt": True,
-            "prompt_send_returncode": 0,
-            "steer_sent": True,
-            "steer_send_returncode": 0,
-            "observed_expected": False,
-            "process_returncode": -15,
-            "terminal_log": str(terminal_log),
-            "events_path": str(tmp_path / "events.jsonl"),
-        }
-
-    monkeypatch.setattr(plc, "run_managed_claude_live_session", fake_run)
-
-    payload = run_provider_live_canary(
-        {
-            "repo_root": str(tmp_path),
-            "provider": "claude",
-            "provider_bin": str(fake_bin),
-            "artifact": str(tmp_path / "artifact.json"),
-            "evidence_root": str(tmp_path / "evidence"),
-            "wait_ready_secs": 1.0,
-            "live_token_timeout_secs": 12,
-            "json": True,
-        }
-    )
-
-    assert payload["verdict"] == "red"
-    assert "terminal_diagnostic_hint" not in payload["canaries"]["transcript_binding_contract"]
 
 
 def test_provider_live_canary_cli_exits_nonzero_on_red(tmp_path: Path) -> None:
@@ -894,7 +614,7 @@ def test_provider_live_publish_cli_writes_stable_sidecar(tmp_path: Path) -> None
     assert artifact["verdict"] == "green"
 
 
-def test_provider_live_publish_cli_passes_token_timeout_to_script(tmp_path: Path) -> None:
+def test_provider_live_publish_cli_rejects_token_timeout_option(tmp_path: Path) -> None:
     proof_dir = tmp_path / "proof"
     script = _fake_provider_live_canary(tmp_path / "bin" / "provider-live-canary")
 
@@ -917,9 +637,9 @@ def test_provider_live_publish_cli_passes_token_timeout_to_script(tmp_path: Path
         ],
     )
 
-    assert result.exit_code == 0, result.output
-    artifact = json.loads((proof_dir / "claude.json").read_text(encoding="utf-8"))
-    assert artifact["received"] == {"live_token_timeout_secs": "17"}
+    assert result.exit_code == 2
+    assert "No such option" in result.output
+    assert not (proof_dir / "claude.json").exists()
 
 
 def test_provider_live_publish_cli_exits_nonzero_on_red_canary(tmp_path: Path) -> None:

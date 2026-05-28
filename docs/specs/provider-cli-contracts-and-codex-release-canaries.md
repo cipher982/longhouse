@@ -306,22 +306,21 @@ Initial product contract:
 - `server/zerg/config/managed_provider_contracts.json` separates operation
   support from `operation_evidence`, so the shared contract can say Claude
   active-turn steer is first-class channel support while still requiring a
-  scheduled live-token canary before the release artifact claims that proof
+  scheduled release canary before the release artifact claims that proof
   level.
 - `longhouse provider-live canary --provider claude` probes the installed
-  upstream Claude Code binary and runs the token-backed channel proof by
-  default: binary version, redacted auth shape, required launch/session flags,
-  the development-channel tagged server contract for Longhouse's private MCP
-  channel, local PTY wrapper availability, provider execution, transcript
-  binding, and active-turn steer.
+  upstream Claude Code binary without spending provider tokens: binary version,
+  redacted auth shape, required launch/session flags, the development-channel
+  tagged server contract for Longhouse's private MCP channel, and local PTY
+  wrapper availability. Provider execution, transcript binding, and
+  active-turn steer belong to explicit release canaries.
 - `longhouse provider-live canary --provider opencode` probes the installed
   upstream OpenCode server contract without executing a prompt: binary version,
   server readiness, `/doc` schema, zero-token session create/get,
   `prompt_async` noReply delivery through `session.messages`, process-restart
-  session recovery, abort, attach command shape, assistant response execution,
-  transcript binding, and abort during an in-flight message turn. Sauron release
-  automation uses this strongest proof by default; missing token-backed evidence
-  stays yellow.
+  session recovery, abort, and attach command shape. Assistant response
+  execution, transcript binding, and abort during an in-flight message turn
+  belong to explicit release canaries.
 - Runtime Host and local-health may cache it and expose:
   - provider
   - upstream version

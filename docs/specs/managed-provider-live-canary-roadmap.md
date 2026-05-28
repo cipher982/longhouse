@@ -160,31 +160,31 @@ and missing live release proof is machine-readable.
    the Longhouse-home default.
 2. Extend the Claude lane beyond the initial no-token checks. The current lane
    proves binary identity, redacted auth shape, required launch/session flags,
-   development-channel tagged server parsing, macOS PTY wrapper availability,
-   provider execution, transcript binding, and active-turn steer. Scheduled
-   live-token evidence owns continuous proof of the full channel contract.
+   development-channel tagged server parsing, and macOS PTY wrapper
+   availability without spending provider tokens. Scheduled release-canary
+   evidence owns continuous proof of provider execution, transcript binding,
+   and active-turn steer.
    The operator live POC at `make managed-claude-poc` can now run an optional
    delayed `intent=steer` injection with `ARGS="--steer-text ..."` and requires
    the assistant transcript to contain the expected steered response. The same
-   PTY/channel/probe loop now backs
-   `longhouse provider-live canary --provider claude`. That lane splits channel
-   launch, channel prompt delivery, provider
-   execution, and active-turn steer so provider-side auth/API failures do not
-   get misclassified as Longhouse channel failures. Idle steer rejection and
-   interrupt remain optional-skipped live-provider contracts until they have
-   their own repeatable upstream proof. Detached remote launch still needs a
-   repeatable live gate against a healthy Runtime Host.
+   PTY/channel/probe loop belongs to the explicit release-canary lane, not the
+   daily provider-live publisher. That lane splits channel launch, channel
+   prompt delivery, provider execution, and active-turn steer so provider-side
+   auth/API failures do not get misclassified as Longhouse channel failures.
+   Idle steer rejection and interrupt remain optional-skipped live-provider
+   contracts until they have their own repeatable upstream proof. Detached
+   remote launch still needs a repeatable live gate against a healthy Runtime
+   Host.
 3. Extend the OpenCode server probe from the initial no-token lane. It is the
    lowest-risk live canary:
    `opencode serve --hostname 127.0.0.1 --port 0 --pure`, `/global/health`,
    `/doc`, session create, attach `--help` command shape, `prompt_async`
    noReply delivery through `session.messages`, process-restart session
    recovery, and abort are checked without relying on a visible terminal or
-   model tokens. The same canary also spends small model calls by default to
-   prove assistant response execution, transcript binding, and abort during an
-   in-flight message turn. Sauron release automation uses this strongest
-   OpenCode proof by default; missing token-backed evidence remains yellow.
-4. Keep the Antigravity live-token lane green for send: real `agy`
+   model tokens. Assistant response execution, transcript binding, and abort
+   during an in-flight message turn belong to the explicit release-canary lane,
+   not the default provider-live publisher.
+4. Keep the Antigravity release-canary lane scoped to send: real `agy`
    version/help/plugin validate/install/list, Longhouse global-hook config,
    and loop-level hook behavior against the upstream runtime.
 5. Continue promoting the packaged Codex release canary inside the same local
@@ -195,7 +195,7 @@ and missing live release proof is machine-readable.
    the typed `provider.live_proof` command only to machines that advertise
    `{provider}.live_proof`. This keeps Sauron and other release automation out
    of the provider-binary business while still giving them structured
-   live-token artifacts from a real user-owned machine. Release automation
+   no-token artifacts from a real user-owned machine. Release automation
    should pass `expected_provider_version` for upstream release gates; mismatches
    are typed application-level conflicts, not green evidence or generic upstream
    5xx responses, and Runtime Host prevents duplicate in-flight live proofs for

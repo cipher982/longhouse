@@ -171,7 +171,7 @@ def _live_canary_profile(provider: str) -> tuple[str, str]:
             "antigravity_hook_inbox_live_contract",
             "longhouse provider-live canary --provider antigravity owns the live agy version/help/plugin "
             "validate/install/list canary plus Longhouse global-hook config proof; "
-            "token-backed provider-live proof proves real loop-level hook injection.",
+            "release canaries prove real loop-level hook injection.",
         ),
     }
     return profiles.get(provider, ("provider_live_contract", "No live canary profile registered."))

@@ -5,9 +5,7 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
@@ -454,7 +452,7 @@ def _run_provider_canary(
     return result, payload
 
 
-def test_opencode_live_canary_proves_server_and_token_backed_contracts() -> None:
+def test_opencode_live_canary_proves_server_and_no_token_contracts() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fake_bin = _fake_opencode(root / "bin" / "opencode")
@@ -473,9 +471,9 @@ def test_opencode_live_canary_proves_server_and_token_backed_contracts() -> None
         assert payload["canaries"]["prompt_async_no_reply_delivery"]["observed_message_count"] == 1
         assert payload["canaries"]["process_restart_reattach_contract"]["status"] == "pass"
         assert payload["canaries"]["session_abort"]["status"] == "pass"
-        assert payload["canaries"]["assistant_response_contract"]["status"] == "pass"
-        assert payload["canaries"]["prompt_async_execution_contract"]["status"] == "pass"
-        assert payload["canaries"]["active_turn_abort_contract"]["status"] == "pass"
+        assert "assistant_response_contract" not in payload["canaries"]
+        assert "prompt_async_execution_contract" not in payload["canaries"]
+        assert "active_turn_abort_contract" not in payload["canaries"]
         assert set(payload["operation_evidence"]) == {
             "interrupt",
             "launch_local",
@@ -487,10 +485,19 @@ def test_opencode_live_canary_proves_server_and_token_backed_contracts() -> None
         assert payload["operation_evidence"]["reattach"]["level"] == "live_no_token"
         assert payload["operation_evidence"]["reattach"]["canary"] == "opencode_process_restart_reattach_contract"
         assert payload["operation_evidence"]["send_input"]["status"] == "pass"
-        assert payload["operation_evidence"]["send_input"]["level"] == "manual_live_token"
-        assert payload["operation_evidence"]["send_input"]["canary"] == "opencode_assistant_response_contract"
+        assert payload["operation_evidence"]["send_input"]["level"] == "live_no_token"
+        assert payload["operation_evidence"]["send_input"]["canary"] == "opencode_prompt_async_no_reply_delivery"
         assert payload["operation_evidence"]["interrupt"]["status"] == "pass"
-        assert payload["operation_evidence"]["interrupt"]["level"] == "manual_live_token"
+        assert payload["operation_evidence"]["interrupt"]["level"] == "live_no_token"
+        assert payload["operation_evidence"]["interrupt"]["canary"] == "opencode_abort_endpoint"
+        assert payload["operation_evidence"]["transcript_binding"]["status"] == "pass"
+        assert payload["operation_evidence"]["transcript_binding"]["level"] == "live_no_token"
+        assert (
+            payload["operation_evidence"]["transcript_binding"]["canary"]
+            == "opencode_prompt_async_no_reply_delivery"
+        )
+        serialized = json.dumps(payload)
+        assert "Reply with exactly this token" not in serialized
 
 
 def test_antigravity_live_canary_fails_when_plugin_install_fails() -> None:
@@ -553,7 +560,7 @@ def test_opencode_live_canary_fails_when_noreply_schema_is_missing() -> None:
         assert failures[0]["property"] == "noReply"
 
 
-def test_opencode_live_token_contract_fails_when_message_post_schema_is_missing() -> None:
+def test_opencode_live_canary_fails_when_message_post_schema_is_missing() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fake_bin = _fake_opencode(root / "bin" / "opencode")
@@ -612,35 +619,6 @@ def test_opencode_live_canary_fails_when_prompt_async_delivery_is_not_observed()
         assert payload["operation_evidence"]["send_input"]["level"] == "none"
 
 
-def test_opencode_live_canary_records_token_backed_operation_evidence() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        fake_bin = _fake_opencode(root / "bin" / "opencode")
-        result, payload = _run_canary(root, fake_bin)
-
-        assert result.returncode == 0, result.stderr + result.stdout
-        assert payload["verdict"] == "green"
-        assert payload["failure_code"] is None
-        assert payload["canaries"]["assistant_response_contract"]["status"] == "pass"
-        assert payload["canaries"]["prompt_async_execution_contract"]["status"] == "pass"
-        assert payload["canaries"]["active_turn_abort_contract"]["status"] == "pass"
-        assert payload["canaries"]["active_turn_abort_contract"]["response_error_name"] == "MessageAbortedError"
-        assert payload["canaries"]["process_restart_reattach_contract"]["status"] == "pass"
-        assert payload["canaries"]["active_turn_abort_and_reattach_contract"]["status"] == "pass"
-        assert payload["operation_evidence"]["reattach"]["status"] == "pass"
-        assert payload["operation_evidence"]["reattach"]["canary"] == "opencode_process_restart_reattach_contract"
-        assert payload["operation_evidence"]["send_input"]["status"] == "pass"
-        assert payload["operation_evidence"]["send_input"]["level"] == "manual_live_token"
-        assert payload["operation_evidence"]["send_input"]["canary"] == "opencode_assistant_response_contract"
-        assert payload["operation_evidence"]["interrupt"]["status"] == "pass"
-        assert payload["operation_evidence"]["interrupt"]["level"] == "manual_live_token"
-        assert payload["operation_evidence"]["interrupt"]["canary"] == "opencode_active_turn_abort_contract"
-        assert payload["operation_evidence"]["transcript_binding"]["status"] == "pass"
-        assert payload["operation_evidence"]["transcript_binding"]["level"] == "manual_live_token"
-        serialized = json.dumps(payload)
-        assert "Reply with exactly this token" not in serialized
-
-
 def test_opencode_live_canary_fails_when_restart_loses_transcript_marker() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -658,181 +636,18 @@ def test_opencode_live_canary_fails_when_restart_loses_transcript_marker() -> No
         )
 
 
-def test_opencode_live_token_contract_failure_is_send_input_evidence() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        fake_bin = _fake_opencode(root / "bin" / "opencode")
-        result, payload = _run_canary(
-            root,
-            fake_bin,
-            {"FAKE_OPENCODE_BAD_ASSISTANT_MARKER": "1"},
-        )
-
-        assert result.returncode == 1
-        assert payload["verdict"] == "red"
-        assert payload["failure_code"] == "opencode_assistant_response_marker_missing"
-        assert payload["canaries"]["assistant_response_contract"]["status"] == "fail"
-        assert payload["canaries"]["active_turn_abort_contract"]["status"] == "not_run"
-        assert payload["operation_evidence"]["send_input"]["status"] == "fail"
-        assert payload["operation_evidence"]["send_input"]["level"] == "none"
-        assert (
-            payload["operation_evidence"]["send_input"]["failure_code"] == "opencode_assistant_response_marker_missing"
-        )
-
-
-def test_opencode_live_token_contract_reports_post_request_failure() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        fake_bin = _fake_opencode(root / "bin" / "opencode")
-        result, payload = _run_canary(
-            root,
-            fake_bin,
-            {"FAKE_OPENCODE_MESSAGE_POST_500": "1"},
-        )
-
-        assert result.returncode == 1
-        assert payload["verdict"] == "red"
-        assert payload["failure_code"] == "opencode_assistant_response_request_failed"
-        assert payload["canaries"]["assistant_response_contract"]["request_phase"] == "post_session_message"
-        assert payload["canaries"]["active_turn_abort_contract"]["status"] == "not_run"
-        assert payload["canaries"]["session_abort"]["status"] == "pass"
-        assert payload["operation_evidence"]["interrupt"]["status"] == "pass"
-
-
-def test_opencode_live_token_contract_reports_get_messages_failure() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        fake_bin = _fake_opencode(root / "bin" / "opencode")
-        result, payload = _run_canary(
-            root,
-            fake_bin,
-            {"FAKE_OPENCODE_MESSAGE_GET_500": "1"},
-        )
-
-        assert result.returncode == 1
-        assert payload["verdict"] == "red"
-        assert payload["failure_code"] == "opencode_assistant_response_request_failed"
-        assert payload["canaries"]["assistant_response_contract"]["request_phase"] == "get_session_messages"
-        assert payload["canaries"]["active_turn_abort_contract"]["status"] == "not_run"
-        assert payload["canaries"]["session_abort"]["status"] == "pass"
-
-
-def test_opencode_live_token_contract_reports_transcript_missing() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        fake_bin = _fake_opencode(root / "bin" / "opencode")
-        result, payload = _run_canary(
-            root,
-            fake_bin,
-            {"FAKE_OPENCODE_DROP_ASSISTANT_TRANSCRIPT": "1"},
-        )
-
-        assert result.returncode == 1
-        assert payload["verdict"] == "red"
-        assert payload["failure_code"] == "opencode_assistant_response_transcript_missing"
-        assert payload["canaries"]["assistant_response_contract"]["status"] == "fail"
-        assert payload["canaries"]["active_turn_abort_contract"]["status"] == "not_run"
-        assert payload["canaries"]["session_abort"]["status"] == "pass"
-
-
-def test_opencode_live_token_contract_fails_when_active_abort_request_fails() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        fake_bin = _fake_opencode(root / "bin" / "opencode")
-        result, payload = _run_canary(
-            root,
-            fake_bin,
-            {"FAKE_OPENCODE_ABORT_500": "1"},
-        )
-
-        assert result.returncode == 1
-        assert payload["verdict"] == "red"
-        assert payload["failure_code"] == "opencode_active_turn_abort_request_failed"
-        assert payload["canaries"]["assistant_response_contract"]["status"] == "pass"
-        assert payload["canaries"]["active_turn_abort_contract"]["status"] == "fail"
-        assert payload["operation_evidence"]["interrupt"]["status"] == "fail"
-        assert payload["operation_evidence"]["interrupt"]["level"] == "none"
-        assert payload["operation_evidence"]["interrupt"]["failure_code"] == "opencode_active_turn_abort_request_failed"
-
-
-def test_opencode_live_token_contract_fails_when_active_abort_returns_bad_shape() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        fake_bin = _fake_opencode(root / "bin" / "opencode")
-        result, payload = _run_canary(
-            root,
-            fake_bin,
-            {"FAKE_OPENCODE_ABORT_BAD_SHAPE": "1"},
-        )
-
-        assert result.returncode == 1
-        assert payload["verdict"] == "red"
-        assert payload["failure_code"] == "opencode_active_turn_abort_failed"
-        assert payload["canaries"]["active_turn_abort_contract"]["status"] == "fail"
-        assert payload["operation_evidence"]["interrupt"]["status"] == "fail"
-        assert payload["operation_evidence"]["interrupt"]["failure_code"] == "opencode_active_turn_abort_failed"
-
-
-def test_opencode_live_token_contract_fails_when_active_abort_is_not_observed() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        fake_bin = _fake_opencode(root / "bin" / "opencode")
-        result, payload = _run_canary(
-            root,
-            fake_bin,
-            {"FAKE_OPENCODE_ABORT_IGNORED": "1"},
-        )
-
-        assert result.returncode == 1
-        assert payload["verdict"] == "red"
-        assert payload["failure_code"] == "opencode_active_turn_abort_not_observed"
-        assert payload["canaries"]["active_turn_abort_contract"]["status"] == "fail"
-        assert payload["operation_evidence"]["interrupt"]["status"] == "fail"
-        assert payload["operation_evidence"]["interrupt"]["level"] == "none"
-        assert payload["operation_evidence"]["interrupt"]["failure_code"] == "opencode_active_turn_abort_not_observed"
-
-
-def test_opencode_live_token_contract_rejects_stale_abort_transcript() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        fake_bin = _fake_opencode(root / "bin" / "opencode")
-        result, payload = _run_canary(
-            root,
-            fake_bin,
-            {
-                "FAKE_OPENCODE_ABORT_IGNORED": "1",
-                "FAKE_OPENCODE_STALE_ABORT_TRANSCRIPT": "1",
-            },
-        )
-
-        assert result.returncode == 1
-        assert payload["verdict"] == "red"
-        assert payload["failure_code"] == "opencode_active_turn_abort_not_observed"
-        assert payload["canaries"]["active_turn_abort_contract"]["transcript_abort_observed"] is False
-        assert payload["operation_evidence"]["interrupt"]["failure_code"] == "opencode_active_turn_abort_not_observed"
-
-
 def main() -> int:
     tests = [
-        test_opencode_live_canary_proves_server_and_token_backed_contracts,
+        test_opencode_live_canary_proves_server_and_no_token_contracts,
         test_antigravity_live_canary_fails_when_plugin_install_fails,
         test_opencode_live_canary_fails_when_schema_drops_prompt_async,
         test_opencode_live_canary_fails_when_schema_drops_session_messages,
         test_opencode_live_canary_fails_when_noreply_schema_is_missing,
-        test_opencode_live_token_contract_fails_when_message_post_schema_is_missing,
+        test_opencode_live_canary_fails_when_message_post_schema_is_missing,
         test_opencode_live_canary_accepts_empty_successful_abort_response,
         test_opencode_live_canary_reports_prompt_async_request_failure_on_send_input,
         test_opencode_live_canary_fails_when_prompt_async_delivery_is_not_observed,
-        test_opencode_live_canary_records_token_backed_operation_evidence,
         test_opencode_live_canary_fails_when_restart_loses_transcript_marker,
-        test_opencode_live_token_contract_failure_is_send_input_evidence,
-        test_opencode_live_token_contract_reports_post_request_failure,
-        test_opencode_live_token_contract_reports_get_messages_failure,
-        test_opencode_live_token_contract_reports_transcript_missing,
-        test_opencode_live_token_contract_fails_when_active_abort_request_fails,
-        test_opencode_live_token_contract_fails_when_active_abort_returns_bad_shape,
-        test_opencode_live_token_contract_fails_when_active_abort_is_not_observed,
-        test_opencode_live_token_contract_rejects_stale_abort_transcript,
     ]
     for test in tests:
         test()

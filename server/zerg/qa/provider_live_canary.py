@@ -1,18 +1,16 @@
 #!/usr/bin/env python3
-"""Live upstream managed-provider canaries.
+"""No-token upstream managed-provider canaries.
 
-These canaries exercise the installed upstream provider binary directly. They
-are the source-drift layer above the hermetic Longhouse control E2E canaries.
-Claude, OpenCode, and Antigravity run token-backed checks by default because
-release proof should be the strongest available evidence, not a weaker fast
-path hidden behind a flag.
+These canaries exercise the installed upstream provider binary directly for
+binary identity, command/schema shape, and local control-route compatibility.
+Token-spending provider behavior belongs to the explicit release-canary lane,
+not the daily provider-live publish path.
 """
 
 from __future__ import annotations
 
 import argparse
 import base64
-import contextlib
 import hashlib
 import json
 import os
@@ -23,7 +21,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import threading
 import time
 import urllib.error
 import urllib.parse
@@ -34,9 +31,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from zerg.qa.managed_claude_live import ManagedClaudeLiveConfig
-from zerg.qa.managed_claude_live import run_managed_claude_live_session
-from zerg.qa.managed_claude_live import strip_terminal_controls
 from zerg.services.longhouse_paths import resolve_longhouse_home
 
 PROVIDER_STATUS_SCHEMA_VERSION = 1
@@ -56,25 +50,6 @@ _OPENCODE_PROMPT_ASYNC_MESSAGE = " ".join(
         "No-token behavior proof: prompt_async accepted a noReply input and",
         "session.messages returned the delivered marker;",
         "token-spending assistant-response proof is future work.",
-    )
-)
-_OPENCODE_ASSISTANT_RESPONSE_MESSAGE = " ".join(
-    (
-        "Live-token behavior proof: OpenCode returned an assistant response",
-        "and session.messages exposed the assistant text marker.",
-    )
-)
-_OPENCODE_ACTIVE_ABORT_MESSAGE = " ".join(
-    (
-        "Live-token behavior proof: OpenCode accepted abort during an",
-        "in-flight message turn and observed MessageAbortedError.",
-    )
-)
-_ANTIGRAVITY_LOOP_INVOCATION_MESSAGE = " ".join(
-    (
-        "Live-token behavior proof: a real agy loop invoked Longhouse hooks,",
-        "claimed queued hook-inbox input, and the assistant response included",
-        "the injected marker.",
     )
 )
 _CLAUDE_CHANNEL_UNCONFIRMED_MESSAGE = (
@@ -314,55 +289,6 @@ def _claude_operation_evidence(
     if launch_local:
         evidence["launch_local"] = launch_local
 
-    if (canaries.get("send_input_contract") or {}).get("status") in {"pass", "fail", "warn"}:
-        send_input = _entry_from_canary_group(
-            contract,
-            "send_input",
-            canaries=canaries,
-            required=["launch_local_contract", "send_input_contract"],
-            canary_name="claude_send_input_contract",
-            level="manual_live_token",
-            source="longhouse provider-live canary --provider claude token-backed proof",
-            message="Live channel proof: Claude channel accepted a prompt injection into the managed session.",
-            next_note="promote with a scheduled/budgeted live-token release lane",
-        )
-        if send_input:
-            evidence["send_input"] = send_input
-
-    if (canaries.get("transcript_binding_contract") or {}).get("status") in {"pass", "fail", "warn"}:
-        transcript_binding = _entry_from_canary_group(
-            contract,
-            "transcript_binding",
-            canaries=canaries,
-            required=["transcript_binding_contract"],
-            canary_name="claude_transcript_binding_contract",
-            level="manual_live_token",
-            source="longhouse provider-live canary --provider claude token-backed proof",
-            message="Live-token proof: expected assistant text appeared in Claude transcript.",
-            next_note="promote with a scheduled/budgeted live-token release lane",
-        )
-        if transcript_binding:
-            evidence["transcript_binding"] = transcript_binding
-
-    if (canaries.get("steer_active_turn_contract") or {}).get("status") in {"pass", "fail", "warn"}:
-        steer_active_turn = _entry_from_canary_group(
-            contract,
-            "steer_active_turn",
-            canaries=canaries,
-            required=[
-                "launch_local_contract",
-                "send_input_contract",
-                "steer_active_turn_contract",
-            ],
-            canary_name="claude_steer_active_turn_contract",
-            level="manual_live_token",
-            source="longhouse provider-live canary --provider claude token-backed proof",
-            message="Live-token proof: active-turn channel steer reached the Claude transcript.",
-            next_note="promote with a scheduled/budgeted live-token release lane",
-        )
-        if steer_active_turn:
-            evidence["steer_active_turn"] = steer_active_turn
-
     return evidence
 
 
@@ -431,38 +357,6 @@ def _opencode_operation_evidence(
             failure_code=prompt_async_failure.get("failure_code") or "opencode_prompt_async_schema_failed",
             message=prompt_async_failure.get("message"),
         )
-    elif (canaries.get("assistant_response_contract") or {}).get("status") in {"pass", "fail", "warn"}:
-        assistant_send = _entry_from_canary_group(
-            contract,
-            "send_input",
-            canaries=canaries,
-            required=[
-                "binary_identity",
-                "schema_probe",
-                "prompt_async_no_reply_delivery",
-                "assistant_response_contract",
-            ],
-            canary_name="opencode_assistant_response_contract",
-            level="manual_live_token",
-            source="longhouse provider-live canary --provider opencode token-backed proof",
-            message=_OPENCODE_ASSISTANT_RESPONSE_MESSAGE,
-            next_note="promote with a scheduled/budgeted live-token release lane",
-        )
-        if assistant_send:
-            evidence["send_input"] = assistant_send
-        transcript_binding = _entry_from_canary_group(
-            contract,
-            "transcript_binding",
-            canaries=canaries,
-            required=["assistant_response_contract"],
-            canary_name="opencode_assistant_response_contract",
-            level="manual_live_token",
-            source="longhouse provider-live canary --provider opencode token-backed proof",
-            message="Live-token proof: assistant response marker was visible through session.messages.",
-            next_note="promote with a scheduled/budgeted live-token release lane",
-        )
-        if transcript_binding:
-            evidence["transcript_binding"] = transcript_binding
     elif canaries.get("prompt_async_no_reply_delivery"):
         send_input = _entry_from_canary_group(
             contract,
@@ -470,10 +364,24 @@ def _opencode_operation_evidence(
             canaries=canaries,
             required=["binary_identity", "schema_probe", "prompt_async_no_reply_delivery"],
             canary_name="opencode_prompt_async_no_reply_delivery",
+            level="live_no_token",
+            source="longhouse provider-live canary --provider opencode prompt_async noReply delivery",
             message=_OPENCODE_PROMPT_ASYNC_MESSAGE,
         )
         if send_input:
             evidence["send_input"] = send_input
+        transcript_binding = _entry_from_canary_group(
+            contract,
+            "transcript_binding",
+            canaries=canaries,
+            required=["binary_identity", "schema_probe", "prompt_async_no_reply_delivery"],
+            canary_name="opencode_prompt_async_no_reply_delivery",
+            level="live_no_token",
+            source="longhouse provider-live canary --provider opencode session.messages noReply marker",
+            message="No-token transcript proof: session.messages returned the delivered prompt_async marker.",
+        )
+        if transcript_binding:
+            evidence["transcript_binding"] = transcript_binding
     elif canaries.get("schema_probe", {}).get("status") == "pass":
         evidence["send_input"] = _operation_entry(
             contract,
@@ -485,22 +393,7 @@ def _opencode_operation_evidence(
         )
 
     interrupt_failure = _schema_probe_failed_for(canaries, "/session/{sessionID}/abort", "session.abort")
-    active_abort_status = (canaries.get("active_turn_abort_contract") or {}).get("status")
-    if active_abort_status in {"pass", "fail", "warn"}:
-        interrupt = _entry_from_canary_group(
-            contract,
-            "interrupt",
-            canaries=canaries,
-            required=["binary_identity", "schema_probe", "active_turn_abort_contract"],
-            canary_name="opencode_active_turn_abort_contract",
-            level="manual_live_token",
-            source="longhouse provider-live canary --provider opencode token-backed proof",
-            message=_OPENCODE_ACTIVE_ABORT_MESSAGE,
-            next_note="promote with a scheduled/budgeted live-token release lane",
-        )
-        if interrupt:
-            evidence["interrupt"] = interrupt
-    elif interrupt_failure:
+    if interrupt_failure:
         evidence["interrupt"] = _operation_entry(
             contract,
             "interrupt",
@@ -517,6 +410,8 @@ def _opencode_operation_evidence(
             canaries=canaries,
             required=["binary_identity", "session_abort"],
             canary_name="opencode_abort_endpoint",
+            level="live_no_token",
+            source="longhouse provider-live canary --provider opencode abort endpoint",
             message="API-surface proof: abort endpoint accepted a request against a created session.",
         )
         if interrupt:
@@ -539,21 +434,6 @@ def _antigravity_operation_evidence(
     )
     if launch_local:
         evidence["launch_local"] = launch_local
-
-    if (canaries.get("loop_invocation_contract") or {}).get("status") in {"pass", "fail"}:
-        send_input = _entry_from_canary_group(
-            contract,
-            "send_input",
-            canaries=canaries,
-            required=["loop_invocation_contract"],
-            canary_name="antigravity_loop_invocation_contract",
-            level="manual_live_token",
-            source="longhouse provider-live canary --provider antigravity token-backed proof",
-            message=_ANTIGRAVITY_LOOP_INVOCATION_MESSAGE,
-            next_note="promote with a scheduled/budgeted live-token release lane",
-        )
-        if send_input:
-            evidence["send_input"] = send_input
 
     return evidence
 
@@ -793,54 +673,6 @@ def _messages_contain_text(messages: Any, expected_text: str) -> bool:
     return False
 
 
-def _assistant_message_contains_text(message: Any, expected_text: str) -> bool:
-    if not isinstance(message, dict):
-        return False
-    info = message.get("info")
-    if not isinstance(info, dict) or info.get("role") != "assistant":
-        return False
-    for part in message.get("parts") or []:
-        if not isinstance(part, dict):
-            continue
-        # Real models may quote or lightly wrap the marker; the noReply path
-        # above stays exact because OpenCode should persist user input verbatim.
-        if part.get("type") == "text" and expected_text in str(part.get("text") or ""):
-            return True
-    return False
-
-
-def _messages_contain_assistant_text(messages: Any, expected_text: str) -> bool:
-    if not isinstance(messages, list):
-        return False
-    return any(_assistant_message_contains_text(item, expected_text) for item in messages)
-
-
-def _message_info(message: Any) -> dict[str, Any]:
-    if not isinstance(message, dict):
-        return {}
-    info = message.get("info")
-    if not isinstance(info, dict) or info.get("role") != "assistant":
-        return {}
-    return info
-
-
-def _assistant_message_error_name(message: Any) -> str:
-    info = _message_info(message)
-    if not info:
-        return ""
-    error = info.get("error")
-    if not isinstance(error, dict):
-        return ""
-    return str(error.get("name") or "")
-
-
-def _assistant_message_has_abort_error(message: Any, *, provider_session_id: str | None = None) -> bool:
-    info = _message_info(message)
-    if provider_session_id is not None and str(info.get("sessionID") or "") != provider_session_id:
-        return False
-    return _assistant_message_error_name(message) == "MessageAbortedError"
-
-
 def _message_text_contains(item: dict[str, Any], expected_text: str) -> bool:
     for part in item.get("parts") or []:
         if not isinstance(part, dict):
@@ -864,28 +696,6 @@ def _user_message_ids_containing_text(messages: Any, expected_text: str) -> set[
         if message_id and _message_text_contains(item, expected_text):
             ids.add(message_id)
     return ids
-
-
-def _messages_contain_abort_reply_for_marker(
-    messages: Any,
-    *,
-    marker: str,
-    provider_session_id: str,
-) -> bool:
-    user_ids = _user_message_ids_containing_text(messages, marker)
-    if not user_ids or not isinstance(messages, list):
-        return False
-    for item in messages:
-        if not isinstance(item, dict):
-            continue
-        info = _message_info(item)
-        if not info:
-            continue
-        if str(info.get("parentID") or "") not in user_ids:
-            continue
-        if _assistant_message_has_abort_error(item, provider_session_id=provider_session_id):
-            return True
-    return False
 
 
 def _wait_for_user_message_marker(
@@ -992,93 +802,6 @@ def _run_opencode_prompt_async_no_reply_delivery(
         provider_session_id=provider_session_id,
         observed_message_count=len(messages) if isinstance(messages, list) else None,
         poll_attempts=poll_attempts,
-        elapsed_ms=int((time.monotonic() - started) * 1000),
-    )
-
-
-def _run_opencode_assistant_response_contract(
-    *,
-    server_url: str,
-    username: str,
-    password: str,
-    provider_session_id: str,
-    workspace: Path,
-    timeout_secs: int,
-) -> dict[str, Any]:
-    started = time.monotonic()
-    marker = f"LONGHOUSE_OPENCODE_LIVE_{secrets.token_hex(16)}"
-    prompt = f"Reply with exactly this token and no other text: {marker}"
-    try:
-        response = _request_json(
-            server_url=server_url,
-            username=username,
-            password=password,
-            method="POST",
-            path=f"/session/{urllib.parse.quote(provider_session_id, safe='')}/message",
-            query={"directory": str(workspace)},
-            payload={"parts": [{"type": "text", "text": prompt}]},
-            timeout=timeout_secs,
-        )
-    except RuntimeError as exc:
-        return _fail(
-            "opencode_assistant_response_request_failed",
-            f"OpenCode live-token assistant response request failed: {exc}",
-            provider_session_id=provider_session_id,
-            request_phase="post_session_message",
-            elapsed_ms=int((time.monotonic() - started) * 1000),
-        )
-
-    if not _assistant_message_contains_text(response, marker):
-        return _fail(
-            "opencode_assistant_response_marker_missing",
-            "OpenCode returned an assistant response, but it did not contain the expected marker.",
-            provider_session_id=provider_session_id,
-            request_phase="post_session_message",
-            response_role=(response.get("info") or {}).get("role") if isinstance(response, dict) else None,
-            elapsed_ms=int((time.monotonic() - started) * 1000),
-        )
-
-    try:
-        messages = _request_json(
-            server_url=server_url,
-            username=username,
-            password=password,
-            method="GET",
-            path=f"/session/{urllib.parse.quote(provider_session_id, safe='')}/message",
-            query={"directory": str(workspace), "limit": "20"},
-            timeout=timeout_secs,
-        )
-    except RuntimeError as exc:
-        return _fail(
-            "opencode_assistant_response_request_failed",
-            f"OpenCode session.messages request failed after live-token assistant response: {exc}",
-            provider_session_id=provider_session_id,
-            request_phase="get_session_messages",
-            elapsed_ms=int((time.monotonic() - started) * 1000),
-        )
-
-    if not _messages_contain_assistant_text(messages, marker):
-        return _fail(
-            "opencode_assistant_response_transcript_missing",
-            "OpenCode returned the assistant marker, but session.messages did not expose it.",
-            provider_session_id=provider_session_id,
-            observed_message_count=len(messages) if isinstance(messages, list) else None,
-            elapsed_ms=int((time.monotonic() - started) * 1000),
-        )
-
-    info = response.get("info") if isinstance(response, dict) else {}
-    tokens = info.get("tokens") if isinstance(info, dict) else None
-    return _status(
-        "pass",
-        provider_session_id=provider_session_id,
-        assistant_message_id=info.get("id") if isinstance(info, dict) else None,
-        provider_id=info.get("providerID") if isinstance(info, dict) else None,
-        model_id=info.get("modelID") if isinstance(info, dict) else None,
-        finish=info.get("finish") if isinstance(info, dict) else None,
-        cost=info.get("cost") if isinstance(info, dict) else None,
-        tokens=tokens,
-        observed_message_count=len(messages) if isinstance(messages, list) else None,
-        message_marker_sha256=hashlib.sha256(marker.encode("utf-8")).hexdigest(),
         elapsed_ms=int((time.monotonic() - started) * 1000),
     )
 
@@ -1275,168 +998,6 @@ def _run_opencode_process_restart_reattach_contract(
     )
 
 
-def _run_opencode_active_turn_abort_contract(
-    *,
-    server_url: str,
-    username: str,
-    password: str,
-    provider_session_id: str,
-    workspace: Path,
-    timeout_secs: int,
-) -> dict[str, Any]:
-    started = time.monotonic()
-    marker = f"LONGHOUSE_OPENCODE_ABORT_{secrets.token_hex(16)}"
-    prompt = " ".join(
-        (
-            "Write exactly 500 numbered lines about this marker, one line per number,",
-            f"and do not stop early: {marker}",
-        )
-    )
-    result: dict[str, Any] = {}
-
-    def post_message() -> None:
-        try:
-            result["response"] = _request_json(
-                server_url=server_url,
-                username=username,
-                password=password,
-                method="POST",
-                path=f"/session/{urllib.parse.quote(provider_session_id, safe='')}/message",
-                query={"directory": str(workspace)},
-                payload={"parts": [{"type": "text", "text": prompt}]},
-                timeout=timeout_secs,
-            )
-        except RuntimeError as exc:
-            result["request_error"] = f"{type(exc).__name__}: {exc}"
-
-    thread = threading.Thread(target=post_message, daemon=True)
-    thread.start()
-    user_message_ids, pre_abort_poll_attempts, pre_abort_transcript_error = _wait_for_user_message_marker(
-        server_url=server_url,
-        username=username,
-        password=password,
-        provider_session_id=provider_session_id,
-        workspace=workspace,
-        marker=marker,
-        timeout_secs=timeout_secs,
-    )
-    if not user_message_ids:
-        with contextlib.suppress(RuntimeError):
-            _request_json(
-                server_url=server_url,
-                username=username,
-                password=password,
-                method="POST",
-                path=f"/session/{urllib.parse.quote(provider_session_id, safe='')}/abort",
-                query={"directory": str(workspace)},
-                payload={},
-                timeout=min(10, timeout_secs),
-            )
-        thread.join(timeout=min(5, max(1, timeout_secs)))
-        return _fail(
-            "opencode_active_turn_user_message_not_observed",
-            "OpenCode did not expose the active user message before abort, so in-flight abort could not be proven.",
-            provider_session_id=provider_session_id,
-            pre_abort_poll_attempts=pre_abort_poll_attempts,
-            pre_abort_transcript_error=pre_abort_transcript_error,
-            request_error=result.get("request_error"),
-            message_marker_sha256=hashlib.sha256(marker.encode("utf-8")).hexdigest(),
-            elapsed_ms=int((time.monotonic() - started) * 1000),
-        )
-
-    try:
-        abort_result = _request_json(
-            server_url=server_url,
-            username=username,
-            password=password,
-            method="POST",
-            path=f"/session/{urllib.parse.quote(provider_session_id, safe='')}/abort",
-            query={"directory": str(workspace)},
-            payload={},
-            timeout=min(10, timeout_secs),
-        )
-    except RuntimeError as exc:
-        return _fail(
-            "opencode_active_turn_abort_request_failed",
-            f"OpenCode session.abort failed while a message turn was in flight: {exc}",
-            provider_session_id=provider_session_id,
-            elapsed_ms=int((time.monotonic() - started) * 1000),
-        )
-
-    abort_ok_dict = isinstance(abort_result, dict) and abort_result.get("ok") is True
-    abort_ok = abort_result is True or abort_result is None or abort_ok_dict
-    if not abort_ok:
-        return _fail(
-            "opencode_active_turn_abort_failed",
-            "OpenCode session.abort did not return a successful response shape during an active turn.",
-            provider_session_id=provider_session_id,
-            abort_result=abort_result,
-            elapsed_ms=int((time.monotonic() - started) * 1000),
-        )
-
-    thread.join(timeout=max(1, timeout_secs))
-    if thread.is_alive():
-        return _fail(
-            "opencode_active_turn_abort_did_not_settle",
-            "OpenCode accepted abort during an active turn, but the in-flight message request did not settle.",
-            provider_session_id=provider_session_id,
-            message_marker_sha256=hashlib.sha256(marker.encode("utf-8")).hexdigest(),
-            elapsed_ms=int((time.monotonic() - started) * 1000),
-        )
-
-    messages = None
-    transcript_error: str | None = None
-    try:
-        messages = _request_json(
-            server_url=server_url,
-            username=username,
-            password=password,
-            method="GET",
-            path=f"/session/{urllib.parse.quote(provider_session_id, safe='')}/message",
-            query={"directory": str(workspace), "limit": "20"},
-            timeout=timeout_secs,
-        )
-    except RuntimeError as exc:
-        transcript_error = f"{type(exc).__name__}: {exc}"
-
-    response = result.get("response")
-    response_abort_observed = _assistant_message_has_abort_error(response, provider_session_id=provider_session_id)
-    transcript_abort_observed = _messages_contain_abort_reply_for_marker(
-        messages,
-        marker=marker,
-        provider_session_id=provider_session_id,
-    )
-    if not response_abort_observed or not transcript_abort_observed:
-        return _fail(
-            "opencode_active_turn_abort_not_observed",
-            "OpenCode accepted abort during an active turn, but the aborted response was not bound to this turn.",
-            provider_session_id=provider_session_id,
-            pre_abort_poll_attempts=pre_abort_poll_attempts,
-            pre_abort_user_message_count=len(user_message_ids),
-            response_error_name=_assistant_message_error_name(response),
-            response_abort_observed=response_abort_observed,
-            transcript_abort_observed=transcript_abort_observed,
-            request_error=result.get("request_error"),
-            transcript_error=transcript_error,
-            observed_message_count=len(messages) if isinstance(messages, list) else None,
-            message_marker_sha256=hashlib.sha256(marker.encode("utf-8")).hexdigest(),
-            elapsed_ms=int((time.monotonic() - started) * 1000),
-        )
-
-    return _status(
-        "pass",
-        provider_session_id=provider_session_id,
-        response_abort_observed=response_abort_observed,
-        transcript_abort_observed=transcript_abort_observed,
-        response_error_name=_assistant_message_error_name(response),
-        pre_abort_poll_attempts=pre_abort_poll_attempts,
-        pre_abort_user_message_count=len(user_message_ids),
-        observed_message_count=len(messages) if isinstance(messages, list) else None,
-        message_marker_sha256=hashlib.sha256(marker.encode("utf-8")).hexdigest(),
-        elapsed_ms=int((time.monotonic() - started) * 1000),
-    )
-
-
 def _stop_process_group(process: subprocess.Popen[str] | None) -> None:
     if process is None or process.poll() is not None:
         return
@@ -1618,193 +1179,6 @@ def _run_claude_pty_wrapper_shape() -> dict[str, Any]:
             "Detached Claude launch on macOS requires script(1), but it was not found on PATH.",
         )
     return _status("pass", script_path=script_path, platform=sys.platform)
-
-
-def _claude_terminal_diagnostic_hint(summary: dict[str, Any]) -> str | None:
-    terminal_log = summary.get("terminal_log")
-    if not terminal_log:
-        return None
-    tail = strip_terminal_controls(_tail_text(Path(str(terminal_log))))
-    if "401 Invalid authentication credentials" in tail or "Please run /login" in tail:
-        return "provider_auth_prompt"
-    return None
-
-
-def _claude_summary_evidence(summary: dict[str, Any]) -> dict[str, Any]:
-    terminal_log = summary.get("terminal_log")
-    summary_path = str(Path(str(terminal_log)).with_name("summary.json")) if terminal_log else None
-    fields = {
-        "summary_path": summary_path,
-        "terminal_log": summary.get("terminal_log"),
-        "events_path": summary.get("events_path"),
-        "session_id": summary.get("session_id"),
-        "channel_ready": summary.get("channel_ready"),
-        "development_channel_warning_confirmed": summary.get("development_channel_warning_confirmed"),
-        "workspace_trust_confirmed": summary.get("workspace_trust_confirmed"),
-        "prompt_send_returncode": summary.get("prompt_send_returncode"),
-        "steer_send_returncode": summary.get("steer_send_returncode"),
-        "process_returncode": summary.get("process_returncode"),
-        "observed_transcript_path": summary.get("observed_transcript_path"),
-        "observed_transcript_line": summary.get("observed_transcript_line"),
-        "observed_transcript_timestamp": summary.get("observed_transcript_timestamp"),
-        "hosted_terminal_state": summary.get("hosted_terminal_state"),
-        "hosted_terminal_reason": summary.get("hosted_terminal_reason"),
-        "hosted_terminal_source": summary.get("hosted_terminal_source"),
-        "hosted_archive_event_count": summary.get("hosted_archive_event_count"),
-        "hosted_archive_assistant_events": summary.get("hosted_archive_assistant_events"),
-        "hosted_transcript_revision": summary.get("hosted_transcript_revision"),
-    }
-    hint = _claude_terminal_diagnostic_hint(summary)
-    if hint:
-        fields["terminal_diagnostic_hint"] = hint
-    return {key: value for key, value in fields.items() if value is not None}
-
-
-def _run_claude_live_token_contracts(args: argparse.Namespace, root: Path) -> dict[str, dict[str, Any]]:
-    started = time.monotonic()
-    base_marker = f"LONGHOUSE_CLAUDE_LIVE_{secrets.token_hex(16)}"
-    steer_marker = f"LONGHOUSE_CLAUDE_STEER_{secrets.token_hex(16)}"
-    run_id = datetime.now(UTC).strftime("claude-live-%Y%m%dT%H%M%SZ")
-    output_dir = root / "managed-claude-live" / run_id
-    try:
-        summary = run_managed_claude_live_session(
-            ManagedClaudeLiveConfig(
-                cwd=args.repo_root,
-                repo_root=args.repo_root,
-                output_dir=output_dir,
-                run_id=run_id,
-                name="Claude provider-live canary",
-                model=os.environ.get("LONGHOUSE_CLAUDE_CANARY_MODEL", ""),
-                prompt=(
-                    "Use the Bash tool to run `sleep 8`. After the command completes, reply exactly: "
-                    f"{base_marker}. If a Longhouse channel correction arrives before you answer, obey the "
-                    "correction instead."
-                ),
-                expected=base_marker,
-                steer_text=f"Channel correction: reply exactly {steer_marker} and do not include other text.",
-                steer_expected=steer_marker,
-                steer_delay_secs=4.0,
-                response_timeout_secs=float(getattr(args, "live_token_timeout_secs", 120) or 120),
-                post_close_probe_secs=5.0,
-            )
-        )
-    except Exception as exc:  # noqa: BLE001
-        failure = _fail(
-            "claude_live_token_canary_exception",
-            f"{type(exc).__name__}: {exc}",
-            output_dir=str(output_dir),
-            elapsed_ms=int((time.monotonic() - started) * 1000),
-        )
-        return {
-            "launch_local_contract": failure,
-            "send_input_contract": _status(
-                "not_run",
-                reason="Managed Claude live-token session did not launch.",
-            ),
-            "transcript_binding_contract": _status(
-                "not_run",
-                reason="Managed Claude live-token session did not launch.",
-            ),
-            "steer_active_turn_contract": _status(
-                "not_run",
-                reason="Managed Claude live-token session did not launch.",
-            ),
-            "idle_steer_rejection_contract": _optional_skipped(
-                "Idle steer rejection live provider proof is future work.",
-            ),
-            "interrupt_contract": _optional_skipped("Claude interrupt live provider proof is future work."),
-        }
-
-    evidence = _claude_summary_evidence(summary)
-    base_marker_sha = hashlib.sha256(base_marker.encode("utf-8")).hexdigest()
-    steer_marker_sha = hashlib.sha256(steer_marker.encode("utf-8")).hexdigest()
-    elapsed_ms = int((time.monotonic() - started) * 1000)
-
-    if summary.get("session_id") and summary.get("channel_ready"):
-        managed_launch = _status("pass", elapsed_ms=elapsed_ms, **evidence)
-    else:
-        managed_launch = _fail(
-            "claude_managed_channel_launch_failed",
-            "Managed Claude did not expose a ready Longhouse channel session.",
-            elapsed_ms=elapsed_ms,
-            **evidence,
-        )
-
-    if summary.get("sent_prompt") and summary.get("prompt_send_returncode") == 0:
-        prompt_delivery = _status("pass", elapsed_ms=elapsed_ms, **evidence)
-    else:
-        prompt_delivery = _fail(
-            "claude_channel_prompt_delivery_failed",
-            "Claude channel did not accept the provider-live prompt.",
-            elapsed_ms=elapsed_ms,
-            **evidence,
-        )
-
-    if summary.get("observed_expected"):
-        provider_execution = _status(
-            "pass",
-            marker_sha256=steer_marker_sha,
-            base_marker_sha256=base_marker_sha,
-            elapsed_ms=elapsed_ms,
-            **evidence,
-        )
-        active_turn_steer = _status(
-            "pass",
-            marker_sha256=steer_marker_sha,
-            elapsed_ms=elapsed_ms,
-            **evidence,
-        )
-    else:
-        provider_auth_prompt = evidence.get("terminal_diagnostic_hint") == "provider_auth_prompt"
-        provider_failure_code = "claude_provider_auth_prompt" if provider_auth_prompt else "claude_assistant_response_timeout"
-        provider_failure_message = (
-            "Claude launched and accepted channel input, but the provider session "
-            "requested /login or reported invalid authentication credentials before "
-            "an assistant marker appeared."
-            if provider_auth_prompt
-            else "Claude channel accepted the prompt, but no expected assistant transcript marker appeared."
-        )
-        provider_execution = _fail(
-            provider_failure_code,
-            provider_failure_message,
-            marker_sha256=steer_marker_sha,
-            base_marker_sha256=base_marker_sha,
-            elapsed_ms=elapsed_ms,
-            **evidence,
-        )
-        if not summary.get("steer_sent"):
-            active_turn_steer = _fail(
-                "claude_channel_steer_returncode_nonzero",
-                "Claude channel did not accept the active-turn steer message.",
-                marker_sha256=steer_marker_sha,
-                elapsed_ms=elapsed_ms,
-                **evidence,
-            )
-        else:
-            steer_failure_code = "claude_provider_auth_prompt" if provider_auth_prompt else "claude_steer_transcript_missing"
-            steer_failure_message = (
-                "Claude channel accepted active-turn steer, but the provider session "
-                "requested /login or reported invalid authentication credentials before "
-                "the steer marker appeared."
-                if provider_auth_prompt
-                else "Claude channel accepted active-turn steer, but the steer marker did not appear in transcript."
-            )
-            active_turn_steer = _fail(
-                steer_failure_code,
-                steer_failure_message,
-                marker_sha256=steer_marker_sha,
-                elapsed_ms=elapsed_ms,
-                **evidence,
-            )
-
-    return {
-        "launch_local_contract": managed_launch,
-        "send_input_contract": prompt_delivery,
-        "transcript_binding_contract": provider_execution,
-        "steer_active_turn_contract": active_turn_steer,
-        "idle_steer_rejection_contract": _optional_skipped("Idle steer rejection live provider proof is future work."),
-        "interrupt_contract": _optional_skipped("Claude interrupt live provider proof is future work."),
-    }
 
 
 def _run_antigravity_command_shape(binary: str) -> dict[str, Any]:
@@ -2037,316 +1411,6 @@ def _run_antigravity_plugin_contract(binary: str, root: Path) -> dict[str, Any]:
     )
 
 
-def _read_antigravity_claims(inbox_dir: Path) -> list[dict[str, Any]]:
-    claims: list[dict[str, Any]] = []
-    for path in sorted((inbox_dir / "claimed").glob("claimed-msg-*.json")):
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if isinstance(payload, dict):
-            claims.append(payload)
-    return claims
-
-
-def _read_antigravity_state(state_dir: Path, session_id: str) -> dict[str, Any]:
-    try:
-        payload = json.loads((state_dir / f"{session_id}.json").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
-
-
-def _antigravity_log_events(log_path: Path) -> list[str]:
-    log_text = _tail_text(log_path, max_chars=20000)
-    return [event for event in _ANTIGRAVITY_HOOK_EVENTS if f"_{event}_" in log_text or f"_{event}" in log_text]
-
-
-def _remove_path(path: Path) -> None:
-    try:
-        if path.is_dir() and not path.is_symlink():
-            shutil.rmtree(path)
-        else:
-            path.unlink()
-    except FileNotFoundError:
-        pass
-    except OSError:
-        pass
-
-
-def _restore_path_from_backup(*, path: Path, backup: Path | None, existed: bool) -> None:
-    _remove_path(path)
-    if not existed or backup is None:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if backup.is_dir() and not backup.is_symlink():
-        shutil.copytree(backup, path)
-    else:
-        shutil.copy2(backup, path)
-
-
-@contextlib.contextmanager
-def _preserve_antigravity_user_hook_state(
-    *,
-    global_hooks_path: Path,
-    installed_plugin_dir: Path,
-) -> Any:
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    backup_root = global_hooks_path.parent / f".longhouse-antigravity-canary-backup-{timestamp}-{os.getpid()}"
-    backup_root.mkdir(parents=True, exist_ok=True)
-    global_hooks_backup = backup_root / "hooks.json"
-    installed_plugin_backup = backup_root / "installed-plugin"
-    global_hooks_existed = global_hooks_path.exists()
-    installed_plugin_existed = installed_plugin_dir.exists()
-    if global_hooks_existed:
-        shutil.copy2(global_hooks_path, global_hooks_backup)
-    if installed_plugin_existed:
-        shutil.copytree(installed_plugin_dir, installed_plugin_backup)
-
-    restored = False
-    previous_handlers: dict[int, Any] = {}
-
-    def restore() -> None:
-        nonlocal restored
-        if restored:
-            return
-        _restore_path_from_backup(
-            path=global_hooks_path,
-            backup=global_hooks_backup if global_hooks_existed else None,
-            existed=global_hooks_existed,
-        )
-        _restore_path_from_backup(
-            path=installed_plugin_dir,
-            backup=installed_plugin_backup if installed_plugin_existed else None,
-            existed=installed_plugin_existed,
-        )
-        restored = True
-
-    def handle_signal(signum: int, _frame: Any) -> None:
-        restore()
-        previous = previous_handlers.get(signum)
-        if callable(previous):
-            previous(signum, _frame)
-        raise KeyboardInterrupt
-
-    for signum in (signal.SIGINT, signal.SIGTERM):
-        try:
-            previous_handlers[signum] = signal.getsignal(signum)
-            signal.signal(signum, handle_signal)
-        except (ValueError, OSError):
-            pass
-
-    try:
-        yield {"backup_root": str(backup_root)}
-    finally:
-        restore()
-        for signum, previous in previous_handlers.items():
-            with contextlib.suppress(ValueError, OSError):
-                signal.signal(signum, previous)
-        _remove_path(backup_root)
-
-
-def _run_antigravity_loop_invocation_contract(
-    *,
-    binary: str,
-    root: Path,
-    timeout_secs: int,
-) -> dict[str, Any]:
-    from zerg.cli.antigravity import _antigravity_global_hooks_path
-    from zerg.cli.antigravity import _antigravity_installed_plugin_hooks_path
-
-    global_hooks_path = _antigravity_global_hooks_path()
-    installed_plugin_dir = _antigravity_installed_plugin_hooks_path().parent
-    with _preserve_antigravity_user_hook_state(
-        global_hooks_path=global_hooks_path,
-        installed_plugin_dir=installed_plugin_dir,
-    ) as preservation:
-        return _run_antigravity_loop_invocation_contract_inner(
-            binary=binary,
-            root=root,
-            timeout_secs=timeout_secs,
-            preservation=preservation,
-        )
-
-
-def _run_antigravity_loop_invocation_contract_inner(
-    *,
-    binary: str,
-    root: Path,
-    timeout_secs: int,
-    preservation: Mapping[str, Any],
-) -> dict[str, Any]:
-    from zerg.cli.antigravity import _ensure_antigravity_runtime_plugin
-    from zerg.cli.antigravity_channel import antigravity_inbox_dir
-    from zerg.cli.antigravity_channel import antigravity_state_dir
-    from zerg.cli.antigravity_channel import enqueue_antigravity_message
-
-    started = time.monotonic()
-    workspace = root / "workspace"
-    workspace.mkdir(parents=True, exist_ok=True)
-    config_dir = root / "longhouse-home"
-    session_id = f"antigravity-live-{secrets.token_hex(8)}"
-    marker = secrets.token_hex(16)
-    base_marker = f"BASE_{marker}"
-    injected_marker = f"INJECTED_{marker}"
-    stdout_path = root / "antigravity-live.stdout.txt"
-    stderr_path = root / "antigravity-live.stderr.txt"
-    log_path = root / "antigravity-live.log"
-
-    try:
-        _ensure_antigravity_runtime_plugin(
-            config_dir=config_dir,
-            antigravity_bin=binary,
-            engine_path="/bin/true",
-        )
-        queued = enqueue_antigravity_message(
-            session_id=session_id,
-            text=f"Add this exact marker to your next answer: {injected_marker}",
-            config_dir=config_dir,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return _fail(
-            "antigravity_loop_setup_failed",
-            f"Could not install Antigravity hook plugin or queue input: {type(exc).__name__}: {exc}",
-        )
-
-    state_dir = antigravity_state_dir(config_dir)
-    inbox_dir = antigravity_inbox_dir(session_id, config_dir)
-    prompt = (
-        "Reply in one short line. Include this marker exactly once: "
-        f"{base_marker}. Do not run tools or mention any other marker unless instructed."
-    )
-    env = os.environ.copy()
-    env.update(
-        {
-            "LONGHOUSE_MANAGED_SESSION_ID": session_id,
-            "LONGHOUSE_DEVICE_ID": "provider-live-canary",
-            "LONGHOUSE_HOOK_PYTHON": sys.executable,
-            "LONGHOUSE_ANTIGRAVITY_STATE_DIR": str(state_dir),
-            "LONGHOUSE_ANTIGRAVITY_INBOX_DIR": str(inbox_dir),
-        }
-    )
-    argv = [
-        binary,
-        "--log-file",
-        str(log_path),
-        "--print-timeout",
-        f"{max(1, int(timeout_secs))}s",
-        "--print",
-        prompt,
-    ]
-    try:
-        completed = subprocess.run(
-            argv,
-            cwd=str(workspace),
-            env=env,
-            text=True,
-            capture_output=True,
-            timeout=max(5, int(timeout_secs) + 10),
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        return _fail(
-            "antigravity_loop_timeout",
-            f"agy live-token loop did not finish before timeout: {exc}",
-            argv=argv[:-1] + ["<prompt>"],
-            stdout_path=str(stdout_path),
-            stderr_path=str(stderr_path),
-            log_path=str(log_path),
-            log_tail=_tail_text(log_path),
-        )
-    except OSError as exc:
-        return _fail(
-            "antigravity_loop_launch_failed",
-            f"Could not run agy live-token loop: {type(exc).__name__}: {exc}",
-            argv=argv[:-1] + ["<prompt>"],
-        )
-
-    stdout_path.write_text(completed.stdout or "", encoding="utf-8")
-    stderr_path.write_text(completed.stderr or "", encoding="utf-8")
-    claims = _read_antigravity_claims(inbox_dir)
-    matching_claim = next((claim for claim in claims if claim.get("id") == queued["message_id"]), None)
-    state = _read_antigravity_state(state_dir, session_id)
-    hook_events = _antigravity_log_events(log_path)
-    marker_hash = hashlib.sha256(marker.encode("utf-8")).hexdigest()
-
-    if completed.returncode != 0:
-        return _fail(
-            "antigravity_loop_failed",
-            "agy live-token loop exited unsuccessfully",
-            argv=argv[:-1] + ["<prompt>"],
-            returncode=completed.returncode,
-            stdout_tail=(completed.stdout or "")[-4000:],
-            stderr_tail=(completed.stderr or "")[-4000:],
-            stdout_path=str(stdout_path),
-            stderr_path=str(stderr_path),
-            log_path=str(log_path),
-            log_tail=_tail_text(log_path),
-            message_marker_sha256=marker_hash,
-        )
-    if matching_claim is None:
-        return _fail(
-            "antigravity_loop_claim_missing",
-            "A real agy loop finished without claiming queued Longhouse input.",
-            stdout_tail=(completed.stdout or "")[-4000:],
-            stderr_tail=(completed.stderr or "")[-4000:],
-            claims=claims,
-            inbox_dir=str(inbox_dir),
-            log_path=str(log_path),
-            log_tail=_tail_text(log_path),
-            message_marker_sha256=marker_hash,
-        )
-    if matching_claim.get("hook_event") != "PreInvocation":
-        return _fail(
-            "antigravity_loop_claim_event_unexpected",
-            "agy claimed queued input at an unexpected hook boundary for this live-token proof.",
-            claim=matching_claim,
-            expected_hook_event="PreInvocation",
-            hook_events=hook_events,
-            log_path=str(log_path),
-            log_tail=_tail_text(log_path),
-            message_marker_sha256=marker_hash,
-        )
-    if base_marker not in (completed.stdout or "") or injected_marker not in (completed.stdout or ""):
-        return _fail(
-            "antigravity_injected_marker_missing",
-            "agy claimed queued input, but the assistant response did not include both expected markers.",
-            stdout_tail=(completed.stdout or "")[-4000:],
-            stderr_tail=(completed.stderr or "")[-4000:],
-            claim=matching_claim,
-            hook_events=hook_events,
-            log_path=str(log_path),
-            log_tail=_tail_text(log_path),
-            message_marker_sha256=marker_hash,
-        )
-    if "PreInvocation" not in hook_events:
-        return _fail(
-            "antigravity_preinvocation_log_missing",
-            "agy output proved injection, but the hook log did not show PreInvocation.",
-            hook_events=hook_events,
-            log_path=str(log_path),
-            log_tail=_tail_text(log_path),
-            message_marker_sha256=marker_hash,
-        )
-
-    return _status(
-        "pass",
-        session_id=session_id,
-        provider_session_id=state.get("provider_session_id") or state.get("conversation_id"),
-        transcript_path=state.get("transcript_path"),
-        claimed_at=matching_claim.get("claimed_at"),
-        claimed_hook_event=matching_claim.get("hook_event"),
-        hook_events=hook_events,
-        stdout_path=str(stdout_path),
-        stderr_path=str(stderr_path),
-        log_path=str(log_path),
-        elapsed_ms=int((time.monotonic() - started) * 1000),
-        message_marker_sha256=marker_hash,
-        user_hook_state_backup_root=preservation.get("backup_root"),
-        note=_ANTIGRAVITY_LOOP_INVOCATION_MESSAGE,
-    )
-
-
 def run_claude_live_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     binary = _resolve_provider_binary(args, "claude")
     if not binary:
@@ -2376,7 +1440,6 @@ def run_claude_live_canary(args: argparse.Namespace, root: Path) -> dict[str, An
         "channels_shape": _run_claude_channels_shape(binary),
         "detached_pty_shape": _run_claude_pty_wrapper_shape(),
     }
-    canaries.update(_run_claude_live_token_contracts(args, root))
     return {
         "provider": "claude",
         "provider_version": version,
@@ -2581,32 +1644,6 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
         if canaries["process_restart_reattach_contract"]["status"] != "pass":
             return {"provider": "opencode", "provider_version": version, "canaries": canaries}
 
-        canaries["assistant_response_contract"] = _run_opencode_assistant_response_contract(
-            server_url=server_url,
-            username=username,
-            password=password,
-            provider_session_id=provider_session_id,
-            workspace=workspace,
-            timeout_secs=int(getattr(args, "live_token_timeout_secs", 120) or 120),
-        )
-
-        if canaries["assistant_response_contract"].get("status") == "pass":
-            canaries["active_turn_abort_contract"] = _run_opencode_active_turn_abort_contract(
-                server_url=server_url,
-                username=username,
-                password=password,
-                provider_session_id=provider_session_id,
-                workspace=workspace,
-                timeout_secs=int(getattr(args, "live_token_timeout_secs", 120) or 120),
-            )
-            if canaries["active_turn_abort_contract"].get("status") != "pass":
-                return {"provider": "opencode", "provider_version": version, "canaries": canaries}
-        else:
-            canaries["active_turn_abort_contract"] = _status(
-                "not_run",
-                reason="Assistant response contract did not pass, so active-turn abort proof was not run.",
-            )
-
         abort_result = _request_json(
             server_url=server_url,
             username=username,
@@ -2624,27 +1661,6 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
             )
             return {"provider": "opencode", "provider_version": version, "canaries": canaries}
         canaries["session_abort"] = _status("pass", provider_session_id=provider_session_id)
-        if canaries.get("assistant_response_contract", {}).get("status") == "pass":
-            canaries["prompt_async_execution_contract"] = _status(
-                "pass",
-                canary="assistant_response_contract",
-                reason="Live-token assistant response execution and transcript binding passed.",
-            )
-            active_abort_pass = canaries.get("active_turn_abort_contract", {}).get("status") == "pass"
-            process_restart_pass = canaries.get("process_restart_reattach_contract", {}).get("status") == "pass"
-            canaries["active_turn_abort_and_reattach_contract"] = _status(
-                "pass" if active_abort_pass and process_restart_pass else "not_run",
-                reason=(
-                    "Live-token assistant response, active-turn abort, and process-restart reattach passed."
-                    if active_abort_pass and process_restart_pass
-                    else "Future proof still must cover active-turn abort and process-restart reattach."
-                ),
-            )
-        else:
-            canaries["prompt_async_execution_contract"] = _status(
-                "not_run",
-                reason="Assistant response contract did not pass, so prompt execution proof was not established.",
-            )
         return {"provider": "opencode", "provider_version": version, "canaries": canaries}
     except Exception as exc:  # noqa: BLE001
         canaries["live_contract"] = _fail(
@@ -2688,11 +1704,6 @@ def run_antigravity_live_canary(args: argparse.Namespace, root: Path) -> dict[st
         "plugin_contract": _run_antigravity_plugin_contract(binary, root),
         "global_hooks_contract": _run_antigravity_global_hooks_contract(root / "plugin" / "global-hooks.json"),
     }
-    canaries["loop_invocation_contract"] = _run_antigravity_loop_invocation_contract(
-        binary=binary,
-        root=root / "loop-invocation",
-        timeout_secs=int(getattr(args, "live_token_timeout_secs", 120) or 120),
-    )
 
     return {"provider": "antigravity", "provider_version": version, "canaries": canaries}
 
@@ -2726,7 +1737,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifact", type=Path)
     parser.add_argument("--evidence-root", type=Path)
     parser.add_argument("--wait-ready-secs", type=float, default=15.0)
-    parser.add_argument("--live-token-timeout-secs", type=int, default=120)
     parser.add_argument("--json", action="store_true")
     return parser
 
@@ -2741,8 +1751,6 @@ def run_provider_live_canary(args: argparse.Namespace | Mapping[str, Any]) -> di
         args.evidence_root = Path(args.evidence_root).expanduser()
     if args.artifact is not None:
         args.artifact = Path(args.artifact).expanduser()
-    if not hasattr(args, "live_token_timeout_secs"):
-        args.live_token_timeout_secs = 120
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     if args.evidence_root is None:
         evidence_root = _reserve_default_evidence_root(_default_evidence_root(args.repo_root, args.provider, timestamp))

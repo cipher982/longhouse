@@ -250,7 +250,6 @@ def _post_live_proof(
     expected_version: str,
     process_timeout_s: int,
     http_timeout_s: float,
-    live_token_timeout_secs: int,
 ) -> tuple[int, dict[str, Any]]:
     body: dict[str, Any] = {
         "provider": provider,
@@ -258,7 +257,6 @@ def _post_live_proof(
         "timeout_secs": process_timeout_s,
         "expected_provider_version": expected_version,
     }
-    body["live_token_timeout_secs"] = live_token_timeout_secs
     return _request_json(
         method="POST",
         url=f"{api_url}/api/agents/machines/{device_id}/provider-live-proof",
@@ -287,7 +285,6 @@ def _post_live_proof_with_retry(
             expected_version=expected_version,
             process_timeout_s=args.process_timeout_s,
             http_timeout_s=args.http_timeout_s,
-            live_token_timeout_secs=args.live_token_timeout_secs,
         )
         retryable = _is_retryable_response(status, payload)
         attempts.append(_response_attempt(status, payload, retryable=retryable))
@@ -488,7 +485,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Delay between transient retry attempts.",
     )
     parser.add_argument("--user-agent", default=DEFAULT_USER_AGENT)
-    parser.add_argument("--live-token-timeout-secs", type=int, default=120)
     parser.add_argument("--artifact", type=Path, default=None)
     parser.add_argument("--json", action="store_true")
     return parser

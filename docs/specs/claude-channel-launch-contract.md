@@ -26,10 +26,10 @@ launch, attach, and Machine Agent remote launch cannot drift apart.
 ## Drift Detection
 
 `longhouse provider-live canary --provider claude` must probe the installed
-Claude binary for this exact development-channel launch shape. The repo script
-`scripts/qa/provider-live-canary.py` is a wrapper around that packaged canary.
-The token-backed lane reports channel launch and channel prompt delivery
-separately from provider execution. A run where the Longhouse channel accepts
-input but Claude never writes the expected assistant marker is a
-provider-execution failure, with terminal auth/API prompts recorded only as
-diagnostic hints.
+Claude binary for this exact development-channel launch shape without spending
+provider tokens. The repo script `scripts/qa/provider-live-canary.py` is a
+wrapper around that packaged canary. The explicit release-canary lane reports
+channel launch and channel prompt delivery separately from provider execution.
+A run where the Longhouse channel accepts input but Claude never writes the
+expected assistant marker is a provider-execution failure, with terminal
+auth/API prompts recorded only as diagnostic hints.

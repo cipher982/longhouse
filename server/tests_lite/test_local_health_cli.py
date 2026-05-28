@@ -522,10 +522,7 @@ def test_collect_local_health_marks_connected_control_channel_launch_ready(monke
     assert contracts["claude"]["operations"]["steer_active_turn"] == {
         "supported": True,
         "evidence_level": "manual_live_token",
-        "evidence_source": (
-            "make managed-claude-poc and provider-live canary --provider claude "
-            "token-backed proof delayed intent=steer transcript assertion"
-        ),
+        "evidence_source": "make managed-claude-poc delayed intent=steer transcript assertion",
         "next": "promote to scheduled live token canary",
     }
     assert contracts["opencode"]["operations"]["steer_active_turn"]["supported"] is False
