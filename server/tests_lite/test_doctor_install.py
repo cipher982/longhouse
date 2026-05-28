@@ -167,6 +167,38 @@ def test_check_provider_support_warns_on_stale_local_live_proof(monkeypatch):
     )
 
 
+def test_check_provider_support_warns_on_partial_live_control(monkeypatch):
+    monkeypatch.setattr(
+        "zerg.services.local_health.collect_local_health",
+        lambda: {
+            "provider_support_state": {
+                "providers": {
+                    "claude": {
+                        "state": "live_control_partial",
+                        "capabilities": {
+                            "live_control_operations": ["launch"],
+                            "missing_live_control_operations": ["send", "interrupt", "steer"],
+                        },
+                        "proof": {"minimum_evidence_level": "source_review"},
+                        "version_readiness": {"state": "no_artifact"},
+                        "live_proof": {"status": "not_configured"},
+                    }
+                }
+            }
+        },
+    )
+
+    results = doctor_cli._check_provider_support()
+
+    assert len(results) == 1
+    assert results[0].status == doctor_cli.WARN
+    assert results[0].label == "claude managed support live_control_partial"
+    assert results[0].detail == (
+        "live=launch; proof_min=source_review; version=no_artifact; "
+        "local_proof=not_configured; missing_live=send, interrupt, steer"
+    )
+
+
 def test_check_provider_live_route_e2e_reports_green_artifact(monkeypatch):
     monkeypatch.setattr(
         "zerg.services.local_health.collect_local_health",
