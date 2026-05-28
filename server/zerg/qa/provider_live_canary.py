@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -21,6 +22,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -55,6 +57,12 @@ _OPENCODE_ASSISTANT_RESPONSE_MESSAGE = " ".join(
     (
         "Live-token behavior proof: OpenCode returned an assistant response",
         "and session.messages exposed the assistant text marker.",
+    )
+)
+_OPENCODE_ACTIVE_ABORT_MESSAGE = " ".join(
+    (
+        "Live-token behavior proof: OpenCode accepted abort during an",
+        "in-flight message turn and observed MessageAbortedError.",
     )
 )
 _CLAUDE_CHANNEL_UNCONFIRMED_MESSAGE = (
@@ -344,7 +352,7 @@ def _opencode_operation_evidence(
             level="manual_live_token",
             source="longhouse provider-live canary --provider opencode --run-live-token-contract",
             message=_OPENCODE_ASSISTANT_RESPONSE_MESSAGE,
-            next_note="promote with future live-token active-turn abort and process-restart reattach canaries",
+            next_note="promote with future live-token process-restart reattach canary",
         )
         if assistant_send:
             evidence["send_input"] = assistant_send
@@ -357,7 +365,7 @@ def _opencode_operation_evidence(
             level="manual_live_token",
             source="longhouse provider-live canary --provider opencode --run-live-token-contract",
             message="Live-token proof: assistant response marker was visible through session.messages.",
-            next_note="promote with future live-token active-turn abort and process-restart reattach canaries",
+            next_note="promote with future live-token process-restart reattach canary",
         )
         if transcript_binding:
             evidence["transcript_binding"] = transcript_binding
@@ -383,7 +391,22 @@ def _opencode_operation_evidence(
         )
 
     interrupt_failure = _schema_probe_failed_for(canaries, "/session/{sessionID}/abort", "session.abort")
-    if interrupt_failure:
+    active_abort_status = (canaries.get("active_turn_abort_contract") or {}).get("status")
+    if active_abort_status in {"pass", "fail", "warn"}:
+        interrupt = _entry_from_canary_group(
+            contract,
+            "interrupt",
+            canaries=canaries,
+            required=["binary_identity", "schema_probe", "active_turn_abort_contract"],
+            canary_name="opencode_active_turn_abort_contract",
+            level="manual_live_token",
+            source="longhouse provider-live canary --provider opencode --run-live-token-contract",
+            message=_OPENCODE_ACTIVE_ABORT_MESSAGE,
+            next_note="promote with future live-token process-restart reattach canary",
+        )
+        if interrupt:
+            evidence["interrupt"] = interrupt
+    elif interrupt_failure:
         evidence["interrupt"] = _operation_entry(
             contract,
             "interrupt",
@@ -670,6 +693,115 @@ def _messages_contain_assistant_text(messages: Any, expected_text: str) -> bool:
     return any(_assistant_message_contains_text(item, expected_text) for item in messages)
 
 
+def _message_info(message: Any) -> dict[str, Any]:
+    if not isinstance(message, dict):
+        return {}
+    info = message.get("info")
+    if not isinstance(info, dict) or info.get("role") != "assistant":
+        return {}
+    return info
+
+
+def _assistant_message_error_name(message: Any) -> str:
+    info = _message_info(message)
+    if not info:
+        return ""
+    error = info.get("error")
+    if not isinstance(error, dict):
+        return ""
+    return str(error.get("name") or "")
+
+
+def _assistant_message_has_abort_error(message: Any, *, provider_session_id: str | None = None) -> bool:
+    info = _message_info(message)
+    if provider_session_id is not None and str(info.get("sessionID") or "") != provider_session_id:
+        return False
+    return _assistant_message_error_name(message) == "MessageAbortedError"
+
+
+def _message_text_contains(item: dict[str, Any], expected_text: str) -> bool:
+    for part in item.get("parts") or []:
+        if not isinstance(part, dict):
+            continue
+        if part.get("type") == "text" and expected_text in str(part.get("text") or ""):
+            return True
+    return False
+
+
+def _user_message_ids_containing_text(messages: Any, expected_text: str) -> set[str]:
+    if not isinstance(messages, list):
+        return set()
+    ids: set[str] = set()
+    for item in messages:
+        if not isinstance(item, dict):
+            continue
+        info = item.get("info")
+        if not isinstance(info, dict) or info.get("role") != "user":
+            continue
+        message_id = str(info.get("id") or "")
+        if message_id and _message_text_contains(item, expected_text):
+            ids.add(message_id)
+    return ids
+
+
+def _messages_contain_abort_reply_for_marker(
+    messages: Any,
+    *,
+    marker: str,
+    provider_session_id: str,
+) -> bool:
+    user_ids = _user_message_ids_containing_text(messages, marker)
+    if not user_ids or not isinstance(messages, list):
+        return False
+    for item in messages:
+        if not isinstance(item, dict):
+            continue
+        info = _message_info(item)
+        if not info:
+            continue
+        if str(info.get("parentID") or "") not in user_ids:
+            continue
+        if _assistant_message_has_abort_error(item, provider_session_id=provider_session_id):
+            return True
+    return False
+
+
+def _wait_for_user_message_marker(
+    *,
+    server_url: str,
+    username: str,
+    password: str,
+    provider_session_id: str,
+    workspace: Path,
+    marker: str,
+    timeout_secs: int,
+) -> tuple[set[str], int, str | None]:
+    poll_attempts = 0
+    last_error: str | None = None
+    deadline = time.monotonic() + min(8.0, max(2.0, timeout_secs / 10))
+    while time.monotonic() < deadline:
+        poll_attempts += 1
+        try:
+            messages = _request_json(
+                server_url=server_url,
+                username=username,
+                password=password,
+                method="GET",
+                path=f"/session/{urllib.parse.quote(provider_session_id, safe='')}/message",
+                query={"directory": str(workspace), "limit": "20"},
+                timeout=min(10, max(1, timeout_secs)),
+            )
+        except RuntimeError as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+            time.sleep(0.2)
+            continue
+        user_ids = _user_message_ids_containing_text(messages, marker)
+        if user_ids:
+            return user_ids, poll_attempts, last_error
+        time.sleep(0.2)
+    return set(), poll_attempts, last_error
+
+
 def _run_opencode_prompt_async_no_reply_delivery(
     *,
     server_url: str,
@@ -823,6 +955,168 @@ def _run_opencode_assistant_response_contract(
         finish=info.get("finish") if isinstance(info, dict) else None,
         cost=info.get("cost") if isinstance(info, dict) else None,
         tokens=tokens,
+        observed_message_count=len(messages) if isinstance(messages, list) else None,
+        message_marker_sha256=hashlib.sha256(marker.encode("utf-8")).hexdigest(),
+        elapsed_ms=int((time.monotonic() - started) * 1000),
+    )
+
+
+def _run_opencode_active_turn_abort_contract(
+    *,
+    server_url: str,
+    username: str,
+    password: str,
+    provider_session_id: str,
+    workspace: Path,
+    timeout_secs: int,
+) -> dict[str, Any]:
+    started = time.monotonic()
+    marker = f"LONGHOUSE_OPENCODE_ABORT_{secrets.token_hex(16)}"
+    prompt = " ".join(
+        (
+            "Write exactly 500 numbered lines about this marker, one line per number,",
+            f"and do not stop early: {marker}",
+        )
+    )
+    result: dict[str, Any] = {}
+
+    def post_message() -> None:
+        try:
+            result["response"] = _request_json(
+                server_url=server_url,
+                username=username,
+                password=password,
+                method="POST",
+                path=f"/session/{urllib.parse.quote(provider_session_id, safe='')}/message",
+                query={"directory": str(workspace)},
+                payload={"parts": [{"type": "text", "text": prompt}]},
+                timeout=timeout_secs,
+            )
+        except RuntimeError as exc:
+            result["request_error"] = f"{type(exc).__name__}: {exc}"
+
+    thread = threading.Thread(target=post_message, daemon=True)
+    thread.start()
+    user_message_ids, pre_abort_poll_attempts, pre_abort_transcript_error = _wait_for_user_message_marker(
+        server_url=server_url,
+        username=username,
+        password=password,
+        provider_session_id=provider_session_id,
+        workspace=workspace,
+        marker=marker,
+        timeout_secs=timeout_secs,
+    )
+    if not user_message_ids:
+        with contextlib.suppress(RuntimeError):
+            _request_json(
+                server_url=server_url,
+                username=username,
+                password=password,
+                method="POST",
+                path=f"/session/{urllib.parse.quote(provider_session_id, safe='')}/abort",
+                query={"directory": str(workspace)},
+                payload={},
+                timeout=min(10, timeout_secs),
+            )
+        thread.join(timeout=min(5, max(1, timeout_secs)))
+        return _fail(
+            "opencode_active_turn_user_message_not_observed",
+            "OpenCode did not expose the active user message before abort, so in-flight abort could not be proven.",
+            provider_session_id=provider_session_id,
+            pre_abort_poll_attempts=pre_abort_poll_attempts,
+            pre_abort_transcript_error=pre_abort_transcript_error,
+            request_error=result.get("request_error"),
+            message_marker_sha256=hashlib.sha256(marker.encode("utf-8")).hexdigest(),
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+        )
+
+    try:
+        abort_result = _request_json(
+            server_url=server_url,
+            username=username,
+            password=password,
+            method="POST",
+            path=f"/session/{urllib.parse.quote(provider_session_id, safe='')}/abort",
+            query={"directory": str(workspace)},
+            payload={},
+            timeout=min(10, timeout_secs),
+        )
+    except RuntimeError as exc:
+        return _fail(
+            "opencode_active_turn_abort_request_failed",
+            f"OpenCode session.abort failed while a message turn was in flight: {exc}",
+            provider_session_id=provider_session_id,
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+        )
+
+    abort_ok_dict = isinstance(abort_result, dict) and abort_result.get("ok") is True
+    abort_ok = abort_result is True or abort_result is None or abort_ok_dict
+    if not abort_ok:
+        return _fail(
+            "opencode_active_turn_abort_failed",
+            "OpenCode session.abort did not return a successful response shape during an active turn.",
+            provider_session_id=provider_session_id,
+            abort_result=abort_result,
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+        )
+
+    thread.join(timeout=max(1, timeout_secs))
+    if thread.is_alive():
+        return _fail(
+            "opencode_active_turn_abort_did_not_settle",
+            "OpenCode accepted abort during an active turn, but the in-flight message request did not settle.",
+            provider_session_id=provider_session_id,
+            message_marker_sha256=hashlib.sha256(marker.encode("utf-8")).hexdigest(),
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+        )
+
+    messages = None
+    transcript_error: str | None = None
+    try:
+        messages = _request_json(
+            server_url=server_url,
+            username=username,
+            password=password,
+            method="GET",
+            path=f"/session/{urllib.parse.quote(provider_session_id, safe='')}/message",
+            query={"directory": str(workspace), "limit": "20"},
+            timeout=timeout_secs,
+        )
+    except RuntimeError as exc:
+        transcript_error = f"{type(exc).__name__}: {exc}"
+
+    response = result.get("response")
+    response_abort_observed = _assistant_message_has_abort_error(response, provider_session_id=provider_session_id)
+    transcript_abort_observed = _messages_contain_abort_reply_for_marker(
+        messages,
+        marker=marker,
+        provider_session_id=provider_session_id,
+    )
+    if not response_abort_observed or not transcript_abort_observed:
+        return _fail(
+            "opencode_active_turn_abort_not_observed",
+            "OpenCode accepted abort during an active turn, but the aborted response was not bound to this turn.",
+            provider_session_id=provider_session_id,
+            pre_abort_poll_attempts=pre_abort_poll_attempts,
+            pre_abort_user_message_count=len(user_message_ids),
+            response_error_name=_assistant_message_error_name(response),
+            response_abort_observed=response_abort_observed,
+            transcript_abort_observed=transcript_abort_observed,
+            request_error=result.get("request_error"),
+            transcript_error=transcript_error,
+            observed_message_count=len(messages) if isinstance(messages, list) else None,
+            message_marker_sha256=hashlib.sha256(marker.encode("utf-8")).hexdigest(),
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+        )
+
+    return _status(
+        "pass",
+        provider_session_id=provider_session_id,
+        response_abort_observed=response_abort_observed,
+        transcript_abort_observed=transcript_abort_observed,
+        response_error_name=_assistant_message_error_name(response),
+        pre_abort_poll_attempts=pre_abort_poll_attempts,
+        pre_abort_user_message_count=len(user_message_ids),
         observed_message_count=len(messages) if isinstance(messages, list) else None,
         message_marker_sha256=hashlib.sha256(marker.encode("utf-8")).hexdigest(),
         elapsed_ms=int((time.monotonic() - started) * 1000),
@@ -1455,7 +1749,34 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
         else:
             canaries["assistant_response_contract"] = _status(
                 "not_run",
-                reason="Pass --run-live-token-contract to spend tokens and prove assistant response execution.",
+                reason=" ".join(
+                    (
+                        "Pass --run-live-token-contract to spend tokens and prove assistant response execution",
+                        "plus active-turn abort.",
+                    )
+                ),
+            )
+
+        if canaries["assistant_response_contract"].get("status") == "pass":
+            canaries["active_turn_abort_contract"] = _run_opencode_active_turn_abort_contract(
+                server_url=server_url,
+                username=username,
+                password=password,
+                provider_session_id=provider_session_id,
+                workspace=workspace,
+                timeout_secs=int(getattr(args, "live_token_timeout_secs", 120) or 120),
+            )
+            if canaries["active_turn_abort_contract"].get("status") != "pass":
+                return {"provider": "opencode", "provider_version": version, "canaries": canaries}
+        elif bool(getattr(args, "run_live_token_contract", False)):
+            canaries["active_turn_abort_contract"] = _status(
+                "not_run",
+                reason="Assistant response contract did not pass, so active-turn abort proof was not run.",
+            )
+        else:
+            canaries["active_turn_abort_contract"] = _status(
+                "not_run",
+                reason="Pass --run-live-token-contract to prove active-turn abort.",
             )
 
         abort_result = _request_json(
@@ -1481,9 +1802,16 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
                 canary="assistant_response_contract",
                 reason="Live-token assistant response execution and transcript binding passed.",
             )
+            canaries["process_restart_reattach_contract"] = _status(
+                "not_run",
+                reason="Future live-token evidence still must prove process-restart reattach.",
+            )
             canaries["active_turn_abort_and_reattach_contract"] = _status(
                 "not_run",
-                reason="Future live-token evidence still must prove active-turn abort and process-restart reattach.",
+                reason=(
+                    "Active-turn abort is tracked separately by active_turn_abort_contract; "
+                    "process-restart reattach remains future proof."
+                ),
             )
         else:
             canaries["prompt_async_execution_contract"] = _status(
@@ -1583,7 +1911,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--run-live-token-contract",
         action="store_true",
-        help="For OpenCode, spend a small model call to prove assistant response execution.",
+        help="For OpenCode, spend small model calls to prove assistant response execution and active-turn abort.",
     )
     parser.add_argument("--live-token-timeout-secs", type=int, default=120)
     parser.add_argument("--json", action="store_true")

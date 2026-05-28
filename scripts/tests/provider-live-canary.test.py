@@ -33,6 +33,8 @@ import os
 import re
 import signal
 import sys
+import threading
+import time
 from urllib.parse import urlparse
 
 args = sys.argv[1:]
@@ -55,6 +57,7 @@ username = os.environ.get("OPENCODE_SERVER_USERNAME", "opencode")
 password = os.environ.get("OPENCODE_SERVER_PASSWORD", "")
 provider_session_id = "ses_fake_provider_live"
 messages = []
+abort_event = threading.Event()
 
 def make_doc():
     prompt_async_operation = {
@@ -176,6 +179,59 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 for part in payload.get("parts") or []
                 if isinstance(part, dict) and part.get("type") == "text"
             )
+            if "LONGHOUSE_OPENCODE_ABORT_" in prompt_text:
+                user_message = {
+                    "info": {"id": "msg_fake_abort_user", "sessionID": provider_session_id, "role": "user"},
+                    "parts": payload.get("parts") or [],
+                }
+                messages.append(user_message)
+                if os.environ.get("FAKE_OPENCODE_STALE_ABORT_TRANSCRIPT") == "1":
+                    messages.append({
+                        "info": {
+                            "id": "msg_fake_stale_abort_assistant",
+                            "sessionID": provider_session_id,
+                            "role": "assistant",
+                            "parentID": "msg_fake_stale_user",
+                            "error": {"name": "MessageAbortedError", "data": {"message": "Aborted"}},
+                        },
+                        "parts": [],
+                    })
+                if os.environ.get("FAKE_OPENCODE_ABORT_IGNORED") == "1":
+                    time.sleep(2)
+                    assistant_message = {
+                        "info": {
+                            "id": "msg_fake_abort_assistant",
+                            "sessionID": provider_session_id,
+                            "role": "assistant",
+                            "providerID": "fake",
+                            "modelID": "fake-model",
+                            "finish": "stop",
+                            "cost": 0.001,
+                            "tokens": {"input": 1, "output": 1, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+                        },
+                        "parts": [{"type": "text", "text": "not aborted"}],
+                    }
+                    messages.append(assistant_message)
+                    self._json(assistant_message)
+                    return
+                abort_event.wait(10)
+                assistant_message = {
+                    "info": {
+                        "id": "msg_fake_abort_assistant",
+                        "sessionID": provider_session_id,
+                        "role": "assistant",
+                        "parentID": "msg_fake_abort_user",
+                        "providerID": "fake",
+                        "modelID": "fake-model",
+                        "cost": 0,
+                        "tokens": {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+                        "error": {"name": "MessageAbortedError", "data": {"message": "Aborted"}},
+                    },
+                    "parts": [],
+                }
+                messages.append(assistant_message)
+                self._json(assistant_message)
+                return
             match = re.search(r"LONGHOUSE_OPENCODE_LIVE_[0-9a-f]+", prompt_text)
             marker = match.group(0) if match else "missing-marker"
             response_text = "wrong-marker" if os.environ.get("FAKE_OPENCODE_BAD_ASSISTANT_MARKER") == "1" else marker
@@ -202,6 +258,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._json(assistant_message)
             return
         if parsed.path == f"/session/{provider_session_id}/abort":
+            if os.environ.get("FAKE_OPENCODE_ABORT_500") == "1":
+                self._json({"error": "boom"}, 500)
+                return
+            if os.environ.get("FAKE_OPENCODE_ABORT_BAD_SHAPE") == "1":
+                self._json({"ok": False})
+                return
+            if os.environ.get("FAKE_OPENCODE_ABORT_IGNORED") != "1":
+                abort_event.set()
             if os.environ.get("FAKE_OPENCODE_EMPTY_ABORT") == "1":
                 self._empty()
                 return
@@ -436,6 +500,7 @@ def test_opencode_live_canary_stays_yellow_until_prompt_execution_is_proven() ->
         assert payload["canaries"]["prompt_async_no_reply_delivery"]["observed_message_count"] == 1
         assert payload["canaries"]["session_abort"]["status"] == "pass"
         assert payload["canaries"]["prompt_async_execution_contract"]["status"] == "not_run"
+        assert payload["canaries"]["active_turn_abort_contract"]["status"] == "not_run"
         assert set(payload["operation_evidence"]) == {"interrupt", "launch_local", "reattach", "send_input"}
         assert payload["operation_evidence"]["launch_local"]["level"] == "live_no_token"
         assert payload["operation_evidence"]["reattach"]["level"] == "live_no_token"
@@ -732,10 +797,16 @@ def test_opencode_live_token_contract_proves_assistant_response_but_stays_yellow
         assert payload["failure_code"] == "insufficient_coverage"
         assert payload["canaries"]["assistant_response_contract"]["status"] == "pass"
         assert payload["canaries"]["prompt_async_execution_contract"]["status"] == "pass"
+        assert payload["canaries"]["active_turn_abort_contract"]["status"] == "pass"
+        assert payload["canaries"]["active_turn_abort_contract"]["response_error_name"] == "MessageAbortedError"
+        assert payload["canaries"]["process_restart_reattach_contract"]["status"] == "not_run"
         assert payload["canaries"]["active_turn_abort_and_reattach_contract"]["status"] == "not_run"
         assert payload["operation_evidence"]["send_input"]["status"] == "pass"
         assert payload["operation_evidence"]["send_input"]["level"] == "manual_live_token"
         assert payload["operation_evidence"]["send_input"]["canary"] == "opencode_assistant_response_contract"
+        assert payload["operation_evidence"]["interrupt"]["status"] == "pass"
+        assert payload["operation_evidence"]["interrupt"]["level"] == "manual_live_token"
+        assert payload["operation_evidence"]["interrupt"]["canary"] == "opencode_active_turn_abort_contract"
         assert payload["operation_evidence"]["transcript_binding"]["status"] == "pass"
         assert payload["operation_evidence"]["transcript_binding"]["level"] == "manual_live_token"
         serialized = json.dumps(payload)
@@ -757,6 +828,7 @@ def test_opencode_live_token_contract_failure_is_send_input_evidence() -> None:
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "opencode_assistant_response_marker_missing"
         assert payload["canaries"]["assistant_response_contract"]["status"] == "fail"
+        assert payload["canaries"]["active_turn_abort_contract"]["status"] == "not_run"
         assert payload["operation_evidence"]["send_input"]["status"] == "fail"
         assert payload["operation_evidence"]["send_input"]["level"] == "none"
         assert payload["operation_evidence"]["send_input"]["failure_code"] == "opencode_assistant_response_marker_missing"
@@ -777,6 +849,7 @@ def test_opencode_live_token_contract_reports_post_request_failure() -> None:
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "opencode_assistant_response_request_failed"
         assert payload["canaries"]["assistant_response_contract"]["request_phase"] == "post_session_message"
+        assert payload["canaries"]["active_turn_abort_contract"]["status"] == "not_run"
         assert payload["canaries"]["session_abort"]["status"] == "pass"
         assert payload["operation_evidence"]["interrupt"]["status"] == "pass"
 
@@ -796,6 +869,7 @@ def test_opencode_live_token_contract_reports_get_messages_failure() -> None:
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "opencode_assistant_response_request_failed"
         assert payload["canaries"]["assistant_response_contract"]["request_phase"] == "get_session_messages"
+        assert payload["canaries"]["active_turn_abort_contract"]["status"] == "not_run"
         assert payload["canaries"]["session_abort"]["status"] == "pass"
 
 
@@ -814,7 +888,89 @@ def test_opencode_live_token_contract_reports_transcript_missing() -> None:
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "opencode_assistant_response_transcript_missing"
         assert payload["canaries"]["assistant_response_contract"]["status"] == "fail"
+        assert payload["canaries"]["active_turn_abort_contract"]["status"] == "not_run"
         assert payload["canaries"]["session_abort"]["status"] == "pass"
+
+
+def test_opencode_live_token_contract_fails_when_active_abort_request_fails() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_opencode(root / "bin" / "opencode")
+        result, payload = _run_canary(
+            root,
+            fake_bin,
+            {"FAKE_OPENCODE_ABORT_500": "1"},
+            extra_args=["--run-live-token-contract"],
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "opencode_active_turn_abort_request_failed"
+        assert payload["canaries"]["assistant_response_contract"]["status"] == "pass"
+        assert payload["canaries"]["active_turn_abort_contract"]["status"] == "fail"
+        assert payload["operation_evidence"]["interrupt"]["status"] == "fail"
+        assert payload["operation_evidence"]["interrupt"]["level"] == "none"
+        assert payload["operation_evidence"]["interrupt"]["failure_code"] == "opencode_active_turn_abort_request_failed"
+
+
+def test_opencode_live_token_contract_fails_when_active_abort_returns_bad_shape() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_opencode(root / "bin" / "opencode")
+        result, payload = _run_canary(
+            root,
+            fake_bin,
+            {"FAKE_OPENCODE_ABORT_BAD_SHAPE": "1"},
+            extra_args=["--run-live-token-contract"],
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "opencode_active_turn_abort_failed"
+        assert payload["canaries"]["active_turn_abort_contract"]["status"] == "fail"
+        assert payload["operation_evidence"]["interrupt"]["status"] == "fail"
+        assert payload["operation_evidence"]["interrupt"]["failure_code"] == "opencode_active_turn_abort_failed"
+
+
+def test_opencode_live_token_contract_fails_when_active_abort_is_not_observed() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_opencode(root / "bin" / "opencode")
+        result, payload = _run_canary(
+            root,
+            fake_bin,
+            {"FAKE_OPENCODE_ABORT_IGNORED": "1"},
+            extra_args=["--run-live-token-contract"],
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "opencode_active_turn_abort_not_observed"
+        assert payload["canaries"]["active_turn_abort_contract"]["status"] == "fail"
+        assert payload["operation_evidence"]["interrupt"]["status"] == "fail"
+        assert payload["operation_evidence"]["interrupt"]["level"] == "none"
+        assert payload["operation_evidence"]["interrupt"]["failure_code"] == "opencode_active_turn_abort_not_observed"
+
+
+def test_opencode_live_token_contract_rejects_stale_abort_transcript() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_opencode(root / "bin" / "opencode")
+        result, payload = _run_canary(
+            root,
+            fake_bin,
+            {
+                "FAKE_OPENCODE_ABORT_IGNORED": "1",
+                "FAKE_OPENCODE_STALE_ABORT_TRANSCRIPT": "1",
+            },
+            extra_args=["--run-live-token-contract"],
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "opencode_active_turn_abort_not_observed"
+        assert payload["canaries"]["active_turn_abort_contract"]["transcript_abort_observed"] is False
+        assert payload["operation_evidence"]["interrupt"]["failure_code"] == "opencode_active_turn_abort_not_observed"
 
 
 def main() -> int:
@@ -841,6 +997,10 @@ def main() -> int:
         test_opencode_live_token_contract_reports_post_request_failure,
         test_opencode_live_token_contract_reports_get_messages_failure,
         test_opencode_live_token_contract_reports_transcript_missing,
+        test_opencode_live_token_contract_fails_when_active_abort_request_fails,
+        test_opencode_live_token_contract_fails_when_active_abort_returns_bad_shape,
+        test_opencode_live_token_contract_fails_when_active_abort_is_not_observed,
+        test_opencode_live_token_contract_rejects_stale_abort_transcript,
     ]
     for test in tests:
         test()

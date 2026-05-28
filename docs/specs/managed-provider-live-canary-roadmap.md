@@ -170,11 +170,11 @@ gate by itself.
    `/doc`, session create, attach `--help` command shape, `prompt_async`
    noReply delivery through `session.messages`, and abort are checked without
    relying on a visible terminal or model tokens. The opt-in
-   `--run-live-token-contract` lane spends a small model call and proves
-   assistant response execution plus transcript binding. The provider-live
-   verdict still stays Yellow until future evidence also proves active-turn
-   abort and process-restart reattach; no scheduled OpenCode token-spending
-   lane exists until we add an explicit budgeted Sauron/CI job.
+   `--run-live-token-contract` lane spends small model calls and proves
+   assistant response execution, transcript binding, and abort during an
+   in-flight message turn. The provider-live verdict still stays Yellow until
+   future evidence also proves process-restart reattach; no scheduled OpenCode
+   token-spending lane exists until we add an explicit budgeted Sauron/CI job.
 4. Extend the Antigravity canary from its current yellow state -- real `agy`
    version/help/plugin validate/install/list plus Longhouse global-hook config
    proof -- to loop-level hook behavior against the upstream runtime.
