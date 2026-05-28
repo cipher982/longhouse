@@ -249,8 +249,10 @@ Initial product contract:
   `scripts/qa/provider-live-canary.py` and
   `scripts/qa/provider-live-proof-publish.py` remain repo wrappers around the
   packaged commands.
-  `make dogfood-refresh` runs this publisher as part of the dogfood repair loop;
-  `make dogfood-check` only reports the current sidecars. Reader precedence is
+  `make dogfood-refresh` runs this publisher as part of the dogfood repair loop,
+  then runs the hosted provider-live route E2E against the configured machine so
+  the Runtime Host -> Machine Agent dispatch path is also proved; `make
+  dogfood-check` only reports the current sidecars. Reader precedence is
   explicit env, persisted provider-status config, then the Longhouse-home
   default. Local-health reads those artifacts as operation proof only when the
   sidecar provider and normalized version match the installed provider CLI. This

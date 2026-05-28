@@ -12,11 +12,14 @@ if [[ -n "${COMMAND}" ]]; then
   shift
 fi
 
+DEFAULT_ROUTE_E2E_PROVIDER="opencode"
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 URL_OVERRIDE="${LONGHOUSE_DOGFOOD_URL:-}"
 MACHINE_NAME_OVERRIDE="${LONGHOUSE_DOGFOOD_MACHINE_NAME:-}"
+ROUTE_E2E_PROVIDER="${LONGHOUSE_DOGFOOD_PROVIDER_LIVE_ROUTE_PROVIDER:-$DEFAULT_ROUTE_E2E_PROVIDER}"
 MENUBAR=1
 SKIP_ENGINE=0
+SKIP_ROUTE_E2E=0
 
 resolve_longhouse_home() {
   local provider_home="$1"
@@ -36,7 +39,7 @@ resolve_longhouse_home() {
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/dev/dogfood-runtime.sh refresh [--url <url>] [--machine-name <name>] [--claude-dir <path>] [--no-menubar] [--skip-engine]
+  scripts/dev/dogfood-runtime.sh refresh [--url <url>] [--machine-name <name>] [--claude-dir <path>] [--no-menubar] [--skip-engine] [--skip-route-e2e] [--route-provider <provider|all>]
   scripts/dev/dogfood-runtime.sh check [--claude-dir <path>]
 
 Purpose:
@@ -46,6 +49,7 @@ Purpose:
 Notes:
   - This is the dogfood loop for repo work. It installs into the actual local runtime.
   - DMG/drag-install is release transport only. Daily dogfooding should use this script.
+  - Refresh runs a no-token hosted provider-live route E2E after install unless --skip-route-e2e is set.
 EOF
 }
 
@@ -285,6 +289,24 @@ publish_provider_live_proof() {
   fi
 }
 
+run_provider_live_route_e2e() {
+  local status=0
+  require_cmd python3
+
+  log ""
+  log "==> Hosted provider-live route E2E"
+  log "Provider: $ROUTE_E2E_PROVIDER"
+  mkdir -p "$ARTIFACT_DIR"
+  LONGHOUSE_HOME="$LONGHOUSE_HOME" \
+  LONGHOUSE_PROVIDER_LIVE_PROOF_DIR="$PROVIDER_LIVE_PROOF_DIR" \
+    python3 "$ROOT_DIR/scripts/qa/provider-live-route-e2e.py" \
+      --provider "$ROUTE_E2E_PROVIDER" \
+      --artifact "$ARTIFACT_DIR/provider-live-route-e2e.json" || status=$?
+  if (( status != 0 )); then
+    fail "Hosted provider-live route E2E failed (exit $status). See $ARTIFACT_DIR/provider-live-route-e2e.json"
+  fi
+}
+
 run_refresh() {
   local url
   local machine_name
@@ -329,6 +351,9 @@ run_refresh() {
   publish_provider_live_proof
   log ""
   run_check
+  if (( SKIP_ROUTE_E2E == 0 )); then
+    run_provider_live_route_e2e
+  fi
 }
 
 while [[ $# -gt 0 ]]; do
@@ -352,6 +377,14 @@ while [[ $# -gt 0 ]]; do
     --skip-engine)
       SKIP_ENGINE=1
       shift
+      ;;
+    --skip-route-e2e)
+      SKIP_ROUTE_E2E=1
+      shift
+      ;;
+    --route-provider)
+      ROUTE_E2E_PROVIDER="${2:-}"
+      shift 2
       ;;
     -h|--help)
       usage

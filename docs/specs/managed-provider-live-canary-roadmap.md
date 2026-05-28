@@ -206,9 +206,10 @@ machine has proven the installed version.
    should pass `expected_provider_version` for upstream release gates; mismatches
    are typed application-level conflicts, not green evidence or generic upstream
    5xx responses, and Runtime Host prevents duplicate in-flight live proofs for
-   the same owner/device/provider. `make provider-live-route-e2e` is the
-   repeatable dogfood proof for this contract; it defaults to OpenCode for a
-   fast no-token route check and can run `PROVIDER_LIVE_ROUTE_PROVIDER=all` when
+   the same owner/device/provider. `make dogfood-refresh` now runs the
+   repeatable hosted route proof after publishing local sidecars; it defaults to
+   OpenCode for a fast no-token check. `make provider-live-route-e2e` exposes
+   the same harness directly and can run `PROVIDER_LIVE_ROUTE_PROVIDER=all` when
    the machine has fresh sidecars for every provider.
 
 ## Reference Surfaces
