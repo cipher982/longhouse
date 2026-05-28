@@ -93,11 +93,20 @@ Use it for directed session actions such as:
 ### Machine health and transport summaries
 
 - `GET /api/agents/machines/health`
+- `POST /api/agents/machines/{device_id}/provider-live-proof`
 
 This route is the canonical machine-facing summary for latest heartbeat-derived
 transport state. It should answer, per device, whether Longhouse shipping is
 healthy, degraded, offline, or broken, plus the dominant recent transport
 symptom and rolling ship outcome counters.
+
+Provider live proof is a typed Machine Agent command, not generic remote shell.
+The Runtime Host dispatches `provider.live_proof` only to a connected machine
+that advertises `{provider}.live_proof`, and the Machine Agent runs the local
+packaged `longhouse provider-live` canary with the user's installed provider CLI.
+This lets release automation ask a provider-capable user-owned machine for live
+evidence without installing Claude, Codex, OpenCode, or Antigravity inside the
+automation container.
 
 ### Coordination and directed messaging
 

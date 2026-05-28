@@ -3568,6 +3568,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/machines/{device_id}/provider-live-proof": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Provider Live Proof
+         * @description Run a typed provider-live proof on a connected provider-capable machine.
+         */
+        post: operations["run_provider_live_proof_agents_machines__device_id__provider_live_proof_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/sessions/semantic": {
         parameters: {
             query?: never;
@@ -7138,6 +7158,64 @@ export interface components {
             render_p95_ms_ok: number;
             /** Render P95 Ms Failing */
             render_p95_ms_failing: number;
+        };
+        /** ProviderLiveProofRequest */
+        ProviderLiveProofRequest: {
+            /**
+             * Provider
+             * @description Provider CLI to prove on the target machine.
+             * @enum {string}
+             */
+            provider: "codex" | "claude" | "opencode" | "antigravity";
+            /**
+             * Run Live Token Contract
+             * @description When true, spend provider/model calls to prove token-backed behavior.
+             * @default false
+             */
+            run_live_token_contract: boolean;
+            /**
+             * Publish
+             * @description Publish the proof into the machine's stable local sidecar before returning it.
+             * @default true
+             */
+            publish: boolean;
+            /**
+             * Live Token Timeout Secs
+             * @description Provider turn timeout passed to the live-token canary lane.
+             * @default 120
+             */
+            live_token_timeout_secs: number;
+            /**
+             * Timeout Secs
+             * @description Optional provider-live process timeout. When omitted, the Machine Agent uses a provider-aware default.
+             */
+            timeout_secs?: number | null;
+        };
+        /** ProviderLiveProofResponse */
+        ProviderLiveProofResponse: {
+            /**
+             * Device Id
+             * @description Machine that executed the proof.
+             */
+            device_id: string;
+            /**
+             * Provider
+             * @description Provider that was proved.
+             * @enum {string}
+             */
+            provider: "codex" | "claude" | "opencode" | "antigravity";
+            /**
+             * Command Id
+             * @description Machine-control command id.
+             */
+            command_id: string;
+            /**
+             * Result
+             * @description Structured provider-live result returned by the Machine Agent.
+             */
+            result: {
+                [key: string]: unknown;
+            };
         };
         /** QueuedInputSummary */
         QueuedInputSummary: {
@@ -16970,6 +17048,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MachineHealthListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_provider_live_proof_agents_machines__device_id__provider_live_proof_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProviderLiveProofRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderLiveProofResponse"];
                 };
             };
             /** @description Validation Error */

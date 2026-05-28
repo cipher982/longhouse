@@ -139,7 +139,7 @@ class MachineControlChannelRegistry:
         *,
         owner_id: int,
         device_id: str,
-        session_id: str,
+        session_id: str | None,
         command_type: str,
         payload: Mapping[str, Any] | None = None,
         timeout_secs: int = 15,
@@ -174,10 +174,11 @@ class MachineControlChannelRegistry:
         frame = {
             "type": "command",
             "command_id": command_id,
-            "session_id": session_id,
             "command_type": command_type,
             "payload": dict(payload or {}),
         }
+        if session_id is not None:
+            frame["session_id"] = session_id
         if should_send:
             try:
                 async with send_lock:

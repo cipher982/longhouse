@@ -69,7 +69,42 @@ class _FakeWebSocket:
         pass
 
 
-def _register(registry: MachineControlChannelRegistry, *, owner_id: int, device_id: str, supports=("codex.send",)):
+class _CompletingWebSocket:
+    def __init__(self, registry: MachineControlChannelRegistry, *, owner_id: int, device_id: str):
+        self.registry = registry
+        self.owner_id = owner_id
+        self.device_id = device_id
+        self.sent = []
+
+    async def send_json(self, message):
+        self.sent.append(message)
+        await self.registry.complete_command(
+            {
+                "type": "command_result",
+                "command_id": message["command_id"],
+                "ok": True,
+                "result": {
+                    "provider": message["payload"]["provider"],
+                    "artifact": {
+                        "artifact_kind": "provider_live_canary",
+                        "provider": message["payload"]["provider"],
+                        "verdict": "green",
+                    },
+                },
+            },
+            owner_id=self.owner_id,
+            device_id=self.device_id,
+        )
+
+
+def _register(
+    registry: MachineControlChannelRegistry,
+    *,
+    owner_id: int,
+    device_id: str,
+    supports=("codex.send",),
+    websocket=None,
+):
     asyncio.run(
         registry.register(
             owner_id=owner_id,
@@ -77,7 +112,7 @@ def _register(registry: MachineControlChannelRegistry, *, owner_id: int, device_
             machine_name=device_id,
             engine_build="test-build",
             supports=list(supports),
-            websocket=_FakeWebSocket(),
+            websocket=websocket or _FakeWebSocket(),
         )
     )
 
@@ -277,6 +312,14 @@ def _swap_registry(registry: MachineControlChannelRegistry):
     return original, module
 
 
+def _swap_agents_machines_registry(registry: MachineControlChannelRegistry):
+    import zerg.routers.agents_machines as module
+
+    original = module.get_machine_control_channel_registry
+    module.get_machine_control_channel_registry = lambda: registry
+    return original, module
+
+
 def test_agents_machines_route_matches_timeline_route(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user(SessionLocal)
@@ -322,6 +365,74 @@ def test_agents_machines_route_matches_timeline_route(tmp_path):
     assert body["machines"][1]["can_launch_codex"] is False
     assert body["machines"][1]["launchable_providers"] == []
     assert body["machines"][1]["launch_blocked_by"] == "control_down"
+
+
+def test_provider_live_proof_route_dispatches_typed_machine_command(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+    registry = MachineControlChannelRegistry()
+    websocket = _CompletingWebSocket(registry, owner_id=OWNER_ID, device_id="cinder")
+    _register(
+        registry,
+        owner_id=OWNER_ID,
+        device_id="cinder",
+        supports=("claude.live_proof",),
+        websocket=websocket,
+    )
+
+    original, module = _swap_agents_machines_registry(registry)
+    try:
+        client, api_app = _make_agents_client(SessionLocal)
+        try:
+            resp = client.post(
+                "/api/agents/machines/cinder/provider-live-proof",
+                json={
+                    "provider": "claude",
+                    "run_live_token_contract": True,
+                    "live_token_timeout_secs": 17,
+                },
+            )
+        finally:
+            api_app.dependency_overrides.clear()
+    finally:
+        module.get_machine_control_channel_registry = original
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["device_id"] == "cinder"
+    assert body["provider"] == "claude"
+    assert body["result"]["artifact"]["verdict"] == "green"
+    assert len(websocket.sent) == 1
+    sent = websocket.sent[0]
+    assert "session_id" not in sent
+    assert sent["command_type"] == "provider.live_proof"
+    assert sent["payload"]["provider"] == "claude"
+    assert sent["payload"]["run_live_token_contract"] is True
+    assert sent["payload"]["live_token_timeout_secs"] == 17
+    assert "timeout_secs" not in sent["payload"]
+
+
+def test_provider_live_proof_route_rejects_machine_without_provider_support(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+    registry = MachineControlChannelRegistry()
+    _register(registry, owner_id=OWNER_ID, device_id="cinder", supports=("claude.launch",))
+
+    original, module = _swap_agents_machines_registry(registry)
+    try:
+        client, api_app = _make_agents_client(SessionLocal)
+        try:
+            resp = client.post(
+                "/api/agents/machines/cinder/provider-live-proof",
+                json={"provider": "claude"},
+            )
+        finally:
+            api_app.dependency_overrides.clear()
+    finally:
+        module.get_machine_control_channel_registry = original
+
+    assert resp.status_code == 409
+    assert "claude.live_proof" in resp.text
 
 
 def test_machines_route_returns_empty_for_unknown_user(tmp_path):
