@@ -128,6 +128,12 @@ Claude, OpenCode, and Antigravity, then publishes stable local sidecars under
 `~/.longhouse/provider-live-proof`. Codex stays in its dedicated release canary
 lane because its app-server/TUI bridge proof is provider-specific.
 
+Antigravity's shared live proof includes binary/help shape, plugin
+validate/install/list, global hook config, and a script-level hook-inbox claim
+cycle for `PreInvocation`, `PostInvocation`, and `Stop`. That proves the
+Longhouse hook contract but does not advertise `antigravity.send`; promotion
+still requires a real `agy` loop proof showing upstream honors `injectSteps`.
+
 `POST /api/agents/machines/{device_id}/provider-live-proof` dispatches the
 typed `provider.live_proof` command only to machines advertising
 `{provider}.live_proof`. Release automation can pass

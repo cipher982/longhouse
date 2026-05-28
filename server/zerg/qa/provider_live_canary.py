@@ -1306,6 +1306,225 @@ def _run_antigravity_plugin_contract(binary: str, root: Path) -> dict[str, Any]:
     )
 
 
+def _invoke_antigravity_hook(
+    *,
+    hook_script: Path,
+    event: str,
+    payload: dict[str, Any],
+    env: Mapping[str, str],
+) -> tuple[subprocess.CompletedProcess[str], dict[str, Any] | None]:
+    result = subprocess.run(
+        [str(hook_script), event],
+        input=json.dumps(payload),
+        text=True,
+        capture_output=True,
+        timeout=8,
+        check=False,
+        env=dict(env),
+    )
+    parsed: dict[str, Any] | None = None
+    if result.returncode == 0:
+        try:
+            loaded = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError:
+            loaded = None
+        if isinstance(loaded, dict):
+            parsed = loaded
+    return result, parsed
+
+
+def _run_antigravity_hook_inbox_contract(root: Path) -> dict[str, Any]:
+    """Prove Longhouse's shipped Antigravity hook script handles inbox claims.
+
+    This is intentionally not a real `agy` loop proof. It verifies the staged
+    Longhouse hook and inbox mechanics in an isolated home so the provider-live
+    artifact can expose hook-contract drift without advertising remote send.
+    """
+
+    try:
+        from zerg.cli.antigravity import _ANTIGRAVITY_HOOK_SCRIPT_NAME
+        from zerg.cli.antigravity import _ensure_antigravity_runtime_plugin
+        from zerg.cli.antigravity_channel import antigravity_inbox_dir
+        from zerg.cli.antigravity_channel import antigravity_state_dir
+        from zerg.cli.antigravity_channel import enqueue_antigravity_message
+        from zerg.cli.antigravity_channel import wait_for_antigravity_message_claim
+    except Exception as exc:
+        return _fail("antigravity_hook_import_failed", f"{type(exc).__name__}: {exc}")
+
+    contract_root = root / "hook-inbox-contract"
+    config_dir = contract_root / ".claude"
+    antigravity_cli_root = contract_root / ".gemini" / "antigravity-cli"
+    global_hooks_path = contract_root / ".gemini" / "config" / "hooks.json"
+    workspace = contract_root / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    try:
+        plugin_root = _ensure_antigravity_runtime_plugin(
+            config_dir=config_dir,
+            antigravity_cli_root=antigravity_cli_root,
+            engine_path="/bin/true",
+            global_hooks_path=global_hooks_path,
+        )
+    except Exception as exc:
+        return _fail("antigravity_hook_stage_failed", f"{type(exc).__name__}: {exc}")
+
+    hook_script = plugin_root / _ANTIGRAVITY_HOOK_SCRIPT_NAME
+    if not hook_script.is_file():
+        return _fail(
+            "antigravity_hook_script_missing",
+            "Staged Antigravity runtime plugin did not include the Longhouse hook script",
+            hook_script=str(hook_script),
+        )
+
+    session_id = f"antigravity-provider-live-{secrets.token_hex(6)}"
+    inbox_dir = antigravity_inbox_dir(session_id, config_dir)
+    state_dir = antigravity_state_dir(config_dir)
+    env = os.environ.copy()
+    env.update(
+        {
+            "LONGHOUSE_HOOK_PYTHON": sys.executable,
+            "LONGHOUSE_ENGINE": "/bin/true",
+            "LONGHOUSE_MANAGED_SESSION_ID": session_id,
+            "LONGHOUSE_ANTIGRAVITY_INBOX_DIR": str(inbox_dir),
+            "LONGHOUSE_ANTIGRAVITY_STATE_DIR": str(state_dir),
+            "PATH": os.defpath,
+        }
+    )
+
+    def event_payload(step: int) -> dict[str, Any]:
+        return {
+            "conversationId": "antigravity-provider-live-canary",
+            "workspacePaths": [str(workspace)],
+            "transcriptPath": str(contract_root / "transcript.jsonl"),
+            "stepIdx": step,
+        }
+
+    def enqueue(text: str) -> dict[str, Any]:
+        return enqueue_antigravity_message(session_id=session_id, text=text, config_dir=config_dir)
+
+    pre_text = f"LONGHOUSE_ANTIGRAVITY_PRE_{secrets.token_hex(8)}"
+    post_text = f"LONGHOUSE_ANTIGRAVITY_POST_{secrets.token_hex(8)}"
+    stop_text = f"LONGHOUSE_ANTIGRAVITY_STOP_{secrets.token_hex(8)}"
+
+    pre_message = enqueue(pre_text)
+    pre_result, pre_response = _invoke_antigravity_hook(
+        hook_script=hook_script,
+        event="PreInvocation",
+        payload=event_payload(1),
+        env=env,
+    )
+    expected_pre = {"injectSteps": [{"userMessage": pre_text}]}
+    if pre_response != expected_pre:
+        return _fail(
+            "antigravity_preinvocation_injection_failed",
+            "PreInvocation did not claim pending Longhouse inbox input",
+            expected=expected_pre,
+            observed=pre_response,
+            evidence=_command_evidence(pre_result),
+        )
+    pre_claim = wait_for_antigravity_message_claim(
+        session_id=session_id,
+        message_id=str(pre_message["message_id"]),
+        timeout_secs=0,
+        config_dir=config_dir,
+    )
+    if not pre_claim or pre_claim.get("hook_event") != "PreInvocation":
+        return _fail(
+            "antigravity_preinvocation_claim_missing",
+            "PreInvocation returned injection but did not persist a matching claim",
+            claim=pre_claim,
+        )
+
+    post_message = enqueue(post_text)
+    post_result, post_response = _invoke_antigravity_hook(
+        hook_script=hook_script,
+        event="PostInvocation",
+        payload=event_payload(2),
+        env=env,
+    )
+    expected_post = {
+        "injectSteps": [{"userMessage": post_text}],
+        "terminationBehavior": "force_continue",
+    }
+    if post_response != expected_post:
+        return _fail(
+            "antigravity_postinvocation_injection_failed",
+            "PostInvocation did not claim pending Longhouse inbox input with force_continue",
+            expected=expected_post,
+            observed=post_response,
+            evidence=_command_evidence(post_result),
+        )
+    post_claim = wait_for_antigravity_message_claim(
+        session_id=session_id,
+        message_id=str(post_message["message_id"]),
+        timeout_secs=0,
+        config_dir=config_dir,
+    )
+    if not post_claim or post_claim.get("hook_event") != "PostInvocation":
+        return _fail(
+            "antigravity_postinvocation_claim_missing",
+            "PostInvocation returned injection but did not persist a matching claim",
+            claim=post_claim,
+        )
+
+    enqueue(stop_text)
+    stop_result, stop_response = _invoke_antigravity_hook(
+        hook_script=hook_script,
+        event="Stop",
+        payload={**event_payload(3), "fullyIdle": True},
+        env=env,
+    )
+    expected_stop = {
+        "decision": "continue",
+        "reason": "Longhouse queued input is waiting in the managed Antigravity inbox.",
+    }
+    if stop_response != expected_stop:
+        return _fail(
+            "antigravity_stop_continue_failed",
+            "Stop did not continue when Longhouse inbox input was pending",
+            expected=expected_stop,
+            observed=stop_response,
+            evidence=_command_evidence(stop_result),
+        )
+
+    empty_session_id = f"{session_id}-empty"
+    empty_env = dict(env)
+    empty_env["LONGHOUSE_MANAGED_SESSION_ID"] = empty_session_id
+    empty_env["LONGHOUSE_ANTIGRAVITY_INBOX_DIR"] = str(antigravity_inbox_dir(empty_session_id, config_dir))
+    empty_env["LONGHOUSE_ANTIGRAVITY_STATE_DIR"] = str(antigravity_state_dir(config_dir))
+    empty_stop_result, empty_stop_response = _invoke_antigravity_hook(
+        hook_script=hook_script,
+        event="Stop",
+        payload={**event_payload(4), "fullyIdle": True},
+        env=empty_env,
+    )
+    expected_empty_stop = {"decision": "allow", "reason": ""}
+    if empty_stop_response != expected_empty_stop:
+        return _fail(
+            "antigravity_stop_empty_queue_failed",
+            "Stop should not continue when no Longhouse inbox input is pending",
+            expected=expected_empty_stop,
+            observed=empty_stop_response,
+            evidence=_command_evidence(empty_stop_result),
+        )
+
+    return _status(
+        "pass",
+        hook_script=str(hook_script),
+        config_dir=str(config_dir),
+        global_hooks_path=str(global_hooks_path),
+        pre_injection=pre_response,
+        post_injection=post_response,
+        stop_decision=stop_response,
+        empty_stop_decision=empty_stop_response,
+        pre_claim_event=pre_claim.get("hook_event"),
+        post_claim_event=post_claim.get("hook_event"),
+        note=(
+            "Longhouse hook-inbox mechanics passed in an isolated script-level proof; "
+            "real agy loop proof is still required before advertising antigravity.send."
+        ),
+    )
+
+
 def run_claude_live_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     binary = _resolve_provider_binary(args, "claude")
     if not binary:
@@ -1597,6 +1816,7 @@ def run_antigravity_live_canary(args: argparse.Namespace, root: Path) -> dict[st
         "command_shape": _run_antigravity_command_shape(binary),
         "plugin_contract": _run_antigravity_plugin_contract(binary, root),
         "global_hooks_contract": _run_antigravity_global_hooks_contract(root / "plugin" / "global-hooks.json"),
+        "hook_inbox_claim_contract": _run_antigravity_hook_inbox_contract(root),
     }
 
     return {"provider": "antigravity", "provider_version": version, "canaries": canaries}
