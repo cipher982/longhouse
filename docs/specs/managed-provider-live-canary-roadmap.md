@@ -217,7 +217,10 @@ machine has proven the installed version.
    yellow provider-readiness remains visible in the sidecar/local-health
    provider status. `make provider-live-route-e2e` exposes the same harness
    directly and can run `PROVIDER_LIVE_ROUTE_PROVIDER=all` when the machine
-   should fail hard unless every launch-scope provider has a fresh sidecar.
+   should fail hard unless every launch-scope provider has a fresh sidecar. The
+   route harness retries transient hosted dispatch failures per provider, but
+   keeps typed provider-version mismatches and real provider verdict failures
+   strict.
 
 ## Reference Surfaces
 

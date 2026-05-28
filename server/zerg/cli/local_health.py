@@ -266,7 +266,14 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
             match = result.get("match_status_code") or "-"
             mismatch = result.get("mismatch_status_code") or "-"
             mismatch_code = result.get("mismatch_code") or "-"
-            typer.echo(f"    {provider}: {status}; match={match}; mismatch={mismatch}/{mismatch_code}")
+            retry_note = ""
+            match_attempts = result.get("match_attempt_count")
+            mismatch_attempts = result.get("mismatch_attempt_count")
+            if isinstance(match_attempts, int) and match_attempts > 1:
+                retry_note += f"; match_attempts={match_attempts}"
+            if isinstance(mismatch_attempts, int) and mismatch_attempts > 1:
+                retry_note += f"; mismatch_attempts={mismatch_attempts}"
+            typer.echo(f"    {provider}: {status}; match={match}; mismatch={mismatch}/{mismatch_code}{retry_note}")
 
     provider_hook_diagnostics = dict(snapshot.get("provider_hook_diagnostics") or {})
     hook_events = list(provider_hook_diagnostics.get("events") or [])
