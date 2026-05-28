@@ -630,6 +630,8 @@ def _check_provider_support() -> list[CheckResult]:
         version = dict(info.get("version_readiness") or {})
         live_proof = dict(info.get("live_proof") or {})
         live_ops = ", ".join(str(item) for item in list(capabilities.get("live_control_operations") or [])) or "-"
+        supported_ops = ", ".join(str(item) for item in list(capabilities.get("supported_operations") or [])) or "-"
+        unsupported_ops = ", ".join(str(item) for item in list(capabilities.get("unsupported_operations") or [])) or "-"
         missing_live_items = list(capabilities.get("missing_live_control_operations") or [])
         missing_live_ops = ", ".join(str(item) for item in missing_live_items)
         minimum_level = str(proof.get("minimum_evidence_level") or "-")
@@ -640,7 +642,10 @@ def _check_provider_support() -> list[CheckResult]:
         version_state = str(version.get("state") or "-")
         state = str(info.get("state") or "unknown")
         live_proof_detail = _provider_live_proof_detail(live_proof)
-        detail = f"live={live_ops}; proof_min={minimum_level}; version={version_state}; local_proof={live_proof_detail}"
+        detail = (
+            f"live={live_ops}; contract={supported_ops}; unsupported={unsupported_ops}; "
+            f"proof_min={minimum_level}; version={version_state}; local_proof={live_proof_detail}"
+        )
         if missing_live_ops:
             detail = f"{detail}; missing_live={missing_live_ops}"
         if release_failed_ops:

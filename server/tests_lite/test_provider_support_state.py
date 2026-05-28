@@ -1,6 +1,47 @@
 from __future__ import annotations
 
+from zerg.services.managed_provider_contracts import all_managed_provider_contracts
+from zerg.services.provider_support_state import CONTRACT_OPERATIONS
 from zerg.services.provider_support_state import collect_provider_support_state
+
+
+def _expected_supported_operations(contract) -> list[str]:
+    return [operation for operation in CONTRACT_OPERATIONS if bool(getattr(contract, operation))]
+
+
+def _expected_unsupported_operations(contract) -> list[str]:
+    return [operation for operation in CONTRACT_OPERATIONS if not bool(getattr(contract, operation))]
+
+
+def _expected_live_operations(contract) -> list[str]:
+    return [support.split(".", 1)[1] for support in contract.machine_control_supports]
+
+
+def test_support_state_provider_capability_axes_match_manifest_contracts() -> None:
+    provider_clis = {
+        contract.provider: {"path": f"/usr/local/bin/{contract.provider}", "source": "PATH"}
+        for contract in all_managed_provider_contracts()
+    }
+    control_operations_by_provider = {
+        contract.provider: _expected_live_operations(contract) for contract in all_managed_provider_contracts()
+    }
+
+    support = collect_provider_support_state(
+        provider_clis=provider_clis,
+        provider_release_status={"statuses": {}},
+        control_channel={
+            "status": "connected",
+            "control_operations_by_provider": control_operations_by_provider,
+        },
+    )
+
+    for contract in all_managed_provider_contracts():
+        capabilities = support["providers"][contract.provider]["capabilities"]
+        assert capabilities["supported_operations"] == _expected_supported_operations(contract)
+        assert capabilities["unsupported_operations"] == _expected_unsupported_operations(contract)
+        assert capabilities["machine_control_supports"] == list(contract.machine_control_supports)
+        assert capabilities["live_control_operations"] == _expected_live_operations(contract)
+        assert capabilities["missing_live_control_operations"] == []
 
 
 def test_support_state_separates_candidate_release_from_local_readiness() -> None:

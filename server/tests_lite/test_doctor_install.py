@@ -99,7 +99,11 @@ def test_check_provider_support_reports_capability_axes(monkeypatch):
                 "providers": {
                     "claude": {
                         "state": "ready",
-                        "capabilities": {"live_control_operations": ["send", "steer"]},
+                        "capabilities": {
+                            "live_control_operations": ["send", "steer"],
+                            "supported_operations": ["launch_local", "send_input", "interrupt", "steer_active_turn"],
+                            "unsupported_operations": ["launch_remote"],
+                        },
                         "proof": {"minimum_evidence_level": "source_review"},
                         "version_readiness": {"state": "no_artifact"},
                         "live_proof": {
@@ -112,7 +116,11 @@ def test_check_provider_support_reports_capability_axes(monkeypatch):
                     },
                     "opencode": {
                         "state": "provider_cli_missing",
-                        "capabilities": {"live_control_operations": []},
+                        "capabilities": {
+                            "live_control_operations": [],
+                            "supported_operations": ["launch_local", "send_input", "interrupt"],
+                            "unsupported_operations": ["steer_active_turn"],
+                        },
                         "proof": {"minimum_evidence_level": "live_no_token"},
                         "version_readiness": {"state": "not_configured"},
                         "live_proof": {"status": "not_configured"},
@@ -127,7 +135,8 @@ def test_check_provider_support_reports_capability_axes(monkeypatch):
 
     assert labels["claude managed support ready"].status == doctor_cli.PASS
     assert labels["claude managed support ready"].detail == (
-        "live=send, steer; proof_min=source_review; version=no_artifact; "
+        "live=send, steer; contract=launch_local, send_input, interrupt, steer_active_turn; "
+        "unsupported=launch_remote; proof_min=source_review; version=no_artifact; "
         "local_proof=ok,version=match,freshness=fresh,verdict=yellow,failure=insufficient_coverage"
     )
     assert labels["opencode managed support provider_cli_missing"].status == doctor_cli.WARN
@@ -162,7 +171,7 @@ def test_check_provider_support_warns_on_stale_local_live_proof(monkeypatch):
     assert results[0].status == doctor_cli.WARN
     assert results[0].label == "codex managed support ready"
     assert results[0].detail == (
-        "live=send, interrupt; proof_min=hermetic; version=installed_release_reviewed; "
+        "live=send, interrupt; contract=-; unsupported=-; proof_min=hermetic; version=installed_release_reviewed; "
         "local_proof=stale,version=match,freshness=stale,verdict=yellow"
     )
 
@@ -194,7 +203,7 @@ def test_check_provider_support_warns_on_partial_live_control(monkeypatch):
     assert results[0].status == doctor_cli.WARN
     assert results[0].label == "claude managed support live_control_partial"
     assert results[0].detail == (
-        "live=launch; proof_min=source_review; version=no_artifact; "
+        "live=launch; contract=-; unsupported=-; proof_min=source_review; version=no_artifact; "
         "local_proof=not_configured; missing_live=send, interrupt, steer"
     )
 
