@@ -13,7 +13,6 @@ from zerg import provider_release_status as prs
 
 @pytest.fixture(autouse=True)
 def clear_live_proof_env(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.delenv(prs.PROVIDER_LIVE_PROOF_DIR_ENV, raising=False)
     monkeypatch.setenv("LONGHOUSE_HOME", str(tmp_path / ".longhouse"))
     monkeypatch.setenv(prs.PROVIDER_RELEASE_STATUS_CONFIG_FILE_ENV, str(tmp_path / "missing-provider-status.env"))
 
@@ -42,9 +41,16 @@ def _artifact(provider: str, version: str) -> dict[str, object]:
     }
 
 
+def _write_proof(tmp_path: Path, provider: str, artifact: dict[str, object]) -> Path:
+    proof_dir = tmp_path / ".longhouse" / "provider-live-proof"
+    proof_dir.mkdir(parents=True, exist_ok=True)
+    path = proof_dir / f"{provider}.json"
+    path.write_text(json.dumps(artifact), encoding="utf-8")
+    return path
+
+
 def test_matching_live_proof_applies(monkeypatch, tmp_path: Path) -> None:
-    (tmp_path / "claude.json").write_text(json.dumps(_artifact("claude", "2.1.153")), encoding="utf-8")
-    monkeypatch.setenv(prs.PROVIDER_LIVE_PROOF_DIR_ENV, str(tmp_path))
+    _write_proof(tmp_path, "claude", _artifact("claude", "2.1.153"))
     monkeypatch.setattr(
         plp,
         "_provider_version_from_cli",
@@ -62,8 +68,7 @@ def test_matching_live_proof_applies(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_mismatched_live_proof_is_informational_only(monkeypatch, tmp_path: Path) -> None:
-    (tmp_path / "opencode.json").write_text(json.dumps(_artifact("opencode", "1.15.11")), encoding="utf-8")
-    monkeypatch.setenv(prs.PROVIDER_LIVE_PROOF_DIR_ENV, str(tmp_path))
+    _write_proof(tmp_path, "opencode", _artifact("opencode", "1.15.11"))
     monkeypatch.setattr(
         plp,
         "_provider_version_from_cli",
@@ -80,19 +85,17 @@ def test_mismatched_live_proof_is_informational_only(monkeypatch, tmp_path: Path
 
 
 def test_rejects_release_artifact_in_live_proof_dir(monkeypatch, tmp_path: Path) -> None:
-    (tmp_path / "antigravity.json").write_text(
-        json.dumps(
-            {
-                "schema_version": prs.PROVIDER_STATUS_SCHEMA_VERSION,
-                "provider": "antigravity",
-                "provider_version": "1.0.2",
-                "generated_at": _generated_at(),
-                "verdict": "green",
-            }
-        ),
-        encoding="utf-8",
+    _write_proof(
+        tmp_path,
+        "antigravity",
+        {
+            "schema_version": prs.PROVIDER_STATUS_SCHEMA_VERSION,
+            "provider": "antigravity",
+            "provider_version": "1.0.2",
+            "generated_at": _generated_at(),
+            "verdict": "green",
+        },
     )
-    monkeypatch.setenv(prs.PROVIDER_LIVE_PROOF_DIR_ENV, str(tmp_path))
     monkeypatch.setattr(
         plp,
         "_provider_version_from_cli",
@@ -110,8 +113,7 @@ def test_rejects_release_artifact_in_live_proof_dir(monkeypatch, tmp_path: Path)
 def test_stale_live_proof_does_not_apply(monkeypatch, tmp_path: Path) -> None:
     artifact = _artifact("claude", "2.1.153")
     artifact["generated_at"] = "2000-01-01T00:00:00Z"
-    (tmp_path / "claude.json").write_text(json.dumps(artifact), encoding="utf-8")
-    monkeypatch.setenv(prs.PROVIDER_LIVE_PROOF_DIR_ENV, str(tmp_path))
+    _write_proof(tmp_path, "claude", artifact)
     monkeypatch.setattr(plp, "_max_artifact_age_seconds", lambda: 1)
     monkeypatch.setattr(
         plp,
@@ -130,8 +132,7 @@ def test_stale_live_proof_does_not_apply(monkeypatch, tmp_path: Path) -> None:
 def test_schema_mismatch_live_proof_does_not_apply(monkeypatch, tmp_path: Path) -> None:
     artifact = _artifact("claude", "2.1.153")
     artifact["schema_version"] = 99
-    (tmp_path / "claude.json").write_text(json.dumps(artifact), encoding="utf-8")
-    monkeypatch.setenv(prs.PROVIDER_LIVE_PROOF_DIR_ENV, str(tmp_path))
+    _write_proof(tmp_path, "claude", artifact)
     monkeypatch.setattr(
         plp,
         "_provider_version_from_cli",
@@ -147,8 +148,7 @@ def test_schema_mismatch_live_proof_does_not_apply(monkeypatch, tmp_path: Path) 
 
 
 def test_provider_mismatch_live_proof_does_not_apply(monkeypatch, tmp_path: Path) -> None:
-    (tmp_path / "claude.json").write_text(json.dumps(_artifact("opencode", "2.1.153")), encoding="utf-8")
-    monkeypatch.setenv(prs.PROVIDER_LIVE_PROOF_DIR_ENV, str(tmp_path))
+    _write_proof(tmp_path, "claude", _artifact("opencode", "2.1.153"))
     monkeypatch.setattr(
         plp,
         "_provider_version_from_cli",
@@ -164,8 +164,7 @@ def test_provider_mismatch_live_proof_does_not_apply(monkeypatch, tmp_path: Path
 
 
 def test_unknown_local_version_live_proof_does_not_apply(monkeypatch, tmp_path: Path) -> None:
-    (tmp_path / "claude.json").write_text(json.dumps(_artifact("claude", "2.1.153")), encoding="utf-8")
-    monkeypatch.setenv(prs.PROVIDER_LIVE_PROOF_DIR_ENV, str(tmp_path))
+    _write_proof(tmp_path, "claude", _artifact("claude", "2.1.153"))
     monkeypatch.setattr(
         plp,
         "_provider_version_from_cli",
@@ -246,52 +245,3 @@ def test_corrupt_default_live_proof_file_is_unavailable(monkeypatch, tmp_path: P
     assert claude["configured"] is True
     assert claude["status"] == "unavailable"
     assert "JSONDecodeError" in claude["source"]["attempts"][0]["error"]
-
-
-def test_configured_live_proof_dir_overrides_default(monkeypatch, tmp_path: Path) -> None:
-    longhouse_home = tmp_path / ".longhouse-dev"
-    default_dir = longhouse_home / "provider-live-proof"
-    explicit_dir = tmp_path / "explicit-proof"
-    default_dir.mkdir(parents=True)
-    explicit_dir.mkdir()
-    (default_dir / "claude.json").write_text(json.dumps(_artifact("claude", "2.1.153")), encoding="utf-8")
-    (explicit_dir / "claude.json").write_text(json.dumps(_artifact("claude", "9.9.9")), encoding="utf-8")
-    monkeypatch.setenv("LONGHOUSE_HOME", str(longhouse_home))
-    monkeypatch.setenv(prs.PROVIDER_LIVE_PROOF_DIR_ENV, str(explicit_dir))
-    monkeypatch.setattr(
-        plp,
-        "_provider_version_from_cli",
-        lambda path: ("Claude Code 2.1.153\n", None),
-    )
-
-    proof = plp.collect_provider_live_proof({"claude": {"path": "/opt/homebrew/bin/claude"}})
-
-    claude = proof["statuses"]["claude"]
-    assert claude["status"] == "version_mismatch"
-    assert claude["source"]["attempts"][0]["path"] == str(explicit_dir / "claude.json")
-
-
-def test_config_file_live_proof_dir_overrides_default(monkeypatch, tmp_path: Path) -> None:
-    longhouse_home = tmp_path / ".longhouse-dev"
-    default_dir = longhouse_home / "provider-live-proof"
-    configured_dir = tmp_path / "configured-proof"
-    config_path = tmp_path / "provider-release-status.env"
-    default_dir.mkdir(parents=True)
-    configured_dir.mkdir()
-    (default_dir / "claude.json").write_text(json.dumps(_artifact("claude", "2.1.153")), encoding="utf-8")
-    (configured_dir / "claude.json").write_text(json.dumps(_artifact("claude", "9.9.9")), encoding="utf-8")
-    config_path.write_text(f"{prs.PROVIDER_LIVE_PROOF_DIR_ENV}={configured_dir}\n", encoding="utf-8")
-    monkeypatch.delenv(prs.PROVIDER_LIVE_PROOF_DIR_ENV, raising=False)
-    monkeypatch.setenv("LONGHOUSE_HOME", str(longhouse_home))
-    monkeypatch.setenv(prs.PROVIDER_RELEASE_STATUS_CONFIG_FILE_ENV, str(config_path))
-    monkeypatch.setattr(
-        plp,
-        "_provider_version_from_cli",
-        lambda path: ("Claude Code 2.1.153\n", None),
-    )
-
-    proof = plp.collect_provider_live_proof({"claude": {"path": "/opt/homebrew/bin/claude"}})
-
-    claude = proof["statuses"]["claude"]
-    assert claude["status"] == "version_mismatch"
-    assert claude["source"]["attempts"][0]["path"] == str(configured_dir / "claude.json")

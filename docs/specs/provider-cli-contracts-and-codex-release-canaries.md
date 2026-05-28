@@ -255,8 +255,7 @@ Initial product contract:
 
 - Sauron publishes one latest-status JSON document per provider.
 - A local dogfood machine can publish independent live-proof sidecars under
-  `LONGHOUSE_PROVIDER_LIVE_PROOF_DIR`, or the default
-  `~/.longhouse/provider-live-proof`, by running
+  `~/.longhouse/provider-live-proof` by running
   `longhouse provider-live publish`. The publisher covers Claude, OpenCode,
   and Antigravity. Codex release drift stays in the dedicated Codex release
   canary lane. The underlying canary is the packaged

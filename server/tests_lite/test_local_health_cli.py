@@ -277,7 +277,6 @@ def _disable_real_runner_env(monkeypatch, tmp_path: Path) -> None:
         provider_release_status.CODEX_RELEASE_STATUS_URL_ENV,
         provider_release_status.PROVIDER_RELEASE_STATUS_DIR_ENV,
         provider_release_status.PROVIDER_RELEASE_STATUS_URL_ENV,
-        provider_release_status.PROVIDER_LIVE_PROOF_DIR_ENV,
     ):
         monkeypatch.delenv(env_name, raising=False)
     # Stub the live process scan by default so tests don't pick up the dev
@@ -1337,8 +1336,6 @@ def test_collect_local_health_projects_matching_provider_live_proof(monkeypatch,
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv(provider_release_status.PROVIDER_LIVE_PROOF_DIR_ENV, str(proof_dir))
-
     snapshot = local_health_service.collect_local_health(tmp_path)
 
     assert snapshot["provider_live_proof"]["statuses"]["claude"]["status"] == "ok"

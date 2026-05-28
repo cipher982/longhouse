@@ -14,9 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from zerg.provider_release_status import PROVIDER_LIVE_PROOF_DIR_ENV
 from zerg.provider_release_status import PROVIDER_STATUS_SCHEMA_VERSION
-from zerg.provider_release_status import _configured_value
 from zerg.provider_release_status import _max_artifact_age_seconds
 from zerg.provider_release_status import _normalize_operation_evidence
 from zerg.provider_release_status import _parse_rfc3339
@@ -41,15 +39,8 @@ def _read_json_file(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     return payload, None
 
 
-def configured_provider_live_proof_dir(base_dir: Path | None = None) -> Path:
-    raw = _configured_value(PROVIDER_LIVE_PROOF_DIR_ENV)
-    if raw:
-        return Path(raw).expanduser()
-    return get_provider_live_proof_dir(base_dir)
-
-
 def _proof_file_candidates(provider: str, *, base_dir: Path | None = None) -> list[Path]:
-    return [configured_provider_live_proof_dir(base_dir) / f"{provider}.json"]
+    return [get_provider_live_proof_dir(base_dir) / f"{provider}.json"]
 
 
 def _load_live_proof_artifact(
@@ -216,4 +207,4 @@ def collect_provider_live_proof(
     }
 
 
-__all__ = ["LIVE_PROOF_ARTIFACT_KIND", "collect_provider_live_proof", "configured_provider_live_proof_dir"]
+__all__ = ["LIVE_PROOF_ARTIFACT_KIND", "collect_provider_live_proof"]

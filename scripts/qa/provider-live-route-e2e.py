@@ -68,7 +68,7 @@ def _default_token_file() -> Path:
 
 
 def _default_proof_dir() -> Path:
-    return Path(os.environ.get("LONGHOUSE_PROVIDER_LIVE_PROOF_DIR") or _longhouse_home() / "provider-live-proof")
+    return _longhouse_home() / "provider-live-proof"
 
 
 def _read_token(token_file: Path) -> str:
