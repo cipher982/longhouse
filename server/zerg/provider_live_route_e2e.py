@@ -248,7 +248,6 @@ def collect_provider_live_route_e2e(
         "engine_build": payload.get("engine_build"),
         "providers": providers,
         "require_verdict": payload.get("require_verdict"),
-        "run_live_token_contract": payload.get("run_live_token_contract"),
         "mismatch_checked": payload.get("mismatch_checked"),
         "results": summarized_results,
         **coverage,

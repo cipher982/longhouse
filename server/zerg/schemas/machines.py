@@ -73,10 +73,6 @@ class ProviderLiveProofRequest(UTCBaseModel):
         max_length=120,
         description="Optional release/version the returned provider-live artifact must prove.",
     )
-    run_live_token_contract: bool = Field(
-        default=False,
-        description="When true, spend provider/model calls to prove token-backed behavior.",
-    )
     publish: bool = Field(
         default=True,
         description="Publish the proof into the machine's stable local sidecar before returning it.",
@@ -85,7 +81,7 @@ class ProviderLiveProofRequest(UTCBaseModel):
         default=120,
         ge=1,
         le=600,
-        description="Provider turn timeout passed to the live-token canary lane.",
+        description="Provider turn timeout for token-backed live proof where the provider supports it.",
     )
     timeout_secs: int | None = Field(
         default=None,

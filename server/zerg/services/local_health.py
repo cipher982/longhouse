@@ -36,7 +36,6 @@ from zerg.provider_live_proof import collect_provider_live_proof
 from zerg.provider_live_route_e2e import collect_provider_live_route_e2e
 from zerg.provider_live_route_e2e import expected_route_providers_from_live_proof
 from zerg.provider_release_status import collect_provider_release_status
-from zerg.provider_release_status import reconcile_provider_release_status_with_live_proof
 from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_log_dir
 from zerg.services.longhouse_paths import get_agent_outbox_dir
@@ -3579,10 +3578,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         base_dir=resolved_base_dir,
         expected_providers=expected_route_providers_from_live_proof(provider_live_proof),
     )
-    provider_release_status = reconcile_provider_release_status_with_live_proof(
-        collect_provider_release_status(provider_clis, fast=fast),
-        provider_live_proof,
-    )
+    provider_release_status = collect_provider_release_status(provider_clis, fast=fast)
     activity_summary = _collect_activity_summary(resolved_base_dir, now=now)
     managed_summary, managed_sessions, orphan_bridges, unmanaged_processes = _collect_managed_session_sources(
         resolved_base_dir,

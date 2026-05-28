@@ -524,7 +524,7 @@ def test_collect_local_health_marks_connected_control_channel_launch_ready(monke
         "evidence_level": "manual_live_token",
         "evidence_source": (
             "make managed-claude-poc and provider-live canary --provider claude "
-            "--run-live-token-contract delayed intent=steer transcript assertion"
+            "token-backed proof delayed intent=steer transcript assertion"
         ),
         "next": "promote to scheduled live token canary",
     }
@@ -1118,7 +1118,7 @@ def test_collect_local_health_degrades_for_provider_release_warning(monkeypatch,
     assert "provider_release_warning" in snapshot["reasons"]
 
 
-def test_collect_local_health_keeps_release_coverage_gap_advisory_when_live_proof_is_green(
+def test_collect_local_health_keeps_release_coverage_gap_visible_when_live_proof_is_green(
     monkeypatch,
     tmp_path: Path,
 ):
@@ -1196,20 +1196,17 @@ def test_collect_local_health_keeps_release_coverage_gap_advisory_when_live_proo
 
     release = snapshot["provider_release_status"]["statuses"]["claude"]
     claude_support = snapshot["provider_support_state"]["providers"]["claude"]
-    assert snapshot["health_state"] == "healthy"
-    assert snapshot["severity"] == "green"
-    assert "provider_release_warning" not in snapshot["reasons"]
-    assert snapshot["provider_release_status"]["warning_count"] == 0
-    assert snapshot["provider_release_status"]["advisory_count"] == 1
-    assert release["status"] == "caution_local_proven"
-    assert release["risk"] == "none"
-    assert release["local_live_proof_override"]["reason"] == "release_coverage_gap_locally_proven"
-    assert claude_support["state"] == "ready"
-    assert claude_support["version_readiness"]["state"] == "release_coverage_gap_locally_proven"
-    assert claude_support["proof"]["state"] == "mixed"
-    assert claude_support["proof"]["release_gap_operations"] == []
-    assert claude_support["operations"]["launch_remote"]["release_evidence"]["status"] == "advisory"
-    assert claude_support["operations"]["launch_remote"]["release_evidence"]["original_status"] == "not_run"
+    assert snapshot["health_state"] == "degraded"
+    assert snapshot["severity"] == "yellow"
+    assert "provider_release_warning" in snapshot["reasons"]
+    assert snapshot["provider_release_status"]["warning_count"] == 1
+    assert release["status"] == "caution"
+    assert release["risk"] == "warning"
+    assert claude_support["state"] == "needs_attention"
+    assert claude_support["version_readiness"]["state"] == "installed_release_needs_attention"
+    assert claude_support["proof"]["state"] == "release_incomplete"
+    assert claude_support["proof"]["release_gap_operations"] == ["launch_remote"]
+    assert claude_support["operations"]["launch_remote"]["release_evidence"]["status"] == "not_run"
 
 
 def test_collect_local_health_projects_matching_provider_live_proof(monkeypatch, tmp_path: Path):

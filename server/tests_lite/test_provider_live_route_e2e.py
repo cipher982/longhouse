@@ -51,7 +51,6 @@ def _route_artifact(*, verdict: str = "green", status: str = "pass") -> dict[str
         "engine_build": "abc1234",
         "providers": ["opencode"],
         "require_verdict": "green",
-        "run_live_token_contract": False,
         "mismatch_checked": True,
         "verdict": verdict,
         "failure_count": 0 if status == "pass" and verdict == "green" else 1,

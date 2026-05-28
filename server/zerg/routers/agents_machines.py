@@ -149,7 +149,7 @@ async def run_provider_live_proof(
 def _provider_live_proof_machine_timeout_secs(request: ProviderLiveProofRequest) -> int:
     if request.timeout_secs is not None:
         return request.timeout_secs
-    if request.run_live_token_contract:
+    if request.provider != "codex":
         return min(request.live_token_timeout_secs + 60, 900)
     return 120
 

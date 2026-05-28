@@ -308,68 +308,6 @@ server.serve_forever()
     )
 
 
-def _fake_claude(path: Path) -> Path:
-    return _write_exe(
-        path,
-        r"""#!/usr/bin/env python3
-import json
-import os
-import sys
-
-args = sys.argv[1:]
-if args == ["--version"]:
-    print("2.9.9-fake (Claude Code)")
-    raise SystemExit(0)
-
-if args == ["auth", "status", "--json"]:
-    if os.environ.get("FAKE_CLAUDE_AUTH_NONZERO") == "1":
-        print("email=should-not-appear@example.com orgId=org-secret", file=sys.stderr)
-        raise SystemExit(1)
-    if os.environ.get("FAKE_CLAUDE_AUTH_INVALID_JSON") == "1":
-        print("email=should-not-appear@example.com orgId=org-secret")
-        raise SystemExit(0)
-    if os.environ.get("FAKE_CLAUDE_NOT_LOGGED_IN") == "1":
-        print(json.dumps({"loggedIn": False, "authMethod": "", "apiProvider": ""}))
-        raise SystemExit(0)
-    if os.environ.get("FAKE_CLAUDE_API_AUTH") == "1":
-        print(json.dumps({
-            "loggedIn": True,
-            "authMethod": "apiKey",
-            "apiProvider": "anthropic",
-            "email": "should-not-appear@example.com",
-            "orgId": "org-secret",
-        }))
-        raise SystemExit(0)
-    print(json.dumps({
-        "loggedIn": True,
-        "authMethod": "claude.ai",
-        "apiProvider": "firstParty",
-        "email": "should-not-appear@example.com",
-        "orgId": "org-secret",
-        "subscriptionType": "pro",
-    }))
-    raise SystemExit(0)
-
-if args == ["--help"]:
-    if os.environ.get("FAKE_CLAUDE_MISSING_SESSION_ID") == "1":
-        print("--resume --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
-    else:
-        print("--session-id --resume --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
-    raise SystemExit(0)
-
-if args == ["--dangerously-load-development-channels", "server:longhouse-channel", "--help"]:
-    if os.environ.get("FAKE_CLAUDE_BAD_CHANNELS") == "1":
-        print("unknown option --dangerously-load-development-channels", file=sys.stderr)
-        raise SystemExit(1)
-    print("--session-id --resume --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
-    raise SystemExit(0)
-
-print("unexpected fake claude args: " + json.dumps(args), file=sys.stderr)
-raise SystemExit(2)
-""",
-    )
-
-
 def _fake_antigravity(path: Path) -> Path:
     return _write_exe(
         path,
@@ -446,7 +384,11 @@ def _run_canary(
         env.update(extra_env)
     result = subprocess.run(
         [
-            sys.executable,
+            "uv",
+            "run",
+            "--project",
+            str(REPO_ROOT / "server"),
+            "python",
             str(CANARY),
             "--repo-root",
             str(REPO_ROOT),
@@ -484,7 +426,11 @@ def _run_provider_canary(
         env.update(extra_env)
     result = subprocess.run(
         [
-            sys.executable,
+            "uv",
+            "run",
+            "--project",
+            str(REPO_ROOT / "server"),
+            "python",
             str(CANARY),
             "--repo-root",
             str(REPO_ROOT),
@@ -508,7 +454,7 @@ def _run_provider_canary(
     return result, payload
 
 
-def test_opencode_live_canary_no_token_tier_is_green_with_optional_prompt_execution() -> None:
+def test_opencode_live_canary_proves_server_and_token_backed_contracts() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fake_bin = _fake_opencode(root / "bin" / "opencode")
@@ -527,76 +473,24 @@ def test_opencode_live_canary_no_token_tier_is_green_with_optional_prompt_execut
         assert payload["canaries"]["prompt_async_no_reply_delivery"]["observed_message_count"] == 1
         assert payload["canaries"]["process_restart_reattach_contract"]["status"] == "pass"
         assert payload["canaries"]["session_abort"]["status"] == "pass"
-        assert payload["canaries"]["prompt_async_execution_contract"]["status"] == "optional_skipped"
-        assert payload["canaries"]["active_turn_abort_contract"]["status"] == "optional_skipped"
-        assert set(payload["operation_evidence"]) == {"interrupt", "launch_local", "reattach", "send_input"}
+        assert payload["canaries"]["assistant_response_contract"]["status"] == "pass"
+        assert payload["canaries"]["prompt_async_execution_contract"]["status"] == "pass"
+        assert payload["canaries"]["active_turn_abort_contract"]["status"] == "pass"
+        assert set(payload["operation_evidence"]) == {
+            "interrupt",
+            "launch_local",
+            "reattach",
+            "send_input",
+            "transcript_binding",
+        }
         assert payload["operation_evidence"]["launch_local"]["level"] == "live_no_token"
         assert payload["operation_evidence"]["reattach"]["level"] == "live_no_token"
         assert payload["operation_evidence"]["reattach"]["canary"] == "opencode_process_restart_reattach_contract"
         assert payload["operation_evidence"]["send_input"]["status"] == "pass"
-        assert payload["operation_evidence"]["send_input"]["canary"] == "opencode_prompt_async_no_reply_delivery"
-        assert "No-token behavior proof" in payload["operation_evidence"]["send_input"]["message"]
+        assert payload["operation_evidence"]["send_input"]["level"] == "manual_live_token"
+        assert payload["operation_evidence"]["send_input"]["canary"] == "opencode_assistant_response_contract"
         assert payload["operation_evidence"]["interrupt"]["status"] == "pass"
-
-
-def test_claude_live_canary_no_token_tier_is_green_with_optional_live_token_contracts() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        fake_bin = _fake_claude(root / "bin" / "claude")
-        result, payload = _run_provider_canary(root, provider="claude", fake_bin=fake_bin)
-
-        assert result.returncode == 0, result.stderr + result.stdout
-        assert payload["provider"] == "claude"
-        assert payload["provider_version"] == "2.9.9-fake (Claude Code)"
-        assert payload["verdict"] == "green"
-        assert payload["failure_code"] is None
-        assert payload["canaries"]["auth_status"]["status"] == "pass"
-        assert "email" not in payload["canaries"]["auth_status"]["auth"]
-        assert payload["canaries"]["command_shape"]["status"] == "pass"
-        assert payload["canaries"]["channels_shape"]["status"] == "pass"
-        assert payload["canaries"]["detached_pty_shape"]["status"] == "pass"
-        assert "live_token_contract" not in payload["canaries"]
-        live_contract_names = [
-            "idle_steer_rejection_contract",
-            "interrupt_contract",
-            "launch_local_contract",
-            "send_input_contract",
-            "steer_active_turn_contract",
-            "transcript_binding_contract",
-        ]
-        assert [name for name in payload["canaries"] if name.endswith("_contract")] == live_contract_names
-        for name in live_contract_names:
-            assert payload["canaries"][name]["status"] == "optional_skipped"
-        assert set(payload["operation_evidence"]) == {"launch_local"}
-        assert payload["operation_evidence"]["launch_local"]["status"] == "pass"
-        assert payload["operation_evidence"]["launch_local"]["level"] == "live_no_token"
-
-
-def test_antigravity_live_canary_stays_yellow_until_loop_invocation_is_proven() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        fake_bin = _fake_antigravity(root / "bin" / "agy")
-        result, payload = _run_provider_canary(root, provider="antigravity", fake_bin=fake_bin)
-
-        assert result.returncode == 0, result.stderr + result.stdout
-        assert payload["provider"] == "antigravity"
-        assert payload["provider_version"] == "1.0.2-fake"
-        assert payload["verdict"] == "yellow"
-        assert payload["failure_code"] == "insufficient_coverage"
-        assert payload["canaries"]["command_shape"]["status"] == "pass"
-        assert payload["canaries"]["plugin_contract"]["status"] == "pass"
-        assert payload["canaries"]["global_hooks_contract"]["status"] == "pass"
-        assert payload["canaries"]["loop_invocation_contract"]["status"] == "not_run"
-        assert set(payload["canaries"]["global_hooks_contract"]["events"]) == {
-            "PostInvocation",
-            "PostToolUse",
-            "PreInvocation",
-            "PreToolUse",
-            "Stop",
-        }
-        assert "longhouse-runtime" in json.dumps(payload["canaries"]["plugin_contract"])
-        assert set(payload["operation_evidence"]) == {"launch_local"}
-        assert payload["operation_evidence"]["launch_local"]["level"] == "live_no_token"
+        assert payload["operation_evidence"]["interrupt"]["level"] == "manual_live_token"
 
 
 def test_antigravity_live_canary_fails_when_plugin_install_fails() -> None:
@@ -613,113 +507,6 @@ def test_antigravity_live_canary_fails_when_plugin_install_fails() -> None:
         assert result.returncode == 1
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "antigravity_plugin_install_failed"
-
-
-def test_claude_live_canary_accepts_api_key_auth() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        fake_bin = _fake_claude(root / "bin" / "claude")
-        result, payload = _run_provider_canary(
-            root,
-            provider="claude",
-            fake_bin=fake_bin,
-            extra_env={"FAKE_CLAUDE_API_AUTH": "1"},
-        )
-
-        assert result.returncode == 0, result.stderr + result.stdout
-        assert payload["verdict"] == "green"
-        assert payload["failure_code"] is None
-        assert payload["canaries"]["auth_status"]["status"] == "pass"
-        auth = payload["canaries"]["auth_status"]["auth"]
-        assert auth["apiProvider"] == "anthropic"
-        assert "email" not in auth
-        assert "orgId" not in auth
-
-
-def test_claude_live_canary_turns_yellow_when_not_logged_in() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        fake_bin = _fake_claude(root / "bin" / "claude")
-        result, payload = _run_provider_canary(
-            root,
-            provider="claude",
-            fake_bin=fake_bin,
-            extra_env={"FAKE_CLAUDE_NOT_LOGGED_IN": "1"},
-        )
-
-        assert result.returncode == 0, result.stderr + result.stdout
-        assert payload["verdict"] == "yellow"
-        assert payload["canaries"]["auth_status"]["status"] == "warn"
-        assert payload["canaries"]["auth_status"]["reason"] == "claude_auth_not_logged_in"
-
-
-def test_claude_auth_failures_do_not_publish_raw_identifiers() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        fake_bin = _fake_claude(root / "bin" / "claude")
-        result, payload = _run_provider_canary(
-            root,
-            provider="claude",
-            fake_bin=fake_bin,
-            extra_env={"FAKE_CLAUDE_AUTH_INVALID_JSON": "1"},
-        )
-
-        serialized = json.dumps(payload)
-        assert result.returncode == 1
-        assert payload["failure_code"] == "claude_auth_status_invalid_json"
-        assert "should-not-appear@example.com" not in serialized
-        assert "org-secret" not in serialized
-
-
-def test_claude_auth_nonzero_does_not_publish_raw_identifiers() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        fake_bin = _fake_claude(root / "bin" / "claude")
-        result, payload = _run_provider_canary(
-            root,
-            provider="claude",
-            fake_bin=fake_bin,
-            extra_env={"FAKE_CLAUDE_AUTH_NONZERO": "1"},
-        )
-
-        serialized = json.dumps(payload)
-        assert result.returncode == 0
-        assert payload["verdict"] == "yellow"
-        assert "should-not-appear@example.com" not in serialized
-        assert "org-secret" not in serialized
-
-
-def test_claude_live_canary_fails_when_channels_contract_is_missing() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        fake_bin = _fake_claude(root / "bin" / "claude")
-        result, payload = _run_provider_canary(
-            root,
-            provider="claude",
-            fake_bin=fake_bin,
-            extra_env={"FAKE_CLAUDE_BAD_CHANNELS": "1"},
-        )
-
-        assert result.returncode == 1
-        assert payload["verdict"] == "red"
-        assert payload["failure_code"] == "claude_development_channels_contract_missing"
-
-
-def test_claude_live_canary_fails_when_session_flag_is_missing() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        fake_bin = _fake_claude(root / "bin" / "claude")
-        result, payload = _run_provider_canary(
-            root,
-            provider="claude",
-            fake_bin=fake_bin,
-            extra_env={"FAKE_CLAUDE_MISSING_SESSION_ID": "1"},
-        )
-
-        assert result.returncode == 1
-        assert payload["verdict"] == "red"
-        assert payload["failure_code"] == "claude_command_contract_missing"
-        assert payload["canaries"]["command_shape"]["missing"] == ["--session-id"]
 
 
 def test_opencode_live_canary_fails_when_schema_drops_prompt_async() -> None:
@@ -774,7 +561,6 @@ def test_opencode_live_token_contract_fails_when_message_post_schema_is_missing(
             root,
             fake_bin,
             {"FAKE_OPENCODE_OMIT_MESSAGE_POST": "1"},
-            extra_args=["--run-live-token-contract"],
         )
 
         assert result.returncode == 1
@@ -826,11 +612,11 @@ def test_opencode_live_canary_fails_when_prompt_async_delivery_is_not_observed()
         assert payload["operation_evidence"]["send_input"]["level"] == "none"
 
 
-def test_opencode_live_token_contract_proves_open_code_server_behavior() -> None:
+def test_opencode_live_canary_records_token_backed_operation_evidence() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fake_bin = _fake_opencode(root / "bin" / "opencode")
-        result, payload = _run_canary(root, fake_bin, extra_args=["--run-live-token-contract"])
+        result, payload = _run_canary(root, fake_bin)
 
         assert result.returncode == 0, result.stderr + result.stdout
         assert payload["verdict"] == "green"
@@ -880,7 +666,6 @@ def test_opencode_live_token_contract_failure_is_send_input_evidence() -> None:
             root,
             fake_bin,
             {"FAKE_OPENCODE_BAD_ASSISTANT_MARKER": "1"},
-            extra_args=["--run-live-token-contract"],
         )
 
         assert result.returncode == 1
@@ -903,7 +688,6 @@ def test_opencode_live_token_contract_reports_post_request_failure() -> None:
             root,
             fake_bin,
             {"FAKE_OPENCODE_MESSAGE_POST_500": "1"},
-            extra_args=["--run-live-token-contract"],
         )
 
         assert result.returncode == 1
@@ -923,7 +707,6 @@ def test_opencode_live_token_contract_reports_get_messages_failure() -> None:
             root,
             fake_bin,
             {"FAKE_OPENCODE_MESSAGE_GET_500": "1"},
-            extra_args=["--run-live-token-contract"],
         )
 
         assert result.returncode == 1
@@ -942,7 +725,6 @@ def test_opencode_live_token_contract_reports_transcript_missing() -> None:
             root,
             fake_bin,
             {"FAKE_OPENCODE_DROP_ASSISTANT_TRANSCRIPT": "1"},
-            extra_args=["--run-live-token-contract"],
         )
 
         assert result.returncode == 1
@@ -961,7 +743,6 @@ def test_opencode_live_token_contract_fails_when_active_abort_request_fails() ->
             root,
             fake_bin,
             {"FAKE_OPENCODE_ABORT_500": "1"},
-            extra_args=["--run-live-token-contract"],
         )
 
         assert result.returncode == 1
@@ -982,7 +763,6 @@ def test_opencode_live_token_contract_fails_when_active_abort_returns_bad_shape(
             root,
             fake_bin,
             {"FAKE_OPENCODE_ABORT_BAD_SHAPE": "1"},
-            extra_args=["--run-live-token-contract"],
         )
 
         assert result.returncode == 1
@@ -1001,7 +781,6 @@ def test_opencode_live_token_contract_fails_when_active_abort_is_not_observed() 
             root,
             fake_bin,
             {"FAKE_OPENCODE_ABORT_IGNORED": "1"},
-            extra_args=["--run-live-token-contract"],
         )
 
         assert result.returncode == 1
@@ -1024,7 +803,6 @@ def test_opencode_live_token_contract_rejects_stale_abort_transcript() -> None:
                 "FAKE_OPENCODE_ABORT_IGNORED": "1",
                 "FAKE_OPENCODE_STALE_ABORT_TRANSCRIPT": "1",
             },
-            extra_args=["--run-live-token-contract"],
         )
 
         assert result.returncode == 1
@@ -1036,16 +814,8 @@ def test_opencode_live_token_contract_rejects_stale_abort_transcript() -> None:
 
 def main() -> int:
     tests = [
-        test_opencode_live_canary_no_token_tier_is_green_with_optional_prompt_execution,
-        test_claude_live_canary_no_token_tier_is_green_with_optional_live_token_contracts,
-        test_antigravity_live_canary_stays_yellow_until_loop_invocation_is_proven,
+        test_opencode_live_canary_proves_server_and_token_backed_contracts,
         test_antigravity_live_canary_fails_when_plugin_install_fails,
-        test_claude_live_canary_accepts_api_key_auth,
-        test_claude_live_canary_turns_yellow_when_not_logged_in,
-        test_claude_auth_failures_do_not_publish_raw_identifiers,
-        test_claude_auth_nonzero_does_not_publish_raw_identifiers,
-        test_claude_live_canary_fails_when_channels_contract_is_missing,
-        test_claude_live_canary_fails_when_session_flag_is_missing,
         test_opencode_live_canary_fails_when_schema_drops_prompt_async,
         test_opencode_live_canary_fails_when_schema_drops_session_messages,
         test_opencode_live_canary_fails_when_noreply_schema_is_missing,
@@ -1053,7 +823,7 @@ def main() -> int:
         test_opencode_live_canary_accepts_empty_successful_abort_response,
         test_opencode_live_canary_reports_prompt_async_request_failure_on_send_input,
         test_opencode_live_canary_fails_when_prompt_async_delivery_is_not_observed,
-        test_opencode_live_token_contract_proves_open_code_server_behavior,
+        test_opencode_live_canary_records_token_backed_operation_evidence,
         test_opencode_live_canary_fails_when_restart_loses_transcript_marker,
         test_opencode_live_token_contract_failure_is_send_input_evidence,
         test_opencode_live_token_contract_reports_post_request_failure,

@@ -250,7 +250,6 @@ def _post_live_proof(
     expected_version: str,
     process_timeout_s: int,
     http_timeout_s: float,
-    run_live_token_contract: bool,
     live_token_timeout_secs: int,
 ) -> tuple[int, dict[str, Any]]:
     body: dict[str, Any] = {
@@ -259,9 +258,7 @@ def _post_live_proof(
         "timeout_secs": process_timeout_s,
         "expected_provider_version": expected_version,
     }
-    if run_live_token_contract:
-        body["run_live_token_contract"] = True
-        body["live_token_timeout_secs"] = live_token_timeout_secs
+    body["live_token_timeout_secs"] = live_token_timeout_secs
     return _request_json(
         method="POST",
         url=f"{api_url}/api/agents/machines/{device_id}/provider-live-proof",
@@ -277,7 +274,6 @@ def _post_live_proof_with_retry(
     args: argparse.Namespace,
     provider: str,
     expected_version: str,
-    run_live_token_contract: bool,
 ) -> tuple[int, dict[str, Any], list[dict[str, Any]]]:
     attempts: list[dict[str, Any]] = []
     max_attempts = max(1, int(args.attempts or 1))
@@ -291,7 +287,6 @@ def _post_live_proof_with_retry(
             expected_version=expected_version,
             process_timeout_s=args.process_timeout_s,
             http_timeout_s=args.http_timeout_s,
-            run_live_token_contract=run_live_token_contract,
             live_token_timeout_secs=args.live_token_timeout_secs,
         )
         retryable = _is_retryable_response(status, payload)
@@ -327,7 +322,6 @@ def _run_provider(args: argparse.Namespace, provider: str, expected_version: str
         args=args,
         provider=provider,
         expected_version=expected_version,
-        run_live_token_contract=args.run_live_token_contract,
     )
     result: dict[str, Any] = {
         "provider": provider,
@@ -383,7 +377,6 @@ def _run_provider(args: argparse.Namespace, provider: str, expected_version: str
             args=args,
             provider=provider,
             expected_version=args.mismatch_version,
-            run_live_token_contract=False,
         )
         result["mismatch"] = {"status_code": mismatch_status, "payload": mismatch_payload}
         result["mismatch_attempts"] = mismatch_attempts
@@ -444,7 +437,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "engine_build": machine.get("engine_build"),
         "providers": args.providers,
         "require_verdict": args.require_verdict,
-        "run_live_token_contract": args.run_live_token_contract,
         "mismatch_checked": not args.skip_mismatch,
         "verdict": "red" if failures else "green",
         "failure_count": len(failures),
@@ -496,7 +488,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Delay between transient retry attempts.",
     )
     parser.add_argument("--user-agent", default=DEFAULT_USER_AGENT)
-    parser.add_argument("--run-live-token-contract", action="store_true")
     parser.add_argument("--live-token-timeout-secs", type=int, default=120)
     parser.add_argument("--artifact", type=Path, default=None)
     parser.add_argument("--json", action="store_true")
