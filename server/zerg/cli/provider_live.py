@@ -48,7 +48,7 @@ def canary_command(
         bool,
         typer.Option(
             "--run-live-token-contract",
-            help="For OpenCode, spend a small model call to prove assistant response execution.",
+            help="For OpenCode, spend small model calls to prove assistant response execution and active-turn abort.",
         ),
     ] = False,
     live_token_timeout_secs: Annotated[

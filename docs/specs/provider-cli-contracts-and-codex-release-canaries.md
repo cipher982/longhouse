@@ -284,11 +284,12 @@ Initial product contract:
   upstream OpenCode server contract without executing a prompt: binary version,
   server readiness, `/doc` schema, zero-token session create/get,
   `prompt_async` noReply delivery through `session.messages`, abort, and attach
-  command shape. `--run-live-token-contract` spends a small model call to prove
-  assistant response execution and transcript binding. The artifact remains
-  Yellow until future live-token evidence also proves active-turn abort and
-  process-restart reattach; there is no scheduled OpenCode token-spending lane
-  until we explicitly add a budgeted Sauron/CI job.
+  command shape. `--run-live-token-contract` spends small model calls to prove
+  assistant response execution, transcript binding, and abort during an
+  in-flight message turn. The artifact remains Yellow until future live-token
+  evidence also proves process-restart reattach; there is no scheduled
+  OpenCode token-spending lane until we explicitly add a budgeted Sauron/CI
+  job.
 - Runtime Host and local-health may cache it and expose:
   - provider
   - upstream version
