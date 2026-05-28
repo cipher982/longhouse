@@ -682,6 +682,48 @@ def _provider_live_proof_needs_attention(live_proof: dict) -> bool:
     return True
 
 
+def _check_provider_live_route_e2e() -> list[CheckResult]:
+    """Hosted provider-live route proof checks from local-health."""
+    try:
+        from zerg.services.local_health import collect_local_health
+
+        snapshot = collect_local_health()
+        route = dict(snapshot.get("provider_live_route_e2e") or {})
+    except Exception as exc:
+        return [CheckResult(WARN, "Provider live route E2E unavailable", str(exc))]
+
+    status = str(route.get("status") or "not_configured")
+    detail = _provider_live_route_e2e_detail(route)
+    if status in {"ok", "not_configured", "skipped"}:
+        return [CheckResult(PASS, f"Provider live route E2E {status}", detail)]
+    return [CheckResult(WARN, f"Provider live route E2E {status}", detail)]
+
+
+def _provider_live_route_e2e_detail(route: dict) -> str:
+    parts = []
+    providers = ", ".join(str(item) for item in list(route.get("providers") or []))
+    if providers:
+        parts.append(f"providers={providers}")
+    for key, label in (
+        ("freshness_status", "freshness"),
+        ("verdict", "verdict"),
+        ("failure_count", "failures"),
+        ("failure_code", "failure"),
+        ("engine_build", "engine"),
+        ("device_id", "device"),
+        ("skipped_reason", "skipped"),
+    ):
+        value = route.get(key)
+        if value is not None and value != "":
+            parts.append(f"{label}={value}")
+    source = dict(route.get("source") or {})
+    if source.get("path"):
+        parts.append(f"evidence={source.get('path')}")
+    if route.get("message"):
+        parts.append(f"message={route.get('message')}")
+    return "; ".join(parts) or "not configured"
+
+
 # ---------------------------------------------------------------------------
 # Main command
 # ---------------------------------------------------------------------------
@@ -721,6 +763,7 @@ def doctor(
         ("Local Runtime", _check_server()),
         ("Machine Agent", _check_shipper()),
         ("Provider Support", _check_provider_support()),
+        ("Provider Route E2E", _check_provider_live_route_e2e()),
         ("Config", _check_config()),
     ]
 

@@ -167,6 +167,56 @@ def test_check_provider_support_warns_on_stale_local_live_proof(monkeypatch):
     )
 
 
+def test_check_provider_live_route_e2e_reports_green_artifact(monkeypatch):
+    monkeypatch.setattr(
+        "zerg.services.local_health.collect_local_health",
+        lambda: {
+            "provider_live_route_e2e": {
+                "status": "ok",
+                "providers": ["opencode"],
+                "freshness_status": "fresh",
+                "verdict": "green",
+                "failure_count": 0,
+                "engine_build": "abc1234",
+                "device_id": "cinder",
+                "source": {"path": "/Users/test/.longhouse/provider-live-route-e2e/latest.json"},
+            }
+        },
+    )
+
+    results = doctor_cli._check_provider_live_route_e2e()
+
+    assert len(results) == 1
+    assert results[0].status == doctor_cli.PASS
+    assert results[0].label == "Provider live route E2E ok"
+    assert results[0].detail == (
+        "providers=opencode; freshness=fresh; verdict=green; failures=0; "
+        "engine=abc1234; device=cinder; evidence=/Users/test/.longhouse/provider-live-route-e2e/latest.json"
+    )
+
+
+def test_check_provider_live_route_e2e_warns_on_stale_artifact(monkeypatch):
+    monkeypatch.setattr(
+        "zerg.services.local_health.collect_local_health",
+        lambda: {
+            "provider_live_route_e2e": {
+                "status": "stale",
+                "providers": ["codex", "claude"],
+                "freshness_status": "stale",
+                "verdict": "green",
+                "failure_count": 0,
+            }
+        },
+    )
+
+    results = doctor_cli._check_provider_live_route_e2e()
+
+    assert len(results) == 1
+    assert results[0].status == doctor_cli.WARN
+    assert results[0].label == "Provider live route E2E stale"
+    assert results[0].detail == "providers=codex, claude; freshness=stale; verdict=green; failures=0"
+
+
 def test_check_config_does_not_flag_hosted_machine_state_as_local_url_drift(tmp_path, monkeypatch):
     config_path = tmp_path / "config.toml"
     config_path.write_text('[server]\nhost = "127.0.0.1"\nport = 65534\n', encoding="utf-8")

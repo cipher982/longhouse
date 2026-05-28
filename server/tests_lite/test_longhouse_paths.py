@@ -5,6 +5,7 @@ from zerg.services.longhouse_paths import get_agent_log_dir
 from zerg.services.longhouse_paths import get_agent_outbox_dir
 from zerg.services.longhouse_paths import get_agent_status_path
 from zerg.services.longhouse_paths import get_provider_live_proof_dir
+from zerg.services.longhouse_paths import get_provider_live_route_e2e_dir
 from zerg.services.longhouse_paths import is_stable_longhouse_home
 from zerg.services.longhouse_paths import resolve_longhouse_home
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
@@ -64,3 +65,10 @@ def test_provider_live_proof_dir_tracks_resolved_longhouse_home(tmp_path, monkey
     monkeypatch.setenv("LONGHOUSE_HOME", str(scratch_home))
 
     assert get_provider_live_proof_dir() == scratch_home / "provider-live-proof"
+
+
+def test_provider_live_route_e2e_dir_tracks_resolved_longhouse_home(tmp_path, monkeypatch):
+    scratch_home = tmp_path / ".longhouse-dev"
+    monkeypatch.setenv("LONGHOUSE_HOME", str(scratch_home))
+
+    assert get_provider_live_route_e2e_dir() == scratch_home / "provider-live-route-e2e"
