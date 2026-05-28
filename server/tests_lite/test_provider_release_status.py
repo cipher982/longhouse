@@ -11,6 +11,7 @@ from zerg import provider_release_status as prs
 
 @pytest.fixture(autouse=True)
 def clear_release_status_env(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     for key in (
         prs.PROVIDER_RELEASE_STATUS_DIR_ENV,
         prs.PROVIDER_RELEASE_STATUS_URL_ENV,
@@ -331,6 +332,36 @@ def test_collects_operation_evidence_from_provider_status_artifact(monkeypatch, 
         "source": "scheduled Claude steer canary",
         "canary": "claude_live_token_contract",
     }
+
+
+def test_reads_provider_status_user_config_file_when_env_absent(monkeypatch, tmp_path: Path) -> None:
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir()
+    (artifact_dir / "codex.json").write_text(
+        json.dumps(
+            {
+                "provider": "codex",
+                "schema_version": prs.PROVIDER_STATUS_SCHEMA_VERSION,
+                "provider_version": "codex-cli 0.134.0",
+                "verdict": "green",
+                "generated_at": "2026-05-27T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    config_file = tmp_path / "home" / ".config" / "longhouse" / "provider-release-status.env"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text(f"{prs.PROVIDER_RELEASE_STATUS_DIR_ENV}={artifact_dir}\n", encoding="utf-8")
+    monkeypatch.setattr(
+        prs.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="codex-cli 0.134.0\n", stderr=""),
+    )
+
+    status = prs.collect_provider_release_status({"codex": {"path": "/opt/homebrew/bin/codex"}})
+
+    assert status["enabled"] is True
+    assert status["statuses"]["codex"]["status"] == "ok"
 
 
 def test_accepts_sauron_provider_status_url_envelope(monkeypatch) -> None:
