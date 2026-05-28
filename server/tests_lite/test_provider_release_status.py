@@ -119,7 +119,7 @@ def test_newer_candidate_artifact_does_not_warn_for_older_local_version(monkeypa
     assert status["statuses"]["codex"]["artifact_version_delta"] == 1
 
 
-def test_matching_insufficient_coverage_is_advisory_when_local_live_proof_is_green(monkeypatch, tmp_path: Path) -> None:
+def test_matching_insufficient_coverage_remains_release_warning(monkeypatch, tmp_path: Path) -> None:
     status_file = tmp_path / "claude.json"
     status_file.write_text(
         json.dumps(
@@ -147,79 +147,16 @@ def test_matching_insufficient_coverage_is_advisory_when_local_live_proof_is_gre
         lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="2.1.153 (Claude Code)\n", stderr=""),
     )
 
-    release_status = prs.collect_provider_release_status({"claude": {"path": "/opt/homebrew/bin/claude"}})
-    reconciled = prs.reconcile_provider_release_status_with_live_proof(
-        release_status,
-        {
-            "statuses": {
-                "claude": {
-                    "status": "ok",
-                    "applies": True,
-                    "verdict": "green",
-                    "version_match": "match",
-                    "freshness_status": "fresh",
-                    "generated_at": "2026-05-27T00:05:00Z",
-                    "evidence_root": "/tmp/claude-live-proof",
-                }
-            }
-        },
-    )
+    status = prs.collect_provider_release_status({"claude": {"path": "/opt/homebrew/bin/claude"}})
 
-    claude = reconciled["statuses"]["claude"]
-    assert release_status["warning_count"] == 1
-    assert reconciled["warning_count"] == 0
-    assert reconciled["advisory_count"] == 1
-    assert claude["status"] == "caution_local_proven"
-    assert claude["risk"] == "none"
+    claude = status["statuses"]["claude"]
+    assert status["warning_count"] == 1
+    assert status["blocking_count"] == 0
+    assert claude["status"] == "caution"
+    assert claude["risk"] == "warning"
     assert claude["verdict"] == "yellow"
     assert claude["failure_code"] == "insufficient_coverage"
-    assert claude["local_live_proof_override"]["reason"] == "release_coverage_gap_locally_proven"
-    assert claude["local_live_proof_override"]["original_status"] == "caution"
-    assert claude["operation_evidence"]["launch_remote"]["status"] == "advisory"
-    assert claude["operation_evidence"]["launch_remote"]["original_status"] == "not_run"
-
-
-def test_red_matching_release_blocker_is_not_suppressed_by_local_live_proof(monkeypatch, tmp_path: Path) -> None:
-    status_file = tmp_path / "claude.json"
-    status_file.write_text(
-        json.dumps(
-            {
-                "provider": "claude",
-                "schema_version": prs.PROVIDER_STATUS_SCHEMA_VERSION,
-                "provider_version": "2.1.153",
-                "verdict": "red",
-                "failure_code": "provider_launch_crashes",
-                "generated_at": "2026-05-27T00:00:00Z",
-            }
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.setenv(prs.PROVIDER_RELEASE_STATUS_DIR_ENV, str(tmp_path))
-    monkeypatch.setattr(
-        prs.subprocess,
-        "run",
-        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="2.1.153 (Claude Code)\n", stderr=""),
-    )
-
-    release_status = prs.collect_provider_release_status({"claude": {"path": "/opt/homebrew/bin/claude"}})
-    reconciled = prs.reconcile_provider_release_status_with_live_proof(
-        release_status,
-        {
-            "statuses": {
-                "claude": {
-                    "status": "ok",
-                    "applies": True,
-                    "verdict": "green",
-                    "version_match": "match",
-                    "freshness_status": "fresh",
-                }
-            }
-        },
-    )
-
-    assert reconciled["blocking_count"] == 1
-    assert reconciled["statuses"]["claude"]["status"] == "blocked"
-    assert "local_live_proof_override" not in reconciled["statuses"]["claude"]
+    assert claude["operation_evidence"]["launch_remote"]["status"] == "not_run"
 
 
 def test_stale_matching_green_artifact_warns(monkeypatch, tmp_path: Path) -> None:

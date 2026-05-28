@@ -283,14 +283,9 @@ Initial product contract:
   dogfood-check` only reports the current sidecars. Reader precedence is
   explicit env, persisted provider-status config, then the Longhouse-home
   default. Local-health reads those artifacts as operation proof only when the
-  sidecar provider and
-  normalized version match the installed provider CLI. This proof is additive to
-  the support-state projection; it does not overwrite Sauron's release verdict.
-  A fresh green local proof can demote a matching
-  `yellow/insufficient_coverage` release artifact to advisory-only
-  (`caution_local_proven`, risk `none`) so dogfood health stays focused on
-  machine-actionable failures. Operation-level gaps from that demoted artifact
-  are marked advisory in support state. Red release blockers remain blocking.
+  sidecar provider and normalized version match the installed provider CLI.
+  This proof is additive to the support-state projection; it does not overwrite
+  Sauron's release verdict or suppress release warnings.
 - `scripts/qa/provider-release-profile-canary.py` emits the shared provider
   profile artifact for any managed provider in
   `server/zerg/config/managed_provider_contracts.json`. Its top-level
@@ -314,23 +309,19 @@ Initial product contract:
   scheduled live-token canary before the release artifact claims that proof
   level.
 - `longhouse provider-live canary --provider claude` probes the installed
-  upstream Claude Code binary without executing a prompt: binary version,
-  redacted auth shape, required launch/session flags, the development-channel
-  tagged server contract for Longhouse's private MCP channel, and local PTY
-  wrapper availability. Token-spending contracts are `optional_skipped` by
-  default; scheduled live-token evidence still owns proof of detached launch,
-  active-turn steer delivery, idle steer rejection, interrupt, and reattach.
+  upstream Claude Code binary and runs the token-backed channel proof by
+  default: binary version, redacted auth shape, required launch/session flags,
+  the development-channel tagged server contract for Longhouse's private MCP
+  channel, local PTY wrapper availability, provider execution, transcript
+  binding, and active-turn steer.
 - `longhouse provider-live canary --provider opencode` probes the installed
   upstream OpenCode server contract without executing a prompt: binary version,
   server readiness, `/doc` schema, zero-token session create/get,
   `prompt_async` noReply delivery through `session.messages`, process-restart
-  session recovery, abort, and attach command shape. `--run-live-token-contract`
-  spends small model calls to prove assistant response execution, transcript
-  binding, and abort during an in-flight message turn. The default publisher
-  remains no-token and can go Green for that tier; the explicit live-token lane
-  proves the upstream OpenCode server contract. Sauron release automation can
-  request it with `AGENT_RELEASE_OPENCODE_LIVE_TOKEN_CONTRACT=1`; it stays off
-  by default so scheduled spend is deliberate.
+  session recovery, abort, attach command shape, assistant response execution,
+  transcript binding, and abort during an in-flight message turn. Sauron release
+  automation uses this strongest proof by default; missing token-backed evidence
+  stays yellow.
 - Runtime Host and local-health may cache it and expose:
   - provider
   - upstream version

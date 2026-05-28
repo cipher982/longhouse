@@ -1149,20 +1149,18 @@ async fn run_provider_live_proof_command(
         });
     }
     let publish = payload_optional_bool(payload, "publish").unwrap_or(true);
-    let run_live_token_contract =
-        payload_optional_bool(payload, "run_live_token_contract").unwrap_or(false);
     let live_token_timeout_secs =
         payload_optional_u64(payload, "live_token_timeout_secs", 1, 600).unwrap_or(120);
-    let default_timeout = if run_live_token_contract {
-        live_token_timeout_secs.saturating_add(60)
-    } else {
+    let default_timeout = if provider == "codex" {
         120
+    } else {
+        live_token_timeout_secs.saturating_add(60)
     };
     let timeout_secs =
         payload_optional_u64(payload, "timeout_secs", 1, 900).unwrap_or(default_timeout);
     let expected_provider_version = payload_optional_string(payload, "expected_provider_version");
 
-    let mut args = vec![
+    let args = vec![
         "provider-live".to_string(),
         if publish {
             "publish".to_string()
@@ -1175,9 +1173,6 @@ async fn run_provider_live_proof_command(
         "--live-token-timeout-secs".to_string(),
         live_token_timeout_secs.to_string(),
     ];
-    if run_live_token_contract {
-        args.push("--run-live-token-contract".to_string());
-    }
 
     let output = run_longhouse_command(args, timeout_secs, Vec::new()).await?;
     let payload_json: Value =
@@ -1201,7 +1196,6 @@ async fn run_provider_live_proof_command(
         "provider": provider,
         "transport": "provider_live_proof",
         "publish": publish,
-        "run_live_token_contract": run_live_token_contract,
         "expected_provider_version": expected_provider_version,
         "provider_version_match": version_match,
         "exit_code": output.exit_code,
@@ -2192,7 +2186,6 @@ exit 0
                 "payload": {
                     "provider": "claude",
                     "expected_provider_version": "2.1.153",
-                    "run_live_token_contract": true,
                     "live_token_timeout_secs": 17,
                     "timeout_secs": 30,
                 },
@@ -2240,7 +2233,6 @@ exit 0
                 "--json",
                 "--live-token-timeout-secs",
                 "17",
-                "--run-live-token-contract",
             ]
         );
         let _ = std::fs::remove_dir_all(&dir);

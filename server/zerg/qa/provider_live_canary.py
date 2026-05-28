@@ -3,8 +3,9 @@
 
 These canaries exercise the installed upstream provider binary directly. They
 are the source-drift layer above the hermetic Longhouse control E2E canaries.
-The OpenCode lane intentionally avoids prompt execution so it can run without
-spending model tokens.
+Claude, OpenCode, and Antigravity run token-backed checks by default because
+release proof should be the strongest available evidence, not a weaker fast
+path hidden behind a flag.
 """
 
 from __future__ import annotations
@@ -321,7 +322,7 @@ def _claude_operation_evidence(
             required=["launch_local_contract", "send_input_contract"],
             canary_name="claude_send_input_contract",
             level="manual_live_token",
-            source="longhouse provider-live canary --provider claude --run-live-token-contract",
+            source="longhouse provider-live canary --provider claude token-backed proof",
             message="Live channel proof: Claude channel accepted a prompt injection into the managed session.",
             next_note="promote with a scheduled/budgeted live-token release lane",
         )
@@ -336,7 +337,7 @@ def _claude_operation_evidence(
             required=["transcript_binding_contract"],
             canary_name="claude_transcript_binding_contract",
             level="manual_live_token",
-            source="longhouse provider-live canary --provider claude --run-live-token-contract",
+            source="longhouse provider-live canary --provider claude token-backed proof",
             message="Live-token proof: expected assistant text appeared in Claude transcript.",
             next_note="promote with a scheduled/budgeted live-token release lane",
         )
@@ -355,7 +356,7 @@ def _claude_operation_evidence(
             ],
             canary_name="claude_steer_active_turn_contract",
             level="manual_live_token",
-            source="longhouse provider-live canary --provider claude --run-live-token-contract",
+            source="longhouse provider-live canary --provider claude token-backed proof",
             message="Live-token proof: active-turn channel steer reached the Claude transcript.",
             next_note="promote with a scheduled/budgeted live-token release lane",
         )
@@ -443,7 +444,7 @@ def _opencode_operation_evidence(
             ],
             canary_name="opencode_assistant_response_contract",
             level="manual_live_token",
-            source="longhouse provider-live canary --provider opencode --run-live-token-contract",
+            source="longhouse provider-live canary --provider opencode token-backed proof",
             message=_OPENCODE_ASSISTANT_RESPONSE_MESSAGE,
             next_note="promote with a scheduled/budgeted live-token release lane",
         )
@@ -456,7 +457,7 @@ def _opencode_operation_evidence(
             required=["assistant_response_contract"],
             canary_name="opencode_assistant_response_contract",
             level="manual_live_token",
-            source="longhouse provider-live canary --provider opencode --run-live-token-contract",
+            source="longhouse provider-live canary --provider opencode token-backed proof",
             message="Live-token proof: assistant response marker was visible through session.messages.",
             next_note="promote with a scheduled/budgeted live-token release lane",
         )
@@ -493,7 +494,7 @@ def _opencode_operation_evidence(
             required=["binary_identity", "schema_probe", "active_turn_abort_contract"],
             canary_name="opencode_active_turn_abort_contract",
             level="manual_live_token",
-            source="longhouse provider-live canary --provider opencode --run-live-token-contract",
+            source="longhouse provider-live canary --provider opencode token-backed proof",
             message=_OPENCODE_ACTIVE_ABORT_MESSAGE,
             next_note="promote with a scheduled/budgeted live-token release lane",
         )
@@ -547,7 +548,7 @@ def _antigravity_operation_evidence(
             required=["loop_invocation_contract"],
             canary_name="antigravity_loop_invocation_contract",
             level="manual_live_token",
-            source="longhouse provider-live canary --provider antigravity --run-live-token-contract",
+            source="longhouse provider-live canary --provider antigravity token-backed proof",
             message=_ANTIGRAVITY_LOOP_INVOCATION_MESSAGE,
             next_note="promote with a scheduled/budgeted live-token release lane",
         )
@@ -611,9 +612,9 @@ def run_codex_live_canary(args: argparse.Namespace, root: Path) -> dict[str, Any
 def _classify(canaries: dict[str, dict[str, Any]]) -> tuple[str, str | None, str]:
     """Classify required canary results.
 
-    ``optional_skipped`` means an opt-in, usually token-spending, proof was not
-    requested in this run. It stays visible in artifacts but does not demote the
-    verdict for the no-token tier. Real launch-scope gaps remain ``not_run``.
+    ``optional_skipped`` is reserved for future proof that is not part of the
+    artifact's current contract. Real launch-scope gaps remain ``not_run`` and
+    keep the artifact yellow until they are proved.
     """
 
     first_not_run: str | None = None
@@ -1619,34 +1620,6 @@ def _run_claude_pty_wrapper_shape() -> dict[str, Any]:
     return _status("pass", script_path=script_path, platform=sys.platform)
 
 
-def _claude_live_token_contract_placeholders() -> dict[str, dict[str, Any]]:
-    reason = (
-        "Claude no-token live canary proves binary/auth/channel/PTY shape only. "
-        "Pass --run-live-token-contract to launch real managed Claude, inject through the channel, "
-        "and prove provider execution plus active-turn steer."
-    )
-    idle_reason = " ".join(
-        (
-            "Idle steer rejection is covered by hermetic Runtime Host tests;",
-            "live provider canary coverage is future work.",
-        )
-    )
-    interrupt_reason = " ".join(
-        (
-            "Claude interrupt is covered by hermetic channel/process tests;",
-            "live provider canary coverage is future work.",
-        )
-    )
-    return {
-        "launch_local_contract": _optional_skipped(reason),
-        "send_input_contract": _optional_skipped(reason),
-        "transcript_binding_contract": _optional_skipped(reason),
-        "steer_active_turn_contract": _optional_skipped(reason),
-        "idle_steer_rejection_contract": _optional_skipped(idle_reason),
-        "interrupt_contract": _optional_skipped(interrupt_reason),
-    }
-
-
 def _claude_terminal_diagnostic_hint(summary: dict[str, Any]) -> str | None:
     terminal_log = summary.get("terminal_log")
     if not terminal_log:
@@ -2403,10 +2376,7 @@ def run_claude_live_canary(args: argparse.Namespace, root: Path) -> dict[str, An
         "channels_shape": _run_claude_channels_shape(binary),
         "detached_pty_shape": _run_claude_pty_wrapper_shape(),
     }
-    if bool(getattr(args, "run_live_token_contract", False)):
-        canaries.update(_run_claude_live_token_contracts(args, root))
-    else:
-        canaries.update(_claude_live_token_contract_placeholders())
+    canaries.update(_run_claude_live_token_contracts(args, root))
     return {
         "provider": "claude",
         "provider_version": version,
@@ -2504,11 +2474,10 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
             ("/session", "post", "session.create"),
             ("/session/{sessionID}", "get", "session.get"),
             ("/session/{sessionID}/message", "get", "session.messages"),
+            ("/session/{sessionID}/message", "post", "session.prompt"),
             ("/session/{sessionID}/prompt_async", "post", "session.prompt_async"),
             ("/session/{sessionID}/abort", "post", "session.abort"),
         ]
-        if bool(getattr(args, "run_live_token_contract", False)):
-            required_operations.append(("/session/{sessionID}/message", "post", "session.prompt"))
         failures = [
             failure
             for path, method, operation_id in required_operations
@@ -2612,24 +2581,14 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
         if canaries["process_restart_reattach_contract"]["status"] != "pass":
             return {"provider": "opencode", "provider_version": version, "canaries": canaries}
 
-        if bool(getattr(args, "run_live_token_contract", False)):
-            canaries["assistant_response_contract"] = _run_opencode_assistant_response_contract(
-                server_url=server_url,
-                username=username,
-                password=password,
-                provider_session_id=provider_session_id,
-                workspace=workspace,
-                timeout_secs=int(getattr(args, "live_token_timeout_secs", 120) or 120),
-            )
-        else:
-            canaries["assistant_response_contract"] = _optional_skipped(
-                " ".join(
-                    (
-                        "Pass --run-live-token-contract to spend tokens and prove assistant response execution",
-                        "plus active-turn abort.",
-                    )
-                )
-            )
+        canaries["assistant_response_contract"] = _run_opencode_assistant_response_contract(
+            server_url=server_url,
+            username=username,
+            password=password,
+            provider_session_id=provider_session_id,
+            workspace=workspace,
+            timeout_secs=int(getattr(args, "live_token_timeout_secs", 120) or 120),
+        )
 
         if canaries["assistant_response_contract"].get("status") == "pass":
             canaries["active_turn_abort_contract"] = _run_opencode_active_turn_abort_contract(
@@ -2642,14 +2601,10 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
             )
             if canaries["active_turn_abort_contract"].get("status") != "pass":
                 return {"provider": "opencode", "provider_version": version, "canaries": canaries}
-        elif bool(getattr(args, "run_live_token_contract", False)):
+        else:
             canaries["active_turn_abort_contract"] = _status(
                 "not_run",
                 reason="Assistant response contract did not pass, so active-turn abort proof was not run.",
-            )
-        else:
-            canaries["active_turn_abort_contract"] = _optional_skipped(
-                "Pass --run-live-token-contract to prove active-turn abort.",
             )
 
         abort_result = _request_json(
@@ -2686,18 +2641,9 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
                 ),
             )
         else:
-            reason = (
-                "OpenCode no-token live canary proves prompt_async noReply delivery into session.messages; "
-                "process-restart reattach is also proven without tokens. Pass --run-live-token-contract "
-                "to prove assistant response execution, transcript binding, and active-turn abort."
-            )
-            canaries["prompt_async_execution_contract"] = (
-                _status(
-                    "not_run",
-                    reason="Assistant response contract did not pass, so prompt execution proof was not established.",
-                )
-                if bool(getattr(args, "run_live_token_contract", False))
-                else _optional_skipped(reason)
+            canaries["prompt_async_execution_contract"] = _status(
+                "not_run",
+                reason="Assistant response contract did not pass, so prompt execution proof was not established.",
             )
         return {"provider": "opencode", "provider_version": version, "canaries": canaries}
     except Exception as exc:  # noqa: BLE001
@@ -2742,21 +2688,11 @@ def run_antigravity_live_canary(args: argparse.Namespace, root: Path) -> dict[st
         "plugin_contract": _run_antigravity_plugin_contract(binary, root),
         "global_hooks_contract": _run_antigravity_global_hooks_contract(root / "plugin" / "global-hooks.json"),
     }
-    if bool(getattr(args, "run_live_token_contract", False)):
-        canaries["loop_invocation_contract"] = _run_antigravity_loop_invocation_contract(
-            binary=binary,
-            root=root / "loop-invocation",
-            timeout_secs=int(getattr(args, "live_token_timeout_secs", 120) or 120),
-        )
-    else:
-        canaries["loop_invocation_contract"] = _status(
-            "not_run",
-            reason=(
-                "This no-token canary proves agy plugin/config drift only. "
-                "Pass --run-live-token-contract to prove a real upstream agy loop invokes "
-                "PreInvocation/PostInvocation/Stop and consumes Longhouse queued input."
-            ),
-        )
+    canaries["loop_invocation_contract"] = _run_antigravity_loop_invocation_contract(
+        binary=binary,
+        root=root / "loop-invocation",
+        timeout_secs=int(getattr(args, "live_token_timeout_secs", 120) or 120),
+    )
 
     return {"provider": "antigravity", "provider_version": version, "canaries": canaries}
 
@@ -2790,11 +2726,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifact", type=Path)
     parser.add_argument("--evidence-root", type=Path)
     parser.add_argument("--wait-ready-secs", type=float, default=15.0)
-    parser.add_argument(
-        "--run-live-token-contract",
-        action="store_true",
-        help="Spend small model calls to prove provider execution semantics where implemented.",
-    )
     parser.add_argument("--live-token-timeout-secs", type=int, default=120)
     parser.add_argument("--json", action="store_true")
     return parser
@@ -2810,8 +2741,6 @@ def run_provider_live_canary(args: argparse.Namespace | Mapping[str, Any]) -> di
         args.evidence_root = Path(args.evidence_root).expanduser()
     if args.artifact is not None:
         args.artifact = Path(args.artifact).expanduser()
-    if not hasattr(args, "run_live_token_contract"):
-        args.run_live_token_contract = False
     if not hasattr(args, "live_token_timeout_secs"):
         args.live_token_timeout_secs = 120
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")

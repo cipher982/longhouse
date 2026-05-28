@@ -147,7 +147,7 @@ Current OpenCode adapter:
 3. Implement `longhouse opencode-channel send` against
    `/session/:id/prompt_async`; the no-token live canary now proves noReply
    user-message delivery by reading the marker back from
-   `/session/:id/message`, and the opt-in live-token lane proves assistant
+   `/session/:id/message`, and the token-backed live canary proves assistant
    response execution plus transcript binding.
 4. Implement interrupt against `/session/:id/abort`.
 5. Implement attach as `opencode attach <server_url> --session <provider_id>`.
@@ -185,8 +185,8 @@ Target Antigravity adapter:
    - The hermetic control-path canary proves the generated hook claims queued
      input at `PreInvocation` and `PostInvocation`, requests
      `force_continue`, and continues at `Stop` when inbox input is waiting.
-   - `longhouse provider-live canary --provider antigravity
-     --run-live-token-contract` proves the installed upstream `agy` loop
+   - `longhouse provider-live canary --provider antigravity` proves the
+     installed upstream `agy` loop
      invokes the hook, claims queued input, and honors `injectSteps` in the
      assistant response.
 4. Do not mark `steer_active_turn` supported until we prove that an input can

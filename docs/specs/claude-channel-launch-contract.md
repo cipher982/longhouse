@@ -28,12 +28,8 @@ launch, attach, and Machine Agent remote launch cannot drift apart.
 `longhouse provider-live canary --provider claude` must probe the installed
 Claude binary for this exact development-channel launch shape. The repo script
 `scripts/qa/provider-live-canary.py` is a wrapper around that packaged canary.
-The no-token canary does not prove model execution or live steering; scheduled
-live-token evidence still owns detached launch, provider execution, active-turn
-steer delivery, idle steer rejection, interrupt, and reattach.
-
-The opt-in live-token lane is intentionally split. It reports channel launch and
-channel prompt delivery separately from provider execution. A run where the
-Longhouse channel accepts input but Claude never writes the expected assistant
-marker is a provider-execution failure, with terminal auth/API prompts recorded
-only as diagnostic hints.
+The token-backed lane reports channel launch and channel prompt delivery
+separately from provider execution. A run where the Longhouse channel accepts
+input but Claude never writes the expected assistant marker is a
+provider-execution failure, with terminal auth/API prompts recorded only as
+diagnostic hints.

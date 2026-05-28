@@ -38,10 +38,9 @@ antigravity: send
 Provider release status is interpreted against the installed local version.
 Newer upstream artifacts remain visible as candidate release status, but do
 not degrade local health until the installed provider version matches the
-artifact or is newer than the newest reviewed artifact. A fresh green local
-live-proof sidecar for the installed version demotes matching
-`yellow/insufficient_coverage` release artifacts to advisory-only; it never
-silences red release blockers.
+artifact or is newer than the newest reviewed artifact. Local live-proof
+sidecars are additive operation evidence for this machine; they do not rewrite
+or suppress the Sauron release verdict.
 
 ## Control Plane Families
 
@@ -133,18 +132,12 @@ work while an agent is busy. Steer needs active-phase proof and idle rejection.
 Local live proof and Sauron release status are separate feeds. Sauron release
 artifacts answer "is this upstream release reviewed enough to recommend or
 block?" Local proof artifacts answer "has this machine proven operation behavior
-for the installed CLI version?" A matching local proof artifact can raise or
-demote the operation evidence shown by local-health, but it cannot turn a
-Yellow/Red Sauron release verdict Green or satisfy the source-drift release
-gate by itself. Shared provider release-profile artifacts must include
-top-level operation evidence so each unsupported operation, source-reviewed
-operation, and missing live release proof is machine-readable. The only health
-suppression rule is narrow:
-`yellow/insufficient_coverage` plus fresh green local proof becomes
-`caution_local_proven` with risk `none`; the raw Sauron verdict remains visible
-as an advisory. Operation-level release gaps from that artifact are also marked
-advisory so support-state proof does not report a release gap after the local
-machine has proven the installed version.
+for the installed CLI version?" A matching local proof artifact can strengthen
+the operation evidence shown by local-health, but it cannot turn a Yellow/Red
+Sauron release verdict Green or satisfy the source-drift release gate by
+itself. Shared provider release-profile artifacts must include top-level
+operation evidence so each unsupported operation, source-reviewed operation,
+and missing live release proof is machine-readable.
 
 ## Next Implementation Slices
 
@@ -167,16 +160,15 @@ machine has proven the installed version.
    the Longhouse-home default.
 2. Extend the Claude lane beyond the initial no-token checks. The current lane
    proves binary identity, redacted auth shape, required launch/session flags,
-   development-channel tagged server parsing, and macOS PTY wrapper availability.
-   Default token-spending contracts are marked `optional_skipped` so the
-   no-token tier can go Green when its required checks pass. Scheduled
-   live-token evidence still owns continuous proof of the full channel contract.
+   development-channel tagged server parsing, macOS PTY wrapper availability,
+   provider execution, transcript binding, and active-turn steer. Scheduled
+   live-token evidence owns continuous proof of the full channel contract.
    The operator live POC at `make managed-claude-poc` can now run an optional
    delayed `intent=steer` injection with `ARGS="--steer-text ..."` and requires
    the assistant transcript to contain the expected steered response. The same
-   PTY/channel/probe loop now backs the opt-in
-   `longhouse provider-live canary --provider claude --run-live-token-contract`
-   lane. That lane splits channel launch, channel prompt delivery, provider
+   PTY/channel/probe loop now backs
+   `longhouse provider-live canary --provider claude`. That lane splits channel
+   launch, channel prompt delivery, provider
    execution, and active-turn steer so provider-side auth/API failures do not
    get misclassified as Longhouse channel failures. Idle steer rejection and
    interrupt remain optional-skipped live-provider contracts until they have
@@ -188,14 +180,10 @@ machine has proven the installed version.
    `/doc`, session create, attach `--help` command shape, `prompt_async`
    noReply delivery through `session.messages`, process-restart session
    recovery, and abort are checked without relying on a visible terminal or
-   model tokens. The opt-in `--run-live-token-contract` lane spends small model
-   calls and proves assistant response execution, transcript binding, and abort
-   during an in-flight message turn. The default publisher remains no-token and
-   can go Green for the no-token tier; the explicit live-token lane proves the
-   upstream OpenCode server contract. Sauron release automation can request the
-   token-spending OpenCode lane with
-   `AGENT_RELEASE_OPENCODE_LIVE_TOKEN_CONTRACT=1`; it stays off by default so
-   scheduled spend is deliberate.
+   model tokens. The same canary also spends small model calls by default to
+   prove assistant response execution, transcript binding, and abort during an
+   in-flight message turn. Sauron release automation uses this strongest
+   OpenCode proof by default; missing token-backed evidence remains yellow.
 4. Keep the Antigravity live-token lane green for send: real `agy`
    version/help/plugin validate/install/list, Longhouse global-hook config,
    and loop-level hook behavior against the upstream runtime.

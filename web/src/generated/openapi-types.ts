@@ -7173,12 +7173,6 @@ export interface components {
              */
             expected_provider_version?: string | null;
             /**
-             * Run Live Token Contract
-             * @description When true, spend provider/model calls to prove token-backed behavior.
-             * @default false
-             */
-            run_live_token_contract: boolean;
-            /**
              * Publish
              * @description Publish the proof into the machine's stable local sidecar before returning it.
              * @default true
@@ -7186,7 +7180,7 @@ export interface components {
             publish: boolean;
             /**
              * Live Token Timeout Secs
-             * @description Provider turn timeout passed to the live-token canary lane.
+             * @description Provider turn timeout for token-backed live proof where the provider supports it.
              * @default 120
              */
             live_token_timeout_secs: number;
