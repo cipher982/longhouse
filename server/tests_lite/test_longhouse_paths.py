@@ -4,6 +4,7 @@ from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_log_dir
 from zerg.services.longhouse_paths import get_agent_outbox_dir
 from zerg.services.longhouse_paths import get_agent_status_path
+from zerg.services.longhouse_paths import get_provider_live_proof_dir
 from zerg.services.longhouse_paths import is_stable_longhouse_home
 from zerg.services.longhouse_paths import resolve_longhouse_home
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
@@ -56,3 +57,10 @@ def test_agent_state_paths_live_under_agent_dir(tmp_path):
     assert get_agent_status_path(tmp_path) == tmp_path / "agent" / "engine-status.json"
     assert get_agent_db_path(tmp_path) == tmp_path / "agent" / "longhouse-shipper.db"
     assert get_agent_log_dir(tmp_path) == tmp_path / "agent" / "logs"
+
+
+def test_provider_live_proof_dir_tracks_resolved_longhouse_home(tmp_path, monkeypatch):
+    scratch_home = tmp_path / ".longhouse-dev"
+    monkeypatch.setenv("LONGHOUSE_HOME", str(scratch_home))
+
+    assert get_provider_live_proof_dir() == scratch_home / "provider-live-proof"

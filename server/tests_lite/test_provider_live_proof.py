@@ -14,6 +14,7 @@ from zerg import provider_release_status as prs
 @pytest.fixture(autouse=True)
 def clear_live_proof_env(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.delenv(prs.PROVIDER_LIVE_PROOF_DIR_ENV, raising=False)
+    monkeypatch.setenv("LONGHOUSE_HOME", str(tmp_path / ".longhouse"))
     monkeypatch.setenv(prs.PROVIDER_RELEASE_STATUS_CONFIG_FILE_ENV, str(tmp_path / "missing-provider-status.env"))
 
 
@@ -190,3 +191,107 @@ def test_not_configured_when_live_proof_dir_absent(monkeypatch) -> None:
 
     assert proof["enabled"] is False
     assert proof["statuses"]["claude"]["status"] == "not_configured"
+
+
+def test_default_live_proof_dir_applies_from_longhouse_home(monkeypatch, tmp_path: Path) -> None:
+    longhouse_home = tmp_path / ".longhouse-dev"
+    proof_dir = longhouse_home / "provider-live-proof"
+    proof_dir.mkdir(parents=True)
+    (proof_dir / "claude.json").write_text(json.dumps(_artifact("claude", "2.1.153")), encoding="utf-8")
+    monkeypatch.setenv("LONGHOUSE_HOME", str(longhouse_home))
+    monkeypatch.setattr(
+        plp,
+        "_provider_version_from_cli",
+        lambda path: ("Claude Code 2.1.153\n", None),
+    )
+
+    proof = plp.collect_provider_live_proof({"claude": {"path": "/opt/homebrew/bin/claude"}})
+
+    claude = proof["statuses"]["claude"]
+    assert proof["enabled"] is True
+    assert claude["status"] == "ok"
+    assert claude["applies"] is True
+    assert claude["source"]["attempts"][0]["path"] == str(proof_dir / "claude.json")
+
+
+def test_missing_default_live_proof_dir_stays_not_configured(monkeypatch, tmp_path: Path) -> None:
+    longhouse_home = tmp_path / ".longhouse-dev"
+    monkeypatch.setenv("LONGHOUSE_HOME", str(longhouse_home))
+    monkeypatch.setattr(
+        plp,
+        "_provider_version_from_cli",
+        lambda path: ("Claude Code 2.1.153\n", None),
+    )
+
+    proof = plp.collect_provider_live_proof({"claude": {"path": "/opt/homebrew/bin/claude"}})
+
+    claude = proof["statuses"]["claude"]
+    assert proof["enabled"] is False
+    assert claude["configured"] is False
+    assert claude["status"] == "not_configured"
+    assert claude["source"]["attempts"][0]["path"] == str(longhouse_home / "provider-live-proof" / "claude.json")
+
+
+def test_corrupt_default_live_proof_file_is_unavailable(monkeypatch, tmp_path: Path) -> None:
+    longhouse_home = tmp_path / ".longhouse-dev"
+    proof_dir = longhouse_home / "provider-live-proof"
+    proof_dir.mkdir(parents=True)
+    (proof_dir / "claude.json").write_text("{not json", encoding="utf-8")
+    monkeypatch.setenv("LONGHOUSE_HOME", str(longhouse_home))
+
+    proof = plp.collect_provider_live_proof({"claude": {"path": "/opt/homebrew/bin/claude"}})
+
+    claude = proof["statuses"]["claude"]
+    assert proof["enabled"] is True
+    assert claude["configured"] is True
+    assert claude["status"] == "unavailable"
+    assert "JSONDecodeError" in claude["source"]["attempts"][0]["error"]
+
+
+def test_configured_live_proof_dir_overrides_default(monkeypatch, tmp_path: Path) -> None:
+    longhouse_home = tmp_path / ".longhouse-dev"
+    default_dir = longhouse_home / "provider-live-proof"
+    explicit_dir = tmp_path / "explicit-proof"
+    default_dir.mkdir(parents=True)
+    explicit_dir.mkdir()
+    (default_dir / "claude.json").write_text(json.dumps(_artifact("claude", "2.1.153")), encoding="utf-8")
+    (explicit_dir / "claude.json").write_text(json.dumps(_artifact("claude", "9.9.9")), encoding="utf-8")
+    monkeypatch.setenv("LONGHOUSE_HOME", str(longhouse_home))
+    monkeypatch.setenv(prs.PROVIDER_LIVE_PROOF_DIR_ENV, str(explicit_dir))
+    monkeypatch.setattr(
+        plp,
+        "_provider_version_from_cli",
+        lambda path: ("Claude Code 2.1.153\n", None),
+    )
+
+    proof = plp.collect_provider_live_proof({"claude": {"path": "/opt/homebrew/bin/claude"}})
+
+    claude = proof["statuses"]["claude"]
+    assert claude["status"] == "version_mismatch"
+    assert claude["source"]["attempts"][0]["path"] == str(explicit_dir / "claude.json")
+
+
+def test_config_file_live_proof_dir_overrides_default(monkeypatch, tmp_path: Path) -> None:
+    longhouse_home = tmp_path / ".longhouse-dev"
+    default_dir = longhouse_home / "provider-live-proof"
+    configured_dir = tmp_path / "configured-proof"
+    config_path = tmp_path / "provider-release-status.env"
+    default_dir.mkdir(parents=True)
+    configured_dir.mkdir()
+    (default_dir / "claude.json").write_text(json.dumps(_artifact("claude", "2.1.153")), encoding="utf-8")
+    (configured_dir / "claude.json").write_text(json.dumps(_artifact("claude", "9.9.9")), encoding="utf-8")
+    config_path.write_text(f"{prs.PROVIDER_LIVE_PROOF_DIR_ENV}={configured_dir}\n", encoding="utf-8")
+    monkeypatch.delenv(prs.PROVIDER_LIVE_PROOF_DIR_ENV, raising=False)
+    monkeypatch.setenv("LONGHOUSE_HOME", str(longhouse_home))
+    monkeypatch.setenv(prs.PROVIDER_RELEASE_STATUS_CONFIG_FILE_ENV, str(config_path))
+    monkeypatch.setattr(
+        plp,
+        "_provider_version_from_cli",
+        lambda path: ("Claude Code 2.1.153\n", None),
+    )
+
+    proof = plp.collect_provider_live_proof({"claude": {"path": "/opt/homebrew/bin/claude"}})
+
+    claude = proof["statuses"]["claude"]
+    assert claude["status"] == "version_mismatch"
+    assert claude["source"]["attempts"][0]["path"] == str(configured_dir / "claude.json")
