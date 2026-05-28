@@ -277,8 +277,8 @@ Initial product contract:
   upstream Claude Code binary without executing a prompt: binary version,
   redacted auth shape, required launch/session flags, the development-channel
   tagged server contract for Longhouse's private MCP channel, and local PTY
-  wrapper availability. It remains
-  Yellow until scheduled live-token evidence proves detached launch,
+  wrapper availability. Token-spending contracts are `optional_skipped` by
+  default; scheduled live-token evidence still owns proof of detached launch,
   active-turn steer delivery, idle steer rejection, interrupt, and reattach.
 - `longhouse provider-live canary --provider opencode` probes the installed
   upstream OpenCode server contract without executing a prompt: binary version,
@@ -287,8 +287,8 @@ Initial product contract:
   session recovery, abort, and attach command shape. `--run-live-token-contract`
   spends small model calls to prove assistant response execution, transcript
   binding, and abort during an in-flight message turn. The default publisher
-  remains no-token and Yellow; the explicit live-token lane can go Green for
-  the upstream OpenCode server contract, but there is no scheduled OpenCode
+  remains no-token and can go Green for that tier; the explicit live-token lane
+  proves the upstream OpenCode server contract, but there is no scheduled OpenCode
   token-spending lane until we explicitly add a budgeted Sauron/CI job.
 - Runtime Host and local-health may cache it and expose:
   - provider

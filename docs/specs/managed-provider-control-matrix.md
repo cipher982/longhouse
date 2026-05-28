@@ -62,7 +62,7 @@ the upstream provider can support.
 | Codex | Yes, `longhouse codex` | Yes, engine `session.launch` | Yes, engine channel | Yes, engine channel | Yes, engine channel with active-turn errors | Bridge/runtime events | Hooks + rollout | First-class |
 | Claude | Yes, `longhouse claude` | Yes, Machine Agent `claude.launch` with PTY-backed development-channel handshake | Yes, `claude-channel send` | Yes, `claude-channel interrupt` | Yes, dispatch gated by fresh active runtime phase and delivered through channel metadata; scheduled live-token canary still has to prove upstream mid-turn behavior continuously | Channel/hooks/process scan | Claude channel + transcript ingest | First-class channel control |
 | OpenCode | Yes, `longhouse opencode` server bridge + `opencode attach` | Yes, Machine Agent `opencode.launch` when `opencode` is on PATH | Yes, server `prompt_async` API | Yes, server `abort` API | No, active-turn injection not proven | OpenCode plugin runtime events | Plugin/transcript observation | First-class launch/send/interrupt; no steer |
-| Antigravity | Yes, `longhouse antigravity` / `longhouse agy` | No | Yes, hook inbox claimed by active hooks | No | No | JSON hooks + runtime outbox | Hook binding to transcript path | Send-only hook-inbox wrapper |
+| Antigravity | Yes, `longhouse antigravity` / `longhouse agy` | No | Implemented but not advertised until real `agy` loop proof | No | No | JSON hooks + runtime outbox | Hook binding to transcript path | Hook-inbox wrapper gated on loop proof |
 
 ## Target Matrix
 
@@ -162,10 +162,11 @@ the server sidecar exists. Introduce a new control plane such as
 ### Antigravity
 
 Antigravity has hooks and plugin installation today. Its hooks can observe
-runtime phases and can inject steps at defined loop points. Longhouse now uses
-that hook surface as a send-only inbox while an Antigravity loop is alive. The
-hook inbox is the only Longhouse-owned Antigravity control surface today; there
-is no live server bridge equivalent to Codex or OpenCode in this repo.
+runtime phases and can inject steps at defined loop points. Longhouse has a
+hook-inbox adapter for that surface, but it is not advertised as machine
+control until a real upstream `agy` loop canary proves queued input is claimed
+while an Antigravity loop is alive. There is no live server bridge equivalent
+to Codex or OpenCode in this repo.
 
 Target Antigravity adapter:
 
@@ -278,7 +279,7 @@ prove:
 2. Build OpenCode server-bridge sidecar and `opencode-channel send/interrupt`. Done.
 3. Add OpenCode remote launch and attach. Done.
 4. Decide OpenCode steer only after active-turn semantics are proven.
-5. Build Antigravity hook inbox for queued input claimed by active hooks. Done.
+5. Build Antigravity hook inbox for queued input claimed by active hooks. Adapter done; machine-control advertisement blocked on real `agy` loop proof.
 6. Decide Antigravity interrupt and steer only after hook canaries prove
    bounded behavior.
 7. Move all provider operation truth into the contract registry and remove

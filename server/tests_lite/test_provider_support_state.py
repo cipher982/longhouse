@@ -216,7 +216,7 @@ def test_support_state_promotes_matching_local_live_proof_without_release_artifa
                             "status": "pass",
                             "level": "scheduled_live_token",
                             "source": "local provider-live-canary",
-                            "canary": "claude_active_turn_steer_contract",
+                            "canary": "claude_steer_active_turn_contract",
                         }
                     },
                 }
@@ -235,7 +235,7 @@ def test_support_state_promotes_matching_local_live_proof_without_release_artifa
     assert steer["evidence_level"] == "scheduled_live_token"
     assert steer["evidence_origin"] == "local_proof"
     assert steer["evidence_state"] == "local_proof_proven"
-    assert steer["local_proof_evidence"]["canary"] == "claude_active_turn_steer_contract"
+    assert steer["local_proof_evidence"]["canary"] == "claude_steer_active_turn_contract"
 
 
 def test_support_state_does_not_promote_mismatched_local_live_proof() -> None:

@@ -90,10 +90,22 @@ def test_provider_cli_catalog_matches_managed_provider_contracts():
     [
         (lambda item: item.pop("operation_evidence"), "operation_evidence must be an object"),
         (lambda item: item["operation_evidence"].pop("send_input"), "operation_evidence missing send_input"),
-        (lambda item: item["operation_evidence"].__setitem__("made_up", {"level": "none", "source": "x"}), "unknown keys made_up"),
-        (lambda item: item["operation_evidence"]["send_input"].__setitem__("level", "bogus"), "level must be one of"),
-        (lambda item: item["operation_evidence"]["send_input"].__setitem__("source", ""), "source must be a non-empty string"),
-        (lambda item: item["operation_evidence"]["send_input"].__setitem__("level", "none"), "supported operation send_input"),
+        (
+            lambda item: item["operation_evidence"].__setitem__("made_up", {"level": "none", "source": "x"}),
+            "unknown keys made_up",
+        ),
+        (
+            lambda item: item["operation_evidence"]["send_input"].__setitem__("level", "bogus"),
+            "level must be one of",
+        ),
+        (
+            lambda item: item["operation_evidence"]["send_input"].__setitem__("source", ""),
+            "source must be a non-empty string",
+        ),
+        (
+            lambda item: item["operation_evidence"]["send_input"].__setitem__("level", "none"),
+            "supported operation send_input",
+        ),
         (
             lambda item: (
                 item.__setitem__("steer_active_turn", False),
@@ -101,7 +113,10 @@ def test_provider_cli_catalog_matches_managed_provider_contracts():
             ),
             "unsupported operation steer_active_turn",
         ),
-        (lambda item: item["operation_evidence"]["send_input"].__setitem__("next", ""), "next must be a non-empty string"),
+        (
+            lambda item: item["operation_evidence"]["send_input"].__setitem__("next", ""),
+            "next must be a non-empty string",
+        ),
     ],
 )
 def test_operation_evidence_validation_rejects_drift(mutator, message):
@@ -234,7 +249,7 @@ def test_managed_provider_contract_manifest_snapshot():
                 "terminate": "none",
                 "transcript_binding": "hermetic",
             },
-            "machine_control_supports": ("antigravity.send",),
+            "machine_control_supports": (),
         },
     }
 
@@ -326,7 +341,7 @@ def test_antigravity_contract_is_hook_inbox_send_only():
     assert contract.transcript_binding is True
     assert contract.operation_evidence_for("send_input")["level"] == "hermetic"
     assert contract.operation_evidence_for("steer_active_turn")["level"] == "none"
-    assert contract.machine_control_supports == ("antigravity.send",)
+    assert contract.machine_control_supports == ()
     assert contract.connection_capabilities == {
         "can_send_input": 1,
         "can_interrupt": 0,
@@ -369,7 +384,7 @@ def test_control_plane_aliases_are_explicit_contract_not_scattered_literals():
         ("opencode", "session.send_text", "opencode.send"),
         ("opencode", "session.interrupt", "opencode.interrupt"),
         ("opencode", "session.steer_text", None),
-        ("antigravity", "session.send_text", "antigravity.send"),
+        ("antigravity", "session.send_text", None),
         ("antigravity", "session.interrupt", None),
         ("antigravity", "session.steer_text", None),
     ],
@@ -389,7 +404,6 @@ def test_machine_control_launch_capability_map_comes_from_provider_contracts():
 def test_machine_control_operations_by_provider_projects_live_supports():
     assert machine_control_operations_by_provider(
         [
-            "antigravity.send",
             "claude.launch",
             "claude.steer",
             "codex.send",
@@ -400,7 +414,6 @@ def test_machine_control_operations_by_provider_projects_live_supports():
     ) == {
         "codex": ("send", "launch"),
         "claude": ("steer", "launch"),
-        "antigravity": ("send",),
     }
 
 

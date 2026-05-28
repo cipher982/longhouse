@@ -42,7 +42,8 @@ PROVIDER_STATUS_SCHEMA_VERSION = 1
 _OPENCODE_SERVER_LOG_RE = re.compile(r"opencode server listening on (?P<url>http://127\.0\.0\.1:\d+)")
 _ANTIGRAVITY_PLUGIN_NAME = "longhouse-runtime"
 _ANTIGRAVITY_HOOK_EVENTS = ("PreInvocation", "PreToolUse", "PostToolUse", "PostInvocation", "Stop")
-_GAP_OPERATION_STATUSES = {"fail", "missing", "not_run", "skipped", "stale"}
+_OPTIONAL_SKIPPED_STATUS = "optional_skipped"
+_GAP_OPERATION_STATUSES = {"fail", "missing", "not_run", _OPTIONAL_SKIPPED_STATUS, "skipped", "stale"}
 _OPENCODE_REATTACH_MESSAGE = " ".join(
     (
         "Process-restart proof: a fresh OpenCode server recovered",
@@ -119,6 +120,10 @@ def _status(status: str, **fields: Any) -> dict[str, Any]:
     payload = {"status": status}
     payload.update(fields)
     return payload
+
+
+def _optional_skipped(reason: str, **fields: Any) -> dict[str, Any]:
+    return _status(_OPTIONAL_SKIPPED_STATUS, reason=reason, optional=True, **fields)
 
 
 def _fail(code: str, message: str, **fields: Any) -> dict[str, Any]:
@@ -301,13 +306,13 @@ def _claude_operation_evidence(
     if launch_local:
         evidence["launch_local"] = launch_local
 
-    if (canaries.get("channel_prompt_delivery_contract") or {}).get("status") in {"pass", "fail", "warn"}:
+    if (canaries.get("send_input_contract") or {}).get("status") in {"pass", "fail", "warn"}:
         send_input = _entry_from_canary_group(
             contract,
             "send_input",
             canaries=canaries,
-            required=["managed_channel_launch_contract", "channel_prompt_delivery_contract"],
-            canary_name="claude_channel_prompt_delivery_contract",
+            required=["launch_local_contract", "send_input_contract"],
+            canary_name="claude_send_input_contract",
             level="manual_live_token",
             source="longhouse provider-live canary --provider claude --run-live-token-contract",
             message="Live channel proof: Claude channel accepted a prompt injection into the managed session.",
@@ -316,13 +321,13 @@ def _claude_operation_evidence(
         if send_input:
             evidence["send_input"] = send_input
 
-    if (canaries.get("provider_execution_contract") or {}).get("status") in {"pass", "fail", "warn"}:
+    if (canaries.get("transcript_binding_contract") or {}).get("status") in {"pass", "fail", "warn"}:
         transcript_binding = _entry_from_canary_group(
             contract,
             "transcript_binding",
             canaries=canaries,
-            required=["provider_execution_contract"],
-            canary_name="claude_provider_execution_contract",
+            required=["transcript_binding_contract"],
+            canary_name="claude_transcript_binding_contract",
             level="manual_live_token",
             source="longhouse provider-live canary --provider claude --run-live-token-contract",
             message="Live-token proof: expected assistant text appeared in Claude transcript.",
@@ -331,17 +336,17 @@ def _claude_operation_evidence(
         if transcript_binding:
             evidence["transcript_binding"] = transcript_binding
 
-    if (canaries.get("active_turn_steer_contract") or {}).get("status") in {"pass", "fail", "warn"}:
+    if (canaries.get("steer_active_turn_contract") or {}).get("status") in {"pass", "fail", "warn"}:
         steer_active_turn = _entry_from_canary_group(
             contract,
             "steer_active_turn",
             canaries=canaries,
             required=[
-                "managed_channel_launch_contract",
-                "channel_prompt_delivery_contract",
-                "active_turn_steer_contract",
+                "launch_local_contract",
+                "send_input_contract",
+                "steer_active_turn_contract",
             ],
-            canary_name="claude_active_turn_steer_contract",
+            canary_name="claude_steer_active_turn_contract",
             level="manual_live_token",
             source="longhouse provider-live canary --provider claude --run-live-token-contract",
             message="Live-token proof: active-turn channel steer reached the Claude transcript.",
@@ -578,12 +583,21 @@ def run_codex_live_canary(args: argparse.Namespace, root: Path) -> dict[str, Any
 
 
 def _classify(canaries: dict[str, dict[str, Any]]) -> tuple[str, str | None, str]:
+    """Classify required canary results.
+
+    ``optional_skipped`` means an opt-in, usually token-spending, proof was not
+    requested in this run. It stays visible in artifacts but does not demote the
+    verdict for the no-token tier. Real launch-scope gaps remain ``not_run``.
+    """
+
     first_not_run: str | None = None
     first_warn: str | None = None
     for name, canary in canaries.items():
         status = canary.get("status")
         if status == "fail":
             return "red", str(canary.get("failure_code") or name), "block_upgrade_recommendation"
+        if status == _OPTIONAL_SKIPPED_STATUS:
+            continue
         if status == "not_run" and first_not_run is None:
             first_not_run = name
         if status == "warn" and first_warn is None:
@@ -1598,12 +1612,12 @@ def _claude_live_token_contract_placeholders() -> dict[str, dict[str, Any]]:
         )
     )
     return {
-        "managed_channel_launch_contract": _status("not_run", reason=reason),
-        "channel_prompt_delivery_contract": _status("not_run", reason=reason),
-        "provider_execution_contract": _status("not_run", reason=reason),
-        "active_turn_steer_contract": _status("not_run", reason=reason),
-        "idle_steer_rejection_contract": _status("not_run", reason=idle_reason),
-        "interrupt_contract": _status("not_run", reason=interrupt_reason),
+        "launch_local_contract": _optional_skipped(reason),
+        "send_input_contract": _optional_skipped(reason),
+        "transcript_binding_contract": _optional_skipped(reason),
+        "steer_active_turn_contract": _optional_skipped(reason),
+        "idle_steer_rejection_contract": _optional_skipped(idle_reason),
+        "interrupt_contract": _optional_skipped(interrupt_reason),
     }
 
 
@@ -1683,24 +1697,21 @@ def _run_claude_live_token_contracts(args: argparse.Namespace, root: Path) -> di
             elapsed_ms=int((time.monotonic() - started) * 1000),
         )
         return {
-            "managed_channel_launch_contract": failure,
-            "channel_prompt_delivery_contract": _status(
+            "launch_local_contract": failure,
+            "send_input_contract": _status(
                 "not_run",
                 reason="Managed Claude live-token session did not launch.",
             ),
-            "provider_execution_contract": _status(
+            "transcript_binding_contract": _status(
                 "not_run",
                 reason="Managed Claude live-token session did not launch.",
             ),
-            "active_turn_steer_contract": _status(
+            "steer_active_turn_contract": _status(
                 "not_run",
                 reason="Managed Claude live-token session did not launch.",
             ),
-            "idle_steer_rejection_contract": _status(
-                "not_run",
-                reason="Idle steer rejection live provider proof is future work.",
-            ),
-            "interrupt_contract": _status("not_run", reason="Claude interrupt live provider proof is future work."),
+            "idle_steer_rejection_contract": _optional_skipped("Idle steer rejection live provider proof is future work."),
+            "interrupt_contract": _optional_skipped("Claude interrupt live provider proof is future work."),
         }
 
     evidence = _claude_summary_evidence(summary)
@@ -1769,15 +1780,12 @@ def _run_claude_live_token_contracts(args: argparse.Namespace, root: Path) -> di
             )
 
     return {
-        "managed_channel_launch_contract": managed_launch,
-        "channel_prompt_delivery_contract": prompt_delivery,
-        "provider_execution_contract": provider_execution,
-        "active_turn_steer_contract": active_turn_steer,
-        "idle_steer_rejection_contract": _status(
-            "not_run",
-            reason="Idle steer rejection live provider proof is future work.",
-        ),
-        "interrupt_contract": _status("not_run", reason="Claude interrupt live provider proof is future work."),
+        "launch_local_contract": managed_launch,
+        "send_input_contract": prompt_delivery,
+        "transcript_binding_contract": provider_execution,
+        "steer_active_turn_contract": active_turn_steer,
+        "idle_steer_rejection_contract": _optional_skipped("Idle steer rejection live provider proof is future work."),
+        "interrupt_contract": _optional_skipped("Claude interrupt live provider proof is future work."),
     }
 
 
@@ -2231,14 +2239,13 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
                 timeout_secs=int(getattr(args, "live_token_timeout_secs", 120) or 120),
             )
         else:
-            canaries["assistant_response_contract"] = _status(
-                "not_run",
-                reason=" ".join(
+            canaries["assistant_response_contract"] = _optional_skipped(
+                " ".join(
                     (
                         "Pass --run-live-token-contract to spend tokens and prove assistant response execution",
                         "plus active-turn abort.",
                     )
-                ),
+                )
             )
 
         if canaries["assistant_response_contract"].get("status") == "pass":
@@ -2258,10 +2265,7 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
                 reason="Assistant response contract did not pass, so active-turn abort proof was not run.",
             )
         else:
-            canaries["active_turn_abort_contract"] = _status(
-                "not_run",
-                reason="Pass --run-live-token-contract to prove active-turn abort.",
-            )
+            canaries["active_turn_abort_contract"] = _optional_skipped("Pass --run-live-token-contract to prove active-turn abort.")
 
         abort_result = _request_json(
             server_url=server_url,
@@ -2297,13 +2301,18 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
                 ),
             )
         else:
-            canaries["prompt_async_execution_contract"] = _status(
-                "not_run",
-                reason=(
-                    "OpenCode no-token live canary proves prompt_async noReply delivery into session.messages; "
-                    "process-restart reattach is also proven without tokens. Pass --run-live-token-contract "
-                    "to prove assistant response execution, transcript binding, and active-turn abort."
-                ),
+            reason = (
+                "OpenCode no-token live canary proves prompt_async noReply delivery into session.messages; "
+                "process-restart reattach is also proven without tokens. Pass --run-live-token-contract "
+                "to prove assistant response execution, transcript binding, and active-turn abort."
+            )
+            canaries["prompt_async_execution_contract"] = (
+                _status(
+                    "not_run",
+                    reason="Assistant response contract did not pass, so prompt execution proof was not established.",
+                )
+                if bool(getattr(args, "run_live_token_contract", False))
+                else _optional_skipped(reason)
             )
         return {"provider": "opencode", "provider_version": version, "canaries": canaries}
     except Exception as exc:  # noqa: BLE001
