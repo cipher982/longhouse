@@ -62,6 +62,22 @@ _CLAUDE_CHANNEL_UNCONFIRMED_MESSAGE = (
 _ANTIGRAVITY_PLUGIN_NOTE = (
     "agy may report hook components as skipped here; Longhouse wires Antigravity hooks through the global hooks config."
 )
+_SIMPLE_OPERATION_GROUPS = {
+    "claude": (
+        (
+            "launch_local",
+            ("binary_identity", "command_shape", "channels_shape", "detached_pty_shape"),
+            "claude_launch_local_no_token",
+        ),
+    ),
+    "antigravity": (
+        (
+            "launch_local",
+            ("binary_identity", "command_shape", "plugin_contract", "global_hooks_contract"),
+            "antigravity_launch_local_no_token",
+        ),
+    ),
+}
 
 
 def _default_evidence_root(provider: str, timestamp: str) -> Path:
@@ -256,21 +272,21 @@ def _schema_probe_failed_for(
     return None
 
 
-def _claude_operation_evidence(
+def _simple_operation_evidence(
     contract: ManagedProviderContract,
     canaries: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
     evidence: dict[str, dict[str, Any]] = {}
-    launch_local = _entry_from_canary_group(
-        contract,
-        "launch_local",
-        canaries=canaries,
-        required=["binary_identity", "command_shape", "channels_shape", "detached_pty_shape"],
-        canary_name="claude_launch_local_no_token",
-    )
-    if launch_local:
-        evidence["launch_local"] = launch_local
-
+    for operation, required, canary_name in _SIMPLE_OPERATION_GROUPS.get(contract.provider, ()):
+        entry = _entry_from_canary_group(
+            contract,
+            operation,
+            canaries=canaries,
+            required=list(required),
+            canary_name=canary_name,
+        )
+        if entry:
+            evidence[operation] = entry
     return evidence
 
 
@@ -393,34 +409,14 @@ def _opencode_operation_evidence(
     return evidence
 
 
-def _antigravity_operation_evidence(
-    contract: ManagedProviderContract,
-    canaries: dict[str, dict[str, Any]],
-) -> dict[str, dict[str, Any]]:
-    evidence: dict[str, dict[str, Any]] = {}
-    launch_local = _entry_from_canary_group(
-        contract,
-        "launch_local",
-        canaries=canaries,
-        required=["binary_identity", "command_shape", "plugin_contract", "global_hooks_contract"],
-        canary_name="antigravity_launch_local_no_token",
-    )
-    if launch_local:
-        evidence["launch_local"] = launch_local
-
-    return evidence
-
-
 def _provider_operation_evidence(provider: str, canaries: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
     contract = contract_for_provider(provider)
     if contract is None:
         return {}
-    if provider == "claude":
-        return _claude_operation_evidence(contract, canaries)
+    if provider in _SIMPLE_OPERATION_GROUPS:
+        return _simple_operation_evidence(contract, canaries)
     if provider == "opencode":
         return _opencode_operation_evidence(contract, canaries)
-    if provider == "antigravity":
-        return _antigravity_operation_evidence(contract, canaries)
     return {}
 
 
