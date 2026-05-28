@@ -67,6 +67,10 @@ def collect_provider_support_state(
         release_info = dict(release_statuses.get(provider) or {})
         live_proof_info = dict(live_proof_statuses.get(provider) or {})
         live_control_operations = tuple(str(item) for item in live_ops_by_provider.get(provider) or ())
+        missing_live_control_operations = _missing_live_control_operations(
+            expected_supports=contract.machine_control_supports,
+            live_control_operations=live_control_operations,
+        )
         operations = _operation_states(contract, release_info=release_info, live_proof_info=live_proof_info)
         version_readiness = _version_readiness(release_info)
         proof = _proof_summary(operations, live_proof_info=live_proof_info)
@@ -78,6 +82,7 @@ def collect_provider_support_state(
             control_connected=control_connected,
             expected_supports=contract.machine_control_supports,
             live_control_operations=live_control_operations,
+            missing_live_control_operations=missing_live_control_operations,
         )
         providers[provider] = {
             "provider": provider,
@@ -95,10 +100,12 @@ def collect_provider_support_state(
                 "unsupported_operations": _operation_names_by_support(operations, supported=False),
                 "machine_control_supports": list(contract.machine_control_supports),
                 "live_control_operations": list(live_control_operations),
+                "missing_live_control_operations": list(missing_live_control_operations),
                 "live_control_state": _live_control_state(
                     control_connected=control_connected,
                     expected_supports=contract.machine_control_supports,
                     live_control_operations=live_control_operations,
+                    missing_live_control_operations=missing_live_control_operations,
                 ),
             },
             "proof": proof,
@@ -269,6 +276,27 @@ def _operation_names_by_support(operations: Mapping[str, Mapping[str, Any]], *, 
     return [operation for operation, info in operations.items() if bool(info.get("supported")) == supported]
 
 
+def _expected_live_control_operations(expected_supports: tuple[str, ...]) -> tuple[str, ...]:
+    operations: list[str] = []
+    seen: set[str] = set()
+    for support in expected_supports:
+        _, _, operation = str(support).partition(".")
+        if operation and operation not in seen:
+            operations.append(operation)
+            seen.add(operation)
+    return tuple(operations)
+
+
+def _missing_live_control_operations(
+    *,
+    expected_supports: tuple[str, ...],
+    live_control_operations: tuple[str, ...],
+) -> tuple[str, ...]:
+    live = {str(operation) for operation in live_control_operations}
+    expected = _expected_live_control_operations(expected_supports)
+    return tuple(operation for operation in expected if operation not in live)
+
+
 def _proof_summary(
     operations: Mapping[str, Mapping[str, Any]],
     *,
@@ -397,6 +425,7 @@ def _provider_state(
     control_connected: bool,
     expected_supports: tuple[str, ...],
     live_control_operations: tuple[str, ...],
+    missing_live_control_operations: tuple[str, ...],
 ) -> str:
     if contract_requires_cli and _cli_state(cli_info) != "available":
         return "provider_cli_missing"
@@ -414,6 +443,8 @@ def _provider_state(
         return "live_control_not_connected"
     if expected_supports and not live_control_operations:
         return "live_control_partial"
+    if expected_supports and missing_live_control_operations:
+        return "live_control_partial"
     return "ready"
 
 
@@ -422,6 +453,7 @@ def _live_control_state(
     control_connected: bool,
     expected_supports: tuple[str, ...],
     live_control_operations: tuple[str, ...],
+    missing_live_control_operations: tuple[str, ...],
 ) -> str:
     if not expected_supports:
         return "not_applicable"
@@ -429,6 +461,8 @@ def _live_control_state(
         return "not_connected"
     if not live_control_operations:
         return "not_advertised"
+    if missing_live_control_operations:
+        return "partial"
     return "advertised"
 
 

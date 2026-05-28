@@ -84,6 +84,27 @@ def test_support_state_reports_missing_provider_cli_without_collapsing_contract(
     assert "steer_active_turn" in opencode["capabilities"]["unsupported_operations"]
 
 
+def test_support_state_reports_partial_live_control_operations() -> None:
+    support = collect_provider_support_state(
+        provider_clis={"claude": {"path": "/Users/test/.local/bin/claude", "source": "PATH"}},
+        provider_release_status={"statuses": {"claude": {"status": "no_artifact", "risk": "none"}}},
+        control_channel={
+            "status": "connected",
+            "control_operations_by_provider": {"claude": ["launch"]},
+        },
+    )
+
+    claude = support["providers"]["claude"]
+    assert claude["state"] == "live_control_partial"
+    assert claude["capabilities"]["live_control_state"] == "partial"
+    assert claude["capabilities"]["live_control_operations"] == ["launch"]
+    assert claude["capabilities"]["missing_live_control_operations"] == [
+        "send",
+        "interrupt",
+        "steer",
+    ]
+
+
 def test_support_state_tolerates_missing_health_sections() -> None:
     support = collect_provider_support_state(
         provider_clis=None,
