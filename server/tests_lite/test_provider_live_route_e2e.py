@@ -32,10 +32,12 @@ def _route_artifact(*, verdict: str = "green", status: str = "pass") -> dict[str
             "status_code": 200,
             "payload": {"result": {"provider_version_match": {"status": "match"}}},
         },
+        "match_attempt_count": 1,
         "mismatch": {
             "status_code": 409,
             "payload": {"detail": {"code": "provider_version_mismatch"}},
         },
+        "mismatch_attempt_count": 1,
     }
     if status != "pass":
         result["failure_code"] = "provider_live_mismatch_not_typed"
@@ -86,8 +88,10 @@ def test_route_e2e_green_artifact_applies(tmp_path: Path) -> None:
             "expected_provider_version": "1.15.11",
             "version_match": "match",
             "match_status_code": 200,
+            "match_attempt_count": 1,
             "match_version_match": "match",
             "mismatch_status_code": 409,
+            "mismatch_attempt_count": 1,
             "mismatch_code": "provider_version_mismatch",
             "failure_code": None,
             "message": None,

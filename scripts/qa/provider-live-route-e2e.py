@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from datetime import UTC
@@ -23,6 +24,7 @@ from typing import Any
 SUPPORTED_PROVIDERS = ("codex", "claude", "opencode", "antigravity")
 DEFAULT_USER_AGENT = "sauron-provider-live-proof/1"
 DEFAULT_MISMATCH_VERSION = "9.9.9-longhouse-route-e2e"
+RETRYABLE_STATUS_CODES = {0, 408, 429, 500, 502, 503, 504}
 
 
 def _now_iso() -> str:
@@ -167,6 +169,49 @@ def _request_json(
         except json.JSONDecodeError:
             payload = {"raw_body": raw[-2000:]}
         return exc.code, payload
+    except (TimeoutError, urllib.error.URLError) as exc:
+        return 0, {"detail": {"code": "request_error", "message": str(exc)}}
+
+
+def _detail_code(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    detail = payload.get("detail")
+    if not isinstance(detail, dict):
+        return None
+    code = detail.get("code")
+    return str(code) if code is not None else None
+
+
+def _detail_message(payload: Any) -> str | None:
+    if not isinstance(payload, dict):
+        return None
+    detail = payload.get("detail")
+    if isinstance(detail, str):
+        return detail
+    if isinstance(detail, dict):
+        message = detail.get("message")
+        return str(message) if message is not None else None
+    return None
+
+
+def _is_retryable_response(status: int, payload: dict[str, Any]) -> bool:
+    if status in RETRYABLE_STATUS_CODES:
+        return True
+    if status == 409 and "already in flight" in (_detail_message(payload) or "").lower():
+        return True
+    return False
+
+
+def _response_attempt(status: int, payload: dict[str, Any], *, retryable: bool) -> dict[str, Any]:
+    attempt: dict[str, Any] = {"status_code": status, "retryable": retryable}
+    code = _detail_code(payload)
+    if code:
+        attempt["code"] = code
+    message = _detail_message(payload)
+    if message:
+        attempt["message"] = message[:240]
+    return attempt
 
 
 def _machine_supports(
@@ -227,6 +272,37 @@ def _post_live_proof(
     )
 
 
+def _post_live_proof_with_retry(
+    *,
+    args: argparse.Namespace,
+    provider: str,
+    expected_version: str,
+    run_live_token_contract: bool,
+) -> tuple[int, dict[str, Any], list[dict[str, Any]]]:
+    attempts: list[dict[str, Any]] = []
+    max_attempts = max(1, int(args.attempts or 1))
+    for attempt_index in range(max_attempts):
+        status, payload = _post_live_proof(
+            api_url=args.api_url,
+            device_id=args.device_id,
+            token=args.token,
+            user_agent=args.user_agent,
+            provider=provider,
+            expected_version=expected_version,
+            process_timeout_s=args.process_timeout_s,
+            http_timeout_s=args.http_timeout_s,
+            run_live_token_contract=run_live_token_contract,
+            live_token_timeout_secs=args.live_token_timeout_secs,
+        )
+        retryable = _is_retryable_response(status, payload)
+        attempts.append(_response_attempt(status, payload, retryable=retryable))
+        if not retryable or attempt_index == max_attempts - 1:
+            return status, payload, attempts
+        if args.retry_delay_s > 0:
+            time.sleep(args.retry_delay_s)
+    raise AssertionError("unreachable")
+
+
 def _artifact_version_match(result: dict[str, Any]) -> dict[str, Any]:
     route_result = result.get("result")
     if not isinstance(route_result, dict):
@@ -247,22 +323,18 @@ def _artifact_verdict(result: dict[str, Any]) -> str | None:
 
 
 def _run_provider(args: argparse.Namespace, provider: str, expected_version: str) -> dict[str, Any]:
-    match_status, match_payload = _post_live_proof(
-        api_url=args.api_url,
-        device_id=args.device_id,
-        token=args.token,
-        user_agent=args.user_agent,
+    match_status, match_payload, match_attempts = _post_live_proof_with_retry(
+        args=args,
         provider=provider,
         expected_version=expected_version,
-        process_timeout_s=args.process_timeout_s,
-        http_timeout_s=args.http_timeout_s,
         run_live_token_contract=args.run_live_token_contract,
-        live_token_timeout_secs=args.live_token_timeout_secs,
     )
     result: dict[str, Any] = {
         "provider": provider,
         "expected_provider_version": expected_version,
         "match": {"status_code": match_status, "payload": match_payload},
+        "match_attempts": match_attempts,
+        "match_attempt_count": len(match_attempts),
     }
 
     if match_status != 200:
@@ -307,21 +379,16 @@ def _run_provider(args: argparse.Namespace, provider: str, expected_version: str
         return result
 
     if not args.skip_mismatch:
-        mismatch_status, mismatch_payload = _post_live_proof(
-            api_url=args.api_url,
-            device_id=args.device_id,
-            token=args.token,
-            user_agent=args.user_agent,
+        mismatch_status, mismatch_payload, mismatch_attempts = _post_live_proof_with_retry(
+            args=args,
             provider=provider,
             expected_version=args.mismatch_version,
-            process_timeout_s=args.process_timeout_s,
-            http_timeout_s=args.http_timeout_s,
             run_live_token_contract=False,
-            live_token_timeout_secs=args.live_token_timeout_secs,
         )
         result["mismatch"] = {"status_code": mismatch_status, "payload": mismatch_payload}
-        detail = mismatch_payload.get("detail") if isinstance(mismatch_payload, dict) else None
-        code = detail.get("code") if isinstance(detail, dict) else None
+        result["mismatch_attempts"] = mismatch_attempts
+        result["mismatch_attempt_count"] = len(mismatch_attempts)
+        code = _detail_code(mismatch_payload)
         if mismatch_status != 409 or code != "provider_version_mismatch":
             result.update(
                 {
@@ -395,7 +462,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--provider",
         action="append",
         choices=[*SUPPORTED_PROVIDERS, "all", "auto"],
-        help="Provider to prove. Repeat for several. Defaults to auto from live-proof sidecars. Use all to require every provider.",
+        help=(
+            "Provider to prove. Repeat for several. Defaults to auto from live-proof "
+            "sidecars. Use all to require every provider."
+        ),
     )
     parser.add_argument(
         "--expected",
@@ -413,6 +483,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--process-timeout-s", type=int, default=120)
     parser.add_argument("--http-timeout-s", type=float, default=180.0)
+    parser.add_argument(
+        "--attempts",
+        type=int,
+        default=2,
+        help="Per-leg attempts for transient hosted dispatch failures.",
+    )
+    parser.add_argument(
+        "--retry-delay-s",
+        type=float,
+        default=2.0,
+        help="Delay between transient retry attempts.",
+    )
     parser.add_argument("--user-agent", default=DEFAULT_USER_AGENT)
     parser.add_argument("--run-live-token-contract", action="store_true")
     parser.add_argument("--live-token-timeout-secs", type=int, default=120)

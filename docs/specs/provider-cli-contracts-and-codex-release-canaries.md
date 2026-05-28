@@ -260,10 +260,14 @@ Initial product contract:
   route results against the current applying sidecars and reports missing
   coverage separately from transport failure. Dogfood runs the route proof with
   a non-red verdict threshold because yellow provider-readiness is still useful
-  route evidence and remains visible separately. `make dogfood-check` only
-  reports the current sidecars. Reader precedence is explicit env, persisted
-  provider-status config, then the Longhouse-home default. Local-health reads
-  those artifacts as operation proof only when the sidecar provider and
+  route evidence and remains visible separately. The route harness retries
+  transient hosted dispatch failures per provider so one machine-control
+  timeout does not invalidate an otherwise valid all-provider route proof, but
+  version mismatches and provider verdict failures remain strict. `make
+  dogfood-check` only reports the current sidecars. Reader precedence is
+  explicit env, persisted provider-status config, then the Longhouse-home
+  default. Local-health reads those artifacts as operation proof only when the
+  sidecar provider and
   normalized version match the installed provider CLI. This proof is additive to
   the support-state projection; it does not overwrite Sauron's release verdict.
   A fresh green local proof can demote a matching

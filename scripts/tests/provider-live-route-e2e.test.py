@@ -20,6 +20,7 @@ class _ServerState:
     def __init__(self) -> None:
         self.requests: list[dict] = []
         self.bad_mismatch_shape = False
+        self.transient_match_failures: dict[str, int] = {}
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -66,6 +67,11 @@ class _Handler(BaseHTTPRequestHandler):
         expected = body["expected_provider_version"]
         matched_versions = {"claude": "2.1.153", "opencode": "1.15.11"}
         if expected == matched_versions.get(provider):
+            transient_remaining = self.state.transient_match_failures.get(provider, 0)
+            if transient_remaining > 0:
+                self.state.transient_match_failures[provider] = transient_remaining - 1
+                self._write_json(503, {"detail": "Request timed out"})
+                return
             self._write_json(
                 200,
                 {
@@ -146,7 +152,7 @@ def _write_inputs(root: Path) -> tuple[Path, Path]:
 
 
 def _run_harness(
-    root: Path, api_url: str, token_file: Path, proof_dir: Path
+    root: Path, api_url: str, token_file: Path, proof_dir: Path, *extra_args: str
 ) -> tuple[subprocess.CompletedProcess[str], dict]:
     artifact = root / "artifact.json"
     result = subprocess.run(
@@ -164,6 +170,7 @@ def _run_harness(
             "--artifact",
             str(artifact),
             "--json",
+            *extra_args,
         ],
         cwd=REPO_ROOT,
         text=True,
@@ -197,6 +204,34 @@ def test_route_e2e_requires_match_and_typed_mismatch() -> None:
         server.shutdown()
 
 
+def test_route_e2e_retries_transient_match_failure() -> None:
+    state = _ServerState()
+    state.transient_match_failures["opencode"] = 1
+    server, api_url = _run_server(state)
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            token_file, proof_dir = _write_inputs(root)
+            result, payload = _run_harness(root, api_url, token_file, proof_dir, "--retry-delay-s", "0")
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["verdict"] == "green"
+        opencode = payload["results"][1]
+        assert opencode["provider"] == "opencode"
+        assert opencode["match_attempt_count"] == 2
+        assert opencode["match_attempts"][0]["status_code"] == 503
+        assert opencode["match_attempts"][0]["retryable"] is True
+        assert [(request["provider"], request["expected_provider_version"]) for request in state.requests] == [
+            ("claude", "2.1.153"),
+            ("claude", "9.9.9-longhouse-route-e2e"),
+            ("opencode", "1.15.11"),
+            ("opencode", "1.15.11"),
+            ("opencode", "9.9.9-longhouse-route-e2e"),
+        ]
+    finally:
+        server.shutdown()
+
+
 def test_route_e2e_fails_when_mismatch_is_not_typed() -> None:
     state = _ServerState()
     state.bad_mismatch_shape = True
@@ -217,6 +252,7 @@ def test_route_e2e_fails_when_mismatch_is_not_typed() -> None:
 def main() -> int:
     tests = [
         test_route_e2e_requires_match_and_typed_mismatch,
+        test_route_e2e_retries_transient_match_failure,
         test_route_e2e_fails_when_mismatch_is_not_typed,
     ]
     for test in tests:

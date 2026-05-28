@@ -122,7 +122,9 @@ that sidecar as the durable evidence that hosted dispatch still works for this
 machine. The default provider set is `auto`: every current valid
 `~/.longhouse/provider-live-proof/{provider}.json` sidecar is routed through the
 hosted machine API. Local-health reports coverage separately so a one-provider
-green route proof cannot masquerade as all-provider coverage.
+green route proof cannot masquerade as all-provider coverage. The route harness
+retries transient hosted dispatch failures per provider; typed version
+mismatches and provider verdict failures remain strict evidence.
 
 ### Coordination and directed messaging
 
