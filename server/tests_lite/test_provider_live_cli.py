@@ -171,6 +171,75 @@ print(json.dumps(payload))
     )
 
 
+def _fake_configurable_provider_live_canary(path: Path) -> Path:
+    return _write_exe(
+        path,
+        r"""#!/usr/bin/env python3
+import argparse
+import json
+import os
+from datetime import UTC, datetime
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--provider", required=True)
+parser.add_argument("--artifact", required=True)
+parser.add_argument("--evidence-root", required=True)
+parser.add_argument("--repo-root")
+parser.add_argument("--json", action="store_true")
+parser.add_argument("--wait-ready-secs")
+parser.add_argument("--run-live-token-contract", action="store_true")
+parser.add_argument("--live-token-timeout-secs")
+args = parser.parse_args()
+
+failure_code = os.environ.get("FAKE_PROVIDER_FAILURE_CODE")
+payload = {
+    "schema_version": 1,
+    "artifact_kind": "provider_live_canary",
+    "provider": args.provider,
+    "provider_version": os.environ.get("FAKE_PROVIDER_VERSION", "fake"),
+    "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+    "verdict": os.environ.get("FAKE_PROVIDER_VERDICT", "green"),
+    "recommendation": "investigate_before_upgrade",
+    "canaries": {"fake": {"status": "pass"}},
+    "operation_evidence": json.loads(os.environ.get("FAKE_PROVIDER_OPERATION_EVIDENCE", "{}")),
+    "artifact_path": args.artifact,
+    "evidence_root": args.evidence_root,
+}
+if failure_code:
+    payload["failure_code"] = failure_code
+with open(args.artifact, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle)
+print(json.dumps(payload))
+raise SystemExit(1 if payload["verdict"] == "red" else 0)
+""",
+    )
+
+
+def _live_proof_artifact(
+    provider: str,
+    *,
+    verdict: str,
+    operation_evidence: dict[str, object],
+    failure_code: str | None = None,
+    version: str = "fake",
+    artifact_path: str = "/previous/provider-live-canary.json",
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "artifact_kind": "provider_live_canary",
+        "provider": provider,
+        "provider_version": version,
+        "generated_at": "2026-05-28T00:00:00Z",
+        "verdict": verdict,
+        "operation_evidence": operation_evidence,
+        "artifact_path": artifact_path,
+        "evidence_root": "/previous/evidence",
+    }
+    if failure_code:
+        payload["failure_code"] = failure_code
+    return payload
+
+
 def test_provider_live_canary_cli_writes_packaged_artifact(tmp_path: Path) -> None:
     fake_bin = _fake_claude(tmp_path / "bin" / "claude")
     artifact_path = tmp_path / "artifact.json"
@@ -520,18 +589,9 @@ def test_claude_provider_live_token_contract_reports_provider_auth_diagnostic(
     assert execution["terminal_diagnostic_hint"] == "provider_auth_prompt"
     assert payload["operation_evidence"]["send_input"]["status"] == "pass"
     assert payload["operation_evidence"]["transcript_binding"]["status"] == "fail"
-    assert (
-        payload["operation_evidence"]["transcript_binding"]["failure_code"]
-        == "claude_provider_auth_prompt"
-    )
-    assert (
-        "invalid authentication credentials"
-        in payload["operation_evidence"]["transcript_binding"]["message"]
-    )
-    assert (
-        payload["operation_evidence"]["steer_active_turn"]["failure_code"]
-        == "claude_provider_auth_prompt"
-    )
+    assert payload["operation_evidence"]["transcript_binding"]["failure_code"] == "claude_provider_auth_prompt"
+    assert "invalid authentication credentials" in payload["operation_evidence"]["transcript_binding"]["message"]
+    assert payload["operation_evidence"]["steer_active_turn"]["failure_code"] == "claude_provider_auth_prompt"
 
 
 def test_claude_provider_live_token_contract_does_not_overclassify_generic_api_text(
@@ -824,6 +884,315 @@ def test_provider_live_publish_cli_does_not_request_live_token_by_default(tmp_pa
         "run_live_token_contract": False,
         "live_token_timeout_secs": "120",
     }
+
+
+def test_provider_live_publish_preserves_stronger_same_version_sidecar(tmp_path: Path) -> None:
+    proof_dir = tmp_path / "proof"
+    proof_dir.mkdir()
+    script = _fake_configurable_provider_live_canary(tmp_path / "bin" / "provider-live-canary")
+    existing = _live_proof_artifact(
+        "antigravity",
+        verdict="green",
+        operation_evidence={
+            "send_input": {
+                "status": "pass",
+                "level": "manual_live_token",
+                "source": "previous live-token proof",
+                "canary": "antigravity_loop_invocation_contract",
+            }
+        },
+    )
+    stable_path = proof_dir / "antigravity.json"
+    stable_path.write_text(json.dumps(existing), encoding="utf-8")
+    env = {
+        "FAKE_PROVIDER_VERDICT": "yellow",
+        "FAKE_PROVIDER_FAILURE_CODE": "insufficient_coverage",
+        "FAKE_PROVIDER_OPERATION_EVIDENCE": json.dumps(
+            {
+                "launch_local": {
+                    "status": "pass",
+                    "level": "live_no_token",
+                    "source": "routine no-token proof",
+                    "canary": "antigravity_launch_local_no_token",
+                }
+            }
+        ),
+    }
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "provider-live",
+            "publish",
+            "--provider",
+            "antigravity",
+            "--proof-dir",
+            str(proof_dir),
+            "--evidence-root",
+            str(tmp_path / "evidence"),
+            "--canary-script",
+            str(script),
+            "--json",
+        ],
+        env=env,
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    published = payload["results"][0]
+    assert published["status"] == "preserved_existing"
+    assert published["verdict"] == "green"
+    assert published["candidate_verdict"] == "yellow"
+    assert json.loads(stable_path.read_text(encoding="utf-8")) == existing
+    assert Path(published["candidate_artifact_path"]).exists()
+
+
+def test_provider_live_publish_same_strength_keeps_better_existing_verdict(tmp_path: Path) -> None:
+    proof_dir = tmp_path / "proof"
+    proof_dir.mkdir()
+    script = _fake_configurable_provider_live_canary(tmp_path / "bin" / "provider-live-canary")
+    launch_evidence = {
+        "launch_local": {
+            "status": "pass",
+            "level": "live_no_token",
+            "source": "routine no-token proof",
+            "canary": "claude_launch_local_no_token",
+        }
+    }
+    existing = _live_proof_artifact(
+        "claude",
+        verdict="green",
+        operation_evidence=launch_evidence,
+    )
+    stable_path = proof_dir / "claude.json"
+    stable_path.write_text(json.dumps(existing), encoding="utf-8")
+    env = {
+        "FAKE_PROVIDER_VERDICT": "yellow",
+        "FAKE_PROVIDER_FAILURE_CODE": "insufficient_coverage",
+        "FAKE_PROVIDER_OPERATION_EVIDENCE": json.dumps(launch_evidence),
+    }
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "provider-live",
+            "publish",
+            "--provider",
+            "claude",
+            "--proof-dir",
+            str(proof_dir),
+            "--evidence-root",
+            str(tmp_path / "evidence"),
+            "--canary-script",
+            str(script),
+            "--json",
+        ],
+        env=env,
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    published = payload["results"][0]
+    assert published["status"] == "preserved_existing"
+    assert published["verdict"] == "green"
+    assert published["candidate_verdict"] == "yellow"
+    assert json.loads(stable_path.read_text(encoding="utf-8")) == existing
+
+
+def test_provider_live_publish_version_mismatch_overwrites_stronger_existing(tmp_path: Path) -> None:
+    proof_dir = tmp_path / "proof"
+    proof_dir.mkdir()
+    script = _fake_configurable_provider_live_canary(tmp_path / "bin" / "provider-live-canary")
+    existing = _live_proof_artifact(
+        "antigravity",
+        version="1.0.2",
+        verdict="green",
+        operation_evidence={
+            "send_input": {
+                "status": "pass",
+                "level": "manual_live_token",
+                "source": "previous live-token proof",
+                "canary": "antigravity_loop_invocation_contract",
+            }
+        },
+    )
+    stable_path = proof_dir / "antigravity.json"
+    stable_path.write_text(json.dumps(existing), encoding="utf-8")
+    env = {
+        "FAKE_PROVIDER_VERSION": "1.0.3",
+        "FAKE_PROVIDER_VERDICT": "yellow",
+        "FAKE_PROVIDER_FAILURE_CODE": "insufficient_coverage",
+        "FAKE_PROVIDER_OPERATION_EVIDENCE": json.dumps(
+            {
+                "launch_local": {
+                    "status": "pass",
+                    "level": "live_no_token",
+                    "source": "routine no-token proof",
+                    "canary": "antigravity_launch_local_no_token",
+                }
+            }
+        ),
+    }
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "provider-live",
+            "publish",
+            "--provider",
+            "antigravity",
+            "--proof-dir",
+            str(proof_dir),
+            "--evidence-root",
+            str(tmp_path / "evidence"),
+            "--canary-script",
+            str(script),
+            "--json",
+        ],
+        env=env,
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    published = payload["results"][0]
+    assert published["status"] == "published"
+    assert published["verdict"] == "yellow"
+    artifact = json.loads(stable_path.read_text(encoding="utf-8"))
+    assert artifact["provider_version"] == "1.0.3"
+    assert artifact["verdict"] == "yellow"
+
+
+def test_provider_live_publish_preserves_existing_live_failure_over_weaker_default(
+    tmp_path: Path,
+) -> None:
+    proof_dir = tmp_path / "proof"
+    proof_dir.mkdir()
+    script = _fake_configurable_provider_live_canary(tmp_path / "bin" / "provider-live-canary")
+    existing = _live_proof_artifact(
+        "claude",
+        verdict="red",
+        failure_code="claude_provider_auth_prompt",
+        operation_evidence={
+            "send_input": {
+                "status": "pass",
+                "level": "manual_live_token",
+                "source": "previous live-token proof",
+                "canary": "claude_channel_send_delivery",
+            },
+            "transcript_binding": {
+                "status": "fail",
+                "level": "none",
+                "source": "previous live-token proof",
+                "canary": "claude_assistant_response_contract",
+                "failure_code": "claude_provider_auth_prompt",
+            },
+        },
+    )
+    stable_path = proof_dir / "claude.json"
+    stable_path.write_text(json.dumps(existing), encoding="utf-8")
+    env = {
+        "FAKE_PROVIDER_VERDICT": "green",
+        "FAKE_PROVIDER_OPERATION_EVIDENCE": json.dumps(
+            {
+                "launch_local": {
+                    "status": "pass",
+                    "level": "live_no_token",
+                    "source": "routine no-token proof",
+                    "canary": "claude_launch_local_no_token",
+                }
+            }
+        ),
+    }
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "provider-live",
+            "publish",
+            "--provider",
+            "claude",
+            "--proof-dir",
+            str(proof_dir),
+            "--evidence-root",
+            str(tmp_path / "evidence"),
+            "--canary-script",
+            str(script),
+            "--json",
+        ],
+        env=env,
+    )
+
+    assert result.exit_code == 1, result.output
+    payload = json.loads(result.output)
+    published = payload["results"][0]
+    assert published["status"] == "preserved_existing"
+    assert published["verdict"] == "red"
+    assert published["failure_code"] == "claude_provider_auth_prompt"
+    assert published["candidate_verdict"] == "green"
+    assert json.loads(stable_path.read_text(encoding="utf-8")) == existing
+
+
+def test_provider_live_publish_red_candidate_overwrites_stronger_existing(tmp_path: Path) -> None:
+    proof_dir = tmp_path / "proof"
+    proof_dir.mkdir()
+    script = _fake_configurable_provider_live_canary(tmp_path / "bin" / "provider-live-canary")
+    existing = _live_proof_artifact(
+        "claude",
+        verdict="green",
+        operation_evidence={
+            "send_input": {
+                "status": "pass",
+                "level": "manual_live_token",
+                "source": "previous live-token proof",
+                "canary": "claude_channel_send_delivery",
+            }
+        },
+    )
+    stable_path = proof_dir / "claude.json"
+    stable_path.write_text(json.dumps(existing), encoding="utf-8")
+    env = {
+        "FAKE_PROVIDER_VERDICT": "red",
+        "FAKE_PROVIDER_FAILURE_CODE": "claude_provider_auth_prompt",
+        "FAKE_PROVIDER_OPERATION_EVIDENCE": json.dumps(
+            {
+                "send_input": {
+                    "status": "fail",
+                    "level": "none",
+                    "source": "fresh live-token proof",
+                    "canary": "claude_channel_send_delivery",
+                    "failure_code": "claude_provider_auth_prompt",
+                }
+            }
+        ),
+    }
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "provider-live",
+            "publish",
+            "--provider",
+            "claude",
+            "--proof-dir",
+            str(proof_dir),
+            "--evidence-root",
+            str(tmp_path / "evidence"),
+            "--canary-script",
+            str(script),
+            "--json",
+        ],
+        env=env,
+    )
+
+    assert result.exit_code == 1, result.output
+    payload = json.loads(result.output)
+    published = payload["results"][0]
+    assert published["status"] == "published"
+    assert published["verdict"] == "red"
+    assert published["failure_code"] == "claude_provider_auth_prompt"
+    artifact = json.loads(stable_path.read_text(encoding="utf-8"))
+    assert artifact["verdict"] == "red"
+    assert artifact["failure_code"] == "claude_provider_auth_prompt"
 
 
 def test_provider_live_publish_cli_exits_nonzero_on_red_canary(tmp_path: Path) -> None:

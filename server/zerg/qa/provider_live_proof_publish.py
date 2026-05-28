@@ -30,6 +30,15 @@ SUPPORTED_PROVIDERS = ("codex", *DEFAULT_PROVIDERS)
 PROVIDER_STATUS_SCHEMA_VERSION = 1
 LIVE_PROOF_ARTIFACT_KIND = "provider_live_canary"
 CANARY_SCRIPT_HELP = "Debug/test override for the provider-live canary executable."
+_EVIDENCE_RANK = {
+    "none": 0,
+    "source_review": 1,
+    "hermetic": 2,
+    "live_no_token": 3,
+    "manual_live_token": 4,
+    "scheduled_live_token": 5,
+}
+_VERDICT_RANK = {"red": 0, "yellow": 1, "green": 2}
 
 
 def _default_proof_dir() -> Path:
@@ -129,6 +138,92 @@ def _publish_result(
         "artifact_path": str(artifact.get("artifact_path") or artifact_path),
         "stable_path": str(stable_path),
     }
+
+
+def _same_provider_version(left: Mapping[str, Any], right: Mapping[str, Any], *, provider: str) -> bool:
+    if left.get("artifact_kind") != LIVE_PROOF_ARTIFACT_KIND:
+        return False
+    if right.get("artifact_kind") != LIVE_PROOF_ARTIFACT_KIND:
+        return False
+    if left.get("provider") != provider or right.get("provider") != provider:
+        return False
+    left_version = str(left.get("provider_version") or "").strip()
+    right_version = str(right.get("provider_version") or "").strip()
+    return bool(left_version and right_version and left_version == right_version)
+
+
+def _artifact_evidence_strength(artifact: Mapping[str, Any]) -> tuple[int, int, int]:
+    operation_evidence = artifact.get("operation_evidence")
+    if not isinstance(operation_evidence, Mapping):
+        return (0, 0, 0)
+    max_rank = 0
+    pass_count = 0
+    operation_count = 0
+    for raw_evidence in operation_evidence.values():
+        if not isinstance(raw_evidence, Mapping):
+            continue
+        operation_count += 1
+        level = str(raw_evidence.get("level") or "none").strip()
+        max_rank = max(max_rank, _EVIDENCE_RANK.get(level, 0))
+        if raw_evidence.get("status") == "pass":
+            pass_count += 1
+    return (max_rank, pass_count, operation_count)
+
+
+def _verdict_rank(artifact: Mapping[str, Any]) -> int:
+    return _VERDICT_RANK.get(str(artifact.get("verdict") or "").lower(), -1)
+
+
+def _should_preserve_existing_artifact(
+    *,
+    provider: str,
+    existing: Mapping[str, Any] | None,
+    candidate: Mapping[str, Any],
+) -> bool:
+    if not existing or not _same_provider_version(existing, candidate, provider=provider):
+        return False
+    if str(candidate.get("verdict") or "").lower() == "red":
+        return False
+
+    existing_strength = _artifact_evidence_strength(existing)
+    candidate_strength = _artifact_evidence_strength(candidate)
+    if existing_strength > candidate_strength:
+        return True
+    return existing_strength == candidate_strength and _verdict_rank(existing) > _verdict_rank(candidate)
+
+
+def _publish_or_preserve_result(
+    *,
+    provider: str,
+    artifact: dict[str, Any],
+    artifact_path: Path,
+    stable_path: Path,
+    returncode: int | None,
+    used_fallback: bool = False,
+) -> dict[str, Any]:
+    existing = _read_artifact(stable_path)
+    if _should_preserve_existing_artifact(provider=provider, existing=existing, candidate=artifact):
+        preserved = dict(existing or {})
+        return {
+            "provider": provider,
+            "status": "preserved_existing",
+            "returncode": returncode,
+            "verdict": preserved.get("verdict"),
+            "failure_code": preserved.get("failure_code"),
+            "artifact_path": str(preserved.get("artifact_path") or stable_path),
+            "stable_path": str(stable_path),
+            "candidate_artifact_path": str(artifact.get("artifact_path") or artifact_path),
+            "candidate_verdict": artifact.get("verdict"),
+            "candidate_failure_code": artifact.get("failure_code"),
+        }
+    return _publish_result(
+        provider=provider,
+        artifact=artifact,
+        artifact_path=artifact_path,
+        stable_path=stable_path,
+        returncode=returncode,
+        used_fallback=used_fallback,
+    )
 
 
 def _run_canary_script(
@@ -265,7 +360,7 @@ def _publish_provider(args: argparse.Namespace, provider: str, run_timestamp: st
             artifact_path=artifact_path,
         )
 
-    return _publish_result(
+    return _publish_or_preserve_result(
         provider=provider,
         artifact=artifact,
         artifact_path=artifact_path,
@@ -325,6 +420,8 @@ def run_provider_live_proof_publish(args: argparse.Namespace | Mapping[str, Any]
 def publish_exit_code(payload: dict[str, Any]) -> int:
     for result in payload.get("results") or []:
         if result.get("status") == "published_fallback":
+            return 1
+        if result.get("verdict") == "red":
             return 1
         if result.get("returncode") not in (0, None):
             return 1
