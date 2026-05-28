@@ -1117,6 +1117,100 @@ def test_collect_local_health_degrades_for_provider_release_warning(monkeypatch,
     assert "provider_release_warning" in snapshot["reasons"]
 
 
+def test_collect_local_health_keeps_release_coverage_gap_advisory_when_live_proof_is_green(
+    monkeypatch,
+    tmp_path: Path,
+):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service,
+        "_collect_provider_clis",
+        lambda: {"claude": {"path": "/opt/homebrew/bin/claude", "source": "PATH"}},
+    )
+    monkeypatch.setattr(
+        local_health_service,
+        "collect_provider_release_status",
+        lambda provider_clis, *, fast: {
+            "schema_version": 1,
+            "enabled": True,
+            "blocking_count": 0,
+            "warning_count": 1,
+            "statuses": {
+                "claude": {
+                    "status": "caution",
+                    "risk": "warning",
+                    "verdict": "yellow",
+                    "failure_code": "insufficient_coverage",
+                    "current_version": "2.1.153 (Claude Code)",
+                    "artifact_version": "v2.1.153",
+                    "local_version_matches": True,
+                    "operation_evidence": {
+                        "launch_remote": {
+                            "status": "not_run",
+                            "source": "scheduled Claude release canary",
+                        }
+                    },
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(
+        local_health_service,
+        "collect_provider_live_proof",
+        lambda provider_clis, *, fast, base_dir: {
+            "schema_version": 1,
+            "enabled": True,
+            "statuses": {
+                "claude": {
+                    "status": "ok",
+                    "configured": True,
+                    "applies": True,
+                    "version_match": "match",
+                    "verdict": "green",
+                    "freshness_status": "fresh",
+                    "generated_at": "2026-05-28T00:00:00Z",
+                    "evidence_root": "/tmp/claude-live-proof",
+                }
+            },
+        },
+    )
+    _write_engine_status(
+        tmp_path,
+        age_seconds=5,
+        payload={
+            "control_channel": {
+                "status": "connected",
+                "supports": [
+                    "claude.send",
+                    "claude.interrupt",
+                    "claude.steer",
+                    "claude.launch",
+                ],
+            }
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    release = snapshot["provider_release_status"]["statuses"]["claude"]
+    claude_support = snapshot["provider_support_state"]["providers"]["claude"]
+    assert snapshot["health_state"] == "healthy"
+    assert snapshot["severity"] == "green"
+    assert "provider_release_warning" not in snapshot["reasons"]
+    assert snapshot["provider_release_status"]["warning_count"] == 0
+    assert snapshot["provider_release_status"]["advisory_count"] == 1
+    assert release["status"] == "caution_local_proven"
+    assert release["risk"] == "none"
+    assert release["local_live_proof_override"]["reason"] == "release_coverage_gap_locally_proven"
+    assert claude_support["state"] == "ready"
+    assert claude_support["version_readiness"]["state"] == "release_coverage_gap_locally_proven"
+    assert claude_support["proof"]["state"] == "mixed"
+    assert claude_support["proof"]["release_gap_operations"] == []
+    assert claude_support["operations"]["launch_remote"]["release_evidence"]["status"] == "advisory"
+    assert claude_support["operations"]["launch_remote"]["release_evidence"]["original_status"] == "not_run"
+
+
 def test_collect_local_health_projects_matching_provider_live_proof(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))

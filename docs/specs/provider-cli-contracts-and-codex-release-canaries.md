@@ -255,7 +255,11 @@ Initial product contract:
   default. Local-health reads those artifacts as operation proof only when the
   sidecar provider and normalized version match the installed provider CLI. This
   proof is additive to the support-state projection; it does not overwrite
-  Sauron's release verdict.
+  Sauron's release verdict. A fresh green local proof can demote a matching
+  `yellow/insufficient_coverage` release artifact to advisory-only
+  (`caution_local_proven`, risk `none`) so dogfood health stays focused on
+  machine-actionable failures. Operation-level gaps from that demoted artifact
+  are marked advisory in support state. Red release blockers remain blocking.
 - `scripts/qa/provider-release-profile-canary.py` emits the shared provider
   profile artifact for any managed provider in
   `server/zerg/config/managed_provider_contracts.json`.

@@ -32,13 +32,16 @@ shipping health. The control channel advertised:
 codex: send, interrupt, steer, launch, continue
 claude: send, interrupt, steer, launch
 opencode: send, interrupt, launch
-antigravity: send
+antigravity: -
 ```
 
 Provider release status is interpreted against the installed local version.
 Newer upstream artifacts remain visible as candidate release status, but do
 not degrade local health until the installed provider version matches the
-artifact or is newer than the newest reviewed artifact.
+artifact or is newer than the newest reviewed artifact. A fresh green local
+live-proof sidecar for the installed version demotes matching
+`yellow/insufficient_coverage` release artifacts to advisory-only; it never
+silences red release blockers.
 
 ## Control Plane Families
 
@@ -133,7 +136,12 @@ block?" Local proof artifacts answer "has this machine proven operation behavior
 for the installed CLI version?" A matching local proof artifact can raise or
 demote the operation evidence shown by local-health, but it cannot turn a
 Yellow/Red Sauron release verdict Green or satisfy the source-drift release
-gate by itself.
+gate by itself. The only health suppression rule is narrow:
+`yellow/insufficient_coverage` plus fresh green local proof becomes
+`caution_local_proven` with risk `none`; the raw Sauron verdict remains visible
+as an advisory. Operation-level release gaps from that artifact are also marked
+advisory so support-state proof does not report a release gap after the local
+machine has proven the installed version.
 
 ## Next Implementation Slices
 

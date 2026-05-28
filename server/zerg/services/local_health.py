@@ -34,6 +34,7 @@ from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PROCESS
 from zerg.provider_live_proof import collect_provider_live_proof
 from zerg.provider_release_status import collect_provider_release_status
+from zerg.provider_release_status import reconcile_provider_release_status_with_live_proof
 from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_log_dir
 from zerg.services.longhouse_paths import get_agent_outbox_dir
@@ -3570,8 +3571,11 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
     outbox = _collect_outbox(resolved_base_dir, now=now)
     provider_clis = _collect_provider_clis()
     provider_contracts = _collect_provider_contracts()
-    provider_release_status = collect_provider_release_status(provider_clis, fast=fast)
     provider_live_proof = collect_provider_live_proof(provider_clis, fast=fast, base_dir=resolved_base_dir)
+    provider_release_status = reconcile_provider_release_status_with_live_proof(
+        collect_provider_release_status(provider_clis, fast=fast),
+        provider_live_proof,
+    )
     activity_summary = _collect_activity_summary(resolved_base_dir, now=now)
     managed_summary, managed_sessions, orphan_bridges, unmanaged_processes = _collect_managed_session_sources(
         resolved_base_dir,
