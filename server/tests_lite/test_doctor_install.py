@@ -174,6 +174,10 @@ def test_check_provider_live_route_e2e_reports_green_artifact(monkeypatch):
             "provider_live_route_e2e": {
                 "status": "ok",
                 "providers": ["opencode"],
+                "coverage_status": "complete",
+                "expected_providers": ["opencode"],
+                "covered_providers": ["opencode"],
+                "missing_providers": [],
                 "freshness_status": "fresh",
                 "verdict": "green",
                 "failure_count": 0,
@@ -190,8 +194,38 @@ def test_check_provider_live_route_e2e_reports_green_artifact(monkeypatch):
     assert results[0].status == doctor_cli.PASS
     assert results[0].label == "Provider live route E2E ok"
     assert results[0].detail == (
-        "providers=opencode; freshness=fresh; verdict=green; failures=0; "
+        "providers=opencode; coverage=complete; expected=opencode; covered=opencode; "
+        "freshness=fresh; verdict=green; failures=0; "
         "engine=abc1234; device=cinder; evidence=/Users/test/.longhouse/provider-live-route-e2e/latest.json"
+    )
+
+
+def test_check_provider_live_route_e2e_warns_on_missing_coverage(monkeypatch):
+    monkeypatch.setattr(
+        "zerg.services.local_health.collect_local_health",
+        lambda: {
+            "provider_live_route_e2e": {
+                "status": "ok",
+                "providers": ["opencode"],
+                "coverage_status": "missing",
+                "expected_providers": ["claude", "opencode"],
+                "covered_providers": ["opencode"],
+                "missing_providers": ["claude"],
+                "freshness_status": "fresh",
+                "verdict": "green",
+                "failure_count": 0,
+            }
+        },
+    )
+
+    results = doctor_cli._check_provider_live_route_e2e()
+
+    assert len(results) == 1
+    assert results[0].status == doctor_cli.WARN
+    assert results[0].label == "Provider live route E2E coverage missing"
+    assert results[0].detail == (
+        "providers=opencode; coverage=missing; expected=claude, opencode; covered=opencode; "
+        "missing=claude; freshness=fresh; verdict=green; failures=0"
     )
 
 

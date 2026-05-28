@@ -49,7 +49,7 @@ class _Handler(BaseHTTPRequestHandler):
                         "device_id": "cinder",
                         "online": True,
                         "engine_build": "test-build",
-                        "supports": ["opencode.live_proof"],
+                        "supports": ["claude.live_proof", "opencode.live_proof"],
                     }
                 ]
             },
@@ -62,27 +62,29 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path != "/api/agents/machines/cinder/provider-live-proof":
             self._write_json(404, {"detail": "not found"})
             return
+        provider = body["provider"]
         expected = body["expected_provider_version"]
-        if expected == "1.15.11":
+        matched_versions = {"claude": "2.1.153", "opencode": "1.15.11"}
+        if expected == matched_versions.get(provider):
             self._write_json(
                 200,
                 {
                     "device_id": "cinder",
-                    "provider": "opencode",
+                    "provider": provider,
                     "command_id": "cmd-test",
                     "result": {
-                        "provider": "opencode",
+                        "provider": provider,
                         "transport": "provider_live_proof",
                         "artifact": {
                             "artifact_kind": "provider_live_canary",
-                            "provider": "opencode",
-                            "provider_version": "1.15.11",
+                            "provider": provider,
+                            "provider_version": expected,
                             "verdict": "green",
                         },
                         "provider_version_match": {
                             "status": "match",
                             "expected_provider_version": expected,
-                            "artifact_provider_version": "1.15.11",
+                            "artifact_provider_version": expected,
                         },
                     },
                 },
@@ -129,6 +131,17 @@ def _write_inputs(root: Path) -> tuple[Path, Path]:
         ),
         encoding="utf-8",
     )
+    (proof_dir / "claude.json").write_text(
+        json.dumps(
+            {
+                "artifact_kind": "provider_live_canary",
+                "provider": "claude",
+                "provider_version": "2.1.153",
+                "verdict": "green",
+            }
+        ),
+        encoding="utf-8",
+    )
     return token_file, proof_dir
 
 
@@ -148,8 +161,6 @@ def _run_harness(
             str(token_file),
             "--proof-dir",
             str(proof_dir),
-            "--provider",
-            "opencode",
             "--artifact",
             str(artifact),
             "--json",
@@ -174,10 +185,13 @@ def test_route_e2e_requires_match_and_typed_mismatch() -> None:
         assert result.returncode == 0, result.stderr + result.stdout
         assert payload["verdict"] == "green"
         assert payload["engine_build"] == "test-build"
-        assert payload["results"][0]["status"] == "pass"
-        assert [request["expected_provider_version"] for request in state.requests] == [
-            "1.15.11",
-            "9.9.9-longhouse-route-e2e",
+        assert [result["provider"] for result in payload["results"]] == ["claude", "opencode"]
+        assert [result["status"] for result in payload["results"]] == ["pass", "pass"]
+        assert [(request["provider"], request["expected_provider_version"]) for request in state.requests] == [
+            ("claude", "2.1.153"),
+            ("claude", "9.9.9-longhouse-route-e2e"),
+            ("opencode", "1.15.11"),
+            ("opencode", "9.9.9-longhouse-route-e2e"),
         ]
     finally:
         server.shutdown()

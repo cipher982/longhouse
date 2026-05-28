@@ -119,7 +119,10 @@ and typed `provider_version_mismatch` rejection. `make dogfood-refresh` writes
 the latest hosted-route proof to
 `~/.longhouse/provider-live-route-e2e/latest.json`; local-health and doctor read
 that sidecar as the durable evidence that hosted dispatch still works for this
-machine.
+machine. The default provider set is `auto`: every current valid
+`~/.longhouse/provider-live-proof/{provider}.json` sidecar is routed through the
+hosted machine API. Local-health reports coverage separately so a one-provider
+green route proof cannot masquerade as all-provider coverage.
 
 ### Coordination and directed messaging
 

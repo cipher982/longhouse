@@ -12,7 +12,7 @@ if [[ -n "${COMMAND}" ]]; then
   shift
 fi
 
-DEFAULT_ROUTE_E2E_PROVIDER="opencode"
+DEFAULT_ROUTE_E2E_PROVIDER="auto"
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 URL_OVERRIDE="${LONGHOUSE_DOGFOOD_URL:-}"
 MACHINE_NAME_OVERRIDE="${LONGHOUSE_DOGFOOD_MACHINE_NAME:-}"
@@ -39,7 +39,7 @@ resolve_longhouse_home() {
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/dev/dogfood-runtime.sh refresh [--url <url>] [--machine-name <name>] [--claude-dir <path>] [--no-menubar] [--skip-engine] [--skip-route-e2e] [--route-provider <provider|all>]
+  scripts/dev/dogfood-runtime.sh refresh [--url <url>] [--machine-name <name>] [--claude-dir <path>] [--no-menubar] [--skip-engine] [--skip-route-e2e] [--route-provider <auto|provider|all>]
   scripts/dev/dogfood-runtime.sh check [--claude-dir <path>]
 
 Purpose:
@@ -49,7 +49,7 @@ Purpose:
 Notes:
   - This is the dogfood loop for repo work. It installs into the actual local runtime.
   - DMG/drag-install is release transport only. Daily dogfooding should use this script.
-  - Refresh runs a no-token hosted provider-live route E2E after install unless --skip-route-e2e is set.
+  - Refresh runs a no-token hosted provider-live route E2E after install unless --skip-route-e2e is set. The default provider set is auto from current sidecars.
 EOF
 }
 
@@ -304,6 +304,7 @@ run_provider_live_route_e2e() {
   LONGHOUSE_PROVIDER_LIVE_PROOF_DIR="$PROVIDER_LIVE_PROOF_DIR" \
     python3 "$ROOT_DIR/scripts/qa/provider-live-route-e2e.py" \
       --provider "$ROUTE_E2E_PROVIDER" \
+      --require-verdict non-red \
       --artifact "$route_artifact" || status=$?
   cp -f "$route_artifact" "$repo_artifact" 2>/dev/null || true
   if (( status != 0 )); then
@@ -357,6 +358,9 @@ run_refresh() {
   run_check
   if (( SKIP_ROUTE_E2E == 0 )); then
     run_provider_live_route_e2e
+    log ""
+    log "==> Local health after provider-live route E2E"
+    run_repo_longhouse local-health
   fi
 }
 

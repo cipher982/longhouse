@@ -255,7 +255,12 @@ Initial product contract:
   provider sidecars live in `~/.longhouse/provider-live-proof/{provider}.json`;
   the hosted-route proof lives in
   `~/.longhouse/provider-live-route-e2e/latest.json` and is surfaced by
-  local-health and doctor as a separate signal. `make dogfood-check` only
+  local-health and doctor as a separate signal. The route harness defaults to
+  `auto`, selecting every current valid provider sidecar; local-health compares
+  route results against the current applying sidecars and reports missing
+  coverage separately from transport failure. Dogfood runs the route proof with
+  a non-red verdict threshold because yellow provider-readiness is still useful
+  route evidence and remains visible separately. `make dogfood-check` only
   reports the current sidecars. Reader precedence is explicit env, persisted
   provider-status config, then the Longhouse-home default. Local-health reads
   those artifacts as operation proof only when the sidecar provider and
