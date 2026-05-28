@@ -67,6 +67,12 @@ class MachineDirectoryResponse(UTCBaseModel):
 
 class ProviderLiveProofRequest(UTCBaseModel):
     provider: ProviderLiveProofProvider = Field(..., description="Provider CLI to prove on the target machine.")
+    expected_provider_version: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=120,
+        description="Optional release/version the returned provider-live artifact must prove.",
+    )
     run_live_token_contract: bool = Field(
         default=False,
         description="When true, spend provider/model calls to prove token-backed behavior.",

@@ -1160,6 +1160,7 @@ async fn run_provider_live_proof_command(
     };
     let timeout_secs =
         payload_optional_u64(payload, "timeout_secs", 1, 900).unwrap_or(default_timeout);
+    let expected_provider_version = payload_optional_string(payload, "expected_provider_version");
 
     let mut args = vec![
         "provider-live".to_string(),
@@ -1193,12 +1194,16 @@ async fn run_provider_live_proof_command(
     } else {
         payload_json.clone()
     };
+    let version_match =
+        provider_live_proof_version_match(expected_provider_version.as_deref(), &artifact)?;
 
     Ok(json!({
         "provider": provider,
         "transport": "provider_live_proof",
         "publish": publish,
         "run_live_token_contract": run_live_token_contract,
+        "expected_provider_version": expected_provider_version,
+        "provider_version_match": version_match,
         "exit_code": output.exit_code,
         "stderr": output.stderr,
         "payload": payload_json,
@@ -1239,6 +1244,93 @@ fn read_published_provider_live_artifact(
         code: "provider_live_proof_failed".to_string(),
         message: format!("provider live proof artifact {stable_path} is invalid JSON: {err}"),
     })
+}
+
+fn provider_live_proof_version_match(
+    expected_provider_version: Option<&str>,
+    artifact: &Value,
+) -> std::result::Result<Value, CommandError> {
+    let expected_raw = match expected_provider_version
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => value,
+        None => return Ok(json!({"status": "not_requested"})),
+    };
+    let artifact_raw = artifact
+        .get("provider_version")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim();
+    let normalized_expected = normalize_provider_version(expected_raw);
+    let normalized_artifact = normalize_provider_version(artifact_raw);
+    let matches = normalized_expected.is_some()
+        && normalized_artifact.is_some()
+        && normalized_expected == normalized_artifact;
+    let details = json!({
+        "status": if matches { "match" } else { "mismatch" },
+        "expected_provider_version": expected_raw,
+        "artifact_provider_version": artifact_raw,
+        "normalized_expected_provider_version": normalized_expected,
+        "normalized_artifact_provider_version": normalized_artifact,
+    });
+    if matches {
+        Ok(details)
+    } else {
+        Err(CommandError {
+            code: "provider_version_mismatch".to_string(),
+            message: format!(
+                "provider live proof version mismatch: expected {expected_raw}, artifact reported {}",
+                if artifact_raw.is_empty() { "<missing>" } else { artifact_raw }
+            ),
+        })
+    }
+}
+
+fn normalize_provider_version(raw: &str) -> Option<String> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let chars: Vec<char> = value.chars().collect();
+    for start in 0..chars.len() {
+        if !chars[start].is_ascii_digit() {
+            continue;
+        }
+        let mut idx = start;
+        let mut dot_count = 0;
+        while idx < chars.len() {
+            let ch = chars[idx];
+            if ch.is_ascii_digit() {
+                idx += 1;
+                continue;
+            }
+            if ch == '.' && idx + 1 < chars.len() && chars[idx + 1].is_ascii_digit() {
+                dot_count += 1;
+                idx += 1;
+                continue;
+            }
+            break;
+        }
+        if dot_count < 2 {
+            continue;
+        }
+        if idx < chars.len() && (chars[idx] == '-' || chars[idx] == '+') {
+            idx += 1;
+            while idx < chars.len()
+                && (chars[idx].is_ascii_alphanumeric() || matches!(chars[idx], '.' | '-' | '+'))
+            {
+                idx += 1;
+            }
+        }
+        return Some(
+            chars[start..idx]
+                .iter()
+                .collect::<String>()
+                .to_ascii_lowercase(),
+        );
+    }
+    Some(value.trim_start_matches('v').to_ascii_lowercase())
 }
 
 async fn launch_claude_channel_session(
@@ -2073,7 +2165,7 @@ mod tests {
         let stable_path = dir.join("claude.json");
         std::fs::write(
             &stable_path,
-            r#"{"artifact_kind":"provider_live_canary","provider":"claude","provider_version":"test","verdict":"green"}"#,
+            r#"{"artifact_kind":"provider_live_canary","provider":"claude","provider_version":"Claude Code 2.1.153","verdict":"green"}"#,
         )
         .unwrap();
         write_test_executable(
@@ -2099,6 +2191,7 @@ exit 0
                 "command_type": COMMAND_PROVIDER_LIVE_PROOF,
                 "payload": {
                     "provider": "claude",
+                    "expected_provider_version": "2.1.153",
                     "run_live_token_contract": true,
                     "live_token_timeout_secs": 17,
                     "timeout_secs": 30,
@@ -2128,6 +2221,14 @@ exit 0
         assert_eq!(result["result"]["provider"], "claude");
         assert_eq!(result["result"]["transport"], "provider_live_proof");
         assert_eq!(result["result"]["artifact"]["verdict"], "green");
+        assert_eq!(
+            result["result"]["provider_version_match"]["status"],
+            "match"
+        );
+        assert_eq!(
+            result["result"]["provider_version_match"]["normalized_expected_provider_version"],
+            "2.1.153"
+        );
         let args = std::fs::read_to_string(&args_path).unwrap();
         assert_eq!(
             args.lines().collect::<Vec<_>>(),
@@ -2142,6 +2243,72 @@ exit 0
                 "--run-live-token-contract",
             ]
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn provider_live_proof_rejects_expected_version_mismatch() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let unique = format!(
+            "lh-provider-live-proof-version-mismatch-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let dir = std::env::temp_dir().join(unique);
+        std::fs::create_dir_all(&dir).unwrap();
+        let stable_path = dir.join("claude.json");
+        std::fs::write(
+            &stable_path,
+            r#"{"artifact_kind":"provider_live_canary","provider":"claude","provider_version":"Claude Code 2.1.154","verdict":"green"}"#,
+        )
+        .unwrap();
+        write_test_executable(
+            &dir.join("longhouse"),
+            r#"#!/bin/sh
+printf '{"artifact_kind":"provider_live_proof_publish","results":[{"provider":"claude","stable_path":"%s","verdict":"green"}]}\n' "$LONGHOUSE_STABLE_ARTIFACT"
+exit 0
+"#,
+        );
+
+        let old_path = std::env::var_os("PATH");
+        let old_stable = std::env::var_os("LONGHOUSE_STABLE_ARTIFACT");
+        std::env::set_var("PATH", dir.as_os_str());
+        std::env::set_var("LONGHOUSE_STABLE_ARTIFACT", stable_path.as_os_str());
+        let mut cache = command_cache();
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-provider-live-proof-version-mismatch",
+                "command_type": COMMAND_PROVIDER_LIVE_PROOF,
+                "payload": {
+                    "provider": "claude",
+                    "expected_provider_version": "2.1.153",
+                },
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+        if let Some(value) = old_path {
+            std::env::set_var("PATH", value);
+        } else {
+            std::env::remove_var("PATH");
+        }
+        if let Some(value) = old_stable {
+            std::env::set_var("LONGHOUSE_STABLE_ARTIFACT", value);
+        } else {
+            std::env::remove_var("LONGHOUSE_STABLE_ARTIFACT");
+        }
+
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"]["code"], "provider_version_mismatch");
+        assert!(result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("expected 2.1.153"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

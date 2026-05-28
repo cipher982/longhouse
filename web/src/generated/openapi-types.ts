@@ -7168,6 +7168,11 @@ export interface components {
              */
             provider: "codex" | "claude" | "opencode" | "antigravity";
             /**
+             * Expected Provider Version
+             * @description Optional release/version the returned provider-live artifact must prove.
+             */
+            expected_provider_version?: string | null;
+            /**
              * Run Live Token Contract
              * @description When true, spend provider/model calls to prove token-backed behavior.
              * @default false
