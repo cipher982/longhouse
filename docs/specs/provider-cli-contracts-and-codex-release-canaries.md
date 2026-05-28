@@ -283,13 +283,13 @@ Initial product contract:
 - `longhouse provider-live canary --provider opencode` probes the installed
   upstream OpenCode server contract without executing a prompt: binary version,
   server readiness, `/doc` schema, zero-token session create/get,
-  `prompt_async` noReply delivery through `session.messages`, abort, and attach
-  command shape. `--run-live-token-contract` spends small model calls to prove
-  assistant response execution, transcript binding, and abort during an
-  in-flight message turn. The artifact remains Yellow until future live-token
-  evidence also proves process-restart reattach; there is no scheduled
-  OpenCode token-spending lane until we explicitly add a budgeted Sauron/CI
-  job.
+  `prompt_async` noReply delivery through `session.messages`, process-restart
+  session recovery, abort, and attach command shape. `--run-live-token-contract`
+  spends small model calls to prove assistant response execution, transcript
+  binding, and abort during an in-flight message turn. The default publisher
+  remains no-token and Yellow; the explicit live-token lane can go Green for
+  the upstream OpenCode server contract, but there is no scheduled OpenCode
+  token-spending lane until we explicitly add a budgeted Sauron/CI job.
 - Runtime Host and local-health may cache it and expose:
   - provider
   - upstream version

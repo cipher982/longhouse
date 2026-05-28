@@ -42,8 +42,8 @@ _ANTIGRAVITY_HOOK_EVENTS = ("PreInvocation", "PreToolUse", "PostToolUse", "PostI
 _GAP_OPERATION_STATUSES = {"fail", "missing", "not_run", "skipped", "stale"}
 _OPENCODE_REATTACH_MESSAGE = " ".join(
     (
-        "API-surface proof: attach command exposes session and auth flags;",
-        "process-restart reattach is future proof.",
+        "Process-restart proof: a fresh OpenCode server recovered",
+        "the created provider session and marker transcript.",
     )
 )
 _OPENCODE_PROMPT_ASYNC_MESSAGE = " ".join(
@@ -94,6 +94,18 @@ def _default_evidence_root(repo_root: Path, provider: str, timestamp: str) -> Pa
     if source_root is not None and repo_root.resolve() == source_root.resolve():
         return repo_root / ".build/canaries/provider-live" / provider / timestamp
     return resolve_longhouse_home() / "canaries/provider-live" / provider / timestamp
+
+
+def _reserve_default_evidence_root(path: Path) -> Path:
+    candidate = path
+    suffix = 0
+    while True:
+        try:
+            candidate.mkdir(parents=True, exist_ok=False)
+            return candidate
+        except FileExistsError:
+            suffix += 1
+            candidate = path.with_name(f"{path.name}-{suffix}")
 
 
 def _now_iso() -> str:
@@ -300,16 +312,29 @@ def _opencode_operation_evidence(
     if launch_local:
         evidence["launch_local"] = launch_local
 
-    reattach = _entry_from_canary_group(
-        contract,
-        "reattach",
-        canaries=canaries,
-        required=["binary_identity", "attach_command_shape"],
-        canary_name="opencode_attach_surface",
-        message=_OPENCODE_REATTACH_MESSAGE,
-    )
-    if reattach:
-        evidence["reattach"] = reattach
+    if (canaries.get("process_restart_reattach_contract") or {}).get("status") in {"pass", "fail", "warn"}:
+        reattach = _entry_from_canary_group(
+            contract,
+            "reattach",
+            canaries=canaries,
+            required=["binary_identity", "attach_command_shape", "process_restart_reattach_contract"],
+            canary_name="opencode_process_restart_reattach_contract",
+            level="live_no_token",
+            message=_OPENCODE_REATTACH_MESSAGE,
+        )
+        if reattach:
+            evidence["reattach"] = reattach
+    else:
+        reattach = _entry_from_canary_group(
+            contract,
+            "reattach",
+            canaries=canaries,
+            required=["binary_identity", "attach_command_shape"],
+            canary_name="opencode_attach_surface",
+            message="API-surface proof: attach command exposes session and auth flags.",
+        )
+        if reattach:
+            evidence["reattach"] = reattach
 
     prompt_failure = _schema_probe_failed_for(canaries, "/session/{sessionID}/message", "session.prompt")
     prompt_async_failure = _schema_probe_failed_for(
@@ -352,7 +377,7 @@ def _opencode_operation_evidence(
             level="manual_live_token",
             source="longhouse provider-live canary --provider opencode --run-live-token-contract",
             message=_OPENCODE_ASSISTANT_RESPONSE_MESSAGE,
-            next_note="promote with future live-token process-restart reattach canary",
+            next_note="promote with a scheduled/budgeted live-token release lane",
         )
         if assistant_send:
             evidence["send_input"] = assistant_send
@@ -365,7 +390,7 @@ def _opencode_operation_evidence(
             level="manual_live_token",
             source="longhouse provider-live canary --provider opencode --run-live-token-contract",
             message="Live-token proof: assistant response marker was visible through session.messages.",
-            next_note="promote with future live-token process-restart reattach canary",
+            next_note="promote with a scheduled/budgeted live-token release lane",
         )
         if transcript_binding:
             evidence["transcript_binding"] = transcript_binding
@@ -402,7 +427,7 @@ def _opencode_operation_evidence(
             level="manual_live_token",
             source="longhouse provider-live canary --provider opencode --run-live-token-contract",
             message=_OPENCODE_ACTIVE_ABORT_MESSAGE,
-            next_note="promote with future live-token process-restart reattach canary",
+            next_note="promote with a scheduled/budgeted live-token release lane",
         )
         if interrupt:
             evidence["interrupt"] = interrupt
@@ -958,6 +983,198 @@ def _run_opencode_assistant_response_contract(
         observed_message_count=len(messages) if isinstance(messages, list) else None,
         message_marker_sha256=hashlib.sha256(marker.encode("utf-8")).hexdigest(),
         elapsed_ms=int((time.monotonic() - started) * 1000),
+    )
+
+
+def _start_opencode_server_process(
+    *,
+    binary: str,
+    workspace: Path,
+    env: dict[str, str],
+    log_path: Path,
+    wait_ready_secs: float,
+) -> tuple[subprocess.Popen[str], str]:
+    cmd = [binary, "serve", "--hostname", "127.0.0.1", "--port", "0", "--pure"]
+    with log_path.open("w", encoding="utf-8") as log_file:
+        process = subprocess.Popen(
+            cmd,
+            cwd=str(workspace),
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+        )
+    try:
+        server_url = _wait_for_opencode_server_url(log_path, process, timeout_secs=wait_ready_secs)
+    except Exception:
+        _stop_process_group(process)
+        raise
+    return process, server_url
+
+
+def _run_opencode_process_restart_reattach_contract(
+    *,
+    binary: str,
+    env: dict[str, str],
+    process: subprocess.Popen[str],
+    server_url: str,
+    username: str,
+    password: str,
+    provider_session_id: str,
+    workspace: Path,
+    restart_log_path: Path,
+    wait_ready_secs: float,
+) -> tuple[dict[str, Any], subprocess.Popen[str] | None, str]:
+    started = time.monotonic()
+    marker = f"LONGHOUSE_OPENCODE_REATTACH_{secrets.token_hex(16)}"
+    try:
+        _request_json(
+            server_url=server_url,
+            username=username,
+            password=password,
+            method="POST",
+            path=f"/session/{urllib.parse.quote(provider_session_id, safe='')}/prompt_async",
+            query={"directory": str(workspace)},
+            payload={"noReply": True, "parts": [{"type": "text", "text": marker}]},
+        )
+    except RuntimeError as exc:
+        return (
+            _fail(
+                "opencode_reattach_marker_request_failed",
+                f"OpenCode prompt_async marker request failed before restart reattach proof: {exc}",
+                provider_session_id=provider_session_id,
+                elapsed_ms=int((time.monotonic() - started) * 1000),
+            ),
+            process,
+            server_url,
+        )
+
+    user_message_ids, poll_attempts, transcript_error = _wait_for_user_message_marker(
+        server_url=server_url,
+        username=username,
+        password=password,
+        provider_session_id=provider_session_id,
+        workspace=workspace,
+        marker=marker,
+        timeout_secs=8,
+    )
+    if not user_message_ids:
+        return (
+            _fail(
+                "opencode_reattach_marker_not_observed_before_restart",
+                "OpenCode did not expose the marker before restart, so reattach recovery could not be proven.",
+                provider_session_id=provider_session_id,
+                poll_attempts=poll_attempts,
+                transcript_error=transcript_error,
+                message_marker_sha256=hashlib.sha256(marker.encode("utf-8")).hexdigest(),
+                elapsed_ms=int((time.monotonic() - started) * 1000),
+            ),
+            process,
+            server_url,
+        )
+
+    _stop_process_group(process)
+    process = None
+    try:
+        process, restarted_server_url = _start_opencode_server_process(
+            binary=binary,
+            workspace=workspace,
+            env=env,
+            log_path=restart_log_path,
+            wait_ready_secs=wait_ready_secs,
+        )
+        health = _request_json(
+            server_url=restarted_server_url,
+            username=username,
+            password=password,
+            method="GET",
+            path="/global/health",
+        )
+        if not isinstance(health, dict) or health.get("healthy") is not True:
+            return (
+                _fail(
+                    "opencode_reattach_health_not_ready",
+                    "Restarted OpenCode server health check did not report healthy.",
+                    provider_session_id=provider_session_id,
+                    health=health,
+                    restarted_server_url=restarted_server_url,
+                    elapsed_ms=int((time.monotonic() - started) * 1000),
+                ),
+                process,
+                restarted_server_url,
+            )
+        fetched_session = _request_json(
+            server_url=restarted_server_url,
+            username=username,
+            password=password,
+            method="GET",
+            path=f"/session/{urllib.parse.quote(provider_session_id, safe='')}",
+        )
+        if not isinstance(fetched_session, dict) or fetched_session.get("id") != provider_session_id:
+            return (
+                _fail(
+                    "opencode_reattach_session_get_mismatch",
+                    "Restarted OpenCode server did not recover the created provider session.",
+                    provider_session_id=provider_session_id,
+                    session=fetched_session,
+                    restarted_server_url=restarted_server_url,
+                    elapsed_ms=int((time.monotonic() - started) * 1000),
+                ),
+                process,
+                restarted_server_url,
+            )
+        messages = _request_json(
+            server_url=restarted_server_url,
+            username=username,
+            password=password,
+            method="GET",
+            path=f"/session/{urllib.parse.quote(provider_session_id, safe='')}/message",
+            query={"directory": str(workspace), "limit": "20"},
+        )
+    except (RuntimeError, TimeoutError, OSError) as exc:
+        return (
+            _fail(
+                "opencode_process_restart_reattach_failed",
+                f"OpenCode process-restart reattach proof failed: {exc}",
+                provider_session_id=provider_session_id,
+                restarted_server_log_path=str(restart_log_path),
+                restarted_server_log_tail=_tail_text(restart_log_path),
+                elapsed_ms=int((time.monotonic() - started) * 1000),
+            ),
+            process,
+            server_url,
+        )
+
+    if not _messages_contain_text(messages, marker):
+        return (
+            _fail(
+                "opencode_reattach_transcript_marker_missing",
+                "Restarted OpenCode server recovered the session but not the marker transcript.",
+                provider_session_id=provider_session_id,
+                observed_message_count=len(messages) if isinstance(messages, list) else None,
+                message_marker_sha256=hashlib.sha256(marker.encode("utf-8")).hexdigest(),
+                restarted_server_url=restarted_server_url,
+                elapsed_ms=int((time.monotonic() - started) * 1000),
+            ),
+            process,
+            restarted_server_url,
+        )
+
+    return (
+        _status(
+            "pass",
+            provider_session_id=provider_session_id,
+            restarted_server_url=restarted_server_url,
+            restarted_server_log_path=str(restart_log_path),
+            observed_message_count=len(messages) if isinstance(messages, list) else None,
+            message_marker_sha256=hashlib.sha256(marker.encode("utf-8")).hexdigest(),
+            pre_restart_poll_attempts=poll_attempts,
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+        ),
+        process,
+        restarted_server_url,
     )
 
 
@@ -1584,6 +1801,7 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
     workspace = root / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
     log_path = root / "opencode-server.log"
+    restart_log_path = root / "opencode-server-restart.log"
     doc_summary_path = root / "opencode-doc-paths.json"
     username = "opencode"
     password = secrets.token_urlsafe(24)
@@ -1597,19 +1815,13 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
         "attach_command_shape": _run_attach_shape(binary),
     }
     try:
-        cmd = [binary, "serve", "--hostname", "127.0.0.1", "--port", "0", "--pure"]
-        with log_path.open("w", encoding="utf-8") as log_file:
-            process = subprocess.Popen(
-                cmd,
-                cwd=str(workspace),
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=log_file,
-                stderr=subprocess.STDOUT,
-                text=True,
-                start_new_session=True,
-            )
-        server_url = _wait_for_opencode_server_url(log_path, process, timeout_secs=args.wait_ready_secs)
+        process, server_url = _start_opencode_server_process(
+            binary=binary,
+            workspace=workspace,
+            env=env,
+            log_path=log_path,
+            wait_ready_secs=args.wait_ready_secs,
+        )
 
         health = _request_json(
             server_url=server_url,
@@ -1737,6 +1949,27 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
         if canaries["prompt_async_no_reply_delivery"]["status"] != "pass":
             return {"provider": "opencode", "provider_version": version, "canaries": canaries}
 
+        (
+            canaries["process_restart_reattach_contract"],
+            restarted_process,
+            restarted_server_url,
+        ) = _run_opencode_process_restart_reattach_contract(
+            binary=binary,
+            env=env,
+            process=process,
+            server_url=server_url,
+            username=username,
+            password=password,
+            provider_session_id=provider_session_id,
+            workspace=workspace,
+            restart_log_path=restart_log_path,
+            wait_ready_secs=args.wait_ready_secs,
+        )
+        process = restarted_process
+        server_url = restarted_server_url
+        if canaries["process_restart_reattach_contract"]["status"] != "pass":
+            return {"provider": "opencode", "provider_version": version, "canaries": canaries}
+
         if bool(getattr(args, "run_live_token_contract", False)):
             canaries["assistant_response_contract"] = _run_opencode_assistant_response_contract(
                 server_url=server_url,
@@ -1802,15 +2035,14 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
                 canary="assistant_response_contract",
                 reason="Live-token assistant response execution and transcript binding passed.",
             )
-            canaries["process_restart_reattach_contract"] = _status(
-                "not_run",
-                reason="Future live-token evidence still must prove process-restart reattach.",
-            )
+            active_abort_pass = canaries.get("active_turn_abort_contract", {}).get("status") == "pass"
+            process_restart_pass = canaries.get("process_restart_reattach_contract", {}).get("status") == "pass"
             canaries["active_turn_abort_and_reattach_contract"] = _status(
-                "not_run",
+                "pass" if active_abort_pass and process_restart_pass else "not_run",
                 reason=(
-                    "Active-turn abort is tracked separately by active_turn_abort_contract; "
-                    "process-restart reattach remains future proof."
+                    "Live-token assistant response, active-turn abort, and process-restart reattach passed."
+                    if active_abort_pass and process_restart_pass
+                    else "Future proof still must cover active-turn abort and process-restart reattach."
                 ),
             )
         else:
@@ -1818,8 +2050,8 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
                 "not_run",
                 reason=(
                     "OpenCode no-token live canary proves prompt_async noReply delivery into session.messages; "
-                    "pass --run-live-token-contract to prove assistant response execution and transcript binding. "
-                    "Remaining future proof must cover active-turn abort and process-restart reattach."
+                    "process-restart reattach is also proven without tokens. Pass --run-live-token-contract "
+                    "to prove assistant response execution, transcript binding, and active-turn abort."
                 ),
             )
         return {"provider": "opencode", "provider_version": version, "canaries": canaries}
@@ -1933,9 +2165,12 @@ def run_provider_live_canary(args: argparse.Namespace | Mapping[str, Any]) -> di
     if not hasattr(args, "live_token_timeout_secs"):
         args.live_token_timeout_secs = 120
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    evidence_root = args.evidence_root or _default_evidence_root(args.repo_root, args.provider, timestamp)
+    if args.evidence_root is None:
+        evidence_root = _reserve_default_evidence_root(_default_evidence_root(args.repo_root, args.provider, timestamp))
+    else:
+        evidence_root = args.evidence_root
+        evidence_root.mkdir(parents=True, exist_ok=True)
     artifact_path = args.artifact or evidence_root / "provider-live-canary.json"
-    evidence_root.mkdir(parents=True, exist_ok=True)
 
     provider_result = run_provider(args, evidence_root)
     canaries = provider_result["canaries"]

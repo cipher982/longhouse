@@ -174,18 +174,18 @@
         },
         "reattach": {
           "level": "live_no_token",
-          "source": "longhouse provider-live canary OpenCode attach command shape",
-          "next": "prove attach to created provider session id"
+          "source": "longhouse provider-live canary OpenCode process-restart session recovery plus attach command shape",
+          "next": "promote with a scheduled/budgeted live-token release lane"
         },
         "send_input": {
           "level": "live_no_token",
           "source": "longhouse provider-live canary OpenCode prompt_async noReply delivery observed through session.messages",
-          "next": "manual proof exists via --run-live-token-contract; promote with future process-restart reattach canary"
+          "next": "manual assistant-response proof exists via --run-live-token-contract; promote with a scheduled/budgeted live-token release lane"
         },
         "interrupt": {
           "level": "live_no_token",
           "source": "longhouse provider-live canary OpenCode abort endpoint check",
-          "next": "manual live-token proof exists via --run-live-token-contract; promote with future process-restart reattach canary"
+          "next": "manual active-turn abort proof exists via --run-live-token-contract; promote with a scheduled/budgeted live-token release lane"
         },
         "steer_active_turn": {
           "level": "none",
