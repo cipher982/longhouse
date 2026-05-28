@@ -1585,19 +1585,25 @@ def _claude_live_token_contract_placeholders() -> dict[str, dict[str, Any]]:
         "Pass --run-live-token-contract to launch real managed Claude, inject through the channel, "
         "and prove provider execution plus active-turn steer."
     )
+    idle_reason = " ".join(
+        (
+            "Idle steer rejection is covered by hermetic Runtime Host tests;",
+            "live provider canary coverage is future work.",
+        )
+    )
+    interrupt_reason = " ".join(
+        (
+            "Claude interrupt is covered by hermetic channel/process tests;",
+            "live provider canary coverage is future work.",
+        )
+    )
     return {
         "managed_channel_launch_contract": _status("not_run", reason=reason),
         "channel_prompt_delivery_contract": _status("not_run", reason=reason),
         "provider_execution_contract": _status("not_run", reason=reason),
         "active_turn_steer_contract": _status("not_run", reason=reason),
-        "idle_steer_rejection_contract": _status(
-            "not_run",
-            reason=("Idle steer rejection is covered by hermetic Runtime Host tests; " "live provider canary coverage is future work."),
-        ),
-        "interrupt_contract": _status(
-            "not_run",
-            reason=("Claude interrupt is covered by hermetic channel/process tests; " "live provider canary coverage is future work."),
-        ),
+        "idle_steer_rejection_contract": _status("not_run", reason=idle_reason),
+        "interrupt_contract": _status("not_run", reason=interrupt_reason),
     }
 
 
@@ -1612,8 +1618,10 @@ def _claude_terminal_diagnostic_hint(summary: dict[str, Any]) -> str | None:
 
 
 def _claude_summary_evidence(summary: dict[str, Any]) -> dict[str, Any]:
+    terminal_log = summary.get("terminal_log")
+    summary_path = str(Path(str(terminal_log)).with_name("summary.json")) if terminal_log else None
     fields = {
-        "summary_path": str(Path(str(summary.get("terminal_log"))).with_name("summary.json")) if summary.get("terminal_log") else None,
+        "summary_path": summary_path,
         "terminal_log": summary.get("terminal_log"),
         "events_path": summary.get("events_path"),
         "session_id": summary.get("session_id"),
