@@ -192,8 +192,10 @@ machine has proven the installed version.
    calls and proves assistant response execution, transcript binding, and abort
    during an in-flight message turn. The default publisher remains no-token and
    can go Green for the no-token tier; the explicit live-token lane proves the
-   upstream OpenCode server contract, but no scheduled OpenCode token-spending
-   lane exists until we add an explicit budgeted Sauron/CI job.
+   upstream OpenCode server contract. Sauron release automation can request the
+   token-spending OpenCode lane with
+   `AGENT_RELEASE_OPENCODE_LIVE_TOKEN_CONTRACT=1`; it stays off by default so
+   scheduled spend is deliberate.
 4. Keep the Antigravity live-token lane green for send: real `agy`
    version/help/plugin validate/install/list, Longhouse global-hook config,
    and loop-level hook behavior against the upstream runtime.
