@@ -197,3 +197,235 @@ def test_support_state_promotes_operation_proof_from_release_evidence() -> None:
     assert steer["target_evidence_level"] == "manual_live_token"
     assert steer["evidence_level"] == "scheduled_live_token"
     assert steer["evidence_state"] == "release_proven"
+
+
+def test_support_state_promotes_matching_local_live_proof_without_release_artifact() -> None:
+    support = collect_provider_support_state(
+        provider_clis={"claude": {"path": "/Users/test/.local/bin/claude", "source": "PATH"}},
+        provider_release_status={"statuses": {"claude": {"status": "no_artifact", "risk": "none"}}},
+        provider_live_proof={
+            "statuses": {
+                "claude": {
+                    "status": "ok",
+                    "applies": True,
+                    "version_match": "match",
+                    "current_version": "Claude Code 2.1.153",
+                    "artifact_version": "2.1.153",
+                    "operation_evidence": {
+                        "steer_active_turn": {
+                            "status": "pass",
+                            "level": "scheduled_live_token",
+                            "source": "local provider-live-canary",
+                            "canary": "claude_live_token_contract",
+                        }
+                    },
+                }
+            }
+        },
+        control_channel={
+            "status": "connected",
+            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "launch"]},
+        },
+    )
+
+    claude = support["providers"]["claude"]
+    steer = claude["operations"]["steer_active_turn"]
+    assert claude["version_readiness"]["state"] == "no_artifact"
+    assert claude["live_proof"]["applies"] is True
+    assert steer["evidence_level"] == "scheduled_live_token"
+    assert steer["evidence_origin"] == "local_proof"
+    assert steer["evidence_state"] == "local_proof_proven"
+    assert steer["local_proof_evidence"]["canary"] == "claude_live_token_contract"
+
+
+def test_support_state_does_not_promote_mismatched_local_live_proof() -> None:
+    support = collect_provider_support_state(
+        provider_clis={"claude": {"path": "/Users/test/.local/bin/claude", "source": "PATH"}},
+        provider_release_status={"statuses": {"claude": {"status": "no_artifact", "risk": "none"}}},
+        provider_live_proof={
+            "statuses": {
+                "claude": {
+                    "status": "version_mismatch",
+                    "applies": False,
+                    "version_match": "mismatch",
+                    "current_version": "Claude Code 2.1.154",
+                    "artifact_version": "2.1.153",
+                    "operation_evidence": {
+                        "steer_active_turn": {
+                            "status": "pass",
+                            "level": "scheduled_live_token",
+                            "source": "stale local provider-live-canary",
+                        }
+                    },
+                }
+            }
+        },
+        control_channel={
+            "status": "connected",
+            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "launch"]},
+        },
+    )
+
+    claude = support["providers"]["claude"]
+    steer = claude["operations"]["steer_active_turn"]
+    assert claude["live_proof"]["applies"] is False
+    assert steer["evidence_level"] == "manual_live_token"
+    assert steer["evidence_origin"] == "manifest"
+    assert steer["local_proof_evidence"]["level"] == "scheduled_live_token"
+
+
+def test_support_state_keeps_stronger_passing_release_proof_over_local_live_proof() -> None:
+    support = collect_provider_support_state(
+        provider_clis={"claude": {"path": "/Users/test/.local/bin/claude", "source": "PATH"}},
+        provider_release_status={
+            "statuses": {
+                "claude": {
+                    "status": "ok",
+                    "risk": "none",
+                    "operation_evidence": {
+                        "steer_active_turn": {
+                            "status": "pass",
+                            "level": "scheduled_live_token",
+                            "source": "scheduled release canary",
+                        }
+                    },
+                }
+            }
+        },
+        provider_live_proof={
+            "statuses": {
+                "claude": {
+                    "status": "ok",
+                    "applies": True,
+                    "version_match": "match",
+                    "operation_evidence": {
+                        "steer_active_turn": {
+                            "status": "pass",
+                            "level": "live_no_token",
+                            "source": "local no-token canary",
+                        }
+                    },
+                }
+            }
+        },
+        control_channel={
+            "status": "connected",
+            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "launch"]},
+        },
+    )
+
+    steer = support["providers"]["claude"]["operations"]["steer_active_turn"]
+    assert steer["evidence_level"] == "scheduled_live_token"
+    assert steer["evidence_origin"] == "release"
+    assert steer["local_proof_evidence"]["level"] == "live_no_token"
+
+
+def test_support_state_promotes_stronger_passing_local_live_proof_over_release_proof() -> None:
+    support = collect_provider_support_state(
+        provider_clis={"opencode": {"path": "/opt/homebrew/bin/opencode", "source": "PATH"}},
+        provider_release_status={
+            "statuses": {
+                "opencode": {
+                    "status": "ok",
+                    "risk": "none",
+                    "operation_evidence": {
+                        "send_input": {
+                            "status": "pass",
+                            "level": "hermetic",
+                            "source": "hermetic release contract",
+                        }
+                    },
+                }
+            }
+        },
+        provider_live_proof={
+            "statuses": {
+                "opencode": {
+                    "status": "ok",
+                    "applies": True,
+                    "version_match": "match",
+                    "operation_evidence": {
+                        "send_input": {
+                            "status": "pass",
+                            "level": "live_no_token",
+                            "source": "local provider-live-canary",
+                        }
+                    },
+                }
+            }
+        },
+        control_channel={
+            "status": "connected",
+            "control_operations_by_provider": {"opencode": ["send", "interrupt", "launch"]},
+        },
+    )
+
+    send = support["providers"]["opencode"]["operations"]["send_input"]
+    assert send["evidence_level"] == "live_no_token"
+    assert send["evidence_origin"] == "local_proof"
+    assert send["release_evidence"]["level"] == "hermetic"
+
+
+def test_support_state_demotes_failed_matching_local_live_proof() -> None:
+    support = collect_provider_support_state(
+        provider_clis={"opencode": {"path": "/opt/homebrew/bin/opencode", "source": "PATH"}},
+        provider_release_status={"statuses": {"opencode": {"status": "ok", "risk": "none"}}},
+        provider_live_proof={
+            "statuses": {
+                "opencode": {
+                    "status": "ok",
+                    "applies": True,
+                    "version_match": "match",
+                    "operation_evidence": {
+                        "send_input": {
+                            "status": "fail",
+                            "level": "none",
+                            "source": "local prompt_async canary",
+                            "failure_code": "prompt_async_failed",
+                        }
+                    },
+                }
+            }
+        },
+        control_channel={
+            "status": "connected",
+            "control_operations_by_provider": {"opencode": ["send", "interrupt", "launch"]},
+        },
+    )
+
+    opencode = support["providers"]["opencode"]
+    send = opencode["operations"]["send_input"]
+    assert opencode["state"] == "needs_attention"
+    assert opencode["proof"]["state"] == "local_proof_failed"
+    assert opencode["proof"]["local_proof_failed_operations"] == ["send_input"]
+    assert send["evidence_level"] == "none"
+    assert send["evidence_origin"] == "local_proof"
+    assert send["evidence_state"] == "local_proof_failed"
+
+
+def test_support_state_surfaces_red_matching_local_live_proof_without_operation_evidence() -> None:
+    support = collect_provider_support_state(
+        provider_clis={"claude": {"path": "/Users/test/.local/bin/claude", "source": "PATH"}},
+        provider_release_status={"statuses": {"claude": {"status": "ok", "risk": "none"}}},
+        provider_live_proof={
+            "statuses": {
+                "claude": {
+                    "status": "ok",
+                    "applies": True,
+                    "version_match": "match",
+                    "verdict": "red",
+                    "failure_code": "provider_version_failed",
+                    "operation_evidence": {},
+                }
+            }
+        },
+        control_channel={
+            "status": "connected",
+            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "launch"]},
+        },
+    )
+
+    claude = support["providers"]["claude"]
+    assert claude["state"] == "needs_attention"
+    assert claude["proof"]["state"] == "local_proof_failed"
+    assert claude["proof"]["local_proof_verdict_failed"] is True

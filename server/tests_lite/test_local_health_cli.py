@@ -22,6 +22,7 @@ os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg import managed_phase_contract
+from zerg import provider_live_proof
 from zerg import provider_release_status
 from zerg.cli import local_health as local_health_cli
 from zerg.cli import local_health_fast
@@ -263,6 +264,10 @@ def _contract_tool_name(case: managed_phase_contract.ManagedPhaseDefinition) -> 
 
 def _disable_real_runner_env(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(local_health_service, "_candidate_runner_env_paths", lambda: [tmp_path / "missing-runner.env"])
+    monkeypatch.setenv(
+        provider_release_status.PROVIDER_RELEASE_STATUS_CONFIG_FILE_ENV,
+        str(tmp_path / "missing-provider-status.env"),
+    )
     for env_name in (
         local_health_service.CODEX_BIN_ENV,
         local_health_service.OPENCODE_BIN_ENV,
@@ -271,6 +276,7 @@ def _disable_real_runner_env(monkeypatch, tmp_path: Path) -> None:
         provider_release_status.CODEX_RELEASE_STATUS_URL_ENV,
         provider_release_status.PROVIDER_RELEASE_STATUS_DIR_ENV,
         provider_release_status.PROVIDER_RELEASE_STATUS_URL_ENV,
+        provider_release_status.PROVIDER_LIVE_PROOF_DIR_ENV,
     ):
         monkeypatch.delenv(env_name, raising=False)
     # Stub the live process scan by default so tests don't pick up the dev
@@ -1106,6 +1112,54 @@ def test_collect_local_health_degrades_for_provider_release_warning(monkeypatch,
     assert snapshot["severity"] == "yellow"
     assert snapshot["headline"] == "Provider release status needs attention"
     assert "provider_release_warning" in snapshot["reasons"]
+
+
+def test_collect_local_health_projects_matching_provider_live_proof(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service,
+        "_collect_provider_clis",
+        lambda: {"claude": {"path": "/opt/homebrew/bin/claude", "source": "PATH"}},
+    )
+    monkeypatch.setattr(
+        provider_live_proof,
+        "_provider_version_from_cli",
+        lambda path: ("Claude Code 2.1.153\n", None),
+    )
+    _write_engine_status(tmp_path, age_seconds=5)
+    proof_dir = tmp_path / "provider-live-proof"
+    proof_dir.mkdir()
+    (proof_dir / "claude.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "artifact_kind": "provider_live_canary",
+                "provider": "claude",
+                "provider_version": "2.1.153",
+                "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "verdict": "green",
+                "operation_evidence": {
+                    "steer_active_turn": {
+                        "status": "pass",
+                        "level": "scheduled_live_token",
+                        "source": "local provider-live-canary",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(provider_release_status.PROVIDER_LIVE_PROOF_DIR_ENV, str(proof_dir))
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["provider_live_proof"]["statuses"]["claude"]["status"] == "ok"
+    claude = snapshot["provider_support_state"]["providers"]["claude"]
+    assert claude["live_proof"]["applies"] is True
+    steer = claude["operations"]["steer_active_turn"]
+    assert steer["evidence_origin"] == "local_proof"
+    assert steer["evidence_level"] == "scheduled_live_token"
 
 
 def test_collect_local_health_surfaces_opencode_provider_cli(monkeypatch, tmp_path: Path):

@@ -126,12 +126,22 @@ An operation can be advertised only when all applicable gates pass:
 No provider should move from "send" to "steer" because its send path happens to
 work while an agent is busy. Steer needs active-phase proof and idle rejection.
 
+Local live proof and Sauron release status are separate feeds. Sauron release
+artifacts answer "is this upstream release reviewed enough to recommend or
+block?" Local proof artifacts answer "has this machine proven operation behavior
+for the installed CLI version?" A matching local proof artifact can raise or
+demote the operation evidence shown by local-health, but it cannot turn a
+Yellow/Red Sauron release verdict Green or satisfy the source-drift release
+gate by itself.
+
 ## Next Implementation Slices
 
 1. Add a provider live-canary dispatcher that can run one provider or all
-   providers and emit one Sauron-facing artifact per provider. The dispatcher
-   currently covers OpenCode, Claude, and Antigravity at
-   `scripts/qa/provider-live-canary.py`.
+   providers and emit one local live-proof artifact per provider. The
+   dispatcher currently covers OpenCode, Claude, and Antigravity at
+   `scripts/qa/provider-live-canary.py`; `scripts/qa/provider-live-proof-publish.py`
+   runs those canaries on a dogfood machine and publishes stable sidecars under
+   `LONGHOUSE_PROVIDER_LIVE_PROOF_DIR` for local-health to consume.
 2. Extend the Claude lane beyond the initial no-token checks. The current lane
    proves binary identity, redacted auth shape, required launch/session flags,
    development-channel tagged server parsing, and macOS PTY wrapper availability,

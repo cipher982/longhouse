@@ -197,6 +197,33 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
             if info.get("evidence_root"):
                 typer.echo(f"    evidence: {info.get('evidence_root')}")
 
+    provider_live_proof = dict(snapshot.get("provider_live_proof") or {})
+    live_proof_statuses = dict(provider_live_proof.get("statuses") or {})
+    has_configured_live_proof = any(dict(info or {}).get("configured") for info in live_proof_statuses.values())
+    if has_configured_live_proof or provider_live_proof.get("skipped_reason"):
+        typer.echo("")
+        typer.echo("Provider Live Proof")
+    if provider_live_proof.get("skipped_reason"):
+        typer.echo(f"  skipped: {provider_live_proof.get('skipped_reason')}")
+    if live_proof_statuses:
+        for provider, raw_info in sorted(live_proof_statuses.items()):
+            info = dict(raw_info or {})
+            if not info.get("configured"):
+                continue
+            typer.echo(f"  {provider}: {info.get('status') or '-'}")
+            if info.get("version_match"):
+                typer.echo(f"    version match: {info.get('version_match')}")
+            if info.get("freshness_status") and info.get("freshness_status") != "fresh":
+                typer.echo(f"    freshness: {info.get('freshness_status')}")
+            if info.get("artifact_version") or info.get("current_version"):
+                current_version = info.get("current_version") or "-"
+                artifact_version = info.get("artifact_version") or "-"
+                typer.echo(f"    version: local={current_version} proof={artifact_version}")
+            if info.get("failure_code"):
+                typer.echo(f"    failure: {info.get('failure_code')}")
+            if info.get("evidence_root"):
+                typer.echo(f"    evidence: {info.get('evidence_root')}")
+
     provider_hook_diagnostics = dict(snapshot.get("provider_hook_diagnostics") or {})
     hook_events = list(provider_hook_diagnostics.get("events") or [])
     if provider_hook_diagnostics.get("state") == "session_cwd_missing" or hook_events:
