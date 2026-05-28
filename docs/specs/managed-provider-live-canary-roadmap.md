@@ -35,6 +35,11 @@ opencode: send, interrupt, launch
 antigravity: send
 ```
 
+The Antigravity send advertisement was later corrected: the hook-inbox
+implementation exists, but `antigravity.send` stays unadvertised until a real
+upstream `agy` loop proof shows queued input is claimed and honored through
+`injectSteps`.
+
 Provider release status is interpreted against the installed local version.
 Newer upstream artifacts remain visible as candidate release status, but do
 not degrade local health until the installed provider version matches the
