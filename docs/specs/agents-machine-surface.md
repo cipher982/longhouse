@@ -113,6 +113,9 @@ application-level conflict so release automation cannot promote a local green
 proof for the wrong upstream release and edge proxies do not collapse the typed
 body into a generic upstream 5xx. Runtime Host also allows only one in-flight
 live proof per owner/device/provider to avoid duplicate token-spending canaries.
+`make provider-live-route-e2e` verifies this hosted route end to end against a
+configured dogfood machine: machine directory support, positive version match,
+and typed `provider_version_mismatch` rejection.
 
 ### Coordination and directed messaging
 
