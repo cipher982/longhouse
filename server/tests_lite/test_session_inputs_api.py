@@ -222,7 +222,7 @@ class _AutoCompletingMachineWebSocket:
                     "exit_code": 0,
                     "stdout": "",
                     "stderr": "",
-                    "turn_id": "antigravity-turn-1",
+                    "turn_id": "machine-control-turn-1",
                 },
             }
         )
@@ -255,8 +255,10 @@ def _seed_machine_control_session(
     *,
     provider: str,
     control_plane: str,
+    managed_transport: str | None = None,
     can_interrupt: bool = True,
     device_id: str = "cinder",
+    phase: str = "idle",
 ):
     from zerg.models.agents import SessionConnection
     from zerg.models.agents import SessionRun
@@ -267,7 +269,7 @@ def _seed_machine_control_session(
     with session_local() as db:
         session = db.query(AgentSession).filter_by(id=session_id).one()
         session.provider = provider
-        session.managed_transport = control_plane
+        session.managed_transport = managed_transport or control_plane
         session.device_id = device_id
         session.source_runner_id = None
         session.source_runner_name = None
@@ -288,7 +290,7 @@ def _seed_machine_control_session(
         conn.can_tail_output = 1
         conn.can_resume = 0
         db.commit()
-        _seed_live_runtime_state(db, session)
+        _seed_live_runtime_state(db, session, phase=phase)
     return session_id, user_id
 
 
@@ -298,6 +300,17 @@ def _seed_antigravity_session(session_local):
         provider="antigravity",
         control_plane="antigravity_hook_inbox",
         can_interrupt=False,
+    )
+
+
+def _seed_codex_machine_control_session(session_local, *, phase: str = "idle"):
+    return _seed_machine_control_session(
+        session_local,
+        provider="codex",
+        control_plane="codex_bridge",
+        managed_transport="codex_app_server",
+        device_id="codex-machine-control",
+        phase=phase,
     )
 
 
@@ -490,6 +503,7 @@ def _assert_provider_auto_input_routes_through_machine_control(
     provider: str,
     control_plane: str,
     support: str,
+    managed_transport: str | None = None,
 ) -> None:
     session_local = _make_db(tmp_path)
     device_id = f"{provider}-machine-control"
@@ -497,6 +511,7 @@ def _assert_provider_auto_input_routes_through_machine_control(
         session_local,
         provider=provider,
         control_plane=control_plane,
+        managed_transport=managed_transport,
         device_id=device_id,
     )
     websocket = asyncio.run(_register_fake_machine_control(owner_id=user_id, supports=[support], device_id=device_id))
@@ -575,6 +590,17 @@ def test_opencode_auto_input_routes_through_machine_control(monkeypatch, tmp_pat
         provider="opencode",
         control_plane="opencode_server_bridge",
         support="opencode.send",
+    )
+
+
+def test_codex_auto_input_routes_through_machine_control(monkeypatch, tmp_path):
+    _assert_provider_auto_input_routes_through_machine_control(
+        monkeypatch,
+        tmp_path,
+        provider="codex",
+        control_plane="codex_bridge",
+        managed_transport="codex_app_server",
+        support="codex.send",
     )
 
 
@@ -1045,30 +1071,7 @@ def test_list_and_cancel_queued(monkeypatch, tmp_path):
 def _seed_codex_session(session_local):
     """Seed a managed-local session on codex_app_server transport so the
     capability gate for steer is satisfied."""
-    from zerg.models.agents import SessionConnection
-    from zerg.models.agents import SessionRun
-    from zerg.models.agents import SessionRuntimeState
-    from zerg.models.agents import SessionThread
-
-    session_id, user_id = _seed_live_session(session_local)
-    with session_local() as db:
-        session = db.query(AgentSession).filter_by(id=session_id).one()
-        session.provider = "codex"
-        session.managed_transport = "codex_app_server"
-        db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).delete(
-            synchronize_session=False
-        )
-        thread = (
-            db.query(SessionThread).filter(SessionThread.session_id == session.id, SessionThread.is_primary == 1).one()
-        )
-        thread.provider = "codex"
-        run = db.query(SessionRun).filter(SessionRun.thread_id == thread.id, SessionRun.ended_at.is_(None)).one()
-        run.provider = "codex"
-        conn = db.query(SessionConnection).filter(SessionConnection.run_id == run.id).one()
-        conn.control_plane = "codex_bridge"
-        db.commit()
-        _seed_live_runtime_state(db, session, phase="running")
-    return session_id, user_id
+    return _seed_codex_machine_control_session(session_local, phase="running")
 
 
 def test_intent_steer_requires_steerable_capability(monkeypatch, tmp_path):
@@ -1301,6 +1304,63 @@ def test_intent_steer_success_returns_sent_for_codex_bridge(monkeypatch, tmp_pat
         assert body["outcome"] == "sent"
         assert body["intent"] == "steer"
     finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_codex_steer_intent_routes_through_machine_control(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_codex_machine_control_session(session_local, phase="running")
+    websocket = asyncio.run(
+        _register_fake_machine_control(
+            owner_id=user_id,
+            supports=["codex.steer"],
+            device_id="codex-machine-control",
+        )
+    )
+
+    class FailingRunnerDispatcher:
+        async def dispatch_job(self, **_kwargs):
+            raise AssertionError("Codex steer must use Machine Agent control, not legacy runner dispatch")
+
+    monkeypatch.setattr(
+        "zerg.services.managed_control_dispatcher.get_runner_job_dispatcher",
+        lambda: FailingRunnerDispatcher(),
+    )
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        resp = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "steer through codex bridge", "intent": "steer", "client_request_id": "codex-steer-1"},
+        )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["outcome"] == "sent"
+        assert body["intent"] == "steer"
+        assert len(websocket.sent) == 1
+        frame = websocket.sent[0]
+        assert frame["command_type"] == "session.steer_text"
+        assert frame["session_id"] == str(session_id)
+        assert str(frame["command_id"]).startswith(f"managed-control:{session_id}:session.steer_text:")
+        assert frame["payload"] == {
+            "provider": "codex",
+            "text": "steer through codex bridge",
+            "intent": "steer",
+        }
+
+        with session_local() as db:
+            session = db.query(AgentSession).filter_by(id=session_id).one()
+            assert session.source_runner_id is None
+            row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
+            assert row.status == INPUT_STATUS_DELIVERED
+            assert row.intent == "steer"
+            assert row.client_request_id == "codex-steer-1"
+    finally:
+        asyncio.run(_clear_machine_control_registry())
         api_app_ref.dependency_overrides = {}
 
 
