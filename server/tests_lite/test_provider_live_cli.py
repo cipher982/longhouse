@@ -83,6 +83,51 @@ raise SystemExit(2)
     )
 
 
+def _fake_antigravity(path: Path) -> Path:
+    return _write_exe(
+        path,
+        r"""#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import sys
+
+args = sys.argv[1:]
+home = pathlib.Path(os.environ.get("HOME") or ".")
+state = home / ".fake-agy-plugins.json"
+if args == ["--version"]:
+    print("1.9.9")
+    raise SystemExit(0)
+
+if args == ["--help"]:
+    print("--print --prompt-interactive --conversation plugin")
+    raise SystemExit(0)
+
+if args == ["plugin", "--help"]:
+    print("install <target>\nlist\nvalidate")
+    raise SystemExit(0)
+
+if args[:2] == ["plugin", "validate"] and len(args) == 3:
+    print("[ok] " + args[2])
+    raise SystemExit(0)
+
+if args[:2] == ["plugin", "install"] and len(args) == 3:
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(json.dumps({"installed": ["longhouse-runtime"]}))
+    print("[ok] " + args[2])
+    raise SystemExit(0)
+
+if args == ["plugin", "list"]:
+    if state.exists():
+        print("longhouse-runtime")
+    raise SystemExit(0)
+
+print("unexpected fake agy args: " + json.dumps(args), file=sys.stderr)
+raise SystemExit(2)
+""",
+    )
+
+
 def _fake_provider_live_canary(path: Path) -> Path:
     return _write_exe(
         path,
@@ -217,6 +262,148 @@ def test_claude_provider_live_default_marks_token_spending_contracts_optional(tm
         assert payload["canaries"][name]["status"] == "optional_skipped"
         assert payload["canaries"][name]["optional"] is True
     assert set(payload["operation_evidence"]) == {"launch_local"}
+
+
+def test_antigravity_provider_live_default_keeps_loop_proof_gap(tmp_path: Path) -> None:
+    fake_bin = _fake_antigravity(tmp_path / "bin" / "agy")
+    artifact_path = tmp_path / "artifact.json"
+
+    payload = run_provider_live_canary(
+        {
+            "repo_root": str(tmp_path / "not-a-repo"),
+            "provider": "antigravity",
+            "provider_bin": str(fake_bin),
+            "artifact": str(artifact_path),
+            "evidence_root": str(tmp_path / "evidence"),
+            "wait_ready_secs": 1.0,
+            "run_live_token_contract": False,
+            "json": True,
+        }
+    )
+
+    assert payload["provider"] == "antigravity"
+    assert payload["verdict"] == "yellow"
+    assert payload["failure_code"] == "insufficient_coverage"
+    assert payload["canaries"]["loop_invocation_contract"]["status"] == "not_run"
+    assert set(payload["operation_evidence"]) == {"launch_local"}
+
+
+def test_antigravity_plugin_argv_unwraps_home_based_debug_wrapper(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    home = tmp_path / "home"
+    direct = _write_exe(home / ".local" / "bin" / "agy", "#!/bin/sh\nexit 0\n")
+    wrapper = _write_exe(
+        tmp_path / "bin" / "agy-dangerously-skip-permissions",
+        '#!/bin/sh\nexec "$HOME/.local/bin/agy" --dangerously-skip-permissions "$@"\n',
+    )
+    monkeypatch.setenv("HOME", str(home))
+
+    assert plc._antigravity_plugin_argv(str(wrapper), "plugin", "list") == [
+        str(direct),
+        "--dangerously-skip-permissions",
+        "plugin",
+        "list",
+    ]
+
+
+def test_antigravity_loop_contract_keeps_injected_marker_out_of_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from zerg.cli import antigravity as antigravity_cli
+
+    monkeypatch.setattr(antigravity_cli, "_ensure_antigravity_runtime_plugin", lambda **_kwargs: tmp_path / "plugin")
+    prompts: list[str] = []
+
+    def fake_run(argv, *, cwd, env, text, capture_output, timeout, check):
+        prompt = argv[-1]
+        prompts.append(prompt)
+        assert "INJECTED_" not in prompt
+        base_marker = next(part.rstrip(".") for part in prompt.split() if part.startswith("BASE_"))
+        inbox_dir = Path(env["LONGHOUSE_ANTIGRAVITY_INBOX_DIR"])
+        message_path = next(inbox_dir.glob("msg-*.json"))
+        payload = json.loads(message_path.read_text(encoding="utf-8"))
+        injected_marker = next(part for part in payload["text"].split() if part.startswith("INJECTED_"))
+        claimed_dir = inbox_dir / "claimed"
+        claimed_dir.mkdir(parents=True)
+        payload.update(
+            {
+                "claimed_at": "2026-05-28T00:00:00Z",
+                "claimed_by": "longhouse-antigravity-hook",
+                "hook_event": "PreInvocation",
+            }
+        )
+        message_path.replace(claimed_dir / f"claimed-{message_path.name}")
+        (claimed_dir / f"claimed-{message_path.name}").write_text(json.dumps(payload), encoding="utf-8")
+        log_path = Path(argv[argv.index("--log-file") + 1])
+        log_path.write_text('JSON hook "jsonhook__longhouse-runtime_PreInvocation_0_0": executing command\n')
+
+        class Completed:
+            returncode = 0
+            stdout = f"{base_marker} {injected_marker}\n"
+            stderr = ""
+
+        return Completed()
+
+    monkeypatch.setattr(plc.subprocess, "run", fake_run)
+
+    result = plc._run_antigravity_loop_invocation_contract_inner(
+        binary="/tmp/fake-agy",
+        root=tmp_path,
+        timeout_secs=3,
+        preservation={"backup_root": str(tmp_path / "backup")},
+    )
+
+    assert result["status"] == "pass"
+    assert prompts
+    assert result["claimed_hook_event"] == "PreInvocation"
+
+
+def test_antigravity_provider_live_token_contract_records_send_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_bin = _fake_antigravity(tmp_path / "bin" / "agy")
+    artifact_path = tmp_path / "artifact.json"
+    calls: list[dict[str, object]] = []
+
+    def fake_loop_contract(**kwargs):
+        calls.append(kwargs)
+        return {
+            "status": "pass",
+            "session_id": "ag-session",
+            "provider_session_id": "ag-provider-session",
+            "claimed_hook_event": "PreInvocation",
+        }
+
+    monkeypatch.setattr(plc, "_run_antigravity_loop_invocation_contract", fake_loop_contract)
+
+    payload = run_provider_live_canary(
+        {
+            "repo_root": str(tmp_path / "not-a-repo"),
+            "provider": "antigravity",
+            "provider_bin": str(fake_bin),
+            "artifact": str(artifact_path),
+            "evidence_root": str(tmp_path / "evidence"),
+            "wait_ready_secs": 1.0,
+            "run_live_token_contract": True,
+            "live_token_timeout_secs": 17,
+            "json": True,
+        }
+    )
+
+    assert payload["provider"] == "antigravity"
+    assert payload["verdict"] == "green"
+    assert payload["failure_code"] is None
+    assert calls[0]["binary"] == str(fake_bin)
+    assert calls[0]["timeout_secs"] == 17
+    assert payload["canaries"]["loop_invocation_contract"]["status"] == "pass"
+    send_input = payload["operation_evidence"]["send_input"]
+    assert send_input["status"] == "pass"
+    assert send_input["level"] == "manual_live_token"
+    assert send_input["canary"] == "antigravity_loop_invocation_contract"
 
 
 def test_claude_provider_live_token_contract_success_records_control_evidence(

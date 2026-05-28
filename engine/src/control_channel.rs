@@ -1747,7 +1747,7 @@ mod tests {
         assert!(supports.contains(&"codex.continue".to_string()));
         assert!(supports.contains(&"claude.launch".to_string()));
         assert!(supports.contains(&"opencode.launch".to_string()));
-        assert!(!supports.contains(&"antigravity.send".to_string()));
+        assert!(supports.contains(&"antigravity.send".to_string()));
         assert!(!supports.contains(&"antigravity.interrupt".to_string()));
         assert!(!supports.contains(&"antigravity.steer".to_string()));
         assert!(!supports.contains(&"antigravity.launch".to_string()));

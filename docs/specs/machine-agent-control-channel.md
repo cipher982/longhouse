@@ -255,10 +255,10 @@ active-turn injection is proven.
 ### Antigravity
 
 Antigravity control goes through the local hook inbox exposed by the Python
-CLI. The hook-inbox adapter exists, but the engine must not advertise
-`antigravity.send` until a real `agy` loop canary proves queued input is claimed
-by active `PreInvocation`/`PostInvocation` hooks. This is not active-turn steer,
-reattach, remote launch, or interrupt.
+CLI. The engine advertises `antigravity.send` after a real `agy` loop canary
+proved queued input is claimed by active hooks and honored through
+`injectSteps`. This is not active-turn steer, reattach, remote launch, or
+interrupt.
 
 ### Future Providers
 

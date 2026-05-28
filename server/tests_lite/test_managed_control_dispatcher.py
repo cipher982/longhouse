@@ -16,6 +16,7 @@ from zerg.services.live_session_dispatch import supports_live_text_dispatch_meta
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_INTERRUPT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
+from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_STEER_TEXT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_LEGACY_RUNNER
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_NONE
@@ -208,7 +209,7 @@ def test_select_managed_control_transport_supports_opencode_interrupt_engine_cha
     asyncio.run(_run())
 
 
-def test_select_managed_control_transport_does_not_advertise_unproven_antigravity_send():
+def test_select_managed_control_transport_supports_antigravity_send_engine_channel():
     async def _run():
         await _clear_machine_registry()
         try:
@@ -223,7 +224,7 @@ def test_select_managed_control_transport_does_not_advertise_unproven_antigravit
                     owner_id=42,
                     command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
                 )
-                is None
+                == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
             )
         finally:
             await _clear_machine_registry()
@@ -245,6 +246,36 @@ def test_select_managed_control_transport_does_not_upgrade_legacy_antigravity_pr
                     ),
                     owner_id=42,
                     command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+                )
+                is None
+            )
+        finally:
+            await _clear_machine_registry()
+
+    asyncio.run(_run())
+
+
+@pytest.mark.parametrize(
+    "command_type",
+    [MANAGED_CONTROL_COMMAND_INTERRUPT, MANAGED_CONTROL_COMMAND_STEER_TEXT],
+)
+def test_select_managed_control_transport_rejects_antigravity_non_send_commands(command_type):
+    async def _run():
+        await _clear_machine_registry()
+        try:
+            await _connect_fake_engine(
+                owner_id=42,
+                supports=["antigravity.send", "antigravity.interrupt", "antigravity.steer"],
+            )
+            assert (
+                select_managed_control_transport(
+                    _session(
+                        provider="antigravity",
+                        managed_transport="antigravity_hook_inbox",
+                        source_runner_id=None,
+                    ),
+                    owner_id=42,
+                    command_type=command_type,
                 )
                 is None
             )
@@ -347,7 +378,7 @@ def test_dispatch_managed_control_command_uses_engine_channel_when_connected():
     asyncio.run(_run())
 
 
-def test_dispatch_managed_control_command_does_not_send_unproven_antigravity_provider_to_engine_channel():
+def test_dispatch_managed_control_command_sends_antigravity_provider_to_engine_channel():
     async def _run():
         await _clear_machine_registry()
         try:
@@ -356,6 +387,12 @@ def test_dispatch_managed_control_command_does_not_send_unproven_antigravity_pro
                 provider="antigravity",
                 managed_transport="antigravity_hook_inbox",
                 source_runner_id=None,
+            )
+            completer = asyncio.create_task(
+                _complete_first_machine_command(
+                    websocket,
+                    {"ok": True, "result": {"stdout": "queued", "exit_code": 0, "stderr": ""}},
+                )
             )
             result = await dispatch_managed_control_command(
                 db=object(),
@@ -367,10 +404,12 @@ def test_dispatch_managed_control_command_does_not_send_unproven_antigravity_pro
                 payload={"text": "continue"},
                 commis_id="req-agy",
             )
+            await completer
 
-            assert result.ok is False
-            assert result.transport == MANAGED_CONTROL_TRANSPORT_NONE
-            assert websocket.sent == []
+            assert result.ok is True
+            assert result.transport == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
+            assert result.data == {"stdout": "queued", "exit_code": 0, "stderr": ""}
+            assert websocket.sent[0]["payload"] == {"provider": "antigravity", "text": "continue"}
         finally:
             await _clear_machine_registry()
 

@@ -243,13 +243,13 @@ def test_managed_provider_contract_manifest_snapshot():
                 "launch_remote": "none",
                 "reattach": "none",
                 "runtime_phase": "hermetic",
-                "send_input": "hermetic",
+                "send_input": "manual_live_token",
                 "steer_active_turn": "none",
                 "tail_output": "hermetic",
                 "terminate": "none",
                 "transcript_binding": "hermetic",
             },
-            "machine_control_supports": (),
+            "machine_control_supports": ("antigravity.send",),
         },
     }
 
@@ -339,9 +339,9 @@ def test_antigravity_contract_is_hook_inbox_send_only():
     assert contract.tail_output is True
     assert contract.runtime_phase is True
     assert contract.transcript_binding is True
-    assert contract.operation_evidence_for("send_input")["level"] == "hermetic"
+    assert contract.operation_evidence_for("send_input")["level"] == "manual_live_token"
     assert contract.operation_evidence_for("steer_active_turn")["level"] == "none"
-    assert contract.machine_control_supports == ()
+    assert contract.machine_control_supports == ("antigravity.send",)
     assert contract.connection_capabilities == {
         "can_send_input": 1,
         "can_interrupt": 0,
@@ -384,7 +384,7 @@ def test_control_plane_aliases_are_explicit_contract_not_scattered_literals():
         ("opencode", "session.send_text", "opencode.send"),
         ("opencode", "session.interrupt", "opencode.interrupt"),
         ("opencode", "session.steer_text", None),
-        ("antigravity", "session.send_text", None),
+        ("antigravity", "session.send_text", "antigravity.send"),
         ("antigravity", "session.interrupt", None),
         ("antigravity", "session.steer_text", None),
     ],
