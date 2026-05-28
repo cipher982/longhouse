@@ -126,6 +126,7 @@ fi
 
 curl() {
   local data=""
+  local output_file=""
   local request_url=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -134,7 +135,7 @@ curl() {
         shift 2
         ;;
       -o)
-        : >"$2"
+        output_file="$2"
         shift 2
         ;;
       -w|-H|-X|--connect-timeout|--max-time)
@@ -147,11 +148,25 @@ curl() {
     esac
   done
 
-  printf '%s' "$request_url" >"$temp_json.request"
-  printf '%s' "$data" >"$temp_json.body"
-  printf '200'
+  case "$request_url" in
+    */api/instances/7/reprovision)
+      printf '%s' "$request_url" >"$temp_json.request"
+      printf '%s' "$data" >"$temp_json.body"
+      printf '200'
+      ;;
+    */api/health)
+      printf '%s' "$request_url" >"$temp_json.health-request"
+      printf '{"build":{"commit":"deadbeef"}}' >"$output_file"
+      printf '200'
+      ;;
+    *)
+      echo "Unexpected curl URL in reprovision success wait test: $request_url" >&2
+      return 1
+      ;;
+  esac
 }
 
+export INSTANCE_SUBDOMAIN="demo"
 lh_hosted_reprovision "7" "ghcr.io/cipher982/longhouse-runtime:deadbeef"
 
 if [[ "$(cat "$temp_json.request")" != 'https://control.longhouse.ai/api/instances/7/reprovision' ]]; then
@@ -161,6 +176,11 @@ fi
 
 if [[ "$(cat "$temp_json.body")" != '{"image":"ghcr.io/cipher982/longhouse-runtime:deadbeef"}' ]]; then
   echo "Expected reprovision helper to send image override JSON"
+  exit 1
+fi
+
+if [[ "$(cat "$temp_json.health-request")" != 'https://demo.longhouse.ai/api/health' ]]; then
+  echo "Expected successful reprovision to wait until hosted runtime health reports the image"
   exit 1
 fi
 
@@ -207,7 +227,6 @@ curl() {
   esac
 }
 
-export INSTANCE_SUBDOMAIN="demo"
 lh_hosted_reprovision "7" "ghcr.io/cipher982/longhouse-runtime:deadbeefcafebabedeadbeefcafebabedeadbeef"
 
 if [[ "$(cat "$temp_json.health-request")" != 'https://demo.longhouse.ai/api/health' ]]; then

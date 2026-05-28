@@ -239,6 +239,14 @@ jobs:
             --docker-tag "${{ needs.gate.outputs.runtime_image_tag }}" \
             --timeout 900
 
+      - name: Wait for public demo runtime image
+        run: |
+          . scripts/lib/hosted-instance.sh
+          lh_wait_for_runtime_image \
+            "$PUBLIC_DEMO_URL" \
+            "${{ needs.gate.outputs.runtime_image_ref }}" \
+            240
+
       - name: Wait for control plane
         run: ./scripts/ci/wait-for-http.sh "$CONTROL_PLANE_URL/health" "Control plane"
 
