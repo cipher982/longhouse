@@ -109,7 +109,7 @@
         },
         "send_input": {
           "level": "hermetic",
-          "source": "scripts/qa/provider-control-e2e-canary.py Claude channel send delivery"
+          "source": "scripts/qa/provider-control-e2e-canary.py Claude channel send delivery; opt-in provider-live canary --provider claude --run-live-token-contract proves real channel prompt delivery"
         },
         "interrupt": {
           "level": "hermetic",
@@ -117,7 +117,7 @@
         },
         "steer_active_turn": {
           "level": "manual_live_token",
-          "source": "make managed-claude-poc delayed intent=steer transcript assertion",
+          "source": "make managed-claude-poc and provider-live canary --provider claude --run-live-token-contract delayed intent=steer transcript assertion",
           "next": "promote to scheduled live token canary"
         },
         "terminate": {
@@ -137,7 +137,7 @@
         "transcript_binding": {
           "level": "hermetic",
           "source": "Claude hook transcript binding tests",
-          "next": "promote with live transcript assertion"
+          "next": "promote with provider-live canary --provider claude --run-live-token-contract live transcript assertion"
         }
       },
       "machine_control_supports": ["claude.send", "claude.interrupt", "claude.steer", "claude.launch"]

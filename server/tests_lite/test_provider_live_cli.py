@@ -178,6 +178,202 @@ def test_provider_live_canary_uses_packaged_contracts_without_repo_root(tmp_path
     assert json.loads(artifact_path.read_text(encoding="utf-8")) == payload
 
 
+def test_claude_provider_live_default_keeps_split_live_contract_placeholders(tmp_path: Path) -> None:
+    fake_bin = _fake_claude(tmp_path / "bin" / "claude")
+    artifact_path = tmp_path / "artifact.json"
+
+    payload = run_provider_live_canary(
+        {
+            "repo_root": str(tmp_path / "not-a-repo"),
+            "provider": "claude",
+            "provider_bin": str(fake_bin),
+            "artifact": str(artifact_path),
+            "evidence_root": str(tmp_path / "evidence"),
+            "wait_ready_secs": 1.0,
+            "run_live_token_contract": False,
+            "json": True,
+        }
+    )
+
+    assert payload["verdict"] == "yellow"
+    assert "live_token_contract" not in payload["canaries"]
+    live_contract_names = [
+        "managed_channel_launch_contract",
+        "channel_prompt_delivery_contract",
+        "provider_execution_contract",
+        "active_turn_steer_contract",
+        "idle_steer_rejection_contract",
+        "interrupt_contract",
+    ]
+    assert [name for name in payload["canaries"] if name.endswith("_contract")] == live_contract_names
+    for name in live_contract_names:
+        assert payload["canaries"][name]["status"] == "not_run"
+    assert set(payload["operation_evidence"]) == {"launch_local"}
+
+
+def test_claude_provider_live_token_contract_success_records_control_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_bin = _fake_claude(tmp_path / "bin" / "claude")
+    terminal_log = tmp_path / "terminal.log"
+    terminal_log.write_text("ok\n", encoding="utf-8")
+
+    def fake_run(config):
+        return {
+            "run_id": config.run_id,
+            "session_id": "11111111-1111-4111-8111-111111111111",
+            "channel_ready": True,
+            "development_channel_warning_confirmed": True,
+            "workspace_trust_confirmed": False,
+            "sent_prompt": True,
+            "prompt_send_returncode": 0,
+            "steer_requested": True,
+            "steer_sent": True,
+            "steer_send_returncode": 0,
+            "observed_expected": True,
+            "observed_transcript_path": str(tmp_path / "transcript.jsonl"),
+            "observed_transcript_line": 3,
+            "observed_transcript_timestamp": "2026-05-28T12:00:00Z",
+            "process_returncode": 0,
+            "terminal_log": str(terminal_log),
+            "events_path": str(tmp_path / "events.jsonl"),
+            "hosted_terminal_source": "claude_channel_wrapper",
+        }
+
+    monkeypatch.setattr(plc, "run_managed_claude_live_session", fake_run)
+
+    payload = run_provider_live_canary(
+        {
+            "repo_root": str(tmp_path),
+            "provider": "claude",
+            "provider_bin": str(fake_bin),
+            "artifact": str(tmp_path / "artifact.json"),
+            "evidence_root": str(tmp_path / "evidence"),
+            "wait_ready_secs": 1.0,
+            "run_live_token_contract": True,
+            "live_token_timeout_secs": 12,
+            "json": True,
+        }
+    )
+
+    assert payload["verdict"] == "yellow"
+    assert payload["failure_code"] == "insufficient_coverage"
+    assert payload["canaries"]["managed_channel_launch_contract"]["status"] == "pass"
+    assert payload["canaries"]["channel_prompt_delivery_contract"]["status"] == "pass"
+    assert payload["canaries"]["provider_execution_contract"]["status"] == "pass"
+    assert payload["canaries"]["active_turn_steer_contract"]["status"] == "pass"
+    assert payload["canaries"]["idle_steer_rejection_contract"]["status"] == "not_run"
+    assert payload["canaries"]["interrupt_contract"]["status"] == "not_run"
+    assert payload["operation_evidence"]["send_input"]["status"] == "pass"
+    assert payload["operation_evidence"]["send_input"]["level"] == "manual_live_token"
+    assert payload["operation_evidence"]["transcript_binding"]["status"] == "pass"
+    assert payload["operation_evidence"]["steer_active_turn"]["status"] == "pass"
+
+
+def test_claude_provider_live_token_contract_reports_provider_auth_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_bin = _fake_claude(tmp_path / "bin" / "claude")
+    terminal_log = tmp_path / "terminal.log"
+    terminal_log.write_text("Please run /login\nAPI Error: 401 Invalid authentication credentials\n", encoding="utf-8")
+
+    def fake_run(config):
+        return {
+            "run_id": config.run_id,
+            "session_id": "22222222-2222-4222-8222-222222222222",
+            "channel_ready": True,
+            "development_channel_warning_confirmed": True,
+            "workspace_trust_confirmed": False,
+            "sent_prompt": True,
+            "prompt_send_returncode": 0,
+            "steer_requested": True,
+            "steer_sent": True,
+            "steer_send_returncode": 0,
+            "observed_expected": False,
+            "process_returncode": -15,
+            "terminal_log": str(terminal_log),
+            "events_path": str(tmp_path / "events.jsonl"),
+            "hosted_terminal_state": "finished",
+            "hosted_terminal_source": "scanner",
+        }
+
+    monkeypatch.setattr(plc, "run_managed_claude_live_session", fake_run)
+
+    payload = run_provider_live_canary(
+        {
+            "repo_root": str(tmp_path),
+            "provider": "claude",
+            "provider_bin": str(fake_bin),
+            "artifact": str(tmp_path / "artifact.json"),
+            "evidence_root": str(tmp_path / "evidence"),
+            "wait_ready_secs": 1.0,
+            "run_live_token_contract": True,
+            "live_token_timeout_secs": 12,
+            "json": True,
+        }
+    )
+
+    assert payload["verdict"] == "red"
+    assert payload["failure_code"] == "claude_assistant_response_timeout"
+    assert payload["canaries"]["managed_channel_launch_contract"]["status"] == "pass"
+    assert payload["canaries"]["channel_prompt_delivery_contract"]["status"] == "pass"
+    execution = payload["canaries"]["provider_execution_contract"]
+    assert execution["status"] == "fail"
+    assert execution["failure_code"] == "claude_assistant_response_timeout"
+    assert execution["terminal_diagnostic_hint"] == "provider_auth_prompt"
+    assert payload["operation_evidence"]["send_input"]["status"] == "pass"
+    assert payload["operation_evidence"]["transcript_binding"]["status"] == "fail"
+    assert payload["operation_evidence"]["transcript_binding"]["failure_code"] == "claude_assistant_response_timeout"
+    assert "no expected assistant transcript marker" in payload["operation_evidence"]["transcript_binding"]["message"]
+    assert "steer marker did not appear" in payload["operation_evidence"]["steer_active_turn"]["message"]
+
+
+def test_claude_provider_live_token_contract_does_not_overclassify_generic_api_text(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_bin = _fake_claude(tmp_path / "bin" / "claude")
+    terminal_log = tmp_path / "terminal.log"
+    terminal_log.write_text("The assistant mentioned an API in ordinary output.\n", encoding="utf-8")
+
+    def fake_run(config):
+        return {
+            "run_id": config.run_id,
+            "session_id": "33333333-3333-4333-8333-333333333333",
+            "channel_ready": True,
+            "development_channel_warning_confirmed": True,
+            "sent_prompt": True,
+            "prompt_send_returncode": 0,
+            "steer_sent": True,
+            "steer_send_returncode": 0,
+            "observed_expected": False,
+            "process_returncode": -15,
+            "terminal_log": str(terminal_log),
+            "events_path": str(tmp_path / "events.jsonl"),
+        }
+
+    monkeypatch.setattr(plc, "run_managed_claude_live_session", fake_run)
+
+    payload = run_provider_live_canary(
+        {
+            "repo_root": str(tmp_path),
+            "provider": "claude",
+            "provider_bin": str(fake_bin),
+            "artifact": str(tmp_path / "artifact.json"),
+            "evidence_root": str(tmp_path / "evidence"),
+            "wait_ready_secs": 1.0,
+            "run_live_token_contract": True,
+            "live_token_timeout_secs": 12,
+            "json": True,
+        }
+    )
+
+    assert payload["verdict"] == "red"
+    assert "terminal_diagnostic_hint" not in payload["canaries"]["provider_execution_contract"]
+
+
 def test_provider_live_canary_cli_exits_nonzero_on_red(tmp_path: Path) -> None:
     fake_bin = _fake_claude(tmp_path / "bin" / "claude")
     artifact_path = tmp_path / "artifact.json"

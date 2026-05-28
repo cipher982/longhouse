@@ -555,7 +555,18 @@ def test_claude_live_canary_stays_yellow_until_live_token_contract_is_proven() -
         assert payload["canaries"]["command_shape"]["status"] == "pass"
         assert payload["canaries"]["channels_shape"]["status"] == "pass"
         assert payload["canaries"]["detached_pty_shape"]["status"] == "pass"
-        assert payload["canaries"]["live_token_contract"]["status"] == "not_run"
+        assert "live_token_contract" not in payload["canaries"]
+        live_contract_names = [
+            "active_turn_steer_contract",
+            "channel_prompt_delivery_contract",
+            "idle_steer_rejection_contract",
+            "interrupt_contract",
+            "managed_channel_launch_contract",
+            "provider_execution_contract",
+        ]
+        assert [name for name in payload["canaries"] if name.endswith("_contract")] == live_contract_names
+        for name in live_contract_names:
+            assert payload["canaries"][name]["status"] == "not_run"
         assert set(payload["operation_evidence"]) == {"launch_local"}
         assert payload["operation_evidence"]["launch_local"]["status"] == "pass"
         assert payload["operation_evidence"]["launch_local"]["level"] == "live_no_token"
@@ -856,7 +867,9 @@ def test_opencode_live_canary_fails_when_restart_loses_transcript_marker() -> No
         assert payload["canaries"]["process_restart_reattach_contract"]["status"] == "fail"
         assert payload["operation_evidence"]["reattach"]["status"] == "fail"
         assert payload["operation_evidence"]["reattach"]["level"] == "none"
-        assert payload["operation_evidence"]["reattach"]["failure_code"] == "opencode_reattach_transcript_marker_missing"
+        assert (
+            payload["operation_evidence"]["reattach"]["failure_code"] == "opencode_reattach_transcript_marker_missing"
+        )
 
 
 def test_opencode_live_token_contract_failure_is_send_input_evidence() -> None:
@@ -877,7 +890,9 @@ def test_opencode_live_token_contract_failure_is_send_input_evidence() -> None:
         assert payload["canaries"]["active_turn_abort_contract"]["status"] == "not_run"
         assert payload["operation_evidence"]["send_input"]["status"] == "fail"
         assert payload["operation_evidence"]["send_input"]["level"] == "none"
-        assert payload["operation_evidence"]["send_input"]["failure_code"] == "opencode_assistant_response_marker_missing"
+        assert (
+            payload["operation_evidence"]["send_input"]["failure_code"] == "opencode_assistant_response_marker_missing"
+        )
 
 
 def test_opencode_live_token_contract_reports_post_request_failure() -> None:

@@ -33,6 +33,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from zerg.qa.managed_claude_live import ManagedClaudeLiveConfig
+from zerg.qa.managed_claude_live import run_managed_claude_live_session
+from zerg.qa.managed_claude_live import strip_terminal_controls
 from zerg.services.longhouse_paths import resolve_longhouse_home
 
 PROVIDER_STATUS_SCHEMA_VERSION = 1
@@ -261,7 +264,7 @@ def _entry_from_canary_group(
         canaries=required,
         level="none" if status == "fail" else level,
         source=source,
-        message=message or (detail or {}).get("message"),
+        message=(detail or {}).get("message") if status == "fail" else message or (detail or {}).get("message"),
         failure_code=(detail or {}).get("failure_code"),
         next_note=next_note,
     )
@@ -287,6 +290,7 @@ def _claude_operation_evidence(
     contract: dict[str, Any],
     canaries: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
+    evidence: dict[str, dict[str, Any]] = {}
     launch_local = _entry_from_canary_group(
         contract,
         "launch_local",
@@ -294,7 +298,59 @@ def _claude_operation_evidence(
         required=["binary_identity", "command_shape", "channels_shape", "detached_pty_shape"],
         canary_name="claude_launch_local_no_token",
     )
-    return {"launch_local": launch_local} if launch_local else {}
+    if launch_local:
+        evidence["launch_local"] = launch_local
+
+    if (canaries.get("channel_prompt_delivery_contract") or {}).get("status") in {"pass", "fail", "warn"}:
+        send_input = _entry_from_canary_group(
+            contract,
+            "send_input",
+            canaries=canaries,
+            required=["managed_channel_launch_contract", "channel_prompt_delivery_contract"],
+            canary_name="claude_channel_prompt_delivery_contract",
+            level="manual_live_token",
+            source="longhouse provider-live canary --provider claude --run-live-token-contract",
+            message="Live channel proof: Claude channel accepted a prompt injection into the managed session.",
+            next_note="promote with a scheduled/budgeted live-token release lane",
+        )
+        if send_input:
+            evidence["send_input"] = send_input
+
+    if (canaries.get("provider_execution_contract") or {}).get("status") in {"pass", "fail", "warn"}:
+        transcript_binding = _entry_from_canary_group(
+            contract,
+            "transcript_binding",
+            canaries=canaries,
+            required=["provider_execution_contract"],
+            canary_name="claude_provider_execution_contract",
+            level="manual_live_token",
+            source="longhouse provider-live canary --provider claude --run-live-token-contract",
+            message="Live-token proof: expected assistant text appeared in Claude transcript.",
+            next_note="promote with a scheduled/budgeted live-token release lane",
+        )
+        if transcript_binding:
+            evidence["transcript_binding"] = transcript_binding
+
+    if (canaries.get("active_turn_steer_contract") or {}).get("status") in {"pass", "fail", "warn"}:
+        steer_active_turn = _entry_from_canary_group(
+            contract,
+            "steer_active_turn",
+            canaries=canaries,
+            required=[
+                "managed_channel_launch_contract",
+                "channel_prompt_delivery_contract",
+                "active_turn_steer_contract",
+            ],
+            canary_name="claude_active_turn_steer_contract",
+            level="manual_live_token",
+            source="longhouse provider-live canary --provider claude --run-live-token-contract",
+            message="Live-token proof: active-turn channel steer reached the Claude transcript.",
+            next_note="promote with a scheduled/budgeted live-token release lane",
+        )
+        if steer_active_turn:
+            evidence["steer_active_turn"] = steer_active_turn
+
+    return evidence
 
 
 def _opencode_operation_evidence(
@@ -1523,15 +1579,198 @@ def _run_claude_pty_wrapper_shape() -> dict[str, Any]:
     return _status("pass", script_path=script_path, platform=sys.platform)
 
 
-def _claude_live_token_contract_placeholder() -> dict[str, Any]:
-    return _status(
-        "not_run",
-        reason=(
-            "Claude no-token live canary proves binary/auth/channel/PTY shape only; "
-            "scheduled live-token evidence must prove detached launch, active-turn steer transcript delivery, "
-            "idle steer rejection, interrupt, and reattach."
-        ),
+def _claude_live_token_contract_placeholders() -> dict[str, dict[str, Any]]:
+    reason = (
+        "Claude no-token live canary proves binary/auth/channel/PTY shape only. "
+        "Pass --run-live-token-contract to launch real managed Claude, inject through the channel, "
+        "and prove provider execution plus active-turn steer."
     )
+    return {
+        "managed_channel_launch_contract": _status("not_run", reason=reason),
+        "channel_prompt_delivery_contract": _status("not_run", reason=reason),
+        "provider_execution_contract": _status("not_run", reason=reason),
+        "active_turn_steer_contract": _status("not_run", reason=reason),
+        "idle_steer_rejection_contract": _status(
+            "not_run",
+            reason=("Idle steer rejection is covered by hermetic Runtime Host tests; " "live provider canary coverage is future work."),
+        ),
+        "interrupt_contract": _status(
+            "not_run",
+            reason=("Claude interrupt is covered by hermetic channel/process tests; " "live provider canary coverage is future work."),
+        ),
+    }
+
+
+def _claude_terminal_diagnostic_hint(summary: dict[str, Any]) -> str | None:
+    terminal_log = summary.get("terminal_log")
+    if not terminal_log:
+        return None
+    tail = strip_terminal_controls(_tail_text(Path(str(terminal_log))))
+    if "401 Invalid authentication credentials" in tail or "Please run /login" in tail:
+        return "provider_auth_prompt"
+    return None
+
+
+def _claude_summary_evidence(summary: dict[str, Any]) -> dict[str, Any]:
+    fields = {
+        "summary_path": str(Path(str(summary.get("terminal_log"))).with_name("summary.json")) if summary.get("terminal_log") else None,
+        "terminal_log": summary.get("terminal_log"),
+        "events_path": summary.get("events_path"),
+        "session_id": summary.get("session_id"),
+        "channel_ready": summary.get("channel_ready"),
+        "development_channel_warning_confirmed": summary.get("development_channel_warning_confirmed"),
+        "workspace_trust_confirmed": summary.get("workspace_trust_confirmed"),
+        "prompt_send_returncode": summary.get("prompt_send_returncode"),
+        "steer_send_returncode": summary.get("steer_send_returncode"),
+        "process_returncode": summary.get("process_returncode"),
+        "observed_transcript_path": summary.get("observed_transcript_path"),
+        "observed_transcript_line": summary.get("observed_transcript_line"),
+        "observed_transcript_timestamp": summary.get("observed_transcript_timestamp"),
+        "hosted_terminal_state": summary.get("hosted_terminal_state"),
+        "hosted_terminal_reason": summary.get("hosted_terminal_reason"),
+        "hosted_terminal_source": summary.get("hosted_terminal_source"),
+        "hosted_archive_event_count": summary.get("hosted_archive_event_count"),
+        "hosted_archive_assistant_events": summary.get("hosted_archive_assistant_events"),
+        "hosted_transcript_revision": summary.get("hosted_transcript_revision"),
+    }
+    hint = _claude_terminal_diagnostic_hint(summary)
+    if hint:
+        fields["terminal_diagnostic_hint"] = hint
+    return {key: value for key, value in fields.items() if value is not None}
+
+
+def _run_claude_live_token_contracts(args: argparse.Namespace, root: Path) -> dict[str, dict[str, Any]]:
+    started = time.monotonic()
+    base_marker = f"LONGHOUSE_CLAUDE_LIVE_{secrets.token_hex(16)}"
+    steer_marker = f"LONGHOUSE_CLAUDE_STEER_{secrets.token_hex(16)}"
+    run_id = datetime.now(UTC).strftime("claude-live-%Y%m%dT%H%M%SZ")
+    output_dir = root / "managed-claude-live" / run_id
+    try:
+        summary = run_managed_claude_live_session(
+            ManagedClaudeLiveConfig(
+                cwd=args.repo_root,
+                repo_root=args.repo_root,
+                output_dir=output_dir,
+                run_id=run_id,
+                name="Claude provider-live canary",
+                model=os.environ.get("LONGHOUSE_CLAUDE_CANARY_MODEL", ""),
+                prompt=(
+                    "Use the Bash tool to run `sleep 8`. After the command completes, reply exactly: "
+                    f"{base_marker}. If a Longhouse channel correction arrives before you answer, obey the "
+                    "correction instead."
+                ),
+                expected=base_marker,
+                steer_text=f"Channel correction: reply exactly {steer_marker} and do not include other text.",
+                steer_expected=steer_marker,
+                steer_delay_secs=4.0,
+                response_timeout_secs=float(getattr(args, "live_token_timeout_secs", 120) or 120),
+                post_close_probe_secs=5.0,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        failure = _fail(
+            "claude_live_token_canary_exception",
+            f"{type(exc).__name__}: {exc}",
+            output_dir=str(output_dir),
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+        )
+        return {
+            "managed_channel_launch_contract": failure,
+            "channel_prompt_delivery_contract": _status(
+                "not_run",
+                reason="Managed Claude live-token session did not launch.",
+            ),
+            "provider_execution_contract": _status(
+                "not_run",
+                reason="Managed Claude live-token session did not launch.",
+            ),
+            "active_turn_steer_contract": _status(
+                "not_run",
+                reason="Managed Claude live-token session did not launch.",
+            ),
+            "idle_steer_rejection_contract": _status(
+                "not_run",
+                reason="Idle steer rejection live provider proof is future work.",
+            ),
+            "interrupt_contract": _status("not_run", reason="Claude interrupt live provider proof is future work."),
+        }
+
+    evidence = _claude_summary_evidence(summary)
+    base_marker_sha = hashlib.sha256(base_marker.encode("utf-8")).hexdigest()
+    steer_marker_sha = hashlib.sha256(steer_marker.encode("utf-8")).hexdigest()
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+
+    if summary.get("session_id") and summary.get("channel_ready"):
+        managed_launch = _status("pass", elapsed_ms=elapsed_ms, **evidence)
+    else:
+        managed_launch = _fail(
+            "claude_managed_channel_launch_failed",
+            "Managed Claude did not expose a ready Longhouse channel session.",
+            elapsed_ms=elapsed_ms,
+            **evidence,
+        )
+
+    if summary.get("sent_prompt") and summary.get("prompt_send_returncode") == 0:
+        prompt_delivery = _status("pass", elapsed_ms=elapsed_ms, **evidence)
+    else:
+        prompt_delivery = _fail(
+            "claude_channel_prompt_delivery_failed",
+            "Claude channel did not accept the provider-live prompt.",
+            elapsed_ms=elapsed_ms,
+            **evidence,
+        )
+
+    if summary.get("observed_expected"):
+        provider_execution = _status(
+            "pass",
+            marker_sha256=steer_marker_sha,
+            base_marker_sha256=base_marker_sha,
+            elapsed_ms=elapsed_ms,
+            **evidence,
+        )
+        active_turn_steer = _status(
+            "pass",
+            marker_sha256=steer_marker_sha,
+            elapsed_ms=elapsed_ms,
+            **evidence,
+        )
+    else:
+        provider_execution = _fail(
+            "claude_assistant_response_timeout",
+            "Claude channel accepted the prompt, but no expected assistant transcript marker appeared.",
+            marker_sha256=steer_marker_sha,
+            base_marker_sha256=base_marker_sha,
+            elapsed_ms=elapsed_ms,
+            **evidence,
+        )
+        if not summary.get("steer_sent"):
+            active_turn_steer = _fail(
+                "claude_channel_steer_returncode_nonzero",
+                "Claude channel did not accept the active-turn steer message.",
+                marker_sha256=steer_marker_sha,
+                elapsed_ms=elapsed_ms,
+                **evidence,
+            )
+        else:
+            active_turn_steer = _fail(
+                "claude_steer_transcript_missing",
+                "Claude channel accepted active-turn steer, but the steer marker did not appear in transcript.",
+                marker_sha256=steer_marker_sha,
+                elapsed_ms=elapsed_ms,
+                **evidence,
+            )
+
+    return {
+        "managed_channel_launch_contract": managed_launch,
+        "channel_prompt_delivery_contract": prompt_delivery,
+        "provider_execution_contract": provider_execution,
+        "active_turn_steer_contract": active_turn_steer,
+        "idle_steer_rejection_contract": _status(
+            "not_run",
+            reason="Idle steer rejection live provider proof is future work.",
+        ),
+        "interrupt_contract": _status("not_run", reason="Claude interrupt live provider proof is future work."),
+    }
 
 
 def _run_antigravity_command_shape(binary: str) -> dict[str, Any]:
@@ -1736,7 +1975,7 @@ def _run_antigravity_plugin_contract(binary: str, root: Path) -> dict[str, Any]:
     )
 
 
-def run_claude_live_canary(args: argparse.Namespace, _root: Path) -> dict[str, Any]:
+def run_claude_live_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     binary = _resolve_provider_binary(args, "claude")
     if not binary:
         return {
@@ -1758,17 +1997,21 @@ def run_claude_live_canary(args: argparse.Namespace, _root: Path) -> dict[str, A
                 )
             },
         }
+    canaries = {
+        "binary_identity": _status("pass", path=binary, version=version, evidence=version_evidence),
+        "auth_status": _run_claude_auth_status(binary),
+        "command_shape": _run_claude_command_shape(binary),
+        "channels_shape": _run_claude_channels_shape(binary),
+        "detached_pty_shape": _run_claude_pty_wrapper_shape(),
+    }
+    if bool(getattr(args, "run_live_token_contract", False)):
+        canaries.update(_run_claude_live_token_contracts(args, root))
+    else:
+        canaries.update(_claude_live_token_contract_placeholders())
     return {
         "provider": "claude",
         "provider_version": version,
-        "canaries": {
-            "binary_identity": _status("pass", path=binary, version=version, evidence=version_evidence),
-            "auth_status": _run_claude_auth_status(binary),
-            "command_shape": _run_claude_command_shape(binary),
-            "channels_shape": _run_claude_channels_shape(binary),
-            "detached_pty_shape": _run_claude_pty_wrapper_shape(),
-            "live_token_contract": _claude_live_token_contract_placeholder(),
-        },
+        "canaries": canaries,
     }
 
 
@@ -2143,7 +2386,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--run-live-token-contract",
         action="store_true",
-        help="For OpenCode, spend small model calls to prove assistant response execution and active-turn abort.",
+        help="Spend small model calls to prove provider execution semantics where implemented.",
     )
     parser.add_argument("--live-token-timeout-secs", type=int, default=120)
     parser.add_argument("--json", action="store_true")

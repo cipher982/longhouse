@@ -161,9 +161,15 @@ gate by itself.
    not a downgrade from first-class Claude channel control.
    The operator live POC at `make managed-claude-poc` can now run an optional
    delayed `intent=steer` injection with `ARGS="--steer-text ..."` and requires
-   the assistant transcript to contain the expected steered response. Detached
-   remote launch still needs a repeatable live gate against a healthy Runtime
-   Host.
+   the assistant transcript to contain the expected steered response. The same
+   PTY/channel/probe loop now backs the opt-in
+   `longhouse provider-live canary --provider claude --run-live-token-contract`
+   lane. That lane splits channel launch, channel prompt delivery, provider
+   execution, and active-turn steer so provider-side auth/API failures do not
+   get misclassified as Longhouse channel failures. Idle steer rejection and
+   interrupt remain explicit not-run live-provider contracts until they have
+   their own repeatable upstream proof. Detached remote launch still needs a
+   repeatable live gate against a healthy Runtime Host.
 3. Extend the OpenCode server probe from the initial no-token lane. It is the
    lowest-risk live canary:
    `opencode serve --hostname 127.0.0.1 --port 0 --pure`, `/global/health`,
