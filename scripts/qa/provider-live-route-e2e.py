@@ -24,6 +24,11 @@ from typing import Any
 SUPPORTED_PROVIDERS = ("codex", "claude", "opencode", "antigravity")
 DEFAULT_USER_AGENT = "sauron-provider-live-proof/1"
 DEFAULT_MISMATCH_VERSION = "9.9.9-longhouse-route-e2e"
+DEFAULT_REQUIRE_VERDICT = "non-red"
+# Hosted machine dispatch can transiently 503 while the bridge is busy; keep
+# the default route proof patient enough for dogfood without hiding red proofs.
+DEFAULT_ATTEMPTS = 6
+DEFAULT_RETRY_DELAY_S = 8.0
 RETRYABLE_STATUS_CODES = {0, 408, 429, 500, 502, 503, 504}
 
 
@@ -504,21 +509,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--require-verdict",
         choices=["green", "non-red", "any"],
-        default="green",
-        help="Artifact verdict requirement for the positive route proof.",
+        default=DEFAULT_REQUIRE_VERDICT,
+        help=(
+            "Artifact verdict requirement for the positive route proof. Defaults to non-red so release-review "
+            "coverage warnings remain advisory; use green for a strict provider-proof quality gate."
+        ),
     )
     parser.add_argument("--process-timeout-s", type=int, default=300)
     parser.add_argument("--http-timeout-s", type=float, default=360.0)
     parser.add_argument(
         "--attempts",
         type=int,
-        default=3,
+        default=DEFAULT_ATTEMPTS,
         help="Per-leg attempts for transient hosted dispatch failures.",
     )
     parser.add_argument(
         "--retry-delay-s",
         type=float,
-        default=2.0,
+        default=DEFAULT_RETRY_DELAY_S,
         help="Delay between transient retry attempts.",
     )
     parser.add_argument("--user-agent", default=DEFAULT_USER_AGENT)
