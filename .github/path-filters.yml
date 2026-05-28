@@ -16,8 +16,12 @@ schemas:
   - 'Makefile'
 
 packaging:
+  - '.github/path-filters.yml'
+  - '.github/workflows/contract-first-ci.yml'
+  - 'server/hatch_build.py'
   - 'server/pyproject.toml'
   - 'server/setup.cfg'
+  - 'server/zerg/**'
   - 'web/**'
   - 'scripts/qa/test-wheel-package.sh'
 
