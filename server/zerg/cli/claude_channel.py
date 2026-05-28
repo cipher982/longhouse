@@ -66,6 +66,7 @@ class _BridgeState:
     port: int
     claude_pid: int | None
     bridge_pid: int
+    cwd: str | None
     ready: bool
     started_at: str
 
@@ -78,6 +79,7 @@ class _BridgeState:
             "port": self.port,
             "claude_pid": self.claude_pid,
             "bridge_pid": self.bridge_pid,
+            "cwd": self.cwd,
             "ready": self.ready,
             "started_at": self.started_at,
             "updated_at": _utc_now_iso(),
@@ -102,10 +104,12 @@ class _ChannelBridgeServer(Server[None, mcp_types.ServerRequest]):
         port: int,
         auth_token: str,
         claude_pid: int | None,
+        cwd: str | None,
     ) -> None:
+        instructions = "Longhouse native Claude channel bridge. Claude may receive channel notifications from this local server."
         super().__init__(
             name=_CHANNEL_BRIDGE_NAME,
-            instructions=("Longhouse native Claude channel bridge. " "Claude may receive channel notifications from this local server."),
+            instructions=instructions,
         )
         self._managed_session_id = str(session_id or "").strip() or None
         self._provider_session_id = str(provider_session_id or "").strip() or None
@@ -113,6 +117,7 @@ class _ChannelBridgeServer(Server[None, mcp_types.ServerRequest]):
         self._requested_port = int(port)
         self._auth_token = auth_token
         self._claude_pid = claude_pid
+        self._cwd = str(cwd or "").strip() or None
         self._started_at = _utc_now_iso()
         self._session: ServerSession | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -144,6 +149,7 @@ class _ChannelBridgeServer(Server[None, mcp_types.ServerRequest]):
             port=port,
             claude_pid=self._claude_pid,
             bridge_pid=os.getpid(),
+            cwd=self._cwd,
             ready=self._initialized.is_set(),
             started_at=self._started_at,
         )
@@ -297,6 +303,7 @@ def _run_bridge_server(
     port: int,
     auth_token: str,
     claude_pid: int | None,
+    cwd: str | None,
 ) -> None:
     server = _ChannelBridgeServer(
         session_id=session_id,
@@ -305,6 +312,7 @@ def _run_bridge_server(
         port=port,
         auth_token=auth_token,
         claude_pid=claude_pid,
+        cwd=cwd,
     )
     anyio.run(server.run_stdio_async)
 
@@ -321,6 +329,7 @@ def serve(
     port: int = typer.Option(0, "--port", min=0, max=65535),
     auth_token: str | None = typer.Option(None, "--auth-token", envvar="LONGHOUSE_CHANNEL_AUTH_TOKEN"),
     claude_pid: int | None = typer.Option(None, "--claude-pid", envvar="LONGHOUSE_CHANNEL_PARENT_PID"),
+    cwd: str | None = typer.Option(None, "--cwd", envvar="LONGHOUSE_CHANNEL_CWD"),
 ) -> None:
     """Run the local MCP channel bridge that Claude connects to over stdio."""
 
@@ -332,6 +341,7 @@ def serve(
         port=port,
         auth_token=str(auth_token or secrets.token_urlsafe(24)),
         claude_pid=claude_pid or os.getppid(),
+        cwd=cwd,
     )
 
 
