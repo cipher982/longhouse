@@ -328,8 +328,9 @@ Initial product contract:
   spends small model calls to prove assistant response execution, transcript
   binding, and abort during an in-flight message turn. The default publisher
   remains no-token and can go Green for that tier; the explicit live-token lane
-  proves the upstream OpenCode server contract, but there is no scheduled OpenCode
-  token-spending lane until we explicitly add a budgeted Sauron/CI job.
+  proves the upstream OpenCode server contract. Sauron release automation can
+  request it with `AGENT_RELEASE_OPENCODE_LIVE_TOKEN_CONTRACT=1`; it stays off
+  by default so scheduled spend is deliberate.
 - Runtime Host and local-health may cache it and expose:
   - provider
   - upstream version
