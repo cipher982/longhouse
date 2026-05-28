@@ -263,7 +263,9 @@ def _write_summary_markdown(path: Path, summary: dict[str, Any]) -> None:
         f"{summary.get('hosted_terminal_reason') or '-'} / "
         f"{summary.get('hosted_terminal_source') or '-'}"
     )
-    write_serializer = f"{summary.get('hosted_write_serializer_avg_wait_ms')} / {summary.get('hosted_write_serializer_max_wait_ms')}"
+    serializer_avg = summary.get("hosted_write_serializer_avg_wait_ms")
+    serializer_max = summary.get("hosted_write_serializer_max_wait_ms")
+    write_serializer = f"{serializer_avg} / {serializer_max}"
     lines = [
         "# Managed Claude POC",
         "",
