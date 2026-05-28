@@ -190,3 +190,13 @@ def test_build_channel_send_command_omits_empty_metadata():
         "--text",
         "continue",
     ]
+
+
+def test_terminal_provider_auth_prompt_detection_is_specific():
+    runner = _load_runner()
+
+    assert runner.terminal_has_provider_auth_prompt("Please run /login")
+    assert runner.terminal_has_provider_auth_prompt("API Error: 401 Invalid authentication credentials")
+    assert not runner.terminal_has_provider_auth_prompt(
+        "The assistant mentioned an API in ordinary output."
+    )

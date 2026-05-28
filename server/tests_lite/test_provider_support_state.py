@@ -403,6 +403,47 @@ def test_support_state_demotes_failed_matching_local_live_proof() -> None:
     assert send["evidence_state"] == "local_proof_failed"
 
 
+def test_support_state_does_not_attach_global_live_failure_to_passing_operation() -> None:
+    support = collect_provider_support_state(
+        provider_clis={"claude": {"path": "/Users/test/.local/bin/claude", "source": "PATH"}},
+        provider_release_status={"statuses": {"claude": {"status": "ok", "risk": "none"}}},
+        provider_live_proof={
+            "statuses": {
+                "claude": {
+                    "status": "ok",
+                    "applies": True,
+                    "version_match": "match",
+                    "verdict": "red",
+                    "failure_code": "claude_provider_auth_prompt",
+                    "operation_evidence": {
+                        "send_input": {
+                            "status": "pass",
+                            "level": "manual_live_token",
+                            "source": "local channel canary",
+                        },
+                        "transcript_binding": {
+                            "status": "fail",
+                            "level": "none",
+                            "source": "local transcript canary",
+                        },
+                    },
+                }
+            }
+        },
+        control_channel={
+            "status": "connected",
+            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "launch"]},
+        },
+    )
+
+    claude = support["providers"]["claude"]
+    assert claude["operations"]["send_input"]["local_proof_evidence"]["failure_code"] is None
+    assert (
+        claude["operations"]["transcript_binding"]["local_proof_evidence"]["failure_code"]
+        == "claude_provider_auth_prompt"
+    )
+
+
 def test_support_state_surfaces_red_matching_local_live_proof_without_operation_evidence() -> None:
     support = collect_provider_support_state(
         provider_clis={"claude": {"path": "/Users/test/.local/bin/claude", "source": "PATH"}},

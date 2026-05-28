@@ -105,6 +105,10 @@ def compact_terminal_text(text: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
+def terminal_has_provider_auth_prompt(text: str) -> bool:
+    return "401 Invalid authentication credentials" in text or "Please run /login" in text
+
+
 def wait_for_channel_ready(session_id: str, *, timeout_secs: float) -> bool:
     state_path = Path.home() / ".claude" / "channels" / "longhouse" / "sessions" / f"{session_id}.json"
     deadline = time.monotonic() + timeout_secs
@@ -345,6 +349,7 @@ def run_managed_claude_live_session(config: ManagedClaudeLiveConfig) -> dict[str
     steer_send_returncode: int | None = None
     steer_transcript_cursor: dict[str, int] | None = None
     observed_expected = False
+    provider_auth_prompt_observed = False
     transcript_path: str | None = None
     transcript_line: int | None = None
     transcript_timestamp: str | None = None
@@ -368,6 +373,10 @@ def run_managed_claude_live_session(config: ManagedClaudeLiveConfig) -> dict[str
                 stripped = strip_terminal_controls(text)
                 clean_buffer = (clean_buffer + stripped)[-12000:]
                 compact_buffer = (compact_buffer + compact_terminal_text(stripped))[-12000:]
+                if sent_prompt and not observed_expected and terminal_has_provider_auth_prompt(clean_buffer):
+                    provider_auth_prompt_observed = True
+                    recorder.write("provider_auth_prompt_observed", session_id=session_id)
+                    break
 
                 if not session_id:
                     match = SESSION_ID_RE.search(clean_buffer)
@@ -470,6 +479,9 @@ def run_managed_claude_live_session(config: ManagedClaudeLiveConfig) -> dict[str
                     os.write(master_fd, b"/exit\r")
                     exit_sent = True
                     recorder.write("exit_sent", session_id=session_id)
+
+            if provider_auth_prompt_observed:
+                break
 
             if sent_prompt and not observed_expected and (time.monotonic() > deadline - 5):
                 break

@@ -26,6 +26,7 @@ from zerg.qa.managed_claude_live import run_managed_claude_live_session  # noqa:
 from zerg.qa.managed_claude_live import run_probe  # noqa: E402,F401
 from zerg.qa.managed_claude_live import set_nonblocking  # noqa: E402,F401
 from zerg.qa.managed_claude_live import strip_terminal_controls  # noqa: E402,F401
+from zerg.qa.managed_claude_live import terminal_has_provider_auth_prompt  # noqa: E402,F401
 from zerg.qa.managed_claude_live import text_fragments  # noqa: E402,F401
 from zerg.qa.managed_claude_live import transcript_line_counts  # noqa: E402,F401
 from zerg.qa.managed_claude_live import transcript_paths  # noqa: E402,F401
