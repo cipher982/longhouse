@@ -3649,14 +3649,37 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         health_state = "broken"
         severity = "red"
         headline = "Installed provider release is blocked"
-    elif int(provider_release_status.get("warning_count") or 0) > 0:
-        if "provider_release_warning" not in reasons:
-            reasons.append("provider_release_warning")
-        suggested_actions.append("Review provider release status before starting or upgrading managed sessions.")
-        if health_state == "healthy":
-            health_state = "degraded"
-            severity = "yellow"
-            headline = "Provider release status needs attention"
+    else:
+        release_statuses = dict(provider_release_status.get("statuses") or {})
+        version_probe_failed_providers = sorted(
+            provider for provider, raw_info in release_statuses.items() if dict(raw_info or {}).get("status") == "unknown_local_version"
+        )
+        if version_probe_failed_providers:
+            if "provider_cli_version_unknown" not in reasons:
+                reasons.append("provider_cli_version_unknown")
+            _with_action(
+                suggested_actions,
+                "Check provider CLI version output for: " + ", ".join(version_probe_failed_providers),
+            )
+            if health_state == "healthy":
+                health_state = "degraded"
+                severity = "yellow"
+                headline = "Provider CLI version check needs attention"
+        support_providers = dict(provider_support_state.get("providers") or {})
+        support_attention_providers = sorted(
+            provider for provider, raw_info in support_providers.items() if dict(raw_info or {}).get("state") == "needs_attention"
+        )
+        if support_attention_providers:
+            if "provider_support_needs_attention" not in reasons:
+                reasons.append("provider_support_needs_attention")
+            _with_action(
+                suggested_actions,
+                "Review provider support proof details for: " + ", ".join(support_attention_providers),
+            )
+            if health_state == "healthy":
+                health_state = "degraded"
+                severity = "yellow"
+                headline = "Managed provider support needs attention"
     if provider_live_route_e2e.get("configured") and provider_live_route_e2e.get("status") != "ok":
         if "provider_live_route_e2e_warning" not in reasons:
             reasons.append("provider_live_route_e2e_warning")

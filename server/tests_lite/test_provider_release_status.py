@@ -159,6 +159,36 @@ def test_matching_insufficient_coverage_remains_release_warning(monkeypatch, tmp
     assert claude["operation_evidence"]["launch_remote"]["status"] == "not_run"
 
 
+def test_local_version_probe_failure_is_not_release_warning(monkeypatch, tmp_path: Path) -> None:
+    status_file = tmp_path / "codex.json"
+    status_file.write_text(
+        json.dumps(
+            {
+                "provider": "codex",
+                "schema_version": prs.PROVIDER_STATUS_SCHEMA_VERSION,
+                "codex_version": "0.133.0",
+                "verdict": "green",
+                "generated_at": "2026-05-27T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(prs.CODEX_RELEASE_STATUS_FILE_ENV, str(status_file))
+    monkeypatch.setattr(
+        prs.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout="", stderr="version failed\n"),
+    )
+
+    status = prs.collect_provider_release_status({"codex": {"path": "/opt/homebrew/bin/codex"}})
+
+    codex = status["statuses"]["codex"]
+    assert status["warning_count"] == 0
+    assert codex["status"] == "unknown_local_version"
+    assert codex["risk"] == "none"
+    assert codex["version_error"] == "version failed"
+
+
 def test_stale_matching_green_artifact_warns(monkeypatch, tmp_path: Path) -> None:
     status_file = tmp_path / "codex.json"
     status_file.write_text(

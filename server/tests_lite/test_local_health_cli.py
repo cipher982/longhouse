@@ -1091,7 +1091,7 @@ def test_collect_local_health_degrades_for_blocked_provider_release(monkeypatch,
     assert snapshot["provider_release_status"]["statuses"]["codex"]["status"] == "blocked"
 
 
-def test_collect_local_health_degrades_for_provider_release_warning(monkeypatch, tmp_path: Path):
+def test_collect_local_health_keeps_provider_release_warning_advisory(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     monkeypatch.setattr(
@@ -1109,10 +1109,105 @@ def test_collect_local_health_degrades_for_provider_release_warning(monkeypatch,
 
     snapshot = local_health_service.collect_local_health(tmp_path)
 
+    assert snapshot["health_state"] == "healthy"
+    assert snapshot["severity"] == "green"
+    assert snapshot["headline"] == "Longhouse shipping healthy"
+    assert "provider_release_warning" not in snapshot["reasons"]
+    assert snapshot["provider_release_status"]["warning_count"] == 1
+    assert snapshot["provider_release_status"]["statuses"]["codex"]["status"] == "unknown_for_current_version"
+
+
+def test_collect_local_health_degrades_for_provider_cli_version_probe_failure(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service,
+        "collect_provider_release_status",
+        lambda provider_clis, *, fast: {
+            "schema_version": 1,
+            "enabled": True,
+            "blocking_count": 0,
+            "warning_count": 0,
+            "statuses": {
+                "codex": {
+                    "status": "unknown_local_version",
+                    "risk": "none",
+                    "version_error": "exit 1",
+                }
+            },
+        },
+    )
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
     assert snapshot["health_state"] == "degraded"
     assert snapshot["severity"] == "yellow"
-    assert snapshot["headline"] == "Provider release status needs attention"
-    assert "provider_release_warning" in snapshot["reasons"]
+    assert snapshot["headline"] == "Provider CLI version check needs attention"
+    assert "provider_cli_version_unknown" in snapshot["reasons"]
+    assert "provider_release_warning" not in snapshot["reasons"]
+
+
+def test_collect_local_health_degrades_for_concrete_provider_support_failure(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr(
+        local_health_service,
+        "_collect_provider_clis",
+        lambda: {"claude": {"path": "/opt/homebrew/bin/claude", "source": "PATH"}},
+    )
+    monkeypatch.setattr(
+        local_health_service,
+        "collect_provider_release_status",
+        lambda provider_clis, *, fast: {
+            "schema_version": 1,
+            "enabled": True,
+            "blocking_count": 0,
+            "warning_count": 0,
+            "statuses": {
+                "claude": {
+                    "status": "ok",
+                    "risk": "none",
+                    "verdict": "green",
+                    "operation_evidence": {
+                        "send_input": {
+                            "status": "fail",
+                            "level": "none",
+                            "source": "scheduled Claude send canary",
+                            "failure_code": "send_failed",
+                        }
+                    },
+                }
+            },
+        },
+    )
+    _write_engine_status(
+        tmp_path,
+        age_seconds=5,
+        payload={
+            "control_channel": {
+                "status": "connected",
+                "supports": [
+                    "claude.send",
+                    "claude.interrupt",
+                    "claude.steer",
+                    "claude.launch",
+                ],
+            }
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    claude_support = snapshot["provider_support_state"]["providers"]["claude"]
+    assert snapshot["health_state"] == "degraded"
+    assert snapshot["severity"] == "yellow"
+    assert snapshot["headline"] == "Managed provider support needs attention"
+    assert "provider_support_needs_attention" in snapshot["reasons"]
+    assert "provider_release_warning" not in snapshot["reasons"]
+    assert claude_support["state"] == "needs_attention"
+    assert claude_support["proof"]["state"] == "release_failed"
+    assert claude_support["proof"]["release_failed_operations"] == ["send_input"]
 
 
 def test_collect_local_health_keeps_release_coverage_gap_visible_when_live_proof_is_green(
@@ -1193,13 +1288,13 @@ def test_collect_local_health_keeps_release_coverage_gap_visible_when_live_proof
 
     release = snapshot["provider_release_status"]["statuses"]["claude"]
     claude_support = snapshot["provider_support_state"]["providers"]["claude"]
-    assert snapshot["health_state"] == "degraded"
-    assert snapshot["severity"] == "yellow"
-    assert "provider_release_warning" in snapshot["reasons"]
+    assert snapshot["health_state"] == "healthy"
+    assert snapshot["severity"] == "green"
+    assert "provider_release_warning" not in snapshot["reasons"]
     assert snapshot["provider_release_status"]["warning_count"] == 1
     assert release["status"] == "caution"
     assert release["risk"] == "warning"
-    assert claude_support["state"] == "needs_attention"
+    assert claude_support["state"] == "ready"
     assert claude_support["version_readiness"]["state"] == "installed_release_needs_attention"
     assert claude_support["proof"]["state"] == "release_incomplete"
     assert claude_support["proof"]["release_gap_operations"] == ["launch_remote"]

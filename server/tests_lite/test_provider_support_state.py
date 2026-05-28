@@ -189,6 +189,31 @@ def test_support_state_surfaces_release_gaps_without_removing_capability() -> No
     assert opencode["proof"]["release_gap_operations"] == ["send_input"]
 
 
+def test_support_state_keeps_release_warning_advisory() -> None:
+    support = collect_provider_support_state(
+        provider_clis={"claude": {"path": "/Users/test/.local/bin/claude", "source": "PATH"}},
+        provider_release_status={
+            "statuses": {
+                "claude": {
+                    "status": "caution",
+                    "risk": "warning",
+                    "verdict": "yellow",
+                    "failure_code": "insufficient_coverage",
+                }
+            }
+        },
+        control_channel={
+            "status": "connected",
+            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "launch"]},
+        },
+    )
+
+    claude = support["providers"]["claude"]
+    assert claude["state"] == "ready"
+    assert claude["version_readiness"]["state"] == "installed_release_needs_attention"
+    assert claude["version_readiness"]["risk"] == "warning"
+
+
 def test_support_state_promotes_operation_proof_from_release_evidence() -> None:
     support = collect_provider_support_state(
         provider_clis={"claude": {"path": "/Users/test/.local/bin/claude", "source": "PATH"}},

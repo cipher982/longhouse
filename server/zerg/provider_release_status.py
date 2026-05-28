@@ -357,7 +357,7 @@ def _status_for_provider(provider: str, provider_cli: dict[str, Any]) -> dict[st
     risk = "none"
     if version_error:
         status = "unknown_local_version"
-        risk = "warning"
+        risk = "none"
     elif verdict == "red" and local_version_matches:
         status = "blocked"
         risk = "blocking"
