@@ -25,7 +25,19 @@ os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 
-ENGINE_BIN = shutil.which("longhouse-engine")
+def _engine_bin() -> str | None:
+    explicit = os.environ.get("LONGHOUSE_ENGINE_BIN")
+    if explicit:
+        return explicit
+    repo_root = Path(__file__).resolve().parents[2]
+    for relative in ("engine/target/release/longhouse-engine", "engine/target/debug/longhouse-engine"):
+        candidate = repo_root / relative
+        if candidate.exists():
+            return str(candidate)
+    return shutil.which("longhouse-engine")
+
+
+ENGINE_BIN = _engine_bin()
 SESSION_ID = "bbbb1111-2222-4333-8444-555566667777"
 
 
@@ -67,8 +79,6 @@ def test_second_bridge_bails_when_lock_is_held(tmp_path: Path) -> None:
                 str(tmp_path),
                 "--url",
                 "http://127.0.0.1:0",
-                "--token",
-                "test-token",
                 "--codex-bin",
                 "/nonexistent/codex",  # must not be reached
                 "--state-file",
@@ -78,6 +88,7 @@ def test_second_bridge_bails_when_lock_is_held(tmp_path: Path) -> None:
             ],
             capture_output=True,
             text=True,
+            env={**os.environ, "LONGHOUSE_CODEX_BRIDGE_TOKEN": "test-token"},
             timeout=15,
         )
     finally:
@@ -138,8 +149,6 @@ def test_engine_acquires_lock_then_releases_on_sigkill(tmp_path: Path) -> None:
             str(tmp_path),
             "--url",
             "http://127.0.0.1:0",
-            "--token",
-            "test-token",
             "--codex-bin",
             "/nonexistent/codex",
             "--state-file",
@@ -149,6 +158,7 @@ def test_engine_acquires_lock_then_releases_on_sigkill(tmp_path: Path) -> None:
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env={**os.environ, "LONGHOUSE_CODEX_BRIDGE_TOKEN": "test-token"},
     )
 
     try:

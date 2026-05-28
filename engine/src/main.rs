@@ -75,6 +75,22 @@ fn parse_compression_algo(s: &str) -> anyhow::Result<CompressionAlgo> {
     }
 }
 
+fn require_codex_bridge_token_env() -> anyhow::Result<String> {
+    let token = std::env::var(codex_bridge::CODEX_BRIDGE_TOKEN_ENV).map_err(|_| {
+        anyhow::anyhow!(
+            "{} must be set for codex-bridge start/run",
+            codex_bridge::CODEX_BRIDGE_TOKEN_ENV
+        )
+    })?;
+    if token.trim().is_empty() {
+        anyhow::bail!(
+            "{} must not be empty for codex-bridge start/run",
+            codex_bridge::CODEX_BRIDGE_TOKEN_ENV
+        );
+    }
+    Ok(token)
+}
+
 fn resolve_codex_bridge_start_roots(
     state_root: Option<PathBuf>,
     longhouse_home: Option<PathBuf>,
@@ -436,9 +452,6 @@ enum CodexBridgeCommands {
         #[arg(long)]
         url: String,
 
-        #[arg(long)]
-        token: String,
-
         #[arg(long, default_value = "codex")]
         codex_bin: String,
 
@@ -509,9 +522,6 @@ enum CodexBridgeCommands {
 
         #[arg(long)]
         url: String,
-
-        #[arg(long)]
-        token: String,
 
         #[arg(long, default_value = "codex")]
         codex_bin: String,
@@ -1056,7 +1066,6 @@ fn main() -> anyhow::Result<()> {
                     session_id,
                     cwd,
                     url,
-                    token,
                     codex_bin,
                     session_source: _,
                     approval_policy,
@@ -1076,6 +1085,7 @@ fn main() -> anyhow::Result<()> {
                     launch_mode,
                     json,
                 } => {
+                    let token = require_codex_bridge_token_env()?;
                     let (state_root, longhouse_home) = resolve_codex_bridge_start_roots(
                         state_root,
                         longhouse_home,
@@ -1123,7 +1133,6 @@ fn main() -> anyhow::Result<()> {
                     session_id,
                     cwd,
                     url,
-                    token,
                     codex_bin,
                     session_source,
                     approval_policy,
@@ -1140,6 +1149,7 @@ fn main() -> anyhow::Result<()> {
                     resume_thread_path,
                     launch_mode,
                 } => {
+                    let token = require_codex_bridge_token_env()?;
                     let launch_mode = parse_codex_bridge_launch_mode(&launch_mode)?;
                     rt.block_on(cmd_codex_bridge_run(BridgeRunConfig {
                         session_id,
@@ -1308,8 +1318,6 @@ mod tests {
             "/tmp",
             "--url",
             "https://longhouse.test",
-            "--token",
-            "token",
             "--create-initial-thread",
         ])
         .unwrap();
@@ -1345,8 +1353,6 @@ mod tests {
             "/tmp",
             "--url",
             "https://longhouse.test",
-            "--token",
-            "token",
             "--create-initial-thread",
             "--launch-mode",
             "detached-ui",
@@ -1384,8 +1390,6 @@ mod tests {
             "/tmp",
             "--url",
             "https://longhouse.test",
-            "--token",
-            "token",
             "--resume-thread-id",
             "thread-abc",
             "--resume-thread-path",

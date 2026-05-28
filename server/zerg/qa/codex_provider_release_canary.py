@@ -105,7 +105,7 @@ def _redact_argv(argv: Any, secrets: list[str] | None = None) -> Any:
             redact_next = False
             continue
         redacted.append("<redacted>" if item in secrets else item)
-        if item in {"--token", "--agents-token"}:
+        if item == "--agents-token":
             redact_next = True
     return redacted
 
@@ -620,8 +620,6 @@ def _start_bridge(
         str(workspace),
         "--url",
         args.api_url,
-        "--token",
-        args.agents_token,
         "--codex-bin",
         codex_bin,
         "--isolation-root",
@@ -643,7 +641,9 @@ def _start_bridge(
     if args.model:
         command.extend(["--model", args.model])
 
-    result = _run(command, cwd=args.repo_root, timeout=args.bridge_start_timeout_secs + 20)
+    env = os.environ.copy()
+    env["LONGHOUSE_CODEX_BRIDGE_TOKEN"] = args.agents_token
+    result = _run(command, cwd=args.repo_root, env=env, timeout=args.bridge_start_timeout_secs + 20)
     if result.returncode != 0:
         raise RuntimeError(json.dumps(_command_evidence(result, secrets=[args.agents_token])))
     try:

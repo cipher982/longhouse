@@ -52,6 +52,7 @@ _CODEX_VERSION_TIMEOUT_SECONDS = 5
 _CODEX_STOP_REASON_BRIDGE_STOP = "bridge_stop"
 _CODEX_STOP_REASON_TERMINAL_DISCONNECTED = "terminal_disconnected"
 _CODEX_STOP_SIGNAL_TIMEOUT_SECONDS = 3.0
+_CODEX_BRIDGE_TOKEN_ENV = "LONGHOUSE_CODEX_BRIDGE_TOKEN"
 _CODEX_BIN_OPTION_HELP = " ".join(
     [
         "Debug override for the Codex executable used by managed sessions",
@@ -382,8 +383,6 @@ def _start_native_codex_bridge(
         str(cwd),
         "--url",
         url,
-        "--token",
-        token,
         "--codex-bin",
         codex_bin,
     ]
@@ -396,11 +395,14 @@ def _start_native_codex_bridge(
     if launch_mode != "tui":
         cmd += ["--launch-mode", launch_mode]
     cmd.append("--json")
+    env = os.environ.copy()
+    env[_CODEX_BRIDGE_TOKEN_ENV] = token
     completed = subprocess.run(
         cmd,
         check=False,
         capture_output=True,
         text=True,
+        env=env,
     )
     if completed.returncode != 0:
         stderr = (completed.stderr or "").strip()

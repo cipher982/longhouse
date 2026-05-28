@@ -441,6 +441,8 @@ def test_start_native_codex_bridge_can_prestart_initial_thread(monkeypatch, tmp_
 
     assert (thread_id, ws_url, state_file) == ("thr_123", "ws://127.0.0.1:4800", "/tmp/state.json")
     assert "--create-initial-thread" in calls[0]["command"]
+    assert "--token" not in calls[0]["command"]
+    assert calls[0]["env"][codex_cli._CODEX_BRIDGE_TOKEN_ENV] == "zdt_test_token"
     launch_mode_index = calls[0]["command"].index("--launch-mode")
     assert calls[0]["command"][launch_mode_index + 1] == "detached_ui"
 

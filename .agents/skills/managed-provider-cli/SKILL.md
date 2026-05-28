@@ -41,6 +41,9 @@ Use this skill when a task touches how Longhouse starts, observes, steers, or re
 - `longhouse codex` resolves the user's stock upstream `codex` from PATH by default.
 - `--codex-bin` and `LONGHOUSE_CODEX_BIN` are explicit debug/operator overrides, not the normal install path.
 - The Python CLI starts `longhouse-engine codex-bridge`.
+- The Python CLI passes the bridge device token to `codex-bridge start/run`
+  through `LONGHOUSE_CODEX_BRIDGE_TOKEN`; managed Codex bridge argv must not
+  contain the device token.
 - The Rust bridge starts `codex app-server`, fronts it with `engine/src/codex_ws_relay.rs`, and attaches the TUI with `codex --enable tui_app_server --remote ...`.
 - Bridge state, logs, lock sidecars, and IPC sockets live under `~/.longhouse/managed-local/codex-bridge/` unless overridden.
 - Hook scripts such as `longhouse-codex-hook.sh` are Longhouse hook scripts, not provider binaries.
