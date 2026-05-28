@@ -279,7 +279,7 @@
           "next": "promote with real agy transcript assertion"
         }
       },
-      "machine_control_supports": ["antigravity.send"]
+      "machine_control_supports": []
     }
   ]
 }

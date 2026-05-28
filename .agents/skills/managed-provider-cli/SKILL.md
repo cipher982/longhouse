@@ -87,11 +87,12 @@ Hard Codex contract:
 
 - Start from the same ownership rule: Longhouse can own the wrapper/control path, but the provider CLI remains user-owned unless the product decision explicitly changes.
 - Do not infer one provider's liveness/control model from another provider. Split behavior when the provider mechanics differ.
-- Antigravity has a managed local wrapper plus a send-only hook inbox. The
-  named control plane is `antigravity_hook_inbox`; pending input is claimed by
-  active `PreInvocation`/`PostInvocation` hooks and injected as user messages.
-  Do not advertise Antigravity remote launch, reattach, interrupt, or
-  active-turn steer until a stable provider surface proves those semantics.
+- Antigravity has a managed local wrapper plus a hook-inbox adapter. The named
+  control plane is `antigravity_hook_inbox`; do not advertise
+  `antigravity.send` until a real `agy` loop canary proves active
+  `PreInvocation`/`PostInvocation` hooks claim pending input. Do not advertise
+  Antigravity remote launch, reattach, interrupt, or active-turn steer until a
+  stable provider surface proves those semantics.
 
 ## Workflows
 

@@ -28,6 +28,8 @@ parser.add_argument("--provider", required=True)
 parser.add_argument("--evidence-root", required=True)
 parser.add_argument("--artifact", required=True)
 parser.add_argument("--json", action="store_true")
+parser.add_argument("--run-live-token-contract", action="store_true")
+parser.add_argument("--live-token-timeout-secs")
 args = parser.parse_args()
 
 artifact = {
@@ -45,6 +47,10 @@ artifact = {
         }
     },
     "evidence_root": args.evidence_root,
+    "received": {
+        "run_live_token_contract": args.run_live_token_contract,
+        "live_token_timeout_secs": args.live_token_timeout_secs,
+    },
 }
 with open(args.artifact, "w", encoding="utf-8") as handle:
     json.dump(artifact, handle)

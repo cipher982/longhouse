@@ -177,8 +177,7 @@ The Machine Agent sends a hello frame:
     "codex.interrupt",
     "codex.steer",
     "claude.send",
-    "opencode.send",
-    "antigravity.send"
+    "opencode.send"
   ]
 }
 ```
@@ -256,11 +255,10 @@ active-turn injection is proven.
 ### Antigravity
 
 Antigravity control goes through the local hook inbox exposed by the Python
-CLI. The engine advertises `antigravity.send` only when the stock `agy` binary
-and Longhouse CLI are available, and dispatches `session.send_text` through
-`antigravity-channel send`. This is queued input claimed by active
-`PreInvocation`/`PostInvocation` hooks, not active-turn steer, reattach, remote
-launch, or interrupt.
+CLI. The hook-inbox adapter exists, but the engine must not advertise
+`antigravity.send` until a real `agy` loop canary proves queued input is claimed
+by active `PreInvocation`/`PostInvocation` hooks. This is not active-turn steer,
+reattach, remote launch, or interrupt.
 
 ### Future Providers
 

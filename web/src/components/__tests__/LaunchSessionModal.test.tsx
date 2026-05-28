@@ -144,7 +144,7 @@ describe("LaunchSessionModal", () => {
     expect(screen.getByText(/connected, but this engine does not advertise Codex launch/)).toBeInTheDocument();
   });
 
-  it("shows connected machines with non-launch control operations as not launchable", async () => {
+  it("shows connected machines with unproven provider operations as not launchable", async () => {
     apiMocks.listMachines.mockResolvedValue({
       machines: [
         machine({
@@ -152,7 +152,7 @@ describe("LaunchSessionModal", () => {
           machine_name: "antigravity-host",
           online: true,
           supports: ["antigravity.send"],
-          control_operations_by_provider: { antigravity: ["send"] },
+          control_operations_by_provider: {},
           can_launch_codex: false,
           launchable_providers: [],
           launch_blocked_by: "no_launch_support",

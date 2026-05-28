@@ -92,9 +92,10 @@ Required canaries:
 
 Provider: Antigravity.
 
-Antigravity's stable surface is hooks. Longhouse can queue input and have active
-hooks claim it at provider-defined loop boundaries. That is send support, not
-interrupt or active-turn steer.
+Antigravity's stable surface is hooks. Longhouse can queue input and has a hook
+inbox adapter, but machine-control send is not advertised until a real upstream
+`agy` loop proves active hooks claim the queued input at provider-defined loop
+boundaries. That is send support, not interrupt or active-turn steer.
 
 Required canaries:
 
@@ -155,10 +156,10 @@ gate by itself.
    the Longhouse-home default.
 2. Extend the Claude lane beyond the initial no-token checks. The current lane
    proves binary identity, redacted auth shape, required launch/session flags,
-   development-channel tagged server parsing, and macOS PTY wrapper availability,
-   but the release-drift artifact intentionally remains Yellow until scheduled
-   live-token evidence proves the full channel contract. That Yellow status is
-   not a downgrade from first-class Claude channel control.
+   development-channel tagged server parsing, and macOS PTY wrapper availability.
+   Default token-spending contracts are marked `optional_skipped` so the
+   no-token tier can go Green when its required checks pass. Scheduled
+   live-token evidence still owns continuous proof of the full channel contract.
    The operator live POC at `make managed-claude-poc` can now run an optional
    delayed `intent=steer` injection with `ARGS="--steer-text ..."` and requires
    the assistant transcript to contain the expected steered response. The same
@@ -167,7 +168,7 @@ gate by itself.
    lane. That lane splits channel launch, channel prompt delivery, provider
    execution, and active-turn steer so provider-side auth/API failures do not
    get misclassified as Longhouse channel failures. Idle steer rejection and
-   interrupt remain explicit not-run live-provider contracts until they have
+   interrupt remain optional-skipped live-provider contracts until they have
    their own repeatable upstream proof. Detached remote launch still needs a
    repeatable live gate against a healthy Runtime Host.
 3. Extend the OpenCode server probe from the initial no-token lane. It is the
@@ -179,9 +180,9 @@ gate by itself.
    model tokens. The opt-in `--run-live-token-contract` lane spends small model
    calls and proves assistant response execution, transcript binding, and abort
    during an in-flight message turn. The default publisher remains no-token and
-   Yellow; the explicit live-token lane can go Green for the upstream OpenCode
-   server contract, but no scheduled OpenCode token-spending lane exists until
-   we add an explicit budgeted Sauron/CI job.
+   can go Green for the no-token tier; the explicit live-token lane proves the
+   upstream OpenCode server contract, but no scheduled OpenCode token-spending
+   lane exists until we add an explicit budgeted Sauron/CI job.
 4. Extend the Antigravity canary from its current yellow state -- real `agy`
    version/help/plugin validate/install/list plus Longhouse global-hook config
    proof -- to loop-level hook behavior against the upstream runtime.

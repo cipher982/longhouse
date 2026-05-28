@@ -98,6 +98,8 @@ parser.add_argument("--evidence-root", required=True)
 parser.add_argument("--repo-root")
 parser.add_argument("--json", action="store_true")
 parser.add_argument("--wait-ready-secs")
+parser.add_argument("--run-live-token-contract", action="store_true")
+parser.add_argument("--live-token-timeout-secs")
 args = parser.parse_args()
 
 payload = {
@@ -110,6 +112,10 @@ payload = {
     "failure_code": "insufficient_coverage",
     "recommendation": "investigate_before_upgrade",
     "canaries": {"fake": {"status": "not_run"}},
+    "received": {
+        "run_live_token_contract": args.run_live_token_contract,
+        "live_token_timeout_secs": args.live_token_timeout_secs,
+    },
     "artifact_path": args.artifact,
     "evidence_root": args.evidence_root,
 }
@@ -150,8 +156,8 @@ def test_provider_live_canary_cli_writes_packaged_artifact(tmp_path: Path) -> No
     assert payload["artifact_path"] == str(artifact_path)
     assert payload["evidence_root"] == str(evidence_root)
     assert payload["provider"] == "claude"
-    assert payload["verdict"] == "yellow"
-    assert payload["failure_code"] == "insufficient_coverage"
+    assert payload["verdict"] == "green"
+    assert payload["failure_code"] is None
     assert payload["operation_evidence"]["launch_local"]["status"] == "pass"
     assert "should-not-appear@example.com" not in json.dumps(payload)
 
@@ -178,7 +184,7 @@ def test_provider_live_canary_uses_packaged_contracts_without_repo_root(tmp_path
     assert json.loads(artifact_path.read_text(encoding="utf-8")) == payload
 
 
-def test_claude_provider_live_default_keeps_split_live_contract_placeholders(tmp_path: Path) -> None:
+def test_claude_provider_live_default_marks_token_spending_contracts_optional(tmp_path: Path) -> None:
     fake_bin = _fake_claude(tmp_path / "bin" / "claude")
     artifact_path = tmp_path / "artifact.json"
 
@@ -195,19 +201,21 @@ def test_claude_provider_live_default_keeps_split_live_contract_placeholders(tmp
         }
     )
 
-    assert payload["verdict"] == "yellow"
+    assert payload["verdict"] == "green"
+    assert payload["failure_code"] is None
     assert "live_token_contract" not in payload["canaries"]
     live_contract_names = [
-        "managed_channel_launch_contract",
-        "channel_prompt_delivery_contract",
-        "provider_execution_contract",
-        "active_turn_steer_contract",
+        "launch_local_contract",
+        "send_input_contract",
+        "transcript_binding_contract",
+        "steer_active_turn_contract",
         "idle_steer_rejection_contract",
         "interrupt_contract",
     ]
     assert [name for name in payload["canaries"] if name.endswith("_contract")] == live_contract_names
     for name in live_contract_names:
-        assert payload["canaries"][name]["status"] == "not_run"
+        assert payload["canaries"][name]["status"] == "optional_skipped"
+        assert payload["canaries"][name]["optional"] is True
     assert set(payload["operation_evidence"]) == {"launch_local"}
 
 
@@ -257,14 +265,14 @@ def test_claude_provider_live_token_contract_success_records_control_evidence(
         }
     )
 
-    assert payload["verdict"] == "yellow"
-    assert payload["failure_code"] == "insufficient_coverage"
-    assert payload["canaries"]["managed_channel_launch_contract"]["status"] == "pass"
-    assert payload["canaries"]["channel_prompt_delivery_contract"]["status"] == "pass"
-    assert payload["canaries"]["provider_execution_contract"]["status"] == "pass"
-    assert payload["canaries"]["active_turn_steer_contract"]["status"] == "pass"
-    assert payload["canaries"]["idle_steer_rejection_contract"]["status"] == "not_run"
-    assert payload["canaries"]["interrupt_contract"]["status"] == "not_run"
+    assert payload["verdict"] == "green"
+    assert payload["failure_code"] is None
+    assert payload["canaries"]["launch_local_contract"]["status"] == "pass"
+    assert payload["canaries"]["send_input_contract"]["status"] == "pass"
+    assert payload["canaries"]["transcript_binding_contract"]["status"] == "pass"
+    assert payload["canaries"]["steer_active_turn_contract"]["status"] == "pass"
+    assert payload["canaries"]["idle_steer_rejection_contract"]["status"] == "optional_skipped"
+    assert payload["canaries"]["interrupt_contract"]["status"] == "optional_skipped"
     assert payload["operation_evidence"]["send_input"]["status"] == "pass"
     assert payload["operation_evidence"]["send_input"]["level"] == "manual_live_token"
     assert payload["operation_evidence"]["transcript_binding"]["status"] == "pass"
@@ -317,9 +325,9 @@ def test_claude_provider_live_token_contract_reports_provider_auth_diagnostic(
 
     assert payload["verdict"] == "red"
     assert payload["failure_code"] == "claude_assistant_response_timeout"
-    assert payload["canaries"]["managed_channel_launch_contract"]["status"] == "pass"
-    assert payload["canaries"]["channel_prompt_delivery_contract"]["status"] == "pass"
-    execution = payload["canaries"]["provider_execution_contract"]
+    assert payload["canaries"]["launch_local_contract"]["status"] == "pass"
+    assert payload["canaries"]["send_input_contract"]["status"] == "pass"
+    execution = payload["canaries"]["transcript_binding_contract"]
     assert execution["status"] == "fail"
     assert execution["failure_code"] == "claude_assistant_response_timeout"
     assert execution["terminal_diagnostic_hint"] == "provider_auth_prompt"
@@ -371,7 +379,7 @@ def test_claude_provider_live_token_contract_does_not_overclassify_generic_api_t
     )
 
     assert payload["verdict"] == "red"
-    assert "terminal_diagnostic_hint" not in payload["canaries"]["provider_execution_contract"]
+    assert "terminal_diagnostic_hint" not in payload["canaries"]["transcript_binding_contract"]
 
 
 def test_provider_live_canary_cli_exits_nonzero_on_red(tmp_path: Path) -> None:
@@ -558,7 +566,68 @@ def test_provider_live_publish_cli_writes_stable_sidecar(tmp_path: Path) -> None
     assert payload["results"][0]["stable_path"] == str(stable)
     assert artifact["artifact_kind"] == "provider_live_canary"
     assert artifact["provider"] == "claude"
-    assert artifact["verdict"] == "yellow"
+    assert artifact["verdict"] == "green"
+
+
+def test_provider_live_publish_cli_passes_live_token_flags_to_script(tmp_path: Path) -> None:
+    proof_dir = tmp_path / "proof"
+    script = _fake_provider_live_canary(tmp_path / "bin" / "provider-live-canary")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "provider-live",
+            "publish",
+            "--provider",
+            "claude",
+            "--proof-dir",
+            str(proof_dir),
+            "--evidence-root",
+            str(tmp_path / "evidence"),
+            "--canary-script",
+            str(script),
+            "--run-live-token-contract",
+            "--live-token-timeout-secs",
+            "17",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    artifact = json.loads((proof_dir / "claude.json").read_text(encoding="utf-8"))
+    assert artifact["received"] == {
+        "run_live_token_contract": True,
+        "live_token_timeout_secs": "17",
+    }
+
+
+def test_provider_live_publish_cli_does_not_request_live_token_by_default(tmp_path: Path) -> None:
+    proof_dir = tmp_path / "proof"
+    script = _fake_provider_live_canary(tmp_path / "bin" / "provider-live-canary")
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "provider-live",
+            "publish",
+            "--provider",
+            "claude",
+            "--proof-dir",
+            str(proof_dir),
+            "--evidence-root",
+            str(tmp_path / "evidence"),
+            "--canary-script",
+            str(script),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    artifact = json.loads((proof_dir / "claude.json").read_text(encoding="utf-8"))
+    assert artifact["received"] == {
+        "run_live_token_contract": False,
+        "live_token_timeout_secs": "120",
+    }
 
 
 def test_provider_live_publish_cli_exits_nonzero_on_red_canary(tmp_path: Path) -> None:
