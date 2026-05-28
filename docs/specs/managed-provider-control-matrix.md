@@ -185,8 +185,8 @@ Target Antigravity adapter:
    - The hermetic control-path canary proves the generated hook claims queued
      input at `PreInvocation` and `PostInvocation`, requests
      `force_continue`, and continues at `Stop` when inbox input is waiting.
-   - `longhouse provider-live canary --provider antigravity` proves the
-     installed upstream `agy` loop
+   - `scripts/qa/provider-control-e2e-canary.py --provider antigravity
+     --antigravity-real-agy-send` proves the installed upstream `agy` loop
      invokes the hook, claims queued input, and honors `injectSteps` in the
      assistant response.
 4. Do not mark `steer_active_turn` supported until we prove that an input can
@@ -284,7 +284,9 @@ prove:
 2. Build OpenCode server-bridge sidecar and `opencode-channel send/interrupt`. Done.
 3. Add OpenCode remote launch and attach. Done.
 4. Decide OpenCode steer only after active-turn semantics are proven.
-5. Build Antigravity hook inbox for queued input claimed by active hooks. Hook-inbox code is done; machine-control send remains gated until real `agy` loop proof exists.
+5. Build Antigravity hook inbox for queued input claimed by active hooks. Done:
+   `antigravity.send` is advertised after the real `agy --print`
+   PreInvocation injection canary proves upstream honors `injectSteps`.
 6. Decide Antigravity interrupt and steer only after hook canaries prove
    bounded behavior.
 7. Move all provider operation truth into the contract registry and remove

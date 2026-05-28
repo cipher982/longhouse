@@ -96,7 +96,7 @@ def test_each_managed_provider_emits_profile_artifact() -> None:
                 assert payload["operation_evidence"]["steer_active_turn"]["status"] == "unsupported"
             if provider == "antigravity":
                 assert payload["operation_evidence"]["send_input"]["status"] == "not_run"
-                assert payload["operation_evidence"]["send_input"]["canary"] == "antigravity_hook_inbox_live_contract"
+                assert payload["operation_evidence"]["send_input"]["canary"] == "antigravity_real_agy_send"
                 assert payload["operation_evidence"]["launch_remote"]["status"] == "unsupported"
 
 

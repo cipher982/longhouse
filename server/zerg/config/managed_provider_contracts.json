@@ -247,9 +247,9 @@
           "source": "unsupported until Antigravity exposes stable reattach"
         },
         "send_input": {
-          "level": "hermetic",
-          "source": "scripts/qa/provider-control-e2e-canary.py Antigravity hook claim cycle proves PreInvocation/PostInvocation injectSteps plus force_continue",
-          "next": "promote when Antigravity release-canary real agy hook-inbox injection exists"
+          "level": "live_token",
+          "source": "scripts/qa/provider-control-e2e-canary.py --provider antigravity --antigravity-real-agy-send proves real agy PreInvocation hook-inbox injection changes the model-visible turn",
+          "next": "keep interrupt, active-turn steer, and continuation gated on separate bounded-behavior canaries"
         },
         "interrupt": {
           "level": "none",
@@ -279,7 +279,7 @@
           "next": "promote with real agy transcript assertion"
         }
       },
-      "machine_control_supports": []
+      "machine_control_supports": ["antigravity.send"]
     }
   ]
 }
