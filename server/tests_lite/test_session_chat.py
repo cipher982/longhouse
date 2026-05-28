@@ -34,6 +34,7 @@ from zerg.routers import session_chat
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
+from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.session_chat_impl import _session_is_closed_for_input
 from zerg.services.session_runtime import phase_freshness_ms
@@ -108,7 +109,117 @@ def _mark_session_live(db, session, *, owner_id: int, phase: str = "idle") -> No
         plane = "claude_channel_bridge"
     seed_managed_kernel_rows(db, session, control_plane=plane)
     db.commit()
+    _mark_runtime_live(db, session, phase=phase)
 
+
+class _AutoCompletingMachineWebSocket:
+    def __init__(self):
+        self.sent: list[dict[str, object]] = []
+
+    async def send_json(self, message):
+        self.sent.append(message)
+        await get_machine_control_channel_registry().complete_command(
+            {
+                "type": "command_result",
+                "command_id": message["command_id"],
+                "ok": True,
+                "result": {
+                    "exit_code": 0,
+                    "stdout": "",
+                    "stderr": "",
+                },
+            }
+        )
+
+
+async def _clear_machine_control_registry() -> None:
+    await get_machine_control_channel_registry().clear_for_tests()
+
+
+async def _register_fake_machine_control(
+    *,
+    owner_id: int,
+    device_id: str,
+    supports: list[str],
+) -> _AutoCompletingMachineWebSocket:
+    websocket = _AutoCompletingMachineWebSocket()
+    await get_machine_control_channel_registry().register(
+        owner_id=owner_id,
+        device_id=device_id,
+        machine_name=device_id,
+        engine_build="test-engine",
+        supports=supports,
+        websocket=websocket,
+    )
+    return websocket
+
+
+def _seed_machine_control_interrupt_session(
+    session_local,
+    *,
+    provider: str,
+    control_plane: str,
+    managed_transport: str | None = None,
+):
+    from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+
+    source_session_id = uuid4()
+    provider_session_id = f"{provider}-interrupt-{uuid4().hex[:8]}"
+    device_id = f"{provider}-interrupt-machine"
+    with session_local() as db:
+        user = User(email=f"{provider}-interrupt@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        store = AgentsStore(db)
+        started_at = datetime.now(timezone.utc)
+        store.ingest_session(
+            SessionIngest(
+                id=source_session_id,
+                provider=provider,
+                environment="Cinder",
+                project=f"{provider}-interrupt-live",
+                device_id=device_id,
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                provider_session_id=provider_session_id,
+                started_at=started_at,
+                ended_at=started_at,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text=f"Started {provider} before interrupt",
+                        timestamp=started_at,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+        source_session = store.get_session(source_session_id)
+        assert source_session is not None
+        source_session.execution_home = "managed_local"
+        source_session.managed_transport = managed_transport or control_plane
+        source_session.source_runner_id = None
+        source_session.source_runner_name = None
+        source_session.managed_session_name = f"lh-{provider}-interrupt-live"
+        seed_managed_kernel_rows(
+            db,
+            source_session,
+            control_plane=control_plane,
+            can_send_input=True,
+            can_interrupt=True,
+        )
+        db.commit()
+        _mark_runtime_live(db, source_session, phase="running")
+        user_id = user.id
+
+    return source_session_id, user_id, device_id
+
+
+def _mark_runtime_live(db, session, *, phase: str = "idle") -> None:
     now = datetime.now(timezone.utc)
     freshness_ms = phase_freshness_ms(phase) or int(timedelta(minutes=5).total_seconds() * 1000)
     key = runtime_key_for_session(str(session.provider or "claude"), str(session.id))
@@ -344,6 +455,8 @@ def test_managed_local_launch_response_requires_managed_transport(tmp_path):
         )
         with pytest.raises(RuntimeError, match="managed transport metadata"):
             session_chat._managed_local_launch_response(db, result)
+
+
 def test_managed_local_claude_live_send_requires_live_control(tmp_path):
     session_local = _make_db(tmp_path)
     source_session_id = uuid4()
@@ -413,6 +526,8 @@ def test_managed_local_claude_live_send_requires_live_control(tmp_path):
         assert response.json()["detail"] == "This live session needs host attach before Longhouse can continue it."
     finally:
         api_app_ref.dependency_overrides = {}
+
+
 def test_managed_local_codex_live_send_requires_host_attach(tmp_path):
     session_local = _make_db(tmp_path)
     source_session_id = uuid4()
@@ -459,9 +574,7 @@ def test_managed_local_codex_live_send_requires_host_attach(tmp_path):
         source_session.managed_session_name = "lh-codex-no-runner"
         from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 
-        seed_managed_kernel_rows(
-            db, source_session, control_plane="codex_bridge", state="detached"
-        )
+        seed_managed_kernel_rows(db, source_session, control_plane="codex_bridge", state="detached")
         db.commit()
         user_id = user.id
 
@@ -545,6 +658,8 @@ def test_explicit_claude_steer_dispatches_during_active_turn(monkeypatch, tmp_pa
         assert calls[0]["commis_id"]
     finally:
         api_app_ref.dependency_overrides = {}
+
+
 def test_agents_send_live_route_ignores_device_mismatch_and_dispatches(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     source_session_id = uuid4()
@@ -680,11 +795,7 @@ def test_agents_send_live_rejects_runtime_closed_session(monkeypatch, tmp_path, 
         source_session.source_runner_name = "agent-device"
         db.commit()
         _mark_session_live(db, source_session, owner_id=user.id)
-        state = (
-            db.query(SessionRuntimeState)
-            .filter(SessionRuntimeState.session_id == source_session.id)
-            .one()
-        )
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == source_session.id).one()
         state.phase = "finished"
         state.terminal_state = terminal_state
         state.terminal_at = datetime.now(timezone.utc)
@@ -708,6 +819,74 @@ def test_agents_send_live_rejects_runtime_closed_session(monkeypatch, tmp_path, 
             "message": "This session has ended.",
         }
     finally:
+        api_app_ref.dependency_overrides = {}
+
+
+@pytest.mark.parametrize(
+    ("provider", "control_plane", "managed_transport", "support"),
+    [
+        ("claude", "claude_channel_bridge", None, "claude.interrupt"),
+        ("opencode", "opencode_server_bridge", None, "opencode.interrupt"),
+        ("codex", "codex_bridge", "codex_app_server", "codex.interrupt"),
+    ],
+)
+def test_browser_interrupt_live_route_uses_machine_control(
+    monkeypatch,
+    tmp_path,
+    provider,
+    control_plane,
+    managed_transport,
+    support,
+):
+    session_local = _make_db(tmp_path)
+    source_session_id, user_id, device_id = _seed_machine_control_interrupt_session(
+        session_local,
+        provider=provider,
+        control_plane=control_plane,
+        managed_transport=managed_transport,
+    )
+    websocket = asyncio.run(
+        _register_fake_machine_control(
+            owner_id=user_id,
+            device_id=device_id,
+            supports=[support],
+        )
+    )
+
+    class FailingRunnerDispatcher:
+        async def dispatch_job(self, **_kwargs):
+            raise AssertionError(f"{provider} interrupt must use Machine Agent control, not legacy runner dispatch")
+
+    monkeypatch.setattr(
+        "zerg.services.managed_control_dispatcher.get_runner_job_dispatcher",
+        lambda: FailingRunnerDispatcher(),
+    )
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email=f"{provider}-interrupt@test.local", role=UserRole.USER.value),
+    )
+    asyncio.run(session_chat.session_lock_manager.acquire(str(source_session_id), holder="stalled-turn"))
+    try:
+        response = client.post(f"/api/sessions/{source_session_id}/interrupt-live")
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["interrupt_dispatched"] is True
+        assert payload["confirmed_stopped"] is False
+        assert payload["session_id"] == str(source_session_id)
+        assert payload["released_lock"] is True
+        assert payload["exit_code"] == 0
+
+        assert len(websocket.sent) == 1
+        frame = websocket.sent[0]
+        assert frame["type"] == "command"
+        assert frame["command_type"] == "session.interrupt"
+        assert frame["session_id"] == str(source_session_id)
+        assert str(frame["command_id"]).startswith(f"managed-control:{source_session_id}:session.interrupt:")
+        assert frame["payload"] == {"provider": provider}
+    finally:
+        asyncio.run(session_chat.session_lock_manager.release(str(source_session_id)))
+        asyncio.run(_clear_machine_control_registry())
         api_app_ref.dependency_overrides = {}
 
 
