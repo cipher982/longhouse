@@ -2787,6 +2787,7 @@ def test_local_health_render_prints_missing_provider_live_control(capsys):
                             "live_control_operations": ["launch"],
                             "missing_live_control_operations": ["send", "interrupt", "steer"],
                             "supported_operations": ["launch_local", "send_input", "interrupt", "steer_active_turn"],
+                            "unsupported_operations": ["launch_remote", "reattach"],
                         },
                         "proof": {
                             "state": "mixed",
@@ -2806,6 +2807,8 @@ def test_local_health_render_prints_missing_provider_live_control(capsys):
     assert "  claude: live_control_partial" in output
     assert "    live: launch" in output
     assert "    missing live: send, interrupt, steer" in output
+    assert "    contract: launch_local, send_input, interrupt, steer_active_turn" in output
+    assert "    unsupported: launch_remote, reattach" in output
 
 
 def test_collect_local_health_includes_activity_summary(monkeypatch, tmp_path: Path):

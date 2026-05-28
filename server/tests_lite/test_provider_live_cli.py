@@ -17,6 +17,161 @@ from zerg.qa import provider_live_canary as plc
 from zerg.qa import provider_live_proof_publish as plp
 from zerg.qa import repo_root as qa_repo_root
 from zerg.qa.provider_live_canary import run_provider_live_canary
+from zerg.services.managed_provider_contracts import all_managed_provider_contracts
+from zerg.services.managed_provider_contracts import contract_for_provider
+from zerg.services.provider_support_state import CONTRACT_OPERATIONS
+
+
+def _canary(status: str = "pass", **fields: object) -> dict[str, object]:
+    payload: dict[str, object] = {"status": status}
+    payload.update(fields)
+    return payload
+
+
+def _assert_operation_evidence_respects_manifest(provider: str, evidence: dict[str, dict[str, object]]) -> None:
+    contract = contract_for_provider(provider)
+    assert contract is not None
+    manifest_operations = set(contract.operation_evidence)
+    unsupported = {operation for operation in CONTRACT_OPERATIONS if not bool(getattr(contract, operation))}
+
+    assert set(evidence).issubset(manifest_operations)
+    assert set(evidence).isdisjoint(unsupported)
+    for operation, entry in evidence.items():
+        assert entry["source"]
+        if entry["status"] == "fail":
+            assert entry["level"] == "none"
+
+
+def test_provider_live_operation_evidence_never_emits_unknown_or_unsupported_operations() -> None:
+    synthetic_canaries = {
+        "binary_identity": _canary(),
+        "command_shape": _canary(),
+        "channels_shape": _canary(),
+        "detached_pty_shape": _canary(),
+        "server_startup": _canary(),
+        "session_create": _canary(),
+        "session_get": _canary(),
+        "attach_command_shape": _canary(),
+        "process_restart_reattach_contract": _canary(),
+        "schema_probe": _canary(),
+        "prompt_async_no_reply_delivery": _canary(),
+        "session_abort": _canary(),
+        "plugin_contract": _canary(),
+        "global_hooks_contract": _canary(),
+    }
+
+    for contract in all_managed_provider_contracts():
+        evidence = plc._provider_operation_evidence(contract.provider, synthetic_canaries)
+        _assert_operation_evidence_respects_manifest(contract.provider, evidence)
+
+
+def test_provider_live_operation_evidence_uses_manifest_defaults_for_simple_provider_groups() -> None:
+    for provider, required in {
+        "claude": ["binary_identity", "command_shape", "channels_shape", "detached_pty_shape"],
+        "antigravity": ["binary_identity", "command_shape", "plugin_contract", "global_hooks_contract"],
+    }.items():
+        evidence = plc._provider_operation_evidence(provider, {name: _canary() for name in required})
+        launch_local = evidence["launch_local"]
+        manifest = contract_for_provider(provider).operation_evidence_for("launch_local")  # type: ignore[union-attr]
+
+        assert launch_local["status"] == "pass"
+        assert launch_local["level"] == manifest["level"]
+        assert launch_local["source"] == manifest["source"]
+        assert launch_local["canaries"] == required
+
+
+def test_provider_live_operation_evidence_surfaces_failed_and_warned_canaries() -> None:
+    failed = plc._provider_operation_evidence(
+        "claude",
+        {
+            "binary_identity": _canary(),
+            "command_shape": _canary("fail", failure_code="claude_command_missing", message="missing --session-id"),
+            "channels_shape": _canary(),
+            "detached_pty_shape": _canary(),
+        },
+    )["launch_local"]
+
+    assert failed["status"] == "fail"
+    assert failed["level"] == "none"
+    assert failed["failure_code"] == "claude_command_missing"
+    assert failed["message"] == "missing --session-id"
+
+    warned = plc._provider_operation_evidence(
+        "claude",
+        {
+            "binary_identity": _canary(),
+            "command_shape": _canary("warn", message="channel surface is partial"),
+            "channels_shape": _canary(),
+            "detached_pty_shape": _canary(),
+        },
+    )["launch_local"]
+    manifest = contract_for_provider("claude").operation_evidence_for("launch_local")  # type: ignore[union-attr]
+
+    assert warned["status"] == "warn"
+    assert warned["level"] == manifest["level"]
+    assert warned["source"] == manifest["source"]
+    assert warned["message"] == "channel surface is partial"
+
+
+def test_opencode_provider_live_operation_evidence_preserves_explicit_schema_failures() -> None:
+    evidence = plc._provider_operation_evidence(
+        "opencode",
+        {
+            "binary_identity": _canary(),
+            "server_startup": _canary(),
+            "session_create": _canary(),
+            "session_get": _canary(),
+            "attach_command_shape": _canary(),
+            "schema_probe": _canary(
+                "fail",
+                failures=[
+                    {
+                        "path": "/session/{sessionID}/prompt_async",
+                        "failure_code": "opencode_prompt_async_missing",
+                        "message": "prompt_async endpoint disappeared",
+                    }
+                ],
+            ),
+            "session_abort": _canary(),
+        },
+    )
+
+    _assert_operation_evidence_respects_manifest("opencode", evidence)
+    assert evidence["send_input"]["status"] == "fail"
+    assert evidence["send_input"]["level"] == "none"
+    assert evidence["send_input"]["failure_code"] == "opencode_prompt_async_missing"
+    assert evidence["send_input"]["message"] == "prompt_async endpoint disappeared"
+    assert "steer_active_turn" not in evidence
+
+
+def test_opencode_provider_live_operation_evidence_proves_send_interrupt_and_transcript_binding() -> None:
+    evidence = plc._provider_operation_evidence(
+        "opencode",
+        {
+            "binary_identity": _canary(),
+            "server_startup": _canary(),
+            "session_create": _canary(),
+            "session_get": _canary(),
+            "attach_command_shape": _canary(),
+            "process_restart_reattach_contract": _canary(),
+            "schema_probe": _canary(),
+            "prompt_async_no_reply_delivery": _canary(),
+            "session_abort": _canary(),
+        },
+    )
+
+    _assert_operation_evidence_respects_manifest("opencode", evidence)
+    assert set(evidence) == {
+        "launch_local",
+        "reattach",
+        "send_input",
+        "interrupt",
+        "transcript_binding",
+    }
+    assert evidence["send_input"]["status"] == "pass"
+    assert evidence["send_input"]["level"] == "live_no_token"
+    assert evidence["transcript_binding"]["status"] == "pass"
+    assert evidence["interrupt"]["status"] == "pass"
 
 
 def _write_exe(path: Path, text: str) -> Path:
