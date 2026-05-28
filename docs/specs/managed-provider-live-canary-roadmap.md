@@ -138,15 +138,17 @@ gate by itself.
 
 1. Add a provider live-canary dispatcher that can run one provider or all
    providers and emit one local live-proof artifact per provider. The
-   dispatcher currently covers OpenCode, Claude, and Antigravity at
-   `scripts/qa/provider-live-canary.py`; `scripts/qa/provider-live-proof-publish.py`
-   runs those canaries on a dogfood machine and publishes stable sidecars under
-   `LONGHOUSE_PROVIDER_LIVE_PROOF_DIR` or the default
-   `~/.longhouse/provider-live-proof` for local-health to consume. `make
-   dogfood-refresh` runs the publisher before its final local-health snapshot;
-   `make dogfood-check` stays read-only and reports the latest sidecars. The
-   publisher creates the directory on first write; reader precedence is explicit
-   env, persisted provider-status config, then the Longhouse-home default.
+   dispatcher currently covers OpenCode, Claude, and Antigravity through
+   `longhouse provider-live canary`; the repo script
+   `scripts/qa/provider-live-canary.py` is a wrapper for source-checkout jobs.
+   `scripts/qa/provider-live-proof-publish.py` runs those canaries on a dogfood
+   machine and publishes stable sidecars under `LONGHOUSE_PROVIDER_LIVE_PROOF_DIR`
+   or the default `~/.longhouse/provider-live-proof` for local-health to consume.
+   `make dogfood-refresh` runs the publisher before its final local-health
+   snapshot; `make dogfood-check` stays read-only and reports the latest
+   sidecars. The publisher creates the directory on first write; reader
+   precedence is explicit env, persisted provider-status config, then the
+   Longhouse-home default.
 2. Extend the Claude lane beyond the initial no-token checks. The current lane
    proves binary identity, redacted auth shape, required launch/session flags,
    development-channel tagged server parsing, and macOS PTY wrapper availability,

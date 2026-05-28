@@ -94,7 +94,7 @@
       "operation_evidence": {
         "launch_local": {
           "level": "live_no_token",
-          "source": "scripts/qa/provider-live-canary.py --provider claude binary/auth/channel/PTY checks",
+          "source": "longhouse provider-live canary --provider claude binary/auth/channel/PTY checks",
           "next": "promote with detached channel launch transcript canary"
         },
         "launch_remote": {
@@ -164,7 +164,7 @@
       "operation_evidence": {
         "launch_local": {
           "level": "live_no_token",
-          "source": "scripts/qa/provider-live-canary.py --provider opencode server readiness/schema/session checks",
+          "source": "longhouse provider-live canary --provider opencode server readiness/schema/session checks",
           "next": "promote with token-spending prompt transcript canary"
         },
         "launch_remote": {
@@ -174,17 +174,17 @@
         },
         "reattach": {
           "level": "live_no_token",
-          "source": "provider-live-canary OpenCode attach command shape",
+          "source": "longhouse provider-live canary OpenCode attach command shape",
           "next": "prove attach to created provider session id"
         },
         "send_input": {
           "level": "live_no_token",
-          "source": "provider-live-canary OpenCode /doc prompt_async schema",
+          "source": "longhouse provider-live canary OpenCode /doc prompt_async schema",
           "next": "promote with token-spending prompt_async transcript canary"
         },
         "interrupt": {
           "level": "live_no_token",
-          "source": "provider-live-canary OpenCode abort endpoint check",
+          "source": "longhouse provider-live canary OpenCode abort endpoint check",
           "next": "promote with live active-turn abort canary"
         },
         "steer_active_turn": {
@@ -235,7 +235,7 @@
       "operation_evidence": {
         "launch_local": {
           "level": "live_no_token",
-          "source": "scripts/qa/provider-live-canary.py --provider antigravity version/help/plugin checks",
+          "source": "longhouse provider-live canary --provider antigravity version/help/plugin checks",
           "next": "prove real agy loop invocation"
         },
         "launch_remote": {

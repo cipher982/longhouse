@@ -2,9 +2,10 @@
 """Publish stable local provider live-proof sidecars.
 
 This is the dogfood-machine owner for real upstream provider operation proof.
-It shells out to provider-live-canary.py, keeps timestamped evidence under the
-repo build directory, and atomically publishes the latest matching artifact to
-LONGHOUSE_PROVIDER_LIVE_PROOF_DIR for local-health to consume.
+It shells out to the repo wrapper for the packaged `longhouse provider-live
+canary` command, keeps timestamped evidence under the repo build directory, and
+atomically publishes the latest matching artifact to LONGHOUSE_PROVIDER_LIVE_PROOF_DIR
+for local-health to consume.
 """
 
 from __future__ import annotations
