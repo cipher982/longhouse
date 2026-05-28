@@ -314,7 +314,13 @@ def _artifact_verdict(result: dict[str, Any]) -> str | None:
     return str(value) if value is not None else None
 
 
-def _run_provider(args: argparse.Namespace, provider: str, expected_version: str) -> dict[str, Any]:
+def _run_provider(
+    args: argparse.Namespace,
+    provider: str,
+    expected_version: str,
+    *,
+    check_mismatch: bool,
+) -> dict[str, Any]:
     match_status, match_payload, match_attempts = _post_live_proof_with_retry(
         args=args,
         provider=provider,
@@ -369,7 +375,7 @@ def _run_provider(args: argparse.Namespace, provider: str, expected_version: str
         )
         return result
 
-    if not args.skip_mismatch:
+    if check_mismatch:
         mismatch_status, mismatch_payload, mismatch_attempts = _post_live_proof_with_retry(
             args=args,
             provider=provider,
@@ -420,8 +426,29 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if missing_support:
         raise RuntimeError(f"machine {args.device_id} does not advertise live proof for: {', '.join(missing_support)}")
 
+    mismatch_providers: set[str] = set()
+    if not args.skip_mismatch:
+        if args.mismatch_provider == "all":
+            mismatch_providers = set(args.providers)
+        elif args.mismatch_provider == "first":
+            mismatch_providers = {args.providers[0]}
+        elif args.mismatch_provider in SUPPORTED_PROVIDERS:
+            if args.mismatch_provider not in args.providers:
+                raise ValueError(
+                    f"--mismatch-provider {args.mismatch_provider!r} is not in selected providers: "
+                    f"{', '.join(args.providers)}"
+                )
+            mismatch_providers = {args.mismatch_provider}
+        else:
+            raise ValueError(f"unsupported --mismatch-provider: {args.mismatch_provider}")
+
     results = [
-        _run_provider(args, provider, _read_expected_version(provider, args.proof_dir, expected_overrides))
+        _run_provider(
+            args,
+            provider,
+            _read_expected_version(provider, args.proof_dir, expected_overrides),
+            check_mismatch=provider in mismatch_providers,
+        )
         for provider in args.providers
     ]
     failures = [result for result in results if result.get("status") != "pass"]
@@ -434,7 +461,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "engine_build": machine.get("engine_build"),
         "providers": args.providers,
         "require_verdict": args.require_verdict,
-        "mismatch_checked": not args.skip_mismatch,
+        "mismatch_checked": bool(mismatch_providers),
+        "mismatch_providers": sorted(mismatch_providers),
         "verdict": "red" if failures else "green",
         "failure_count": len(failures),
         "results": results,
@@ -464,6 +492,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--mismatch-version", default=DEFAULT_MISMATCH_VERSION)
     parser.add_argument("--skip-mismatch", action="store_true", help="Skip the typed mismatch rejection check.")
+    parser.add_argument(
+        "--mismatch-provider",
+        choices=[*SUPPORTED_PROVIDERS, "first", "all"],
+        default="first",
+        help=(
+            "Provider used for the typed mismatch rejection check. "
+            "Default proves the route once with the first provider."
+        ),
+    )
     parser.add_argument(
         "--require-verdict",
         choices=["green", "non-red", "any"],
