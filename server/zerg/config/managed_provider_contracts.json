@@ -179,8 +179,8 @@
         },
         "send_input": {
           "level": "live_no_token",
-          "source": "longhouse provider-live canary OpenCode /doc prompt_async schema",
-          "next": "promote with token-spending prompt_async transcript canary"
+          "source": "longhouse provider-live canary OpenCode prompt_async noReply delivery observed through session.messages",
+          "next": "promote with token-spending assistant response transcript canary"
         },
         "interrupt": {
           "level": "live_no_token",

@@ -46,8 +46,9 @@ _OPENCODE_REATTACH_MESSAGE = " ".join(
 )
 _OPENCODE_PROMPT_ASYNC_MESSAGE = " ".join(
     (
-        "API-surface proof: /doc exposes session.prompt_async;",
-        "token-spending transcript proof is future work.",
+        "No-token behavior proof: prompt_async accepted a noReply input and",
+        "session.messages returned the delivered marker;",
+        "token-spending assistant-response proof is future work.",
     )
 )
 _CLAUDE_CHANNEL_UNCONFIRMED_MESSAGE = (
@@ -304,6 +305,17 @@ def _opencode_operation_evidence(
             failure_code=send_failure.get("failure_code") or "opencode_prompt_async_schema_failed",
             message=send_failure.get("message"),
         )
+    elif canaries.get("prompt_async_no_reply_delivery"):
+        send_input = _entry_from_canary_group(
+            contract,
+            "send_input",
+            canaries=canaries,
+            required=["binary_identity", "schema_probe", "prompt_async_no_reply_delivery"],
+            canary_name="opencode_prompt_async_no_reply_delivery",
+            message=_OPENCODE_PROMPT_ASYNC_MESSAGE,
+        )
+        if send_input:
+            evidence["send_input"] = send_input
     elif canaries.get("schema_probe", {}).get("status") == "pass":
         evidence["send_input"] = _operation_entry(
             contract,
@@ -524,6 +536,132 @@ def _require_doc_operation(doc: dict[str, Any], path: str, method: str, operatio
             observed=observed,
         )
     return None
+
+
+def _require_doc_request_property(
+    doc: dict[str, Any],
+    path: str,
+    method: str,
+    property_name: str,
+    expected_type: str,
+) -> dict[str, Any] | None:
+    operation = ((doc.get("paths") or {}).get(path) or {}).get(method.lower())
+    if not isinstance(operation, dict):
+        return None
+    schema = (
+        (((operation.get("requestBody") or {}).get("content") or {}).get("application/json") or {}).get("schema")
+        if isinstance(operation.get("requestBody"), dict)
+        else None
+    )
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    prop = properties.get(property_name) if isinstance(properties, dict) else None
+    if not isinstance(prop, dict):
+        return _fail(
+            "opencode_schema_missing_request_property",
+            f"OpenCode /doc is missing request property {property_name} for {method.upper()} {path}",
+            path=path,
+            method=method.upper(),
+            property=property_name,
+            expected_type=expected_type,
+        )
+    observed_type = str(prop.get("type") or "")
+    if observed_type != expected_type:
+        return _fail(
+            "opencode_schema_request_property_type_mismatch",
+            f"OpenCode /doc request property {property_name} has unexpected type for {method.upper()} {path}",
+            path=path,
+            method=method.upper(),
+            property=property_name,
+            expected_type=expected_type,
+            observed_type=observed_type,
+        )
+    return None
+
+
+def _messages_contain_text(messages: Any, expected_text: str) -> bool:
+    if not isinstance(messages, list):
+        return False
+    for item in messages:
+        if not isinstance(item, dict):
+            continue
+        for part in item.get("parts") or []:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text" and part.get("text") == expected_text:
+                return True
+    return False
+
+
+def _run_opencode_prompt_async_no_reply_delivery(
+    *,
+    server_url: str,
+    username: str,
+    password: str,
+    provider_session_id: str,
+    workspace: Path,
+) -> dict[str, Any]:
+    started = time.monotonic()
+    marker = f"LONGHOUSE_OPENCODE_NOREPLY_{secrets.token_urlsafe(24)}"
+    path = f"/session/{urllib.parse.quote(provider_session_id, safe='')}/prompt_async"
+    try:
+        _request_json(
+            server_url=server_url,
+            username=username,
+            password=password,
+            method="POST",
+            path=path,
+            query={"directory": str(workspace)},
+            payload={"noReply": True, "parts": [{"type": "text", "text": marker}]},
+        )
+    except RuntimeError as exc:
+        return _fail(
+            "opencode_prompt_async_request_failed",
+            f"OpenCode prompt_async noReply request failed: {exc}",
+            provider_session_id=provider_session_id,
+            request_phase="post_prompt_async",
+            elapsed_ms=int((time.monotonic() - started) * 1000),
+        )
+    messages = None
+    poll_attempts = 0
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        poll_attempts += 1
+        try:
+            messages = _request_json(
+                server_url=server_url,
+                username=username,
+                password=password,
+                method="GET",
+                path=f"/session/{urllib.parse.quote(provider_session_id, safe='')}/message",
+                query={"directory": str(workspace), "limit": "20"},
+            )
+        except RuntimeError as exc:
+            return _fail(
+                "opencode_prompt_async_request_failed",
+                f"OpenCode session.messages request failed after prompt_async noReply input: {exc}",
+                provider_session_id=provider_session_id,
+                request_phase="get_session_messages",
+                poll_attempts=poll_attempts,
+                elapsed_ms=int((time.monotonic() - started) * 1000),
+            )
+        if _messages_contain_text(messages, marker):
+            return _status(
+                "pass",
+                provider_session_id=provider_session_id,
+                message_marker_sha256=hashlib.sha256(marker.encode("utf-8")).hexdigest(),
+                observed_message_count=len(messages) if isinstance(messages, list) else None,
+                poll_attempts=poll_attempts,
+                elapsed_ms=int((time.monotonic() - started) * 1000),
+            )
+        time.sleep(0.2)
+    return _fail(
+        "opencode_prompt_async_delivery_not_observed",
+        "OpenCode accepted prompt_async noReply input, but session.messages did not return the marker.",
+        provider_session_id=provider_session_id,
+        observed_message_count=len(messages) if isinstance(messages, list) else None,
+        poll_attempts=poll_attempts,
+        elapsed_ms=int((time.monotonic() - started) * 1000),
+    )
 
 
 def _stop_process_group(process: subprocess.Popen[str] | None) -> None:
@@ -1052,6 +1190,7 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
             ("/global/health", "get", "global.health"),
             ("/session", "post", "session.create"),
             ("/session/{sessionID}", "get", "session.get"),
+            ("/session/{sessionID}/message", "get", "session.messages"),
             ("/session/{sessionID}/prompt_async", "post", "session.prompt_async"),
             ("/session/{sessionID}/abort", "post", "session.abort"),
         ]
@@ -1060,6 +1199,14 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
             for path, method, operation_id in required_operations
             if (failure := _require_doc_operation(doc, path, method, operation_id)) is not None
         ]
+        request_property_failures = [
+            failure
+            for path, method, property_name, expected_type in [
+                ("/session/{sessionID}/prompt_async", "post", "noReply", "boolean"),
+            ]
+            if (failure := _require_doc_request_property(doc, path, method, property_name, expected_type)) is not None
+        ]
+        failures.extend(request_property_failures)
         if failures:
             canaries["schema_probe"] = _fail(
                 "opencode_schema_probe_failed",
@@ -1119,6 +1266,15 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
             )
             return {"provider": "opencode", "provider_version": version, "canaries": canaries}
         canaries["session_get"] = _status("pass", provider_session_id=provider_session_id)
+        canaries["prompt_async_no_reply_delivery"] = _run_opencode_prompt_async_no_reply_delivery(
+            server_url=server_url,
+            username=username,
+            password=password,
+            provider_session_id=provider_session_id,
+            workspace=workspace,
+        )
+        if canaries["prompt_async_no_reply_delivery"]["status"] != "pass":
+            return {"provider": "opencode", "provider_version": version, "canaries": canaries}
 
         abort_result = _request_json(
             server_url=server_url,
@@ -1140,9 +1296,9 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
         canaries["prompt_async_execution_contract"] = _status(
             "not_run",
             reason=(
-                "OpenCode no-token live canary proves server schema/session/abort shape only; "
-                "scheduled live-token evidence must prove prompt_async execution, transcript binding, "
-                "active-turn abort, and reattach."
+                "OpenCode no-token live canary proves prompt_async noReply delivery into session.messages; "
+                "scheduled live-token evidence must prove assistant response execution, transcript binding, "
+                "active-turn abort, and process-restart reattach."
             ),
         )
         return {"provider": "opencode", "provider_version": version, "canaries": canaries}

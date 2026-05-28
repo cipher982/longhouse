@@ -52,17 +52,39 @@ if not args or args[0] != "serve":
 username = os.environ.get("OPENCODE_SERVER_USERNAME", "opencode")
 password = os.environ.get("OPENCODE_SERVER_PASSWORD", "")
 provider_session_id = "ses_fake_provider_live"
+messages = []
 
 def make_doc():
+    prompt_async_operation = {
+        "operationId": "session.prompt_async",
+        "requestBody": {
+            "content": {
+                "application/json": {
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "noReply": {"type": "boolean"},
+                            "parts": {"type": "array"},
+                        },
+                    },
+                },
+            },
+        },
+    }
+    if os.environ.get("FAKE_OPENCODE_OMIT_NOREPLY_SCHEMA") == "1":
+        prompt_async_operation["requestBody"]["content"]["application/json"]["schema"]["properties"].pop("noReply")
     paths = {
         "/global/health": {"get": {"operationId": "global.health"}},
         "/session": {"post": {"operationId": "session.create"}},
         "/session/{sessionID}": {"get": {"operationId": "session.get"}},
-        "/session/{sessionID}/prompt_async": {"post": {"operationId": "session.prompt_async"}},
+        "/session/{sessionID}/message": {"get": {"operationId": "session.messages"}},
+        "/session/{sessionID}/prompt_async": {"post": prompt_async_operation},
         "/session/{sessionID}/abort": {"post": {"operationId": "session.abort"}},
     }
     if os.environ.get("FAKE_OPENCODE_OMIT_PROMPT_ASYNC") == "1":
         paths.pop("/session/{sessionID}/prompt_async")
+    if os.environ.get("FAKE_OPENCODE_OMIT_MESSAGES") == "1":
+        paths.pop("/session/{sessionID}/message")
     return {"openapi": "3.1.0", "paths": paths}
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -87,6 +109,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return self.headers.get("Authorization") == expected
 
     def do_GET(self):
+        parsed = urlparse(self.path)
         if not self._authorized():
             self._json({"error": "forbidden"}, 403)
             return
@@ -98,6 +121,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if self.path == f"/session/{provider_session_id}":
             self._json({"id": provider_session_id})
+            return
+        if parsed.path == f"/session/{provider_session_id}/message":
+            self._json(messages)
             return
         self._json({"error": "not found"}, 404)
 
@@ -112,6 +138,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "cost": 0,
                 "tokens": {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}},
             })
+            return
+        if parsed.path == f"/session/{provider_session_id}/prompt_async":
+            if os.environ.get("FAKE_OPENCODE_PROMPT_ASYNC_500") == "1":
+                self._json({"error": "boom"}, 500)
+                return
+            length = int(self.headers.get("Content-Length") or "0")
+            body = self.rfile.read(length) if length else b"{}"
+            payload = json.loads(body.decode("utf-8") or "{}")
+            if os.environ.get("FAKE_OPENCODE_DROP_PROMPT_ASYNC") != "1":
+                messages.append({
+                    "info": {"id": "msg_fake_user", "sessionID": provider_session_id, "role": "user"},
+                    "parts": payload.get("parts") or [],
+                })
+            self._empty()
             return
         if parsed.path == f"/session/{provider_session_id}/abort":
             if os.environ.get("FAKE_OPENCODE_EMPTY_ABORT") == "1":
@@ -338,13 +378,16 @@ def test_opencode_live_canary_stays_yellow_until_prompt_execution_is_proven() ->
         assert payload["canaries"]["server_startup"]["status"] == "pass"
         assert payload["canaries"]["schema_probe"]["status"] == "pass"
         assert payload["canaries"]["session_create"]["tokens"]["input"] == 0
+        assert payload["canaries"]["prompt_async_no_reply_delivery"]["status"] == "pass"
+        assert payload["canaries"]["prompt_async_no_reply_delivery"]["observed_message_count"] == 1
         assert payload["canaries"]["session_abort"]["status"] == "pass"
         assert payload["canaries"]["prompt_async_execution_contract"]["status"] == "not_run"
         assert set(payload["operation_evidence"]) == {"interrupt", "launch_local", "reattach", "send_input"}
         assert payload["operation_evidence"]["launch_local"]["level"] == "live_no_token"
         assert payload["operation_evidence"]["reattach"]["level"] == "live_no_token"
         assert payload["operation_evidence"]["send_input"]["status"] == "pass"
-        assert "API-surface proof" in payload["operation_evidence"]["send_input"]["message"]
+        assert payload["operation_evidence"]["send_input"]["canary"] == "opencode_prompt_async_no_reply_delivery"
+        assert "No-token behavior proof" in payload["operation_evidence"]["send_input"]["message"]
         assert payload["operation_evidence"]["interrupt"]["status"] == "pass"
 
 
@@ -536,6 +579,34 @@ def test_opencode_live_canary_fails_when_schema_drops_prompt_async() -> None:
         assert "prompt_async_execution_contract" not in payload["operation_evidence"]
 
 
+def test_opencode_live_canary_fails_when_schema_drops_session_messages() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_opencode(root / "bin" / "opencode")
+        result, payload = _run_canary(root, fake_bin, {"FAKE_OPENCODE_OMIT_MESSAGES": "1"})
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "opencode_schema_probe_failed"
+        failures = payload["canaries"]["schema_probe"]["failures"]
+        assert failures[0]["failure_code"] == "opencode_schema_missing_path"
+        assert failures[0]["path"] == "/session/{sessionID}/message"
+
+
+def test_opencode_live_canary_fails_when_noreply_schema_is_missing() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_opencode(root / "bin" / "opencode")
+        result, payload = _run_canary(root, fake_bin, {"FAKE_OPENCODE_OMIT_NOREPLY_SCHEMA": "1"})
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "opencode_schema_probe_failed"
+        failures = payload["canaries"]["schema_probe"]["failures"]
+        assert failures[0]["failure_code"] == "opencode_schema_missing_request_property"
+        assert failures[0]["property"] == "noReply"
+
+
 def test_opencode_live_canary_accepts_empty_successful_abort_response() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -545,6 +616,35 @@ def test_opencode_live_canary_accepts_empty_successful_abort_response() -> None:
         assert result.returncode == 0, result.stderr + result.stdout
         assert payload["verdict"] == "yellow"
         assert payload["canaries"]["session_abort"]["status"] == "pass"
+
+
+def test_opencode_live_canary_reports_prompt_async_request_failure_on_send_input() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_opencode(root / "bin" / "opencode")
+        result, payload = _run_canary(root, fake_bin, {"FAKE_OPENCODE_PROMPT_ASYNC_500": "1"})
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "opencode_prompt_async_request_failed"
+        assert payload["canaries"]["prompt_async_no_reply_delivery"]["status"] == "fail"
+        assert payload["canaries"]["prompt_async_no_reply_delivery"]["request_phase"] == "post_prompt_async"
+        assert payload["operation_evidence"]["send_input"]["status"] == "fail"
+        assert payload["operation_evidence"]["send_input"]["failure_code"] == "opencode_prompt_async_request_failed"
+
+
+def test_opencode_live_canary_fails_when_prompt_async_delivery_is_not_observed() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_opencode(root / "bin" / "opencode")
+        result, payload = _run_canary(root, fake_bin, {"FAKE_OPENCODE_DROP_PROMPT_ASYNC": "1"})
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "opencode_prompt_async_delivery_not_observed"
+        assert payload["canaries"]["prompt_async_no_reply_delivery"]["status"] == "fail"
+        assert payload["operation_evidence"]["send_input"]["status"] == "fail"
+        assert payload["operation_evidence"]["send_input"]["level"] == "none"
 
 
 def main() -> int:
@@ -560,7 +660,11 @@ def main() -> int:
         test_claude_live_canary_fails_when_channels_contract_is_missing,
         test_claude_live_canary_fails_when_session_flag_is_missing,
         test_opencode_live_canary_fails_when_schema_drops_prompt_async,
+        test_opencode_live_canary_fails_when_schema_drops_session_messages,
+        test_opencode_live_canary_fails_when_noreply_schema_is_missing,
         test_opencode_live_canary_accepts_empty_successful_abort_response,
+        test_opencode_live_canary_reports_prompt_async_request_failure_on_send_input,
+        test_opencode_live_canary_fails_when_prompt_async_delivery_is_not_observed,
     ]
     for test in tests:
         test()
