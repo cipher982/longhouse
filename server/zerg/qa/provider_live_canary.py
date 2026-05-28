@@ -31,15 +31,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from zerg.services.longhouse_paths import resolve_longhouse_home
+from zerg.qa.repo_root import default_repo_root
+from zerg.qa.repo_root import provider_live_evidence_base
 
 PROVIDER_STATUS_SCHEMA_VERSION = 1
 _OPENCODE_SERVER_LOG_RE = re.compile(r"opencode server listening on (?P<url>http://127\.0\.0\.1:\d+)")
 _ANTIGRAVITY_PLUGIN_NAME = "longhouse-runtime"
 _ANTIGRAVITY_HOOK_EVENTS = ("PreInvocation", "PreToolUse", "PostToolUse", "PostInvocation", "Stop")
 SUPPORTED_PROVIDERS = ("claude", "opencode", "antigravity")
-_OPTIONAL_SKIPPED_STATUS = "optional_skipped"
-_GAP_OPERATION_STATUSES = {"fail", "missing", "not_run", _OPTIONAL_SKIPPED_STATUS, "skipped", "stale"}
+_GAP_OPERATION_STATUSES = {"fail", "missing", "not_run", "skipped", "stale"}
 _OPENCODE_REATTACH_MESSAGE = " ".join(
     (
         "Process-restart proof: a fresh OpenCode server recovered",
@@ -61,23 +61,8 @@ _ANTIGRAVITY_PLUGIN_NOTE = (
 )
 
 
-def _source_repo_root() -> Path | None:
-    for parent in Path(__file__).resolve().parents:
-        contract_path = parent / "server/zerg/config/managed_provider_contracts.json"
-        if contract_path.exists() and (parent / "scripts/qa").exists():
-            return parent
-    return None
-
-
-def default_repo_root() -> Path:
-    return _source_repo_root() or Path.cwd()
-
-
 def _default_evidence_root(repo_root: Path, provider: str, timestamp: str) -> Path:
-    source_root = _source_repo_root()
-    if source_root is not None and repo_root.resolve() == source_root.resolve():
-        return repo_root / ".build/canaries/provider-live" / provider / timestamp
-    return resolve_longhouse_home() / "canaries/provider-live" / provider / timestamp
+    return provider_live_evidence_base(repo_root) / provider / timestamp
 
 
 def _reserve_default_evidence_root(path: Path) -> Path:
@@ -139,6 +124,35 @@ def _resolve_provider_binary(args: argparse.Namespace, binary_name: str) -> str 
         path = Path(args.provider_bin).expanduser()
         return str(path) if path.is_file() else None
     return shutil.which(binary_name)
+
+
+def _provider_binary_identity(
+    args: argparse.Namespace,
+    binary_name: str,
+) -> tuple[str | None, str | None, dict[str, Any]]:
+    binary = _resolve_provider_binary(args, binary_name)
+    if not binary:
+        return (
+            None,
+            None,
+            _fail(
+                "provider_binary_not_found",
+                f"{binary_name} binary was not found on PATH",
+            ),
+        )
+    version, evidence = _run_version(binary)
+    if not version:
+        return (
+            None,
+            None,
+            _fail(
+                "provider_version_failed",
+                f"{binary_name} --version failed",
+                path=binary,
+                evidence=evidence,
+            ),
+        )
+    return binary, version, _status("pass", path=binary, version=version, evidence=evidence)
 
 
 def _provider_contract(repo_root: Path, provider: str) -> dict[str, Any] | None:
@@ -446,8 +460,6 @@ def _classify(canaries: dict[str, dict[str, Any]]) -> tuple[str, str | None, str
         status = canary.get("status")
         if status == "fail":
             return "red", str(canary.get("failure_code") or name), "block_upgrade_recommendation"
-        if status == _OPTIONAL_SKIPPED_STATUS:
-            continue
         if status == "not_run" and first_not_run is None:
             first_not_run = name
         if status == "warn" and first_warn is None:
@@ -1526,29 +1538,11 @@ def _run_antigravity_hook_inbox_contract(root: Path) -> dict[str, Any]:
 
 
 def run_claude_live_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
-    binary = _resolve_provider_binary(args, "claude")
-    if not binary:
-        return {
-            "provider": "claude",
-            "provider_version": None,
-            "canaries": {"binary_identity": _fail("provider_binary_not_found", "claude binary was not found on PATH")},
-        }
-    version, version_evidence = _run_version(binary)
-    if not version:
-        return {
-            "provider": "claude",
-            "provider_version": None,
-            "canaries": {
-                "binary_identity": _fail(
-                    "provider_version_failed",
-                    "claude --version failed",
-                    path=binary,
-                    evidence=version_evidence,
-                )
-            },
-        }
+    binary, version, binary_identity = _provider_binary_identity(args, "claude")
+    if binary is None or version is None:
+        return {"provider": "claude", "provider_version": None, "canaries": {"binary_identity": binary_identity}}
     canaries = {
-        "binary_identity": _status("pass", path=binary, version=version, evidence=version_evidence),
+        "binary_identity": binary_identity,
         "command_shape": _run_claude_command_shape(binary),
         "channels_shape": _run_claude_channels_shape(binary),
         "detached_pty_shape": _run_claude_pty_wrapper_shape(),
@@ -1561,30 +1555,9 @@ def run_claude_live_canary(args: argparse.Namespace, root: Path) -> dict[str, An
 
 
 def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
-    binary = _resolve_provider_binary(args, "opencode")
-    if not binary:
-        return {
-            "provider": "opencode",
-            "provider_version": None,
-            "canaries": {
-                "binary_identity": _fail("provider_binary_not_found", "opencode binary was not found on PATH"),
-            },
-        }
-
-    version, version_evidence = _run_version(binary)
-    if not version:
-        return {
-            "provider": "opencode",
-            "provider_version": None,
-            "canaries": {
-                "binary_identity": _fail(
-                    "provider_version_failed",
-                    "opencode --version failed",
-                    path=binary,
-                    evidence=version_evidence,
-                )
-            },
-        }
+    binary, version, binary_identity = _provider_binary_identity(args, "opencode")
+    if binary is None or version is None:
+        return {"provider": "opencode", "provider_version": None, "canaries": {"binary_identity": binary_identity}}
 
     workspace = root / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)
@@ -1599,7 +1572,7 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
 
     process: subprocess.Popen[str] | None = None
     canaries: dict[str, dict[str, Any]] = {
-        "binary_identity": _status("pass", path=binary, version=version, evidence=version_evidence),
+        "binary_identity": binary_identity,
         "attach_command_shape": _run_attach_shape(binary),
     }
     try:
@@ -1788,31 +1761,12 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
 
 
 def run_antigravity_live_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
-    binary = _resolve_provider_binary(args, "agy")
-    if not binary:
-        return {
-            "provider": "antigravity",
-            "provider_version": None,
-            "canaries": {"binary_identity": _fail("provider_binary_not_found", "agy binary was not found on PATH")},
-        }
-
-    version, version_evidence = _run_version(binary)
-    if not version:
-        return {
-            "provider": "antigravity",
-            "provider_version": None,
-            "canaries": {
-                "binary_identity": _fail(
-                    "provider_version_failed",
-                    "agy --version failed",
-                    path=binary,
-                    evidence=version_evidence,
-                )
-            },
-        }
+    binary, version, binary_identity = _provider_binary_identity(args, "agy")
+    if binary is None or version is None:
+        return {"provider": "antigravity", "provider_version": None, "canaries": {"binary_identity": binary_identity}}
 
     canaries = {
-        "binary_identity": _status("pass", path=binary, version=version, evidence=version_evidence),
+        "binary_identity": binary_identity,
         "command_shape": _run_antigravity_command_shape(binary),
         "plugin_contract": _run_antigravity_plugin_contract(binary, root),
         "global_hooks_contract": _run_antigravity_global_hooks_contract(root / "plugin" / "global-hooks.json"),
@@ -1820,16 +1774,6 @@ def run_antigravity_live_canary(args: argparse.Namespace, root: Path) -> dict[st
     }
 
     return {"provider": "antigravity", "provider_version": version, "canaries": canaries}
-
-
-def run_provider(args: argparse.Namespace, root: Path) -> dict[str, Any]:
-    if args.provider == "claude":
-        return run_claude_live_canary(args, root)
-    if args.provider == "opencode":
-        return run_opencode_live_canary(args, root)
-    if args.provider == "antigravity":
-        return run_antigravity_live_canary(args, root)
-    raise ValueError(f"unsupported provider: {args.provider}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -1862,10 +1806,16 @@ def run_provider_live_canary(args: argparse.Namespace | Mapping[str, Any]) -> di
         evidence_root.mkdir(parents=True, exist_ok=True)
     artifact_path = args.artifact or evidence_root / "provider-live-canary.json"
 
-    provider_result = run_provider(args, evidence_root)
+    if args.provider == "claude":
+        provider_result = run_claude_live_canary(args, evidence_root)
+    elif args.provider == "opencode":
+        provider_result = run_opencode_live_canary(args, evidence_root)
+    elif args.provider == "antigravity":
+        provider_result = run_antigravity_live_canary(args, evidence_root)
+    else:
+        raise ValueError(f"unsupported provider: {args.provider}")
     canaries = provider_result["canaries"]
-    manifest_operation_evidence = _provider_operation_evidence(args.repo_root, provider_result["provider"], canaries)
-    operation_evidence = dict(provider_result.get("operation_evidence") or manifest_operation_evidence)
+    operation_evidence = _provider_operation_evidence(args.repo_root, provider_result["provider"], canaries)
     verdict, failure_code, recommendation = _classify(canaries)
     artifact = {
         "schema_version": PROVIDER_STATUS_SCHEMA_VERSION,
@@ -1882,8 +1832,6 @@ def run_provider_live_canary(args: argparse.Namespace | Mapping[str, Any]) -> di
     }
     if operation_evidence:
         artifact["operation_evidence"] = operation_evidence
-    if provider_result.get("source_artifacts"):
-        artifact["source_artifacts"] = provider_result["source_artifacts"]
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
     artifact_path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return artifact
