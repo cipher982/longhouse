@@ -108,10 +108,11 @@ This lets release automation ask a provider-capable user-owned machine for live
 evidence without installing Claude, Codex, OpenCode, or Antigravity inside the
 automation container. Callers may include `expected_provider_version`; when the
 returned live artifact proves a different version, the Machine Agent rejects the
-command with `provider_version_mismatch` so release automation cannot promote a
-local green proof for the wrong upstream release. Runtime Host also allows only
-one in-flight live proof per owner/device/provider to avoid duplicate
-token-spending canaries.
+command with `provider_version_mismatch`; Runtime Host maps that mismatch to an
+application-level conflict so release automation cannot promote a local green
+proof for the wrong upstream release and edge proxies do not collapse the typed
+body into a generic upstream 5xx. Runtime Host also allows only one in-flight
+live proof per owner/device/provider to avoid duplicate token-spending canaries.
 
 ### Coordination and directed messaging
 

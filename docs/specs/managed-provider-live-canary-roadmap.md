@@ -204,8 +204,9 @@ machine has proven the installed version.
    of the provider-binary business while still giving them structured
    live-token artifacts from a real user-owned machine. Release automation
    should pass `expected_provider_version` for upstream release gates; mismatches
-   are typed failures, not green evidence, and Runtime Host prevents duplicate
-   in-flight live proofs for the same owner/device/provider.
+   are typed application-level conflicts, not green evidence or generic upstream
+   5xx responses, and Runtime Host prevents duplicate in-flight live proofs for
+   the same owner/device/provider.
 
 ## Reference Surfaces
 

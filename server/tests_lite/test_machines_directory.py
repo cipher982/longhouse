@@ -514,7 +514,7 @@ def test_provider_live_proof_route_preserves_machine_error_code(tmp_path):
     finally:
         module.get_machine_control_channel_registry = original
 
-    assert resp.status_code == 502
+    assert resp.status_code == 409
     assert resp.json()["detail"] == {
         "code": "provider_version_mismatch",
         "message": "provider live proof version mismatch",
