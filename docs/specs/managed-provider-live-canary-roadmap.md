@@ -136,7 +136,10 @@ block?" Local proof artifacts answer "has this machine proven operation behavior
 for the installed CLI version?" A matching local proof artifact can raise or
 demote the operation evidence shown by local-health, but it cannot turn a
 Yellow/Red Sauron release verdict Green or satisfy the source-drift release
-gate by itself. The only health suppression rule is narrow:
+gate by itself. Shared provider release-profile artifacts must include
+top-level operation evidence so each unsupported operation, source-reviewed
+operation, and missing live release proof is machine-readable. The only health
+suppression rule is narrow:
 `yellow/insufficient_coverage` plus fresh green local proof becomes
 `caution_local_proven` with risk `none`; the raw Sauron verdict remains visible
 as an advisory. Operation-level release gaps from that artifact are also marked

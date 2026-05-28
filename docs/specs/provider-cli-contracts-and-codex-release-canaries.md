@@ -218,6 +218,22 @@ Sauron should publish a single structured artifact per release:
     "detached_ui": { "status": "pass" },
     "fake_app_server": { "status": "pass" }
   },
+  "operation_evidence": {
+    "send_input": {
+      "status": "not_run",
+      "level": "none",
+      "failure_code": "insufficient_coverage",
+      "canary": "codex_live_contract",
+      "source": "engine codex_bridge IPC turn/start tests"
+    },
+    "steer_active_turn": {
+      "status": "not_run",
+      "level": "none",
+      "failure_code": "insufficient_coverage",
+      "canary": "codex_live_contract",
+      "source": "engine codex_bridge turn/steer active-turn tests"
+    }
+  },
   "evidence_root": "..."
 }
 ```
@@ -277,7 +293,12 @@ Initial product contract:
   are marked advisory in support state. Red release blockers remain blocking.
 - `scripts/qa/provider-release-profile-canary.py` emits the shared provider
   profile artifact for any managed provider in
-  `server/zerg/config/managed_provider_contracts.json`.
+  `server/zerg/config/managed_provider_contracts.json`. Its top-level
+  `operation_evidence` is the Sauron/local-health contract: supported
+  operations that lack a release proof are `not_run` with
+  `insufficient_coverage`, source-reviewed operations can pass from Sauron's
+  source review, source/binary failures mark supported operations failed, and
+  provider-limited operations are explicit `unsupported` entries.
 - `scripts/qa/codex-provider-release-canary.py` is a repo wrapper around the
   packaged Codex-specific live bridge/TUI canary suite. The shared
   `provider-live` dispatcher reuses that packaged lane for explicit Codex local

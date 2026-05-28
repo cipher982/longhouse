@@ -80,9 +80,12 @@ downgraded with the failed evidence attached.
 `scripts/qa/provider-release-profile-canary.py` now emits the shared
 Sauron-facing release artifact for every managed provider. Provider-specific
 release profile live fields remain yellow/not-run until real upstream provider
-probes run. `scripts/qa/provider-control-e2e-canary.py` is the hermetic
-Longhouse control-path canary: it proves the local commands and control
-contracts without spending model tokens.
+probes run, and the artifact includes top-level per-operation evidence so
+unsupported provider limits, source-review passes, and missing live release
+proofs are visible without reading the raw Sauron transcript.
+`scripts/qa/provider-control-e2e-canary.py` is the hermetic Longhouse
+control-path canary: it proves the local commands and control contracts without
+spending model tokens.
 
 ## Provider Contracts
 
