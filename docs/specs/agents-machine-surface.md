@@ -112,15 +112,15 @@ command with `provider_version_mismatch`; Runtime Host maps that mismatch to an
 application-level conflict so release automation cannot promote a local green
 proof for the wrong upstream release and edge proxies do not collapse the typed
 body into a generic upstream 5xx. Runtime Host also allows only one in-flight
-live proof per owner/device/provider to avoid duplicate token-spending canaries.
+live proof per owner/device/provider to avoid duplicate provider-response canaries.
 `make provider-live-route-e2e` verifies this hosted route end to end against a
 configured dogfood machine: machine directory support, positive version match,
 and typed `provider_version_mismatch` rejection. `make dogfood-refresh` writes
 the latest hosted-route proof to
 `~/.longhouse/provider-live-route-e2e/latest.json`; local-health and doctor read
 that sidecar as the durable evidence that hosted dispatch still works for this
-machine. The default provider set is `auto`: every current valid
-`~/.longhouse/provider-live-proof/{provider}.json` sidecar is routed through the
+machine. The default provider set is `auto`: every current valid shared
+live-proof sidecar for Claude, OpenCode, or Antigravity is routed through the
 hosted machine API. Local-health reports coverage separately so a one-provider
 green route proof cannot masquerade as all-provider coverage. The route harness
 retries transient hosted dispatch failures per provider; typed version

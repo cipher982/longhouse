@@ -521,7 +521,7 @@ def test_collect_local_health_marks_connected_control_channel_launch_ready(monke
     contracts = snapshot["provider_contracts"]["providers"]
     assert contracts["claude"]["operations"]["steer_active_turn"] == {
         "supported": True,
-        "evidence_level": "manual_live_token",
+        "evidence_level": "live_token",
         "evidence_source": "make managed-claude-poc delayed intent=steer transcript assertion",
         "next": "promote to scheduled live token canary",
     }
@@ -1329,7 +1329,7 @@ def test_collect_local_health_projects_matching_provider_live_proof(monkeypatch,
                 "operation_evidence": {
                     "steer_active_turn": {
                         "status": "pass",
-                        "level": "scheduled_live_token",
+                        "level": "live_token",
                         "source": "local provider-live-canary",
                     }
                 },
@@ -1346,7 +1346,7 @@ def test_collect_local_health_projects_matching_provider_live_proof(monkeypatch,
     assert claude["live_proof"]["applies"] is True
     steer = claude["operations"]["steer_active_turn"]
     assert steer["evidence_origin"] == "local_proof"
-    assert steer["evidence_level"] == "scheduled_live_token"
+    assert steer["evidence_level"] == "live_token"
 
 
 def test_collect_local_health_surfaces_opencode_provider_cli(monkeypatch, tmp_path: Path):

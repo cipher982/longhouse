@@ -11,7 +11,7 @@ from pydantic import Field
 
 from zerg.utils.time import UTCBaseModel
 
-ProviderLiveProofProvider = Literal["codex", "claude", "opencode", "antigravity"]
+ProviderLiveProofProvider = Literal["claude", "opencode", "antigravity"]
 
 ControlChannelStatus = Literal["connected", "disconnected"]
 LaunchBlockedBy = Literal[

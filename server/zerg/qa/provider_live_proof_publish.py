@@ -26,7 +26,7 @@ from zerg.qa.provider_live_canary import run_provider_live_canary
 from zerg.services.longhouse_paths import resolve_longhouse_home
 
 DEFAULT_PROVIDERS = ("claude", "opencode", "antigravity")
-SUPPORTED_PROVIDERS = ("codex", *DEFAULT_PROVIDERS)
+SUPPORTED_PROVIDERS = DEFAULT_PROVIDERS
 PROVIDER_STATUS_SCHEMA_VERSION = 1
 LIVE_PROOF_ARTIFACT_KIND = "provider_live_canary"
 CANARY_SCRIPT_HELP = "Debug/test override for the provider-live canary executable."
@@ -277,7 +277,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--provider",
         action="append",
         choices=list(SUPPORTED_PROVIDERS),
-        help="Provider to prove. Repeat to run more than one. Defaults to all non-Codex shared live canaries.",
+        help="Provider to prove. Repeat to run more than one. Defaults to all shared live canaries.",
     )
     parser.add_argument("--proof-dir", type=Path, default=None)
     parser.add_argument("--evidence-root", type=Path)

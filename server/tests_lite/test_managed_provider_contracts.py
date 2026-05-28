@@ -186,7 +186,7 @@ def test_managed_provider_contract_manifest_snapshot():
                 "reattach": "hermetic",
                 "runtime_phase": "hermetic",
                 "send_input": "hermetic",
-                "steer_active_turn": "manual_live_token",
+                "steer_active_turn": "live_token",
                 "tail_output": "hermetic",
                 "terminate": "hermetic",
                 "transcript_binding": "hermetic",
@@ -302,7 +302,7 @@ def test_claude_contract_is_first_class_channel_control_provider():
     assert claude.send_input is True
     assert claude.interrupt is True
     assert claude.steer_active_turn is True
-    assert claude.operation_evidence_for("steer_active_turn")["level"] == "manual_live_token"
+    assert claude.operation_evidence_for("steer_active_turn")["level"] == "live_token"
     assert "scheduled live token canary" in claude.operation_evidence_for("steer_active_turn")["next"]
     assert claude.machine_control_supports == ("claude.send", "claude.interrupt", "claude.steer", "claude.launch")
 

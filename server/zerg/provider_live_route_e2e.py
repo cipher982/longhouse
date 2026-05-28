@@ -21,6 +21,7 @@ from zerg.provider_release_status import _parse_rfc3339
 from zerg.services.longhouse_paths import get_provider_live_route_e2e_dir
 
 ROUTE_E2E_ARTIFACT_KIND = "provider_live_route_e2e"
+SUPPORTED_ROUTE_PROOF_PROVIDERS = frozenset({"claude", "opencode", "antigravity"})
 
 
 def _read_json_file(path: Path) -> tuple[dict[str, Any] | None, str | None]:
@@ -107,6 +108,8 @@ def expected_route_providers_from_live_proof(provider_live_proof: Mapping[str, A
     statuses = dict((provider_live_proof or {}).get("statuses") or {})
     providers: list[str] = []
     for provider, raw_info in sorted(statuses.items()):
+        if provider not in SUPPORTED_ROUTE_PROOF_PROVIDERS:
+            continue
         info = dict(raw_info or {})
         if info.get("applies") and info.get("status") == "ok":
             providers.append(str(provider))

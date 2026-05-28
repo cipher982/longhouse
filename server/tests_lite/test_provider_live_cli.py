@@ -86,24 +86,6 @@ raise SystemExit(2)
     )
 
 
-def _fake_codex(path: Path) -> Path:
-    return _write_exe(
-        path,
-        r"""#!/usr/bin/env python3
-import json
-import sys
-
-args = sys.argv[1:]
-if args == ["--version"]:
-    print("codex 0.999.0")
-    raise SystemExit(0)
-
-print("unexpected fake codex args: " + json.dumps(args), file=sys.stderr)
-raise SystemExit(2)
-""",
-    )
-
-
 def _fake_antigravity(path: Path) -> Path:
     return _write_exe(
         path,
@@ -229,7 +211,7 @@ raise SystemExit(1 if payload["verdict"] == "red" else 0)
 
 
 def test_provider_live_canary_cli_writes_packaged_artifact(tmp_path: Path) -> None:
-    fake_bin = _fake_codex(tmp_path / "bin" / "codex")
+    fake_bin = _fake_claude(tmp_path / "bin" / "claude")
     artifact_path = tmp_path / "artifact.json"
     evidence_root = tmp_path / "evidence"
 
@@ -239,7 +221,7 @@ def test_provider_live_canary_cli_writes_packaged_artifact(tmp_path: Path) -> No
             "provider-live",
             "canary",
             "--provider",
-            "codex",
+            "claude",
             "--provider-bin",
             str(fake_bin),
             "--artifact",
@@ -257,10 +239,10 @@ def test_provider_live_canary_cli_writes_packaged_artifact(tmp_path: Path) -> No
     assert payload["artifact_kind"] == "provider_live_canary"
     assert payload["artifact_path"] == str(artifact_path)
     assert payload["evidence_root"] == str(evidence_root)
-    assert payload["provider"] == "codex"
-    assert payload["verdict"] == "yellow"
-    assert payload["failure_code"] == "insufficient_coverage"
-    assert "codex_provider_release_canary" in payload["source_artifacts"]
+    assert payload["provider"] == "claude"
+    assert payload["verdict"] == "green"
+    assert payload["failure_code"] is None
+    assert "source_artifacts" not in payload
 
 
 def test_provider_live_canary_uses_packaged_contracts_without_repo_root(tmp_path: Path) -> None:
@@ -430,7 +412,7 @@ def test_antigravity_plugin_argv_unwraps_home_based_debug_wrapper(
 
 def test_provider_live_canary_cli_exits_nonzero_on_red(tmp_path: Path) -> None:
     fake_bin = _write_exe(
-        tmp_path / "bin" / "codex",
+        tmp_path / "bin" / "claude",
         "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo broken >&2; exit 3; fi\nexit 2\n",
     )
     artifact_path = tmp_path / "artifact.json"
@@ -441,7 +423,7 @@ def test_provider_live_canary_cli_exits_nonzero_on_red(tmp_path: Path) -> None:
             "provider-live",
             "canary",
             "--provider",
-            "codex",
+            "claude",
             "--provider-bin",
             str(fake_bin),
             "--artifact",
@@ -455,14 +437,11 @@ def test_provider_live_canary_cli_exits_nonzero_on_red(tmp_path: Path) -> None:
     assert result.exit_code == 1, result.output
     payload = json.loads(result.output)
     assert payload["verdict"] == "red"
-    assert payload["failure_code"] == "codex_version_failed"
+    assert payload["failure_code"] == "provider_version_failed"
     assert json.loads(artifact_path.read_text(encoding="utf-8")) == payload
 
 
-def test_provider_live_canary_cli_runs_codex_lightweight_lane(tmp_path: Path) -> None:
-    fake_bin = _fake_codex(tmp_path / "bin" / "codex")
-    artifact_path = tmp_path / "artifact.json"
-
+def test_provider_live_canary_cli_rejects_codex(tmp_path: Path) -> None:
     result = CliRunner().invoke(
         app,
         [
@@ -470,34 +449,17 @@ def test_provider_live_canary_cli_runs_codex_lightweight_lane(tmp_path: Path) ->
             "canary",
             "--provider",
             "codex",
-            "--provider-bin",
-            str(fake_bin),
             "--artifact",
-            str(artifact_path),
+            str(tmp_path / "artifact.json"),
             "--evidence-root",
             str(tmp_path / "evidence"),
             "--json",
         ],
     )
 
-    assert result.exit_code == 0, result.output
-    payload = json.loads(result.output)
-    persisted = json.loads(artifact_path.read_text(encoding="utf-8"))
-    assert payload == persisted
-    assert payload["schema_version"] == 1
-    assert payload["artifact_kind"] == "provider_live_canary"
-    assert payload["provider"] == "codex"
-    assert payload["provider_version"] == "codex 0.999.0"
-    assert payload["verdict"] == "yellow"
-    assert payload["failure_code"] == "insufficient_coverage"
-    assert payload["canaries"]["binary_identity"]["status"] == "pass"
-    assert payload["canaries"]["static_contract"]["status"] == "pass"
-    assert payload["canaries"]["managed_tui_attach"]["status"] == "not_run"
-    assert payload["canaries"]["codex_release_lane"]["status"] == "warn"
-    assert "codex_provider_release_canary" in payload["source_artifacts"]
-    release_artifact = json.loads(Path(payload["source_artifacts"]["codex_provider_release_canary"]).read_text())
-    assert release_artifact["artifact_kind"] == "provider_release_canary"
-    assert release_artifact["provider_version"] == "codex 0.999.0"
+    assert result.exit_code == 2
+    assert "Unsupported provider" in result.output
+    assert not (tmp_path / "artifact.json").exists()
 
 
 def test_provider_live_canary_installed_default_evidence_uses_longhouse_home(tmp_path: Path, monkeypatch) -> None:
@@ -693,11 +655,9 @@ def test_provider_live_publish_cli_rejects_unsupported_provider(tmp_path: Path) 
     assert "Unsupported provider" in result.output
 
 
-def test_provider_live_publish_cli_accepts_explicit_codex_but_excludes_it_by_default(tmp_path: Path) -> None:
-    fake_bin = _fake_codex(tmp_path / "bin" / "codex")
+def test_provider_live_publish_cli_rejects_codex_and_excludes_it_by_default(tmp_path: Path) -> None:
     proof_dir = tmp_path / "proof"
     env = {
-        "PATH": f"{fake_bin.parent}{os.pathsep}{os.environ.get('PATH', '')}",
         "LONGHOUSE_HOME": str(tmp_path / "longhouse-home"),
     }
 
@@ -717,13 +677,9 @@ def test_provider_live_publish_cli_accepts_explicit_codex_but_excludes_it_by_def
         env=env,
     )
 
-    assert explicit.exit_code == 0, explicit.output
-    explicit_payload = json.loads(explicit.output)
-    assert explicit_payload["providers"] == ["codex"]
-    codex_artifact = json.loads((proof_dir / "codex.json").read_text(encoding="utf-8"))
-    assert codex_artifact["artifact_kind"] == "provider_live_canary"
-    assert codex_artifact["provider"] == "codex"
-    assert codex_artifact["provider_version"] == "codex 0.999.0"
+    assert explicit.exit_code == 2
+    assert "Unsupported provider" in explicit.output
+    assert not (proof_dir / "codex.json").exists()
 
     default_payload = CliRunner().invoke(
         app,

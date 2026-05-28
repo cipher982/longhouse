@@ -257,10 +257,9 @@ Initial product contract:
 - A local dogfood machine can publish independent live-proof sidecars under
   `LONGHOUSE_PROVIDER_LIVE_PROOF_DIR`, or the default
   `~/.longhouse/provider-live-proof`, by running
-  `longhouse provider-live publish`. The default publisher covers Claude,
-  OpenCode, and Antigravity; explicit `--provider codex` publishes a Codex
-  sidecar without making the heavier Codex bridge/TUI suite part of the
-  dogfood refresh path. The underlying canary is the packaged
+  `longhouse provider-live publish`. The publisher covers Claude, OpenCode,
+  and Antigravity. Codex release drift stays in the dedicated Codex release
+  canary lane. The underlying canary is the packaged
   `longhouse provider-live canary` command; the repo scripts
   `scripts/qa/provider-live-canary.py` and
   `scripts/qa/provider-live-proof-publish.py` remain repo wrappers around the
@@ -295,9 +294,9 @@ Initial product contract:
   source review, source/binary failures mark supported operations failed, and
   provider-limited operations are explicit `unsupported` entries.
 - `scripts/qa/codex-provider-release-canary.py` is a repo wrapper around the
-  packaged Codex-specific live bridge/TUI canary suite. The shared
-  `provider-live` dispatcher reuses that packaged lane for explicit Codex local
-  proof and emits a local-health-compatible `provider_live_canary` sidecar.
+  packaged Codex-specific live bridge/TUI canary suite. Codex does not also run
+  through the shared `provider-live` dispatcher; that dispatcher is for
+  Claude, OpenCode, and Antigravity live-proof sidecars.
 - `scripts/qa/provider-control-e2e-canary.py` proves the Longhouse-managed
   local control contracts for Claude, OpenCode, and Antigravity with hermetic
   fake provider endpoints where needed. It is not a source-drift substitute for

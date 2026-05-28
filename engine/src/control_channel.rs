@@ -318,8 +318,7 @@ fn validate_managed_provider_contract_manifest(payload: &Value) -> Result<(), St
         "source_review",
         "hermetic",
         "live_no_token",
-        "manual_live_token",
-        "scheduled_live_token",
+        "live_token",
     ];
     for provider in providers {
         let provider_name = provider
@@ -423,11 +422,17 @@ fn control_supports_for_path_with_env(
         }
         if longhouse_available {
             if let Some(provider) = contract.get("provider").and_then(Value::as_str) {
-                supports.push(format!("{provider}.live_proof"));
+                if provider_live_proof_supported_provider(provider) {
+                    supports.push(format!("{provider}.live_proof"));
+                }
             }
         }
     }
     supports
+}
+
+fn provider_live_proof_supported_provider(provider: &str) -> bool {
+    matches!(provider, "claude" | "opencode" | "antigravity")
 }
 
 fn control_supports_for_path(path_value: Option<&OsStr>) -> Vec<String> {
@@ -1142,7 +1147,7 @@ async fn run_provider_live_proof_command(
     payload: &Value,
 ) -> std::result::Result<Value, CommandError> {
     let provider = payload_required_string(payload, "provider")?;
-    if !["codex", "claude", "opencode", "antigravity"].contains(&provider.as_str()) {
+    if !provider_live_proof_supported_provider(&provider) {
         return Err(CommandError {
             code: "provider_unsupported".to_string(),
             message: format!("provider={provider} is not supported for provider live proof"),
@@ -1953,7 +1958,7 @@ mod tests {
         });
         assert!(supports.contains(&"codex.launch".to_string()));
         assert!(supports.contains(&"codex.continue".to_string()));
-        assert!(supports.contains(&"codex.live_proof".to_string()));
+        assert!(!supports.contains(&"codex.live_proof".to_string()));
 
         write_executable(&dir, "codex");
         write_executable(&dir, "claude");
@@ -1967,6 +1972,7 @@ mod tests {
         assert!(supports.contains(&"claude.live_proof".to_string()));
         assert!(supports.contains(&"opencode.live_proof".to_string()));
         assert!(supports.contains(&"antigravity.live_proof".to_string()));
+        assert!(!supports.contains(&"codex.live_proof".to_string()));
         assert!(!supports.contains(&"antigravity.interrupt".to_string()));
         assert!(!supports.contains(&"antigravity.steer".to_string()));
         assert!(!supports.contains(&"antigravity.launch".to_string()));

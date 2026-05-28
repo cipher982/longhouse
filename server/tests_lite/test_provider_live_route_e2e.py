@@ -187,7 +187,7 @@ def test_expected_route_providers_from_live_proof_uses_current_applying_sidecars
         {
             "statuses": {
                 "claude": {"configured": True, "status": "ok", "applies": True},
-                "codex": {"configured": True, "status": "version_mismatch", "applies": False},
+                "codex": {"configured": True, "status": "ok", "applies": True},
                 "opencode": {"configured": True, "status": "ok", "applies": True},
             }
         }

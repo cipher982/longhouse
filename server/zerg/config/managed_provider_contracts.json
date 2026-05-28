@@ -109,14 +109,14 @@
         },
         "send_input": {
           "level": "hermetic",
-          "source": "scripts/qa/provider-control-e2e-canary.py Claude channel send delivery; token-spending prompt proof belongs to release canaries"
+          "source": "scripts/qa/provider-control-e2e-canary.py Claude channel send delivery; provider-response prompt proof belongs to release canaries"
         },
         "interrupt": {
           "level": "hermetic",
           "source": "scripts/qa/provider-control-e2e-canary.py Claude channel interrupt sends SIGINT"
         },
         "steer_active_turn": {
-          "level": "manual_live_token",
+          "level": "live_token",
           "source": "make managed-claude-poc delayed intent=steer transcript assertion",
           "next": "promote to scheduled live token canary"
         },
@@ -175,7 +175,7 @@
         "reattach": {
           "level": "live_no_token",
           "source": "longhouse provider-live canary OpenCode process-restart session recovery plus attach command shape",
-          "next": "promote with a scheduled/budgeted live-token release lane"
+          "next": "promote with an explicit live-token release lane"
         },
         "send_input": {
           "level": "live_no_token",

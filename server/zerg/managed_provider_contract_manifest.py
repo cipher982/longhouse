@@ -44,8 +44,7 @@ _OPERATION_EVIDENCE_LEVELS = frozenset(
         "source_review",
         "hermetic",
         "live_no_token",
-        "manual_live_token",
-        "scheduled_live_token",
+        "live_token",
     }
 )
 

@@ -7166,7 +7166,7 @@ export interface components {
              * @description Provider CLI to prove on the target machine.
              * @enum {string}
              */
-            provider: "codex" | "claude" | "opencode" | "antigravity";
+            provider: "claude" | "opencode" | "antigravity";
             /**
              * Expected Provider Version
              * @description Optional release/version the returned provider-live artifact must prove.
@@ -7196,7 +7196,7 @@ export interface components {
              * @description Provider that was proved.
              * @enum {string}
              */
-            provider: "codex" | "claude" | "opencode" | "antigravity";
+            provider: "claude" | "opencode" | "antigravity";
             /**
              * Command Id
              * @description Machine-control command id.
