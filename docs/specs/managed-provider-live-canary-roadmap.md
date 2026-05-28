@@ -208,9 +208,12 @@ machine has proven the installed version.
    5xx responses, and Runtime Host prevents duplicate in-flight live proofs for
    the same owner/device/provider. `make dogfood-refresh` now runs the
    repeatable hosted route proof after publishing local sidecars; it defaults to
-   OpenCode for a fast no-token check. `make provider-live-route-e2e` exposes
-   the same harness directly and can run `PROVIDER_LIVE_ROUTE_PROVIDER=all` when
-   the machine has fresh sidecars for every provider.
+   OpenCode for a fast no-token check and writes the latest route artifact to
+   `~/.longhouse/provider-live-route-e2e/latest.json`. `longhouse local-health`
+   and `longhouse doctor` surface that route proof separately from the local
+   provider sidecars. `make provider-live-route-e2e` exposes the same harness
+   directly and can run `PROVIDER_LIVE_ROUTE_PROVIDER=all` when the machine has
+   fresh sidecars for every provider.
 
 ## Reference Surfaces
 

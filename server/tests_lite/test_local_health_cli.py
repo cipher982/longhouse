@@ -22,6 +22,7 @@ os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg import managed_phase_contract
+from zerg import provider_live_route_e2e
 from zerg import provider_live_proof
 from zerg import provider_release_status
 from zerg.cli import local_health as local_health_cli
@@ -3643,6 +3644,42 @@ def test_collect_local_health_ignores_stale_update_cache_when_version_moved(monk
     assert snapshot["update_info"]["update_available"] is False
     assert snapshot["update_info"]["installed_version"] == "0.1.11"
     assert snapshot["update_info"]["supported"] is True
+
+
+def test_collect_local_health_warns_on_failed_provider_live_route_e2e(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(tmp_path, age_seconds=5)
+    route_path = provider_live_route_e2e.configured_provider_live_route_e2e_path(tmp_path)
+    route_path.parent.mkdir(parents=True)
+    route_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "artifact_kind": provider_live_route_e2e.ROUTE_E2E_ARTIFACT_KIND,
+                "generated_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "verdict": "red",
+                "failure_count": 1,
+                "providers": ["opencode"],
+                "results": [
+                    {
+                        "provider": "opencode",
+                        "status": "fail",
+                        "failure_code": "provider_live_mismatch_not_typed",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["provider_live_route_e2e"]["status"] == "failed"
+    assert snapshot["health_state"] == "degraded"
+    assert snapshot["severity"] == "yellow"
+    assert snapshot["headline"] == "Hosted provider-live route proof needs attention"
+    assert "provider_live_route_e2e_warning" in snapshot["reasons"]
 
 
 def test_update_info_present_in_json_cli_output(monkeypatch, tmp_path: Path):

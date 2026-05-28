@@ -129,6 +129,11 @@ def get_provider_live_proof_dir(base_dir: Path | None = None) -> Path:
     return resolve_longhouse_home(base_dir) / "provider-live-proof"
 
 
+def get_provider_live_route_e2e_dir(base_dir: Path | None = None) -> Path:
+    """Return the local hosted provider-live route E2E sidecar directory."""
+    return resolve_longhouse_home(base_dir) / "provider-live-route-e2e"
+
+
 def get_runtime_config_path(base_dir: Path | None = None) -> Path:
     """Return the Longhouse runtime config path."""
     return resolve_longhouse_home(base_dir) / "config.toml"

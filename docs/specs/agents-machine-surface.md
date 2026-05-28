@@ -115,7 +115,11 @@ body into a generic upstream 5xx. Runtime Host also allows only one in-flight
 live proof per owner/device/provider to avoid duplicate token-spending canaries.
 `make provider-live-route-e2e` verifies this hosted route end to end against a
 configured dogfood machine: machine directory support, positive version match,
-and typed `provider_version_mismatch` rejection.
+and typed `provider_version_mismatch` rejection. `make dogfood-refresh` writes
+the latest hosted-route proof to
+`~/.longhouse/provider-live-route-e2e/latest.json`; local-health and doctor read
+that sidecar as the durable evidence that hosted dispatch still works for this
+machine.
 
 ### Coordination and directed messaging
 

@@ -251,13 +251,17 @@ Initial product contract:
   packaged commands.
   `make dogfood-refresh` runs this publisher as part of the dogfood repair loop,
   then runs the hosted provider-live route E2E against the configured machine so
-  the Runtime Host -> Machine Agent dispatch path is also proved; `make
-  dogfood-check` only reports the current sidecars. Reader precedence is
-  explicit env, persisted provider-status config, then the Longhouse-home
-  default. Local-health reads those artifacts as operation proof only when the
-  sidecar provider and normalized version match the installed provider CLI. This
-  proof is additive to the support-state projection; it does not overwrite
-  Sauron's release verdict. A fresh green local proof can demote a matching
+  the Runtime Host -> Machine Agent dispatch path is also proved. The local
+  provider sidecars live in `~/.longhouse/provider-live-proof/{provider}.json`;
+  the hosted-route proof lives in
+  `~/.longhouse/provider-live-route-e2e/latest.json` and is surfaced by
+  local-health and doctor as a separate signal. `make dogfood-check` only
+  reports the current sidecars. Reader precedence is explicit env, persisted
+  provider-status config, then the Longhouse-home default. Local-health reads
+  those artifacts as operation proof only when the sidecar provider and
+  normalized version match the installed provider CLI. This proof is additive to
+  the support-state projection; it does not overwrite Sauron's release verdict.
+  A fresh green local proof can demote a matching
   `yellow/insufficient_coverage` release artifact to advisory-only
   (`caution_local_proven`, risk `none`) so dogfood health stays focused on
   machine-actionable failures. Operation-level gaps from that demoted artifact

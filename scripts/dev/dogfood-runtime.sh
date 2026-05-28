@@ -291,19 +291,23 @@ publish_provider_live_proof() {
 
 run_provider_live_route_e2e() {
   local status=0
+  local route_artifact="$LONGHOUSE_HOME/provider-live-route-e2e/latest.json"
+  local repo_artifact="$ARTIFACT_DIR/provider-live-route-e2e.json"
   require_cmd python3
 
   log ""
   log "==> Hosted provider-live route E2E"
   log "Provider: $ROUTE_E2E_PROVIDER"
-  mkdir -p "$ARTIFACT_DIR"
+  log "Evidence: $route_artifact"
+  mkdir -p "$(dirname "$route_artifact")" "$ARTIFACT_DIR"
   LONGHOUSE_HOME="$LONGHOUSE_HOME" \
   LONGHOUSE_PROVIDER_LIVE_PROOF_DIR="$PROVIDER_LIVE_PROOF_DIR" \
     python3 "$ROOT_DIR/scripts/qa/provider-live-route-e2e.py" \
       --provider "$ROUTE_E2E_PROVIDER" \
-      --artifact "$ARTIFACT_DIR/provider-live-route-e2e.json" || status=$?
+      --artifact "$route_artifact" || status=$?
+  cp -f "$route_artifact" "$repo_artifact" 2>/dev/null || true
   if (( status != 0 )); then
-    fail "Hosted provider-live route E2E failed (exit $status). See $ARTIFACT_DIR/provider-live-route-e2e.json"
+    fail "Hosted provider-live route E2E failed (exit $status). See $route_artifact"
   fi
 }
 

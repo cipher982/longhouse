@@ -33,6 +33,7 @@ from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_MISSING
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PATH
 from zerg.provider_cli_contract import PROVIDER_CLI_SOURCE_PROCESS
 from zerg.provider_live_proof import collect_provider_live_proof
+from zerg.provider_live_route_e2e import collect_provider_live_route_e2e
 from zerg.provider_release_status import collect_provider_release_status
 from zerg.provider_release_status import reconcile_provider_release_status_with_live_proof
 from zerg.services.longhouse_paths import get_agent_db_path
@@ -3572,6 +3573,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
     provider_clis = _collect_provider_clis()
     provider_contracts = _collect_provider_contracts()
     provider_live_proof = collect_provider_live_proof(provider_clis, fast=fast, base_dir=resolved_base_dir)
+    provider_live_route_e2e = collect_provider_live_route_e2e(fast=fast, base_dir=resolved_base_dir)
     provider_release_status = reconcile_provider_release_status_with_live_proof(
         collect_provider_release_status(provider_clis, fast=fast),
         provider_live_proof,
@@ -3654,6 +3656,14 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
             health_state = "degraded"
             severity = "yellow"
             headline = "Provider release status needs attention"
+    if provider_live_route_e2e.get("configured") and provider_live_route_e2e.get("status") != "ok":
+        if "provider_live_route_e2e_warning" not in reasons:
+            reasons.append("provider_live_route_e2e_warning")
+        suggested_actions.append("Run scripts/dev/dogfood-runtime.sh refresh to refresh the hosted provider-live route proof.")
+        if health_state == "healthy":
+            health_state = "degraded"
+            severity = "yellow"
+            headline = "Hosted provider-live route proof needs attention"
     build_identity = _collect_build_identity(engine_status=engine_status)
 
     return {
@@ -3677,6 +3687,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         "provider_contracts": provider_contracts,
         "provider_release_status": provider_release_status,
         "provider_live_proof": provider_live_proof,
+        "provider_live_route_e2e": provider_live_route_e2e,
         "provider_support_state": provider_support_state,
         "managed_session_contracts": managed_session_contracts,
         "provider_hook_diagnostics": provider_hook_diagnostics,

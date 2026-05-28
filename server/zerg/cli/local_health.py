@@ -227,6 +227,40 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
             if info.get("evidence_root"):
                 typer.echo(f"    evidence: {info.get('evidence_root')}")
 
+    provider_live_route_e2e = dict(snapshot.get("provider_live_route_e2e") or {})
+    if provider_live_route_e2e.get("enabled") or provider_live_route_e2e.get("skipped_reason"):
+        typer.echo("")
+        typer.echo("Provider Live Route E2E")
+    if provider_live_route_e2e.get("skipped_reason"):
+        typer.echo(f"  skipped: {provider_live_route_e2e.get('skipped_reason')}")
+    elif provider_live_route_e2e.get("enabled"):
+        typer.echo(f"  status: {provider_live_route_e2e.get('status') or '-'}")
+        providers = ", ".join(str(item) for item in list(provider_live_route_e2e.get("providers") or []))
+        typer.echo(f"  providers: {providers or '-'}")
+        if provider_live_route_e2e.get("freshness_status"):
+            freshness = provider_live_route_e2e.get("freshness_status")
+            age = _format_age(provider_live_route_e2e.get("generated_at_age_seconds"))
+            typer.echo(f"  freshness: {freshness} ({age})")
+        if provider_live_route_e2e.get("engine_build"):
+            typer.echo(f"  engine: {provider_live_route_e2e.get('engine_build')}")
+        if provider_live_route_e2e.get("device_id"):
+            typer.echo(f"  device: {provider_live_route_e2e.get('device_id')}")
+        if provider_live_route_e2e.get("failure_code"):
+            typer.echo(f"  failure: {provider_live_route_e2e.get('failure_code')}")
+        if provider_live_route_e2e.get("message"):
+            typer.echo(f"  message: {provider_live_route_e2e.get('message')}")
+        source = dict(provider_live_route_e2e.get("source") or {})
+        if source.get("path"):
+            typer.echo(f"  evidence: {source.get('path')}")
+        for raw_result in list(provider_live_route_e2e.get("results") or []):
+            result = dict(raw_result or {})
+            provider = result.get("provider") or "-"
+            status = result.get("status") or "-"
+            match = result.get("match_status_code") or "-"
+            mismatch = result.get("mismatch_status_code") or "-"
+            mismatch_code = result.get("mismatch_code") or "-"
+            typer.echo(f"    {provider}: {status}; match={match}; mismatch={mismatch}/{mismatch_code}")
+
     provider_hook_diagnostics = dict(snapshot.get("provider_hook_diagnostics") or {})
     hook_events = list(provider_hook_diagnostics.get("events") or [])
     if provider_hook_diagnostics.get("state") == "session_cwd_missing" or hook_events:
