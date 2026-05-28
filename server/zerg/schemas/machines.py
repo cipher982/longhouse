@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 from typing import Literal
 
+from pydantic import ConfigDict
 from pydantic import Field
 
 from zerg.utils.time import UTCBaseModel
@@ -66,6 +67,8 @@ class MachineDirectoryResponse(UTCBaseModel):
 
 
 class ProviderLiveProofRequest(UTCBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     provider: ProviderLiveProofProvider = Field(..., description="Provider CLI to prove on the target machine.")
     expected_provider_version: str | None = Field(
         default=None,
@@ -77,17 +80,11 @@ class ProviderLiveProofRequest(UTCBaseModel):
         default=True,
         description="Publish the proof into the machine's stable local sidecar before returning it.",
     )
-    live_token_timeout_secs: int = Field(
-        default=120,
-        ge=1,
-        le=600,
-        description="Provider turn timeout for token-backed live proof where the provider supports it.",
-    )
     timeout_secs: int | None = Field(
         default=None,
         ge=1,
         le=900,
-        description=("Optional provider-live process timeout. When omitted, the Machine Agent uses a provider-aware default."),
+        description="Optional provider-live process timeout. When omitted, the Machine Agent uses a no-token default.",
     )
 
 

@@ -164,7 +164,6 @@ def _run_canary_script(
         str(artifact_path),
         "--json",
     ]
-    argv.extend(["--live-token-timeout-secs", str(args.live_token_timeout_secs)])
     try:
         result = subprocess.run(
             argv,
@@ -221,7 +220,6 @@ def _run_packaged_canary(
                 "artifact": artifact_path,
                 "evidence_root": evidence_root,
                 "wait_ready_secs": args.wait_ready_secs,
-                "live_token_timeout_secs": args.live_token_timeout_secs,
                 "json": False,
             }
         )
@@ -285,7 +283,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--evidence-root", type=Path)
     parser.add_argument("--canary-script", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--wait-ready-secs", type=float, default=15.0)
-    parser.add_argument("--live-token-timeout-secs", type=int, default=120)
     parser.add_argument("--timeout-s", type=float, default=120.0)
     parser.add_argument("--json", action="store_true")
     return parser
@@ -301,7 +298,6 @@ def run_provider_live_proof_publish(args: argparse.Namespace | Mapping[str, Any]
     args.proof_dir = args.proof_dir.expanduser().resolve()
     args.evidence_root = (args.evidence_root or _default_evidence_base(args.repo_root)).expanduser().resolve()
     args.canary_script = None if args.canary_script is None else Path(args.canary_script).expanduser().resolve()
-    args.live_token_timeout_secs = int(getattr(args, "live_token_timeout_secs", 120) or 120)
     providers = tuple(args.provider or DEFAULT_PROVIDERS)
     run_timestamp = _timestamp()
 

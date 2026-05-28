@@ -1149,15 +1149,7 @@ async fn run_provider_live_proof_command(
         });
     }
     let publish = payload_optional_bool(payload, "publish").unwrap_or(true);
-    let live_token_timeout_secs =
-        payload_optional_u64(payload, "live_token_timeout_secs", 1, 600).unwrap_or(120);
-    let default_timeout = if provider == "codex" {
-        120
-    } else {
-        live_token_timeout_secs.saturating_add(60)
-    };
-    let timeout_secs =
-        payload_optional_u64(payload, "timeout_secs", 1, 900).unwrap_or(default_timeout);
+    let timeout_secs = payload_optional_u64(payload, "timeout_secs", 1, 900).unwrap_or(120);
     let expected_provider_version = payload_optional_string(payload, "expected_provider_version");
 
     let args = vec![
@@ -1170,8 +1162,6 @@ async fn run_provider_live_proof_command(
         "--provider".to_string(),
         provider.clone(),
         "--json".to_string(),
-        "--live-token-timeout-secs".to_string(),
-        live_token_timeout_secs.to_string(),
     ];
 
     let output = run_longhouse_command(args, timeout_secs, Vec::new()).await?;
@@ -2186,7 +2176,6 @@ exit 0
                 "payload": {
                     "provider": "claude",
                     "expected_provider_version": "2.1.153",
-                    "live_token_timeout_secs": 17,
                     "timeout_secs": 30,
                 },
             }),
@@ -2231,8 +2220,6 @@ exit 0
                 "--provider",
                 "claude",
                 "--json",
-                "--live-token-timeout-secs",
-                "17",
             ]
         );
         let _ = std::fs::remove_dir_all(&dir);

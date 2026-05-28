@@ -209,16 +209,16 @@ def test_managed_provider_contract_manifest_snapshot():
             "transcript_binding": True,
             "can_resume": False,
             "operation_evidence_levels": {
-                "interrupt": "manual_live_token",
+                "interrupt": "live_no_token",
                 "launch_local": "live_no_token",
                 "launch_remote": "hermetic",
                 "reattach": "live_no_token",
                 "runtime_phase": "hermetic",
-                "send_input": "manual_live_token",
+                "send_input": "live_no_token",
                 "steer_active_turn": "none",
                 "tail_output": "hermetic",
                 "terminate": "hermetic",
-                "transcript_binding": "manual_live_token",
+                "transcript_binding": "live_no_token",
             },
             "machine_control_supports": ("opencode.send", "opencode.interrupt", "opencode.launch"),
         },
@@ -243,7 +243,7 @@ def test_managed_provider_contract_manifest_snapshot():
                 "launch_remote": "none",
                 "reattach": "none",
                 "runtime_phase": "hermetic",
-                "send_input": "manual_live_token",
+                "send_input": "hermetic",
                 "steer_active_turn": "none",
                 "tail_output": "hermetic",
                 "terminate": "none",
@@ -339,7 +339,7 @@ def test_antigravity_contract_is_hook_inbox_send_only():
     assert contract.tail_output is True
     assert contract.runtime_phase is True
     assert contract.transcript_binding is True
-    assert contract.operation_evidence_for("send_input")["level"] == "manual_live_token"
+    assert contract.operation_evidence_for("send_input")["level"] == "hermetic"
     assert contract.operation_evidence_for("steer_active_turn")["level"] == "none"
     assert contract.machine_control_supports == ("antigravity.send",)
     assert contract.connection_capabilities == {

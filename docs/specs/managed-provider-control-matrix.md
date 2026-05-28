@@ -147,8 +147,8 @@ Current OpenCode adapter:
 3. Implement `longhouse opencode-channel send` against
    `/session/:id/prompt_async`; the no-token live canary now proves noReply
    user-message delivery by reading the marker back from
-   `/session/:id/message`, and the token-backed live canary proves assistant
-   response execution plus transcript binding.
+   `/session/:id/message`. Assistant response execution plus transcript binding
+   belong to the explicit release-canary lane.
 4. Implement interrupt against `/session/:id/abort`.
 5. Implement attach as `opencode attach <server_url> --session <provider_id>`.
 6. Only after active phase + active-turn abort are proven, evaluate whether

@@ -7179,14 +7179,8 @@ export interface components {
              */
             publish: boolean;
             /**
-             * Live Token Timeout Secs
-             * @description Provider turn timeout for token-backed live proof where the provider supports it.
-             * @default 120
-             */
-            live_token_timeout_secs: number;
-            /**
              * Timeout Secs
-             * @description Optional provider-live process timeout. When omitted, the Machine Agent uses a provider-aware default.
+             * @description Optional provider-live process timeout. When omitted, the Machine Agent uses a no-token default.
              */
             timeout_secs?: number | null;
         };
