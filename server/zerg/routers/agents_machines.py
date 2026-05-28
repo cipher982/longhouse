@@ -125,10 +125,12 @@ async def run_provider_live_proof(
     if not message.get("ok"):
         error = message.get("error") if isinstance(message.get("error"), dict) else {}
         error_message = error.get("message") or "Machine Agent provider live proof failed"
+        error_code = error.get("code") or "machine_agent_provider_live_proof_failed"
+        status_code = 409 if error_code == "provider_version_mismatch" else 502
         raise HTTPException(
-            status_code=502,
+            status_code=status_code,
             detail={
-                "code": error.get("code") or "machine_agent_provider_live_proof_failed",
+                "code": error_code,
                 "message": error_message,
             },
         )
