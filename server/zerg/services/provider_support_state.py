@@ -1,10 +1,11 @@
 """Managed provider support-state projection.
 
-This read model joins three separate facts without collapsing them:
+This read model joins separate facts without collapsing them:
 
 - contract capability: what Longhouse implements for a provider
 - proof maturity: how strongly each supported operation is verified
 - version readiness: whether release-drift evidence applies to the installed CLI
+- local live proof: whether this machine has proven operations for the current CLI
 
 Provider-specific code still owns execution. This module only gives local
 health and doctor surfaces a single, explicit projection to display.
@@ -46,12 +47,15 @@ def collect_provider_support_state(
     *,
     provider_clis: Mapping[str, Any] | None,
     provider_release_status: Mapping[str, Any] | None,
+    provider_live_proof: Mapping[str, Any] | None = None,
     control_channel: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     provider_clis = dict(provider_clis or {})
     provider_release_status = dict(provider_release_status or {})
+    provider_live_proof = dict(provider_live_proof or {})
     control_channel = dict(control_channel or {})
     release_statuses = dict(provider_release_status.get("statuses") or {})
+    live_proof_statuses = dict(provider_live_proof.get("statuses") or {})
     live_ops_by_provider = dict(control_channel.get("control_operations_by_provider") or {})
     raw_control_status = str(control_channel.get("status") or "").strip()
     control_connected = raw_control_status == "connected"
@@ -61,10 +65,11 @@ def collect_provider_support_state(
         provider = contract.provider
         cli_info = dict(provider_clis.get(provider) or {})
         release_info = dict(release_statuses.get(provider) or {})
+        live_proof_info = dict(live_proof_statuses.get(provider) or {})
         live_control_operations = tuple(str(item) for item in live_ops_by_provider.get(provider) or ())
-        operations = _operation_states(contract, release_info=release_info)
+        operations = _operation_states(contract, release_info=release_info, live_proof_info=live_proof_info)
         version_readiness = _version_readiness(release_info)
-        proof = _proof_summary(operations)
+        proof = _proof_summary(operations, live_proof_info=live_proof_info)
         provider_state = _provider_state(
             cli_info=cli_info,
             contract_requires_cli=bool(getattr(contract, "launch_local", False)),
@@ -99,6 +104,7 @@ def collect_provider_support_state(
             "proof": proof,
             "operations": operations,
             "version_readiness": version_readiness,
+            "live_proof": _live_proof_summary(live_proof_info),
         }
 
     return {
@@ -108,8 +114,15 @@ def collect_provider_support_state(
     }
 
 
-def _operation_states(contract: Any, *, release_info: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+def _operation_states(
+    contract: Any,
+    *,
+    release_info: Mapping[str, Any],
+    live_proof_info: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
     release_operation_evidence = dict(release_info.get("operation_evidence") or {})
+    live_proof_operation_evidence = dict(live_proof_info.get("operation_evidence") or {})
+    live_proof_applies = bool(live_proof_info.get("applies"))
     operations: dict[str, dict[str, Any]] = {}
     for operation in CONTRACT_OPERATIONS:
         supported = bool(getattr(contract, operation, False))
@@ -117,10 +130,16 @@ def _operation_states(contract: Any, *, release_info: Mapping[str, Any]) -> dict
         target_level = str(manifest_evidence.get("level") or "none")
         target_rank = EVIDENCE_RANK.get(target_level, -1)
         release_evidence = dict(release_operation_evidence.get(operation) or {})
+        raw_local_proof_evidence = dict(live_proof_operation_evidence.get(operation) or {})
+        local_proof_evidence = raw_local_proof_evidence if live_proof_applies else {}
+        effective_evidence, effective_source = _select_effective_evidence(
+            release_evidence=release_evidence,
+            local_proof_evidence=local_proof_evidence,
+        )
         evidence_level, evidence_rank = _effective_evidence_level(
             target_level=target_level,
             target_rank=target_rank,
-            release_evidence=release_evidence,
+            evidence=effective_evidence,
         )
         operations[operation] = {
             "supported": supported,
@@ -128,11 +147,16 @@ def _operation_states(contract: Any, *, release_info: Mapping[str, Any]) -> dict
             "evidence_rank": evidence_rank,
             "target_evidence_level": target_level,
             "target_evidence_rank": target_rank,
-            "evidence_source": release_evidence.get("source") or manifest_evidence.get("source"),
+            "evidence_source": effective_evidence.get("source") or manifest_evidence.get("source"),
+            "evidence_origin": effective_source,
             "manifest_evidence_source": manifest_evidence.get("source"),
             "release_evidence": _release_evidence_summary(release_evidence, release_info=release_info),
-            "evidence_state": _evidence_state(release_evidence),
-            "next": release_evidence.get("next") or manifest_evidence.get("next"),
+            "local_proof_evidence": _local_proof_evidence_summary(
+                raw_local_proof_evidence,
+                live_proof_info=live_proof_info,
+            ),
+            "evidence_state": _evidence_state(effective_evidence, origin=effective_source),
+            "next": local_proof_evidence.get("next") or release_evidence.get("next") or manifest_evidence.get("next"),
         }
     return operations
 
@@ -141,15 +165,48 @@ def _effective_evidence_level(
     *,
     target_level: str,
     target_rank: int,
-    release_evidence: Mapping[str, Any],
+    evidence: Mapping[str, Any],
 ) -> tuple[str, int]:
-    release_level = str(release_evidence.get("level") or "").strip()
-    if release_level in EVIDENCE_RANK:
-        return release_level, EVIDENCE_RANK[release_level]
-    release_status = str(release_evidence.get("status") or "").strip()
-    if release_status in _RELEASE_GAP_STATUSES:
+    evidence_level = str(evidence.get("level") or "").strip()
+    if evidence_level in EVIDENCE_RANK:
+        return evidence_level, EVIDENCE_RANK[evidence_level]
+    evidence_status = str(evidence.get("status") or "").strip()
+    if evidence_status in _RELEASE_GAP_STATUSES:
         return "none", EVIDENCE_RANK["none"]
     return target_level, target_rank
+
+
+def _evidence_status(evidence: Mapping[str, Any]) -> str:
+    return str(evidence.get("status") or "").strip()
+
+
+def _evidence_rank(evidence: Mapping[str, Any]) -> int:
+    level = str(evidence.get("level") or "").strip()
+    return EVIDENCE_RANK.get(level, -1)
+
+
+def _is_gap_or_failure(evidence: Mapping[str, Any]) -> bool:
+    return _evidence_status(evidence) in _RELEASE_GAP_STATUSES
+
+
+def _select_effective_evidence(
+    *,
+    release_evidence: Mapping[str, Any],
+    local_proof_evidence: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], str]:
+    if local_proof_evidence and _is_gap_or_failure(local_proof_evidence):
+        return local_proof_evidence, "local_proof"
+    if release_evidence and _is_gap_or_failure(release_evidence):
+        return release_evidence, "release"
+    if local_proof_evidence and release_evidence:
+        if _evidence_rank(local_proof_evidence) >= _evidence_rank(release_evidence):
+            return local_proof_evidence, "local_proof"
+        return release_evidence, "release"
+    if local_proof_evidence:
+        return local_proof_evidence, "local_proof"
+    if release_evidence:
+        return release_evidence, "release"
+    return {}, "manifest"
 
 
 def _release_evidence_summary(
@@ -171,24 +228,48 @@ def _release_evidence_summary(
     }
 
 
-def _evidence_state(release_evidence: Mapping[str, Any]) -> str:
-    if not release_evidence:
+def _local_proof_evidence_summary(
+    local_proof_evidence: Mapping[str, Any],
+    *,
+    live_proof_info: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    if not local_proof_evidence:
+        return None
+    return {
+        "status": local_proof_evidence.get("status"),
+        "level": local_proof_evidence.get("level"),
+        "source": local_proof_evidence.get("source"),
+        "failure_code": local_proof_evidence.get("failure_code") or live_proof_info.get("failure_code"),
+        "message": local_proof_evidence.get("message"),
+        "generated_at": local_proof_evidence.get("generated_at") or live_proof_info.get("generated_at"),
+        "canary": local_proof_evidence.get("canary"),
+        "canaries": local_proof_evidence.get("canaries"),
+    }
+
+
+def _evidence_state(evidence: Mapping[str, Any], *, origin: str) -> str:
+    if origin == "manifest" or not evidence:
         return "manifest_only"
-    status = str(release_evidence.get("status") or "").strip()
+    status = str(evidence.get("status") or "").strip()
+    prefix = "local_proof" if origin == "local_proof" else "release"
     if status == "pass":
-        return "release_proven"
+        return f"{prefix}_proven"
     if status == "fail":
-        return "release_failed"
+        return f"{prefix}_failed"
     if status in _RELEASE_GAP_STATUSES:
-        return "release_gap"
-    return "release_unknown"
+        return f"{prefix}_gap"
+    return f"{prefix}_unknown"
 
 
 def _operation_names_by_support(operations: Mapping[str, Mapping[str, Any]], *, supported: bool) -> list[str]:
     return [operation for operation, info in operations.items() if bool(info.get("supported")) == supported]
 
 
-def _proof_summary(operations: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+def _proof_summary(
+    operations: Mapping[str, Mapping[str, Any]],
+    *,
+    live_proof_info: Mapping[str, Any],
+) -> dict[str, Any]:
     supported = {operation: dict(info) for operation, info in operations.items() if info.get("supported")}
     if not supported:
         return {
@@ -203,18 +284,33 @@ def _proof_summary(operations: Mapping[str, Mapping[str, Any]]) -> dict[str, Any
     for operation, info in sorted(supported.items()):
         if int(info.get("evidence_rank", -1)) == minimum_rank:
             minimum_operations.append(operation)
-    failed_operations = []
-    gap_operations = []
+    release_failed_operations = []
+    local_proof_failed_operations = []
+    release_gap_operations = []
+    local_proof_gap_operations = []
     for operation, info in sorted(supported.items()):
         evidence_state = info.get("evidence_state")
         if evidence_state == "release_failed":
-            failed_operations.append(operation)
+            release_failed_operations.append(operation)
+        elif evidence_state == "local_proof_failed":
+            local_proof_failed_operations.append(operation)
         elif evidence_state == "release_gap":
-            gap_operations.append(operation)
-    if failed_operations:
+            release_gap_operations.append(operation)
+        elif evidence_state == "local_proof_gap":
+            local_proof_gap_operations.append(operation)
+    local_proof_verdict_failed = bool(live_proof_info.get("applies")) and str(live_proof_info.get("verdict") or "").lower() == "red"
+    # Keep release failures dominant, then local failures, then incomplete
+    # evidence. Passing evidence is ranked earlier per operation.
+    if release_failed_operations:
         state = "release_failed"
-    elif gap_operations:
+    elif local_proof_failed_operations:
+        state = "local_proof_failed"
+    elif local_proof_verdict_failed:
+        state = "local_proof_failed"
+    elif release_gap_operations:
         state = "release_incomplete"
+    elif local_proof_gap_operations:
+        state = "local_proof_incomplete"
     elif minimum_rank >= EVIDENCE_RANK["scheduled_live_token"]:
         state = "scheduled_live_token"
     else:
@@ -223,8 +319,11 @@ def _proof_summary(operations: Mapping[str, Mapping[str, Any]]) -> dict[str, Any
         "state": state,
         "minimum_evidence_level": minimum_level,
         "minimum_evidence_operations": minimum_operations,
-        "release_failed_operations": failed_operations,
-        "release_gap_operations": gap_operations,
+        "release_failed_operations": release_failed_operations,
+        "release_gap_operations": release_gap_operations,
+        "local_proof_failed_operations": local_proof_failed_operations,
+        "local_proof_gap_operations": local_proof_gap_operations,
+        "local_proof_verdict_failed": local_proof_verdict_failed,
     }
 
 
@@ -266,6 +365,21 @@ def _version_readiness(release_info: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _live_proof_summary(live_proof_info: Mapping[str, Any]) -> dict[str, Any]:
+    status = str(live_proof_info.get("status") or "not_configured")
+    return {
+        "status": status,
+        "applies": bool(live_proof_info.get("applies")),
+        "version_match": live_proof_info.get("version_match"),
+        "current_version": live_proof_info.get("current_version"),
+        "artifact_version": live_proof_info.get("artifact_version"),
+        "verdict": live_proof_info.get("verdict"),
+        "failure_code": live_proof_info.get("failure_code"),
+        "freshness_status": live_proof_info.get("freshness_status"),
+        "evidence_root": live_proof_info.get("evidence_root"),
+    }
+
+
 def _provider_state(
     *,
     cli_info: Mapping[str, Any],
@@ -283,6 +397,10 @@ def _provider_state(
     if version_readiness.get("risk") == "warning":
         return "needs_attention"
     if proof.get("release_failed_operations"):
+        return "needs_attention"
+    if proof.get("local_proof_failed_operations"):
+        return "needs_attention"
+    if proof.get("local_proof_verdict_failed"):
         return "needs_attention"
     if expected_supports and not control_connected:
         return "live_control_not_connected"
