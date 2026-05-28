@@ -261,6 +261,10 @@ _lh_hosted_wait_for_runtime_image() {
   return 1
 }
 
+lh_wait_for_runtime_image() {
+  _lh_hosted_wait_for_runtime_image "$@"
+}
+
 _lh_hosted_export_instance_payload() {
   local parsed="$1"
   local fallback_subdomain="${2:-}"
@@ -928,6 +932,12 @@ lh_hosted_reprovision() {
   fi
 
   if _lh_hosted_post_instance_action "$instance_id" "reprovision" "$payload"; then
+    if [[ -n "$image" ]]; then
+      api_url="$(_lh_hosted_reprovision_api_url)"
+      echo "Waiting for hosted runtime health to report the requested image..." >&2
+      _lh_hosted_wait_for_runtime_image "$api_url" "$image" 240
+      return $?
+    fi
     return 0
   fi
 
