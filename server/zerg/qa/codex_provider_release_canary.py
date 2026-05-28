@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any
 from typing import Mapping
 
+from zerg.qa.repo_root import default_repo_root
+
 ACTIVE_THREAD_ERROR = "No active thread is available."
 PROVIDER_STATUS_SCHEMA_VERSION = 1
 PROVIDER_LIVE_CANARY_ARTIFACT_KIND = "provider_live_canary"
@@ -55,24 +57,6 @@ FINGERPRINT_NOTIFICATION_METHODS = {
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
-def _source_repo_root() -> Path | None:
-    for parent in Path(__file__).resolve().parents:
-        contract_path = parent / "server/zerg/config/managed_provider_contracts.json"
-        if contract_path.exists() and (parent / "scripts/qa").exists():
-            return parent
-    return None
-
-
-def default_repo_root() -> Path:
-    return _source_repo_root() or Path.cwd()
-
-
-def _source_checkout_root(repo_root: Path) -> bool:
-    contract_path = repo_root / "server/zerg/config/managed_provider_contracts.json"
-    scripts_dir = repo_root / "scripts/qa"
-    return contract_path.exists() and scripts_dir.exists()
 
 
 def _run(

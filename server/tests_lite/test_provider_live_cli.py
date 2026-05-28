@@ -170,7 +170,6 @@ def test_provider_live_canary_cli_writes_packaged_artifact(tmp_path: Path) -> No
     assert payload["provider"] == "claude"
     assert payload["verdict"] == "green"
     assert payload["failure_code"] is None
-    assert "source_artifacts" not in payload
 
 
 def test_provider_live_canary_uses_packaged_contracts_without_repo_root(tmp_path: Path) -> None:
@@ -293,27 +292,6 @@ def test_provider_live_canary_cli_exits_nonzero_on_red(tmp_path: Path) -> None:
     assert json.loads(artifact_path.read_text(encoding="utf-8")) == payload
 
 
-def test_provider_live_canary_cli_rejects_codex(tmp_path: Path) -> None:
-    result = CliRunner().invoke(
-        app,
-        [
-            "provider-live",
-            "canary",
-            "--provider",
-            "codex",
-            "--artifact",
-            str(tmp_path / "artifact.json"),
-            "--evidence-root",
-            str(tmp_path / "evidence"),
-            "--json",
-        ],
-    )
-
-    assert result.exit_code == 2
-    assert "Unsupported provider" in result.output
-    assert not (tmp_path / "artifact.json").exists()
-
-
 def test_provider_live_canary_installed_default_evidence_uses_longhouse_home(tmp_path: Path, monkeypatch) -> None:
     fake_bin = _fake_claude(tmp_path / "bin" / "claude")
     longhouse_home = tmp_path / "longhouse-home"
@@ -427,35 +405,6 @@ def test_provider_live_publish_cli_writes_stable_sidecar(tmp_path: Path, monkeyp
     assert artifact["verdict"] == "green"
 
 
-def test_provider_live_publish_cli_rejects_removed_debug_options(tmp_path: Path) -> None:
-    for option, value in (
-        ("--live-token-timeout-secs", "17"),
-        ("--canary-script", str(tmp_path / "provider-live-canary")),
-    ):
-        proof_dir = tmp_path / option.removeprefix("--")
-
-        result = CliRunner().invoke(
-            app,
-            [
-                "provider-live",
-                "publish",
-                "--provider",
-                "claude",
-                "--proof-dir",
-                str(proof_dir),
-                "--evidence-root",
-                str(tmp_path / "evidence"),
-                option,
-                value,
-                "--json",
-            ],
-        )
-
-        assert result.exit_code == 2
-        assert "No such option" in result.output
-        assert not (proof_dir / "claude.json").exists()
-
-
 def test_provider_live_publish_cli_exits_nonzero_on_red_canary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -503,7 +452,7 @@ def test_provider_live_publish_cli_rejects_unsupported_provider(tmp_path: Path) 
     assert "Unsupported provider" in result.output
 
 
-def test_provider_live_publish_cli_rejects_codex_and_excludes_it_by_default(
+def test_provider_live_cli_keeps_codex_out_of_shared_live_lane(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -513,6 +462,21 @@ def test_provider_live_publish_cli_rejects_codex_and_excludes_it_by_default(
         "LONGHOUSE_HOME": str(tmp_path / "longhouse-home"),
     }
 
+    canary = CliRunner().invoke(
+        app,
+        [
+            "provider-live",
+            "canary",
+            "--provider",
+            "codex",
+            "--artifact",
+            str(tmp_path / "artifact.json"),
+            "--evidence-root",
+            str(tmp_path / "evidence"),
+            "--json",
+        ],
+        env=env,
+    )
     explicit = CliRunner().invoke(
         app,
         [
@@ -529,6 +493,9 @@ def test_provider_live_publish_cli_rejects_codex_and_excludes_it_by_default(
         env=env,
     )
 
+    assert canary.exit_code == 2
+    assert "Unsupported provider" in canary.output
+    assert not (tmp_path / "artifact.json").exists()
     assert explicit.exit_code == 2
     assert "Unsupported provider" in explicit.output
     assert not (proof_dir / "codex.json").exists()

@@ -19,13 +19,12 @@ from pathlib import Path
 from typing import Any
 
 from zerg.provider_live_proof import configured_provider_live_proof_dir
-from zerg.qa.provider_live_canary import SUPPORTED_PROVIDERS as SHARED_LIVE_PROOF_PROVIDERS
-from zerg.qa.provider_live_canary import default_repo_root
+from zerg.qa.provider_live_canary import SUPPORTED_PROVIDERS
 from zerg.qa.provider_live_canary import run_provider_live_canary
-from zerg.services.longhouse_paths import resolve_longhouse_home
+from zerg.qa.repo_root import default_repo_root
+from zerg.qa.repo_root import provider_live_evidence_base
 
-DEFAULT_PROVIDERS = SHARED_LIVE_PROOF_PROVIDERS
-SUPPORTED_PROVIDERS = DEFAULT_PROVIDERS
+DEFAULT_PROVIDERS = SUPPORTED_PROVIDERS
 PROVIDER_STATUS_SCHEMA_VERSION = 1
 LIVE_PROOF_ARTIFACT_KIND = "provider_live_canary"
 
@@ -34,15 +33,8 @@ def _default_proof_dir() -> Path:
     return configured_provider_live_proof_dir()
 
 
-def _source_checkout_root(repo_root: Path) -> bool:
-    contract_path = repo_root / "server/zerg/config/managed_provider_contracts.json"
-    return contract_path.exists() and (repo_root / "scripts/qa").exists()
-
-
 def _default_evidence_base(repo_root: Path) -> Path:
-    if _source_checkout_root(repo_root):
-        return repo_root / ".build/canaries/provider-live"
-    return resolve_longhouse_home() / "canaries/provider-live"
+    return provider_live_evidence_base(repo_root)
 
 
 def _now_iso() -> str:
