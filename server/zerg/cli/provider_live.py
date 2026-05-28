@@ -22,7 +22,7 @@ app = typer.Typer(help="Run local managed-provider live proof canaries")
 def canary_command(
     provider: Annotated[
         str,
-        typer.Option("--provider", help="Provider to prove: codex, claude, opencode, or antigravity."),
+        typer.Option("--provider", help="Provider to prove: claude, opencode, or antigravity."),
     ],
     provider_bin: Annotated[
         str | None,
@@ -50,6 +50,10 @@ def canary_command(
     ] = False,
 ) -> None:
     """Run one local provider live canary and write its artifact."""
+
+    if provider not in SUPPORTED_PROVIDERS:
+        typer.echo(f"Unsupported provider for live-proof canary: {provider}", err=True)
+        raise typer.Exit(code=2)
 
     args = argparse.Namespace(
         repo_root=repo_root or default_repo_root(),

@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-SUPPORTED_PROVIDERS = ("codex", "claude", "opencode", "antigravity")
+SUPPORTED_PROVIDERS = ("claude", "opencode", "antigravity")
 DEFAULT_USER_AGENT = "sauron-provider-live-proof/1"
 DEFAULT_MISMATCH_VERSION = "9.9.9-longhouse-route-e2e"
 DEFAULT_REQUIRE_VERDICT = "non-red"

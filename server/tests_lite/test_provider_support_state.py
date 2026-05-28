@@ -148,7 +148,7 @@ def test_support_state_applies_release_operation_evidence_demotions() -> None:
     steer = claude["operations"]["steer_active_turn"]
     assert claude["state"] == "needs_attention"
     assert "steer_active_turn" in claude["capabilities"]["supported_operations"]
-    assert steer["target_evidence_level"] == "manual_live_token"
+    assert steer["target_evidence_level"] == "live_token"
     assert steer["evidence_level"] == "none"
     assert steer["evidence_state"] == "release_failed"
     assert steer["release_evidence"]["failure_code"] == "steer_transcript_missing"
@@ -226,7 +226,7 @@ def test_support_state_promotes_operation_proof_from_release_evidence() -> None:
                     "operation_evidence": {
                         "steer_active_turn": {
                             "status": "pass",
-                            "level": "scheduled_live_token",
+                            "level": "live_token",
                             "source": "scheduled Claude live steer canary",
                         }
                     },
@@ -240,8 +240,8 @@ def test_support_state_promotes_operation_proof_from_release_evidence() -> None:
     )
 
     steer = support["providers"]["claude"]["operations"]["steer_active_turn"]
-    assert steer["target_evidence_level"] == "manual_live_token"
-    assert steer["evidence_level"] == "scheduled_live_token"
+    assert steer["target_evidence_level"] == "live_token"
+    assert steer["evidence_level"] == "live_token"
     assert steer["evidence_state"] == "release_proven"
 
 
@@ -260,7 +260,7 @@ def test_support_state_promotes_matching_local_live_proof_without_release_artifa
                     "operation_evidence": {
                         "steer_active_turn": {
                             "status": "pass",
-                            "level": "scheduled_live_token",
+                            "level": "live_token",
                             "source": "local provider-live-canary",
                             "canary": "claude_steer_active_turn_contract",
                         }
@@ -278,7 +278,7 @@ def test_support_state_promotes_matching_local_live_proof_without_release_artifa
     steer = claude["operations"]["steer_active_turn"]
     assert claude["version_readiness"]["state"] == "no_artifact"
     assert claude["live_proof"]["applies"] is True
-    assert steer["evidence_level"] == "scheduled_live_token"
+    assert steer["evidence_level"] == "live_token"
     assert steer["evidence_origin"] == "local_proof"
     assert steer["evidence_state"] == "local_proof_proven"
     assert steer["local_proof_evidence"]["canary"] == "claude_steer_active_turn_contract"
@@ -299,7 +299,7 @@ def test_support_state_does_not_promote_mismatched_local_live_proof() -> None:
                     "operation_evidence": {
                         "steer_active_turn": {
                             "status": "pass",
-                            "level": "scheduled_live_token",
+                            "level": "live_token",
                             "source": "stale local provider-live-canary",
                         }
                     },
@@ -315,9 +315,9 @@ def test_support_state_does_not_promote_mismatched_local_live_proof() -> None:
     claude = support["providers"]["claude"]
     steer = claude["operations"]["steer_active_turn"]
     assert claude["live_proof"]["applies"] is False
-    assert steer["evidence_level"] == "manual_live_token"
+    assert steer["evidence_level"] == "live_token"
     assert steer["evidence_origin"] == "manifest"
-    assert steer["local_proof_evidence"]["level"] == "scheduled_live_token"
+    assert steer["local_proof_evidence"]["level"] == "live_token"
 
 
 def test_support_state_keeps_stronger_passing_release_proof_over_local_live_proof() -> None:
@@ -331,7 +331,7 @@ def test_support_state_keeps_stronger_passing_release_proof_over_local_live_proo
                     "operation_evidence": {
                         "steer_active_turn": {
                             "status": "pass",
-                            "level": "scheduled_live_token",
+                            "level": "live_token",
                             "source": "scheduled release canary",
                         }
                     },
@@ -361,7 +361,7 @@ def test_support_state_keeps_stronger_passing_release_proof_over_local_live_proo
     )
 
     steer = support["providers"]["claude"]["operations"]["steer_active_turn"]
-    assert steer["evidence_level"] == "scheduled_live_token"
+    assert steer["evidence_level"] == "live_token"
     assert steer["evidence_origin"] == "release"
     assert steer["local_proof_evidence"]["level"] == "live_no_token"
 
@@ -464,7 +464,7 @@ def test_support_state_does_not_attach_global_live_failure_to_passing_operation(
                     "operation_evidence": {
                         "send_input": {
                             "status": "pass",
-                            "level": "manual_live_token",
+                            "level": "live_token",
                             "source": "local channel canary",
                         },
                         "transcript_binding": {

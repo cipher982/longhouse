@@ -319,7 +319,7 @@ def test_collects_operation_evidence_from_provider_status_artifact(monkeypatch, 
                 "operation_evidence": {
                     "steer_active_turn": {
                         "status": "pass",
-                        "level": "scheduled_live_token",
+                        "level": "live_token",
                         "source": "scheduled Claude steer canary",
                         "canary": "claude_live_token_contract",
                     }
@@ -340,7 +340,7 @@ def test_collects_operation_evidence_from_provider_status_artifact(monkeypatch, 
     assert status["statuses"]["claude"]["status"] == "ok"
     assert status["statuses"]["claude"]["operation_evidence"]["steer_active_turn"] == {
         "status": "pass",
-        "level": "scheduled_live_token",
+        "level": "live_token",
         "source": "scheduled Claude steer canary",
         "canary": "claude_live_token_contract",
     }

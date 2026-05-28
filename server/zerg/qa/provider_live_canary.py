@@ -49,7 +49,7 @@ _OPENCODE_PROMPT_ASYNC_MESSAGE = " ".join(
     (
         "No-token behavior proof: prompt_async accepted a noReply input and",
         "session.messages returned the delivered marker;",
-        "token-spending assistant-response proof is future work.",
+        "provider-response proof is future work.",
     )
 )
 _CLAUDE_CHANNEL_UNCONFIRMED_MESSAGE = (
@@ -57,10 +57,6 @@ _CLAUDE_CHANNEL_UNCONFIRMED_MESSAGE = (
 )
 _ANTIGRAVITY_PLUGIN_NOTE = (
     "agy may report hook components as skipped here; Longhouse wires Antigravity hooks through the global hooks config."
-)
-_CODEX_LIGHTWEIGHT_MESSAGE = (
-    "Shared provider-live proof ran the portable Codex release checks only. "
-    "Bridge/TUI no-token canaries stay in the explicit Codex release lane."
 )
 
 
@@ -453,40 +449,6 @@ def _provider_operation_evidence(
     if provider == "antigravity":
         return _antigravity_operation_evidence(contract, canaries)
     return {}
-
-
-def run_codex_live_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
-    from zerg.qa.codex_provider_release_canary import run_codex_provider_release_canary
-
-    codex_artifact_path = root / "codex-provider-release-canary.json"
-    codex_evidence_root = root / "codex-provider-release"
-    codex_artifact = run_codex_provider_release_canary(
-        {
-            "repo_root": args.repo_root,
-            "evidence_root": codex_evidence_root,
-            "artifact": codex_artifact_path,
-            "codex_bin": args.provider_bin,
-            "source_review_status": "not_run",
-            "source_review_note": _CODEX_LIGHTWEIGHT_MESSAGE,
-        }
-    )
-    canaries = dict(codex_artifact.get("canaries") or {})
-    release_artifact_path = codex_artifact.get("artifact_path") or str(codex_artifact_path)
-    release_verdict = str(codex_artifact.get("verdict") or "")
-    release_lane_status = "fail" if release_verdict == "red" else "warn" if release_verdict == "yellow" else "pass"
-    canaries["codex_release_lane"] = _status(
-        release_lane_status,
-        message=_CODEX_LIGHTWEIGHT_MESSAGE,
-        artifact_path=release_artifact_path,
-        verdict=release_verdict,
-    )
-    return {
-        "provider": "codex",
-        "provider_version": codex_artifact.get("provider_version") or codex_artifact.get("codex_version"),
-        "canaries": canaries,
-        "operation_evidence": dict(codex_artifact.get("operation_evidence") or {}),
-        "source_artifacts": {"codex_provider_release_canary": release_artifact_path},
-    }
 
 
 def _classify(canaries: dict[str, dict[str, Any]]) -> tuple[str, str | None, str]:
@@ -1709,8 +1671,6 @@ def run_antigravity_live_canary(args: argparse.Namespace, root: Path) -> dict[st
 
 
 def run_provider(args: argparse.Namespace, root: Path) -> dict[str, Any]:
-    if args.provider == "codex":
-        return run_codex_live_canary(args, root)
     if args.provider == "claude":
         return run_claude_live_canary(args, root)
     if args.provider == "opencode":
@@ -1732,7 +1692,7 @@ def run_provider(args: argparse.Namespace, root: Path) -> dict[str, Any]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=default_repo_root())
-    parser.add_argument("--provider", choices=["codex", "claude", "opencode", "antigravity"], required=True)
+    parser.add_argument("--provider", choices=["claude", "opencode", "antigravity"], required=True)
     parser.add_argument("--provider-bin")
     parser.add_argument("--artifact", type=Path)
     parser.add_argument("--evidence-root", type=Path)

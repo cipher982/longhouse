@@ -36,8 +36,7 @@ EVIDENCE_RANK = {
     "source_review": 1,
     "hermetic": 2,
     "live_no_token": 3,
-    "manual_live_token": 4,
-    "scheduled_live_token": 5,
+    "live_token": 4,
 }
 _LEVEL_BY_RANK = {rank: level for level, rank in EVIDENCE_RANK.items()}
 _RELEASE_GAP_STATUSES = {"fail", "missing", "not_run", "skipped", "stale"}
@@ -342,8 +341,8 @@ def _proof_summary(
         state = "release_incomplete"
     elif local_proof_gap_operations:
         state = "local_proof_incomplete"
-    elif minimum_rank >= EVIDENCE_RANK["scheduled_live_token"]:
-        state = "scheduled_live_token"
+    elif minimum_rank >= EVIDENCE_RANK["live_token"]:
+        state = "live_token"
     else:
         state = "mixed"
     return {
