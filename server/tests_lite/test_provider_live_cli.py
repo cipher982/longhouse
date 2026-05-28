@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 
+import pytest
 from cryptography.fernet import Fernet
 from typer.testing import CliRunner
 
@@ -12,6 +13,7 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 os.environ.setdefault("TESTING", "1")
 
 from zerg.cli.main import app
+from zerg.qa import provider_live_canary as plc
 from zerg.qa.provider_live_canary import run_provider_live_canary
 
 
@@ -267,6 +269,63 @@ def test_provider_live_canary_installed_default_evidence_uses_longhouse_home(tmp
     assert evidence_root.parent == longhouse_home / "canaries" / "provider-live" / "claude"
     assert Path(payload["artifact_path"]) == evidence_root / "provider-live-canary.json"
     assert Path(payload["artifact_path"]).is_file()
+
+
+def test_provider_live_canary_default_evidence_root_avoids_collisions(tmp_path: Path, monkeypatch) -> None:
+    base = tmp_path / "provider-run"
+    base.mkdir()
+    monkeypatch.setattr(plc, "_default_evidence_root", lambda _repo_root, _provider, _timestamp: base)
+
+    payload = run_provider_live_canary(
+        {
+            "repo_root": str(tmp_path / "not-a-repo"),
+            "provider": "future-provider",
+            "provider_bin": None,
+            "artifact": None,
+            "evidence_root": None,
+            "wait_ready_secs": 1.0,
+            "json": True,
+        }
+    )
+
+    assert Path(payload["evidence_root"]) == tmp_path / "provider-run-1"
+    assert Path(payload["artifact_path"]) == tmp_path / "provider-run-1" / "provider-live-canary.json"
+    assert Path(payload["artifact_path"]).is_file()
+
+
+def test_opencode_server_start_cleans_up_when_ready_wait_fails(tmp_path: Path, monkeypatch) -> None:
+    fake_bin = _write_exe(
+        tmp_path / "bin" / "opencode",
+        """#!/usr/bin/env python3
+import time
+
+time.sleep(60)
+""",
+    )
+    stopped: list[int] = []
+    original_stop = plc._stop_process_group
+
+    def fail_ready_wait(log_path, process, timeout_secs):
+        assert process.poll() is None
+        raise TimeoutError("not ready")
+
+    def recording_stop(process):
+        stopped.append(process.pid)
+        original_stop(process)
+
+    monkeypatch.setattr(plc, "_wait_for_opencode_server_url", fail_ready_wait)
+    monkeypatch.setattr(plc, "_stop_process_group", recording_stop)
+
+    with pytest.raises(TimeoutError, match="not ready"):
+        plc._start_opencode_server_process(
+            binary=str(fake_bin),
+            workspace=tmp_path,
+            env=os.environ.copy(),
+            log_path=tmp_path / "opencode-server.log",
+            wait_ready_secs=0.1,
+        )
+
+    assert stopped
 
 
 def test_provider_live_publish_cli_writes_stable_sidecar(tmp_path: Path) -> None:
