@@ -134,7 +134,8 @@ def _check_environment() -> list[CheckResult]:
     if (major, minor) >= (3, 12):
         results.append(CheckResult(PASS, f"Python {py_ver}"))
     else:
-        results.append(CheckResult(FAIL, f"Python {py_ver} (need >= 3.12)", "Upgrade: https://www.python.org/downloads/"))
+        upgrade_hint = "Upgrade: https://www.python.org/downloads/"
+        results.append(CheckResult(FAIL, f"Python {py_ver} (need >= 3.12)", upgrade_hint))
 
     # uv
     if shutil.which("uv"):
@@ -694,6 +695,8 @@ def _check_provider_live_route_e2e() -> list[CheckResult]:
 
     status = str(route.get("status") or "not_configured")
     detail = _provider_live_route_e2e_detail(route)
+    if status == "ok" and route.get("coverage_status") == "missing":
+        return [CheckResult(WARN, "Provider live route E2E coverage missing", detail)]
     if status in {"ok", "not_configured", "skipped"}:
         return [CheckResult(PASS, f"Provider live route E2E {status}", detail)]
     return [CheckResult(WARN, f"Provider live route E2E {status}", detail)]
@@ -704,6 +707,18 @@ def _provider_live_route_e2e_detail(route: dict) -> str:
     providers = ", ".join(str(item) for item in list(route.get("providers") or []))
     if providers:
         parts.append(f"providers={providers}")
+    coverage_status = route.get("coverage_status")
+    if coverage_status:
+        parts.append(f"coverage={coverage_status}")
+    expected = ", ".join(str(item) for item in list(route.get("expected_providers") or []))
+    covered = ", ".join(str(item) for item in list(route.get("covered_providers") or []))
+    missing = ", ".join(str(item) for item in list(route.get("missing_providers") or []))
+    if expected:
+        parts.append(f"expected={expected}")
+    if covered:
+        parts.append(f"covered={covered}")
+    if missing:
+        parts.append(f"missing={missing}")
     for key, label in (
         ("freshness_status", "freshness"),
         ("verdict", "verdict"),

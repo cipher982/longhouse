@@ -237,6 +237,13 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
         typer.echo(f"  status: {provider_live_route_e2e.get('status') or '-'}")
         providers = ", ".join(str(item) for item in list(provider_live_route_e2e.get("providers") or []))
         typer.echo(f"  providers: {providers or '-'}")
+        coverage = provider_live_route_e2e.get("coverage_status") or "-"
+        expected = ", ".join(str(item) for item in list(provider_live_route_e2e.get("expected_providers") or []))
+        covered = ", ".join(str(item) for item in list(provider_live_route_e2e.get("covered_providers") or []))
+        missing = ", ".join(str(item) for item in list(provider_live_route_e2e.get("missing_providers") or []))
+        typer.echo(f"  coverage: {coverage}; expected={expected or '-'}; covered={covered or '-'}")
+        if missing:
+            typer.echo(f"  missing: {missing}")
         if provider_live_route_e2e.get("freshness_status"):
             freshness = provider_live_route_e2e.get("freshness_status")
             age = _format_age(provider_live_route_e2e.get("generated_at_age_seconds"))

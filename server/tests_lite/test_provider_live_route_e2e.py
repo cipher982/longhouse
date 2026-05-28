@@ -67,13 +67,17 @@ def _write_artifact(base_dir: Path, payload: dict[str, object]) -> Path:
 def test_route_e2e_green_artifact_applies(tmp_path: Path) -> None:
     path = _write_artifact(tmp_path, _route_artifact())
 
-    proof = route_e2e.collect_provider_live_route_e2e(base_dir=tmp_path)
+    proof = route_e2e.collect_provider_live_route_e2e(base_dir=tmp_path, expected_providers=["opencode"])
 
     assert proof["enabled"] is True
     assert proof["configured"] is True
     assert proof["status"] == "ok"
     assert proof["applies"] is True
     assert proof["providers"] == ["opencode"]
+    assert proof["coverage_status"] == "complete"
+    assert proof["expected_providers"] == ["opencode"]
+    assert proof["covered_providers"] == ["opencode"]
+    assert proof["missing_providers"] == []
     assert proof["results"] == [
         {
             "provider": "opencode",
@@ -92,12 +96,30 @@ def test_route_e2e_green_artifact_applies(tmp_path: Path) -> None:
     assert proof["source"]["path"] == str(path)
 
 
+def test_route_e2e_reports_missing_expected_provider_coverage(tmp_path: Path) -> None:
+    _write_artifact(tmp_path, _route_artifact())
+
+    proof = route_e2e.collect_provider_live_route_e2e(
+        base_dir=tmp_path,
+        expected_providers=["claude", "opencode"],
+    )
+
+    assert proof["status"] == "ok"
+    assert proof["coverage_status"] == "missing"
+    assert proof["applies"] is False
+    assert proof["expected_providers"] == ["claude", "opencode"]
+    assert proof["covered_providers"] == ["opencode"]
+    assert proof["missing_providers"] == ["claude"]
+
+
 def test_route_e2e_missing_artifact_is_not_configured(tmp_path: Path) -> None:
-    proof = route_e2e.collect_provider_live_route_e2e(base_dir=tmp_path)
+    proof = route_e2e.collect_provider_live_route_e2e(base_dir=tmp_path, expected_providers=["opencode"])
 
     assert proof["enabled"] is False
     assert proof["configured"] is False
     assert proof["status"] == "not_configured"
+    assert proof["coverage_status"] == "missing"
+    assert proof["missing_providers"] == ["opencode"]
 
 
 def test_route_e2e_corrupt_artifact_is_unavailable(tmp_path: Path) -> None:
@@ -155,3 +177,17 @@ def test_fast_local_health_skips_route_e2e() -> None:
     assert proof["configured"] is False
     assert proof["status"] == "skipped"
     assert proof["skipped_reason"] == "fast_local_health"
+
+
+def test_expected_route_providers_from_live_proof_uses_current_applying_sidecars() -> None:
+    expected = route_e2e.expected_route_providers_from_live_proof(
+        {
+            "statuses": {
+                "claude": {"configured": True, "status": "ok", "applies": True},
+                "codex": {"configured": True, "status": "version_mismatch", "applies": False},
+                "opencode": {"configured": True, "status": "ok", "applies": True},
+            }
+        }
+    )
+
+    assert expected == ["claude", "opencode"]

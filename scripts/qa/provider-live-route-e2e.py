@@ -100,12 +100,30 @@ def _parse_expected(values: list[str]) -> dict[str, str]:
     return parsed
 
 
-def _selected_providers(raw: list[str] | None) -> list[str]:
-    values = raw or ["opencode"]
+def _auto_providers(proof_dir: Path) -> list[str]:
+    providers: list[str] = []
+    for provider in SUPPORTED_PROVIDERS:
+        path = proof_dir / f"{provider}.json"
+        if not path.exists():
+            continue
+        try:
+            payload = _load_json(path)
+        except Exception:
+            continue
+        version = str(payload.get("provider_version") or "").strip()
+        if version:
+            providers.append(provider)
+    return providers
+
+
+def _selected_providers(raw: list[str] | None, proof_dir: Path) -> list[str]:
+    values = raw or ["auto"]
     providers: list[str] = []
     for value in values:
         if value == "all":
             providers.extend(SUPPORTED_PROVIDERS)
+        elif value == "auto":
+            providers.extend(_auto_providers(proof_dir))
         elif value in SUPPORTED_PROVIDERS:
             providers.append(value)
         else:
@@ -114,6 +132,8 @@ def _selected_providers(raw: list[str] | None) -> list[str]:
     for provider in providers:
         if provider not in deduped:
             deduped.append(provider)
+    if not deduped:
+        raise ValueError(f"no provider live-proof sidecars found in {proof_dir}")
     return deduped
 
 
@@ -326,7 +346,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     args.token_file = (args.token_file or _default_token_file()).expanduser()
     args.proof_dir = (args.proof_dir or _default_proof_dir()).expanduser()
     args.token = _read_token(args.token_file)
-    args.providers = _selected_providers(args.provider)
+    args.providers = _selected_providers(args.provider, args.proof_dir)
     expected_overrides = _parse_expected(args.expected or [])
 
     machine = _machine_supports(
@@ -374,8 +394,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--provider",
         action="append",
-        choices=[*SUPPORTED_PROVIDERS, "all"],
-        help="Provider to prove. Repeat for several. Defaults to opencode. Use all for every provider.",
+        choices=[*SUPPORTED_PROVIDERS, "all", "auto"],
+        help="Provider to prove. Repeat for several. Defaults to auto from live-proof sidecars. Use all to require every provider.",
     )
     parser.add_argument(
         "--expected",

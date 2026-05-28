@@ -8,6 +8,8 @@ run that proof and gets typed version-mismatch rejection on the negative leg.
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
+from collections.abc import Mapping
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -76,12 +78,14 @@ def _summarize_result(raw: Any) -> dict[str, Any]:
 
     match = raw.get("match") if isinstance(raw.get("match"), dict) else {}
     mismatch = raw.get("mismatch") if isinstance(raw.get("mismatch"), dict) else {}
+    version_match_info = raw.get("version_match")
+    version_match = version_match_info.get("status") if isinstance(version_match_info, dict) else None
     return {
         "provider": raw.get("provider"),
         "status": raw.get("status"),
         "verdict": raw.get("verdict"),
         "expected_provider_version": raw.get("expected_provider_version"),
-        "version_match": (raw.get("version_match") or {}).get("status") if isinstance(raw.get("version_match"), dict) else None,
+        "version_match": version_match,
         "match_status_code": match.get("status_code"),
         "match_version_match": _version_match_status(match.get("payload")),
         "mismatch_status_code": mismatch.get("status_code"),
@@ -97,11 +101,59 @@ def _summarize_results(results: Any) -> list[dict[str, Any]]:
     return [_summarize_result(result) for result in results]
 
 
+def expected_route_providers_from_live_proof(provider_live_proof: Mapping[str, Any] | None) -> list[str]:
+    statuses = dict((provider_live_proof or {}).get("statuses") or {})
+    providers: list[str] = []
+    for provider, raw_info in sorted(statuses.items()):
+        info = dict(raw_info or {})
+        if info.get("applies") and info.get("status") == "ok":
+            providers.append(str(provider))
+    return providers
+
+
 def _failure_count(raw: Any) -> int | None:
     try:
         return int(raw)
     except (TypeError, ValueError):
         return None
+
+
+def _coverage(
+    *,
+    expected_providers: Iterable[str] | None,
+    results: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if expected_providers is None:
+        return {
+            "coverage_status": "not_evaluated",
+            "expected_providers": [],
+            "covered_providers": [],
+            "missing_providers": [],
+            "unexpected_providers": [],
+        }
+
+    expected = sorted({str(provider) for provider in expected_providers if provider})
+    covered_set: set[str] = set()
+    for result in results:
+        provider = result.get("provider")
+        if provider and result.get("status") == "pass":
+            covered_set.add(str(provider))
+    covered = sorted(covered_set)
+    missing = [provider for provider in expected if provider not in covered]
+    unexpected = [provider for provider in covered if provider not in expected]
+    if not expected:
+        coverage_status = "none_expected"
+    elif missing:
+        coverage_status = "missing"
+    else:
+        coverage_status = "complete"
+    return {
+        "coverage_status": coverage_status,
+        "expected_providers": expected,
+        "covered_providers": covered,
+        "missing_providers": missing,
+        "unexpected_providers": unexpected,
+    }
 
 
 def _status_for_artifact(payload: dict[str, Any], *, freshness_status: str) -> str:
@@ -132,6 +184,7 @@ def collect_provider_live_route_e2e(
     *,
     fast: bool = False,
     base_dir: Path | None = None,
+    expected_providers: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     if fast:
         return {
@@ -141,6 +194,11 @@ def collect_provider_live_route_e2e(
             "status": "skipped",
             "applies": False,
             "skipped_reason": "fast_local_health",
+            "coverage_status": "not_evaluated",
+            "expected_providers": [],
+            "covered_providers": [],
+            "missing_providers": [],
+            "unexpected_providers": [],
         }
 
     path = configured_provider_live_route_e2e_path(base_dir)
@@ -155,6 +213,7 @@ def collect_provider_live_route_e2e(
             "status": "unavailable" if configured else "not_configured",
             "applies": False,
             "source": source,
+            **_coverage(expected_providers=expected_providers, results=[]),
         }
 
     generated_at = payload.get("generated_at")
@@ -165,13 +224,14 @@ def collect_provider_live_route_e2e(
     providers = [str(item) for item in raw_providers if item] if isinstance(raw_providers, list) else []
     if not providers:
         providers = [str(result.get("provider")) for result in summarized_results if result.get("provider")]
+    coverage = _coverage(expected_providers=expected_providers, results=summarized_results)
 
     return {
         "schema_version": PROVIDER_STATUS_SCHEMA_VERSION,
         "enabled": True,
         "configured": True,
         "status": status,
-        "applies": status == "ok",
+        "applies": status == "ok" and coverage["coverage_status"] in {"complete", "none_expected", "not_evaluated"},
         "artifact_schema_version": payload.get("schema_version"),
         "artifact_kind": payload.get("artifact_kind"),
         "generated_at": generated_at,
@@ -189,6 +249,7 @@ def collect_provider_live_route_e2e(
         "run_live_token_contract": payload.get("run_live_token_contract"),
         "mismatch_checked": payload.get("mismatch_checked"),
         "results": summarized_results,
+        **coverage,
         "source": source,
     }
 
@@ -197,4 +258,5 @@ __all__ = [
     "ROUTE_E2E_ARTIFACT_KIND",
     "collect_provider_live_route_e2e",
     "configured_provider_live_route_e2e_path",
+    "expected_route_providers_from_live_proof",
 ]
