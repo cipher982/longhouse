@@ -15,13 +15,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from zerg.provider_live_proof import SUPPORTED_LIVE_PROOF_PROVIDERS
 from zerg.provider_release_status import PROVIDER_STATUS_SCHEMA_VERSION
 from zerg.provider_release_status import _max_artifact_age_seconds
 from zerg.provider_release_status import _parse_rfc3339
 from zerg.services.longhouse_paths import get_provider_live_route_e2e_dir
 
 ROUTE_E2E_ARTIFACT_KIND = "provider_live_route_e2e"
-SUPPORTED_ROUTE_PROOF_PROVIDERS = frozenset({"claude", "opencode", "antigravity"})
+SUPPORTED_ROUTE_PROOF_PROVIDERS = frozenset(SUPPORTED_LIVE_PROOF_PROVIDERS)
 
 
 def _read_json_file(path: Path) -> tuple[dict[str, Any] | None, str | None]:

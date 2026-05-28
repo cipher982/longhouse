@@ -265,10 +265,6 @@ def _contract_tool_name(case: managed_phase_contract.ManagedPhaseDefinition) -> 
 
 def _disable_real_runner_env(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(local_health_service, "_candidate_runner_env_paths", lambda: [tmp_path / "missing-runner.env"])
-    monkeypatch.setenv(
-        provider_release_status.PROVIDER_RELEASE_STATUS_CONFIG_FILE_ENV,
-        str(tmp_path / "missing-provider-status.env"),
-    )
     for env_name in (
         local_health_service.CODEX_BIN_ENV,
         local_health_service.OPENCODE_BIN_ENV,

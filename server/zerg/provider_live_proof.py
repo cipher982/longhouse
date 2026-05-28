@@ -24,7 +24,7 @@ from zerg.services.longhouse_paths import get_provider_live_proof_dir
 from zerg.services.managed_provider_contracts import managed_provider_names
 
 LIVE_PROOF_ARTIFACT_KIND = "provider_live_canary"
-SUPPORTED_LIVE_PROOF_PROVIDERS = frozenset({"claude", "opencode", "antigravity"})
+SUPPORTED_LIVE_PROOF_PROVIDERS = ("claude", "opencode", "antigravity")
 
 
 def _read_json_file(path: Path) -> tuple[dict[str, Any] | None, str | None]:
@@ -144,8 +144,12 @@ def _status_for_provider(
     else:
         status = "unknown_artifact_version"
 
-    applies = (
-        status == "ok" and schema_status == "ok" and artifact_kind_status == "ok" and provider_status == "ok" and version_match == "match"
+    applies = (status, schema_status, artifact_kind_status, provider_status, version_match) == (
+        "ok",
+        "ok",
+        "ok",
+        "ok",
+        "match",
     )
 
     return {
@@ -192,7 +196,7 @@ def collect_provider_live_proof(
         }
 
     statuses: dict[str, Any] = {}
-    providers = sorted((set(provider_clis) | set(managed_provider_names())) & SUPPORTED_LIVE_PROOF_PROVIDERS)
+    providers = sorted((set(provider_clis) | set(managed_provider_names())) & set(SUPPORTED_LIVE_PROOF_PROVIDERS))
     for provider in providers:
         statuses[provider] = _status_for_provider(
             provider,

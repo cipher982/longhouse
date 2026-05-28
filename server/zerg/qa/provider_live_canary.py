@@ -31,6 +31,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from zerg.provider_live_proof import LIVE_PROOF_ARTIFACT_KIND
+from zerg.provider_live_proof import SUPPORTED_LIVE_PROOF_PROVIDERS
 from zerg.qa.repo_root import default_repo_root
 from zerg.qa.repo_root import provider_live_evidence_base
 
@@ -38,7 +40,7 @@ PROVIDER_STATUS_SCHEMA_VERSION = 1
 _OPENCODE_SERVER_LOG_RE = re.compile(r"opencode server listening on (?P<url>http://127\.0\.0\.1:\d+)")
 _ANTIGRAVITY_PLUGIN_NAME = "longhouse-runtime"
 _ANTIGRAVITY_HOOK_EVENTS = ("PreInvocation", "PreToolUse", "PostToolUse", "PostInvocation", "Stop")
-SUPPORTED_PROVIDERS = ("claude", "opencode", "antigravity")
+SUPPORTED_PROVIDERS = SUPPORTED_LIVE_PROOF_PROVIDERS
 _GAP_OPERATION_STATUSES = {"fail", "missing", "not_run", "skipped", "stale"}
 _OPENCODE_REATTACH_MESSAGE = " ".join(
     (
@@ -1820,7 +1822,7 @@ def run_provider_live_canary(args: argparse.Namespace | Mapping[str, Any]) -> di
     verdict, failure_code, recommendation = _classify(canaries)
     artifact = {
         "schema_version": PROVIDER_STATUS_SCHEMA_VERSION,
-        "artifact_kind": "provider_live_canary",
+        "artifact_kind": LIVE_PROOF_ARTIFACT_KIND,
         "provider": provider_result["provider"],
         "provider_version": provider_result.get("provider_version"),
         "generated_at": _now_iso(),

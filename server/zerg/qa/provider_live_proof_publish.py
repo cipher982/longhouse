@@ -18,6 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from zerg.provider_live_proof import LIVE_PROOF_ARTIFACT_KIND
 from zerg.qa.provider_live_canary import SUPPORTED_PROVIDERS
 from zerg.qa.provider_live_canary import run_provider_live_canary
 from zerg.qa.repo_root import default_repo_root
@@ -26,7 +27,6 @@ from zerg.services.longhouse_paths import get_provider_live_proof_dir
 
 DEFAULT_PROVIDERS = SUPPORTED_PROVIDERS
 PROVIDER_STATUS_SCHEMA_VERSION = 1
-LIVE_PROOF_ARTIFACT_KIND = "provider_live_canary"
 
 
 def _default_evidence_base(repo_root: Path) -> Path:

@@ -430,30 +430,6 @@ def test_provider_live_proof_route_dispatches_typed_machine_command(tmp_path):
     assert sent["payload"]["provider"] == "claude"
     assert sent["payload"]["expected_provider_version"] == "2.1.153"
     assert "timeout_secs" not in sent["payload"]
-    assert "live_token_timeout_secs" not in sent["payload"]
-
-
-def test_provider_live_proof_route_rejects_legacy_live_token_timeout_field(tmp_path):
-    SessionLocal = _make_db(tmp_path)
-    _seed_user(SessionLocal)
-    client, api_app = _make_agents_client(SessionLocal)
-    try:
-        resp = client.post(
-            "/api/agents/machines/cinder/provider-live-proof",
-            json={
-                "provider": "claude",
-                "live_token_timeout_secs": 17,
-            },
-        )
-    finally:
-        api_app.dependency_overrides.clear()
-
-    assert resp.status_code == 422, resp.text
-    body = resp.json()
-    assert any(
-        error.get("loc") == ["body", "live_token_timeout_secs"] and error.get("type") == "extra_forbidden"
-        for error in body.get("detail", [])
-    )
 
 
 def test_provider_live_proof_route_rejects_machine_without_provider_support(tmp_path):

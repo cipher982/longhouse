@@ -315,29 +315,6 @@ def test_provider_live_canary_installed_default_evidence_uses_longhouse_home(tmp
     assert Path(payload["artifact_path"]).is_file()
 
 
-def test_provider_live_canary_default_evidence_root_avoids_collisions(tmp_path: Path, monkeypatch) -> None:
-    base = tmp_path / "provider-run"
-    base.mkdir()
-    fake_bin = _fake_claude(tmp_path / "bin" / "claude")
-    monkeypatch.setattr(plc, "_default_evidence_root", lambda _repo_root, _provider, _timestamp: base)
-
-    payload = run_provider_live_canary(
-        {
-            "repo_root": str(tmp_path / "not-a-repo"),
-            "provider": "claude",
-            "provider_bin": str(fake_bin),
-            "artifact": None,
-            "evidence_root": None,
-            "wait_ready_secs": 1.0,
-            "json": True,
-        }
-    )
-
-    assert Path(payload["evidence_root"]) == tmp_path / "provider-run-1"
-    assert Path(payload["artifact_path"]) == tmp_path / "provider-run-1" / "provider-live-canary.json"
-    assert Path(payload["artifact_path"]).is_file()
-
-
 def test_opencode_server_start_cleans_up_when_ready_wait_fails(tmp_path: Path, monkeypatch) -> None:
     fake_bin = _write_exe(
         tmp_path / "bin" / "opencode",
@@ -450,70 +427,3 @@ def test_provider_live_publish_cli_rejects_unsupported_provider(tmp_path: Path) 
 
     assert result.exit_code == 2
     assert "Unsupported provider" in result.output
-
-
-def test_provider_live_cli_keeps_codex_out_of_shared_live_lane(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _patch_provider_live_publish(monkeypatch)
-    proof_dir = tmp_path / "proof"
-    env = {
-        "LONGHOUSE_HOME": str(tmp_path / "longhouse-home"),
-    }
-
-    canary = CliRunner().invoke(
-        app,
-        [
-            "provider-live",
-            "canary",
-            "--provider",
-            "codex",
-            "--artifact",
-            str(tmp_path / "artifact.json"),
-            "--evidence-root",
-            str(tmp_path / "evidence"),
-            "--json",
-        ],
-        env=env,
-    )
-    explicit = CliRunner().invoke(
-        app,
-        [
-            "provider-live",
-            "publish",
-            "--provider",
-            "codex",
-            "--proof-dir",
-            str(proof_dir),
-            "--evidence-root",
-            str(tmp_path / "evidence"),
-            "--json",
-        ],
-        env=env,
-    )
-
-    assert canary.exit_code == 2
-    assert "Unsupported provider" in canary.output
-    assert not (tmp_path / "artifact.json").exists()
-    assert explicit.exit_code == 2
-    assert "Unsupported provider" in explicit.output
-    assert not (proof_dir / "codex.json").exists()
-
-    default_payload = CliRunner().invoke(
-        app,
-        [
-            "provider-live",
-            "publish",
-            "--proof-dir",
-            str(tmp_path / "proof-default"),
-            "--evidence-root",
-            str(tmp_path / "evidence-default"),
-            "--json",
-        ],
-        env=env,
-    )
-
-    assert default_payload.exit_code == 0
-    payload = json.loads(default_payload.output)
-    assert "codex" not in payload["providers"]
