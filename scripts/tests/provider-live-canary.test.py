@@ -493,8 +493,7 @@ def test_opencode_live_canary_proves_server_and_no_token_contracts() -> None:
         assert payload["operation_evidence"]["transcript_binding"]["status"] == "pass"
         assert payload["operation_evidence"]["transcript_binding"]["level"] == "live_no_token"
         assert (
-            payload["operation_evidence"]["transcript_binding"]["canary"]
-            == "opencode_prompt_async_no_reply_delivery"
+            payload["operation_evidence"]["transcript_binding"]["canary"] == "opencode_prompt_async_no_reply_delivery"
         )
         serialized = json.dumps(payload)
         assert "Reply with exactly this token" not in serialized
@@ -514,6 +513,31 @@ def test_antigravity_live_canary_fails_when_plugin_install_fails() -> None:
         assert result.returncode == 1
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "antigravity_plugin_install_failed"
+
+
+def test_antigravity_live_canary_proves_hook_inbox_without_advertising_send() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_bin = _fake_antigravity(root / "bin" / "agy")
+        result, payload = _run_provider_canary(root, provider="antigravity", fake_bin=fake_bin)
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["provider"] == "antigravity"
+        assert payload["provider_version"] == "1.0.2-fake"
+        assert payload["verdict"] == "green"
+        assert payload["canaries"]["hook_inbox_claim_contract"]["status"] == "pass"
+        assert payload["canaries"]["hook_inbox_claim_contract"]["pre_injection"]["injectSteps"]
+        assert (
+            payload["canaries"]["hook_inbox_claim_contract"]["post_injection"]["terminationBehavior"]
+            == "force_continue"
+        )
+        assert payload["canaries"]["hook_inbox_claim_contract"]["stop_decision"]["decision"] == "continue"
+        assert payload["canaries"]["hook_inbox_claim_contract"]["empty_stop_decision"] == {
+            "decision": "allow",
+            "reason": "",
+        }
+        assert payload["operation_evidence"]["launch_local"]["status"] == "pass"
+        assert "send_input" not in payload.get("operation_evidence", {})
 
 
 def test_opencode_live_canary_fails_when_schema_drops_prompt_async() -> None:
@@ -640,6 +664,7 @@ def main() -> int:
     tests = [
         test_opencode_live_canary_proves_server_and_no_token_contracts,
         test_antigravity_live_canary_fails_when_plugin_install_fails,
+        test_antigravity_live_canary_proves_hook_inbox_without_advertising_send,
         test_opencode_live_canary_fails_when_schema_drops_prompt_async,
         test_opencode_live_canary_fails_when_schema_drops_session_messages,
         test_opencode_live_canary_fails_when_noreply_schema_is_missing,
