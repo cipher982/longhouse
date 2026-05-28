@@ -236,12 +236,13 @@ async def _register_fake_machine_control(
     *,
     owner_id: int,
     supports: list[str],
+    device_id: str = "cinder",
 ) -> _AutoCompletingMachineWebSocket:
     websocket = _AutoCompletingMachineWebSocket()
     await get_machine_control_channel_registry().register(
         owner_id=owner_id,
-        device_id="cinder",
-        machine_name="cinder",
+        device_id=device_id,
+        machine_name=device_id,
         engine_build="test-engine",
         supports=supports,
         websocket=websocket,
@@ -249,7 +250,14 @@ async def _register_fake_machine_control(
     return websocket
 
 
-def _seed_antigravity_session(session_local):
+def _seed_machine_control_session(
+    session_local,
+    *,
+    provider: str,
+    control_plane: str,
+    can_interrupt: bool = True,
+    device_id: str = "cinder",
+):
     from zerg.models.agents import SessionConnection
     from zerg.models.agents import SessionRun
     from zerg.models.agents import SessionRuntimeState
@@ -258,8 +266,9 @@ def _seed_antigravity_session(session_local):
     session_id, user_id = _seed_live_session(session_local)
     with session_local() as db:
         session = db.query(AgentSession).filter_by(id=session_id).one()
-        session.provider = "antigravity"
-        session.managed_transport = "antigravity_hook_inbox"
+        session.provider = provider
+        session.managed_transport = control_plane
+        session.device_id = device_id
         session.source_runner_id = None
         session.source_runner_name = None
         db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).delete(
@@ -268,19 +277,28 @@ def _seed_antigravity_session(session_local):
         thread = (
             db.query(SessionThread).filter(SessionThread.session_id == session.id, SessionThread.is_primary == 1).one()
         )
-        thread.provider = "antigravity"
+        thread.provider = provider
         run = db.query(SessionRun).filter(SessionRun.thread_id == thread.id, SessionRun.ended_at.is_(None)).one()
-        run.provider = "antigravity"
+        run.provider = provider
         conn = db.query(SessionConnection).filter(SessionConnection.run_id == run.id).one()
-        conn.control_plane = "antigravity_hook_inbox"
+        conn.control_plane = control_plane
         conn.can_send_input = 1
-        conn.can_interrupt = 0
+        conn.can_interrupt = int(can_interrupt)
         conn.can_terminate = 0
         conn.can_tail_output = 1
         conn.can_resume = 0
         db.commit()
         _seed_live_runtime_state(db, session)
     return session_id, user_id
+
+
+def _seed_antigravity_session(session_local):
+    return _seed_machine_control_session(
+        session_local,
+        provider="antigravity",
+        control_plane="antigravity_hook_inbox",
+        can_interrupt=False,
+    )
 
 
 def test_session_input_api_schema_exposes_typed_lifecycle_contract():
@@ -463,6 +481,101 @@ def test_antigravity_auto_input_routes_through_machine_control(monkeypatch, tmp_
         asyncio.run(session_lock_manager.release(str(session_id)))
         asyncio.run(_clear_machine_control_registry())
         api_app_ref.dependency_overrides = {}
+
+
+def _assert_provider_auto_input_routes_through_machine_control(
+    monkeypatch,
+    tmp_path,
+    *,
+    provider: str,
+    control_plane: str,
+    support: str,
+) -> None:
+    session_local = _make_db(tmp_path)
+    device_id = f"{provider}-machine-control"
+    session_id, user_id = _seed_machine_control_session(
+        session_local,
+        provider=provider,
+        control_plane=control_plane,
+        device_id=device_id,
+    )
+    websocket = asyncio.run(_register_fake_machine_control(owner_id=user_id, supports=[support], device_id=device_id))
+
+    class FailingRunnerDispatcher:
+        async def dispatch_job(self, **_kwargs):
+            raise AssertionError(f"{provider} send must use Machine Agent control, not legacy runner dispatch")
+
+    monkeypatch.setattr(
+        "zerg.services.managed_control_dispatcher.get_runner_job_dispatcher",
+        lambda: FailingRunnerDispatcher(),
+    )
+    monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_lock_release", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        "zerg.services.session_chat_impl._schedule_managed_local_active_phase_observation",
+        lambda **_kwargs: None,
+    )
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        resp = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": f"ship through {provider}", "intent": "auto", "client_request_id": f"{provider}-send-1"},
+        )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["outcome"] == "sent"
+        assert body["intent"] == "auto"
+        assert len(websocket.sent) == 1
+        frame = websocket.sent[0]
+        assert frame["command_type"] == "session.send_text"
+        assert frame["session_id"] == str(session_id)
+        assert str(frame["command_id"]).startswith(f"managed-control:{session_id}:session.send_text:")
+        assert frame["payload"] == {
+            "provider": provider,
+            "text": f"ship through {provider}",
+        }
+
+        with session_local() as db:
+            session = db.query(AgentSession).filter_by(id=session_id).one()
+            assert session.source_runner_id is None
+            row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
+            assert row.status == INPUT_STATUS_DELIVERED
+            assert row.client_request_id == f"{provider}-send-1"
+            turn = (
+                db.query(SessionTurn)
+                .filter(SessionTurn.session_id == session_id, SessionTurn.request_id == row.delivery_request_id)
+                .one()
+            )
+            assert turn.session_input_id == row.id
+            assert turn.send_accepted_at is not None
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+        asyncio.run(_clear_machine_control_registry())
+        api_app_ref.dependency_overrides = {}
+
+
+def test_claude_auto_input_routes_through_machine_control(monkeypatch, tmp_path):
+    _assert_provider_auto_input_routes_through_machine_control(
+        monkeypatch,
+        tmp_path,
+        provider="claude",
+        control_plane="claude_channel_bridge",
+        support="claude.send",
+    )
+
+
+def test_opencode_auto_input_routes_through_machine_control(monkeypatch, tmp_path):
+    _assert_provider_auto_input_routes_through_machine_control(
+        monkeypatch,
+        tmp_path,
+        provider="opencode",
+        control_plane="opencode_server_bridge",
+        support="opencode.send",
+    )
 
 
 def test_intent_queue_always_persists_queued(monkeypatch, tmp_path):
