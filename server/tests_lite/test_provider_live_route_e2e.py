@@ -14,7 +14,6 @@ from zerg import provider_release_status as prs
 @pytest.fixture(autouse=True)
 def isolate_longhouse_home(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("LONGHOUSE_HOME", str(tmp_path / ".longhouse"))
-    monkeypatch.setenv(prs.PROVIDER_RELEASE_STATUS_CONFIG_FILE_ENV, str(tmp_path / "missing-provider-status.env"))
 
 
 def _generated_at() -> str:
