@@ -507,12 +507,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="green",
         help="Artifact verdict requirement for the positive route proof.",
     )
-    parser.add_argument("--process-timeout-s", type=int, default=120)
-    parser.add_argument("--http-timeout-s", type=float, default=180.0)
+    parser.add_argument("--process-timeout-s", type=int, default=300)
+    parser.add_argument("--http-timeout-s", type=float, default=360.0)
     parser.add_argument(
         "--attempts",
         type=int,
-        default=2,
+        default=3,
         help="Per-leg attempts for transient hosted dispatch failures.",
     )
     parser.add_argument(
