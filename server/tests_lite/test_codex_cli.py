@@ -436,10 +436,13 @@ def test_start_native_codex_bridge_can_prestart_initial_thread(monkeypatch, tmp_
         token="zdt_test_token",
         codex_bin="/tmp/codex",
         create_initial_thread=True,
+        launch_mode="detached_ui",
     )
 
     assert (thread_id, ws_url, state_file) == ("thr_123", "ws://127.0.0.1:4800", "/tmp/state.json")
     assert "--create-initial-thread" in calls[0]["command"]
+    launch_mode_index = calls[0]["command"].index("--launch-mode")
+    assert calls[0]["command"][launch_mode_index + 1] == "detached_ui"
 
 
 def test_start_native_codex_bridge_requires_thread_id_when_prestarting(monkeypatch, tmp_path):
@@ -461,6 +464,7 @@ def test_start_native_codex_bridge_requires_thread_id_when_prestarting(monkeypat
             token="zdt_test_token",
             codex_bin="/tmp/codex",
             create_initial_thread=True,
+            launch_mode="detached_ui",
         )
 
 
@@ -540,7 +544,12 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     monkeypatch.setattr(
         codex_cli,
         "_start_native_codex_bridge",
-        lambda **kwargs: bridge_calls.append(kwargs) or ("thr_123", "ws://127.0.0.1:4800", "/tmp/state.json"),
+        lambda **kwargs: bridge_calls.append(kwargs)
+        or (
+            "thr_123" if kwargs.get("create_initial_thread") else "",
+            "ws://127.0.0.1:4800",
+            "/tmp/state.json",
+        ),
     )
     monkeypatch.setattr(codex_cli, "_interactive_stdio", lambda: True)
     monkeypatch.setattr(
@@ -586,7 +595,7 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     assert "Session ID: session-123" in result.output
     assert "Session URL: https://longhouse.test/timeline/session-123" in result.output
     assert "Starting native Codex bridge..." in result.output
-    assert "Codex thread: thr_123" in result.output
+    assert "Codex thread:" not in result.output
     assert "Remote target: ws://127.0.0.1:4800" in result.output
     assert "Opening session in browser..." in result.output
     assert "Attaching..." in result.output
@@ -600,11 +609,12 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
             "codex_bin": "/tmp/codex",
             "model": None,
             "model_reasoning_effort": None,
-            "create_initial_thread": True,
+            "create_initial_thread": False,
+            "launch_mode": "tui",
         }
     ]
     assert native_tui_calls == [
-        ("session-123", "/tmp/codex", "ws://127.0.0.1:4800", str(tmp_path), False, None, None, "thr_123")
+        ("session-123", "/tmp/codex", "ws://127.0.0.1:4800", str(tmp_path), False, None, None, None)
     ]
     assert list_managed_session_contracts(tmp_path / ".longhouse") == []
     assert stop_calls == [
@@ -616,7 +626,7 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     ]
 
 
-def test_codex_command_fails_before_tui_when_prestart_lacks_thread(monkeypatch, tmp_path):
+def test_codex_command_no_attach_fails_when_prestart_lacks_thread(monkeypatch, tmp_path):
     runner = CliRunner()
     native_tui_calls: list[dict[str, object]] = []
 
@@ -646,7 +656,7 @@ def test_codex_command_fails_before_tui_when_prestart_lacks_thread(monkeypatch, 
     monkeypatch.setattr(codex_cli, "_interactive_stdio", lambda: True)
     monkeypatch.setattr(codex_cli, "_run_native_codex_tui", lambda **kwargs: native_tui_calls.append(kwargs) or 0)
 
-    result = runner.invoke(app, ["codex", "--cwd", str(tmp_path)])
+    result = runner.invoke(app, ["codex", "--cwd", str(tmp_path), "--no-attach"])
 
     assert result.exit_code == 1
     assert "Codex bridge failed: Native Codex bridge did not return thread_id" in result.output
@@ -656,6 +666,7 @@ def test_codex_command_fails_before_tui_when_prestart_lacks_thread(monkeypatch, 
 def test_codex_command_no_attach_prints_attach_command(monkeypatch, tmp_path):
     runner = CliRunner()
     provider_home = tmp_path / ".claude"
+    bridge_calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(
         codex_cli,
@@ -678,7 +689,7 @@ def test_codex_command_no_attach_prints_attach_command(monkeypatch, tmp_path):
     monkeypatch.setattr(
         codex_cli,
         "_start_native_codex_bridge",
-        lambda **_kwargs: ("thr_123", "ws://127.0.0.1:4800", "/tmp/state.json"),
+        lambda **kwargs: bridge_calls.append(kwargs) or ("thr_123", "ws://127.0.0.1:4800", "/tmp/state.json"),
     )
 
     result = runner.invoke(app, ["codex", "--cwd", str(tmp_path), "--config-dir", str(provider_home), "--no-attach"])
@@ -693,6 +704,8 @@ def test_codex_command_no_attach_prints_attach_command(monkeypatch, tmp_path):
     assert contracts[0]["control"]["state_path"] == "/tmp/state.json"
     assert contracts[0]["launch_mode"] == "detached_ui"
     assert not (provider_home / "managed-local" / "contracts").exists()
+    assert bridge_calls[0]["create_initial_thread"] is True
+    assert bridge_calls[0]["launch_mode"] == "detached_ui"
 
 
 def test_codex_command_preserves_bridge_when_active_turn_survives(monkeypatch, tmp_path):

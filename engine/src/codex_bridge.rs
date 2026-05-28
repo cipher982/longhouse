@@ -104,7 +104,8 @@ pub struct BridgeStartConfig {
     pub log_file: Option<PathBuf>,
     pub start_timeout_secs: u64,
     /// When true, the bridge's run loop invokes `thread/start` itself before
-    /// marking the bridge ready. This is independent from launch lifecycle.
+    /// marking the bridge ready. Only detached-ui launches may prestart a
+    /// thread; TUI launches let the provider TUI create the startup thread.
     pub create_initial_thread: bool,
     /// Existing Codex thread id to resume instead of creating a fresh thread.
     pub resume_thread_id: Option<String>,
@@ -131,7 +132,7 @@ pub struct BridgeRunConfig {
     pub state_file: PathBuf,
     pub log_file: PathBuf,
     /// When true, the bridge calls `thread/start` itself instead of waiting
-    /// for a TUI attach.
+    /// for a TUI attach. Only valid for detached-ui launches.
     pub create_initial_thread: bool,
     /// Existing Codex thread id to resume instead of creating a fresh thread.
     pub resume_thread_id: Option<String>,
@@ -403,6 +404,30 @@ enum BridgeFollowup {
     },
 }
 
+fn validate_thread_start_contract(
+    launch_mode: BridgeLaunchMode,
+    create_initial_thread: bool,
+    resume_thread_id: Option<&str>,
+    resume_thread_path: Option<&str>,
+) -> Result<()> {
+    if create_initial_thread && resume_thread_id.is_some() {
+        bail!("create_initial_thread cannot be combined with resume_thread_id");
+    }
+    if resume_thread_path.is_some() && resume_thread_id.is_none() {
+        bail!("resume_thread_path requires resume_thread_id");
+    }
+    if launch_mode == BridgeLaunchMode::Tui && create_initial_thread {
+        bail!("create_initial_thread requires detached-ui launch mode");
+    }
+    if launch_mode == BridgeLaunchMode::DetachedUi
+        && !create_initial_thread
+        && resume_thread_id.is_none()
+    {
+        bail!("detached-ui launch mode requires create_initial_thread or resume_thread_id");
+    }
+    Ok(())
+}
+
 const TERMINAL_REASON_BRIDGE_STOP: &str = "bridge_stop";
 const TERMINAL_REASON_TERMINAL_DISCONNECTED: &str = "terminal_disconnected";
 
@@ -582,12 +607,12 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
     }
     let resume_thread_id = normalize_optional_string(config.resume_thread_id.clone());
     let resume_thread_path = normalize_optional_string(config.resume_thread_path.clone());
-    if config.create_initial_thread && resume_thread_id.is_some() {
-        bail!("create_initial_thread cannot be combined with resume_thread_id");
-    }
-    if resume_thread_path.is_some() && resume_thread_id.is_none() {
-        bail!("resume_thread_path requires resume_thread_id");
-    }
+    validate_thread_start_contract(
+        config.launch_mode,
+        config.create_initial_thread,
+        resume_thread_id.as_deref(),
+        resume_thread_path.as_deref(),
+    )?;
 
     let paths = resolve_bridge_paths(
         config.state_root.as_deref(),
@@ -774,12 +799,12 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     crate::codex_attachments::cleanup_session_tmpdir(&config.session_id);
     let resume_thread_id = normalize_optional_string(config.resume_thread_id.clone());
     let resume_thread_path = normalize_optional_string(config.resume_thread_path.clone());
-    if config.create_initial_thread && resume_thread_id.is_some() {
-        bail!("create_initial_thread cannot be combined with resume_thread_id");
-    }
-    if resume_thread_path.is_some() && resume_thread_id.is_none() {
-        bail!("resume_thread_path requires resume_thread_id");
-    }
+    validate_thread_start_contract(
+        config.launch_mode,
+        config.create_initial_thread,
+        resume_thread_id.as_deref(),
+        resume_thread_path.as_deref(),
+    )?;
     let initial_state = BridgeStateFile {
         schema_version: BRIDGE_STATE_SCHEMA_VERSION,
         session_id: config.session_id.clone(),
@@ -4475,6 +4500,53 @@ mod tests {
             BridgeLaunchMode::DetachedUi.persisted_state_value(),
             LAUNCH_MODE_DETACHED_UI
         );
+    }
+
+    #[test]
+    fn thread_start_contract_rejects_tui_prestart() {
+        let err =
+            validate_thread_start_contract(BridgeLaunchMode::Tui, true, None, None).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("create_initial_thread requires detached-ui launch mode"));
+    }
+
+    #[test]
+    fn thread_start_contract_requires_thread_source_for_detached_ui() {
+        let err = validate_thread_start_contract(BridgeLaunchMode::DetachedUi, false, None, None)
+            .unwrap_err();
+
+        assert!(err.to_string().contains(
+            "detached-ui launch mode requires create_initial_thread or resume_thread_id"
+        ));
+    }
+
+    #[test]
+    fn thread_start_contract_rejects_prestart_with_resume() {
+        let err = validate_thread_start_contract(
+            BridgeLaunchMode::DetachedUi,
+            true,
+            Some("thr-123"),
+            None,
+        )
+        .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("create_initial_thread cannot be combined with resume_thread_id"));
+    }
+
+    #[test]
+    fn thread_start_contract_accepts_detached_ui_prestart_and_resume() {
+        validate_thread_start_contract(BridgeLaunchMode::DetachedUi, true, None, None).unwrap();
+        validate_thread_start_contract(
+            BridgeLaunchMode::DetachedUi,
+            false,
+            Some("thr-123"),
+            Some("/tmp/thread.jsonl"),
+        )
+        .unwrap();
     }
 
     #[cfg(unix)]

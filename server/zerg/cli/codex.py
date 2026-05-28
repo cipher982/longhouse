@@ -366,6 +366,7 @@ def _start_native_codex_bridge(
     model: str | None = None,
     model_reasoning_effort: str | None = None,
     create_initial_thread: bool = False,
+    launch_mode: str = "tui",
 ) -> tuple[str, str, str | None]:
     try:
         engine = get_engine_executable()
@@ -392,6 +393,8 @@ def _start_native_codex_bridge(
         cmd += ["--model-reasoning-effort", model_reasoning_effort]
     if create_initial_thread:
         cmd.append("--create-initial-thread")
+    if launch_mode != "tui":
+        cmd += ["--launch-mode", launch_mode]
     cmd.append("--json")
     completed = subprocess.run(
         cmd,
@@ -820,6 +823,9 @@ def codex(
         cwd=cwd,
         project=project,
     )
+    is_interactive = _interactive_stdio()
+    launch_mode = "tui" if attach and is_interactive else "detached_ui"
+    create_initial_thread = launch_mode != "tui"
     typer.echo("Starting native Codex bridge...")
     try:
         thread_id, ws_url, state_file = _start_native_codex_bridge(
@@ -830,7 +836,8 @@ def codex(
             codex_bin=resolved_codex_bin,
             model=model,
             model_reasoning_effort=model_reasoning_effort,
-            create_initial_thread=True,
+            create_initial_thread=create_initial_thread,
+            launch_mode=launch_mode,
         )
     except _NativeBridgeError as exc:
         typer.secho(f"Codex bridge failed: {exc}", fg=typer.colors.RED)
@@ -838,14 +845,13 @@ def codex(
     if thread_id:
         typer.echo(f"Codex thread: {thread_id}")
     typer.echo(f"Remote target: {ws_url}")
-    is_interactive = _interactive_stdio()
     try:
         record_managed_provider_contract(
             provider="codex",
             session_id=result.session_id,
             cwd=cwd,
             config_dir=resolved_config_dir,
-            launch_mode="tui" if attach and is_interactive else "detached_ui",
+            launch_mode=launch_mode,
             provider_binary_path=resolved_codex_bin,
             provider_binary_source=codex_bin_source,
             control_kind="codex_bridge",
