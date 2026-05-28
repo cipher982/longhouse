@@ -627,25 +627,59 @@ def _check_provider_support() -> list[CheckResult]:
         capabilities = dict(info.get("capabilities") or {})
         proof = dict(info.get("proof") or {})
         version = dict(info.get("version_readiness") or {})
+        live_proof = dict(info.get("live_proof") or {})
         live_ops = ", ".join(str(item) for item in list(capabilities.get("live_control_operations") or [])) or "-"
         minimum_level = str(proof.get("minimum_evidence_level") or "-")
         release_failed_ops = ", ".join(str(item) for item in list(proof.get("release_failed_operations") or []))
         release_gap_ops = ", ".join(str(item) for item in list(proof.get("release_gap_operations") or []))
+        local_failed_ops = ", ".join(str(item) for item in list(proof.get("local_proof_failed_operations") or []))
+        local_gap_ops = ", ".join(str(item) for item in list(proof.get("local_proof_gap_operations") or []))
         version_state = str(version.get("state") or "-")
         state = str(info.get("state") or "unknown")
-        detail = f"live={live_ops}; proof_min={minimum_level}; version={version_state}"
+        live_proof_detail = _provider_live_proof_detail(live_proof)
+        detail = f"live={live_ops}; proof_min={minimum_level}; version={version_state}; local_proof={live_proof_detail}"
         if release_failed_ops:
             detail = f"{detail}; release_failed={release_failed_ops}"
         elif release_gap_ops:
             detail = f"{detail}; release_gaps={release_gap_ops}"
+        if local_failed_ops:
+            detail = f"{detail}; local_proof_failed={local_failed_ops}"
+        elif local_gap_ops:
+            detail = f"{detail}; local_proof_gaps={local_gap_ops}"
         if state in {"blocked", "provider_cli_missing"}:
             results.append(CheckResult(WARN, f"{provider} managed support {state}", detail))
         elif state == "needs_attention":
             results.append(CheckResult(WARN, f"{provider} managed support needs attention", detail))
+        elif _provider_live_proof_needs_attention(live_proof):
+            results.append(CheckResult(WARN, f"{provider} managed support {state}", detail))
         else:
             results.append(CheckResult(PASS, f"{provider} managed support {state}", detail))
 
     return results
+
+
+def _provider_live_proof_detail(live_proof: dict) -> str:
+    status = str(live_proof.get("status") or "not_configured")
+    if status == "not_configured":
+        return status
+    parts = [status]
+    for key, label in (
+        ("version_match", "version"),
+        ("freshness_status", "freshness"),
+        ("verdict", "verdict"),
+        ("failure_code", "failure"),
+    ):
+        value = live_proof.get(key)
+        if value:
+            parts.append(f"{label}={value}")
+    return ",".join(parts)
+
+
+def _provider_live_proof_needs_attention(live_proof: dict) -> bool:
+    status = str(live_proof.get("status") or "not_configured")
+    if status in {"", "not_configured", "ok"}:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
