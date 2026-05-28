@@ -426,8 +426,6 @@ def _provider_state(
         return "provider_cli_missing"
     if version_readiness.get("risk") == "blocking":
         return "blocked"
-    if version_readiness.get("risk") == "warning":
-        return "needs_attention"
     if proof.get("release_failed_operations"):
         return "needs_attention"
     if proof.get("local_proof_failed_operations"):
