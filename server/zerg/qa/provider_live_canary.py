@@ -37,6 +37,7 @@ PROVIDER_STATUS_SCHEMA_VERSION = 1
 _OPENCODE_SERVER_LOG_RE = re.compile(r"opencode server listening on (?P<url>http://127\.0\.0\.1:\d+)")
 _ANTIGRAVITY_PLUGIN_NAME = "longhouse-runtime"
 _ANTIGRAVITY_HOOK_EVENTS = ("PreInvocation", "PreToolUse", "PostToolUse", "PostInvocation", "Stop")
+SUPPORTED_PROVIDERS = ("claude", "opencode", "antigravity")
 _OPTIONAL_SKIPPED_STATUS = "optional_skipped"
 _GAP_OPERATION_STATUSES = {"fail", "missing", "not_run", _OPTIONAL_SKIPPED_STATUS, "skipped", "stale"}
 _OPENCODE_REATTACH_MESSAGE = " ".join(
@@ -101,10 +102,6 @@ def _status(status: str, **fields: Any) -> dict[str, Any]:
     return payload
 
 
-def _optional_skipped(reason: str, **fields: Any) -> dict[str, Any]:
-    return _status(_OPTIONAL_SKIPPED_STATUS, reason=reason, optional=True, **fields)
-
-
 def _fail(code: str, message: str, **fields: Any) -> dict[str, Any]:
     payload = {"status": "fail", "failure_code": code, "message": message}
     payload.update(fields)
@@ -117,15 +114,6 @@ def _command_evidence(result: subprocess.CompletedProcess[str]) -> dict[str, Any
         "returncode": result.returncode,
         "stdout": (result.stdout or "")[-4000:],
         "stderr": (result.stderr or "")[-4000:],
-    }
-
-
-def _metadata_only_command_evidence(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
-    return {
-        "argv": list(result.args) if isinstance(result.args, list) else result.args,
-        "returncode": result.returncode,
-        "stdout_chars": len(result.stdout or ""),
-        "stderr_chars": len(result.stderr or ""),
     }
 
 
@@ -452,13 +440,6 @@ def _provider_operation_evidence(
 
 
 def _classify(canaries: dict[str, dict[str, Any]]) -> tuple[str, str | None, str]:
-    """Classify required canary results.
-
-    ``optional_skipped`` is reserved for future proof that is not part of the
-    artifact's current contract. Real launch-scope gaps remain ``not_run`` and
-    keep the artifact yellow until they are proved.
-    """
-
     first_not_run: str | None = None
     first_warn: str | None = None
     for name, canary in canaries.items():
@@ -1014,54 +995,6 @@ def _run_attach_shape(binary: str) -> dict[str, Any]:
     return _status("pass", evidence=_command_evidence(result))
 
 
-def _run_claude_auth_status(binary: str) -> dict[str, Any]:
-    try:
-        result = subprocess.run(
-            [binary, "auth", "status", "--json"],
-            text=True,
-            capture_output=True,
-            timeout=8,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return _fail(
-            "claude_auth_status_failed",
-            f"{type(exc).__name__}: {exc}",
-            argv=[binary, "auth", "status", "--json"],
-        )
-    evidence = _metadata_only_command_evidence(result)
-    if result.returncode != 0:
-        return _status(
-            "warn",
-            reason="claude_auth_status_nonzero",
-            message="Claude auth status is unavailable; release compatibility can still be source-reviewed.",
-            evidence=evidence,
-        )
-    try:
-        payload = json.loads(result.stdout or "{}")
-    except json.JSONDecodeError:
-        return _fail(
-            "claude_auth_status_invalid_json",
-            "claude auth status --json returned invalid JSON",
-            evidence=evidence,
-        )
-    auth_summary = {
-        "loggedIn": bool(payload.get("loggedIn")),
-        "authMethod": str(payload.get("authMethod") or ""),
-        "apiProvider": str(payload.get("apiProvider") or ""),
-        "subscriptionType": str(payload.get("subscriptionType") or ""),
-    }
-    # Do not publish email/org identifiers into Sauron-facing artifacts.
-    if auth_summary["loggedIn"]:
-        return _status("pass", auth=auth_summary)
-    return _status(
-        "warn",
-        reason="claude_auth_not_logged_in",
-        message="Claude is not logged in on this machine.",
-        auth=auth_summary,
-    )
-
-
 def _run_claude_command_shape(binary: str) -> dict[str, Any]:
     try:
         result = subprocess.run(
@@ -1397,7 +1330,6 @@ def run_claude_live_canary(args: argparse.Namespace, root: Path) -> dict[str, An
         }
     canaries = {
         "binary_identity": _status("pass", path=binary, version=version, evidence=version_evidence),
-        "auth_status": _run_claude_auth_status(binary),
         "command_shape": _run_claude_command_shape(binary),
         "channels_shape": _run_claude_channels_shape(binary),
         "detached_pty_shape": _run_claude_pty_wrapper_shape(),
@@ -1677,22 +1609,13 @@ def run_provider(args: argparse.Namespace, root: Path) -> dict[str, Any]:
         return run_opencode_live_canary(args, root)
     if args.provider == "antigravity":
         return run_antigravity_live_canary(args, root)
-    return {
-        "provider": args.provider,
-        "provider_version": None,
-        "canaries": {
-            "live_contract": _status(
-                "not_run",
-                reason=f"{args.provider} live canary is not implemented in this dispatcher yet.",
-            )
-        },
-    }
+    raise ValueError(f"unsupported provider: {args.provider}")
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=default_repo_root())
-    parser.add_argument("--provider", choices=["claude", "opencode", "antigravity"], required=True)
+    parser.add_argument("--provider", choices=list(SUPPORTED_PROVIDERS), required=True)
     parser.add_argument("--provider-bin")
     parser.add_argument("--artifact", type=Path)
     parser.add_argument("--evidence-root", type=Path)

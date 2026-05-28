@@ -14,6 +14,7 @@ os.environ.setdefault("TESTING", "1")
 
 from zerg.cli.main import app
 from zerg.qa import provider_live_canary as plc
+from zerg.qa import provider_live_proof_publish as plp
 from zerg.qa.provider_live_canary import run_provider_live_canary
 
 
@@ -35,35 +36,6 @@ import sys
 args = sys.argv[1:]
 if args == ["--version"]:
     print("2.9.9-fake (Claude Code)")
-    raise SystemExit(0)
-
-if args == ["auth", "status", "--json"]:
-    if os.environ.get("FAKE_CLAUDE_AUTH_NONZERO") == "1":
-        print("email=should-not-appear@example.com orgId=org-secret", file=sys.stderr)
-        raise SystemExit(1)
-    if os.environ.get("FAKE_CLAUDE_AUTH_INVALID_JSON") == "1":
-        print("email=should-not-appear@example.com orgId=org-secret")
-        raise SystemExit(0)
-    if os.environ.get("FAKE_CLAUDE_NOT_LOGGED_IN") == "1":
-        print(json.dumps({"loggedIn": False, "authMethod": "", "apiProvider": ""}))
-        raise SystemExit(0)
-    if os.environ.get("FAKE_CLAUDE_API_AUTH") == "1":
-        print(json.dumps({
-            "loggedIn": True,
-            "authMethod": "apiKey",
-            "apiProvider": "anthropic",
-            "email": "should-not-appear@example.com",
-            "orgId": "org-secret",
-        }))
-        raise SystemExit(0)
-    print(json.dumps({
-        "loggedIn": True,
-        "authMethod": "claude.ai",
-        "apiProvider": "firstParty",
-        "subscriptionType": "pro",
-        "email": "should-not-appear@example.com",
-        "orgId": "org-secret",
-    }))
     raise SystemExit(0)
 
 if args == ["--help"]:
@@ -131,83 +103,39 @@ raise SystemExit(2)
     )
 
 
-def _fake_provider_live_canary(path: Path) -> Path:
-    return _write_exe(
-        path,
-        r"""#!/usr/bin/env python3
-import argparse
-import json
-from datetime import UTC, datetime
+def _patch_provider_live_publish(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    verdict: str = "green",
+    failure_code: str | None = None,
+) -> None:
+    def fake_canary(args: dict) -> dict:
+        artifact_path = Path(args["artifact"])
+        payload = {
+            "schema_version": 1,
+            "artifact_kind": "provider_live_canary",
+            "provider": args["provider"],
+            "provider_version": "fake",
+            "generated_at": "2026-01-01T00:00:00Z",
+            "verdict": verdict,
+            "failure_code": failure_code,
+            "recommendation": "investigate_before_upgrade",
+            "canaries": {"fake": {"status": "pass"}},
+            "operation_evidence": {
+                "send_input": {
+                    "status": "pass",
+                    "level": "live_no_token",
+                    "source": "fake packaged provider live canary",
+                }
+            },
+            "artifact_path": str(artifact_path),
+            "evidence_root": str(args["evidence_root"]),
+        }
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.write_text(json.dumps(payload), encoding="utf-8")
+        return payload
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--provider", required=True)
-parser.add_argument("--artifact", required=True)
-parser.add_argument("--evidence-root", required=True)
-parser.add_argument("--repo-root")
-parser.add_argument("--json", action="store_true")
-parser.add_argument("--wait-ready-secs")
-args = parser.parse_args()
-
-payload = {
-    "schema_version": 1,
-    "artifact_kind": "provider_live_canary",
-    "provider": args.provider,
-    "provider_version": "fake",
-    "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-    "verdict": "yellow",
-    "failure_code": "insufficient_coverage",
-    "recommendation": "investigate_before_upgrade",
-    "canaries": {"fake": {"status": "not_run"}},
-    "artifact_path": args.artifact,
-    "evidence_root": args.evidence_root,
-}
-with open(args.artifact, "w", encoding="utf-8") as handle:
-    json.dump(payload, handle)
-print(json.dumps(payload))
-""",
-    )
-
-
-def _fake_configurable_provider_live_canary(path: Path) -> Path:
-    return _write_exe(
-        path,
-        r"""#!/usr/bin/env python3
-import argparse
-import json
-import os
-from datetime import UTC, datetime
-
-parser = argparse.ArgumentParser()
-parser.add_argument("--provider", required=True)
-parser.add_argument("--artifact", required=True)
-parser.add_argument("--evidence-root", required=True)
-parser.add_argument("--repo-root")
-parser.add_argument("--json", action="store_true")
-parser.add_argument("--wait-ready-secs")
-args = parser.parse_args()
-
-failure_code = os.environ.get("FAKE_PROVIDER_FAILURE_CODE")
-payload = {
-    "schema_version": 1,
-    "artifact_kind": "provider_live_canary",
-    "provider": args.provider,
-    "provider_version": os.environ.get("FAKE_PROVIDER_VERSION", "fake"),
-    "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-    "verdict": os.environ.get("FAKE_PROVIDER_VERDICT", "green"),
-    "recommendation": "investigate_before_upgrade",
-    "canaries": {"fake": {"status": "pass"}},
-    "operation_evidence": json.loads(os.environ.get("FAKE_PROVIDER_OPERATION_EVIDENCE", "{}")),
-    "artifact_path": args.artifact,
-    "evidence_root": args.evidence_root,
-}
-if failure_code:
-    payload["failure_code"] = failure_code
-with open(args.artifact, "w", encoding="utf-8") as handle:
-    json.dump(payload, handle)
-print(json.dumps(payload))
-raise SystemExit(1 if payload["verdict"] == "red" else 0)
-""",
-    )
+    monkeypatch.setattr(plp, "run_provider_live_canary", fake_canary)
 
 
 def test_provider_live_canary_cli_writes_packaged_artifact(tmp_path: Path) -> None:
@@ -265,82 +193,6 @@ def test_provider_live_canary_uses_packaged_contracts_without_repo_root(tmp_path
     assert payload["artifact_path"] == str(artifact_path)
     assert payload["operation_evidence"]["launch_local"]["status"] == "pass"
     assert json.loads(artifact_path.read_text(encoding="utf-8")) == payload
-
-
-def test_claude_live_canary_turns_yellow_when_not_logged_in(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("FAKE_CLAUDE_NOT_LOGGED_IN", "1")
-    fake_bin = _fake_claude(tmp_path / "bin" / "claude")
-
-    payload = run_provider_live_canary(
-        {
-            "repo_root": str(tmp_path / "not-a-repo"),
-            "provider": "claude",
-            "provider_bin": str(fake_bin),
-            "artifact": str(tmp_path / "artifact.json"),
-            "evidence_root": str(tmp_path / "evidence"),
-            "wait_ready_secs": 1.0,
-            "json": True,
-        }
-    )
-
-    assert payload["verdict"] == "yellow"
-    assert payload["canaries"]["auth_status"]["status"] == "warn"
-    assert payload["canaries"]["auth_status"]["reason"] == "claude_auth_not_logged_in"
-
-
-def test_claude_auth_invalid_json_does_not_publish_raw_identifiers(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("FAKE_CLAUDE_AUTH_INVALID_JSON", "1")
-    fake_bin = _fake_claude(tmp_path / "bin" / "claude")
-
-    payload = run_provider_live_canary(
-        {
-            "repo_root": str(tmp_path / "not-a-repo"),
-            "provider": "claude",
-            "provider_bin": str(fake_bin),
-            "artifact": str(tmp_path / "artifact.json"),
-            "evidence_root": str(tmp_path / "evidence"),
-            "wait_ready_secs": 1.0,
-            "json": True,
-        }
-    )
-
-    serialized = json.dumps(payload)
-    assert payload["verdict"] == "red"
-    assert payload["failure_code"] == "claude_auth_status_invalid_json"
-    assert "should-not-appear@example.com" not in serialized
-    assert "org-secret" not in serialized
-
-
-def test_claude_auth_nonzero_does_not_publish_raw_identifiers(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("FAKE_CLAUDE_AUTH_NONZERO", "1")
-    fake_bin = _fake_claude(tmp_path / "bin" / "claude")
-
-    payload = run_provider_live_canary(
-        {
-            "repo_root": str(tmp_path / "not-a-repo"),
-            "provider": "claude",
-            "provider_bin": str(fake_bin),
-            "artifact": str(tmp_path / "artifact.json"),
-            "evidence_root": str(tmp_path / "evidence"),
-            "wait_ready_secs": 1.0,
-            "json": True,
-        }
-    )
-
-    serialized = json.dumps(payload)
-    assert payload["verdict"] == "yellow"
-    assert payload["canaries"]["auth_status"]["status"] == "warn"
-    assert "should-not-appear@example.com" not in serialized
-    assert "org-secret" not in serialized
 
 
 def test_claude_live_canary_fails_when_channels_contract_is_missing(
@@ -413,7 +265,7 @@ def test_antigravity_plugin_argv_unwraps_home_based_debug_wrapper(
 def test_provider_live_canary_cli_exits_nonzero_on_red(tmp_path: Path) -> None:
     fake_bin = _write_exe(
         tmp_path / "bin" / "claude",
-        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo broken >&2; exit 3; fi\nexit 2\n",
+        '#!/bin/sh\nif [ "$1" = "--version" ]; then echo broken >&2; exit 3; fi\nexit 2\n',
     )
     artifact_path = tmp_path / "artifact.json"
 
@@ -488,13 +340,14 @@ def test_provider_live_canary_installed_default_evidence_uses_longhouse_home(tmp
 def test_provider_live_canary_default_evidence_root_avoids_collisions(tmp_path: Path, monkeypatch) -> None:
     base = tmp_path / "provider-run"
     base.mkdir()
+    fake_bin = _fake_claude(tmp_path / "bin" / "claude")
     monkeypatch.setattr(plc, "_default_evidence_root", lambda _repo_root, _provider, _timestamp: base)
 
     payload = run_provider_live_canary(
         {
             "repo_root": str(tmp_path / "not-a-repo"),
-            "provider": "future-provider",
-            "provider_bin": None,
+            "provider": "claude",
+            "provider_bin": str(fake_bin),
             "artifact": None,
             "evidence_root": None,
             "wait_ready_secs": 1.0,
@@ -542,8 +395,8 @@ time.sleep(60)
     assert stopped
 
 
-def test_provider_live_publish_cli_writes_stable_sidecar(tmp_path: Path) -> None:
-    script = _fake_configurable_provider_live_canary(tmp_path / "bin" / "provider-live-canary")
+def test_provider_live_publish_cli_writes_stable_sidecar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_provider_live_publish(monkeypatch)
     proof_dir = tmp_path / "proof"
     evidence_root = tmp_path / "evidence"
 
@@ -558,8 +411,6 @@ def test_provider_live_publish_cli_writes_stable_sidecar(tmp_path: Path) -> None
             str(proof_dir),
             "--evidence-root",
             str(evidence_root),
-            "--canary-script",
-            str(script),
             "--json",
         ],
     )
@@ -576,9 +427,41 @@ def test_provider_live_publish_cli_writes_stable_sidecar(tmp_path: Path) -> None
     assert artifact["verdict"] == "green"
 
 
-def test_provider_live_publish_cli_rejects_token_timeout_option(tmp_path: Path) -> None:
+def test_provider_live_publish_cli_rejects_removed_debug_options(tmp_path: Path) -> None:
+    for option, value in (
+        ("--live-token-timeout-secs", "17"),
+        ("--canary-script", str(tmp_path / "provider-live-canary")),
+    ):
+        proof_dir = tmp_path / option.removeprefix("--")
+
+        result = CliRunner().invoke(
+            app,
+            [
+                "provider-live",
+                "publish",
+                "--provider",
+                "claude",
+                "--proof-dir",
+                str(proof_dir),
+                "--evidence-root",
+                str(tmp_path / "evidence"),
+                option,
+                value,
+                "--json",
+            ],
+        )
+
+        assert result.exit_code == 2
+        assert "No such option" in result.output
+        assert not (proof_dir / "claude.json").exists()
+
+
+def test_provider_live_publish_cli_exits_nonzero_on_red_canary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_provider_live_publish(monkeypatch, verdict="red", failure_code="claude_command_contract_missing")
     proof_dir = tmp_path / "proof"
-    script = _fake_provider_live_canary(tmp_path / "bin" / "provider-live-canary")
 
     result = CliRunner().invoke(
         app,
@@ -591,43 +474,8 @@ def test_provider_live_publish_cli_rejects_token_timeout_option(tmp_path: Path) 
             str(proof_dir),
             "--evidence-root",
             str(tmp_path / "evidence"),
-            "--canary-script",
-            str(script),
-            "--live-token-timeout-secs",
-            "17",
             "--json",
         ],
-    )
-
-    assert result.exit_code == 2
-    assert "No such option" in result.output
-    assert not (proof_dir / "claude.json").exists()
-
-
-def test_provider_live_publish_cli_exits_nonzero_on_red_canary(tmp_path: Path) -> None:
-    script = _fake_configurable_provider_live_canary(tmp_path / "bin" / "provider-live-canary")
-    proof_dir = tmp_path / "proof"
-    env = {
-        "FAKE_PROVIDER_VERDICT": "red",
-        "FAKE_PROVIDER_FAILURE_CODE": "claude_command_contract_missing",
-    }
-
-    result = CliRunner().invoke(
-        app,
-        [
-            "provider-live",
-            "publish",
-            "--provider",
-            "claude",
-            "--proof-dir",
-            str(proof_dir),
-            "--evidence-root",
-            str(tmp_path / "evidence"),
-            "--canary-script",
-            str(script),
-            "--json",
-        ],
-        env=env,
     )
 
     assert result.exit_code == 1, result.output
@@ -655,7 +503,11 @@ def test_provider_live_publish_cli_rejects_unsupported_provider(tmp_path: Path) 
     assert "Unsupported provider" in result.output
 
 
-def test_provider_live_publish_cli_rejects_codex_and_excludes_it_by_default(tmp_path: Path) -> None:
+def test_provider_live_publish_cli_rejects_codex_and_excludes_it_by_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_provider_live_publish(monkeypatch)
     proof_dir = tmp_path / "proof"
     env = {
         "LONGHOUSE_HOME": str(tmp_path / "longhouse-home"),
@@ -690,8 +542,6 @@ def test_provider_live_publish_cli_rejects_codex_and_excludes_it_by_default(tmp_
             str(tmp_path / "proof-default"),
             "--evidence-root",
             str(tmp_path / "evidence-default"),
-            "--canary-script",
-            str(_fake_provider_live_canary(tmp_path / "bin" / "provider-live-canary")),
             "--json",
         ],
         env=env,

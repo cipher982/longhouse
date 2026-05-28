@@ -309,10 +309,10 @@ Initial product contract:
   level.
 - `longhouse provider-live canary --provider claude` probes the installed
   upstream Claude Code binary without spending provider tokens: binary version,
-  redacted auth shape, required launch/session flags, the development-channel
-  tagged server contract for Longhouse's private MCP channel, and local PTY
-  wrapper availability. Provider execution, transcript binding, and
-  active-turn steer belong to explicit release canaries.
+  required launch/session flags, the development-channel tagged server contract
+  for Longhouse's private MCP channel, and local PTY wrapper availability.
+  Provider execution, transcript binding, and active-turn steer belong to
+  explicit release canaries.
 - `longhouse provider-live canary --provider opencode` probes the installed
   upstream OpenCode server contract without executing a prompt: binary version,
   server readiness, `/doc` schema, zero-token session create/get,
@@ -491,29 +491,11 @@ Default artifact root:
 Do not ship raw user prompts or real repo-sensitive content in public CI
 artifacts. Release canaries should use a temporary cwd with synthetic files.
 
-## Implementation Roadmap
+## Current Contract
 
-1. Convert this spec into the canonical checklist for Sauron Codex release
-   review.
-2. Expand `validate-managed-codex-contract` or add a sibling target for source
-   checks that forbid reintroducing packaged Codex runtimes, `--start-thread`,
-   `longhouse-codex`, or writer-side `headless`.
-3. Add a manual/scripted managed TUI attach canary using an isolated home.
-4. Wire Sauron release jobs to run source review plus behavioral canaries and
-   emit Green/Yellow/Red output.
-5. Promote the fake app-server contract subset into normal CI once stable.
-6. Repeat the same provider-contract shape for Claude and Gemini only where
-   their mechanics actually need it.
-
-## Open Questions
-
-- Should the raw fresh remote TUI warning canary ever become blocking, or stay
-  advisory when the managed TUI attach contract passes?
-- Should model-invoking canaries run nightly, on every Codex release, or only
-  manually? Default until decided: scheduled/manual only, not every cheap source
-  review run.
-- Should canary artifacts live only in Sauron-owned storage, or should local
-  manual runs also keep `.build/canaries/...` artifacts? Default until decided:
-  both.
-- What exact Sauron storage path should host the provider-release status
-  artifact?
+Sauron release jobs run source review plus behavioral canaries and emit the
+Green/Yellow/Red provider-release artifact. Cheap source-review jobs stay
+separate from token-spending provider execution. Local manual runs may keep
+`.build/canaries/...` evidence, but Longhouse product surfaces consume only the
+structured provider-release artifact and the local live-proof sidecars described
+above.

@@ -102,14 +102,6 @@ def publish_command(
         float,
         typer.Option("--wait-ready-secs", help="Seconds to wait for provider local servers to become ready."),
     ] = 15.0,
-    timeout_s: Annotated[
-        float,
-        typer.Option("--timeout-s", help="Seconds to wait for script-based canary execution."),
-    ] = 120.0,
-    canary_script: Annotated[
-        Path | None,
-        typer.Option("--canary-script", help="Debug/test override for the canary executable.", hidden=True),
-    ] = None,
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Emit machine-readable JSON."),
@@ -127,9 +119,7 @@ def publish_command(
         provider=provider,
         proof_dir=proof_dir,
         evidence_root=evidence_root,
-        canary_script=canary_script,
         wait_ready_secs=wait_ready_secs,
-        timeout_s=timeout_s,
         json=json_output,
     )
     payload = run_provider_live_proof_publish(args)
