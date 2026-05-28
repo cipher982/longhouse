@@ -323,7 +323,10 @@ def test_full_fake_canary_can_go_green() -> None:
             ["--run-all-live", "--source-review-status", "pass"],
         )
         assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["schema_version"] == 1
+        assert payload["artifact_kind"] == "provider_release_canary"
         assert payload["verdict"] == "green"
+        assert payload["provider_version"] == "codex 0.999.0"
         for canary in payload["canaries"].values():
             assert canary["status"] == "pass"
         assert set(payload["operation_evidence"]) == {
@@ -404,6 +407,7 @@ def test_forbidden_longhouse_codex_path_is_red() -> None:
         assert result.returncode == 1
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "longhouse_codex_launcher"
+        assert payload["provider_version"] is None
         assert payload["operation_evidence"]["launch_local"]["status"] == "fail"
         assert payload["operation_evidence"]["launch_local"]["level"] == "none"
 
@@ -462,6 +466,7 @@ def test_release_artifact_can_use_upstream_version_without_local_binary_identity
         assert payload["verdict"] == "yellow"
         assert payload["failure_code"] == "insufficient_coverage"
         assert payload["codex_version"] == "rust-v0.134.0"
+        assert payload["provider_version"] == "rust-v0.134.0"
         assert payload["canaries"]["binary_identity"]["status"] == "not_run"
         assert payload["source_review"]["note"] == "release triage report is in report.md"
 

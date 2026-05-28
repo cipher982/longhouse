@@ -11,7 +11,7 @@ import typer
 
 from zerg.qa.provider_live_canary import default_repo_root
 from zerg.qa.provider_live_canary import run_provider_live_canary
-from zerg.qa.provider_live_proof_publish import DEFAULT_PROVIDERS
+from zerg.qa.provider_live_proof_publish import SUPPORTED_PROVIDERS
 from zerg.qa.provider_live_proof_publish import publish_exit_code
 from zerg.qa.provider_live_proof_publish import run_provider_live_proof_publish
 
@@ -113,7 +113,7 @@ def publish_command(
 ) -> None:
     """Publish stable provider live-proof sidecars for local-health."""
 
-    unsupported = sorted(set(provider or []) - set(DEFAULT_PROVIDERS))
+    unsupported = sorted(set(provider or []) - set(SUPPORTED_PROVIDERS))
     if unsupported:
         typer.echo(f"Unsupported provider for live-proof publish: {', '.join(unsupported)}", err=True)
         raise typer.Exit(code=2)
