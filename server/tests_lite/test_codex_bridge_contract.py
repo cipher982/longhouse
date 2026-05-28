@@ -15,7 +15,7 @@ import os
 import shutil
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -25,9 +25,21 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
-from zerg.services.local_health import _collect_managed_codex_sessions  # noqa: E402
+from zerg.services.local_health import _collect_managed_codex_sessions  # noqa: E402,I001
 
-ENGINE_BIN = shutil.which("longhouse-engine")
+def _engine_bin() -> str | None:
+    explicit = os.environ.get("LONGHOUSE_ENGINE_BIN")
+    if explicit:
+        return explicit
+    repo_root = Path(__file__).resolve().parents[2]
+    for relative in ("engine/target/release/longhouse-engine", "engine/target/debug/longhouse-engine"):
+        candidate = repo_root / relative
+        if candidate.exists():
+            return str(candidate)
+    return shutil.which("longhouse-engine")
+
+
+ENGINE_BIN = _engine_bin()
 SESSION_ID = "cccc2222-3333-4444-8555-666677778888"
 
 pytestmark = pytest.mark.skipif(
@@ -66,6 +78,9 @@ def test_bridge_state_file_schema_matches_python_reader(tmp_path: Path) -> None:
     state_file = state_dir / f"{SESSION_ID}.json"
     log_file = state_dir / f"{SESSION_ID}.log"
     lock_path = state_file.with_suffix(".lock")
+    codex_stub = tmp_path / "codex-stub"
+    codex_stub.write_text("#!/bin/sh\nsleep 30\n", encoding="utf-8")
+    codex_stub.chmod(0o755)
 
     proc = subprocess.Popen(
         [
@@ -78,10 +93,8 @@ def test_bridge_state_file_schema_matches_python_reader(tmp_path: Path) -> None:
             str(tmp_path),
             "--url",
             "http://127.0.0.1:0",
-            "--token",
-            "test-token",
             "--codex-bin",
-            "/nonexistent/codex",
+            str(codex_stub),
             "--state-file",
             str(state_file),
             "--log-file",
@@ -89,6 +102,7 @@ def test_bridge_state_file_schema_matches_python_reader(tmp_path: Path) -> None:
         ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env={**os.environ, "LONGHOUSE_CODEX_BRIDGE_TOKEN": "test-token"},
     )
 
     try:

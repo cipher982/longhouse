@@ -110,11 +110,10 @@ mkdir -p "$CWD" "$ISOLATION_ROOT" "$DETACHED_ISOLATION_ROOT"
 
 echo "─── Test 1: Bridge start ───"
 
-BRIDGE_OUTPUT=$("$ENGINE" codex-bridge start \
+BRIDGE_OUTPUT=$(LONGHOUSE_CODEX_BRIDGE_TOKEN="$DEVICE_TOKEN" "$ENGINE" codex-bridge start \
     --session-id "$SESSION_ID" \
     --cwd "$CWD" \
     --url "$API_URL" \
-    --token "$DEVICE_TOKEN" \
     --codex-bin "$CODEX_BIN" \
     --json \
     --auto-approve \
@@ -172,11 +171,10 @@ fi
 echo "─── Test 4: Detached UI bridge start ───"
 
 DETACHED_SESSION_ID=$(python3 -c "import uuid; print(uuid.uuid4())")
-DETACHED_OUTPUT=$("$ENGINE" codex-bridge start \
+DETACHED_OUTPUT=$(LONGHOUSE_CODEX_BRIDGE_TOKEN="$DEVICE_TOKEN" "$ENGINE" codex-bridge start \
     --session-id "$DETACHED_SESSION_ID" \
     --cwd "$CWD" \
     --url "$API_URL" \
-    --token "$DEVICE_TOKEN" \
     --codex-bin "$CODEX_BIN" \
     --json \
     --auto-approve \

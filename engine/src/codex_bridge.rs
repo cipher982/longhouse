@@ -31,6 +31,7 @@ const THREAD_SUBSCRIBE_BACKGROUND_RETRY_MS: u64 = 500;
 const THREAD_SUBSCRIBE_RETRY_ATTEMPTS: usize = 8;
 const THREAD_SUBSCRIBE_RETRY_DELAY_MS: u64 = 250;
 const CODEX_DISABLE_UPDATE_CHECK_CONFIG: &str = "check_for_update_on_startup=false";
+pub const CODEX_BRIDGE_TOKEN_ENV: &str = "LONGHOUSE_CODEX_BRIDGE_TOKEN";
 pub const BRIDGE_STATE_SCHEMA_VERSION: u32 = 1;
 pub const LAUNCH_MODE_DETACHED_UI: &str = "detached_ui";
 pub const LAUNCH_MODE_TUI: &str = "tui";
@@ -680,8 +681,6 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         .arg(&config.cwd)
         .arg("--url")
         .arg(&config.api_url)
-        .arg("--token")
-        .arg(&config.api_token)
         .arg("--codex-bin")
         .arg(&config.codex_bin)
         .arg("--state-file")
@@ -690,7 +689,8 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         .arg(&paths.log_file)
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
-        .stdin(Stdio::null());
+        .stdin(Stdio::null())
+        .env(CODEX_BRIDGE_TOKEN_ENV, &config.api_token);
     if let Some(longhouse_home) = config.longhouse_home.as_deref() {
         child.arg("--longhouse-home").arg(longhouse_home);
     }
