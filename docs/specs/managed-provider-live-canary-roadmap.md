@@ -138,12 +138,15 @@ gate by itself.
 
 1. Add a provider live-canary dispatcher that can run one provider or all
    providers and emit one local live-proof artifact per provider. The
-   dispatcher currently covers OpenCode, Claude, and Antigravity through
-   `longhouse provider-live canary`; the repo script
+   dispatcher covers Claude, OpenCode, Antigravity, and explicit Codex runs
+   through `longhouse provider-live canary`; the repo script
    `scripts/qa/provider-live-canary.py` is a wrapper for source-checkout jobs.
-   `longhouse provider-live publish` runs those canaries on a dogfood machine
-   and publishes stable sidecars under `LONGHOUSE_PROVIDER_LIVE_PROOF_DIR` or
-   the default `~/.longhouse/provider-live-proof` for local-health to consume;
+   `longhouse provider-live publish` runs the default non-Codex canaries on a
+   dogfood machine and publishes stable sidecars under
+   `LONGHOUSE_PROVIDER_LIVE_PROOF_DIR` or the default
+   `~/.longhouse/provider-live-proof` for local-health to consume; explicit
+   `--provider codex` publishes a Codex sidecar while keeping Codex bridge/TUI
+   checks out of the default dogfood refresh path;
    `scripts/qa/provider-live-proof-publish.py` is now a repo wrapper around the
    packaged publisher. `make dogfood-refresh` runs the publisher before its
    final local-health snapshot; `make dogfood-check` stays read-only and reports
@@ -172,8 +175,8 @@ gate by itself.
 4. Extend the Antigravity canary from its current yellow state -- real `agy`
    version/help/plugin validate/install/list plus Longhouse global-hook config
    proof -- to loop-level hook behavior against the upstream runtime.
-5. Fold the existing Codex release canary into the same artifact shape without
-   deleting its Codex-specific app-server checks.
+5. Continue promoting the packaged Codex release canary inside the same local
+   proof feed without deleting its Codex-specific app-server checks.
 
 ## Reference Surfaces
 

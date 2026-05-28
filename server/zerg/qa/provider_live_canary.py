@@ -56,6 +56,10 @@ _CLAUDE_CHANNEL_UNCONFIRMED_MESSAGE = (
 _ANTIGRAVITY_PLUGIN_NOTE = (
     "agy may report hook components as skipped here; Longhouse wires Antigravity hooks through the global hooks config."
 )
+_CODEX_LIGHTWEIGHT_MESSAGE = (
+    "Shared provider-live proof ran the portable Codex release checks only. "
+    "Bridge/TUI no-token canaries stay in the explicit Codex release lane."
+)
 
 
 def _source_repo_root() -> Path | None:
@@ -365,6 +369,40 @@ def _provider_operation_evidence(
     if provider == "antigravity":
         return _antigravity_operation_evidence(contract, canaries)
     return {}
+
+
+def run_codex_live_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    from zerg.qa.codex_provider_release_canary import run_codex_provider_release_canary
+
+    codex_artifact_path = root / "codex-provider-release-canary.json"
+    codex_evidence_root = root / "codex-provider-release"
+    codex_artifact = run_codex_provider_release_canary(
+        {
+            "repo_root": args.repo_root,
+            "evidence_root": codex_evidence_root,
+            "artifact": codex_artifact_path,
+            "codex_bin": args.provider_bin,
+            "source_review_status": "not_run",
+            "source_review_note": _CODEX_LIGHTWEIGHT_MESSAGE,
+        }
+    )
+    canaries = dict(codex_artifact.get("canaries") or {})
+    release_artifact_path = codex_artifact.get("artifact_path") or str(codex_artifact_path)
+    release_verdict = str(codex_artifact.get("verdict") or "")
+    release_lane_status = "fail" if release_verdict == "red" else "warn" if release_verdict == "yellow" else "pass"
+    canaries["codex_release_lane"] = _status(
+        release_lane_status,
+        message=_CODEX_LIGHTWEIGHT_MESSAGE,
+        artifact_path=release_artifact_path,
+        verdict=release_verdict,
+    )
+    return {
+        "provider": "codex",
+        "provider_version": codex_artifact.get("provider_version") or codex_artifact.get("codex_version"),
+        "canaries": canaries,
+        "operation_evidence": dict(codex_artifact.get("operation_evidence") or {}),
+        "source_artifacts": {"codex_provider_release_canary": release_artifact_path},
+    }
 
 
 def _classify(canaries: dict[str, dict[str, Any]]) -> tuple[str, str | None, str]:
@@ -1165,6 +1203,8 @@ def run_antigravity_live_canary(args: argparse.Namespace, root: Path) -> dict[st
 
 
 def run_provider(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    if args.provider == "codex":
+        return run_codex_live_canary(args, root)
     if args.provider == "claude":
         return run_claude_live_canary(args, root)
     if args.provider == "opencode":
@@ -1212,7 +1252,8 @@ def run_provider_live_canary(args: argparse.Namespace | Mapping[str, Any]) -> di
 
     provider_result = run_provider(args, evidence_root)
     canaries = provider_result["canaries"]
-    operation_evidence = _provider_operation_evidence(args.repo_root, provider_result["provider"], canaries)
+    manifest_operation_evidence = _provider_operation_evidence(args.repo_root, provider_result["provider"], canaries)
+    operation_evidence = dict(provider_result.get("operation_evidence") or manifest_operation_evidence)
     verdict, failure_code, recommendation = _classify(canaries)
     artifact = {
         "schema_version": PROVIDER_STATUS_SCHEMA_VERSION,
@@ -1229,6 +1270,8 @@ def run_provider_live_canary(args: argparse.Namespace | Mapping[str, Any]) -> di
     }
     if operation_evidence:
         artifact["operation_evidence"] = operation_evidence
+    if provider_result.get("source_artifacts"):
+        artifact["source_artifacts"] = provider_result["source_artifacts"]
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
     artifact_path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return artifact
