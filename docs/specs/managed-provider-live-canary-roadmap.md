@@ -124,7 +124,6 @@ and missing live release proof is machine-readable.
 
 `longhouse provider-live publish` runs the shared no-token live canaries for
 Claude, OpenCode, and Antigravity, then publishes stable local sidecars under
-`LONGHOUSE_PROVIDER_LIVE_PROOF_DIR` or the default
 `~/.longhouse/provider-live-proof`. Codex stays in its dedicated release canary
 lane because its app-server/TUI bridge proof is provider-specific.
 

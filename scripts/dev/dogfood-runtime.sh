@@ -279,8 +279,7 @@ publish_provider_live_proof() {
   require_cmd longhouse
 
   log "==> Publishing provider live proof"
-  log "Proof dir: $PROVIDER_LIVE_PROOF_DIR"
-  LONGHOUSE_PROVIDER_LIVE_PROOF_DIR="$PROVIDER_LIVE_PROOF_DIR" \
+  LONGHOUSE_HOME="$LONGHOUSE_HOME" \
     longhouse provider-live publish \
       --repo-root "$ROOT_DIR" || status=$?
   if (( status != 0 )); then
@@ -301,7 +300,6 @@ run_provider_live_route_e2e() {
   log "Evidence: $route_artifact"
   mkdir -p "$(dirname "$route_artifact")" "$ARTIFACT_DIR"
   LONGHOUSE_HOME="$LONGHOUSE_HOME" \
-  LONGHOUSE_PROVIDER_LIVE_PROOF_DIR="$PROVIDER_LIVE_PROOF_DIR" \
     python3 "$ROOT_DIR/scripts/qa/provider-live-route-e2e.py" \
       --provider "$ROUTE_E2E_PROVIDER" \
       --require-verdict non-red \
@@ -405,7 +403,6 @@ while [[ $# -gt 0 ]]; do
 done
 
 LONGHOUSE_HOME="$(resolve_longhouse_home "$CLAUDE_DIR")"
-PROVIDER_LIVE_PROOF_DIR="$LONGHOUSE_HOME/provider-live-proof"
 
 case "$COMMAND" in
   refresh)

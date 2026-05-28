@@ -17,7 +17,6 @@ def clear_release_status_env(monkeypatch, tmp_path: Path) -> None:
         prs.CODEX_RELEASE_STATUS_FILE_ENV,
         prs.CODEX_RELEASE_STATUS_URL_ENV,
         prs.PROVIDER_RELEASE_STATUS_MAX_AGE_SECONDS_ENV,
-        prs.PROVIDER_LIVE_PROOF_DIR_ENV,
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv(prs.PROVIDER_RELEASE_STATUS_CONFIG_FILE_ENV, str(tmp_path / "missing-provider-status.env"))

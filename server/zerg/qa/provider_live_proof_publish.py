@@ -3,8 +3,8 @@
 
 This is the dogfood-machine owner for real upstream provider operation proof.
 It runs the packaged provider live canary, keeps timestamped evidence, and
-atomically publishes the latest matching artifact to LONGHOUSE_PROVIDER_LIVE_PROOF_DIR
-for local-health to consume.
+atomically publishes the latest matching artifact under LONGHOUSE_HOME for
+local-health to consume.
 """
 
 from __future__ import annotations
@@ -18,19 +18,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from zerg.provider_live_proof import configured_provider_live_proof_dir
 from zerg.qa.provider_live_canary import SUPPORTED_PROVIDERS
 from zerg.qa.provider_live_canary import run_provider_live_canary
 from zerg.qa.repo_root import default_repo_root
 from zerg.qa.repo_root import provider_live_evidence_base
+from zerg.services.longhouse_paths import get_provider_live_proof_dir
 
 DEFAULT_PROVIDERS = SUPPORTED_PROVIDERS
 PROVIDER_STATUS_SCHEMA_VERSION = 1
 LIVE_PROOF_ARTIFACT_KIND = "provider_live_canary"
-
-
-def _default_proof_dir() -> Path:
-    return configured_provider_live_proof_dir()
 
 
 def _default_evidence_base(repo_root: Path) -> Path:
@@ -188,7 +184,7 @@ def run_provider_live_proof_publish(args: argparse.Namespace | Mapping[str, Any]
     else:
         args = argparse.Namespace(**vars(args))
     args.repo_root = Path(args.repo_root).expanduser().resolve()
-    args.proof_dir = args.proof_dir or _default_proof_dir()
+    args.proof_dir = args.proof_dir or get_provider_live_proof_dir()
     args.proof_dir = args.proof_dir.expanduser().resolve()
     args.evidence_root = (args.evidence_root or _default_evidence_base(args.repo_root)).expanduser().resolve()
     providers = tuple(args.provider or DEFAULT_PROVIDERS)

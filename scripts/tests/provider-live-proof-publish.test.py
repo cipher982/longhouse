@@ -45,7 +45,6 @@ raise SystemExit(2)
 
 def _publisher_env(root: Path, *, include_fake_claude: bool) -> dict[str, str]:
     env = os.environ.copy()
-    env.pop("LONGHOUSE_PROVIDER_LIVE_PROOF_DIR", None)
     env["LONGHOUSE_PROVIDER_RELEASE_STATUS_CONFIG"] = str(root / "missing-provider-status.env")
     if include_fake_claude:
         fake_claude = _write_fake_claude(root / "bin" / "claude")
