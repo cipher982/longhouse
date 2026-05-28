@@ -55,7 +55,9 @@ def _publisher_env(root: Path, *, include_fake_claude: bool) -> dict[str, str]:
     return env
 
 
-def _run_publisher(args: list[str], *, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _run_publisher(
+    args: list[str], *, env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(PUBLISHER), *args],
         text=True,
@@ -71,8 +73,6 @@ def test_publishes_stable_sidecar_from_packaged_live_canary() -> None:
         proof_dir = root / "proof"
         result = _run_publisher(
             [
-                "--repo-root",
-                str(root / "repo"),
                 "--provider",
                 "claude",
                 "--evidence-root",
@@ -91,7 +91,9 @@ def test_publishes_stable_sidecar_from_packaged_live_canary() -> None:
         artifact = json.loads(stable.read_text(encoding="utf-8"))
         assert artifact["artifact_kind"] == "provider_live_canary"
         assert artifact["provider"] == "claude"
-        assert artifact["operation_evidence"]["launch_local"]["level"] == "live_no_token"
+        assert (
+            artifact["operation_evidence"]["launch_local"]["level"] == "live_no_token"
+        )
 
 
 def test_publishes_red_sidecar_when_provider_binary_is_missing() -> None:
@@ -100,8 +102,6 @@ def test_publishes_red_sidecar_when_provider_binary_is_missing() -> None:
         proof_dir = root / "proof"
         result = _run_publisher(
             [
-                "--repo-root",
-                str(root / "repo"),
                 "--provider",
                 "opencode",
                 "--evidence-root",
@@ -131,8 +131,6 @@ def test_defaults_proof_dir_to_longhouse_home() -> None:
 
         result = _run_publisher(
             [
-                "--repo-root",
-                str(root / "repo"),
                 "--provider",
                 "claude",
                 "--evidence-root",
@@ -144,7 +142,9 @@ def test_defaults_proof_dir_to_longhouse_home() -> None:
 
         assert result.returncode == 0, result.stderr
         payload = json.loads(result.stdout)
-        assert payload["proof_dir"] == str((longhouse_home / "provider-live-proof").resolve())
+        assert payload["proof_dir"] == str(
+            (longhouse_home / "provider-live-proof").resolve()
+        )
         assert (longhouse_home / "provider-live-proof" / "claude.json").exists()
 
 

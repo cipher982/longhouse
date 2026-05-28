@@ -388,8 +388,6 @@ def _run_canary(
             str(REPO_ROOT / "server"),
             "python",
             str(CANARY),
-            "--repo-root",
-            str(REPO_ROOT),
             "--provider",
             "opencode",
             "--provider-bin",
@@ -430,8 +428,6 @@ def _run_provider_canary(
             str(REPO_ROOT / "server"),
             "python",
             str(CANARY),
-            "--repo-root",
-            str(REPO_ROOT),
             "--provider",
             provider,
             "--provider-bin",
@@ -468,8 +464,15 @@ def test_opencode_live_canary_proves_server_and_no_token_contracts() -> None:
         assert payload["canaries"]["schema_probe"]["status"] == "pass"
         assert payload["canaries"]["session_create"]["tokens"]["input"] == 0
         assert payload["canaries"]["prompt_async_no_reply_delivery"]["status"] == "pass"
-        assert payload["canaries"]["prompt_async_no_reply_delivery"]["observed_message_count"] == 1
-        assert payload["canaries"]["process_restart_reattach_contract"]["status"] == "pass"
+        assert (
+            payload["canaries"]["prompt_async_no_reply_delivery"][
+                "observed_message_count"
+            ]
+            == 1
+        )
+        assert (
+            payload["canaries"]["process_restart_reattach_contract"]["status"] == "pass"
+        )
         assert payload["canaries"]["session_abort"]["status"] == "pass"
         assert "assistant_response_contract" not in payload["canaries"]
         assert "prompt_async_execution_contract" not in payload["canaries"]
@@ -483,17 +486,30 @@ def test_opencode_live_canary_proves_server_and_no_token_contracts() -> None:
         }
         assert payload["operation_evidence"]["launch_local"]["level"] == "live_no_token"
         assert payload["operation_evidence"]["reattach"]["level"] == "live_no_token"
-        assert payload["operation_evidence"]["reattach"]["canary"] == "opencode_process_restart_reattach_contract"
+        assert (
+            payload["operation_evidence"]["reattach"]["canary"]
+            == "opencode_process_restart_reattach_contract"
+        )
         assert payload["operation_evidence"]["send_input"]["status"] == "pass"
         assert payload["operation_evidence"]["send_input"]["level"] == "live_no_token"
-        assert payload["operation_evidence"]["send_input"]["canary"] == "opencode_prompt_async_no_reply_delivery"
+        assert (
+            payload["operation_evidence"]["send_input"]["canary"]
+            == "opencode_prompt_async_no_reply_delivery"
+        )
         assert payload["operation_evidence"]["interrupt"]["status"] == "pass"
         assert payload["operation_evidence"]["interrupt"]["level"] == "live_no_token"
-        assert payload["operation_evidence"]["interrupt"]["canary"] == "opencode_abort_endpoint"
-        assert payload["operation_evidence"]["transcript_binding"]["status"] == "pass"
-        assert payload["operation_evidence"]["transcript_binding"]["level"] == "live_no_token"
         assert (
-            payload["operation_evidence"]["transcript_binding"]["canary"] == "opencode_prompt_async_no_reply_delivery"
+            payload["operation_evidence"]["interrupt"]["canary"]
+            == "opencode_abort_endpoint"
+        )
+        assert payload["operation_evidence"]["transcript_binding"]["status"] == "pass"
+        assert (
+            payload["operation_evidence"]["transcript_binding"]["level"]
+            == "live_no_token"
+        )
+        assert (
+            payload["operation_evidence"]["transcript_binding"]["canary"]
+            == "opencode_prompt_async_no_reply_delivery"
         )
         serialized = json.dumps(payload)
         assert "Reply with exactly this token" not in serialized
@@ -519,20 +535,33 @@ def test_antigravity_live_canary_proves_hook_inbox_without_advertising_send() ->
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fake_bin = _fake_antigravity(root / "bin" / "agy")
-        result, payload = _run_provider_canary(root, provider="antigravity", fake_bin=fake_bin)
+        result, payload = _run_provider_canary(
+            root, provider="antigravity", fake_bin=fake_bin
+        )
 
         assert result.returncode == 0, result.stderr + result.stdout
         assert payload["provider"] == "antigravity"
         assert payload["provider_version"] == "1.0.2-fake"
         assert payload["verdict"] == "green"
         assert payload["canaries"]["hook_inbox_claim_contract"]["status"] == "pass"
-        assert payload["canaries"]["hook_inbox_claim_contract"]["pre_injection"]["injectSteps"]
+        assert payload["canaries"]["hook_inbox_claim_contract"]["pre_injection"][
+            "injectSteps"
+        ]
         assert (
-            payload["canaries"]["hook_inbox_claim_contract"]["post_injection"]["terminationBehavior"]
+            payload["canaries"]["hook_inbox_claim_contract"]["post_injection"][
+                "terminationBehavior"
+            ]
             == "force_continue"
         )
-        assert payload["canaries"]["hook_inbox_claim_contract"]["stop_decision"]["decision"] == "continue"
-        assert payload["canaries"]["hook_inbox_claim_contract"]["empty_stop_decision"] == {
+        assert (
+            payload["canaries"]["hook_inbox_claim_contract"]["stop_decision"][
+                "decision"
+            ]
+            == "continue"
+        )
+        assert payload["canaries"]["hook_inbox_claim_contract"][
+            "empty_stop_decision"
+        ] == {
             "decision": "allow",
             "reason": "",
         }
@@ -544,7 +573,9 @@ def test_opencode_live_canary_fails_when_schema_drops_prompt_async() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fake_bin = _fake_opencode(root / "bin" / "opencode")
-        result, payload = _run_canary(root, fake_bin, {"FAKE_OPENCODE_OMIT_PROMPT_ASYNC": "1"})
+        result, payload = _run_canary(
+            root, fake_bin, {"FAKE_OPENCODE_OMIT_PROMPT_ASYNC": "1"}
+        )
 
         assert result.returncode == 1
         assert payload["verdict"] == "red"
@@ -560,7 +591,9 @@ def test_opencode_live_canary_fails_when_schema_drops_session_messages() -> None
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fake_bin = _fake_opencode(root / "bin" / "opencode")
-        result, payload = _run_canary(root, fake_bin, {"FAKE_OPENCODE_OMIT_MESSAGES": "1"})
+        result, payload = _run_canary(
+            root, fake_bin, {"FAKE_OPENCODE_OMIT_MESSAGES": "1"}
+        )
 
         assert result.returncode == 1
         assert payload["verdict"] == "red"
@@ -574,7 +607,9 @@ def test_opencode_live_canary_fails_when_noreply_schema_is_missing() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fake_bin = _fake_opencode(root / "bin" / "opencode")
-        result, payload = _run_canary(root, fake_bin, {"FAKE_OPENCODE_OMIT_NOREPLY_SCHEMA": "1"})
+        result, payload = _run_canary(
+            root, fake_bin, {"FAKE_OPENCODE_OMIT_NOREPLY_SCHEMA": "1"}
+        )
 
         assert result.returncode == 1
         assert payload["verdict"] == "red"
@@ -600,40 +635,59 @@ def test_opencode_live_canary_fails_when_message_post_schema_is_missing() -> Non
         failures = payload["canaries"]["schema_probe"]["failures"]
         assert failures[0]["failure_code"] == "opencode_schema_missing_path"
         assert failures[0]["expected"] == "session.prompt"
-        assert payload["operation_evidence"]["send_input"]["canary"] == "opencode_prompt_schema"
+        assert (
+            payload["operation_evidence"]["send_input"]["canary"]
+            == "opencode_prompt_schema"
+        )
 
 
 def test_opencode_live_canary_accepts_empty_successful_abort_response() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fake_bin = _fake_opencode(root / "bin" / "opencode")
-        result, payload = _run_canary(root, fake_bin, {"FAKE_OPENCODE_EMPTY_ABORT": "1"})
+        result, payload = _run_canary(
+            root, fake_bin, {"FAKE_OPENCODE_EMPTY_ABORT": "1"}
+        )
 
         assert result.returncode == 0, result.stderr + result.stdout
         assert payload["verdict"] == "green"
         assert payload["canaries"]["session_abort"]["status"] == "pass"
 
 
-def test_opencode_live_canary_reports_prompt_async_request_failure_on_send_input() -> None:
+def test_opencode_live_canary_reports_prompt_async_request_failure_on_send_input() -> (
+    None
+):
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fake_bin = _fake_opencode(root / "bin" / "opencode")
-        result, payload = _run_canary(root, fake_bin, {"FAKE_OPENCODE_PROMPT_ASYNC_500": "1"})
+        result, payload = _run_canary(
+            root, fake_bin, {"FAKE_OPENCODE_PROMPT_ASYNC_500": "1"}
+        )
 
         assert result.returncode == 1
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "opencode_prompt_async_request_failed"
         assert payload["canaries"]["prompt_async_no_reply_delivery"]["status"] == "fail"
-        assert payload["canaries"]["prompt_async_no_reply_delivery"]["request_phase"] == "post_prompt_async"
+        assert (
+            payload["canaries"]["prompt_async_no_reply_delivery"]["request_phase"]
+            == "post_prompt_async"
+        )
         assert payload["operation_evidence"]["send_input"]["status"] == "fail"
-        assert payload["operation_evidence"]["send_input"]["failure_code"] == "opencode_prompt_async_request_failed"
+        assert (
+            payload["operation_evidence"]["send_input"]["failure_code"]
+            == "opencode_prompt_async_request_failed"
+        )
 
 
-def test_opencode_live_canary_fails_when_prompt_async_delivery_is_not_observed() -> None:
+def test_opencode_live_canary_fails_when_prompt_async_delivery_is_not_observed() -> (
+    None
+):
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fake_bin = _fake_opencode(root / "bin" / "opencode")
-        result, payload = _run_canary(root, fake_bin, {"FAKE_OPENCODE_DROP_PROMPT_ASYNC": "1"})
+        result, payload = _run_canary(
+            root, fake_bin, {"FAKE_OPENCODE_DROP_PROMPT_ASYNC": "1"}
+        )
 
         assert result.returncode == 1
         assert payload["verdict"] == "red"
@@ -647,16 +701,21 @@ def test_opencode_live_canary_fails_when_restart_loses_transcript_marker() -> No
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fake_bin = _fake_opencode(root / "bin" / "opencode")
-        result, payload = _run_canary(root, fake_bin, {"FAKE_OPENCODE_FORGET_REATTACH_ON_RESTART": "1"})
+        result, payload = _run_canary(
+            root, fake_bin, {"FAKE_OPENCODE_FORGET_REATTACH_ON_RESTART": "1"}
+        )
 
         assert result.returncode == 1
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "opencode_reattach_transcript_marker_missing"
-        assert payload["canaries"]["process_restart_reattach_contract"]["status"] == "fail"
+        assert (
+            payload["canaries"]["process_restart_reattach_contract"]["status"] == "fail"
+        )
         assert payload["operation_evidence"]["reattach"]["status"] == "fail"
         assert payload["operation_evidence"]["reattach"]["level"] == "none"
         assert (
-            payload["operation_evidence"]["reattach"]["failure_code"] == "opencode_reattach_transcript_marker_missing"
+            payload["operation_evidence"]["reattach"]["failure_code"]
+            == "opencode_reattach_transcript_marker_missing"
         )
 
 

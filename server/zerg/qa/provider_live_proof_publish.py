@@ -21,7 +21,6 @@ from typing import Any
 from zerg.provider_live_proof import LIVE_PROOF_ARTIFACT_KIND
 from zerg.qa.provider_live_canary import SUPPORTED_PROVIDERS
 from zerg.qa.provider_live_canary import run_provider_live_canary
-from zerg.qa.repo_root import default_repo_root
 from zerg.qa.repo_root import provider_live_evidence_base
 from zerg.services.longhouse_paths import get_provider_live_proof_dir
 
@@ -29,8 +28,8 @@ DEFAULT_PROVIDERS = SUPPORTED_PROVIDERS
 PROVIDER_STATUS_SCHEMA_VERSION = 1
 
 
-def _default_evidence_base(repo_root: Path) -> Path:
-    return provider_live_evidence_base(repo_root)
+def _default_evidence_base() -> Path:
+    return provider_live_evidence_base()
 
 
 def _now_iso() -> str:
@@ -115,7 +114,6 @@ def _run_packaged_canary(
     try:
         artifact = run_provider_live_canary(
             {
-                "repo_root": args.repo_root,
                 "provider": provider,
                 "provider_bin": None,
                 "artifact": artifact_path,
@@ -164,7 +162,6 @@ def _publish_provider(args: argparse.Namespace, provider: str, run_timestamp: st
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--repo-root", type=Path, default=default_repo_root())
     parser.add_argument(
         "--provider",
         action="append",
@@ -183,10 +180,9 @@ def run_provider_live_proof_publish(args: argparse.Namespace | Mapping[str, Any]
         args = argparse.Namespace(**dict(args))
     else:
         args = argparse.Namespace(**vars(args))
-    args.repo_root = Path(args.repo_root).expanduser().resolve()
     args.proof_dir = args.proof_dir or get_provider_live_proof_dir()
     args.proof_dir = args.proof_dir.expanduser().resolve()
-    args.evidence_root = (args.evidence_root or _default_evidence_base(args.repo_root)).expanduser().resolve()
+    args.evidence_root = (args.evidence_root or _default_evidence_base()).expanduser().resolve()
     providers = tuple(args.provider or DEFAULT_PROVIDERS)
     run_timestamp = _timestamp()
 
