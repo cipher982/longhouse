@@ -1,7 +1,6 @@
 """Shared helpers for Longhouse runtime services."""
 
 from .email import send_email
-from .email import send_reply_email
 from .redaction import redact_text
 from .ssh import SSHResult
 from .ssh import run_ssh_command
@@ -14,7 +13,6 @@ __all__ = [
     "run_ssh_command",
     "test_ssh_connection",
     "send_email",
-    "send_reply_email",
     "count_tokens",
     "truncate_to_tokens",
     "redact_text",
