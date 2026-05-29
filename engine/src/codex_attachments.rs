@@ -156,7 +156,12 @@ pub async fn fetch_one(
         .timeout(ATTACHMENT_FETCH_TIMEOUT)
         .send()
         .await
-        .with_context(|| format!("fetching attachment {} from {}", attachment.id, resolved_url))?;
+        .with_context(|| {
+            format!(
+                "fetching attachment {} from {}",
+                attachment.id, resolved_url
+            )
+        })?;
 
     let status = response.status();
     if !status.is_success() {
@@ -538,7 +543,10 @@ mod tests {
     #[test]
     fn resolve_blob_url_joins_relative_path() {
         assert_eq!(
-            resolve_blob_url("https://api.example", "/api/agents/sessions/s/inputs/1/blob"),
+            resolve_blob_url(
+                "https://api.example",
+                "/api/agents/sessions/s/inputs/1/blob"
+            ),
             "https://api.example/api/agents/sessions/s/inputs/1/blob"
         );
         assert_eq!(
