@@ -574,12 +574,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(retry_at.to_rfc3339(), "2026-03-11T00:00:03+00:00");
-        assert!(
-            spool
-                .next_retry_at_for_path("/missing.jsonl")
-                .unwrap()
-                .is_none()
-        );
+        assert!(spool
+            .next_retry_at_for_path("/missing.jsonl")
+            .unwrap()
+            .is_none());
     }
 
     #[test]
@@ -587,16 +585,12 @@ mod tests {
         let (_tmp, conn) = setup();
         let spool = Spool::new(&conn);
 
-        assert!(
-            spool
-                .enqueue("claude", "/dup.jsonl", 100, 500, Some("s1"))
-                .unwrap()
-        );
-        assert!(
-            spool
-                .enqueue("claude", "/dup.jsonl", 100, 500, Some("s1"))
-                .unwrap()
-        );
+        assert!(spool
+            .enqueue("claude", "/dup.jsonl", 100, 500, Some("s1"))
+            .unwrap());
+        assert!(spool
+            .enqueue("claude", "/dup.jsonl", 100, 500, Some("s1"))
+            .unwrap());
 
         let count: i64 = conn
             .query_row(

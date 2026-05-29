@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::io::AsyncReadExt;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
@@ -2535,7 +2535,7 @@ fn finish_path_task(mut result: PathTaskResult, started: Instant) -> PathTaskRes
 
 /// Wait for SIGINT (Ctrl-C) or SIGTERM.
 async fn shutdown_signal() {
-    use tokio::signal::unix::{SignalKind, signal};
+    use tokio::signal::unix::{signal, SignalKind};
 
     let ctrl_c = tokio::signal::ctrl_c();
     let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
@@ -3302,24 +3302,22 @@ mod tests {
         let mut latest_wakes = HashMap::new();
         let mut scheduler = PathScheduler::new(4);
 
-        assert!(
-            enqueue_transcript_wake_signal(
-                &mut scheduler,
-                &mut latest_wakes,
-                TranscriptWakeSignal {
-                    provider: "codex".to_string(),
-                    path: transcript.path().to_path_buf(),
-                    phase: "idle".to_string(),
-                    observed_at_ms: 123,
-                    session_id: Some("session-123".to_string()),
-                    turn_id: Some("turn-123".to_string()),
-                    wake_reason: Some("turn_completed".to_string()),
-                    file_len_hint: Some(456),
-                    received_at_ms: Some(124),
-                },
-            )
-            .is_some()
-        );
+        assert!(enqueue_transcript_wake_signal(
+            &mut scheduler,
+            &mut latest_wakes,
+            TranscriptWakeSignal {
+                provider: "codex".to_string(),
+                path: transcript.path().to_path_buf(),
+                phase: "idle".to_string(),
+                observed_at_ms: 123,
+                session_id: Some("session-123".to_string()),
+                turn_id: Some("turn-123".to_string()),
+                wake_reason: Some("turn_completed".to_string()),
+                file_len_hint: Some(456),
+                received_at_ms: Some(124),
+            },
+        )
+        .is_some());
 
         let launched = scheduler.pop_launchable().unwrap();
         assert_eq!(launched.path, transcript.path());
