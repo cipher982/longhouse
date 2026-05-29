@@ -1,7 +1,8 @@
-"""Email utilities for Longhouse scheduled jobs.
+"""Email utilities for Longhouse instance mail.
 
-Used by builtin product jobs and, when explicitly configured, optional external
-job packs loaded by Longhouse. This helper is not the standalone Sauron runtime.
+Sends via AWS SES. Used by the assistant email tools, runner-health alerts, and
+the email-config Settings surface. SES credentials resolve from the
+``email_secrets`` table first, then fall back to environment variables.
 """
 
 from __future__ import annotations
@@ -10,7 +11,6 @@ import logging
 import os
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from typing import Any
 
 import boto3
 from botocore.exceptions import ClientError
@@ -36,13 +36,13 @@ def get_single_tenant_owner_id() -> int:
     """
     try:
         from zerg.database import get_session_factory
-        from zerg.models.models import JobSecret
+        from zerg.models.models import EmailSecret
         from zerg.models.user import User
 
         session_factory = get_session_factory()
         with session_factory() as db:
             # Prefer the user who actually has email secrets
-            secret_owner = db.query(JobSecret.owner_id).filter(JobSecret.key == "AWS_SES_ACCESS_KEY_ID").first()
+            secret_owner = db.query(EmailSecret.owner_id).filter(EmailSecret.key == "AWS_SES_ACCESS_KEY_ID").first()
             if secret_owner:
                 return secret_owner[0]
             # Fall back to first user
@@ -55,9 +55,9 @@ def get_single_tenant_owner_id() -> int:
 
 
 def resolve_email_config() -> dict[str, str]:
-    """Resolve email config: DB (JobSecret) first, env var fallback.
+    """Resolve email config: DB (email_secrets) first, env var fallback.
 
-    Checks the JobSecret table for the single-tenant owner first,
+    Checks the email_secrets table for the single-tenant owner first,
     then falls back to environment variables. This lets the control plane
     inject SES creds as env vars while allowing users to override via Settings UI.
 
@@ -69,12 +69,18 @@ def resolve_email_config() -> dict[str, str]:
     # Try DB first (graceful — may fail if DB not ready or no secrets table)
     try:
         from zerg.database import get_session_factory
-        from zerg.jobs.secret_resolver import resolve_secrets
+        from zerg.models.models import EmailSecret
+        from zerg.utils.crypto import decrypt
 
         owner_id = get_single_tenant_owner_id()
         session_factory = get_session_factory()
         with session_factory() as db:
-            resolved = resolve_secrets(owner_id=owner_id, declared_keys=_EMAIL_SECRET_KEYS, db=db)
+            rows = db.query(EmailSecret).filter(EmailSecret.owner_id == owner_id, EmailSecret.key.in_(_EMAIL_SECRET_KEYS)).all()
+            for row in rows:
+                try:
+                    resolved[row.key] = decrypt(row.encrypted_value)
+                except Exception:
+                    logger.warning("Failed to decrypt email secret %s", row.key)
     except Exception as e:
         # DB not available (e.g. during startup or tests) — fall through to env
         logger.debug("DB lookup failed for email config: %s", e)
@@ -106,8 +112,6 @@ def send_email(
     to_email: str | None = None,
     html: str | None = None,
     alert_type: str = "general",
-    job_id: str = "unknown",
-    metadata: dict[str, Any] | None = None,
 ) -> str | None:
     """
     Send email via AWS SES.
@@ -117,9 +121,7 @@ def send_email(
         body: Plain text body
         to_email: Recipient email
         html: Optional HTML body
-        alert_type: Type for categorization (default: "general")
-        job_id: Job that sent this email (default: "unknown")
-        metadata: Optional context metadata
+        alert_type: Category label for logging (default: "general")
 
     Returns:
         SES Message-ID if sent successfully, None otherwise.
@@ -165,79 +167,13 @@ def send_email(
             },
         )
         message_id = response.get("MessageId")
-        logger.info("Email sent: %s (job=%s)", message_id, job_id)
+        logger.info("Email sent: %s (type=%s)", message_id, alert_type)
 
         return message_id
 
     except ClientError as e:
         logger.exception("Failed to send email: %s", e)
         return None
-
-
-def send_digest_email(
-    subject: str,
-    body: str,
-    html: str | None = None,
-    *,
-    alert_type: str = "digest",
-    job_id: str = "unknown",
-    metadata: dict[str, Any] | None = None,
-) -> str | None:
-    """Send a routine digest email to the instance notification address."""
-    return send_email(
-        f"LONGHOUSE DIGEST: {subject}",
-        body,
-        html=html,
-        alert_type=alert_type,
-        job_id=job_id,
-        metadata=metadata,
-    )
-
-
-def send_alert_email(
-    subject: str,
-    body: str,
-    *,
-    level: str = "WARNING",
-    html: str | None = None,
-    alert_type: str = "alert",
-    job_id: str = "unknown",
-    metadata: dict[str, Any] | None = None,
-) -> str | None:
-    """Send an alert email.
-
-    Returns:
-        SES Message-ID if sent successfully, None otherwise.
-    """
-    level = (level or "WARNING").upper()
-    return send_email(
-        f"{level} (LONGHOUSE): {subject}",
-        body,
-        html=html,
-        alert_type=alert_type,
-        job_id=job_id,
-        metadata=metadata,
-    )
-
-
-def send_job_failure_alert(failed_job_id: str, error: str) -> str | None:
-    """Send alert for job failure."""
-    subject = f"Job failed: {failed_job_id}"
-    body = f"""Longhouse job failed:
-
-Job ID: {failed_job_id}
-Error: {error}
-
-Check logs: ssh zerg "docker logs --tail 100 $(docker ps -qf name=zerg)"
-"""
-    return send_alert_email(
-        subject,
-        body,
-        level="WARNING",
-        alert_type="job_failure",
-        job_id=failed_job_id,
-        metadata={"error": error[:500]},
-    )
 
 
 def send_reply_email(

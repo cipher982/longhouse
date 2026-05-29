@@ -509,7 +509,6 @@ def initialize_database(engine: Engine = None) -> None:
     from zerg.models.models import ConversationMessage  # noqa: F401
     from zerg.models.models import Fiche  # noqa: F401
     from zerg.models.models import FicheMessage  # noqa: F401
-    from zerg.models.models import JobRun  # noqa: F401
     from zerg.models.models import MemoryEmbedding  # noqa: F401
     from zerg.models.models import MemoryFile  # noqa: F401
     from zerg.models.models import Run  # noqa: F401
@@ -1430,31 +1429,24 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception as exc:
         raise RuntimeError("Failed to initialize session_observations table") from exc
 
-    # job_runs table migrations
-    # error_type ALTER ADD handled by _auto_add_missing_columns (pure nullable).
-
-    # commis_jobs table migrations
-    # parent_run_id ALTER ADD handled by _auto_add_missing_columns (pure nullable).
-    # Remaining work: index rekey (drop legacy ix_commis_jobs_idempotency, recreate
-    # as composite with parent_run_id + tool_call_id partial unique).
+    # Legacy jobs-platform teardown: drop retired tables if present. The generic
+    # job scheduler, its run/secret/repo tables, and the AI ops-watchman are gone.
+    # commis_jobs was renamed to commis_tasks (drop+recreate, no row preservation).
     try:
         with engine.connect() as conn:
-            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(commis_jobs)"))}
-            if columns:
-                conn.execute(text("CREATE INDEX IF NOT EXISTS ix_commis_jobs_parent_run_id ON commis_jobs(parent_run_id)"))
-                conn.execute(text("DROP INDEX IF EXISTS ix_commis_jobs_idempotency"))
-                conn.execute(
-                    text(
-                        """
-                        CREATE UNIQUE INDEX IF NOT EXISTS ix_commis_jobs_idempotency
-                        ON commis_jobs(parent_run_id, tool_call_id)
-                        WHERE parent_run_id IS NOT NULL AND tool_call_id IS NOT NULL
-                        """
-                    )
-                )
-                conn.commit()
+            for legacy_table in (
+                "job_runs",
+                "job_secrets",
+                "job_repo_configs",
+                "commis_jobs",
+                "operational_incidents",
+                "ops_watch_observations",
+                "ops_watch_runs",
+            ):
+                conn.execute(text(f"DROP TABLE IF EXISTS {legacy_table}"))
+            conn.commit()
     except Exception:
-        logger.debug("commis_jobs table migration skipped (table may not exist yet)", exc_info=True)
+        logger.debug("Legacy jobs/ops table drop skipped", exc_info=True)
 
     # runners table migrations
     try:

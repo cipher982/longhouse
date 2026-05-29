@@ -17,7 +17,7 @@ from .fiche import FicheMessage
 
 # Re-export remaining models from models.py
 from .models import AccountConnectorCredential
-from .models import CommisJob
+from .models import CommisTask
 from .models import ConnectorCredential
 from .models import KnowledgeDocument
 from .models import KnowledgeSource
@@ -84,7 +84,7 @@ __all__ = [
     "TriggerConfig",
     "UserTask",
     "UserSkill",
-    "CommisJob",
+    "CommisTask",
     "SurfaceIngressClaim",
     "Insight",
 ]

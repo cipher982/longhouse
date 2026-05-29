@@ -55,14 +55,14 @@ class TimelineEvent:
 def get_trace_data(db, trace_id: uuid.UUID) -> dict:
     """Query all tables for a given trace_id."""
     from zerg.models.llm_audit import LLMAuditLog
-    from zerg.models.models import CommisJob
+    from zerg.models.models import CommisTask
     from zerg.models.models import Run
 
     # Get all runs with this trace
     runs = db.query(Run).filter(Run.trace_id == trace_id).all()
 
     # Get all commis jobs with this trace
-    commis = db.query(CommisJob).filter(CommisJob.trace_id == trace_id).all()
+    commis = db.query(CommisTask).filter(CommisTask.trace_id == trace_id).all()
 
     # Get all LLM audit logs with this trace
     llm_logs = db.query(LLMAuditLog).filter(LLMAuditLog.trace_id == trace_id).all()
@@ -167,7 +167,7 @@ def build_timeline(data: dict) -> list[TimelineEvent]:
                 else commis.finished_at
             )
             is_error = commis.status in ("failed", "error")
-            # Compute duration from timestamps (CommisJob doesn't have duration_ms column)
+            # Compute duration from timestamps (CommisTask doesn't have duration_ms column)
             duration_ms = None
             if commis.started_at and commis.finished_at:
                 delta = commis.finished_at - commis.started_at

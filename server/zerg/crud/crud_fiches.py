@@ -9,7 +9,7 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import selectinload
 
-from zerg.models import CommisJob
+from zerg.models import CommisTask
 from zerg.models import Fiche
 from zerg.models import FicheMessage
 from zerg.models import Run
@@ -192,8 +192,8 @@ def delete_fiche(db: Session, fiche_id: int):
     run_ids = [row[0] for row in db.query(Run.id).filter(Run.fiche_id == fiche_id).all()]
     if run_ids:
         # Commis jobs may reference parent runs; preserve jobs but remove correlation.
-        db.query(CommisJob).filter(CommisJob.parent_run_id.in_(run_ids)).update(
-            {CommisJob.parent_run_id: None},
+        db.query(CommisTask).filter(CommisTask.parent_run_id.in_(run_ids)).update(
+            {CommisTask.parent_run_id: None},
             synchronize_session="fetch",
         )
         db.query(Run).filter(Run.id.in_(run_ids)).delete(synchronize_session=False)

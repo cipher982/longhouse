@@ -167,9 +167,9 @@ class EvalRunner:
         total_tokens = run.total_tokens if run and run.total_tokens else 0
 
         # Count commis spawned
-        from zerg.models import CommisJob
+        from zerg.models import CommisTask
 
-        commis_spawned = self.oikos_service.db.query(CommisJob).filter(CommisJob.oikos_run_id == result.run_id).count()
+        commis_spawned = self.oikos_service.db.query(CommisTask).filter(CommisTask.oikos_run_id == result.run_id).count()
 
         # Collect tools called (from durable run events)
         from zerg.models.run_event import RunEvent
@@ -206,16 +206,16 @@ class EvalRunner:
         directly to make commis artifacts available for assertions.
         """
 
-        from zerg.models import CommisJob
+        from zerg.models import CommisTask
         from zerg.services.commis_artifact_store import CommisArtifactStore
         from zerg.services.commis_runner import CommisRunner
 
         db = self.oikos_service.db
 
         jobs = (
-            db.query(CommisJob)
-            .filter(CommisJob.oikos_run_id == oikos_run_id, CommisJob.status == "queued")
-            .order_by(CommisJob.created_at)
+            db.query(CommisTask)
+            .filter(CommisTask.oikos_run_id == oikos_run_id, CommisTask.status == "queued")
+            .order_by(CommisTask.created_at)
             .all()
         )
 

@@ -57,7 +57,7 @@ class TraceDebugger:
     def _get_trace_data(self, trace_id: uuid.UUID, max_items: int = 100) -> dict:
         """Query all tables for a given trace_id with limits to prevent memory issues."""
         from zerg.models.llm_audit import LLMAuditLog
-        from zerg.models.models import CommisJob
+        from zerg.models.models import CommisTask
         from zerg.models.models import Run
 
         # Get runs with this trace, ordered by created_at desc to get most recent on long traces
@@ -65,7 +65,7 @@ class TraceDebugger:
 
         # Get commis jobs with this trace, ordered by created_at desc
         commis = (
-            self.db.query(CommisJob).filter(CommisJob.trace_id == trace_id).order_by(CommisJob.created_at.desc()).limit(max_items).all()
+            self.db.query(CommisTask).filter(CommisTask.trace_id == trace_id).order_by(CommisTask.created_at.desc()).limit(max_items).all()
         )
 
         # Get LLM audit logs with this trace, ordered by created_at desc

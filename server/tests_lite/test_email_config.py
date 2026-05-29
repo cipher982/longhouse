@@ -9,11 +9,14 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from zerg.database import Base, get_db, make_engine, make_sessionmaker
-from zerg.models.models import JobSecret, User
+from zerg.database import Base
+from zerg.database import get_db
+from zerg.database import make_engine
+from zerg.database import make_sessionmaker
+from zerg.models.models import EmailSecret
+from zerg.models.models import User
 from zerg.shared.email import _EMAIL_SECRET_KEYS
 from zerg.utils.crypto import encrypt
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -39,7 +42,7 @@ def _seed_user(db, user_id=1, email="test@local"):
 
 def _seed_email_secret(db, key, value, owner_id=1):
     db.add(
-        JobSecret(
+        EmailSecret(
             owner_id=owner_id,
             key=key,
             encrypted_value=encrypt(value),
@@ -465,7 +468,7 @@ class TestStatusValidatesValues:
             _seed_user(db, user_id=1, email="admin@test.com")
             # Seed an empty-string secret (simulating a corrupt/legacy row)
             db.add(
-                JobSecret(
+                EmailSecret(
                     owner_id=1,
                     key="AWS_SES_ACCESS_KEY_ID",
                     encrypted_value=encrypt(""),
@@ -473,7 +476,7 @@ class TestStatusValidatesValues:
                 )
             )
             db.add(
-                JobSecret(
+                EmailSecret(
                     owner_id=1,
                     key="AWS_SES_SECRET_ACCESS_KEY",
                     encrypted_value=encrypt("   "),

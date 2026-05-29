@@ -21,7 +21,7 @@ async def health_db():
     """Database readiness check - verifies critical tables are initialized."""
     from zerg.database import default_engine
 
-    required_tables = ["users", "fiches", "threads", "runs", "commis_jobs", "sessions", "events", "events_fts"]
+    required_tables = ["users", "fiches", "threads", "runs", "commis_tasks", "sessions", "events", "events_fts"]
 
     try:
         with default_engine.connect() as conn:
@@ -161,7 +161,8 @@ async def health_check():
     try:
         import os as _os
 
-        from zerg.models_config import _PROVIDER_DEFAULT_API_KEY_ENVS, get_embedding_config
+        from zerg.models_config import _PROVIDER_DEFAULT_API_KEY_ENVS
+        from zerg.models_config import get_embedding_config
 
         text_provider = next(
             (provider.value for provider, env_var in _PROVIDER_DEFAULT_API_KEY_ENVS.items() if _os.getenv(env_var)),
@@ -215,18 +216,6 @@ async def health_check():
     except Exception as e:
         checks["fts5"] = {"status": "fail", "error": str(e)}
         health_status["status"] = "unhealthy"
-
-    # 4. Job system status
-    job_status = getattr(_health_app_ref, "job_system_status", None)
-    if job_status:
-        checks["jobs"] = {
-            "status": "pass" if job_status.get("started") else "warn",
-            "scheduled_count": job_status.get("scheduled_count", 0),
-            "git_sync": job_status.get("git_sync", False),
-            "error": job_status.get("error"),
-        }
-    else:
-        checks["jobs"] = {"status": "warn", "error": "Job system not initialized"}
 
     # 5. Email config status
     try:
