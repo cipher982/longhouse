@@ -55,9 +55,18 @@ actor SessionWorkspaceStream {
         let transcript_preview: TranscriptPreview?
     }
 
+    struct ReplayGap: Decodable, Sendable {
+        let session_id: String
+        let requested_seq: Int
+        let earliest_seq: Int?
+        let latest_seq: Int
+        let reason: String
+    }
+
     enum Event: Sendable {
         case connected(Connected)
         case changed(WorkspaceChanged)
+        case replayGap(ReplayGap)
         case heartbeat
         case disconnected(Error?)
         /// The stream got a 401. Cookies are stale; reconnecting with them is
@@ -160,6 +169,10 @@ actor SessionWorkspaceStream {
         if id > lastEventId { lastEventId = id }
     }
 
+    private func replaceLastEventId(_ id: Int) {
+        lastEventId = max(0, id)
+    }
+
     private func setSkew(_ serverNowMs: Int64?) {
         guard let serverNowMs else { return }
         let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
@@ -247,6 +260,14 @@ actor SessionWorkspaceStream {
         case "workspace_changed":
             if let w = try? JSONDecoder().decode(WorkspaceChanged.self, from: data) {
                 emit(.changed(w))
+            }
+        case "replay_gap":
+            if let gap = try? JSONDecoder().decode(ReplayGap.self, from: data) {
+                // The cursor belongs to an old or truncated replay domain.
+                // Reset to the server's current latest seq so future reconnects
+                // do not keep asking for an impossible cursor.
+                replaceLastEventId(gap.latest_seq)
+                emit(.replayGap(gap))
             }
         case "heartbeat":
             emit(.heartbeat)

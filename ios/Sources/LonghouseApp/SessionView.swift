@@ -1187,6 +1187,13 @@ final class SessionViewModel: ObservableObject {
         case .unauthorized:
             streamConnected = false
             await handleStreamUnauthorized(sessionId: sessionId, appState: appState)
+        case .replayGap(let gap):
+            streamConnected = true
+            if gap.session_id == sessionId {
+                lastPubsubSeq = gap.latest_seq > 0 ? gap.latest_seq : nil
+            }
+            guard let api = apiFactory(appState.serverURL) else { return }
+            try? await refreshTail(api: api, sessionId: sessionId, allowFailure: true)
         case .heartbeat:
             break
         case .changed(let change):
