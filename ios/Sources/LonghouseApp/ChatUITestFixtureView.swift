@@ -19,7 +19,7 @@ struct ChatUITestFixtureView: View {
         _viewModel = StateObject(
             wrappedValue: SessionViewModel(
                 apiFactory: { _ in client },
-                streamFactory: { _, _ in client.streamSource() },
+                streamFactory: { _, _, _ in client.streamSource() },
                 enableRealtime: fixture.usesRealtimeStream
             )
         )
@@ -149,7 +149,7 @@ struct TimelineOpenUITestFixtureView: View {
         let client = ChatUITestWorkspaceClient(fixture: session.fixture, sessionID: session.id)
         let viewModel = SessionViewModel(
             apiFactory: { _ in client },
-            streamFactory: { _, _ in client.streamSource() },
+            streamFactory: { _, _, _ in client.streamSource() },
             enableRealtime: false
         )
         return SessionView(

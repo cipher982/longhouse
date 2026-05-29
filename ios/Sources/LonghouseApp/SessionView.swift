@@ -6,8 +6,8 @@ struct SessionWorkspaceStreamSource: Sendable {
     let stop: @Sendable () async -> Void
     let clockSkewMs: @Sendable () async -> Int64
 
-    static func live(baseURL: URL, sessionId: String) -> SessionWorkspaceStreamSource {
-        let stream = SessionWorkspaceStream(baseURL: baseURL, sessionId: sessionId)
+    static func live(baseURL: URL, sessionId: String, sinceSeq: Int? = nil) -> SessionWorkspaceStreamSource {
+        let stream = SessionWorkspaceStream(baseURL: baseURL, sessionId: sessionId, sinceSeq: sinceSeq)
         return SessionWorkspaceStreamSource(
             start: { await stream.start() },
             stop: { await stream.stop() },
@@ -160,9 +160,18 @@ struct SessionView: View {
         }
     }
 
+    private var transcriptState: TranscriptDisplayState {
+        TranscriptDisplayState.derive(
+            isInitialLoading: viewModel.isInitialLoading,
+            hasContent: !viewModel.items.isEmpty || !viewModel.submittedInputs.isEmpty,
+            errorMessage: viewModel.errorMessage,
+            refreshErrorMessage: viewModel.refreshErrorMessage
+        )
+    }
+
     private var transcript: some View {
-        let showTranscript = !viewModel.isInitialLoading
-            && (!viewModel.items.isEmpty || !viewModel.submittedInputs.isEmpty || viewModel.errorMessage == nil)
+        let state = transcriptState
+        let showTranscript = state.showsTranscript
 
         return ZStack {
             WebTranscriptView(
@@ -192,61 +201,11 @@ struct SessionView: View {
             .accessibilityIdentifier("session-chat-transcript")
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            if viewModel.isInitialLoading {
-                ProgressView().controlSize(.large)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let error = viewModel.errorMessage, viewModel.items.isEmpty && viewModel.submittedInputs.isEmpty {
-                VStack(spacing: 14) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 40))
-                        .foregroundStyle(.orange)
-                    Text(error)
-                        .font(.callout)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.primary)
-                    Button("Try again") {
-                        Task { await viewModel.reload(sessionId: sessionId, appState: appState) }
-                    }
-                    .buttonStyle(.borderedProminent)
-                }
-                .padding(32)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-
-            // Non-destructive refresh banner: a refresh failed but we still
-            // have cached content underneath. Never erase the transcript.
-            if let refreshError = viewModel.refreshErrorMessage,
-               !viewModel.items.isEmpty || !viewModel.submittedInputs.isEmpty {
-                VStack {
-                    refreshBanner(refreshError)
-                    Spacer(minLength: 0)
-                }
-            }
+            TranscriptStateOverlay(
+                state: state,
+                onRetry: { Task { await viewModel.reload(sessionId: sessionId, appState: appState) } }
+            )
         }
-    }
-
-    private func refreshBanner(_ message: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .font(.caption)
-            Text(message)
-                .font(.caption)
-                .lineLimit(2)
-            Spacer(minLength: 8)
-            Button {
-                Task { await viewModel.reload(sessionId: sessionId, appState: appState) }
-            } label: {
-                Text("Retry").font(.caption.weight(.semibold))
-            }
-        }
-        .foregroundStyle(.orange)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.bar)
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .padding(.horizontal, 12)
-        .padding(.top, 8)
-        .accessibilityIdentifier("session-refresh-banner")
     }
 
     @ViewBuilder
@@ -805,6 +764,9 @@ final class SessionViewModel: ObservableObject {
     private var stream: SessionWorkspaceStreamSource?
     private var streamTask: Task<Void, Never>?
     private var streamConnected: Bool = false
+    /// Guards against an auth-refresh→reconnect→401 loop: we attempt at most
+    /// one refresh per stream session, reset once a connection succeeds.
+    private var streamAuthRefreshAttempted = false
     private var pendingRealtimeTelemetry: PendingRealtimeTelemetry?
     private var activeSessionId: String?
     private var activeServerURL: String?
@@ -817,7 +779,7 @@ final class SessionViewModel: ObservableObject {
     private var isLoadingOlder = false
     private var openWaterfall: SessionOpenWaterfall?
     private let apiFactory: (String) -> SessionWorkspaceClient?
-    private let streamFactory: (URL, String) -> SessionWorkspaceStreamSource
+    private let streamFactory: (URL, String, Int?) -> SessionWorkspaceStreamSource
     private let enableRealtime: Bool
     private let transcriptCache: SessionTranscriptCache?
     /// Durable on-disk mirror of the tail; survives app eviction so a cold
@@ -831,8 +793,8 @@ final class SessionViewModel: ObservableObject {
 
     init(
         apiFactory: @escaping (String) -> SessionWorkspaceClient? = { LonghouseAPI(host: $0) },
-        streamFactory: @escaping (URL, String) -> SessionWorkspaceStreamSource = { baseURL, sessionId in
-            SessionWorkspaceStreamSource.live(baseURL: baseURL, sessionId: sessionId)
+        streamFactory: @escaping (URL, String, Int?) -> SessionWorkspaceStreamSource = { baseURL, sessionId, sinceSeq in
+            SessionWorkspaceStreamSource.live(baseURL: baseURL, sessionId: sessionId, sinceSeq: sinceSeq)
         },
         enableRealtime: Bool = true,
         transcriptCache: SessionTranscriptCache? = nil,
@@ -870,6 +832,7 @@ final class SessionViewModel: ObservableObject {
             errorMessage = nil
             refreshErrorMessage = nil
             lastPubsubSeq = nil
+            streamAuthRefreshAttempted = false
             // Warm path: in-memory cache survives backgrounding while the
             // process lives. Cold path: the durable on-disk snapshot survives
             // app eviction, so a relaunch into a session renders instantly
@@ -1198,7 +1161,12 @@ final class SessionViewModel: ObservableObject {
         }
         streamConnected = false
         guard let base = URL(string: appState.serverURL) else { return }
-        let s = streamFactory(base, sessionId)
+        // Seed the reconnect cursor from the persisted pubsub_seq so a fresh
+        // stream (e.g. after a background pause) replays buffered events from
+        // where we left off instead of cold. The server buffer is bounded
+        // (~1000 msgs, process-local) with no gap signal, so this is a latency
+        // optimization only — refreshTail() remains the correctness backstop.
+        let s = streamFactory(base, sessionId, lastPubsubSeq)
         stream = s
         streamTask = Task { [weak self] in
             let events = await s.start()
@@ -1213,8 +1181,12 @@ final class SessionViewModel: ObservableObject {
         switch event {
         case .connected:
             streamConnected = true
+            streamAuthRefreshAttempted = false
         case .disconnected:
             streamConnected = false
+        case .unauthorized:
+            streamConnected = false
+            await handleStreamUnauthorized(sessionId: sessionId, appState: appState)
         case .heartbeat:
             break
         case .changed(let change):
@@ -1237,6 +1209,36 @@ final class SessionViewModel: ObservableObject {
             guard let api = apiFactory(appState.serverURL) else { return }
             try? await refreshTail(api: api, sessionId: sessionId, allowFailure: true)
         }
+    }
+
+    /// The SSE stream got a 401 and stopped its own retry loop. Refresh auth
+    /// once, then restart the stream with the rotated cookies. A REST call
+    /// drives `LonghouseAPI.data()`, whose built-in 401→/api/auth/refresh→retry
+    /// rotates and persists the session cookie as a side effect; the restarted
+    /// stream then reads the fresh cookie from `SharedAuthStore`. We attempt
+    /// this at most once per stream session to avoid a refresh→401 loop.
+    private func handleStreamUnauthorized(sessionId: String, appState: AppState) async {
+        // This runs inside the stream's own consuming task. If the scene
+        // paused (pauseRealtime cancels that task) bail out — Task.isCancelled
+        // is the precise signal that we must not resurrect the stream.
+        guard activeSessionId == sessionId, !Task.isCancelled else { return }
+        // Second 401 with no successful connect in between: don't refresh-loop.
+        // The actor has already stopped its retry loop, so drop our handles to
+        // the now-dead stream; a later foreground start() will reattach since
+        // it gates on streamTask == nil.
+        guard !streamAuthRefreshAttempted else {
+            streamTask = nil
+            stream = nil
+            return
+        }
+        streamAuthRefreshAttempted = true
+        guard let api = apiFactory(appState.serverURL) else { return }
+        // Best-effort: success refreshes cookies; failure leaves content intact
+        // and surfaces via refreshErrorMessage on the next reconcile.
+        try? await refreshTail(api: api, sessionId: sessionId, allowFailure: true)
+        // Re-check after the await: the scene may have paused mid-refresh.
+        guard activeSessionId == sessionId, !Task.isCancelled else { return }
+        startStream(sessionId: sessionId, appState: appState)
     }
 
     private func pollTick(sessionId: String, appState: AppState) async {
@@ -1416,6 +1418,7 @@ final class SessionViewModel: ObservableObject {
         loadedProjectionItemCount = snapshot.loadedProjectionItemCount
         totalProjectionItemCount = snapshot.totalProjectionItemCount
         tailSnapshotEventId = snapshot.tailSnapshotEventId
+        lastPubsubSeq = snapshot.lastPubsubSeq
         prefetchedOlderTail = nil
         prefetchedOlderOffset = nil
         items = TimelineBuilder.build(events: snapshot.events)
@@ -1470,7 +1473,8 @@ final class SessionViewModel: ObservableObject {
             events: lastWorkspaceEvents,
             loadedProjectionItemCount: loadedProjectionItemCount,
             totalProjectionItemCount: totalProjectionItemCount,
-            tailSnapshotEventId: tailSnapshotEventId
+            tailSnapshotEventId: tailSnapshotEventId,
+            lastPubsubSeq: lastPubsubSeq
         )
         snapshotStore?.save(
             serverURL: activeServerURL,
