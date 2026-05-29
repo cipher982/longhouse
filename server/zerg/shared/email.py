@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import logging
 import os
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 
 import boto3
 from botocore.exceptions import ClientError
@@ -173,75 +171,4 @@ def send_email(
 
     except ClientError as e:
         logger.exception("Failed to send email: %s", e)
-        return None
-
-
-def send_reply_email(
-    to_email: str,
-    subject: str,
-    body: str,
-    in_reply_to: str,
-    *,
-    references: str | None = None,
-) -> str | None:
-    """
-    Send a reply email with proper threading headers.
-
-    Uses SES raw email API to set In-Reply-To and References headers
-    for proper email client threading.
-
-    Args:
-        to_email: Recipient email address
-        subject: Email subject (should include "Re: " prefix)
-        body: Plain text body
-        in_reply_to: Message-ID of the email being replied to
-        references: Optional References header (chain of Message-IDs)
-
-    Returns:
-        SES Message-ID if sent successfully, None otherwise.
-    """
-    config = resolve_email_config()
-    aws_access_key_id = config.get("AWS_SES_ACCESS_KEY_ID")
-    aws_secret_access_key = config.get("AWS_SES_SECRET_ACCESS_KEY")
-    aws_region = config.get("AWS_SES_REGION", "us-east-1")
-    from_email = config.get("FROM_EMAIL")
-
-    if not aws_access_key_id or not aws_secret_access_key:
-        logger.error("AWS SES credentials not configured")
-        return None
-
-    if not from_email:
-        logger.error("FROM_EMAIL not configured")
-        return None
-
-    try:
-        client = _get_ses_client(
-            region=aws_region,
-            access_key_id=aws_access_key_id,
-            secret_access_key=aws_secret_access_key,
-        )
-
-        # Build MIME message with threading headers
-        msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"] = from_email
-        msg["To"] = to_email
-        msg["In-Reply-To"] = in_reply_to
-        msg["References"] = references or in_reply_to
-
-        # Add plain text body
-        msg.attach(MIMEText(body, "plain", "utf-8"))
-
-        # Send raw email
-        response = client.send_raw_email(
-            Source=from_email,
-            Destinations=[to_email],
-            RawMessage={"Data": msg.as_string()},
-        )
-        message_id = response.get("MessageId")
-        logger.info("Reply email sent: %s (in-reply-to: %s)", message_id, in_reply_to)
-        return message_id
-
-    except ClientError as e:
-        logger.exception("Failed to send reply email: %s", e)
         return None
