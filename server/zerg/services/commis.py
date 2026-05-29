@@ -16,7 +16,7 @@ from pathlib import Path
 
 from zerg.database import db_session
 from zerg.models.enums import RunStatus
-from zerg.models.models import CommisJob
+from zerg.models.models import CommisTask
 from zerg.models.models import Run
 from zerg.services.cloud_executor import CloudExecutionResult
 from zerg.services.cloud_executor import CloudExecutor
@@ -39,7 +39,7 @@ async def run_commis_job(job_id: int, *, session_factory=None) -> None:
     """
     # 1. Load job, mark running
     with db_session(session_factory) as db:
-        job = db.query(CommisJob).filter(CommisJob.id == job_id).first()
+        job = db.query(CommisTask).filter(CommisTask.id == job_id).first()
         if not job or job.status != "queued":
             return
         job.status = "running"
@@ -118,7 +118,7 @@ async def run_commis_job(job_id: int, *, session_factory=None) -> None:
 
     # 7. Update job status
     with db_session(session_factory) as db:
-        job = db.query(CommisJob).filter(CommisJob.id == job_id).first()
+        job = db.query(CommisTask).filter(CommisTask.id == job_id).first()
         if not job:
             return
         if job.status == "cancelled":
@@ -319,9 +319,9 @@ async def _resume_parent_run(run_id: int, tool_call_id: str | None, result_text:
             if not effective_tool_call_id:
                 # Fallback: find most recent commis job for this run
                 job = (
-                    db.query(CommisJob)
-                    .filter(CommisJob.parent_run_id == run_id, CommisJob.tool_call_id.isnot(None))
-                    .order_by(CommisJob.created_at.desc())
+                    db.query(CommisTask)
+                    .filter(CommisTask.parent_run_id == run_id, CommisTask.tool_call_id.isnot(None))
+                    .order_by(CommisTask.created_at.desc())
                     .first()
                 )
                 if job:

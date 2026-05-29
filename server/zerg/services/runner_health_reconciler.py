@@ -203,7 +203,6 @@ def _send_email_alert(user: User, subject: str, body: str) -> bool:
             body,
             to_email=email,
             alert_type="runner_offline",
-            job_id="runner-health-reconcile",
         )
     )
 

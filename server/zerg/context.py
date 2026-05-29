@@ -61,7 +61,7 @@ class CommisContext:
     run_id
         Optional parent run ID for correlating events
     job_id
-        Optional CommisJob ID for roundabout event correlation
+        Optional CommisTask ID for roundabout event correlation
     trace_id
         Optional trace ID for end-to-end debugging
     task

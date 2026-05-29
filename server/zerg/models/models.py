@@ -182,21 +182,21 @@ class AccountConnectorCredential(Base):
 # ---------------------------------------------------------------------------
 
 
-class CommisJob(Base):
-    """Background job for executing commis agent tasks.
+class CommisTask(Base):
+    """Background task for executing commis agent work.
 
-    Commis jobs allow assistant agents to delegate long-running tasks
-    to background commiss without blocking the the assistant's execution flow.
+    Commis tasks let assistant agents delegate long-running work to background
+    commiss without blocking the assistant's execution flow.
 
     SQLite-safe concurrency:
-    - worker_id: Identifies which worker claimed the job
-    - claimed_at: When the worker claimed the job
+    - worker_id: Identifies which worker claimed the task
+    - claimed_at: When the worker claimed the task
     - heartbeat_at: Last heartbeat update (proves worker is alive)
 
-    Jobs with stale heartbeats (no update for >2min) are reclaimed.
+    Tasks with stale heartbeats (no update for >2min) are reclaimed.
     """
 
-    __tablename__ = "commis_jobs"
+    __tablename__ = "commis_tasks"
 
     id = Column(Integer, primary_key=True, index=True)
 
@@ -252,13 +252,13 @@ class CommisJob(Base):
     finished_at = Column(DateTime, nullable=True)
 
     # Relationships
-    owner = relationship("User", backref="commis_jobs")
+    owner = relationship("User", backref="commis_tasks")
 
     # Unique constraint for idempotency - prevents duplicate commiss from replay
     # Uses partial index: only enforce when both fields are non-null
     __table_args__ = (
         Index(
-            "ix_commis_jobs_idempotency",
+            "ix_commis_tasks_idempotency",
             "parent_run_id",
             "tool_call_id",
             unique=True,
@@ -804,23 +804,20 @@ class UserDailySmsCounter(Base):
 
 
 # ---------------------------------------------------------------------------
-# Job Secrets – Arbitrary key-value secrets for scheduled jobs
+# Email Secrets – Encrypted SES credentials for instance email
 # ---------------------------------------------------------------------------
 
 
-class JobSecret(Base):
-    """Encrypted secret for scheduled jobs (arbitrary key-value).
+class EmailSecret(Base):
+    """Encrypted email config secret (SES creds + sender/recipient).
 
-    Unlike ConnectorCredential (locked to ConnectorType enum), job secrets
-    are free-form keys defined by job authors. Jobs declare needed secrets
-    in their JobConfig.secrets list; only declared secrets are injected at
-    runtime.
-
+    One row per (owner, key) for the well-known email keys defined in
+    ``zerg.shared.email`` (AWS_SES_ACCESS_KEY_ID, FROM_EMAIL, etc.).
     Resolution order: DB first, env var fallback (self-hosted compatibility).
     """
 
-    __tablename__ = "job_secrets"
-    __table_args__ = (UniqueConstraint("owner_id", "key", name="uix_job_secret_owner_key"),)
+    __tablename__ = "email_secrets"
+    __table_args__ = (UniqueConstraint("owner_id", "key", name="uix_email_secret_owner_key"),)
 
     id = Column(Integer, primary_key=True, index=True)
 
@@ -831,79 +828,14 @@ class JobSecret(Base):
         index=True,
     )
 
-    key = Column(String(255), nullable=False)  # e.g. "LIFE_HUB_DB_URL"
+    key = Column(String(255), nullable=False)  # e.g. "AWS_SES_ACCESS_KEY_ID"
     encrypted_value = Column(Text, nullable=False)  # Fernet AES-GCM
     description = Column(String(500), nullable=True)  # Optional hint for UI
 
     created_at = Column(DateTime, server_default=func.now(), nullable=False)
     updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
 
-    owner = relationship("User", backref="job_secrets")
-
-
-# ---------------------------------------------------------------------------
-# Job Repo Config – Per-user git repo for job scripts
-# ---------------------------------------------------------------------------
-
-
-class JobRepoConfig(Base):
-    """Per-user git repo configuration for job scripts.
-
-    Stores repo URL, branch, and encrypted PAT. One config per user.
-    When present, overrides JOBS_GIT_REPO_URL / JOBS_GIT_TOKEN env vars.
-    """
-
-    __tablename__ = "job_repo_configs"
-    __table_args__ = (UniqueConstraint("owner_id", name="uix_job_repo_config_owner"),)
-
-    id = Column(Integer, primary_key=True, index=True)
-
-    owner_id = Column(
-        Integer,
-        ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-
-    repo_url = Column(String(500), nullable=False)  # https://github.com/user/jobs.git
-    branch = Column(String(100), nullable=False, default="main")
-    encrypted_token = Column(Text, nullable=True)  # Fernet-encrypted PAT (nullable = public repo)
-
-    last_sync_sha = Column(String(40), nullable=True)
-    last_sync_at = Column(DateTime, nullable=True)
-    last_sync_error = Column(Text, nullable=True)
-
-    created_at = Column(DateTime, server_default=func.now(), nullable=False)
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now(), nullable=False)
-
-    owner = relationship("User", backref="job_repo_config")
-
-
-# ---------------------------------------------------------------------------
-# Job Runs – Persistent record of each scheduled job execution
-# ---------------------------------------------------------------------------
-
-
-class JobRun(Base):
-    """Persistent record of each job execution."""
-
-    __tablename__ = "job_runs"
-
-    id = Column(String(36), primary_key=True)  # UUID
-    job_id = Column(String(255), nullable=False, index=True)
-    status = Column(String(20), nullable=False)  # success, degraded, failure, dead, timeout
-    started_at = Column(DateTime, nullable=True)
-    finished_at = Column(DateTime, nullable=True)
-    duration_ms = Column(Integer, nullable=True)
-    error_message = Column(Text, nullable=True)
-    error_type = Column(String(50), nullable=True)  # RuntimeError, MissingSecret, TimeoutError, etc.
-    metadata_json = Column(Text, nullable=True)  # JSON string for extra data
-    created_at = Column(DateTime, nullable=False, server_default=func.now())
-
-    __table_args__ = (
-        Index("idx_job_runs_job_created", "job_id", "created_at"),
-        Index("idx_job_runs_created", "created_at"),
-    )
+    owner = relationship("User", backref="email_secrets")
 
 
 class EmailSendLog(Base):
@@ -976,5 +908,3 @@ class SeedRegistry(Base):
         Index("ix_seed_registry_namespace", "namespace"),
         Index("ix_seed_registry_target", "target"),
     )
-
-

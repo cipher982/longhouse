@@ -4,10 +4,10 @@ Lets users see whether email is configured (and from what source),
 override platform defaults with custom SES credentials, test delivery,
 and revert to platform defaults.
 
-Longhouse uses one recipient email for all instance mail. Alerts, digests,
-and test sends all go through NOTIFY_EMAIL.
+Longhouse uses one recipient email for all instance mail. Alerts and test
+sends all go through NOTIFY_EMAIL.
 
-All email secrets are stored as JobSecret rows (owner_id=current_user.id)
+All email secrets are stored as EmailSecret rows (owner_id=current_user.id)
 with well-known keys (AWS_SES_ACCESS_KEY_ID, etc.).
 """
 
@@ -25,7 +25,7 @@ from sqlalchemy.orm import Session
 
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
-from zerg.models.models import JobSecret
+from zerg.models.models import EmailSecret
 from zerg.models.models import User
 from zerg.shared.email import _EMAIL_SECRET_KEYS
 from zerg.utils.crypto import decrypt
@@ -88,7 +88,7 @@ class EmailTestResponse(BaseModel):
 
 def _resolve_key_status(key: str, db: Session, owner_id: int) -> EmailKeyStatus:
     """Check a single email key: DB first, then env. Validates value is non-empty."""
-    row = db.query(JobSecret).filter(JobSecret.owner_id == owner_id, JobSecret.key == key).first()
+    row = db.query(EmailSecret).filter(EmailSecret.owner_id == owner_id, EmailSecret.key == key).first()
     if row:
         try:
             value = decrypt(row.encrypted_value)
@@ -110,7 +110,7 @@ def _resolve_non_sensitive_value(
     default: str | None = None,
 ) -> str | None:
     """Resolve a non-sensitive email value using the same DB-first/env fallback order."""
-    row = db.query(JobSecret).filter(JobSecret.owner_id == owner_id, JobSecret.key == key).first()
+    row = db.query(EmailSecret).filter(EmailSecret.owner_id == owner_id, EmailSecret.key == key).first()
     if row:
         try:
             value = decrypt(row.encrypted_value)
@@ -200,7 +200,7 @@ def save_email_config(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """Save email config as JobSecret rows (encrypted). Only saves non-None fields."""
+    """Save email config as EmailSecret rows (encrypted). Only saves non-None fields."""
     field_to_key = {
         "aws_ses_access_key_id": "AWS_SES_ACCESS_KEY_ID",
         "aws_ses_secret_access_key": "AWS_SES_SECRET_ACCESS_KEY",
@@ -219,14 +219,14 @@ def save_email_config(
             continue
 
         encrypted = encrypt(value)
-        existing = db.query(JobSecret).filter(JobSecret.owner_id == current_user.id, JobSecret.key == secret_key).first()
+        existing = db.query(EmailSecret).filter(EmailSecret.owner_id == current_user.id, EmailSecret.key == secret_key).first()
 
         if existing:
             existing.encrypted_value = encrypted
             existing.description = "Email config (user override)"
         else:
             db.add(
-                JobSecret(
+                EmailSecret(
                     owner_id=current_user.id,
                     key=secret_key,
                     encrypted_value=encrypted,
@@ -266,7 +266,7 @@ def test_email(
         subject="Longhouse Email Test",
         body="This is a test email from your Longhouse instance.\n\nIf you received this, email is working correctly.",
         to_email=recipient,
-        job_id="email-test",
+        alert_type="email-test",
     )
 
     if message_id:
@@ -285,10 +285,10 @@ def delete_email_config(
 ) -> dict:
     """Remove all email config overrides (revert to platform/env defaults)."""
     deleted = (
-        db.query(JobSecret)
+        db.query(EmailSecret)
         .filter(
-            JobSecret.owner_id == current_user.id,
-            JobSecret.key.in_(list(_ALL_EMAIL_KEYS)),
+            EmailSecret.owner_id == current_user.id,
+            EmailSecret.key.in_(list(_ALL_EMAIL_KEYS)),
         )
         .delete(synchronize_session="fetch")
     )

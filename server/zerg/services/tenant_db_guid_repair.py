@@ -44,7 +44,7 @@ GUID_COLUMN_SPECS: tuple[GuidColumnSpec, ...] = (
     GuidColumnSpec("device_tokens", "id", ("id",), "report_only"),
     GuidColumnSpec("runs", "trace_id", ("id",), "set_null"),
     GuidColumnSpec("runs", "assistant_message_id", ("id",), "set_null"),
-    GuidColumnSpec("commis_jobs", "trace_id", ("id",), "set_null"),
+    GuidColumnSpec("commis_tasks", "trace_id", ("id",), "set_null"),
     GuidColumnSpec("llm_audit_log", "trace_id", ("id",), "set_null"),
     GuidColumnSpec("llm_audit_log", "span_id", ("id",), "set_null"),
     GuidColumnSpec("insights", "id", ("id",), "report_only"),

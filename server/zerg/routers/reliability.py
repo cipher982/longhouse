@@ -17,10 +17,9 @@ from sqlalchemy.orm import Session
 from zerg.database import get_db
 from zerg.dependencies.auth import require_admin
 from zerg.models.enums import RunStatus
-from zerg.models.models import CommisJob
+from zerg.models.models import CommisTask
 from zerg.models.models import Run
 from zerg.models.models import Runner
-from zerg.models.work import OperationalIncident
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.runner_health import assess_runner_health
 
@@ -46,21 +45,6 @@ def _redact_string(s: str | None) -> str | None:
 
 
 router = APIRouter(prefix="/reliability", tags=["reliability"])
-
-
-def _serialize_operational_incident(incident: OperationalIncident) -> dict:
-    return {
-        "id": incident.id,
-        "incident_type": incident.incident_type,
-        "source": incident.source,
-        "dedupe_key": incident.dedupe_key,
-        "status": incident.status,
-        "summary": incident.summary,
-        "context": incident.context,
-        "opened_at": incident.opened_at.isoformat() if incident.opened_at else None,
-        "last_observed_at": incident.last_observed_at.isoformat() if incident.last_observed_at else None,
-        "resolved_at": incident.resolved_at.isoformat() if incident.resolved_at else None,
-    }
 
 
 @router.get("/system-health")
@@ -99,10 +83,10 @@ async def system_health(
 
     # Recent commis failures
     commis_error_count = (
-        db.query(func.count(CommisJob.id))
+        db.query(func.count(CommisTask.id))
         .filter(
-            CommisJob.status == "failed",  # CommisJob.status is a string column, not enum
-            CommisJob.created_at >= hour_ago,
+            CommisTask.status == "failed",  # CommisTask.status is a string column, not enum
+            CommisTask.created_at >= hour_ago,
         )
         .scalar()
         or 0
@@ -164,12 +148,12 @@ async def error_analysis(
 
     # Get failed commis
     commis_errors = (
-        db.query(CommisJob)
+        db.query(CommisTask)
         .filter(
-            CommisJob.status == "failed",  # CommisJob.status is a string column
-            CommisJob.created_at >= since,
+            CommisTask.status == "failed",  # CommisTask.status is a string column
+            CommisTask.created_at >= since,
         )
-        .order_by(CommisJob.created_at.desc())
+        .order_by(CommisTask.created_at.desc())
         .limit(limit)
         .all()
     )
@@ -245,29 +229,6 @@ async def performance_metrics(
     }
 
 
-@router.get("/incidents")
-async def recent_incidents(
-    status: str = Query("open", pattern="^(open|resolved|all)$", description="Incident status filter"),
-    source: str | None = Query(None, description="Optional incident source filter"),
-    limit: int = Query(50, le=200, description="Maximum incidents to return"),
-    db: Session = Depends(get_db),
-    _user=Depends(require_admin),  # Admin only
-):
-    """Recent tenant-local operational incidents (admin only)."""
-    query = db.query(OperationalIncident)
-    if status != "all":
-        query = query.filter(OperationalIncident.status == status)
-    if source:
-        query = query.filter(OperationalIncident.source == source)
-
-    incidents = query.order_by(OperationalIncident.last_observed_at.desc(), OperationalIncident.opened_at.desc()).limit(limit).all()
-
-    return {
-        "total": len(incidents),
-        "incidents": [_serialize_operational_incident(incident) for incident in incidents],
-    }
-
-
 @router.get("/commis/stuck")
 async def stuck_commis(
     threshold_mins: int = Query(10, le=60, description="Threshold in minutes"),
@@ -282,10 +243,10 @@ async def stuck_commis(
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=threshold_mins)
 
     stuck = (
-        db.query(CommisJob)
+        db.query(CommisTask)
         .filter(
-            CommisJob.status == "running",
-            CommisJob.started_at < cutoff,
+            CommisTask.status == "running",
+            CommisTask.started_at < cutoff,
         )
         .limit(50)
         .all()

@@ -226,10 +226,7 @@ async def backfill_embeddings(
     from zerg.models_config import get_embedding_config
 
     if _embedding_backfill_state["running"]:
-        message = (
-            "Embedding backfill in progress: "
-            f"{_embedding_backfill_state['embedded']}/{_embedding_backfill_state['total']} done"
-        )
+        message = "Embedding backfill in progress: " f"{_embedding_backfill_state['embedded']}/{_embedding_backfill_state['total']} done"
         return BackfillEmbeddingsResponse(
             status="already_running",
             total=_embedding_backfill_state["total"],
@@ -394,7 +391,7 @@ async def get_ingest_health(
     _single: None = Depends(require_single_tenant),
 ) -> IngestHealthResponse:
     """Check ingest freshness -- detects if sessions have stopped shipping."""
-    from zerg.jobs.ingest_health import compute_ingest_health
+    from zerg.services.ingest_health import compute_ingest_health
 
     result = compute_ingest_health(db)
     return IngestHealthResponse(**result)
@@ -428,10 +425,7 @@ async def get_usage_stats(
         {"since": since.isoformat()},
     ).fetchall()
 
-    by_provider = [
-        UsageStatsByProvider(provider=r.provider, sessions=r.sessions, messages=r.messages or 0)
-        for r in rows
-    ]
+    by_provider = [UsageStatsByProvider(provider=r.provider, sessions=r.sessions, messages=r.messages or 0) for r in rows]
 
     return UsageStatsResponse(
         total_sessions=sum(r.sessions for r in by_provider),

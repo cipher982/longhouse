@@ -245,11 +245,11 @@ def assert_commis_result_contains(
     Returns:
         (passed, message) tuple
     """
-    from zerg.models.models import CommisJob
+    from zerg.models.models import CommisTask
     from zerg.services.commis_artifact_store import CommisArtifactStore
 
     # Import db_session from runner (injected into metrics)
-    # We need to query CommisJob to get commis_id (UUID), then read artifact
+    # We need to query CommisTask to get commis_id (UUID), then read artifact
     if not hasattr(metrics, "_db_session"):
         return False, "DB session not available in metrics"
 
@@ -257,9 +257,9 @@ def assert_commis_result_contains(
 
     # Get commis ordered by created_at (ordinal indexing)
     commis = (
-        db_session.query(CommisJob)
-        .filter(CommisJob.oikos_run_id == metrics.run_id)
-        .order_by(CommisJob.created_at)
+        db_session.query(CommisTask)
+        .filter(CommisTask.oikos_run_id == metrics.run_id)
+        .order_by(CommisTask.created_at)
         .all()
     )
 
@@ -308,7 +308,7 @@ def assert_commis_tool_called(
     Returns:
         (passed, message) tuple
     """
-    from zerg.models.models import CommisJob
+    from zerg.models.models import CommisTask
     from zerg.models.run_event import RunEvent
 
     if not hasattr(metrics, "_db_session"):
@@ -318,9 +318,9 @@ def assert_commis_tool_called(
 
     # Get commis ordered by created_at (ordinal indexing)
     commis = (
-        db_session.query(CommisJob)
-        .filter(CommisJob.oikos_run_id == metrics.run_id)
-        .order_by(CommisJob.created_at)
+        db_session.query(CommisTask)
+        .filter(CommisTask.oikos_run_id == metrics.run_id)
+        .order_by(CommisTask.created_at)
         .all()
     )
 
@@ -370,7 +370,7 @@ def assert_artifact_exists(
     Returns:
         (passed, message) tuple
     """
-    from zerg.models.models import CommisJob
+    from zerg.models.models import CommisTask
     from zerg.services.commis_artifact_store import CommisArtifactStore
 
     if not hasattr(metrics, "_db_session"):
@@ -380,9 +380,9 @@ def assert_artifact_exists(
 
     # Get commis ordered by created_at (ordinal indexing)
     commis = (
-        db_session.query(CommisJob)
-        .filter(CommisJob.oikos_run_id == metrics.run_id)
-        .order_by(CommisJob.created_at)
+        db_session.query(CommisTask)
+        .filter(CommisTask.oikos_run_id == metrics.run_id)
+        .order_by(CommisTask.created_at)
         .all()
     )
 
@@ -422,7 +422,7 @@ def assert_artifact_contains(
     Returns:
         (passed, message) tuple
     """
-    from zerg.models.models import CommisJob
+    from zerg.models.models import CommisTask
     from zerg.services.commis_artifact_store import CommisArtifactStore
 
     if not hasattr(metrics, "_db_session"):
@@ -432,9 +432,9 @@ def assert_artifact_contains(
 
     # Get commis ordered by created_at (ordinal indexing)
     commis = (
-        db_session.query(CommisJob)
-        .filter(CommisJob.oikos_run_id == metrics.run_id)
-        .order_by(CommisJob.created_at)
+        db_session.query(CommisTask)
+        .filter(CommisTask.oikos_run_id == metrics.run_id)
+        .order_by(CommisTask.created_at)
         .all()
     )
 

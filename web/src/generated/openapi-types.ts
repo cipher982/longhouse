@@ -2019,7 +2019,7 @@ export interface paths {
         get?: never;
         /**
          * Save Email Config
-         * @description Save email config as JobSecret rows (encrypted). Only saves non-None fields.
+         * @description Save email config as EmailSecret rows (encrypted). Only saves non-None fields.
          */
         put: operations["save_email_config_system_email_config_put"];
         post?: never;
@@ -2566,26 +2566,6 @@ export interface paths {
          *     Limited to 10000 samples to prevent memory issues.
          */
         get: operations["performance_metrics_reliability_performance_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/reliability/incidents": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Recent Incidents
-         * @description Recent tenant-local operational incidents (admin only).
-         */
-        get: operations["recent_incidents_reliability_incidents_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -15154,42 +15134,6 @@ export interface operations {
             query?: {
                 /** @description Time window in hours */
                 hours?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    recent_incidents_reliability_incidents_get: {
-        parameters: {
-            query?: {
-                /** @description Incident status filter */
-                status?: string;
-                /** @description Optional incident source filter */
-                source?: string | null;
-                /** @description Maximum incidents to return */
-                limit?: number;
             };
             header?: never;
             path?: never;

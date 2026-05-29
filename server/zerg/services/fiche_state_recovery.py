@@ -7,7 +7,7 @@ by implementing startup recovery procedures based on distributed systems princip
 Handles recovery of:
 - Fiches stuck in "running" state with no active runs
 - Run rows stuck in RUNNING/QUEUED/DEFERRED status
-- CommisJob rows stuck in "running" status (queued jobs are resumable)
+- CommisTask rows stuck in "running" status (queued jobs are resumable)
 - RunnerJob rows stuck in queued/running status
 """
 
@@ -18,7 +18,7 @@ from typing import List
 
 from zerg.database import get_session_factory
 from zerg.models.enums import RunStatus
-from zerg.models.models import CommisJob
+from zerg.models.models import CommisTask
 from zerg.models.models import Fiche
 from zerg.models.models import Run
 from zerg.models.models import RunnerJob
@@ -175,7 +175,7 @@ async def perform_startup_run_recovery() -> List[int]:
 
 async def perform_startup_commis_job_recovery() -> List[int]:
     """
-    Recover orphaned CommisJob rows on application startup.
+    Recover orphaned CommisTask rows on application startup.
 
     Only recovers jobs in "running" status - these were mid-execution when
     the server crashed and their state is lost.
@@ -194,7 +194,7 @@ async def perform_startup_commis_job_recovery() -> List[int]:
     with session_factory() as db:
         try:
             # Only recover "running" jobs - queued jobs are resumable
-            stuck_jobs = db.query(CommisJob).filter(CommisJob.status == "running").all()
+            stuck_jobs = db.query(CommisTask).filter(CommisTask.status == "running").all()
 
             if not stuck_jobs:
                 logger.info("✅ No stuck commis jobs found during startup recovery")
@@ -205,7 +205,7 @@ async def perform_startup_commis_job_recovery() -> List[int]:
             now = datetime.now(timezone.utc)
             for job in stuck_jobs:
                 try:
-                    db.query(CommisJob).filter(CommisJob.id == job.id).update(
+                    db.query(CommisTask).filter(CommisTask.id == job.id).update(
                         {
                             "status": "failed",
                             "finished_at": now,

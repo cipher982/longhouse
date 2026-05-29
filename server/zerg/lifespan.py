@@ -9,7 +9,6 @@ import os
 import time
 from contextlib import asynccontextmanager
 from contextlib import contextmanager
-from pathlib import Path
 
 from fastapi import FastAPI
 
@@ -226,33 +225,6 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"Demo mode auto-seed failed (non-fatal): {e}")
 
-        # External jobs repo
-        if not _settings.testing:
-            try:
-                from zerg.jobs.registry import should_load_manifest_jobs
-
-                if should_load_manifest_jobs():
-                    from zerg.services.jobs_repo import bootstrap_jobs_repo
-                    from zerg.services.jobs_repo import install_jobs_deps
-
-                    with _timed_startup_step("jobs_repo_bootstrap"):
-                        jobs_result = bootstrap_jobs_repo(_settings.data_dir)
-                    if jobs_result["errors"]:
-                        logger.warning(f"Jobs repo bootstrap had errors: {jobs_result['errors']}")
-                    elif jobs_result["created"] or jobs_result["initialized_git"]:
-                        logger.info(f"Jobs repo bootstrapped: {jobs_result['jobs_dir']}")
-
-                    with _timed_startup_step("jobs_deps_install"):
-                        deps_result = install_jobs_deps(_settings.data_dir)
-                    if deps_result.get("error"):
-                        logger.warning(f"Job deps install failed (non-fatal): {deps_result['error']}")
-                    elif deps_result.get("installed"):
-                        logger.info("Job dependencies installed from requirements.txt")
-                else:
-                    logger.info("Skipping jobs repo bootstrap — builtin-only mode")
-            except Exception as e:
-                logger.warning(f"Jobs repo bootstrap failed (non-fatal): {e}")
-
         # Fiche state recovery
         if not _settings.testing:
             from zerg.services.fiche_state_recovery import initialize_fiche_state_system
@@ -437,116 +409,16 @@ async def lifespan(app: FastAPI):
                 failed.append(f"summary_reconciler ({e})")
                 logger.exception("Failed to start summary_reconciler")
 
-            # Job queue
-            if _settings.job_queue_enabled and not _settings.testing:
+            # Periodic runtime maintenance (runner-health reconcile, etc.)
+            if not _settings.testing:
                 try:
-                    from apscheduler.schedulers.asyncio import AsyncIOScheduler  # noqa: I001
+                    from zerg.services.maintenance import start_maintenance_loop
 
-                    from zerg.jobs.commis import enqueue_missed_runs
-                    from zerg.jobs.commis import run_queue_commis
-                    from zerg.jobs.git_sync import GitSyncService
-                    from zerg.jobs.git_sync import run_git_sync_loop
-                    from zerg.jobs.git_sync import set_git_sync_service
-                    from zerg.jobs.git_sync import set_git_sync_task
-                    from zerg.jobs.registry import register_all_jobs
-
-                    def _resolve_repo_config() -> dict | None:
-                        try:
-                            from zerg.database import db_session
-                            from zerg.models.models import JobRepoConfig
-                            from zerg.utils.crypto import decrypt
-
-                            with db_session() as db:
-                                row = db.query(JobRepoConfig).first()
-                                if row:
-                                    token = decrypt(row.encrypted_token) if row.encrypted_token else None
-                                    from urllib.parse import urlparse
-                                    from urllib.parse import urlunparse
-
-                                    _parsed = urlparse(row.repo_url)
-                                    _safe_url = urlunparse(_parsed._replace(netloc=_parsed.netloc.split("@")[-1]))
-                                    logger.info("Using DB repo config: %s (branch=%s)", _safe_url, row.branch)
-                                    return {"repo_url": row.repo_url, "branch": row.branch, "token": token}
-                        except Exception as e:
-                            logger.warning("Failed to query DB repo config: %s", e)
-
-                        if _settings.jobs_git_repo_url:
-                            return {
-                                "repo_url": _settings.jobs_git_repo_url,
-                                "branch": _settings.jobs_git_branch,
-                                "token": _settings.jobs_git_token,
-                            }
-                        return None
-
-                    repo_config = _resolve_repo_config()
-
-                    if not repo_config:
-                        logger.info("No jobs repo configured — builtin jobs only")
-
-                    if repo_config:
-                        git_service = GitSyncService(
-                            repo_url=repo_config["repo_url"],
-                            local_path=Path(_settings.jobs_dir),
-                            branch=repo_config["branch"],
-                            token=repo_config.get("token"),
-                        )
-
-                        await git_service.ensure_cloned()
-                        set_git_sync_service(git_service)
-
-                        if _settings.jobs_refresh_interval_seconds > 0:
-                            sync_task = asyncio.create_task(
-                                run_git_sync_loop(
-                                    git_service,
-                                    _settings.jobs_refresh_interval_seconds,
-                                )
-                            )
-                            set_git_sync_task(sync_task)
-
-                        started.append("git_sync")
-                        logger.info(
-                            "Git sync service initialized: %s",
-                            git_service.current_sha[:8] if git_service.current_sha else "unknown",
-                        )
-
-                    job_scheduler = AsyncIOScheduler()
-                    scheduled_count = await register_all_jobs(scheduler=job_scheduler, use_queue=True)
-
-                    from zerg.jobs.registry import job_registry as _jr
-
-                    all_jobs = _jr.list_jobs()
-                    builtin_count = sum(1 for j in all_jobs if "builtin" in (j.tags or []))
-                    manifest_count = len(all_jobs) - builtin_count
-                    logger.info(
-                        "Scheduled %d jobs (%d builtin, %d from manifest)",
-                        scheduled_count,
-                        builtin_count,
-                        manifest_count,
-                    )
-
-                    app.state.job_system_status = {
-                        "started": True,
-                        "git_sync": repo_config is not None,
-                        "scheduled_count": scheduled_count,
-                        "builtin_count": builtin_count,
-                        "manifest_count": manifest_count,
-                        "error": None,
-                    }
-
-                    await enqueue_missed_runs()
-                    job_scheduler.start()
-                    asyncio.create_task(run_queue_commis())
-                    started.append("job_queue_commis")
-                    logger.info("Job queue commis started (queue mode)")
+                    start_maintenance_loop()
+                    started.append("maintenance_loop")
                 except Exception as e:  # noqa: BLE001
-                    failed.append(f"job_queue_commis ({e})")
-                    logger.exception("Failed to start job_queue_commis")
-                    app.state.job_system_status = {
-                        "started": False,
-                        "git_sync": False,
-                        "scheduled_count": 0,
-                        "error": str(e),
-                    }
+                    failed.append(f"maintenance_loop ({e})")
+                    logger.exception("Failed to start maintenance loop")
 
             if failed:
                 logger.warning(
@@ -671,13 +543,12 @@ async def lifespan(app: FastAPI):
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to stop WAL checkpoint loop")
 
-            if _settings.job_queue_enabled:
-                try:
-                    from zerg.jobs.ops_db import close_pool
+            try:
+                from zerg.services.maintenance import stop_maintenance_loop
 
-                    await close_pool()
-                except Exception:  # noqa: BLE001
-                    logger.exception("Failed to close DB pool")
+                await stop_maintenance_loop()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to stop maintenance loop")
 
             try:
                 from zerg.tools.mcp_adapter import MCPManager
