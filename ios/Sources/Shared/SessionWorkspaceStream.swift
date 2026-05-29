@@ -60,20 +60,36 @@ actor SessionWorkspaceStream {
         case changed(WorkspaceChanged)
         case heartbeat
         case disconnected(Error?)
+        /// The stream got a 401. Cookies are stale; reconnecting with them is
+        /// pointless. The actor stops its retry loop and hands control to the
+        /// caller, which should refresh auth and start a new stream.
+        case unauthorized
     }
+
+    /// Thrown internally when the SSE response is 401 so the reconnect loop can
+    /// distinguish "auth is bad, stop looping" from a transient disconnect.
+    private struct UnauthorizedError: Error {}
 
     private let baseURL: URL
     private let sessionId: String
     private let skipInitial: Bool
     private var task: Task<Void, Never>?
+    /// Reconnect cursor. The server sets the SSE `id:` field to the per-topic
+    /// pubsub sequence (NOT the DB event id), and replays buffered messages
+    /// with `seq > Last-Event-ID`. So this tracks pubsub_seq despite the name.
+    /// Seeded from a persisted snapshot on resume so a freshly-created actor
+    /// replays from where the last one left off instead of cold.
     private var lastEventId: Int = 0
     private var serverClockSkewMs: Int64 = 0
     private var continuation: AsyncStream<Event>.Continuation?
 
-    init(baseURL: URL, sessionId: String, skipInitial: Bool = true) {
+    init(baseURL: URL, sessionId: String, skipInitial: Bool = true, sinceSeq: Int? = nil) {
         self.baseURL = baseURL
         self.sessionId = sessionId
         self.skipInitial = skipInitial
+        if let sinceSeq, sinceSeq > 0 {
+            self.lastEventId = sinceSeq
+        }
     }
 
     static func streamURL(baseURL: URL, sessionId: String, skipInitial: Bool = true) -> URL {
@@ -106,6 +122,12 @@ actor SessionWorkspaceStream {
                         try await self.openAndDrain()
                         backoffMs = 500
                     } catch is CancellationError {
+                        break
+                    } catch is UnauthorizedError {
+                        // Stale cookies: stop looping and let the caller refresh
+                        // auth + restart the stream. Reconnecting here would
+                        // just 401 again on a backoff timer.
+                        await self.emit(.unauthorized)
                         break
                     } catch {
                         await self.emit(.disconnected(error))
@@ -165,7 +187,13 @@ actor SessionWorkspaceStream {
         defer { session.invalidateAndCancel() }
 
         let (bytes, response) = try await session.bytes(for: req)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        if http.statusCode == 401 {
+            throw UnauthorizedError()
+        }
+        guard http.statusCode == 200 else {
             throw URLError(.badServerResponse)
         }
 

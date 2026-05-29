@@ -8,6 +8,9 @@ final class SessionTranscriptCache {
         let loadedProjectionItemCount: Int
         let totalProjectionItemCount: Int
         let tailSnapshotEventId: Int?
+        /// Last realtime pubsub seq seen, so a same-process nav-away/back can
+        /// seed the SSE reconnect cursor instead of replaying cold.
+        let lastPubsubSeq: Int?
         let savedAt: Date
         fileprivate let estimatedBytes: Int
         fileprivate var lastAccessedAt: Date
@@ -48,7 +51,8 @@ final class SessionTranscriptCache {
         events: [SessionEvent],
         loadedProjectionItemCount: Int,
         totalProjectionItemCount: Int,
-        tailSnapshotEventId: Int?
+        tailSnapshotEventId: Int?,
+        lastPubsubSeq: Int? = nil
     ) {
         guard maxBytes > 0 else { return }
         let date = now()
@@ -64,6 +68,7 @@ final class SessionTranscriptCache {
             loadedProjectionItemCount: loadedProjectionItemCount,
             totalProjectionItemCount: totalProjectionItemCount,
             tailSnapshotEventId: tailSnapshotEventId,
+            lastPubsubSeq: lastPubsubSeq,
             savedAt: date,
             estimatedBytes: estimatedBytes,
             lastAccessedAt: date
