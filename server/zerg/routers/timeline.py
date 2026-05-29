@@ -860,11 +860,30 @@ async def _session_workspace_stream(
     wait_start: float | None = None
     bus = get_pubsub()
     topic = topic_session(str(session_id))
+    replay_gap = bus.replay_gap(topic, since_seq=last_event_id)
     # Highest pubsub seq actually consumed by this subscription. Used as the
     # SSE id: so reconnects never skip an event the client hadn't seen.
     consumed_seq: int = 0
     consumed_payload: dict | None = None
-    with bus.subscribe(topic, since_seq=last_event_id) as subscription:
+    # If the requested cursor cannot be faithfully replayed, do not send a
+    # partial ring replay. The client should reconcile from durable state, then
+    # stay attached for future live messages.
+    subscribe_since_seq = None if replay_gap else last_event_id
+    with bus.subscribe(topic, since_seq=subscribe_since_seq) as subscription:
+        if replay_gap:
+            yield {
+                "event": "replay_gap",
+                "id": str(replay_gap.latest_seq) if replay_gap.latest_seq else None,
+                "data": json.dumps(
+                    {
+                        "session_id": str(session_id),
+                        "requested_seq": replay_gap.requested_seq,
+                        "earliest_seq": replay_gap.earliest_seq,
+                        "latest_seq": replay_gap.latest_seq,
+                        "reason": replay_gap.reason,
+                    }
+                ),
+            }
         while True:
             if await request.is_disconnected():
                 break

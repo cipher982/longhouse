@@ -130,6 +130,53 @@ struct SessionStreamResumeTests {
 
         model.stop()
     }
+
+    @Test
+    func replayGapRefreshesTailAndClearsStaleCursor() async throws {
+        let workspace = try TestWorkspaceFactory.make(eventId: 30, content: "Tail")
+        let api = FakeStreamResumeClient(workspaces: [workspace])
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lh-stream-gap-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = TranscriptSnapshotStore(directory: dir)
+        store.save(
+            serverURL: serverURL,
+            sessionId: "session-1",
+            detail: workspace.session,
+            events: workspace.events,
+            loadedProjectionItemCount: workspace.events.count,
+            totalProjectionItemCount: workspace.projection.total,
+            tailSnapshotEventId: 30,
+            lastPubsubSeq: 777
+        )
+        store.waitForPendingWrites()
+
+        let recorder = StreamFactoryRecorder()
+        let appState = AppState()
+        appState.serverURL = serverURL
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            streamFactory: { _, _, sinceSeq in recorder.make(sinceSeq: sinceSeq) },
+            enableRealtime: true,
+            transcriptCache: SessionTranscriptCache(maxBytes: 0),
+            snapshotStore: store
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        #expect(recorder.lastSinceSeq == 777)
+
+        recorder.emitReplayGap(latestSeq: 0)
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        #expect(await api.tailRequestCount() >= 1)
+
+        model.pauseRealtime()
+        await model.start(sessionId: "session-1", appState: appState)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        #expect(recorder.lastSinceSeq == nil, "replay gap should clear stale persisted cursor")
+
+        model.stop()
+    }
 }
 
 /// Records stream factory invocations and lets a test drive the live stream.
@@ -178,6 +225,17 @@ private final class StreamFactoryRecorder: Sendable {
     func emitUnauthorized() {
         let c = state.withLock { $0.continuation }
         c?.yield(.unauthorized)
+    }
+
+    func emitReplayGap(latestSeq: Int) {
+        let c = state.withLock { $0.continuation }
+        c?.yield(.replayGap(SessionWorkspaceStream.ReplayGap(
+            session_id: "session-1",
+            requested_seq: 777,
+            earliest_seq: nil,
+            latest_seq: latestSeq,
+            reason: "buffer_unavailable"
+        )))
     }
 }
 

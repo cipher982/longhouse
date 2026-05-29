@@ -60,7 +60,14 @@ def _collect_stream_events(events: list[dict]) -> dict[str, list[dict]]:
     return result
 
 
-async def _run_stream(sf, session_id, *, cycles: int = 2, skip_initial: bool = False) -> list[dict]:
+async def _run_stream(
+    sf,
+    session_id,
+    *,
+    cycles: int = 2,
+    skip_initial: bool = False,
+    last_event_id: int | None = None,
+) -> list[dict]:
     request = _DisconnectAfterNCycles(cycles)
     events: list[dict] = []
     async for event in timeline_mod._session_workspace_stream(
@@ -68,6 +75,7 @@ async def _run_stream(sf, session_id, *, cycles: int = 2, skip_initial: bool = F
         session_factory=sf,
         session_id=session_id,
         skip_initial=skip_initial,
+        last_event_id=last_event_id,
     ):
         events.append(event)
     return events
@@ -373,6 +381,42 @@ def test_workspace_stream_emits_pubsub_seq_and_id(tmp_path):
     assert changed.get("pubsub_seq") == 0
     changed_events = [e for e in events if e["event"] == "workspace_changed"]
     assert changed_events[0].get("id") is None
+
+
+@patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
+def test_workspace_stream_emits_replay_gap_for_unavailable_cursor(tmp_path):
+    """Old process-local pubsub cursors must be explicit, not silently ignored."""
+    from zerg.services.session_pubsub import reset_pubsub_for_test
+
+    reset_pubsub_for_test()
+    sf = _make_db(tmp_path, name="workspace_stream_replay_gap.db")
+    now = datetime.now(timezone.utc)
+
+    with sf() as db:
+        session = AgentSession(
+            provider="claude",
+            environment="production",
+            project="test",
+            started_at=now,
+            user_messages=1,
+            assistant_messages=1,
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        session_id = session.id
+
+    events = asyncio.run(_run_stream(sf, session_id, cycles=2, last_event_id=777))
+    grouped = _collect_stream_events(events)
+
+    assert "connected" in grouped
+    assert "replay_gap" in grouped
+    gap = grouped["replay_gap"][0]
+    assert gap["session_id"] == str(session_id)
+    assert gap["requested_seq"] == 777
+    assert gap["earliest_seq"] is None
+    assert gap["latest_seq"] == 0
+    assert gap["reason"] == "buffer_unavailable"
 
 
 def test_workspace_stream_wake_includes_fanout_metadata(tmp_path):

@@ -42,6 +42,16 @@ class PubsubMessage:
     payload: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class ReplayGap:
+    """Replay cursor cannot be satisfied from the process-local topic buffer."""
+
+    requested_seq: int
+    earliest_seq: int | None
+    latest_seq: int
+    reason: str
+
+
 class _Subscriber:
     __slots__ = ("queue", "drops")
 
@@ -110,6 +120,44 @@ class SessionPubsub:
 
         state.subscribers.add(sub)
         return _Subscription(self, topic, sub)
+
+    def replay_gap(self, topic: str, *, since_seq: int | None) -> ReplayGap | None:
+        """Return gap metadata when `since_seq` cannot be replayed faithfully.
+
+        Pubsub seqs are process-local. If a client reconnects with a cursor from
+        an older process, or with a cursor older than the bounded ring, the live
+        stream must say so explicitly so clients can reconcile from durable DB
+        state instead of assuming the replay lane was complete.
+        """
+        if since_seq is None or since_seq <= 0:
+            return None
+
+        state = self._topics[topic]
+        latest_seq = state.buffer[-1].seq if state.buffer else max(0, state.next_seq - 1)
+        if not state.buffer:
+            return ReplayGap(
+                requested_seq=since_seq,
+                earliest_seq=None,
+                latest_seq=latest_seq,
+                reason="buffer_unavailable",
+            )
+
+        earliest_seq = state.buffer[0].seq
+        if since_seq < earliest_seq - 1:
+            return ReplayGap(
+                requested_seq=since_seq,
+                earliest_seq=earliest_seq,
+                latest_seq=latest_seq,
+                reason="cursor_too_old",
+            )
+        if since_seq > latest_seq:
+            return ReplayGap(
+                requested_seq=since_seq,
+                earliest_seq=earliest_seq,
+                latest_seq=latest_seq,
+                reason="cursor_ahead",
+            )
+        return None
 
     # -------------------------------------------------------------------- peek
     def peek_latest_seq(self, topic: str) -> int:

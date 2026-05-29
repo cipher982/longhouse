@@ -41,10 +41,8 @@ struct SessionResumeHydrationTests {
         let cached = try makeWorkspace(eventId: 30, content: "Disk tail")
         seedDiskSnapshot(store: store, workspace: cached)
 
-        // Fresh network response exists, but the disk snapshot should render
-        // first and the view should never be in the blocking loading state.
         let fresh = try makeWorkspace(eventId: 31, content: "Network tail")
-        let api = FakeResumeClient(workspaces: [fresh])
+        let api = BlockingResumeClient(workspace: fresh)
         let appState = AppState()
         appState.serverURL = serverURL
         let model = SessionViewModel(
@@ -56,11 +54,16 @@ struct SessionResumeHydrationTests {
 
         await model.start(sessionId: "session-1", appState: appState)
 
+        // The network tail request is deliberately blocked, so this proves the
+        // disk snapshot rendered before any server response could replace it.
         #expect(model.isInitialLoading == false)
         #expect(model.detail?.id == "session-1")
-        // Disk content is on screen; eventID 30 came from disk.
-        #expect(model.items.map(\.id).contains("user:30") || model.items.map(\.id).contains("user:31"))
+        #expect(model.items.map(\.id) == ["user:30"])
         #expect(model.errorMessage == nil)
+
+        await api.waitUntilTailRequested()
+        await api.releaseTail()
+        #expect(await waitForItems(model, ["user:31"]))
     }
 
     @Test
@@ -158,6 +161,14 @@ struct SessionResumeHydrationTests {
         }
     }
 
+    private func waitForItems(_ model: SessionViewModel, _ ids: [String]) async -> Bool {
+        for _ in 0..<50 {
+            if model.items.map(\.id) == ids { return true }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        return false
+    }
+
     nonisolated private func makeWorkspace(
         eventId: Int,
         content: String,
@@ -206,6 +217,76 @@ private actor FakeResumeClient: SessionWorkspaceClient {
             return workspaces.removeFirst()
         }
         return workspaces[0]
+    }
+
+    func sendInput(id: String, text: String, intent: String, clientRequestId: String?) async throws -> SessionInputResponse {
+        SessionInputResponse(outcome: .sent, inputId: 1, clientRequestId: clientRequestId, intent: .auto, queued: [])
+    }
+
+    func sendInputMultipart(id: String, text: String, attachments: [ComposerAttachment], clientRequestId: String?) async throws -> SessionInputResponse {
+        try await sendInput(id: id, text: text, intent: "auto", clientRequestId: clientRequestId)
+    }
+
+    func draftReply(id: String, maxChars: Int) async throws -> DraftReplyResponse {
+        DraftReplyResponse(draftText: "Draft", model: "test", generatedAt: "2026-05-02T20:00:00Z", basedOnEventIds: [])
+    }
+
+    func setSessionLoopMode(id: String, loopMode: SessionLoopMode) async throws -> LoopModeResponse {
+        LoopModeResponse(sessionId: id, loopMode: loopMode)
+    }
+
+    func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async {}
+}
+
+private actor BlockingResumeClient: SessionWorkspaceClient {
+    private let workspace: SessionWorkspaceResponse
+    private var tailRequested = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+    private var released = false
+
+    init(workspace: SessionWorkspaceResponse) {
+        self.workspace = workspace
+    }
+
+    func waitUntilTailRequested() async {
+        if tailRequested { return }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func releaseTail() {
+        released = true
+        releaseContinuation?.resume()
+        releaseContinuation = nil
+    }
+
+    func sessionWorkspace(id: String, limit: Int, branchMode: String) async throws -> SessionWorkspaceResponse {
+        workspace
+    }
+
+    func sessionMobileTail(
+        id: String,
+        limit: Int,
+        offset: Int,
+        branchMode: String,
+        snapshotEventId: Int?
+    ) async throws -> SessionMobileTailResponse {
+        tailRequested = true
+        let pending = waiters
+        waiters.removeAll()
+        pending.forEach { $0.resume() }
+        if !released {
+            await withCheckedContinuation { continuation in
+                releaseContinuation = continuation
+            }
+        }
+        return SessionMobileTailResponse(
+            session: workspace.session,
+            projection: workspace.projection,
+            snapshotEventId: workspace.events.map(\.id).max()
+        )
     }
 
     func sendInput(id: String, text: String, intent: String, clientRequestId: String?) async throws -> SessionInputResponse {
