@@ -167,3 +167,66 @@ private struct ComposerPreviewChrome: View {
     ComposerPreviewChrome(detail: .mock(loopMode: .manual))
         .preferredColorScheme(.light)
 }
+
+// MARK: - Transcript load-state previews (M1)
+
+/// Mirrors the full-screen blocking error in `SessionView.transcript`. Only
+/// shown when there is genuinely nothing cached. Readable on black — the bug
+/// report showed the old version as a lone, near-invisible triangle.
+private struct TranscriptHardErrorPreview: View {
+    let message: String
+    var body: some View {
+        ZStack {
+            Color(.systemBackground).ignoresSafeArea()
+            VStack(spacing: 14) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.orange)
+                Text(message)
+                    .font(.callout)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.primary)
+                Button("Try again") {}
+                    .buttonStyle(.borderedProminent)
+            }
+            .padding(32)
+        }
+    }
+}
+
+/// Mirrors `SessionView.refreshBanner`: a non-destructive strip over an
+/// existing transcript when a refresh fails, instead of erasing content.
+private struct TranscriptRefreshBannerPreview: View {
+    let message: String
+    var body: some View {
+        ZStack {
+            Color(.systemBackground).ignoresSafeArea()
+            VStack {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.caption)
+                    Text(message).font(.caption).lineLimit(2)
+                    Spacer(minLength: 8)
+                    Text("Retry").font(.caption.weight(.semibold))
+                }
+                .foregroundStyle(.orange)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(.bar)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+                Spacer()
+            }
+        }
+    }
+}
+
+#Preview("Transcript · hard error · Dark") {
+    TranscriptHardErrorPreview(message: "Couldn't load session: The Internet connection appears to be offline.")
+        .preferredColorScheme(.dark)
+}
+
+#Preview("Transcript · refresh banner · Dark") {
+    TranscriptRefreshBannerPreview(message: "Couldn't refresh. Showing saved messages.")
+        .preferredColorScheme(.dark)
+}

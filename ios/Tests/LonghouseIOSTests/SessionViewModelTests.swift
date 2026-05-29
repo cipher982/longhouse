@@ -70,6 +70,10 @@ struct SessionViewModelTests {
         await model.start(sessionId: "session-1", appState: appState)
         await model.start(sessionId: "session-1", appState: appState)
 
+        // Re-entering an already-open session reconciles in the BACKGROUND so
+        // the resume never blanks the transcript while a refresh is in flight.
+        // The refresh still happens; it just isn't awaited by start().
+        await waitForWorkspaceRequestCount(api, atLeast: 2)
         #expect(model.items.map(\.id) == ["user:11"])
         #expect(await api.workspaceRequestCount() == 2)
     }

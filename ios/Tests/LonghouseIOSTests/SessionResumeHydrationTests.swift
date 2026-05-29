@@ -1,0 +1,303 @@
+import Foundation
+import Testing
+
+@testable import Longhouse
+
+/// M1 "No blank transcript on resume" guardrails: cold relaunch hydrates from
+/// disk, a failed refresh degrades to a banner instead of erasing the
+/// transcript, and backgrounding (pauseRealtime) keeps content on screen.
+@MainActor
+struct SessionResumeHydrationTests {
+    private let serverURL = "https://example.longhouse.ai"
+
+    private func tempDirectory() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("lh-resume-tests-\(UUID().uuidString)", isDirectory: true)
+    }
+
+    private func seedDiskSnapshot(
+        store: TranscriptSnapshotStore,
+        workspace: SessionWorkspaceResponse,
+        sessionId: String = "session-1"
+    ) {
+        store.save(
+            serverURL: serverURL,
+            sessionId: sessionId,
+            detail: workspace.session,
+            events: workspace.events,
+            loadedProjectionItemCount: workspace.events.count,
+            totalProjectionItemCount: workspace.projection.total,
+            tailSnapshotEventId: workspace.events.map(\.id).max(),
+            lastPubsubSeq: nil
+        )
+        store.waitForPendingWrites()
+    }
+
+    @Test
+    func coldRelaunchHydratesFromDiskBeforeNetwork() async throws {
+        let dir = tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = TranscriptSnapshotStore(directory: dir)
+        let cached = try makeWorkspace(eventId: 30, content: "Disk tail")
+        seedDiskSnapshot(store: store, workspace: cached)
+
+        // Fresh network response exists, but the disk snapshot should render
+        // first and the view should never be in the blocking loading state.
+        let fresh = try makeWorkspace(eventId: 31, content: "Network tail")
+        let api = FakeResumeClient(workspaces: [fresh])
+        let appState = AppState()
+        appState.serverURL = serverURL
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            transcriptCache: SessionTranscriptCache(maxBytes: 0),
+            snapshotStore: store
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+
+        #expect(model.isInitialLoading == false)
+        #expect(model.detail?.id == "session-1")
+        // Disk content is on screen; eventID 30 came from disk.
+        #expect(model.items.map(\.id).contains("user:30") || model.items.map(\.id).contains("user:31"))
+        #expect(model.errorMessage == nil)
+    }
+
+    @Test
+    func coldRelaunchWithFailedRefreshKeepsTranscriptVisible() async throws {
+        let dir = tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = TranscriptSnapshotStore(directory: dir)
+        let cached = try makeWorkspace(eventId: 30, content: "Disk tail")
+        seedDiskSnapshot(store: store, workspace: cached)
+
+        let api = FakeResumeClient(workspaces: [cached])
+        await api.failFutureTails()
+        let appState = AppState()
+        appState.serverURL = serverURL
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            transcriptCache: SessionTranscriptCache(maxBytes: 0),
+            snapshotStore: store
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        // Allow the background refresh task to run and fail.
+        await waitForRefreshError(model)
+
+        // The transcript must survive the failed refresh.
+        #expect(model.items.map(\.id) == ["user:30"])
+        // Full-screen blocking error must NOT be set (that's the lone triangle).
+        #expect(model.errorMessage == nil)
+        // The failure degrades to the non-destructive banner.
+        #expect(model.refreshErrorMessage != nil)
+    }
+
+    @Test
+    func backgroundResumeDoesNotEmptyItems() async throws {
+        let before = try makeWorkspace(eventId: 40, content: "Loaded tail")
+        let api = FakeResumeClient(workspaces: [before])
+        let appState = AppState()
+        appState.serverURL = serverURL
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            transcriptCache: SessionTranscriptCache(maxBytes: 0),
+            snapshotStore: nil
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        #expect(model.items.map(\.id) == ["user:40"])
+
+        // Simulate scene background.
+        model.pauseRealtime()
+        #expect(model.items.map(\.id) == ["user:40"], "pause must not erase the transcript")
+
+        // Now the network goes bad and we resume to foreground.
+        await api.failFutureTails()
+        await model.start(sessionId: "session-1", appState: appState)
+        await waitForRefreshError(model)
+
+        // Same session resumed: content preserved, no blocking error.
+        #expect(model.items.map(\.id) == ["user:40"])
+        #expect(model.errorMessage == nil)
+    }
+
+    @Test
+    func coldLoadWithNoCacheShowsBlockingErrorOnFailure() async throws {
+        let dir = tempDirectory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = TranscriptSnapshotStore(directory: dir)
+        // Nothing seeded on disk.
+        let placeholder = try makeWorkspace(eventId: 1, content: "unused")
+        let api = FakeResumeClient(workspaces: [placeholder])
+        await api.failFutureTails()
+        let appState = AppState()
+        appState.serverURL = serverURL
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            enableRealtime: false,
+            transcriptCache: SessionTranscriptCache(maxBytes: 0),
+            snapshotStore: store
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+
+        // No cache anywhere → the blocking full-screen error is correct here.
+        #expect(model.items.isEmpty)
+        #expect(model.errorMessage != nil)
+    }
+
+    // MARK: - Helpers
+
+    private func waitForRefreshError(_ model: SessionViewModel) async {
+        for _ in 0..<50 {
+            if model.refreshErrorMessage != nil { return }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
+    nonisolated private func makeWorkspace(
+        eventId: Int,
+        content: String,
+        total: Int = 1,
+        pageOffset: Int = 0
+    ) throws -> SessionWorkspaceResponse {
+        let encodedContent = try jsonString(content)
+        let json = """
+        {
+          "session": {
+            "id": "session-1",
+            "provider": "codex",
+            "project": "zerg",
+            "summary_title": "Workspace Session",
+            "user_state": "active",
+            "capabilities": {
+              "live_control_available": true,
+              "host_reattach_available": true,
+              "reply_to_live_session_available": true
+            },
+            "runtime_display": {
+              "truth_tier": "fresh",
+              "signal_tier": "none",
+              "state": null,
+              "tone": "inactive",
+              "headline": "Inactive",
+              "detail": null,
+              "phase_label": "Inactive",
+              "compact_tool_label": null,
+              "is_live": false,
+              "is_executing": false,
+              "needs_attention": false,
+              "is_idle": true,
+              "is_stalled": false,
+              "is_managed_local_truth": false,
+              "has_signal": false,
+              "control_path": "unmanaged",
+              "activity_recency": "none",
+              "lifecycle": "open",
+              "host_state": "unknown",
+              "terminal_reason": null
+            },
+            "loop_mode": "assist"
+          },
+          "thread": {
+            "root_session_id": "session-1",
+            "head_session_id": "session-1",
+            "sessions": []
+          },
+          "projection": {
+            "root_session_id": "session-1",
+            "focus_session_id": "session-1",
+            "head_session_id": "session-1",
+            "path_session_ids": ["session-1"],
+            "items": [
+              {
+                "kind": "event",
+                "session_id": "session-1",
+                "timestamp": "2026-05-02T20:00:00Z",
+                "event": {
+                  "id": \(eventId),
+                  "role": "user",
+                  "content_text": \(encodedContent),
+                  "timestamp": "2026-05-02T20:00:00Z",
+                  "in_active_context": true,
+                  "is_head_branch": true
+                }
+              }
+            ],
+            "total": \(total),
+            "page_offset": \(pageOffset),
+            "branch_mode": "head",
+            "abandoned_events": 0
+          }
+        }
+        """.data(using: .utf8)!
+        return try JSONDecoder.snakeCase.decode(SessionWorkspaceResponse.self, from: json)
+    }
+
+    nonisolated private func jsonString(_ value: String) throws -> String {
+        let data = try JSONEncoder().encode(value)
+        return String(data: data, encoding: .utf8)!
+    }
+}
+
+private actor FakeResumeClient: SessionWorkspaceClient {
+    private var workspaces: [SessionWorkspaceResponse]
+    private var shouldFailTails = false
+
+    init(workspaces: [SessionWorkspaceResponse]) {
+        self.workspaces = workspaces
+    }
+
+    func failFutureTails() {
+        shouldFailTails = true
+    }
+
+    func sessionWorkspace(id: String, limit: Int, branchMode: String) async throws -> SessionWorkspaceResponse {
+        if shouldFailTails { throw URLError(.cannotConnectToHost) }
+        return current()
+    }
+
+    func sessionMobileTail(
+        id: String,
+        limit: Int,
+        offset: Int,
+        branchMode: String,
+        snapshotEventId: Int?
+    ) async throws -> SessionMobileTailResponse {
+        if shouldFailTails { throw URLError(.cannotConnectToHost) }
+        let workspace = current()
+        return SessionMobileTailResponse(
+            session: workspace.session,
+            projection: workspace.projection,
+            snapshotEventId: workspace.events.map(\.id).max()
+        )
+    }
+
+    private func current() -> SessionWorkspaceResponse {
+        if workspaces.count > 1 {
+            return workspaces.removeFirst()
+        }
+        return workspaces[0]
+    }
+
+    func sendInput(id: String, text: String, intent: String, clientRequestId: String?) async throws -> SessionInputResponse {
+        SessionInputResponse(outcome: .sent, inputId: 1, clientRequestId: clientRequestId, intent: .auto, queued: [])
+    }
+
+    func sendInputMultipart(id: String, text: String, attachments: [ComposerAttachment], clientRequestId: String?) async throws -> SessionInputResponse {
+        try await sendInput(id: id, text: text, intent: "auto", clientRequestId: clientRequestId)
+    }
+
+    func draftReply(id: String, maxChars: Int) async throws -> DraftReplyResponse {
+        DraftReplyResponse(draftText: "Draft", model: "test", generatedAt: "2026-05-02T20:00:00Z", basedOnEventIds: [])
+    }
+
+    func setSessionLoopMode(id: String, loopMode: SessionLoopMode) async throws -> LoopModeResponse {
+        LoopModeResponse(sessionId: id, loopMode: loopMode)
+    }
+
+    func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async {}
+}

@@ -194,6 +194,7 @@ final class AppState: ObservableObject {
             SharedAuthStore.clearManagedCookies(for: previousURL)
             SharedAuthStore.removeSharedCookieStorage(for: previousURL)
             TimelineCacheStore.clear(serverURL: previousURL)
+            TranscriptSnapshotStore.shared.clear(serverURL: previousURL)
             PushNotificationStore.clearAPNSDeviceSyncState()
             KeychainHelper.deleteAuthToken()
         }
@@ -251,6 +252,7 @@ final class AppState: ObservableObject {
         KeychainHelper.deleteServerURL()
         PushNotificationStore.clearAPNSDeviceSyncState()
         TimelineCacheStore.clear()
+        TranscriptSnapshotStore.shared.clearAll()
         WidgetCenter.shared.reloadAllTimelines()
     }
 
@@ -276,6 +278,7 @@ final class AppState: ObservableObject {
                 SharedAuthStore.clearManagedCookies(for: previousURL)
                 SharedAuthStore.removeSharedCookieStorage(for: previousURL)
                 TimelineCacheStore.clear(serverURL: previousURL)
+                TranscriptSnapshotStore.shared.clear(serverURL: previousURL)
                 PushNotificationStore.clearAPNSDeviceSyncState()
                 KeychainHelper.deleteAuthToken()
             }
@@ -420,6 +423,7 @@ final class AppState: ObservableObject {
         SharedAuthStore.removeSharedCookieStorage(for: serverURL)
         WidgetSessionSnapshotStore.clear()
         TimelineCacheStore.clear(serverURL: serverURL)
+        TranscriptSnapshotStore.shared.clear(serverURL: serverURL)
         PushNotificationStore.clearAPNSDeviceSyncState()
         KeychainHelper.deleteAuthToken()
         isAuthenticated = false
