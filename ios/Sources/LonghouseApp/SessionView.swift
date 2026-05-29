@@ -81,13 +81,15 @@ struct SessionView: View {
         }
         .onChange(of: scenePhase) { _, newPhase in
             // SSE over URLSession is foreground-only per Apple's contract.
-            // Tear down on background/inactive so we're not leaking a dead
-            // connection; restart on return to active.
+            // Pause (not stop) on background/inactive so we drop the dead
+            // connection but keep the session + transcript; restart on return
+            // to active. stop() is reserved for nav-away (.onDisappear) so an
+            // unlock resumes the same session instead of erasing it.
             switch newPhase {
             case .active:
                 Task { await viewModel.start(sessionId: sessionId, appState: appState) }
             case .background, .inactive:
-                viewModel.stop()
+                viewModel.pauseRealtime()
             @unknown default:
                 break
             }
@@ -194,18 +196,57 @@ struct SessionView: View {
                 ProgressView().controlSize(.large)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let error = viewModel.errorMessage, viewModel.items.isEmpty && viewModel.submittedInputs.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
-                    Text(error).multilineTextAlignment(.center).foregroundStyle(.secondary)
+                VStack(spacing: 14) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 40))
+                        .foregroundStyle(.orange)
+                    Text(error)
+                        .font(.callout)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.primary)
                     Button("Try again") {
                         Task { await viewModel.reload(sessionId: sessionId, appState: appState) }
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.borderedProminent)
                 }
-                .padding()
+                .padding(32)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+
+            // Non-destructive refresh banner: a refresh failed but we still
+            // have cached content underneath. Never erase the transcript.
+            if let refreshError = viewModel.refreshErrorMessage,
+               !viewModel.items.isEmpty || !viewModel.submittedInputs.isEmpty {
+                VStack {
+                    refreshBanner(refreshError)
+                    Spacer(minLength: 0)
+                }
+            }
         }
+    }
+
+    private func refreshBanner(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.caption)
+            Text(message)
+                .font(.caption)
+                .lineLimit(2)
+            Spacer(minLength: 8)
+            Button {
+                Task { await viewModel.reload(sessionId: sessionId, appState: appState) }
+            } label: {
+                Text("Retry").font(.caption.weight(.semibold))
+            }
+        }
+        .foregroundStyle(.orange)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.bar)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .accessibilityIdentifier("session-refresh-banner")
     }
 
     @ViewBuilder
@@ -731,7 +772,13 @@ final class SessionViewModel: ObservableObject {
 
     @Published var detail: SessionDetail?
     @Published var items: [TimelineItem] = []
+    /// Blocking load error: only set when there is genuinely nothing to show
+    /// (no cache, never loaded). Drives the full-screen error overlay.
     @Published var errorMessage: String?
+    /// Non-blocking refresh failure: set when a reconnect/refresh fails but we
+    /// already have cached content on screen. Drives a thin banner over the
+    /// transcript instead of erasing it.
+    @Published var refreshErrorMessage: String?
     @Published var isInitialLoading = true
     @Published var isSending = false
     @Published var isDrafting = false
@@ -773,6 +820,11 @@ final class SessionViewModel: ObservableObject {
     private let streamFactory: (URL, String) -> SessionWorkspaceStreamSource
     private let enableRealtime: Bool
     private let transcriptCache: SessionTranscriptCache?
+    /// Durable on-disk mirror of the tail; survives app eviction so a cold
+    /// relaunch can hydrate before the network responds. The in-memory
+    /// `transcriptCache` stays as the fast warm-resume path.
+    private let snapshotStore: TranscriptSnapshotStore?
+    private var lastPubsubSeq: Int?
     private let initialTailLimit = 50
     private let olderPageLimit = 50
     private let cachedTailRefreshGraceInterval: TimeInterval = 30
@@ -783,12 +835,14 @@ final class SessionViewModel: ObservableObject {
             SessionWorkspaceStreamSource.live(baseURL: baseURL, sessionId: sessionId)
         },
         enableRealtime: Bool = true,
-        transcriptCache: SessionTranscriptCache? = nil
+        transcriptCache: SessionTranscriptCache? = nil,
+        snapshotStore: TranscriptSnapshotStore? = nil
     ) {
         self.apiFactory = apiFactory
         self.streamFactory = streamFactory
         self.enableRealtime = enableRealtime
         self.transcriptCache = transcriptCache ?? (enableRealtime ? .shared : nil)
+        self.snapshotStore = snapshotStore ?? (enableRealtime ? .shared : nil)
     }
 
     func start(sessionId: String, appState: AppState) async {
@@ -814,6 +868,12 @@ final class SessionViewModel: ObservableObject {
             prefetchTask?.cancel()
             prefetchTask = nil
             errorMessage = nil
+            refreshErrorMessage = nil
+            lastPubsubSeq = nil
+            // Warm path: in-memory cache survives backgrounding while the
+            // process lives. Cold path: the durable on-disk snapshot survives
+            // app eviction, so a relaunch into a session renders instantly
+            // instead of a blank screen + lone warning triangle.
             if let snapshot = transcriptCache?.snapshot(serverURL: appState.serverURL, sessionId: sessionId) {
                 let ageMs = Int(Date().timeIntervalSince(snapshot.savedAt) * 1000)
                 openWaterfall?.mark(
@@ -823,21 +883,42 @@ final class SessionViewModel: ObservableObject {
                 applyCachedSnapshot(snapshot)
                 restoredFromCache = true
                 shouldRefreshCachedTail = Date().timeIntervalSince(snapshot.savedAt) >= cachedTailRefreshGraceInterval
+            } else if let disk = snapshotStore?.load(serverURL: appState.serverURL, sessionId: sessionId) {
+                let ageMs = Int(Date().timeIntervalSince(disk.savedAt) * 1000)
+                openWaterfall?.mark(
+                    "disk_hit",
+                    "events=\(disk.events.count) age_ms=\(ageMs)"
+                )
+                applyDiskSnapshot(disk)
+                restoredFromCache = true
+                // Disk snapshots are typically older than the in-memory grace
+                // window; always reconcile in the background after rendering.
+                shouldRefreshCachedTail = true
             } else {
                 openWaterfall?.mark("cache_miss")
             }
         } else {
             activeServerURL = appState.serverURL
         }
-        if isInitialLoading || !sessionChanged {
-            await reload(sessionId: sessionId, appState: appState)
-        } else if restoredFromCache, let api = apiFactory(appState.serverURL) {
-            scheduleOlderPrefetch(api: api, sessionId: sessionId)
-            if shouldRefreshCachedTail {
-                Task { [weak self] in
-                    try? await self?.refreshTail(api: api, sessionId: sessionId, allowFailure: true)
+        let hasContentOnScreen = restoredFromCache || !items.isEmpty
+        if hasContentOnScreen {
+            // We already have something to show (hydrated from cache/disk, or
+            // preserved across a pause). Reconcile in the background so a
+            // failed refresh degrades to a banner instead of erasing the
+            // transcript. This is the path that fixes the lock/unlock blank.
+            if let api = apiFactory(appState.serverURL) {
+                scheduleOlderPrefetch(api: api, sessionId: sessionId)
+                if shouldRefreshCachedTail || !sessionChanged {
+                    Task { [weak self] in
+                        await self?.refreshInBackground(api: api, sessionId: sessionId)
+                    }
                 }
             }
+            isInitialLoading = false
+        } else {
+            // True cold load with nothing cached: block on the fetch and show
+            // a full-screen error if it fails — there is nothing to preserve.
+            await reload(sessionId: sessionId, appState: appState)
         }
         guard enableRealtime else { return }
         // Re-attach only when the session changed or the stream was torn down
@@ -851,9 +932,14 @@ final class SessionViewModel: ObservableObject {
         }
     }
 
-    func stop() {
-        openWaterfall?.mark("stop")
-        openWaterfall = nil
+    /// Tear down realtime work (SSE + polling + prefetch) WITHOUT discarding
+    /// the session identity or the rendered transcript. Use this for scene
+    /// background/inactive: SSE over URLSession is foreground-only, so we must
+    /// drop the connection, but the next `.active` should resume the same
+    /// session and keep its content rather than treating unlock as a brand-new
+    /// session open (which is what erased the transcript before).
+    func pauseRealtime() {
+        openWaterfall?.mark("pause")
         pollTask?.cancel()
         pollTask = nil
         prefetchTask?.cancel()
@@ -863,13 +949,30 @@ final class SessionViewModel: ObservableObject {
         Task { [stream] in await stream?.stop() }
         stream = nil
         streamConnected = false
+    }
+
+    /// Full teardown for genuine nav-away or session switch: stops realtime AND
+    /// forgets which session was active so the next `start()` does a clean
+    /// reset. Background/inactive should use `pauseRealtime()` instead.
+    func stop() {
+        openWaterfall?.mark("stop")
+        openWaterfall = nil
+        pauseRealtime()
         activeSessionId = nil
         activeServerURL = nil
     }
 
     func reload(sessionId: String, appState: AppState) async {
+        // If we already have content on screen, a failed reload must degrade to
+        // the non-destructive banner. Only a truly empty view earns the
+        // full-screen blocking error.
+        let hasContent = !items.isEmpty || !submittedInputs.isEmpty
         guard let api = apiFactory(appState.serverURL) else {
-            errorMessage = "Invalid server URL"
+            if hasContent {
+                refreshErrorMessage = "Invalid server URL"
+            } else {
+                errorMessage = "Invalid server URL"
+            }
             isInitialLoading = false
             return
         }
@@ -877,11 +980,20 @@ final class SessionViewModel: ObservableObject {
         do {
             try await refreshTail(api: api, sessionId: sessionId)
             errorMessage = nil
+            refreshErrorMessage = nil
             loopModeErrorMessage = nil
         } catch LonghouseAPIError.notAuthenticated {
-            errorMessage = "Session expired."
+            if hasContent {
+                refreshErrorMessage = "Session expired. Pull to refresh."
+            } else {
+                errorMessage = "Session expired."
+            }
         } catch {
-            errorMessage = "Couldn't load session: \(error.localizedDescription)"
+            if hasContent {
+                refreshErrorMessage = "Couldn't refresh. Showing saved messages."
+            } else {
+                errorMessage = "Couldn't load session: \(error.localizedDescription)"
+            }
         }
         isInitialLoading = false
     }
@@ -1116,6 +1228,9 @@ final class SessionViewModel: ObservableObject {
                 clockSkewMs: clockSkewMs,
                 pubsubSeq: change.pubsub_seq
             )
+            if let seq = change.pubsub_seq {
+                lastPubsubSeq = seq
+            }
             if let transcriptPreview = change.transcript_preview?.sessionTranscriptPreview {
                 applyRealtimeTranscriptPreview(transcriptPreview, sessionId: sessionId)
             }
@@ -1306,19 +1421,66 @@ final class SessionViewModel: ObservableObject {
         items = TimelineBuilder.build(events: snapshot.events)
         isInitialLoading = false
         errorMessage = nil
+        refreshErrorMessage = nil
         openWaterfall?.mark("cache_applied", "events=\(snapshot.events.count) items=\(items.count)")
     }
 
+    private func applyDiskSnapshot(_ snapshot: TranscriptSnapshotStore.Snapshot) {
+        detail = snapshot.detail
+        lastWorkspaceEvents = snapshot.events
+        loadedProjectionItemCount = snapshot.loadedProjectionItemCount
+        totalProjectionItemCount = snapshot.totalProjectionItemCount
+        tailSnapshotEventId = snapshot.tailSnapshotEventId
+        lastPubsubSeq = snapshot.lastPubsubSeq
+        prefetchedOlderTail = nil
+        prefetchedOlderOffset = nil
+        items = TimelineBuilder.build(events: snapshot.events)
+        isInitialLoading = false
+        errorMessage = nil
+        refreshErrorMessage = nil
+        openWaterfall?.mark("disk_applied", "events=\(snapshot.events.count) items=\(items.count)")
+    }
+
+    /// Background reconcile that never erases on-screen content. A failure
+    /// surfaces as a thin banner (`refreshErrorMessage`); success clears it.
+    private func refreshInBackground(api: SessionWorkspaceClient, sessionId: String) async {
+        do {
+            try await refreshTail(api: api, sessionId: sessionId)
+            guard activeSessionId == sessionId else { return }
+            refreshErrorMessage = nil
+        } catch LonghouseAPIError.notAuthenticated {
+            guard activeSessionId == sessionId else { return }
+            refreshErrorMessage = "Session expired. Pull to refresh."
+        } catch {
+            guard activeSessionId == sessionId else { return }
+            refreshErrorMessage = "Couldn't refresh. Showing saved messages."
+        }
+        if activeSessionId == sessionId, let api = apiFactory(activeServerURL ?? "") {
+            scheduleOlderPrefetch(api: api, sessionId: sessionId)
+        }
+    }
+
     private func saveCurrentCache() {
-        guard let transcriptCache, let activeServerURL, let activeSessionId, let detail else { return }
-        transcriptCache.store(
+        guard let activeServerURL, let activeSessionId, let detail else { return }
+        let storedDetail = detail.withoutTranscriptPreview
+        transcriptCache?.store(
             serverURL: activeServerURL,
             sessionId: activeSessionId,
-            detail: detail.withoutTranscriptPreview,
+            detail: storedDetail,
             events: lastWorkspaceEvents,
             loadedProjectionItemCount: loadedProjectionItemCount,
             totalProjectionItemCount: totalProjectionItemCount,
             tailSnapshotEventId: tailSnapshotEventId
+        )
+        snapshotStore?.save(
+            serverURL: activeServerURL,
+            sessionId: activeSessionId,
+            detail: storedDetail,
+            events: lastWorkspaceEvents,
+            loadedProjectionItemCount: loadedProjectionItemCount,
+            totalProjectionItemCount: totalProjectionItemCount,
+            tailSnapshotEventId: tailSnapshotEventId,
+            lastPubsubSeq: lastPubsubSeq
         )
     }
 
