@@ -34,13 +34,38 @@ final class RuntimeChromeStyleTests: XCTestCase {
         XCTAssertEqual(RuntimeChromeStyle(runtimeTone: "closed", capabilityTone: "neutral").dot, .dormant)
     }
 
-    func testStalledIsDormant() {
-        XCTAssertEqual(RuntimeChromeStyle(runtimeTone: "stalled", capabilityTone: "neutral").dot, .dormant)
+    // active = process-observed alive → live (was wrongly falling to dormant).
+    func testActiveIsLive() {
+        XCTAssertEqual(RuntimeChromeStyle(runtimeTone: "active", capabilityTone: "neutral").dot, .live)
+    }
+
+    // stalled is a degraded state — must stay loud (attention), not silent grey.
+    func testStalledIsAttention() {
+        XCTAssertEqual(RuntimeChromeStyle(runtimeTone: "stalled", capabilityTone: "neutral").dot, .attention)
+    }
+
+    // inactive = quiet/not-observed → idle, not dormant/offline.
+    func testInactiveIsIdle() {
+        XCTAssertEqual(RuntimeChromeStyle(runtimeTone: "inactive", capabilityTone: "neutral").dot, .idle)
     }
 
     func testUnknownToneIsDormant() {
         XCTAssertEqual(RuntimeChromeStyle(runtimeTone: "wat", capabilityTone: "neutral").dot, .dormant)
         XCTAssertEqual(RuntimeChromeStyle(runtimeTone: "", capabilityTone: "neutral").dot, .dormant)
+    }
+
+    // Every tone the server Tone enum can emit must map explicitly (not dormant
+    // by accident). Mirrors session_runtime_display.py Tone.
+    func testAllServerTonesMapExplicitly() {
+        let expected: [String: RuntimeSignal] = [
+            "running": .live, "thinking": .live, "active": .live,
+            "blocked": .attention, "stalled": .attention,
+            "idle": .idle, "inactive": .idle,
+            "closed": .dormant,
+        ]
+        for (tone, signal) in expected {
+            XCTAssertEqual(RuntimeChromeStyle(runtimeTone: tone, capabilityTone: "neutral").dot, signal, tone)
+        }
     }
 
     // MARK: Capability — success shows a live dot, warning stays loud
