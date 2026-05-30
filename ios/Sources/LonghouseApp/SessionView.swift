@@ -639,9 +639,12 @@ struct SessionRuntimeDock: View {
         .accessibilityLabel(accessibilityLabel)
     }
 
+    private var style: RuntimeChromeStyle { RuntimeChromeStyle(detail: detail) }
+
     // State dot — color is the signal; motion (breathing ring) marks "live".
     @ViewBuilder
     private var indicator: some View {
+        let toneColor = style.dot.color
         ZStack {
             if detail.isSessionExecuting && !reduceMotion {
                 Circle().stroke(toneColor.opacity(0.35), lineWidth: 1.5)
@@ -655,41 +658,24 @@ struct SessionRuntimeDock: View {
     // Capability as monochrome text with a small live-dot — never colored words.
     private var capabilityPill: some View {
         HStack(spacing: 4) {
-            if detail.runtimeCapabilityTone == "success" {
+            if style.capability.showsLiveDot {
                 Circle().fill(Color.green).frame(width: 5, height: 5)
             }
             Text(capabilityLabel)
                 .font(.caption2.weight(.medium))
                 .lineLimit(1)
         }
-        .foregroundStyle(capabilityColor)
+        .foregroundStyle(style.capability.color)
     }
 
     private var capabilityLabel: String {
         detail.runtimeCapabilityLabel
     }
 
-    // Degraded capability stays loud (orange); otherwise monochrome secondary.
-    private var capabilityColor: Color {
-        switch detail.runtimeCapabilityTone {
-        case "warning": return .orange
-        default: return .secondary
-        }
-    }
-
     private var accessibilityLabel: String {
         [detail.runtimeHeadline, detail.runtimeDetail, capabilityLabel]
             .compactMap { $0 }
             .joined(separator: ", ")
-    }
-
-    private var toneColor: Color {
-        switch detail.runtimeTone {
-        case "running", "thinking": return .green
-        case "blocked": return .orange
-        case "idle": return Color(.systemGray2)
-        default: return Color(.systemGray)
-        }
     }
 }
 

@@ -706,6 +706,15 @@ private extension SessionInputAuthoredVia {
     }
 }
 
+#if DEBUG
+extension WebTranscriptView {
+    /// Test-only accessor for the static transcript document, so the CSS
+    /// contract (no chat bubbles, monochrome tokens, demoted tool rows) can be
+    /// asserted without a WebView.
+    static var documentHTMLForTesting: String { documentHTML }
+}
+#endif
+
 private extension WebTranscriptView {
     static let documentHTML = #"""
 <!doctype html>
