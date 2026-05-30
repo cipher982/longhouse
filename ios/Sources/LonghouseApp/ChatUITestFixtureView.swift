@@ -268,9 +268,21 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
     init(fixture: ChatUITestFixture, sessionID: String = "ui-test-chat-session") {
         self.sessionID = sessionID
         var seedEvents: [SessionEvent] = []
-        if let replayPath = fixture.replayPath,
-           let replayEvents = Self.loadReplayEvents(path: replayPath) {
-            seedEvents = replayEvents
+        if let replayPath = fixture.replayPath {
+            // A replay run must exercise the actual exported transcript. If the
+            // file is missing/unreadable/malformed, surface it loudly rather
+            // than silently falling back to synthetic data (which would let a
+            // replay QA run pass without the replay).
+            if let replayEvents = Self.loadReplayEvents(path: replayPath) {
+                seedEvents = replayEvents
+            } else {
+                seedEvents = [Self.makeEvent(
+                    id: 1,
+                    role: "assistant",
+                    content: "⚠️ Replay fixture failed to load from \(replayPath). Check LONGHOUSE_UI_TEST_CHAT_REPLAY_PATH and the export schema.",
+                    timestamp: Self.fixedTimestamp(offset: 0)
+                )]
+            }
         } else if fixture.name == "tools" {
             seedEvents = Self.toolFixtureEvents()
         } else {

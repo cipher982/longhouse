@@ -34,8 +34,16 @@ final class TranscriptPayloadGoldenTests: XCTestCase {
         // Regenerate when the golden is missing (first run / intentional reset
         // via `rm` then re-run) — env vars don't reliably reach the xcodebuild
         // test runner here, so absence is the trigger. A present golden always
-        // asserts.
-        guard FileManager.default.fileExists(atPath: goldenURL.path) else {
+        // asserts. Under CI, a MISSING golden is a hard failure (never silently
+        // bootstrap+skip), so a committed-golden gap or a broken #filePath
+        // resolution can't pass as a skip.
+        if !FileManager.default.fileExists(atPath: goldenURL.path) {
+            let env = ProcessInfo.processInfo.environment
+            let isCI = env["CI"] != nil || env["GITHUB_ACTIONS"] != nil
+            if isCI {
+                XCTFail("Golden missing under CI at \(goldenURL.path) — it must be committed; not bootstrapping.")
+                return
+            }
             try (actual + "\n").write(to: goldenURL, atomically: true, encoding: .utf8)
             throw XCTSkip("Bootstrapped golden at \(goldenURL.path) — review the diff and re-run; it will assert from now on.")
         }
