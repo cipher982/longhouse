@@ -77,12 +77,19 @@ struct SessionView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 bottomChrome
                     .background(
+                        // Measure the card height PLUS the bottom safe-area gap
+                        // beneath it (home indicator): the WebView is full-bleed
+                        // to the physical bottom, so DOM clearance must cover the
+                        // card and everything below it. safeAreaInsets.bottom read
+                        // here is the gap from the inset content to the screen edge.
                         GeometryReader { proxy in
-                            Color.clear.preference(key: ChromeHeightKey.self, value: proxy.size.height)
+                            Color.clear.preference(
+                                key: ChromeHeightKey.self,
+                                value: proxy.size.height + proxy.safeAreaInsets.bottom
+                            )
                         }
                     )
                     .frame(maxWidth: .infinity)
-                    .background(.clear)
             }
             .onPreferenceChange(ChromeHeightKey.self) { height in
                 chromeHeight = max(18, height)
@@ -685,7 +692,7 @@ struct SessionRuntimeDock: View {
     private var capabilityPill: some View {
         HStack(spacing: 4) {
             if style.capability.showsLiveDot {
-                Circle().fill(Color.green).frame(width: 5, height: 5)
+                Circle().fill(TranscriptPalette.live).frame(width: 5, height: 5)
             }
             Text(capabilityLabel)
                 .font(.caption2.weight(.medium))
