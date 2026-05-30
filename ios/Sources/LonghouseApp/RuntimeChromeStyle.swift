@@ -49,10 +49,16 @@ struct RuntimeChromeStyle: Equatable {
     let capability: CapabilitySignal
 
     init(runtimeTone: String, capabilityTone: String) {
+        // Maps the full server Tone vocabulary (session_runtime_display.py):
+        // stalled / blocked / running / thinking / idle / active / inactive /
+        // closed. `active` = process-observed alive (live); `blocked`/`stalled`
+        // are degraded and must stay loud (attention); `inactive` is quiet.
+        // Unknown tones fall to dormant.
         switch runtimeTone {
-        case "running", "thinking": dot = .live
-        case "blocked": dot = .attention
-        case "idle": dot = .idle
+        case "running", "thinking", "active": dot = .live
+        case "blocked", "stalled": dot = .attention
+        case "idle", "inactive": dot = .idle
+        case "closed": dot = .dormant
         default: dot = .dormant
         }
         switch capabilityTone {
