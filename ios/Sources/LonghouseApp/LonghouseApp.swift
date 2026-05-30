@@ -1,6 +1,7 @@
 import GoogleSignIn
 import OSLog
 import SwiftUI
+import UIKit
 import WidgetKit
 
 @main
@@ -14,6 +15,7 @@ struct LonghouseApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(appState)
+                .applyUITestAppearanceOverride()
                 .onOpenURL { url in
                     if !handleLonghouseURL(url) {
                         GIDSignIn.sharedInstance.handle(url)
@@ -63,6 +65,62 @@ struct LonghouseApp: App {
         return true
     }
 }
+
+private extension View {
+    @ViewBuilder
+    func applyUITestAppearanceOverride() -> some View {
+#if DEBUG
+        modifier(UITestAppearanceOverrideModifier())
+#else
+        self
+#endif
+    }
+}
+
+#if DEBUG
+private struct UITestAppearanceOverrideModifier: ViewModifier {
+    private var colorScheme: ColorScheme? {
+        switch UITestHooks.appearanceOverride {
+        case "light":
+            return .light
+        case "dark":
+            return .dark
+        default:
+            return nil
+        }
+    }
+
+    private var interfaceStyle: UIUserInterfaceStyle? {
+        switch UITestHooks.appearanceOverride {
+        case "light":
+            return .light
+        case "dark":
+            return .dark
+        default:
+            return nil
+        }
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .preferredColorScheme(colorScheme)
+            .onAppear {
+                applyInterfaceStyleOverride()
+            }
+    }
+
+    @MainActor
+    private func applyInterfaceStyleOverride() {
+        guard let interfaceStyle else { return }
+        for scene in UIApplication.shared.connectedScenes {
+            guard let windowScene = scene as? UIWindowScene else { continue }
+            for window in windowScene.windows {
+                window.overrideUserInterfaceStyle = interfaceStyle
+            }
+        }
+    }
+}
+#endif
 
 @MainActor
 final class AppState: ObservableObject {

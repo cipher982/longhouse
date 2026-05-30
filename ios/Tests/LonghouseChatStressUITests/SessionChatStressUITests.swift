@@ -11,6 +11,10 @@ final class SessionChatStressUITests: XCTestCase {
         static let replayPath = "LONGHOUSE_UI_TEST_CHAT_REPLAY_PATH"
     }
 
+    private enum LaunchArgument {
+        static let appearanceOverride = "-LONGHOUSE_UI_TEST_APPEARANCE"
+    }
+
     override func setUpWithError() throws {
         continueAfterFailure = false
     }
@@ -61,7 +65,7 @@ final class SessionChatStressUITests: XCTestCase {
         app.launchEnvironment[LaunchEnvironment.diagnostics] = "1"
         app.launchEnvironment[LaunchEnvironment.probePath] = probeURL.path
         app.launchEnvironment[LaunchEnvironment.triggerPath] = triggerURL.path
-        app.launchArguments += ["-AppleInterfaceStyle", "Light"]
+        app.launchArguments += [LaunchArgument.appearanceOverride, "light"]
         app.launch()
 
         addTeardownBlock { [weak self] in

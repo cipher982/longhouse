@@ -9,6 +9,15 @@ final class SessionChatUITests: XCTestCase {
         static let chatEventCount = "LONGHOUSE_UI_TEST_CHAT_EVENT_COUNT"
     }
 
+    private enum LaunchArgument {
+        static let appearanceOverride = "-LONGHOUSE_UI_TEST_APPEARANCE"
+    }
+
+    private enum Appearance: String {
+        case light
+        case dark
+    }
+
     override func setUpWithError() throws {
         continueAfterFailure = false
     }
@@ -22,7 +31,7 @@ final class SessionChatUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment[LaunchEnvironment.chatFixture] = "tools"
         app.launchEnvironment[LaunchEnvironment.chatEventCount] = "9"
-        app.launchArguments += ["-AppleInterfaceStyle", "Light"]
+        app.launchArguments += [LaunchArgument.appearanceOverride, Appearance.light.rawValue]
         app.launch()
 
         XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: 8))
@@ -31,6 +40,24 @@ final class SessionChatUITests: XCTestCase {
         XCTAssertTrue(
             app.staticTexts["The MR was renamed by Oleg at 18:42, then moved back to In Review."]
                 .waitForExistence(timeout: 6)
+        )
+    }
+
+    func testCaptureToolsTranscriptLightScreenshot() throws {
+        try captureSessionScreenshot(
+            fixtureName: "tools",
+            eventCount: 9,
+            appearance: .light,
+            outputName: "session-light.png"
+        )
+    }
+
+    func testCaptureToolsTranscriptDarkScreenshot() throws {
+        try captureSessionScreenshot(
+            fixtureName: "tools",
+            eventCount: 9,
+            appearance: .dark,
+            outputName: "session-dark.png"
         )
     }
 
@@ -110,11 +137,15 @@ final class SessionChatUITests: XCTestCase {
         }
     }
 
-    private func launchChatFixture(name: String = "basic", eventCount: Int) -> XCUIApplication {
+    private func launchChatFixture(
+        name: String = "basic",
+        eventCount: Int,
+        appearance: Appearance = .light
+    ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment[LaunchEnvironment.chatFixture] = name
         app.launchEnvironment[LaunchEnvironment.chatEventCount] = String(eventCount)
-        app.launchArguments += ["-AppleInterfaceStyle", "Light"]
+        app.launchArguments += [LaunchArgument.appearanceOverride, appearance.rawValue]
         app.launch()
         addTeardownBlock { [weak self] in
             guard let self, (self.testRun?.failureCount ?? 0) > 0 else { return }
@@ -124,6 +155,74 @@ final class SessionChatUITests: XCTestCase {
             self.add(attachment)
         }
         return app
+    }
+
+    private func captureSessionScreenshot(
+        fixtureName: String,
+        eventCount: Int,
+        appearance: Appearance,
+        outputName: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let app = launchChatFixture(name: fixtureName, eventCount: eventCount, appearance: appearance)
+
+        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: 8), file: file, line: line)
+        XCTAssertTrue(
+            app.staticTexts["The MR was renamed by Oleg at 18:42, then moved back to In Review."]
+                .waitForExistence(timeout: 6),
+            file: file,
+            line: line
+        )
+
+        let screenshot = try waitForScreenshotMatchingAppearance(app, appearance: appearance, timeout: 6)
+        let directory = URL(fileURLWithPath: "/tmp/lh-shots", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try screenshot.pngRepresentation.write(to: directory.appendingPathComponent(outputName), options: .atomic)
+    }
+
+    private func waitForScreenshotMatchingAppearance(
+        _ app: XCUIApplication,
+        appearance: Appearance,
+        timeout: TimeInterval,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws -> XCUIScreenshot {
+        let deadline = Date().addingTimeInterval(timeout)
+        var lastScreenshot = app.screenshot()
+        var lastMeanLuminance = meanLuminance(of: lastScreenshot)
+
+        while Date() < deadline {
+            if let meanLuminance = lastMeanLuminance,
+               screenshot(meanLuminance: meanLuminance, matches: appearance) {
+                return lastScreenshot
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+            lastScreenshot = app.screenshot()
+            lastMeanLuminance = meanLuminance(of: lastScreenshot)
+        }
+
+        let lastMeanDescription: String
+        if let lastMeanLuminance {
+            lastMeanDescription = String(format: "%.3f", lastMeanLuminance)
+        } else {
+            lastMeanDescription = "unreadable"
+        }
+        XCTFail(
+            "Timed out waiting for \(appearance.rawValue) screenshot luminance; last mean=\(lastMeanDescription)",
+            file: file,
+            line: line
+        )
+        return lastScreenshot
+    }
+
+    private func screenshot(meanLuminance: Double, matches appearance: Appearance) -> Bool {
+        switch appearance {
+        case .light:
+            return meanLuminance > 0.55
+        case .dark:
+            return meanLuminance < 0.35
+        }
     }
 
     private func transcriptElement(_ app: XCUIApplication) -> XCUIElement {
@@ -194,5 +293,40 @@ final class SessionChatUITests: XCTestCase {
         let litPixelFraction = Double(visiblyLitPixels) / Double(sampleCount)
         XCTAssertGreaterThan(meanLuminance, 0.03, "Screen rendered close to black", file: file, line: line)
         XCTAssertGreaterThan(litPixelFraction, 0.02, "Screen did not contain enough visible pixels", file: file, line: line)
+    }
+
+    private func meanLuminance(of screenshot: XCUIScreenshot) -> Double? {
+        guard let source = CGImageSourceCreateWithData(screenshot.pngRepresentation as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            return nil
+        }
+
+        let width = 32
+        let height = 64
+        let bytesPerPixel = 4
+        var pixels = [UInt8](repeating: 0, count: width * height * bytesPerPixel)
+        guard let context = CGContext(
+            data: &pixels,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * bytesPerPixel,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return nil
+        }
+
+        context.interpolationQuality = .low
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+
+        var luminanceTotal = 0.0
+        for offset in stride(from: 0, to: pixels.count, by: bytesPerPixel) {
+            let red = Double(pixels[offset]) / 255.0
+            let green = Double(pixels[offset + 1]) / 255.0
+            let blue = Double(pixels[offset + 2]) / 255.0
+            luminanceTotal += 0.2126 * red + 0.7152 * green + 0.0722 * blue
+        }
+        return luminanceTotal / Double(width * height)
     }
 }

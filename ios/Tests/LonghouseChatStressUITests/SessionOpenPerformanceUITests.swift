@@ -10,6 +10,10 @@ final class SessionOpenPerformanceUITests: XCTestCase {
         static let mobileTailDelayMs = "LONGHOUSE_UI_TEST_MOBILE_TAIL_DELAY_MS"
     }
 
+    private enum LaunchArgument {
+        static let appearanceOverride = "-LONGHOUSE_UI_TEST_APPEARANCE"
+    }
+
     override func setUpWithError() throws {
         continueAfterFailure = false
     }
@@ -28,7 +32,7 @@ final class SessionOpenPerformanceUITests: XCTestCase {
         if let delayMs = ProcessInfo.processInfo.environment[LaunchEnvironment.mobileTailDelayMs] {
             app.launchEnvironment[LaunchEnvironment.mobileTailDelayMs] = delayMs
         }
-        app.launchArguments += ["-AppleInterfaceStyle", "Light"]
+        app.launchArguments += [LaunchArgument.appearanceOverride, "light"]
         app.launch()
 
         addTeardownBlock { [weak self] in

@@ -10,6 +10,7 @@ enum UITestHooks {
     static let chatFixtureReplayPathEnvironmentKey = "LONGHOUSE_UI_TEST_CHAT_REPLAY_PATH"
     static let timelineOpenFixtureEnvironmentKey = "LONGHOUSE_UI_TEST_TIMELINE_OPEN_FIXTURE"
     static let mobileTailDelayMsEnvironmentKey = "LONGHOUSE_UI_TEST_MOBILE_TAIL_DELAY_MS"
+    static let appearanceOverrideArgument = "-LONGHOUSE_UI_TEST_APPEARANCE"
 
     static var shouldResetState: Bool {
         ProcessInfo.processInfo.environment[resetStateEnvironmentKey] == "1"
@@ -59,5 +60,33 @@ enum UITestHooks {
             return nil
         }
         return Int(raw)
+    }
+
+    static var appearanceOverride: String? {
+        guard let raw = launchArgumentValue(for: appearanceOverrideArgument)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased() else {
+            return nil
+        }
+        switch raw {
+        case "light", "dark":
+            return raw
+        default:
+            return nil
+        }
+    }
+
+    private static func launchArgumentValue(for name: String) -> String? {
+        let arguments = ProcessInfo.processInfo.arguments
+        for index in arguments.indices {
+            let argument = arguments[index]
+            if argument == name, arguments.indices.contains(index + 1) {
+                return arguments[index + 1]
+            }
+            if argument.hasPrefix("\(name)=") {
+                return String(argument.dropFirst(name.count + 1))
+            }
+        }
+        return nil
     }
 }
