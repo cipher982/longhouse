@@ -594,6 +594,7 @@ def _start_bridge(
     workspace.mkdir(parents=True, exist_ok=True)
     log_file = evidence_root / f"bridge-{launch_mode}-{session_id}.log"
 
+    create_initial_thread = launch_mode == "detached_ui"
     command = [
         engine,
         "codex-bridge",
@@ -610,7 +611,6 @@ def _start_bridge(
         str(isolation_root),
         "--log-file",
         str(log_file),
-        "--create-initial-thread",
         "--auto-approve",
         "--approval-policy",
         "never",
@@ -620,6 +620,8 @@ def _start_bridge(
         str(args.bridge_start_timeout_secs),
         "--json",
     ]
+    if create_initial_thread:
+        command.append("--create-initial-thread")
     if launch_mode == "detached_ui":
         command.extend(["--launch-mode", "detached-ui"])
     if args.model:
@@ -702,13 +704,12 @@ def run_managed_tui_attach(args: argparse.Namespace, evidence_root: Path, codex_
             launch_mode="tui",
         )
         session_id = str(summary.get("session_id") or "")
-        thread_id = str(summary.get("thread_id") or "")
         ws_url = str(summary.get("ws_url") or "")
         state_file = Path(str(summary.get("state_file") or ""))
-        if not thread_id or not ws_url or not state_file.exists():
+        if not ws_url or not state_file.exists():
             return _fail(
                 "managed_tui_attach_incomplete_start",
-                "managed bridge start did not return ws_url, thread_id, and state_file",
+                "managed bridge start did not return ws_url and state_file",
                 evidence_root=str(root),
                 summary=summary,
                 start=_command_evidence(start_result),
@@ -749,9 +750,19 @@ def run_managed_tui_attach(args: argparse.Namespace, evidence_root: Path, codex_
                 evidence_root=str(root),
                 recording=str(recording),
             )
+        attached_state = _read_json(state_file)
+        attached_thread_id = str(attached_state.get("thread_id") or "").strip()
+        if not attached_thread_id:
+            return _fail(
+                "managed_tui_attach_missing_thread",
+                "managed TUI attach did not materialize a Codex thread",
+                evidence_root=str(root),
+                recording=str(recording),
+                state=attached_state,
+            )
         return _status(
             "pass",
-            thread_id=thread_id,
+            thread_id=attached_thread_id,
             ws_url=ws_url,
             state_file=str(state_file),
             recording=str(recording),

@@ -66,9 +66,6 @@ def arg_value(name, default=None):
     return args[index + 1]
 
 if args[:2] == ["codex-bridge", "start"]:
-    if "--create-initial-thread" not in args:
-        print("missing --create-initial-thread", file=sys.stderr)
-        raise SystemExit(2)
     if "--auto-approve" not in args:
         print("missing --auto-approve", file=sys.stderr)
         raise SystemExit(2)
@@ -78,12 +75,19 @@ if args[:2] == ["codex-bridge", "start"]:
     state_root.mkdir(parents=True, exist_ok=True)
     state_file = state_root / f"{session_id}.json"
     state_file.with_suffix(".sock").write_text("fake socket", encoding="utf-8")
-    thread_id = "thread_fake"
     ws_url = "ws://127.0.0.1:65535/fake"
     launch_mode = "detached_ui" if arg_value("--launch-mode") == "detached-ui" else "tui"
+    create_initial_thread = "--create-initial-thread" in args
     if "detached-ui" in str(isolation_root) and launch_mode != "detached_ui":
         print("detached bridge missing --launch-mode detached-ui", file=sys.stderr)
         raise SystemExit(2)
+    if launch_mode == "tui" and create_initial_thread:
+        print("tui bridge must not precreate the provider thread", file=sys.stderr)
+        raise SystemExit(2)
+    if launch_mode == "detached_ui" and not create_initial_thread:
+        print("detached-ui bridge missing --create-initial-thread", file=sys.stderr)
+        raise SystemExit(2)
+    thread_id = "thread_fake" if launch_mode == "detached_ui" else None
     state = {
         "schema_version": 1,
         "session_id": session_id,
@@ -102,13 +106,17 @@ if args[:2] == ["codex-bridge", "start"]:
         "updated_at": "2026-05-26T00:00:00Z",
     }
     state_file.write_text(json.dumps(state), encoding="utf-8")
+    if launch_mode == "tui":
+        pointer = os.environ.get("FAKE_TUI_STATE_POINTER")
+        if pointer:
+            Path(pointer).write_text(str(state_file), encoding="utf-8")
     print(json.dumps({
         "session_id": session_id,
         "state_file": str(state_file),
         "log_file": arg_value("--log-file"),
         "pid": os.getpid(),
         "ws_url": ws_url,
-        "thread_id": thread_id,
+        "thread_id": thread_id or "",
         "thread_path": state["thread_path"],
     }))
     raise SystemExit(0)
@@ -205,6 +213,7 @@ def _fake_script(path: Path) -> Path:
     return _write_exe(
         path,
         r"""#!/usr/bin/env python3
+import json
 import os
 import subprocess
 import sys
@@ -219,6 +228,15 @@ recording = Path(args[1])
 command = args[2:]
 recording.write_text(os.environ.get("FAKE_SCRIPT_RECORDING_TEXT", "remote attached\n"), encoding="utf-8")
 result = subprocess.run(command, text=True, capture_output=True, check=False)
+pointer = os.environ.get("FAKE_TUI_STATE_POINTER")
+if pointer and os.environ.get("FAKE_SCRIPT_MATERIALIZE_THREAD", "1") != "0":
+    state_file = Path(pointer).read_text(encoding="utf-8").strip()
+    if state_file:
+        state_path = Path(state_file)
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["thread_id"] = "thread_fake"
+        state["thread_subscription_status"] = "subscribed"
+        state_path.write_text(json.dumps(state), encoding="utf-8")
 with recording.open("a", encoding="utf-8") as handle:
     handle.write(result.stdout)
     handle.write(result.stderr)
@@ -259,6 +277,7 @@ def _fixture(root: Path) -> dict[str, Path]:
         "cargo": _fake_cargo(bin_dir / "cargo"),
         "calls": root / "engine-calls.jsonl",
         "codex_args": root / "codex-args.json",
+        "tui_state_pointer": root / "tui-state-file.txt",
     }
 
 
@@ -274,6 +293,7 @@ def _run_canary(
     env.pop("LONGHOUSE_CODEX_BIN", None)
     env["FAKE_ENGINE_CALLS"] = str(fixture["calls"])
     env["FAKE_CODEX_ARGS_LOG"] = str(fixture["codex_args"])
+    env["FAKE_TUI_STATE_POINTER"] = str(fixture["tui_state_pointer"])
     if extra_env:
         env.update(extra_env)
     result = subprocess.run(
@@ -393,6 +413,23 @@ def test_managed_tui_attach_active_thread_error_is_red() -> None:
         assert payload["operation_evidence"]["reattach"]["status"] == "fail"
 
 
+def test_managed_tui_attach_requires_thread_after_attach() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fixture = _fixture(root)
+        result, payload = _run_canary(
+            root,
+            fixture,
+            ["--run-managed-tui-attach", "--source-review-status", "pass"],
+            {"FAKE_SCRIPT_MATERIALIZE_THREAD": "0"},
+        )
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "managed_tui_attach_missing_thread"
+        assert payload["operation_evidence"]["launch_local"]["status"] == "fail"
+        assert payload["operation_evidence"]["reattach"]["status"] == "fail"
+
+
 def test_forbidden_longhouse_codex_path_is_red() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -476,6 +513,7 @@ def main() -> int:
         test_full_fake_canary_can_go_green,
         test_raw_fresh_remote_warning_is_yellow,
         test_managed_tui_attach_active_thread_error_is_red,
+        test_managed_tui_attach_requires_thread_after_attach,
         test_forbidden_longhouse_codex_path_is_red,
         test_codex_launch_local_failure_evidence_is_not_overwritten_by_later_canary,
         test_longhouse_codex_bin_env_requires_explicit_override,
