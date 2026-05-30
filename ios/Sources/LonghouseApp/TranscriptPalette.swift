@@ -19,13 +19,10 @@ enum TranscriptPalette {
     static let attentionHexLight = "#d68000"
     static let attentionHexDark = "#ff9f0a"
 
-    /// Live — running node / human-message hairline. Web-side green rgba parts.
-    static let liveRGBLight = "52, 199, 89"
-    static let liveRGBDark = "48, 209, 88"
-
     /// Native counterparts of the two signals, so SwiftUI chrome and the web
     /// transcript render the same colors. System orange/green match the hexes
-    /// above closely and adapt to light/dark automatically.
+    /// above closely and adapt to light/dark automatically. (live is the
+    /// running state dot; attention is a dropped/failed result.)
     static let attention = Color.orange
     static let live = Color.green
 
@@ -47,7 +44,6 @@ enum TranscriptPalette {
               --tertiary: rgba(60, 60, 67, 0.38);
               --user: rgba(120, 120, 128, 0.16);
               --user-pending: rgba(120, 120, 128, 0.10);
-              --user-hairline: rgba(\(liveRGBLight), 0.30);
               --rule: rgba(60, 60, 67, 0.16);
               --code: rgba(118, 118, 128, 0.12);
               --attention: \(attentionHexLight);
@@ -62,7 +58,6 @@ enum TranscriptPalette {
                 --tertiary: rgba(235, 235, 245, 0.34);
                 --user: rgba(120, 120, 128, 0.24);
                 --user-pending: rgba(120, 120, 128, 0.16);
-                --user-hairline: rgba(\(liveRGBDark), 0.35);
                 --rule: rgba(235, 235, 245, 0.18);
                 --code: rgba(118, 118, 128, 0.24);
                 --attention: \(attentionHexDark);

@@ -114,10 +114,6 @@ private struct NativeHumanMessage: View {
                 .padding(.horizontal, 14)
                 .padding(.vertical, 10)
                 .background(Color(.secondarySystemFill), in: RoundedRectangle(cornerRadius: 19, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 19, style: .continuous)
-                        .strokeBorder(TranscriptPalette.live.opacity(0.30), lineWidth: 1)
-                )
         }
         .listRowSeparator(.hidden)
         .listRowInsets(EdgeInsets(top: 8, leading: 18, bottom: 8, trailing: 18))

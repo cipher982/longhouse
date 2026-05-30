@@ -35,7 +35,16 @@ final class TranscriptStyleContractTests: XCTestCase {
     func testNeutralAndSignalTokensPresent() {
         XCTAssertTrue(css.contains("--rule:"), "Neutral rule token should drive separators")
         XCTAssertTrue(css.contains("--attention:"), "Attention signal token should exist for dropped results")
-        XCTAssertTrue(css.contains("--user-hairline:"), "Human-message capsule hairline token should exist")
+    }
+
+    // The human-message capsule must NOT borrow the live-signal (green) color —
+    // right-alignment + neutral fill is the "this is you" signal, not an outline.
+    func testHumanMessageHasNoGreenSignalOutline() {
+        XCTAssertFalse(css.contains("--user-hairline"), "Green hairline token must be removed")
+        guard let block = css.range(of: #"\.bubble \{[^}]*\}"#, options: .regularExpression).map({ String(css[$0]) }) else {
+            return XCTFail(".bubble rule not found")
+        }
+        XCTAssertFalse(block.contains("box-shadow"), "Human capsule must not carry a signal-color outline")
     }
 
     // MARK: Assistant prose is a plain document — no card background
@@ -90,18 +99,12 @@ final class TranscriptStyleContractTests: XCTestCase {
         XCTAssertTrue(css.contains("--attention: \(TranscriptPalette.attentionHexDark)"))
     }
 
-    func testLiveHairlineComesFromPalette() {
-        XCTAssertTrue(css.contains("rgba(\(TranscriptPalette.liveRGBLight)"))
-        XCTAssertTrue(css.contains("rgba(\(TranscriptPalette.liveRGBDark)"))
-    }
-
-    // MARK: The human-message capsule still exists (preserved, just neutral)
+    // MARK: The human-message capsule still exists (preserved, neutral fill)
 
     func testHumanMessageCapsulePreserved() {
         guard let block = css.range(of: #"\.bubble \{[^}]*\}"#, options: .regularExpression).map({ String(css[$0]) }) else {
             return XCTFail(".bubble rule not found")
         }
         XCTAssertTrue(block.contains("var(--user)"), "Human message keeps a neutral capsule fill")
-        XCTAssertTrue(block.contains("var(--user-hairline)"), "Human message keeps its quiet hairline")
     }
 }
