@@ -21,8 +21,8 @@ enum RuntimeSignal: Equatable {
 
     var color: Color {
         switch self {
-        case .live: return .green
-        case .attention: return .orange
+        case .live: return TranscriptPalette.live
+        case .attention: return TranscriptPalette.attention
         case .idle: return Color(.systemGray2)
         case .dormant: return Color(.systemGray)
         }
@@ -36,7 +36,7 @@ enum CapabilitySignal: Equatable {
 
     var color: Color {
         switch self {
-        case .warning: return .orange
+        case .warning: return TranscriptPalette.attention
         default: return .secondary
         }
     }
