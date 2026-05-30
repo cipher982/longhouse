@@ -1,0 +1,87 @@
+[
+  {
+    "body" : "Investigate the failing job and report what Oleg changed.",
+    "calls" : [
+
+    ],
+    "collapsed" : false,
+    "id" : "user:1",
+    "kind" : "message",
+    "role" : "user"
+  },
+  {
+    "body" : "Now I can see what Oleg did. Two blockers appeared: **PAASSE-22459** and **PAASSE-22460**. Here is a `code` span and a [link](https:\/\/example.com).",
+    "calls" : [
+
+    ],
+    "collapsed" : false,
+    "id" : "prose:2",
+    "kind" : "message",
+    "role" : "assistant"
+  },
+  {
+    "calls" : [
+
+    ],
+    "collapsed" : false,
+    "duration" : "1.0s",
+    "id" : "tool:3",
+    "input" : "{\n  \"issueKey\" : \"PAASSE-22459\"\n}",
+    "kind" : "tool",
+    "output" : "PAASSE-22459: blocked on MR rename by Oleg at 18:42.",
+    "status" : "done",
+    "subtitle" : "",
+    "title" : "getJiraIssue"
+  },
+  {
+    "calls" : [
+
+    ],
+    "collapsed" : false,
+    "duration" : "1.0s",
+    "id" : "tool:5",
+    "input" : "{\n  \"command\" : \"git log --oneline\"\n}",
+    "kind" : "tool",
+    "output" : "line 01 of changelog parsing output\nline 02 of changelog parsing output\nline 03 of changelog parsing output\nline 04 of changelog parsing output\nline 05 of changelog parsing output\nline 06 of changelog parsing output\nline 07 of changelog parsing output\nline 08 of changelog parsing output\nline 09 of changelog parsing output\nline 10 of changelog parsing output",
+    "status" : "done",
+    "subtitle" : "git log --oneline",
+    "title" : "Bash"
+  },
+  {
+    "calls" : [
+      {
+        "input" : "{\n  \"pattern\" : \"\\\/repo\\\/a.txt\"\n}",
+        "output" : "contents of a.txt",
+        "status" : "done",
+        "subtitle" : "\/repo\/a.txt",
+        "title" : "Grep"
+      },
+      {
+        "input" : "{\n  \"pattern\" : \"\\\/repo\\\/b.txt\"\n}",
+        "output" : "contents of b.txt",
+        "status" : "done",
+        "subtitle" : "\/repo\/b.txt",
+        "title" : "Grep"
+      }
+    ],
+    "collapsed" : false,
+    "id" : "passive:7",
+    "kind" : "passiveGroup",
+    "subtitle" : "Grep × 2",
+    "title" : "Explored"
+  },
+  {
+    "calls" : [
+
+    ],
+    "collapsed" : false,
+    "duration" : "0ms",
+    "id" : "orphan:11",
+    "input" : "",
+    "kind" : "tool",
+    "output" : "orphan result with no matching call",
+    "status" : "orphan",
+    "subtitle" : "",
+    "title" : "getJiraIssue"
+  }
+]

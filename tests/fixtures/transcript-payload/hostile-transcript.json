@@ -1,0 +1,222 @@
+{
+  "name": "hostile-transcript",
+  "description": "Hostile-case input for the preparedPayload golden: markdown prose, a paired tool with input+output, a large output (truncation), a passive group, an orphan result, a running tool, and a dropped tool. Golden output lives alongside as hostile-transcript.golden.json.",
+  "projection": {
+    "root_session_id": "fixture-hostile",
+    "focus_session_id": "fixture-hostile",
+    "head_session_id": "fixture-hostile",
+    "path_session_ids": [
+      "fixture-hostile"
+    ],
+    "total": 11,
+    "page_offset": 0,
+    "branch_mode": "head",
+    "abandoned_events": 0,
+    "items": [
+      {
+        "kind": "event",
+        "session_id": "fixture-hostile",
+        "timestamp": "2026-05-30T18:00:00Z",
+        "event": {
+          "id": 1,
+          "role": "user",
+          "content_text": "Investigate the failing job and report what Oleg changed.",
+          "tool_name": null,
+          "tool_input_json": null,
+          "tool_output_text": null,
+          "tool_call_id": null,
+          "timestamp": "2026-05-30T18:00:00Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-hostile",
+        "timestamp": "2026-05-30T18:00:01Z",
+        "event": {
+          "id": 2,
+          "role": "assistant",
+          "content_text": "Now I can see what Oleg did. Two blockers appeared: **PAASSE-22459** and **PAASSE-22460**. Here is a `code` span and a [link](https://example.com).",
+          "tool_name": null,
+          "tool_input_json": null,
+          "tool_output_text": null,
+          "tool_call_id": null,
+          "timestamp": "2026-05-30T18:00:01Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-hostile",
+        "timestamp": "2026-05-30T18:00:02Z",
+        "event": {
+          "id": 3,
+          "role": "assistant",
+          "content_text": null,
+          "tool_name": "getJiraIssue",
+          "tool_input_json": {
+            "issueKey": "PAASSE-22459"
+          },
+          "tool_output_text": null,
+          "tool_call_id": "call-jira-1",
+          "tool_call_state": "completed",
+          "timestamp": "2026-05-30T18:00:02Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-hostile",
+        "timestamp": "2026-05-30T18:00:03Z",
+        "event": {
+          "id": 4,
+          "role": "tool",
+          "content_text": null,
+          "tool_name": "getJiraIssue",
+          "tool_input_json": null,
+          "tool_output_text": "PAASSE-22459: blocked on MR rename by Oleg at 18:42.",
+          "tool_call_id": "call-jira-1",
+          "tool_call_state": "completed",
+          "timestamp": "2026-05-30T18:00:03Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-hostile",
+        "timestamp": "2026-05-30T18:00:04Z",
+        "event": {
+          "id": 5,
+          "role": "assistant",
+          "content_text": null,
+          "tool_name": "Bash",
+          "tool_input_json": {
+            "command": "git log --oneline"
+          },
+          "tool_output_text": null,
+          "tool_call_id": "call-bash-1",
+          "tool_call_state": "completed",
+          "timestamp": "2026-05-30T18:00:04Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-hostile",
+        "timestamp": "2026-05-30T18:00:05Z",
+        "event": {
+          "id": 6,
+          "role": "tool",
+          "content_text": null,
+          "tool_name": "Bash",
+          "tool_input_json": null,
+          "tool_output_text": "line 01 of changelog parsing output\nline 02 of changelog parsing output\nline 03 of changelog parsing output\nline 04 of changelog parsing output\nline 05 of changelog parsing output\nline 06 of changelog parsing output\nline 07 of changelog parsing output\nline 08 of changelog parsing output\nline 09 of changelog parsing output\nline 10 of changelog parsing output",
+          "tool_call_id": "call-bash-1",
+          "tool_call_state": "completed",
+          "timestamp": "2026-05-30T18:00:05Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-hostile",
+        "timestamp": "2026-05-30T18:00:06Z",
+        "event": {
+          "id": 7,
+          "role": "assistant",
+          "content_text": null,
+          "tool_name": "Grep",
+          "tool_input_json": {
+            "pattern": "/repo/a.txt"
+          },
+          "tool_output_text": null,
+          "tool_call_id": "call-read-1",
+          "tool_call_state": "completed",
+          "timestamp": "2026-05-30T18:00:06Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-hostile",
+        "timestamp": "2026-05-30T18:00:07Z",
+        "event": {
+          "id": 8,
+          "role": "tool",
+          "content_text": null,
+          "tool_name": "Grep",
+          "tool_input_json": null,
+          "tool_output_text": "contents of a.txt",
+          "tool_call_id": "call-read-1",
+          "tool_call_state": "completed",
+          "timestamp": "2026-05-30T18:00:07Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-hostile",
+        "timestamp": "2026-05-30T18:00:08Z",
+        "event": {
+          "id": 9,
+          "role": "assistant",
+          "content_text": null,
+          "tool_name": "Grep",
+          "tool_input_json": {
+            "pattern": "/repo/b.txt"
+          },
+          "tool_output_text": null,
+          "tool_call_id": "call-read-2",
+          "tool_call_state": "completed",
+          "timestamp": "2026-05-30T18:00:08Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-hostile",
+        "timestamp": "2026-05-30T18:00:09Z",
+        "event": {
+          "id": 10,
+          "role": "tool",
+          "content_text": null,
+          "tool_name": "Grep",
+          "tool_input_json": null,
+          "tool_output_text": "contents of b.txt",
+          "tool_call_id": "call-read-2",
+          "tool_call_state": "completed",
+          "timestamp": "2026-05-30T18:00:09Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      },
+      {
+        "kind": "event",
+        "session_id": "fixture-hostile",
+        "timestamp": "2026-05-30T18:00:10Z",
+        "event": {
+          "id": 11,
+          "role": "tool",
+          "content_text": null,
+          "tool_name": "getJiraIssue",
+          "tool_input_json": null,
+          "tool_output_text": "orphan result with no matching call",
+          "tool_call_id": "call-never-made",
+          "tool_call_state": "dropped",
+          "timestamp": "2026-05-30T18:00:10Z",
+          "in_active_context": true,
+          "is_head_branch": true
+        }
+      }
+    ]
+  }
+}
