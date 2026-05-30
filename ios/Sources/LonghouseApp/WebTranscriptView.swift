@@ -8,6 +8,10 @@ struct WebTranscriptView: UIViewRepresentable {
     let items: [TimelineItem]
     let submittedInputs: [SubmittedInput]
     let errorMessage: String?
+    /// Height (pt) of the floating native control surface below the transcript.
+    /// Drives `#root` bottom padding so the last row clears the card. Defaults
+    /// to the original 18px hardcoded inset.
+    let bottomInset: CGFloat
     let onNearTop: (() -> Void)?
     let onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
     let onLifecycle: ((String) -> Void)?
@@ -16,6 +20,7 @@ struct WebTranscriptView: UIViewRepresentable {
         items: [TimelineItem],
         submittedInputs: [SubmittedInput],
         errorMessage: String?,
+        bottomInset: CGFloat = 18,
         onNearTop: (() -> Void)? = nil,
         onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)? = nil,
         onLifecycle: ((String) -> Void)? = nil
@@ -23,6 +28,7 @@ struct WebTranscriptView: UIViewRepresentable {
         self.items = items
         self.submittedInputs = submittedInputs
         self.errorMessage = errorMessage
+        self.bottomInset = bottomInset
         self.onNearTop = onNearTop
         self.onDiagnostics = onDiagnostics
         self.onLifecycle = onLifecycle
@@ -58,6 +64,7 @@ struct WebTranscriptView: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
+        context.coordinator.updateBottomInset(bottomInset, on: webView)
         context.coordinator.send(
             preparedPayload(),
             to: webView,
@@ -328,17 +335,35 @@ struct WebTranscriptView: UIViewRepresentable {
         private var onDiagnostics: ((RenderBeaconReporter.WebKitDiagnostics) -> Void)?
         private var onLifecycle: ((String) -> Void)?
         private var lastNearTopRequestAt = Date.distantPast
+        /// Last bottom inset (pt) pushed to JS; re-applied on load and only
+        /// re-sent when it changes by ≥0.5pt to avoid churn during streaming.
+        private var lastBottomInset: CGFloat = 18
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             isLoaded = true
             Task { @MainActor in
                 self.onLifecycle?("webview_html_loaded")
             }
+            // A pooled/reused webview is already loaded when the inset was first
+            // set; a fresh one needs the inset applied now that JS exists.
+            applyBottomInset(lastBottomInset, on: webView)
             flushPendingPayload(
                 to: webView,
                 diagnosticsEnabled: diagnosticsEnabled,
                 onDiagnostics: onDiagnostics
             )
+        }
+
+        func updateBottomInset(_ inset: CGFloat, on webView: WKWebView) {
+            guard abs(inset - lastBottomInset) >= 0.5 else { return }
+            lastBottomInset = inset
+            guard isLoaded else { return }   // applied in didFinish otherwise
+            applyBottomInset(inset, on: webView)
+        }
+
+        private func applyBottomInset(_ inset: CGFloat, on webView: WKWebView) {
+            let px = Int(inset.rounded())
+            webView.evaluateJavaScript("window.setBottomInset && window.setBottomInset(\(px));")
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -691,16 +716,21 @@ private extension WebTranscriptView {
   <style>
     :root {
       color-scheme: light dark;
+      /* Monochrome-first: color is signal, not decoration. The transcript is
+         the content layer — system neutrals only. Green appears only as the
+         live node; orange only as attention (a dropped result). Assistant prose
+         has NO container; the human message is the one quiet tinted capsule
+         because it's a rare, injected control action. */
       --page: #f2f2f7;
       --text: #111114;
       --secondary: rgba(60, 60, 67, 0.68);
       --tertiary: rgba(60, 60, 67, 0.38);
-      --assistant: rgba(255, 255, 255, 0.86);
-      --tool: rgba(120, 82, 180, 0.08);
-      --tool-border: rgba(120, 82, 180, 0.16);
-      --user: rgba(0, 122, 255, 0.15);
-      --user-pending: rgba(0, 122, 255, 0.10);
+      --user: rgba(120, 120, 128, 0.16);
+      --user-pending: rgba(120, 120, 128, 0.10);
+      --user-hairline: rgba(52, 199, 89, 0.30);
+      --rule: rgba(60, 60, 67, 0.16);
       --code: rgba(118, 118, 128, 0.12);
+      --attention: #d68000;
       --link: #006edb;
     }
 
@@ -710,12 +740,12 @@ private extension WebTranscriptView {
         --text: #f5f5f7;
         --secondary: rgba(235, 235, 245, 0.62);
         --tertiary: rgba(235, 235, 245, 0.34);
-        --assistant: rgba(28, 28, 30, 0.92);
-        --tool: rgba(167, 139, 250, 0.13);
-        --tool-border: rgba(167, 139, 250, 0.24);
-        --user: rgba(10, 132, 255, 0.28);
-        --user-pending: rgba(10, 132, 255, 0.18);
+        --user: rgba(120, 120, 128, 0.24);
+        --user-pending: rgba(120, 120, 128, 0.16);
+        --user-hairline: rgba(48, 209, 88, 0.35);
+        --rule: rgba(235, 235, 245, 0.18);
         --code: rgba(118, 118, 128, 0.24);
+        --attention: #ff9f0a;
         --link: #65a7ff;
       }
     }
@@ -741,7 +771,10 @@ private extension WebTranscriptView {
 
     #root {
       min-height: 100vh;
-      padding: 12px 16px 18px;
+      /* Bottom padding is driven from native via window.setBottomInset so the
+         last transcript row clears the floating control surface. Defaults to
+         the original 18px until Swift reports the measured chrome height. */
+      padding: 12px 16px var(--native-bottom-inset, 18px);
     }
 
     .empty, .error {
@@ -771,28 +804,31 @@ private extension WebTranscriptView {
     .message.user {
       display: flex;
       justify-content: flex-end;
-      padding-left: 40px;
+      padding-left: 48px;
     }
 
+    /* Assistant prose: a plain document paragraph, no card, generous leading. */
     .message.assistant {
       display: block;
-      padding: 10px;
-      border-radius: 10px;
-      background: var(--assistant);
+      padding: 0;
+      background: transparent;
     }
 
+    /* The human message is the one tinted element — rare, so it earns weight by
+       being small: a neutral capsule with a quiet green hairline. */
     .bubble {
       display: inline-block;
       max-width: 100%;
-      padding: 10px;
-      border-radius: 12px;
+      padding: 9px 13px;
+      border-radius: 17px;
       background: var(--user);
+      box-shadow: inset 0 0 0 1px var(--user-hairline);
       white-space: pre-wrap;
     }
 
     .submitted .bubble {
       background: var(--user-pending);
-      box-shadow: inset 0 0 0 1px rgba(0, 122, 255, 0.20);
+      box-shadow: inset 0 0 0 1px var(--rule);
     }
 
     .submitted-status {
@@ -816,7 +852,7 @@ private extension WebTranscriptView {
     }
 
     .message-content {
-      line-height: 1.36;
+      line-height: 1.45;
     }
 
     p {
@@ -889,19 +925,24 @@ private extension WebTranscriptView {
       padding: 8px 0 0;
     }
 
+    /* Tool rows demoted to footnotes: no box, no purple. A faint left rule
+       groups them under the turn; they read as quiet metadata, not cards.
+       Still fully expandable (preserve, never erase). */
     details.tool, details.passive {
-      border-radius: 8px;
-      background: var(--tool);
-      box-shadow: inset 0 0 0 1px var(--tool-border);
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+      margin-left: 2px;
+      border-left: 1.5px solid var(--rule);
       overflow: hidden;
     }
 
     summary {
-      min-height: 36px;
+      min-height: 28px;
       display: flex;
       gap: 8px;
       align-items: center;
-      padding: 8px 10px;
+      padding: 4px 10px;
       list-style: none;
     }
 
@@ -910,16 +951,17 @@ private extension WebTranscriptView {
     }
 
     .tool-title {
-      font-size: 12px;
-      font-weight: 700;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--secondary);
       white-space: nowrap;
     }
 
     .tool-subtitle {
       min-width: 0;
       flex: 1;
-      color: var(--secondary);
-      font: 12px ui-monospace, "SF Mono", Menlo, monospace;
+      color: var(--tertiary);
+      font: 13px ui-monospace, "SF Mono", Menlo, monospace;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -929,19 +971,23 @@ private extension WebTranscriptView {
       color: var(--tertiary);
       font-size: 11px;
       white-space: nowrap;
+      font-variant-numeric: tabular-nums;
     }
 
     .tool-meta.running {
       color: var(--secondary);
     }
 
+    /* A dropped/missing result is the one loud tool signal — attention color. */
     .tool-meta.dropped {
-      font-style: italic;
+      color: var(--attention);
+      font-style: normal;
     }
 
     .details-body {
-      border-top: 1px solid var(--tool-border);
-      padding: 9px 10px 10px;
+      border-top: 1px solid var(--rule);
+      margin: 4px 10px 0;
+      padding: 8px 0 8px;
     }
 
     .section-label {
@@ -959,7 +1005,7 @@ private extension WebTranscriptView {
 
     .passive-call {
       padding: 8px 0;
-      border-top: 1px solid var(--tool-border);
+      border-top: 1px solid var(--rule);
     }
 
     .passive-call:first-child {
@@ -968,13 +1014,14 @@ private extension WebTranscriptView {
     }
 
     .passive-call-title {
-      font-size: 12px;
-      font-weight: 700;
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--secondary);
     }
 
     .passive-call-subtitle {
-      color: var(--secondary);
-      font: 12px ui-monospace, "SF Mono", Menlo, monospace;
+      color: var(--tertiary);
+      font: 13px ui-monospace, "SF Mono", Menlo, monospace;
       margin-top: 2px;
     }
   </style>
@@ -1084,6 +1131,19 @@ private extension WebTranscriptView {
       const doc = document.documentElement;
       return window.innerHeight + window.scrollY >= doc.scrollHeight - 96;
     }
+
+    // Native reports the floating control-surface height so #root padding keeps
+    // the last row clear of it. Re-pin to bottom if the user was already there,
+    // so growing the inset (attachments, turn-ended, keyboard) never hides the
+    // newest content behind the card.
+    window.setBottomInset = function(px) {
+      const wasAtBottom = isAtBottom();
+      const clamped = Math.max(0, Math.min(2000, Number(px) || 0));
+      document.documentElement.style.setProperty('--native-bottom-inset', clamped + 'px');
+      if (wasAtBottom) {
+        requestAnimationFrame(scrollToBottom);
+      }
+    };
 
     function scrollToBottom() {
       window.scrollTo(0, document.documentElement.scrollHeight);
