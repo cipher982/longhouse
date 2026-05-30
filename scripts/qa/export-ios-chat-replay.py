@@ -76,6 +76,19 @@ def load_session(conn: sqlite3.Connection, session_id: str) -> sqlite3.Row:
     return row
 
 
+def _parse_tool_input(raw: Any) -> Any:
+    """tool_input_json is stored as a JSON string; embed it as a real object so
+    the iOS replay loader can decode it into [String: JSONValue]. Returns None on
+    missing/invalid JSON rather than smuggling a string through."""
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 def export_events(conn: sqlite3.Connection, session_id: str, limit: int) -> list[dict[str, Any]]:
     limit_clause = "" if limit <= 0 else "LIMIT ?"
     params: tuple[Any, ...] = (session_id,) if limit <= 0 else (session_id, limit)
@@ -86,6 +99,7 @@ def export_events(conn: sqlite3.Connection, session_id: str, limit: int) -> list
             role,
             content_text,
             tool_name,
+            tool_input_json,
             tool_output_text,
             tool_call_id,
             timestamp
@@ -96,12 +110,16 @@ def export_events(conn: sqlite3.Connection, session_id: str, limit: int) -> list
         """,
         params,
     ).fetchall()
+    # NOTE: tool_call_state (running/completed/dropped) is NOT stored on events —
+    # the server derives it at projection time from pairing. So replay can't
+    # reproduce running/dropped states; synthetic fixtures cover those instead.
     return [
         {
             "id": int(row["id"]),
             "role": row["role"],
             "contentText": row["content_text"],
             "toolName": row["tool_name"],
+            "toolInputJson": _parse_tool_input(row["tool_input_json"]),
             "toolOutputText": row["tool_output_text"],
             "toolCallId": row["tool_call_id"],
             "timestamp": row["timestamp"],
