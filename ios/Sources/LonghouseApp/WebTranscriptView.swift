@@ -716,48 +716,21 @@ extension WebTranscriptView {
 #endif
 
 private extension WebTranscriptView {
-    static let documentHTML = #"""
+    /// Assembled document: the palette's CSS variable block (single source of
+    /// truth, TranscriptPalette.swift) spliced into the static template at the
+    /// `__LH_ROOT_BLOCK__` marker. Ends the Swift/CSS color double-definition.
+    static var documentHTML: String {
+        documentTemplate.replacingOccurrences(of: "/* __LH_ROOT_BLOCK__ */", with: TranscriptPalette.cssRootBlock)
+    }
+
+    static let documentTemplate = #"""
 <!doctype html>
 <html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <style>
-    :root {
-      color-scheme: light dark;
-      /* Monochrome-first: color is signal, not decoration. The transcript is
-         the content layer — system neutrals only. Green appears only as the
-         live node; orange only as attention (a dropped result). Assistant prose
-         has NO container; the human message is the one quiet tinted capsule
-         because it's a rare, injected control action. */
-      --page: #f2f2f7;
-      --text: #111114;
-      --secondary: rgba(60, 60, 67, 0.68);
-      --tertiary: rgba(60, 60, 67, 0.38);
-      --user: rgba(120, 120, 128, 0.16);
-      --user-pending: rgba(120, 120, 128, 0.10);
-      --user-hairline: rgba(52, 199, 89, 0.30);
-      --rule: rgba(60, 60, 67, 0.16);
-      --code: rgba(118, 118, 128, 0.12);
-      --attention: #d68000;
-      --link: #006edb;
-    }
-
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --page: #000000;
-        --text: #f5f5f7;
-        --secondary: rgba(235, 235, 245, 0.62);
-        --tertiary: rgba(235, 235, 245, 0.34);
-        --user: rgba(120, 120, 128, 0.24);
-        --user-pending: rgba(120, 120, 128, 0.16);
-        --user-hairline: rgba(48, 209, 88, 0.35);
-        --rule: rgba(235, 235, 245, 0.18);
-        --code: rgba(118, 118, 128, 0.24);
-        --attention: #ff9f0a;
-        --link: #65a7ff;
-      }
-    }
+    /* __LH_ROOT_BLOCK__ */
 
     * {
       box-sizing: border-box;

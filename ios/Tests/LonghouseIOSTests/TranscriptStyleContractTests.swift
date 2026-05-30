@@ -76,6 +76,25 @@ final class TranscriptStyleContractTests: XCTestCase {
         XCTAssertTrue(css.contains("window.setBottomInset"), "JS bottom-inset setter must exist for the floating card")
     }
 
+    // MARK: Shared design tokens — the palette is the single source of truth
+
+    func testPaletteBlockIsSplicedNotLeftAsMarker() {
+        XCTAssertFalse(css.contains("__LH_ROOT_BLOCK__"), "Palette marker must be replaced, not shipped raw")
+        XCTAssertTrue(css.contains(":root {"), "Assembled doc must contain the :root block")
+    }
+
+    func testAttentionColorComesFromPalette() {
+        // The CSS attention var must match the Swift palette's declared hexes,
+        // proving the Swift/CSS double-definition is actually unified.
+        XCTAssertTrue(css.contains("--attention: \(TranscriptPalette.attentionHexLight)"))
+        XCTAssertTrue(css.contains("--attention: \(TranscriptPalette.attentionHexDark)"))
+    }
+
+    func testLiveHairlineComesFromPalette() {
+        XCTAssertTrue(css.contains("rgba(\(TranscriptPalette.liveRGBLight)"))
+        XCTAssertTrue(css.contains("rgba(\(TranscriptPalette.liveRGBDark)"))
+    }
+
     // MARK: The human-message capsule still exists (preserved, just neutral)
 
     func testHumanMessageCapsulePreserved() {
