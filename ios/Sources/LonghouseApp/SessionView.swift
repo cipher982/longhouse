@@ -31,6 +31,10 @@ struct SessionView: View {
     @StateObject private var attachmentStore = ComposerAttachmentStore()
     @State private var pickerSelection: [PhotosPickerItem] = []
     @State private var isLoadingPickerItems: Bool = false
+    /// Measured height (pt) of the floating control card. Fed to the WebKit
+    /// transcript (plus the bottom safe area) as DOM clearance so the last row
+    /// clears the card while the transcript scrolls full-bleed underneath it.
+    @State private var chromeHeight: CGFloat = 18
 
     init(
         sessionId: String,
@@ -62,14 +66,26 @@ struct SessionView: View {
     }
 
     var body: some View {
-        // Commit 2: the control card is translucent and floats (inset from the
-        // bezel via its own padding). The safe-area inset RESERVES its height,
-        // so the transcript sits above the card with a clean gap — matching the
-        // approved mock — and there is no DOM-clearance double-gap to manage.
-        // The WebTranscriptView bottom-inset API stays dormant (legacy 18px).
+        // Scroll-under-glass: the transcript runs full-bleed to the bottom edge
+        // and the translucent control card floats ON TOP via a safe-area inset.
+        // The card's measured height (+ the bottom safe area) is the single DOM
+        // bottom-clearance fed to the WebView, so the last row clears the card
+        // while content scrolls visibly underneath it. setBottomInset re-pins to
+        // bottom when the height changes (attachments, turn-ended, keyboard).
         transcript
+            .ignoresSafeArea(.container, edges: .bottom)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 bottomChrome
+                    .background(
+                        GeometryReader { proxy in
+                            Color.clear.preference(key: ChromeHeightKey.self, value: proxy.size.height)
+                        }
+                    )
+                    .frame(maxWidth: .infinity)
+                    .background(.clear)
+            }
+            .onPreferenceChange(ChromeHeightKey.self) { height in
+                chromeHeight = max(18, height)
             }
             .navigationTitle(viewModel.detail?.displayTitle ?? fallbackTitle)
         .navigationBarTitleDisplayMode(.inline)
@@ -217,6 +233,7 @@ struct SessionView: View {
                 items: viewModel.items,
                 submittedInputs: viewModel.submittedInputs,
                 errorMessage: viewModel.errorMessage,
+                bottomInset: chromeHeight,
                 onNearTop: {
                     Task { await viewModel.loadOlder(sessionId: sessionId, appState: appState) }
                 },
@@ -590,6 +607,15 @@ struct SessionView: View {
         guard let draft = await viewModel.draftReply(sessionId: sessionId, appState: appState) else { return }
         composerText = draft
         composerFocused = true
+    }
+}
+
+/// Carries the measured floating-card height up to SessionView so it can be fed
+/// to the WebKit transcript as DOM bottom clearance (scroll-under-glass).
+private struct ChromeHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 18
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
