@@ -69,13 +69,18 @@ final class TranscriptStyleContractTests: XCTestCase {
         XCTAssertFalse(block.contains("var(--tool)"), "Tool rows must not use the old purple tint")
     }
 
-    // MARK: Dropped result is loud (attention color), not just italic
+    // MARK: Dropped AND orphan results are loud (attention color)
 
-    func testDroppedToolResultUsesAttentionColor() {
-        guard let block = css.range(of: #"\.tool-meta\.dropped \{[^}]*\}"#, options: .regularExpression).map({ String(css[$0]) }) else {
+    func testDroppedAndOrphanToolResultsUseAttentionColor() {
+        // Both dropped and orphan share one attention rule — "result missing".
+        guard let block = css.range(
+            of: #"\.tool-meta\.dropped[^{]*\{[^}]*\}"#,
+            options: .regularExpression
+        ).map({ String(css[$0]) }) else {
             return XCTFail(".tool-meta.dropped rule not found")
         }
-        XCTAssertTrue(block.contains("var(--attention)"), "Dropped result must be flagged in attention color")
+        XCTAssertTrue(block.contains("var(--attention)"), "Dropped/orphan must be flagged in attention color")
+        XCTAssertTrue(css.contains(".tool-meta.orphan"), "Orphan results must share the attention treatment, not render grey")
     }
 
     // MARK: Bottom-inset hook for the floating control surface is wired

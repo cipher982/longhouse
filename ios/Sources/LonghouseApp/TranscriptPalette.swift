@@ -8,8 +8,9 @@ import SwiftUI
 /// are declared once.
 ///
 /// Discipline: the transcript is the content layer — neutrals only. The two
-/// signals are `attention` (a dropped/failed result — orange) and `live` (the
-/// running node / human-message hairline — green). Everything else is grey.
+/// signals are `attention` (a dropped/orphaned/failed result — orange) and
+/// `live` (the running state dot / capability live-dot — green). Everything
+/// else is grey.
 enum TranscriptPalette {
 
     // MARK: Cross-boundary signal colors (also used by native chrome)

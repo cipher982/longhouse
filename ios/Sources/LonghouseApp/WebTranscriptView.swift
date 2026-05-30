@@ -45,6 +45,12 @@ struct WebTranscriptView: UIViewRepresentable {
         webView.scrollView.delegate = context.coordinator
         webView.scrollView.keyboardDismissMode = .interactive
         webView.scrollView.alwaysBounceVertical = true
+        // Bottom clearance has exactly ONE owner: the `--native-bottom-inset`
+        // DOM padding (fed the floating card height + bottom safe area). Disable
+        // the scroll view's automatic safe-area inset so it can't double-count
+        // or fight the DOM padding — the SwiftUI side takes the WebView
+        // full-bleed via .ignoresSafeArea(.container, .bottom).
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.isOpaque = false
         webView.backgroundColor = .clear
         webView.scrollView.backgroundColor = .clear
@@ -959,8 +965,11 @@ private extension WebTranscriptView {
       color: var(--secondary);
     }
 
-    /* A dropped/missing result is the one loud tool signal — attention color. */
-    .tool-meta.dropped {
+    /* A dropped or orphaned result is the loud tool signal — attention color.
+       Both mean "the result is missing/unexpected", the trust case we never
+       want to silently hide. */
+    .tool-meta.dropped,
+    .tool-meta.orphan {
       color: var(--attention);
       font-style: normal;
     }
@@ -1134,7 +1143,9 @@ private extension WebTranscriptView {
     }
 
     function toolDetails(item) {
-      const meta = item.status === 'running' ? 'running' : (item.status === 'dropped' ? 'dropped' : '');
+      const meta = item.status === 'running' ? 'running'
+        : (item.status === 'dropped' ? 'dropped'
+        : (item.status === 'orphan' ? 'orphan' : ''));
       const status = item.duration || item.status || '';
       const input = item.input ? '<div class="section-label">Input</div><pre><code>' + escapeHtml(item.input) + '</code></pre>' : '';
       let output = '';
