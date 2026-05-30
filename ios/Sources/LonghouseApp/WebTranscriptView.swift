@@ -796,15 +796,14 @@ private extension WebTranscriptView {
       background: transparent;
     }
 
-    /* The human message is the one tinted element — rare, so it earns weight by
-       being small: a neutral capsule with a quiet green hairline. */
+    /* The human message: a quiet neutral capsule. Right-alignment + fill is the
+       "this is you" signal — no outline needed, and no borrowed signal color. */
     .bubble {
       display: inline-block;
       max-width: 100%;
       padding: 9px 13px;
       border-radius: 17px;
       background: var(--user);
-      box-shadow: inset 0 0 0 1px var(--user-hairline);
       white-space: pre-wrap;
     }
 
