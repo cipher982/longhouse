@@ -271,6 +271,8 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         if let replayPath = fixture.replayPath,
            let replayEvents = Self.loadReplayEvents(path: replayPath) {
             seedEvents = replayEvents
+        } else if fixture.name == "tools" {
+            seedEvents = Self.toolFixtureEvents()
         } else {
             for index in 0..<fixture.eventCount {
                 let role = index.isMultiple(of: 2) ? "user" : "assistant"
@@ -620,6 +622,71 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             isHeadBranch: true,
             inputOrigin: inputOrigin
         )
+    }
+
+    /// A realistic mixed transcript that exercises the redesign's demoted
+    /// tool-row CSS + TimelineBuilder pairing: assistant prose, a paired
+    /// tool call+result, a passive group, and a dropped (orphaned) tool call.
+    private static func toolFixtureEvents() -> [SessionEvent] {
+        var events: [SessionEvent] = []
+        var id = 0
+        func next() -> Int { id += 1; return id }
+        func ts() -> String { fixedTimestamp(offset: id) }
+
+        events.append(SessionEvent(
+            id: next(), role: "user",
+            contentText: "Find who renamed the ticket after the meeting and retry the MR state.",
+            toolName: nil, toolInputJSON: nil, toolOutputText: nil, toolCallId: nil,
+            toolCallState: nil, timestamp: ts(), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+        ))
+        events.append(SessionEvent(
+            id: next(), role: "assistant",
+            contentText: "Now I can see exactly what Oleg did. Two new blocker tickets appeared: **PAASSE-22459** and **PAASSE-22460**. Let me pull those.",
+            toolName: nil, toolInputJSON: nil, toolOutputText: nil, toolCallId: nil,
+            toolCallState: nil, timestamp: ts(), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+        ))
+        // Paired tool call + result.
+        let callId = "call-jira-1"
+        events.append(SessionEvent(
+            id: next(), role: "assistant", contentText: nil,
+            toolName: "getJiraIssue", toolInputJSON: nil, toolOutputText: nil, toolCallId: callId,
+            toolCallState: .completed, timestamp: ts(), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+        ))
+        events.append(SessionEvent(
+            id: next(), role: "tool", contentText: nil,
+            toolName: "getJiraIssue", toolInputJSON: nil,
+            toolOutputText: "PAASSE-22459: blocked on MR rename by Oleg at 18:42.",
+            toolCallId: callId, toolCallState: .completed, timestamp: ts(),
+            inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+        ))
+        // A Bash call with a large-ish output (the "work is not noise" case).
+        let bashId = "call-bash-1"
+        events.append(SessionEvent(
+            id: next(), role: "assistant", contentText: nil,
+            toolName: "Bash", toolInputJSON: nil, toolOutputText: nil, toolCallId: bashId,
+            toolCallState: .completed, timestamp: ts(), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+        ))
+        events.append(SessionEvent(
+            id: next(), role: "tool", contentText: nil,
+            toolName: "Bash", toolInputJSON: nil,
+            toolOutputText: String(repeating: "git log line for changelog parsing\n", count: 12),
+            toolCallId: bashId, toolCallState: .completed, timestamp: ts(),
+            inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+        ))
+        // A dropped/orphaned tool call — no matching result (the trust case).
+        events.append(SessionEvent(
+            id: next(), role: "assistant", contentText: nil,
+            toolName: "mcp__atlassian__getJiraIssue", toolInputJSON: nil, toolOutputText: nil,
+            toolCallId: "call-dropped-1", toolCallState: .dropped, timestamp: ts(),
+            inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+        ))
+        events.append(SessionEvent(
+            id: next(), role: "assistant",
+            contentText: "The MR was renamed by Oleg at 18:42, then moved back to In Review.",
+            toolName: nil, toolInputJSON: nil, toolOutputText: nil, toolCallId: nil,
+            toolCallState: nil, timestamp: ts(), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+        ))
+        return events
     }
 
     private static func loadReplayEvents(path: String) -> [SessionEvent]? {

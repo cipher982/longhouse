@@ -13,6 +13,27 @@ final class SessionChatUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    // The tool-bearing transcript loads and renders (prose + interleaved tool
+    // rows) without crashing the WebView pipeline. The demoted-row STYLING and
+    // the dropped-result attention treatment are asserted separately and more
+    // reliably by TranscriptStyleContractTests (CSS) — WebView DOM text for
+    // <summary>/<span> nodes is not dependably exposed to XCUITest.
+    func testToolTranscriptRendersWithoutBreakingPipeline() {
+        let app = XCUIApplication()
+        app.launchEnvironment[LaunchEnvironment.chatFixture] = "tools"
+        app.launchEnvironment[LaunchEnvironment.chatEventCount] = "9"
+        app.launchArguments += ["-AppleInterfaceStyle", "Light"]
+        app.launch()
+
+        XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: 8))
+        // Assistant prose renders, confirming the tool-bearing fixture loaded
+        // and the timeline built through the tool/orphan-tool pairing path.
+        XCTAssertTrue(
+            app.staticTexts["The MR was renamed by Oleg at 18:42, then moved back to In Review."]
+                .waitForExistence(timeout: 6)
+        )
+    }
+
     func testTranscriptStartsPinnedToLatestMessage() {
         let app = launchChatFixture(eventCount: 120)
 
