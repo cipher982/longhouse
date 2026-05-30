@@ -700,10 +700,12 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                     role: event.role,
                     contentText: event.contentText,
                     toolName: event.toolName,
-                    toolInputJSON: nil,
+                    toolInputJSON: event.toolInputJson,
                     toolOutputText: event.toolOutputText,
                     toolCallId: event.toolCallId,
-                    toolCallState: nil,
+                    // Real exports can't carry tool_call_state (server-derived at
+                    // projection time); synthetic fixtures may set it explicitly.
+                    toolCallState: event.toolCallState.flatMap(ToolCallState.init(rawValue:)),
                     timestamp: event.timestamp,
                     inActiveContext: true,
                     isHeadBranch: true,
@@ -760,8 +762,10 @@ private struct ChatUITestReplayEvent: Decodable {
     let role: String
     let contentText: String?
     let toolName: String?
+    let toolInputJson: [String: JSONValue]?
     let toolOutputText: String?
     let toolCallId: String?
+    let toolCallState: String?
     let timestamp: String
 }
 #endif
