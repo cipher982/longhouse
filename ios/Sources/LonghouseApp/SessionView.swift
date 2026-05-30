@@ -62,13 +62,16 @@ struct SessionView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            transcript
-            liveActivityMessage
-            runtimeDock
-            composer
-        }
-        .navigationTitle(viewModel.detail?.displayTitle ?? fallbackTitle)
+        // Commit 2: the control card is translucent and floats (inset from the
+        // bezel via its own padding). The safe-area inset RESERVES its height,
+        // so the transcript sits above the card with a clean gap — matching the
+        // approved mock — and there is no DOM-clearance double-gap to manage.
+        // The WebTranscriptView bottom-inset API stays dormant (legacy 18px).
+        transcript
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                bottomChrome
+            }
+            .navigationTitle(viewModel.detail?.displayTitle ?? fallbackTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -99,6 +102,36 @@ struct SessionView: View {
             Task { await liveActivityManager.update(detail: detail) }
         }
         .refreshable { await viewModel.reload(sessionId: sessionId, appState: appState) }
+    }
+
+    // The fused floating control card: status line + composer (or the
+    // unavailable row) in one translucent rounded surface, inset from the
+    // bezel so the transcript scrolls under it. liveActivity (a Lock-Screen
+    // failure, NOT runtime status) rides above as its own quiet pill.
+    @ViewBuilder
+    private var bottomChrome: some View {
+        VStack(spacing: 8) {
+            liveActivityMessage
+            if viewModel.detail != nil {
+                VStack(alignment: .leading, spacing: 8) {
+                    runtimeDock
+                    composer
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                                .strokeBorder(.white.opacity(0.10), lineWidth: 0.75)
+                        )
+                )
+                .shadow(color: .black.opacity(0.28), radius: 16, y: 5)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 10)
     }
 
     @ViewBuilder
@@ -144,19 +177,25 @@ struct SessionView: View {
         }
     }
 
+    // Lock-Screen / Live Activity management failure — explicitly NOT session
+    // runtime status. A small attention pill above the control card.
     @ViewBuilder
     private var liveActivityMessage: some View {
         if let error = liveActivityManager.errorMessage {
-            HStack(spacing: 8) {
-                Image(systemName: "exclamationmark.triangle")
+            HStack(spacing: 6) {
+                Image(systemName: "bell.slash")
+                    .font(.caption2)
                 Text(error)
                     .font(.caption)
+                    .lineLimit(2)
                 Spacer(minLength: 0)
             }
             .foregroundStyle(.orange)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
-            .background(.bar)
+            .background(
+                Capsule(style: .continuous).fill(.ultraThinMaterial)
+            )
         }
     }
 
@@ -325,23 +364,32 @@ struct SessionView: View {
                 }
 
                 TextField(detail.composerPlaceholder, text: $composerText, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
                     .lineLimit(1...6)
                     .focused($composerFocused)
                     .disabled(viewModel.isDrafting)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .accessibilityIdentifier("session-chat-composer")
 
-                // Send button: always a circle arrow icon; long-press reveals steer/queue split
+                // Send button: monochrome circle (light fill + dark glyph when
+                // armed, ghost when empty). Long-press reveals steer/queue split.
                 Button {
                     Task { await send() }
                 } label: {
                     if viewModel.isSending {
                         ProgressView()
-                            .frame(width: 28, height: 28)
+                            .frame(width: 30, height: 30)
                     } else {
                         Image(systemName: sendIcon)
-                            .font(.title2)
-                            .foregroundStyle(composerHasContent ? Color.accentColor : Color.secondary.opacity(0.3))
+                            .font(.subheadline.weight(.bold))
+                            .foregroundStyle(composerHasContent ? Color(.systemBackground) : Color(.systemGray))
+                            .frame(width: 30, height: 30)
+                            .background(
+                                Circle().fill(composerHasContent
+                                    ? AnyShapeStyle(Color.primary)
+                                    : AnyShapeStyle(Color(.tertiarySystemFill)))
+                            )
                     }
                 }
                 .disabled(!composerHasContent || viewModel.isSending || viewModel.isDrafting || attachmentStore.isProcessing || isLoadingPickerItems || attachmentSendBlocked)
@@ -363,8 +411,6 @@ struct SessionView: View {
                 }
             }
         }
-        .padding(12)
-        .background(.bar)
         .onChange(of: pickerSelection) { _, items in
             guard !items.isEmpty else { return }
             Task {
@@ -443,24 +489,28 @@ struct SessionView: View {
         }
     }
 
+    // Degraded/observe-only/offline/ended: composer is replaced by an
+    // explanatory row. Copy comes straight from the capability model — no
+    // invented state strings (canSendLive remains the hard gate upstream).
     private func unavailableComposerFooter(detail: SessionDetail) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            Image(systemName: detail.isControlOffline ? "wifi.slash" : "magnifyingglass")
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: detail.isControlOffline ? "wifi.slash" : "eye")
+                .font(.body)
                 .foregroundStyle(detail.isControlOffline ? .orange : .secondary)
             VStack(alignment: .leading, spacing: 2) {
                 Text(detail.runtimeCapabilityLabel)
-                    .font(.caption.weight(.semibold))
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
                 if let message = detail.controlHealthMessage {
                     Text(message)
-                        .font(.caption2)
+                        .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
             Spacer(minLength: 0)
         }
-        .padding(12)
-        .background(.bar)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 4)
     }
 
     private var primaryIntent: String {
@@ -477,11 +527,11 @@ struct SessionView: View {
         return detail.isSessionExecuting && detail.canSteerActiveTurn && detail.canQueueNextInput
     }
 
+    // Bare glyphs — the surrounding circle is drawn by the send button itself.
     private var sendIcon: String {
         switch primaryIntent {
-        case "steer": return "arrow.up.circle.fill"
         case "queue": return "clock.arrow.circlepath"
-        default: return "arrow.up.circle.fill"
+        default: return "arrow.up"
         }
     }
 
@@ -549,26 +599,28 @@ struct SessionRuntimeDock: View {
     var isUpdatingLoopMode: Bool = false
     var onLoopModeChange: ((SessionLoopMode) -> Void)? = nil
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     var body: some View {
-        HStack(spacing: 10) {
+        // One quiet monochrome status line. The state dot is the only color;
+        // headline/detail/capability are a flat type hierarchy. No background or
+        // divider — the fused control card owns the surface.
+        HStack(spacing: 7) {
             indicator
-                .frame(width: 22, height: 22)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(detail.runtimeHeadline)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.primary)
+            Text(detail.runtimeHeadline)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+            if let runtimeDetail = detail.runtimeDetail, !typeSize.isAccessibilitySize {
+                Text("·").foregroundStyle(.tertiary)
+                Text(runtimeDetail)
+                    .font(.subheadline)
+                    .foregroundStyle(.tertiary)
                     .lineLimit(1)
-                if let runtimeDetail = detail.runtimeDetail {
-                    Text(runtimeDetail)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
             }
-
             Spacer(minLength: 8)
-
+            capabilityPill
             if let loopMode, let onChange = onLoopModeChange {
                 if isUpdatingLoopMode {
                     ProgressView().controlSize(.mini)
@@ -581,42 +633,45 @@ struct SessionRuntimeDock: View {
                     .accessibilityIdentifier("session-loop-mode-controls")
                 }
             }
-
-            Text(capabilityLabel)
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(capabilityColor)
-                .lineLimit(1)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.bar)
-        .overlay(alignment: .top) {
-            Divider()
-        }
-        .accessibilityElement(children: .combine)
+        .padding(.horizontal, 4)
+        .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityLabel)
     }
 
+    // State dot — color is the signal; motion (breathing ring) marks "live".
     @ViewBuilder
     private var indicator: some View {
-        if detail.isSessionExecuting {
-            ProgressView()
-                .controlSize(.small)
-                .tint(toneColor)
-        } else {
-            Image(systemName: iconName)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(toneColor)
+        ZStack {
+            if detail.isSessionExecuting && !reduceMotion {
+                Circle().stroke(toneColor.opacity(0.35), lineWidth: 1.5)
+                    .frame(width: 13, height: 13)
+            }
+            Circle().fill(toneColor).frame(width: 7, height: 7)
         }
+        .frame(width: 14, height: 14)
+    }
+
+    // Capability as monochrome text with a small live-dot — never colored words.
+    private var capabilityPill: some View {
+        HStack(spacing: 4) {
+            if detail.runtimeCapabilityTone == "success" {
+                Circle().fill(Color.green).frame(width: 5, height: 5)
+            }
+            Text(capabilityLabel)
+                .font(.caption2.weight(.medium))
+                .lineLimit(1)
+        }
+        .foregroundStyle(capabilityColor)
     }
 
     private var capabilityLabel: String {
         detail.runtimeCapabilityLabel
     }
 
+    // Degraded capability stays loud (orange); otherwise monochrome secondary.
     private var capabilityColor: Color {
         switch detail.runtimeCapabilityTone {
-        case "success": return .green
         case "warning": return .orange
         default: return .secondary
         }
@@ -628,20 +683,12 @@ struct SessionRuntimeDock: View {
             .joined(separator: ", ")
     }
 
-    private var iconName: String {
-        switch detail.runtimeTone {
-        case "blocked": return "lock.circle"
-        case "idle": return "checkmark.circle"
-        default: return "circle"
-        }
-    }
-
     private var toneColor: Color {
         switch detail.runtimeTone {
         case "running", "thinking": return .green
         case "blocked": return .orange
-        case "idle": return .gray
-        default: return .gray
+        case "idle": return Color(.systemGray2)
+        default: return Color(.systemGray)
         }
     }
 }
@@ -664,27 +711,29 @@ private struct LoopModeButtons: View {
                 Label("Off", systemImage: "pause.circle")
             }
         } label: {
-            HStack(spacing: 4) {
+            HStack(spacing: 3) {
                 Image(systemName: modeIcon)
                     .font(.caption2.weight(.semibold))
-                Text(modeLabel)
-                    .font(.caption.weight(.medium))
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.caption2.weight(.semibold))
+                if !typeSize.isAccessibilitySize {
+                    Text(modeLabel)
+                        .font(.caption2.weight(.medium))
+                }
             }
             .foregroundStyle(.secondary)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(Color(.tertiarySystemGroupedBackground), in: Capsule())
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color(.quaternarySystemFill), in: Capsule())
         }
         .disabled(disabled)
         .accessibilityLabel("Loop mode: \(modeLabel)")
     }
 
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     private var modeLabel: String {
         switch currentMode {
         case .assist: return "Assist"
-        case .autopilot: return "Autopilot"
+        case .autopilot: return "Auto"
         case .manual: return "Off"
         }
     }
@@ -692,8 +741,8 @@ private struct LoopModeButtons: View {
     private var modeIcon: String {
         switch currentMode {
         case .assist: return "wand.and.stars"
-        case .autopilot: return "bolt.circle"
-        case .manual: return "pause.circle"
+        case .autopilot: return "bolt"
+        case .manual: return "pause"
         }
     }
 }
