@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
+import threading
+import time
+from collections import deque
 
 from fastapi import HTTPException
 from fastapi import Request
@@ -15,6 +19,48 @@ from zerg.database import get_session_factory
 from zerg.models.device_token import DeviceToken
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Per-token sliding-window rate limit for agents write endpoints.
+#
+# The device/hook token authorizes a trusted machine, but a buggy or runaway
+# agent (or, if a token leaks, an attacker) can still flood the ingest/presence
+# write path. This is a cheap in-process backstop: a sliding window per
+# rate-key. Defaults are generous for healthy engines (which batch) and can be
+# tuned via env. Disabled when auth is disabled (local/dev) or under TESTING.
+# ---------------------------------------------------------------------------
+
+_RATE_LIMIT_WINDOW_SECONDS = float(os.environ.get("AGENTS_RATE_LIMIT_WINDOW_SECONDS", "60"))
+_RATE_LIMIT_MAX_REQUESTS = int(os.environ.get("AGENTS_RATE_LIMIT_MAX_REQUESTS", "600"))
+_rate_buckets: dict[str, deque[float]] = {}
+_rate_lock = threading.Lock()
+
+
+def _enforce_rate_limit(rate_key: str) -> None:
+    """Sliding-window limiter keyed on the authenticated token. Raises 429."""
+    if _RATE_LIMIT_MAX_REQUESTS <= 0:
+        return
+    now = time.monotonic()
+    window_start = now - _RATE_LIMIT_WINDOW_SECONDS
+    with _rate_lock:
+        # Bound memory: when the keyspace grows large, drop buckets whose entire
+        # window has expired (idle/rotated tokens) so the dict can't grow without
+        # limit across many device/hook tokens over the process lifetime.
+        if len(_rate_buckets) > 4096:
+            for key in [k for k, b in _rate_buckets.items() if not b or b[-1] < window_start]:
+                del _rate_buckets[key]
+        bucket = _rate_buckets.setdefault(rate_key, deque())
+        while bucket and bucket[0] < window_start:
+            bucket.popleft()
+        if len(bucket) >= _RATE_LIMIT_MAX_REQUESTS:
+            retry_after = max(1, int(_RATE_LIMIT_WINDOW_SECONDS - (now - bucket[0])) + 1)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Rate limit exceeded for agents API token.",
+                headers={"Retry-After": str(retry_after)},
+            )
+        bucket.append(now)
+
 
 _MANAGED_LOCAL_HOOK_ALLOWED_ROUTES = {
     ("GET", "/agents/sessions"),
@@ -82,7 +128,10 @@ def verify_agents_token(request: Request) -> DeviceToken | ManagedLocalHookToken
         device_token = _validate_device_token_for_request(provided_token)
         if device_token:
             logger.debug("Device token validated for device %s", device_token.device_id)
-            request.state.agents_rate_key = f"device:{device_token.id}"
+            rate_key = f"device:{device_token.id}"
+            request.state.agents_rate_key = rate_key
+            if not settings.testing:
+                _enforce_rate_limit(rate_key)
             return device_token
     else:
         hook_token = validate_managed_local_hook_token(provided_token)
@@ -92,7 +141,10 @@ def verify_agents_token(request: Request) -> DeviceToken | ManagedLocalHookToken
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Managed-local hook token is not allowed on this endpoint",
                 )
-            request.state.agents_rate_key = f"managed-local-hook:{hook_token.session_id}"
+            rate_key = f"managed-local-hook:{hook_token.session_id}"
+            request.state.agents_rate_key = rate_key
+            if not settings.testing:
+                _enforce_rate_limit(rate_key)
             return hook_token
 
     raise HTTPException(
