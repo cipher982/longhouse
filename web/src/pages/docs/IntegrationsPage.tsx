@@ -79,12 +79,12 @@ export default function IntegrationsPage() {
       <h2>Antigravity CLI</h2>
       <p>
         Antigravity is Google's new CLI path. Longhouse launches it with{" "}
-        <code>longhouse antigravity</code>, installs a small Antigravity plugin
+        <code>longhouse agy</code>, installs a small Antigravity plugin
         for hook-backed phase signals, and binds its transcript to the managed
         Longhouse session when hooks expose the transcript path.
       </p>
       <CodeBlock title="terminal">
-        {`longhouse antigravity          # start Antigravity CLI with Longhouse session ownership`}
+        {`longhouse agy                  # start Antigravity CLI with Longhouse session ownership`}
       </CodeBlock>
       <table>
         <thead>

@@ -53,6 +53,10 @@ import "../styles/inbox.css";
 // ---------------------------------------------------------------------------
 
 const PAGE_SIZE = 50;
+// The timeline API caps `limit` at 100 and readSessionsUrlState clamps to it,
+// so "Load More" can't page past 100. Keep this in sync with that clamp and the
+// API cap so the button hides instead of dead-ending.
+const MAX_SESSION_LIMIT = 100;
 const DEFAULT_DAYS_BACK = 14;
 const TIMELINE_RECONCILIATION_MS = 120_000;
 const DEFAULT_SORT_ORDER = "relevant";
@@ -257,7 +261,15 @@ export default function SessionsPage() {
   const total = data?.total || 0;
   const hasRealSessions = data?.has_real_sessions ?? true;
   const groupedQueryMode = data?.query_grouping_mode === "grouped_results";
-  const hasMore = groupedQueryMode ? (data?.query_grouping_has_more ?? false) : sessions.length < total;
+  // Non-grouped browse is capped at MAX_SESSION_LIMIT by the API; once we've
+  // loaded that many, hide "Load More" rather than dead-ending (the click would
+  // clamp back to the same limit and fetch nothing new).
+  // Both modes are capped at MAX_SESSION_LIMIT by the API; once limit hits the
+  // cap, "Load More" can't fetch more, so hide it instead of dead-ending.
+  const belowLimitCap = urlState.limit < MAX_SESSION_LIMIT;
+  const hasMore = groupedQueryMode
+    ? (data?.query_grouping_has_more ?? false) && belowLimitCap
+    : sessions.length < total && belowLimitCap;
 
   useTimelineSessionStream(filters, {
     enabled: timelineStreamEnabled,
@@ -337,7 +349,7 @@ export default function SessionsPage() {
   const handleLoadMore = useCallback(() => {
     updateUrlState((previous) => ({
       ...previous,
-      limit: previous.limit + PAGE_SIZE,
+      limit: Math.min(previous.limit + PAGE_SIZE, MAX_SESSION_LIMIT),
     }));
   }, [updateUrlState]);
 
@@ -383,14 +395,17 @@ export default function SessionsPage() {
   const hasFilters = !!(project || provider || deviceId || daysBack !== DEFAULT_DAYS_BACK || searchQuery);
   const showGuidedEmptyState = sessions.length === 0 && !hasFilters;
 
-  // Auto-seed demo sessions on first empty load so new users see a populated
-  // timeline immediately rather than a blank screen.
+  // Auto-seed demo sessions ONLY in demo mode, where fabricated data is
+  // expected. On a real self-host/hosted instance we must never silently write
+  // synthetic `demo-` sessions into the user's database — the empty state shows
+  // a "connect your machine" guide plus an explicit opt-in "Show me a demo"
+  // button instead.
   useEffect(() => {
-    if (!isLoading && !autoSeededRef.current && showGuidedEmptyState && !config.demoMode) {
+    if (!isLoading && !autoSeededRef.current && showGuidedEmptyState && config.demoMode) {
       autoSeededRef.current = true;
       handleSeedDemo();
     }
-  }, [isLoading, showGuidedEmptyState, handleSeedDemo]);
+  }, [isLoading, showGuidedEmptyState, handleSeedDemo, config.demoMode]);
 
   // Count active non-default filters (for badge)
   const activeFilterCount = [

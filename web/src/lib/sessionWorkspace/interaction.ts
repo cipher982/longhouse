@@ -22,14 +22,14 @@ function getManagedLaunchSuggestion(provider: string, providerLabel: string): Ma
     return {
       title: "Start the next Antigravity session through Longhouse",
       body: "This session stays searchable here. Use this command when you want the next Antigravity session to have Longhouse ownership and phase signals.",
-      command: "longhouse antigravity",
+      command: "longhouse agy",
     };
   }
   if (provider === "gemini") {
     return {
       title: "Start the next Google CLI session with Antigravity",
       body: "Legacy Gemini sessions stay searchable here. Use Antigravity for new Google CLI sessions so Longhouse can archive them with managed ownership and phase signals.",
-      command: "longhouse antigravity",
+      command: "longhouse agy",
     };
   }
   return null;

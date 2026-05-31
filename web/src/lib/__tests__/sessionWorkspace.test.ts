@@ -551,7 +551,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.composerDisabledReason).toBe(
       "This unmanaged Gemini session is read-only in Longhouse.",
     );
-    expect(capabilities.managedLaunchSuggestion?.command).toBe("longhouse antigravity");
+    expect(capabilities.managedLaunchSuggestion?.command).toBe("longhouse agy");
     expect(capabilities.managedLaunchSuggestion?.title).toBe(
       "Start the next Google CLI session with Antigravity",
     );

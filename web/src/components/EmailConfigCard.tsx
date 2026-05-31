@@ -187,7 +187,7 @@ export default function EmailConfigCard() {
       </Card.Header>
       <Card.Body>
         <p className="section-description">
-          Email delivery via AWS SES. One instance email receives alerts, digests, and test mail.
+          Email delivery via AWS SES. One instance email receives alerts and test mail.
         </p>
 
         {error ? (
@@ -314,7 +314,7 @@ export default function EmailConfigCard() {
                       value={currentNotifyEmail}
                       readOnly
                     />
-                    <small>Used for alerts, digests, and test emails</small>
+                    <small>Used for alerts and test emails</small>
                   </div>
                 </div>
 
@@ -419,7 +419,7 @@ export default function EmailConfigCard() {
                           }
                           placeholder="you@example.com"
                         />
-                        <small>Used for alerts, digests, and test emails</small>
+                        <small>Used for alerts and test emails</small>
                       </div>
                     </div>
 
