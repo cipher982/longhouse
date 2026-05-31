@@ -19,7 +19,7 @@ Machine Agent receives a typed `session.launch` command over its existing
 control WebSocket, spawns the provider locally through the provider's managed
 transport, and reports the pre-allocated session id back.
 
-This is a natural extension of `machine-agent-control-channel.md`: Phase 2
+This is a natural extension of the machine agent control channel design (internal spec): Phase 2
 gave us `session.send_text` / `interrupt` / `steer_text` on known sessions.
 This spec adds `session.launch` — a command that happens to create the
 session rather than act on an existing one.
@@ -72,7 +72,7 @@ Machine
   [homelab] offline              (disabled)
 
 Workspace on cinder
-  /Users/david/git/zerg
+  /Users/example/git/zerg
 
 Provider     [Codex | Claude | OpenCode]
 
@@ -284,7 +284,7 @@ machines that are currently offline but have been seen before.
   {
     "device_id": "cinder-abc123",
     "provider": "codex",
-    "cwd": "/Users/david/git/zerg",
+    "cwd": "/Users/example/git/zerg",
     "git_repo": "zerg",
     "git_branch": "main",
     "project": "zerg",
@@ -318,7 +318,7 @@ The frame carries `session_id` like every other command:
   "command_type": "session.launch",
   "payload": {
     "provider": "codex",
-    "cwd": "/Users/david/git/zerg",
+    "cwd": "/Users/example/git/zerg",
     "git_repo": "zerg",
     "git_branch": "main",
     "project": "zerg",
@@ -474,7 +474,7 @@ command `machine.list_dir`:
 ```json
 {
   "command_type": "machine.list_dir",
-  "payload": { "path": "/Users/david/git" }
+  "payload": { "path": "/Users/example/git" }
 }
 ```
 
@@ -562,9 +562,9 @@ This spec was revised after three independent reviews:
 - Repo-aware subagent review — flagged `launch_requests` redundancy,
   confirmed `cmd_codex_bridge_start` as the clean Rust seam, pointed out
   the `device_id` plumbing bug in the old draft.
-- Hatch Opus review — pushed for machines-first UX, explicit cwd
+- internal review — pushed for machines-first UX, explicit cwd
   allowlist, and the Phase 1 deferral gate.
-- Hatch DeepSeek review — confirmed pre-allocated UUID as strictly
+- a second internal review — confirmed pre-allocated UUID as strictly
   better, agreed `session.launch` belongs on the control channel if the
   durable-FSM rule is respected.
 

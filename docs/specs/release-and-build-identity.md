@@ -1,7 +1,7 @@
 # Release and Build Identity
 
 **Status:** draft
-**Owner:** David
+**Owner:** maintainer
 **Started:** 2026-04-21
 
 ## Why
@@ -164,4 +164,4 @@ The Makefile / `scripts/` sprawl problem is real but orthogonal. Tracked as a se
 6. **P5** — `.bumpversion.toml` + shared-version wrapper replacing the in-line semver rewriter in `release.sh`.
 7. **P6** — cleanup: strip hardcoded `0.1.15-local` fallback strings, kill `/api/version` if redundant, record AGENTS.md learning.
 
-After each phase: commit, Codex hatch review, address findings, then move on.
+After each phase: commit, internal review, address findings, then move on.

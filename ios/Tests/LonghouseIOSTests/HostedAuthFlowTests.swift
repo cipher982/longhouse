@@ -16,10 +16,10 @@ struct HostedAuthFlowTests {
 
     @Test
     func openInstanceURLWithTenantIncludesNormalizedTenant() throws {
-        let url = try #require(HostedAuthFlow.openInstanceURL(tenant: "  David010 "))
+        let url = try #require(HostedAuthFlow.openInstanceURL(tenant: "  Demo "))
         let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
 
-        #expect(components.queryItems == [URLQueryItem(name: "tenant", value: "david010")])
+        #expect(components.queryItems == [URLQueryItem(name: "tenant", value: "demo")])
     }
 
     @Test

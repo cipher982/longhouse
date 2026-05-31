@@ -25,7 +25,6 @@ components:
         - generate_uuid
         - get_current_location
         - get_current_time
-        - get_whoop_data
         - get_commis_evidence
         - get_tool_output
         - get_commis_metadata
@@ -73,7 +72,6 @@ components:
         - runner_create_enroll_token
         - runner_exec
         - runner_list
-        - search_notes
         - send_discord_webhook
         - send_email
         - send_imessage
@@ -176,8 +174,6 @@ components:
               const: personal
             get_current_time:
               const: datetime
-            get_whoop_data:
-              const: personal
             get_commis_evidence:
               const: coordination
             get_tool_output:
@@ -272,8 +268,6 @@ components:
               const: runner
             runner_list:
               const: runner_setup
-            search_notes:
-              const: personal
             send_discord_webhook:
               const: discord
             send_email:
@@ -315,7 +309,6 @@ components:
             - generate_uuid
             - get_current_location
             - get_current_time
-            - get_whoop_data
             - get_commis_evidence
             - get_tool_output
             - get_commis_metadata
@@ -357,7 +350,6 @@ components:
             - runner_create_enroll_token
             - runner_exec
             - runner_list
-            - search_notes
             - send_discord_webhook
             - send_email
             - send_imessage

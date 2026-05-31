@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HOSTED_INSTANCE_HELPER="${HOSTED_INSTANCE_HELPER:-$ROOT_DIR/scripts/lib/hosted-instance.sh}"
-SSH_TARGET="${HOSTED_SESSION_DEBUG_SSH_TARGET:-zerg}"
+SSH_TARGET="${HOSTED_SESSION_DEBUG_SSH_TARGET:-runtime-host}"
 
 if [[ ! -f "$HOSTED_INSTANCE_HELPER" ]]; then
   echo "Hosted instance helper missing: $HOSTED_INSTANCE_HELPER" >&2
@@ -13,7 +13,7 @@ fi
 # shellcheck disable=SC1090
 . "$HOSTED_INSTANCE_HELPER"
 
-INSTANCE_SUBDOMAIN="david010"
+INSTANCE_SUBDOMAIN="${LONGHOUSE_DEFAULT_SUBDOMAIN:-demo}"
 SESSION_ID=""
 LIMIT=20
 LOGS_SINCE="30m"
@@ -23,7 +23,7 @@ OUTPUT_MODE="text"
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/ops/hosted-session-debug.sh --session <session-id> [--subdomain david010] [--limit 20] [--logs] [--json]
+  scripts/ops/hosted-session-debug.sh --session <session-id> [--subdomain <name>] [--limit 20] [--logs] [--json]
 
 What it does:
   1. Resolves the hosted tenant through the control plane
@@ -33,10 +33,10 @@ What it does:
 
 Requirements:
   - CONTROL_PLANE_ADMIN_TOKEN (or ADMIN_TOKEN)
-  - SSH access to host alias "zerg" (override with HOSTED_SESSION_DEBUG_SSH_TARGET)
+  - SSH access to host alias "runtime-host" (override with HOSTED_SESSION_DEBUG_SSH_TARGET)
 
 Options:
-  --subdomain <name>   Hosted instance subdomain (default: david010)
+  --subdomain <name>   Hosted instance subdomain (default: $LONGHOUSE_DEFAULT_SUBDOMAIN or demo)
   --session <id>       Session ID to inspect (required)
   --limit <n>          Max recent rows to show per section (default: 20)
   --logs               Include session-specific tenant logs
@@ -86,7 +86,7 @@ while (($# > 0)); do
       exit 1
       ;;
     *)
-      if [[ "$INSTANCE_SUBDOMAIN" != "david010" ]]; then
+      if [[ "$INSTANCE_SUBDOMAIN" != "${LONGHOUSE_DEFAULT_SUBDOMAIN:-demo}" ]]; then
         echo "Unexpected extra argument: $1" >&2
         usage >&2
         exit 1

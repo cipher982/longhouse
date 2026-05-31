@@ -11,7 +11,7 @@ on:
       subdomain:
         description: 'Hosted instance subdomain'
         required: false
-        default: 'david010'
+        default: 'demo'
         type: string
       device_id:
         description: 'Target device id; required unless repository variable is set'
@@ -45,19 +45,22 @@ jobs:
     timeout-minutes: 25
     if: >-
       ${{
-        (
-          github.event_name == 'workflow_run'
-          && github.event.workflow_run.conclusion == 'success'
-          && vars.REMOTE_LAUNCH_SMOKE_AFTER_DEPLOY_ENABLED == 'true'
+        github.repository == 'cipher982/longhouse'
+        && (
+          (
+            github.event_name == 'workflow_run'
+            && github.event.workflow_run.conclusion == 'success'
+            && vars.REMOTE_LAUNCH_SMOKE_AFTER_DEPLOY_ENABLED == 'true'
+          )
+          || (github.event_name == 'schedule' && vars.REMOTE_LAUNCH_SMOKE_ENABLED == 'true')
+          || github.event_name == 'workflow_dispatch'
         )
-        || (github.event_name == 'schedule' && vars.REMOTE_LAUNCH_SMOKE_ENABLED == 'true')
-        || github.event_name == 'workflow_dispatch'
       }}
     env:
-      REMOTE_LAUNCH_SMOKE_SUBDOMAIN: ${{ inputs.subdomain || 'david010' }}
+      REMOTE_LAUNCH_SMOKE_SUBDOMAIN: ${{ inputs.subdomain || vars.HOSTED_CANARY_SUBDOMAIN || 'demo' }}
       REMOTE_LAUNCH_SMOKE_DEVICE_ID: ${{ inputs.device_id || vars.REMOTE_LAUNCH_SMOKE_DEVICE_ID || '' }}
       REMOTE_LAUNCH_SMOKE_CWD: ${{ inputs.cwd || vars.REMOTE_LAUNCH_SMOKE_CWD || '' }}
-      REMOTE_LAUNCH_SMOKE_SSH_TARGET: ${{ vars.REMOTE_LAUNCH_SMOKE_SSH_TARGET || 'zerg' }}
+      REMOTE_LAUNCH_SMOKE_SSH_TARGET: ${{ vars.REMOTE_LAUNCH_SMOKE_SSH_TARGET || 'runtime-host' }}
       REMOTE_LAUNCH_SMOKE_BRIDGE_STOP_SSH_TARGET: ${{ vars.REMOTE_LAUNCH_SMOKE_BRIDGE_STOP_SSH_TARGET || '' }}
       REMOTE_LAUNCH_SMOKE_EXPECTED_COMMIT: ${{ inputs.expected_commit || (github.event_name != 'workflow_dispatch' && 'live') || github.sha }}
       REMOTE_LAUNCH_SMOKE_OUTPUT_DIR: ${{ github.workspace }}/artifacts/remote-launch-smoke/${{ github.run_id }}-${{ github.run_attempt }}

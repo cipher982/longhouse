@@ -54,7 +54,7 @@ class SessionIngest(BaseModel):
     environment: str = Field(..., description="Environment: production, development, test, e2e")
     project: Optional[str] = Field(None, description="Project name")
     device_id: Optional[str] = Field(None, description="Device/machine identifier")
-    device_name: Optional[str] = Field(None, description="Human-friendly device label (e.g. 'laptop', 'cube')")
+    device_name: Optional[str] = Field(None, description="Human-friendly device label (e.g. 'laptop', 'demo-machine')")
     cwd: Optional[str] = Field(None, description="Working directory")
     git_repo: Optional[str] = Field(None, description="Git remote URL")
     git_branch: Optional[str] = Field(None, description="Git branch name")

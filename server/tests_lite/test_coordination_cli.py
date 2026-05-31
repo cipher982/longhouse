@@ -132,7 +132,7 @@ def test_peers_command_lists_live_peer_sessions(monkeypatch):
                     {
                         "session_id": "22222222-2222-2222-2222-222222222222",
                         "has_live_presence": True,
-                        "device_name": "cube",
+                        "device_name": "demo-machine",
                         "provider": "codex",
                         "presence_state": "thinking",
                         "summary_title": "Peer",
@@ -187,7 +187,7 @@ def test_wall_command_prints_raw_sessions(monkeypatch):
                 "sessions": [
                     {
                         "session_id": "22222222-2222-2222-2222-222222222222",
-                        "device_name": "cube",
+                        "device_name": "demo-machine",
                         "provider": "codex",
                         "presence_state": "thinking",
                         "summary_title": "Peer",
@@ -230,7 +230,7 @@ def test_wall_command_json_output(monkeypatch):
                 "sessions": [
                     {
                         "session_id": "22222222-2222-2222-2222-222222222222",
-                        "device_name": "cube",
+                        "device_name": "demo-machine",
                         "provider": "codex",
                         "presence_state": "thinking",
                         "summary_title": "Peer",
@@ -273,7 +273,7 @@ def test_peers_command_json_output(monkeypatch):
                     {
                         "session_id": "22222222-2222-2222-2222-222222222222",
                         "has_live_presence": True,
-                        "device_name": "cube",
+                        "device_name": "demo-machine",
                         "provider": "codex",
                         "presence_state": "thinking",
                         "summary_title": "Peer",

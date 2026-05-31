@@ -94,7 +94,7 @@ def _seed_run_graph(db):
 
 
 def test_scan_and_repair_safe_guid_columns(tmp_path):
-    instance_dir = tmp_path / "david010"
+    instance_dir = tmp_path / "demo"
     instance_dir.mkdir()
     db_path, SessionLocal = _make_db(instance_dir, "longhouse.db")
 

@@ -9,7 +9,7 @@ Usage:
         {
             "runner_exec": [
                 {
-                    "match": {"target": "cube", "command_contains": "df"},
+                    "match": {"target": "deploy-host", "command_contains": "df"},
                     "result": {"ok": true, "data": {"stdout": "...", "exit_code": 0}}
                 }
             ]

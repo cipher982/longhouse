@@ -1,13 +1,13 @@
 # Session Identity Kernel
 
-Status: revised after Hatch Codex review (2026-05-21); ready for implementation
+Status: revised after internal review (2026-05-21); ready for implementation
 Owner: Longhouse session core
 Created: 2026-05-21
 Related:
 - `VISION.md`
-- `docs/specs/realtime-truth-plane.md`
-- `docs/specs/durable-transcript-live-overlay.md`
-- `docs/specs/managed-codex-liveness.md`
+- the realtime truth plane design (internal spec)
+- the durable transcript live overlay design (internal spec)
+- the managed Codex liveness design (internal spec)
 
 ## Why this exists
 
@@ -345,7 +345,7 @@ follow-up.
 
 Pre-launch, no external users, no compatibility projections. Work proceeds in
 a worktree with one phase per commit batch. Each phase ends with `make
-test-ci` and a Hatch Codex review checkpoint before moving on.
+test-ci` and a internal review checkpoint before moving on.
 
 ### Phase 1 — additive schema
 
@@ -531,7 +531,7 @@ Deliverables:
 Codex review gate: final read; ship.
 
 This will break in-flight sessions on hosted at deploy time. That is acceptable
-pre-launch. David's dogfood instance is the only real consumer.
+pre-launch. The maintainer's dogfood instance is the only real consumer.
 
 ## Testing approach
 

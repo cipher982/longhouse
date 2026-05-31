@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - Phase 1 redesign v2 — design mocks (preview-only)
 //
 // Design philosophy (corrected): COLOR IS SIGNAL, NEVER DECORATION.
-// The menu-bar surface David likes is monochrome type hierarchy with green
+// The menu-bar surface the maintainer prefers is monochrome type hierarchy with green
 // appearing as exactly one thing — a small dot meaning "alive". We copy that
 // discipline:
 //   • Type is monochrome: primary / secondary / tertiary. No colored text.
@@ -288,7 +288,7 @@ private struct TranscriptColumnMock: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             assistantProse(
-                "Now I can see exactly what Oleg did after the meeting. Two new blocker tickets appeared: **PAASSE-22459** and **PAASSE-22460**. Let me pull those and the new description text he wrote.",
+                "Now I can see exactly what Alex did after the meeting. Two new blocker tickets appeared: **PROJ-101** and **PROJ-102**. Let me pull those and the new description text he wrote.",
                 running: false
             )
             toolGroup
@@ -296,7 +296,7 @@ private struct TranscriptColumnMock: View {
             assistantProse(
                 state.isExecuting
                     ? "Parsing the changelog for the rename moves…"
-                    : "The MR was renamed by Oleg at 18:42, then moved back to In Review.",
+                    : "The MR was renamed by Alex at 18:42, then moved back to In Review.",
                 running: state.isExecuting
             )
         }
@@ -326,7 +326,7 @@ private struct TranscriptColumnMock: View {
     // No rail. Indent + tighter type does the grouping work and survives a11y.
     private var toolGroup: some View {
         VStack(alignment: .leading, spacing: 3) {
-            ToolRowMock(icon: "arrow.triangle.branch", name: "getJiraIssue", subtitle: "PAASSE-22459", timing: "2.3s")
+            ToolRowMock(icon: "arrow.triangle.branch", name: "getJiraIssue", subtitle: "PROJ-101", timing: "2.3s")
             ToolRowMock(icon: "terminal", name: "Bash", subtitle: "git log --oneline ~/.claude/projects", timing: "1.1s")
             ToolRowMock(icon: "terminal", name: "Bash", subtitle: "pytest tests/ — 3 failed, 41 passed", timing: "8.4s", importance: .work)
             ToolRowMock(icon: "magnifyingglass", name: "Explored", subtitle: "mcp__atlassian__getJiraIssue", timing: "", resultMissing: true)

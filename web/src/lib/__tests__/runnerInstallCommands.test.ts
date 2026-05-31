@@ -7,11 +7,11 @@ describe('buildRunnerNativeInstallCommand', () => {
     const command = buildRunnerNativeInstallCommand({
       enrollToken: 'token_123',
       longhouseUrl: 'https://demo.longhouse.test',
-      runnerName: 'clifford',
+      runnerName: 'demo-runner',
     }, 'server');
 
     expect(command).toContain('ENROLL_TOKEN=token_123');
-    expect(command).toContain('RUNNER_NAME=clifford');
+    expect(command).toContain('RUNNER_NAME=demo-runner');
     expect(command).toContain('RUNNER_INSTALL_MODE=server');
   });
 

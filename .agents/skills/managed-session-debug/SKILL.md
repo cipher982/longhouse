@@ -21,7 +21,7 @@ Use this when a managed Claude/Codex/Gemini session feels slow, appears stuck, s
 
 3. Hosted tenant truth:
    ```bash
-   scripts/ops/hosted-session-debug.sh --subdomain david010 --session <session-id> --limit 20 --json
+   scripts/ops/hosted-session-debug.sh --subdomain <subdomain> --session <session-id> --limit 20 --json
    ```
 
 4. Process and channel state for Claude:
@@ -34,7 +34,7 @@ Use this when a managed Claude/Codex/Gemini session feels slow, appears stuck, s
 
 - Slow `assistant_tool_to_tool_result` means the tool itself or Claude hook/tool execution is slow.
 - Slow `tool_result_to_next_assistant` means provider/model-loop latency.
-- A huge gap after `assistant_text` with no following `tool_use`, `Stop`, or `idle` phase is a stuck provider/TUI turn, not tool latency or hosted ingest lag. On David's Bedrock Claude flow, also check whether `LONGHOUSE_FORCE_NATIVE_CLAUDE_CHANNELS=1` is using the private native-channel patch.
+- A huge gap after `assistant_text` with no following `tool_use`, `Stop`, or `idle` phase is a stuck provider/TUI turn, not tool latency or hosted ingest lag. On a Bedrock Claude flow, also check whether `LONGHOUSE_FORCE_NATIVE_CLAUDE_CHANNELS=1` is using the private native-channel patch.
 - Large `cache_read_input_tokens` plus slow `tool_result_to_next_assistant` usually points at provider latency from a large thread, not Longhouse telemetry.
 - Hosted `sessions.ended_at` with `session_runtime_state.terminal_state = null` is a state-model mismatch. Treat runtime state as the lifecycle source of truth.
 - WriteSerializer waits and high ingest/runtime request counts explain hosted UI/ingest lag, not local provider thinking time, unless a synchronous local hook is slow.
@@ -47,7 +47,7 @@ Claude hooks should be local-only and fast. The installed hook should write loca
 
 - Claude transcript: `~/.claude/projects/**/<session-id>.jsonl`
 - Claude channel state: `~/.claude/channels/longhouse/sessions/<session-id>.json`
-- Hosted tenant DB: `/var/app-data/longhouse/<subdomain>/longhouse.db` on `zerg`
+- Hosted tenant DB: `/var/app-data/longhouse/<subdomain>/longhouse.db` on the runtime host
 - Tenant container: `longhouse-<subdomain>`
 
 ## Report Shape

@@ -56,7 +56,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     project: "zerg",
     device_id: "cinder",
     environment: "development",
-    cwd: "/Users/davidrose/git/zerg",
+    cwd: "/Users/example/git/zerg",
     git_repo: "git@github.com:cipher982/longhouse.git",
     git_branch: "main",
     started_at: "2026-03-22T22:00:00Z",

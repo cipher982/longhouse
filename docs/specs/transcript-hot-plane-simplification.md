@@ -1,9 +1,9 @@
 # Transcript Hot-Plane Simplification
 
 **Status:** in flight
-**Owner:** david010@gmail.com
+**Owner:** maintainer
 **Date:** 2026-05-19
-**Parent spec:** `transcript-hot-plane.md`
+**Parent spec:** the transcript hot-plane design (internal spec)
 
 ## Problem
 
@@ -204,7 +204,7 @@ recorder.
 
 ## Codex review (2026-05-19)
 
-Routed through `hatch codex max --reasoning_effort=high`. Key findings
+Routed through an internal review pass. Key findings
 incorporated above:
 
 - **T1.3 was downgraded from "delete the sleep" to "non-blocking re-enqueue

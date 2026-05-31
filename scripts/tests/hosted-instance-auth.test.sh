@@ -13,7 +13,7 @@ unset CP_URL
 source "$ROOT_DIR/lib/hosted-instance.sh"
 
 # Keep this test focused on explicit env-token fallback behavior instead of
-# ambient operator access to the control plane via `ssh zerg`.
+# ambient operator access to the control plane via `ssh runtime-host`.
 ssh() {
   return 255
 }

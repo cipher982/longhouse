@@ -65,7 +65,7 @@ def _seed_session(
         project=project,
         device_id=device_id,
         device_name=device_name,
-        cwd="/Users/davidrose/git/zerg",
+        cwd="/Users/example/git/zerg",
         git_repo=git_repo,
         git_branch=git_branch,
         started_at=now,
@@ -157,7 +157,7 @@ def test_peers_returns_live_repo_matches(tmp_path, monkeypatch):
 
     with SessionLocal() as db:
         source = _seed_session(db, device_id="shipper-laptop", device_name="laptop")
-        peer = _seed_session(db, device_id="shipper-cube", device_name="cube", git_branch="feature/messaging")
+        peer = _seed_session(db, device_id="shipper-demo-machine", device_name="demo-machine", git_branch="feature/messaging")
         _seed_session(db, device_id="shipper-idle", device_name="idle-box", git_repo="git@github.com:other/repo.git")
         _seed_presence(db, session=source, state="idle")
         _seed_presence(db, session=peer, state="thinking")
@@ -234,7 +234,7 @@ def test_message_session_creates_stored_only_message_for_legacy_target(tmp_path,
 
     with SessionLocal() as db:
         from_session = _seed_session(db, device_id="shipper-laptop")
-        to_session = _seed_session(db, device_id="shipper-cube")
+        to_session = _seed_session(db, device_id="shipper-demo-machine")
         from_session_id = str(from_session.id)
         to_session_id = str(to_session.id)
 
@@ -262,7 +262,7 @@ def test_check_messages_filters_unacknowledged(tmp_path, monkeypatch):
 
     with SessionLocal() as db:
         from_session = _seed_session(db, device_id="shipper-laptop")
-        to_session = _seed_session(db, device_id="shipper-cube")
+        to_session = _seed_session(db, device_id="shipper-demo-machine")
         db.add_all(
             [
                 SessionMessage(
@@ -297,7 +297,7 @@ def test_ack_message_marks_target_message(tmp_path, monkeypatch):
 
     with SessionLocal() as db:
         from_session = _seed_session(db, device_id="shipper-laptop")
-        to_session = _seed_session(db, device_id="shipper-cube")
+        to_session = _seed_session(db, device_id="shipper-demo-machine")
         message = SessionMessage(
             from_session_id=from_session.id,
             to_session_id=to_session.id,

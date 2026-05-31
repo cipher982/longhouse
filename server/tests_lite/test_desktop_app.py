@@ -133,7 +133,7 @@ def test_install_desktop_app_service_persists_provider_release_status_env(monkey
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv(
         "LONGHOUSE_PROVIDER_RELEASE_STATUS_URL",
-        "http://100.118.94.100:8876/provider-release-status/{provider}",
+        "http://release-status.example:8876/provider-release-status/{provider}",
     )
     monkeypatch.setattr(desktop_app.shutil, "which", lambda _name: None)
     monkeypatch.setattr(desktop_app, "detect_platform", lambda: Platform.MACOS)
@@ -161,7 +161,7 @@ def test_install_desktop_app_service_persists_provider_release_status_env(monkey
     plist_path = home / "Library" / "LaunchAgents" / "ai.longhouse.app.plist"
     plist = plistlib.loads(plist_path.read_bytes())
     assert plist["EnvironmentVariables"] == {
-        "LONGHOUSE_PROVIDER_RELEASE_STATUS_URL": "http://100.118.94.100:8876/provider-release-status/{provider}",
+        "LONGHOUSE_PROVIDER_RELEASE_STATUS_URL": "http://release-status.example:8876/provider-release-status/{provider}",
     }
 
 

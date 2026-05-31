@@ -362,10 +362,10 @@ provider-live-route-e2e: ## Hosted Machine Agent provider-live route E2E (PROVID
 qa-unmanaged: ## Local smoke for bare Claude/Codex compatibility ingest
 	@./scripts/qa/qa-unmanaged.sh
 
-reprovision: ## Reprovision hosted instance (SUBDOMAIN=david010, optional IMAGE=...)
+reprovision: ## Reprovision hosted instance (SUBDOMAIN=$LONGHOUSE_DEFAULT_SUBDOMAIN, optional IMAGE=...)
 	@bash -c 'source scripts/lib/hosted-instance.sh && \
 		lh_hosted_prepare_control_plane_auth && \
-		lh_hosted_resolve_instance "$(or $(SUBDOMAIN),david010)" && \
+		lh_hosted_resolve_instance "$(or $(SUBDOMAIN),$(LONGHOUSE_DEFAULT_SUBDOMAIN),demo)" && \
 		lh_hosted_reprovision "$$LH_INSTANCE_ID" "$(IMAGE)" && \
 		echo "Reprovisioned $$LH_INSTANCE_SUBDOMAIN — waiting for health..." && \
 		./scripts/ci/wait-for-http.sh "https://$$LH_INSTANCE_SUBDOMAIN.longhouse.ai/api/health" "$$LH_INSTANCE_SUBDOMAIN health" 30 2 && \

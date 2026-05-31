@@ -84,7 +84,7 @@ def test_delete_runner_rejects_connected_runner(tmp_path: Path):
     try:
         runner = Runner(
             owner_id=user.id,
-            name="clifford",
+            name="demo-runner",
             auth_secret_hash="hash",
             capabilities=["exec.full"],
             status="online",

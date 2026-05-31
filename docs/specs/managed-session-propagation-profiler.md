@@ -662,7 +662,7 @@ scripts/ops/profile-managed-session-propagation.py \
   --provider codex \
   --ownership managed \
   --shutdown graceful \
-  --subdomain david010 \
+  --subdomain example-tenant \
   --project zerg
 ```
 

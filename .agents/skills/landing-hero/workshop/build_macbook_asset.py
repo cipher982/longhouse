@@ -14,7 +14,7 @@ import sys
 import urllib.request
 from pathlib import Path
 
-REPO = Path("/Users/davidrose/git/zerg")
+REPO = Path(__file__).resolve().parents[4]
 TIMELINE_REF = REPO / "web/public/images/landing/timeline-preview.png"
 SHIP_PATH = REPO / "web/public/images/landing/device-laptop.webp"
 WORK_DIR = Path("/tmp/macbook-pipeline")

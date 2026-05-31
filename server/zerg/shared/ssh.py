@@ -1,7 +1,7 @@
 """SSH utilities for Longhouse scheduled jobs.
 
 Used by builtin product jobs and optional external job packs when a jobs repo is
-explicitly configured. This module is separate from the standalone Sauron service.
+explicitly configured. This module is separate from any standalone external job runner.
 """
 
 from __future__ import annotations
@@ -92,7 +92,7 @@ def run_ssh_command(
     Execute a command on a remote host via SSH.
 
     Args:
-        host: Target hostname (e.g., 'clifford' via Tailscale MagicDNS)
+        host: Target hostname (e.g., 'myserver' via Tailscale MagicDNS)
         command: Command to execute on remote host
         user: SSH user (default: root)
         port: SSH port (default: 22)
@@ -101,7 +101,7 @@ def run_ssh_command(
         key_content: Raw PEM key string. Takes priority over key_path and the
             SSH_PRIVATE_KEY env var. Intended for new-style jobs that receive
             the key via ``ctx.require_secret("SSH_PRIVATE_KEY")``.
-        bastion_host: Optional jump host for ProxyJump (e.g., 'root@clifford')
+        bastion_host: Optional jump host for ProxyJump (e.g., 'root@remote-host')
 
     Returns:
         SSHResult with success status, stdout, stderr, and returncode
@@ -114,7 +114,7 @@ def run_ssh_command(
 
     Example:
         result = run_ssh_command(
-            "clifford",
+            "myserver",
             "kopia snapshot list / --json",
             timeout=60
         )
@@ -123,10 +123,10 @@ def run_ssh_command(
 
         # SSH via jump host on custom port
         result = run_ssh_command(
-            "cube",
+            "remote-host",
             "echo ok",
             port=2222,
-            bastion_host="root@clifford"
+            bastion_host="root@remote-host"
         )
 
         # New-style job with per-user secret

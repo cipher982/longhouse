@@ -28,7 +28,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-REPO = Path("/Users/davidrose/git/zerg")
+REPO = Path(__file__).resolve().parents[4]
 WIDGET_SNAPSHOT_DIR = REPO / "scripts/widget-snapshot"
 SHIP_PATH = REPO / "web/public/images/landing/device-iphone.webp"
 WORK_DIR = Path("/tmp/iphone-pipeline")

@@ -39,7 +39,7 @@ from urllib.request import Request
 from urllib.request import urlopen
 
 
-DEFAULT_SUBDOMAIN = "david010"
+DEFAULT_SUBDOMAIN = os.environ.get("LONGHOUSE_DEFAULT_SUBDOMAIN", "demo")
 DEFAULT_PROJECT = "zerg"
 DEFAULT_WAIT_AFTER_LAUNCH_SECS = 135
 DEFAULT_ASSISTANT_TIMEOUT_SECS = 240
@@ -431,7 +431,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--base-url", default=os.environ.get("REMOTE_LAUNCH_SMOKE_BASE_URL"))
     parser.add_argument("--subdomain", default=os.environ.get("REMOTE_LAUNCH_SMOKE_SUBDOMAIN", DEFAULT_SUBDOMAIN))
     parser.add_argument("--container", default=os.environ.get("REMOTE_LAUNCH_SMOKE_CONTAINER"))
-    parser.add_argument("--ssh-target", default=os.environ.get("REMOTE_LAUNCH_SMOKE_SSH_TARGET", "zerg"))
+    parser.add_argument("--ssh-target", default=os.environ.get("REMOTE_LAUNCH_SMOKE_SSH_TARGET", "runtime-host"))
     parser.add_argument("--bridge-stop-ssh-target", default=os.environ.get("REMOTE_LAUNCH_SMOKE_BRIDGE_STOP_SSH_TARGET"))
     parser.add_argument("--device-id", default=os.environ.get("REMOTE_LAUNCH_SMOKE_DEVICE_ID"))
     parser.add_argument("--cwd", default=os.environ.get("REMOTE_LAUNCH_SMOKE_CWD"))

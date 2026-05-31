@@ -3,15 +3,15 @@
 
   "ssh_exec": [
     {
-      "$comment": "Disk space check on cube server - returns deterministic output",
+      "$comment": "Disk space check on deploy host - returns deterministic output",
       "match": {
-        "host": "cube",
+        "host": "deploy-host",
         "command_contains": "df"
       },
       "result": {
         "ok": true,
         "data": {
-          "host": "cube",
+          "host": "deploy-host",
           "command": "df -h",
           "exit_code": 0,
           "stdout": "Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1       100G   45G   55G  45% /\ntmpfs           7.8G     0  7.8G   0% /dev/shm\n/dev/sdb1       500G  200G  300G  40% /data",
@@ -31,14 +31,14 @@
       }
     },
     {
-      "$comment": "Generic SSH success for any other cube command",
+      "$comment": "Generic SSH success for any other deploy-host command",
       "match": {
-        "host": "cube"
+        "host": "deploy-host"
       },
       "result": {
         "ok": true,
         "data": {
-          "host": "cube",
+          "host": "deploy-host",
           "command": "stubbed_command",
           "exit_code": 0,
           "stdout": "Command executed successfully (stubbed)",
@@ -57,30 +57,11 @@
       "result": {
         "ok": true,
         "data": {
-          "target": "cube",
+          "target": "deploy-host",
           "command": "df -h",
           "exit_code": 0,
           "stdout": "Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1       100G   45G   55G  45% /\ntmpfs           7.8G     0  7.8G   0% /dev/shm\n/dev/sdb1       500G  200G  300G  40% /data\n\nNotes: Docker images/volumes are the biggest consumers.",
           "stderr": ""
-        }
-      }
-    },
-    {
-      "$comment": "Notes search - returns deterministic results",
-      "match": {
-        "tool_name_contains": "search_notes"
-      },
-      "result": {
-        "ok": true,
-        "data": {
-          "results": [
-            {
-              "path": "notes/test-note.md",
-              "content": "This is a test note for E2E testing.",
-              "score": 0.95
-            }
-          ],
-          "count": 1
         }
       }
     }

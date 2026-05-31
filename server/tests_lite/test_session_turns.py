@@ -53,7 +53,7 @@ def _seed_session(db):
         provider="claude",
         environment="development",
         project="zerg",
-        cwd="/Users/davidrose/git/zerg",
+        cwd="/Users/example/git/zerg",
         started_at=datetime.now(timezone.utc),
         provider_session_id=str(uuid4()),
         continuation_kind="local",
@@ -367,7 +367,7 @@ def test_agents_store_ingest_marks_canonical_session_turn_durable(tmp_path):
                 environment="development",
                 project="zerg",
                 device_id="cinder",
-                cwd="/Users/davidrose/git/zerg",
+                cwd="/Users/example/git/zerg",
                 started_at=session.started_at,
                 events=[
                     EventIngest(
@@ -608,7 +608,7 @@ def test_agents_store_ingest_materializes_native_managed_transcript_turn_without
                 environment="development",
                 project="zerg",
                 device_id="cinder",
-                cwd="/Users/davidrose/git/zerg",
+                cwd="/Users/example/git/zerg",
                 started_at=session.started_at,
                 events=[
                     EventIngest(
@@ -878,7 +878,7 @@ def test_execute_session_turn_write_uses_bound_database_when_serializer_is_confi
             provider="claude",
             environment="development",
             project="zerg",
-            cwd="/Users/davidrose/git/zerg",
+            cwd="/Users/example/git/zerg",
             started_at=datetime.now(timezone.utc),
             provider_session_id=str(uuid4()),
             continuation_kind="local",
@@ -898,7 +898,7 @@ def test_execute_session_turn_write_uses_bound_database_when_serializer_is_confi
             provider="claude",
             environment="development",
             project="zerg",
-            cwd="/Users/davidrose/git/zerg",
+            cwd="/Users/example/git/zerg",
             started_at=datetime.now(timezone.utc),
             provider_session_id=str(uuid4()),
             continuation_kind="local",

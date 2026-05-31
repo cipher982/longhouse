@@ -93,7 +93,7 @@ def test_unmanaged_process_observation_is_a_fact_not_active_copy():
             observed_at=observed_at,
             last_seen_at=NOW,
             source_mtime=NOW - timedelta(hours=11),
-            source_path="/Users/david/.codex/sessions/rollout.jsonl",
+            source_path="/Users/example/.codex/sessions/rollout.jsonl",
         ),
     )
 
@@ -119,7 +119,7 @@ def test_online_host_without_pid_does_not_observe_process():
             observed_at=NOW,
             last_seen_at=NOW,
             source_mtime=NOW - timedelta(hours=11),
-            source_path="/Users/david/.codex/sessions/rollout.jsonl",
+            source_path="/Users/example/.codex/sessions/rollout.jsonl",
             binding_state="observed",
         ),
     )
@@ -144,7 +144,7 @@ def test_missing_unmanaged_process_scan_marks_process_closed():
             observed_at=NOW - timedelta(hours=4),
             last_seen_at=NOW - timedelta(minutes=20),
             source_mtime=NOW - timedelta(hours=3),
-            source_path="/Users/david/.codex/sessions/rollout.jsonl",
+            source_path="/Users/example/.codex/sessions/rollout.jsonl",
         ),
     )
 
@@ -169,7 +169,7 @@ def test_managed_process_gone_binding_does_not_close_without_terminal_signal():
             observed_at=NOW - timedelta(hours=4),
             last_seen_at=NOW - timedelta(minutes=20),
             source_mtime=NOW - timedelta(hours=3),
-            source_path="/Users/david/.codex/sessions/rollout.jsonl",
+            source_path="/Users/example/.codex/sessions/rollout.jsonl",
             binding_state="stale",
         ),
     )
@@ -195,7 +195,7 @@ def test_host_expired_means_unverified_not_closed():
             observed_at=NOW - timedelta(days=8),
             last_seen_at=NOW - timedelta(days=8),
             source_mtime=NOW - timedelta(days=8),
-            source_path="/Users/david/.codex/sessions/rollout.jsonl",
+            source_path="/Users/example/.codex/sessions/rollout.jsonl",
         ),
     )
 

@@ -151,16 +151,16 @@ def test_wall_repo_filter_matches_cwd(tmp_path):
     """Wall repo filter also matches against cwd for non-git workspaces."""
     SessionLocal = _make_db(tmp_path)
     with SessionLocal() as db:
-        _seed_session(db, cwd="/Users/dev/git/zeta/athena-horizon", git_repo=None, project="athena-horizon")
+        _seed_session(db, cwd="/Users/dev/git/acme/project", git_repo=None, project="project")
         _seed_session(db, cwd="/Users/dev/git/zerg", git_repo="https://github.com/user/other", project="zerg")
 
     client, api_ref = _make_client(SessionLocal)
     try:
-        resp = client.get("/api/agents/sessions/wall", params={"repo": "athena"})
+        resp = client.get("/api/agents/sessions/wall", params={"repo": "acme"})
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 1
-        assert data["sessions"][0]["cwd"] == "/Users/dev/git/zeta/athena-horizon"
+        assert data["sessions"][0]["cwd"] == "/Users/dev/git/acme/project"
     finally:
         api_ref.dependency_overrides = {}
 
@@ -188,7 +188,7 @@ def test_wall_includes_pending_inbound_message_count(tmp_path):
     SessionLocal = _make_db(tmp_path)
     with SessionLocal() as db:
         source = _seed_session(db, device_id="shipper-laptop", device_name="laptop", git_repo="repo-a")
-        target = _seed_session(db, device_id="shipper-cube", device_name="cube", git_repo="repo-b")
+        target = _seed_session(db, device_id="shipper-demo", device_name="demo-machine", git_repo="repo-b")
         db.add_all(
             [
                 SessionMessage(
@@ -219,7 +219,7 @@ def test_wall_includes_pending_inbound_message_count(tmp_path):
         resp = client.get("/api/agents/sessions/wall")
         assert resp.status_code == 200
         data = resp.json()
-        session = next(s for s in data["sessions"] if s["device_name"] == "cube")
+        session = next(s for s in data["sessions"] if s["device_name"] == "demo-machine")
         assert session["pending_inbound_messages"] == 1
     finally:
         api_ref.dependency_overrides = {}
@@ -234,8 +234,8 @@ def test_wall_uses_runtime_state_for_live_presence_without_presence_row(tmp_path
         session = _seed_session(
             db,
             provider="codex",
-            device_id="shipper-cube",
-            device_name="cube",
+            device_id="shipper-demo",
+            device_name="demo-machine",
             git_repo="runtime-only",
             project="zerg",
             last_activity_at=now - timedelta(seconds=20),
@@ -245,7 +245,7 @@ def test_wall_uses_runtime_state_for_live_presence_without_presence_row(tmp_path
                 runtime_key=f"codex:{session.id}",
                 session_id=session.id,
                 provider="codex",
-                device_id="shipper-cube",
+                device_id="shipper-demo",
                 phase="needs_user",
                 phase_source="semantic",
                 active_tool=None,
@@ -267,7 +267,7 @@ def test_wall_uses_runtime_state_for_live_presence_without_presence_row(tmp_path
         resp = client.get("/api/agents/sessions/wall")
         assert resp.status_code == 200
         data = resp.json()
-        row = next(s for s in data["sessions"] if s["device_name"] == "cube")
+        row = next(s for s in data["sessions"] if s["device_name"] == "demo-machine")
         assert row["has_live_presence"] is True
         assert row["presence_state"] == "needs_user"
     finally:
@@ -278,14 +278,14 @@ def test_wall_device_name_falls_back_from_device_id(tmp_path):
     """If device_name is null, wall derives it by stripping 'shipper-' from device_id."""
     SessionLocal = _make_db(tmp_path)
     with SessionLocal() as db:
-        _seed_session(db, device_id="shipper-cube", device_name=None, git_repo="r")
+        _seed_session(db, device_id="shipper-demo", device_name=None, git_repo="r")
 
     client, api_ref = _make_client(SessionLocal)
     try:
         resp = client.get("/api/agents/sessions/wall")
         data = resp.json()
         session = data["sessions"][0]
-        assert session["device_name"] == "cube"
+        assert session["device_name"] == "demo"
     finally:
         api_ref.dependency_overrides = {}
 

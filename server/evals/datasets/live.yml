@@ -159,14 +159,14 @@ cases:
   - id: delegation_infrastructure
     category: infrastructure
     description: Fiche should delegate infrastructure checks to commis
-    input: "Check disk space on cube"
+    input: "Check disk space on deploy-host"
     timeout: 90
     assert:
       # Note: status may be 'deferred' when commis are spawned (correct behavior)
       # We rely on llm_graded to assess actual behavior quality
       - type: llm_graded
         rubric: |
-          For "Check disk space on cube", the fiche should:
+          For "Check disk space on deploy-host", the fiche should:
           1. Recognize this requires SSH access to a server
           2. Spawn a commis to perform the check
           3. Report results (or say a commis was dispatched)
@@ -181,7 +181,7 @@ cases:
   - id: delegation_task_clarity
     category: infrastructure
     description: Delegated tasks should have clear descriptions and synthesis
-    input: "Can you check if nginx is running on clifford and restart it if not? [eval:wait]"
+    input: "Can you check if nginx is running on deploy-host and restart it if not? [eval:wait]"
     timeout: 90
     assert:
       - type: llm_graded
@@ -202,7 +202,7 @@ cases:
   - id: delegation_multi_step
     category: infrastructure
     description: Fiche should be able to coordinate multiple steps
-    input: "Find out where the large files are on cube, then tell me the top 3 directories. [eval:wait]"
+    input: "Find out where the large files are on deploy-host, then tell me the top 3 directories. [eval:wait]"
     timeout: 120
     assert:
       - type: llm_graded
@@ -221,7 +221,7 @@ cases:
   - id: delegation_failure_recovery
     category: infrastructure
     description: Fiche should report persistent failures gracefully
-    input: "Restart the service 'non-existent-service' on clifford. [eval:wait]"
+    input: "Restart the service 'non-existent-service' on deploy-host. [eval:wait]"
     timeout: 90
     assert:
       - type: llm_graded

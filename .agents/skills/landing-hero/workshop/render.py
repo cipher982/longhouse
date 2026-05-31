@@ -16,7 +16,11 @@ VARIANT_LABELS = ["A", "F", "G", "J", "K"]
 # path doesn't exist on your machine, run:
 #   uv run --with "playwright==1.50.0" playwright install chromium
 # then point EXEC at one of ~/Library/Caches/ms-playwright/chromium-*/chrome-mac-arm64/Google Chrome for Testing.app/...
-EXEC = "/Users/davidrose/Library/Caches/ms-playwright/chromium-1200/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+EXEC = str(
+    Path.home()
+    / "Library/Caches/ms-playwright/chromium-1200/chrome-mac-arm64"
+    / "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+)
 
 
 SLUGS = {

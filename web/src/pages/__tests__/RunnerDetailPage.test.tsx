@@ -41,7 +41,7 @@ function makeRunner(overrides: Partial<Runner> = {}): Runner {
   return {
     id: 1,
     owner_id: 1,
-    name: "cube",
+    name: "demo-machine",
     availability_policy: "always_on",
     labels: null,
     capabilities: ["exec.full"],
@@ -52,7 +52,7 @@ function makeRunner(overrides: Partial<Runner> = {}): Runner {
     last_seen_age_seconds: 600,
     heartbeat_interval_ms: 30_000,
     stale_after_seconds: 90,
-    runner_metadata: { hostname: "cube", platform: "linux", arch: "x64" },
+    runner_metadata: { hostname: "demo-machine", platform: "linux", arch: "x64" },
     install_mode: "server",
     auto_update_policy: "notify",
     install_layout_version: 1,

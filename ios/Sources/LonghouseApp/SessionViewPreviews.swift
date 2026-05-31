@@ -19,7 +19,7 @@ private extension SessionDetail {
           "id": "preview-1",
           "provider": "claude",
           "project": "my-project",
-          "cwd": "/Users/david/code",
+          "cwd": "/Users/example/code",
           "gitBranch": "main",
           "summary": "Working on iOS session view redesign",
           "summaryTitle": "iOS session view redesign",

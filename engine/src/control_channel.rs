@@ -1724,8 +1724,8 @@ mod tests {
             "ws://localhost:8000/api/agents/control/ws"
         );
         assert_eq!(
-            control_ws_url("https://david010.longhouse.ai/").unwrap(),
-            "wss://david010.longhouse.ai/api/agents/control/ws"
+            control_ws_url("https://demo.longhouse.ai/").unwrap(),
+            "wss://demo.longhouse.ai/api/agents/control/ws"
         );
     }
 

@@ -447,9 +447,9 @@ private struct WorkspacePathList: View {
             ),
         ],
         previewWorkspacePaths: [
-            "/Users/davidrose/git/zerg/longhouse",
-            "/Users/davidrose/git/zerg",
-            "/Users/davidrose/git/me",
+            "/Users/example/git/zerg/longhouse",
+            "/Users/example/git/zerg",
+            "/Users/example/git/me",
         ]
     ) { _ in }
     .environmentObject(AppState())

@@ -140,7 +140,7 @@ function buildOverview(hoursBack: number) {
         provider: "claude",
         project: "zerg",
         device_id: "broken-machine",
-        device_name: "cube",
+        device_name: "demo-machine",
         state: "durable",
         terminal_phase: "completed",
         error_code: null,

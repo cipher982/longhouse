@@ -1080,7 +1080,7 @@ async def stream_canary_workspace(
 ) -> EventSourceResponse:
     """Canary-only SSE: same generator as the browser endpoint, token-auth.
 
-    The always-on canary observer on cube uses this; requires X-Canary-Token
+    The always-on canary observer on the build host uses this; requires X-Canary-Token
     matching LONGHOUSE_CANARY_TOKEN. Admin users can still use the browser
     endpoint.
     """

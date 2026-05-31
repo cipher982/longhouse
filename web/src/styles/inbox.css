@@ -8,7 +8,7 @@
 
   /* Tunable defaults — kept on :root so the InboxTuner debug panel (writes
    * to :root inline) can override them without specificity fights. Values
-   * dialed in 2026-05-18 against real david010 data. */
+   * dialed in 2026-05-18 against real demo data. */
   :where(:root) {
     --inbox-row-font: 13px;
     --inbox-row-pad-y: 2px;

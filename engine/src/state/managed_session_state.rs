@@ -132,7 +132,7 @@ mod tests {
             .record_phase(&ManagedSessionPhaseSignal {
                 session_id: "sess-1".to_string(),
                 provider: "claude".to_string(),
-                workspace_path: Some("/Users/test/git/citi".to_string()),
+                workspace_path: Some("/Users/test/git/acme".to_string()),
                 phase_kind: "running".to_string(),
                 tool_name: Some("Bash".to_string()),
                 phase_source: "claude_hook".to_string(),
@@ -159,8 +159,8 @@ mod tests {
             )
             .unwrap();
         assert_eq!(row.0, "claude");
-        assert_eq!(row.1, "/Users/test/git/citi");
-        assert_eq!(row.2, "citi");
+        assert_eq!(row.1, "/Users/test/git/acme");
+        assert_eq!(row.2, "acme");
         assert_eq!(row.3, Some("Bash".to_string()));
         assert_eq!(row.4, "running");
     }
@@ -174,7 +174,7 @@ mod tests {
             .record_phase(&ManagedSessionPhaseSignal {
                 session_id: "sess-1".to_string(),
                 provider: "claude".to_string(),
-                workspace_path: Some("/Users/test/git/citi".to_string()),
+                workspace_path: Some("/Users/test/git/acme".to_string()),
                 phase_kind: "totally_wrong".to_string(),
                 tool_name: None,
                 phase_source: "claude_hook".to_string(),

@@ -66,6 +66,4 @@ export type ConnectorType =
   | "jira"
   | "linear"
   | "notion"
-  | "imessage"
-  | "whoop"
-  | "obsidian";
+  | "imessage";

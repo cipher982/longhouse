@@ -1199,7 +1199,7 @@ struct LonghouseMenuBarCoreTests {
                     ActivityTouchSnapshot(
                         provider: "claude",
                         lastUpdated: "2026-04-11T10:00:00Z",
-                        workspaceLabel: "zeta-athena-horizon",
+                        workspaceLabel: "acme",
                         branch: nil,
                         isSubagent: false
                     )
@@ -1218,7 +1218,7 @@ struct LonghouseMenuBarCoreTests {
                 ManagedSessionSnapshot(
                     sessionId: "managed-claude-1",
                     provider: "claude",
-                    workspaceLabel: "athena-horizon",
+                    workspaceLabel: "project",
                     branch: nil,
                     state: "attached",
                     phase: "thinking",
@@ -1345,7 +1345,7 @@ struct LonghouseMenuBarCoreTests {
                 {
                   "session_id": "sess-\(item.rawPhase)",
                   "provider": "claude",
-                  "workspace_label": "citi",
+                  "workspace_label": "acme",
                   "state": "attached",
                   "phase": "\(displayPhase)",
                   "phase_observed_at": "2026-04-22T01:56:59Z",

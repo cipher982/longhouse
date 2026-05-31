@@ -12,7 +12,7 @@ Intentionally simple: no Prometheus, no Alertmanager. A webhook (ntfy /
 Discord / Slack) is enough for solo-dev.
 
 Usage:
-    LONGHOUSE_CANARY_URL=https://david010.longhouse.ai \
+    LONGHOUSE_CANARY_URL=https://your-instance.longhouse.ai \
     LONGHOUSE_SLA_WEBHOOK='https://ntfy.sh/lh-sla' \
     python3 scripts/canary/sla_watch.py
 """

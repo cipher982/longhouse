@@ -10,7 +10,7 @@ Usage:
 
 Environment:
   COOLIFY_API_HOST   SSH host that has access to the Coolify API token
-                     Default: clifford
+                     Default: deploy-host
   COOLIFY_API_BASE   Coolify API base URL on the API host
                      Default: http://localhost:8000/api/v1
   COOLIFY_TIMEOUT    Default timeout in seconds if --timeout is omitted
@@ -30,7 +30,7 @@ need_cmd() {
 
 APP_ID=""
 TIMEOUT="${COOLIFY_TIMEOUT:-900}"
-COOLIFY_API_HOST="${COOLIFY_API_HOST:-clifford}"
+COOLIFY_API_HOST="${COOLIFY_API_HOST:-deploy-host}"
 COOLIFY_API_BASE="${COOLIFY_API_BASE:-http://localhost:8000/api/v1}"
 POLL_INTERVAL=5
 STATUS_POLL_ERROR_BUDGET="${COOLIFY_STATUS_POLL_ERROR_BUDGET:-6}"

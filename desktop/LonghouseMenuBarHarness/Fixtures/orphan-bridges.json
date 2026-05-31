@@ -10,11 +10,11 @@
     "platform": "macos",
     "status": "running",
     "service_name": "com.longhouse.shipper",
-    "service_file": "/Users/davidrose/Library/LaunchAgents/com.longhouse.shipper.plist",
-    "log_path": "/Users/davidrose/.longhouse/agent/logs/engine.log.*"
+    "service_file": "/Users/example/Library/LaunchAgents/com.longhouse.shipper.plist",
+    "log_path": "/Users/example/.longhouse/agent/logs/engine.log.*"
   },
   "engine_status": {
-    "path": "/Users/davidrose/.longhouse/agent/engine-status.json",
+    "path": "/Users/example/.longhouse/agent/engine-status.json",
     "exists": true,
     "fresh": true,
     "age_seconds": 4,
@@ -34,12 +34,12 @@
     "error": null
   },
   "outbox": {
-    "path": "/Users/davidrose/.longhouse/agent/outbox",
+    "path": "/Users/example/.longhouse/agent/outbox",
     "file_count": 0,
     "oldest_age_seconds": null
   },
   "activity_summary": {
-    "path": "/Users/davidrose/.longhouse/agent/longhouse-shipper.db",
+    "path": "/Users/example/.longhouse/agent/longhouse-shipper.db",
     "exists": true,
     "error": null,
     "sessions_today": 27,
@@ -53,7 +53,7 @@
       "claude": 1
     },
     "recent_touches": [
-      { "provider": "claude", "workspace_label": "athena-horizon", "last_updated": "2026-04-17T18:31:58Z", "branch": "main-clean" }
+      { "provider": "claude", "workspace_label": "project", "last_updated": "2026-04-17T18:31:58Z", "branch": "main-clean" }
     ],
     "latest_activity_at": "2026-04-17T18:31:58Z",
     "recent_window_minutes": 15
@@ -81,7 +81,7 @@
     {
       "provider": "claude",
       "pid": 28880,
-      "workspace_label": "athena-horizon",
+      "workspace_label": "project",
       "status": "stale",
       "started_at": "2026-04-17T18:12:00Z",
       "heartbeat_at": "2026-04-17T18:30:11Z",
@@ -95,17 +95,17 @@
     "headline": "Managed launch configuration looks coherent",
     "reasons": [],
     "suggested_actions": [],
-    "stored_url": "https://david010.longhouse.ai",
+    "stored_url": "https://demo.longhouse.ai",
     "machine_name": "cinder",
     "service_machine_name": "cinder",
     "runner": {
-      "path": "/Users/davidrose/.config/longhouse/runner.env",
+      "path": "/Users/example/.config/longhouse/runner.env",
       "exists": true,
       "error": null,
       "runner_name": "cinder",
       "runner_id": null,
       "runner_urls": [
-        "https://david010.longhouse.ai"
+        "https://demo.longhouse.ai"
       ],
       "install_mode": "desktop"
     }

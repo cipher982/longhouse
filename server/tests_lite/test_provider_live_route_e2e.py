@@ -45,7 +45,7 @@ def _route_artifact(*, verdict: str = "green", status: str = "pass") -> dict[str
         "schema_version": prs.PROVIDER_STATUS_SCHEMA_VERSION,
         "artifact_kind": route_e2e.ROUTE_E2E_ARTIFACT_KIND,
         "generated_at": _generated_at(),
-        "api_url": "https://david010.longhouse.ai",
+        "api_url": "https://demo.longhouse.ai",
         "device_id": "cinder",
         "engine_build": "abc1234",
         "providers": ["opencode"],

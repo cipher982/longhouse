@@ -197,7 +197,7 @@ export default function LaunchSessionModal({
                   type="text"
                   value={cwd}
                   onChange={(e) => setCwd(e.target.value)}
-                  placeholder="/Users/davidrose/git/zerg/longhouse"
+                  placeholder="/Users/example/git/zerg/longhouse"
                   autoComplete="off"
                   spellCheck={false}
                   data-testid="launch-cwd-input"

@@ -10,7 +10,7 @@
 #   ./scripts/smoke-prod.sh --wait    # wait 90s then test (post-deploy)
 #
 # Environment:
-#   INSTANCE_SUBDOMAIN        - Hosted instance subdomain (defaults to david010 when control-plane auth is configured)
+#   INSTANCE_SUBDOMAIN        - Hosted instance subdomain (defaults to $LONGHOUSE_DEFAULT_SUBDOMAIN or demo when control-plane auth is configured)
 #   CONTROL_PLANE_URL         - Control-plane base URL for hosted instance resolution
 #   CONTROL_PLANE_ADMIN_TOKEN - Admin token for hosted control-plane resolution (or set direct FRONTEND_URL/API_URL instead)
 #   FRONTEND_URL / API_URL    - Optional direct URL overrides when not resolving via control plane
@@ -45,7 +45,7 @@ FRONTEND_URL="${FRONTEND_URL:-}"
 API_URL="${API_URL:-$FRONTEND_URL}"
 BROWSER_TIMELINE_SESSIONS_PATH="/api/timeline/sessions?limit=1"
 
-lh_hosted_prepare_target "$INSTANCE_SUBDOMAIN" "$FRONTEND_URL" "$API_URL" "david010"
+lh_hosted_prepare_target "$INSTANCE_SUBDOMAIN" "$FRONTEND_URL" "$API_URL" "${LONGHOUSE_DEFAULT_SUBDOMAIN:-demo}"
 FRONTEND_URL="$LH_TARGET_FRONTEND_URL"
 API_URL="$LH_TARGET_API_URL"
 INSTANCE_SUBDOMAIN="${LH_TARGET_SUBDOMAIN:-$INSTANCE_SUBDOMAIN}"
@@ -262,7 +262,7 @@ test_config() {
 test_caddy() {
     local errors
     # grep -c returns exit code 1 if no matches (but still outputs "0")
-    errors=$(ssh zerg "docker logs coolify-proxy 2>&1 | tail -50 | grep -c 'ambiguous site definition'" 2>/dev/null) || true
+    errors=$(ssh runtime-host "docker logs coolify-proxy 2>&1 | tail -50 | grep -c 'ambiguous site definition'" 2>/dev/null) || true
     # Trim whitespace
     errors=$(echo "$errors" | tr -d '[:space:]')
 

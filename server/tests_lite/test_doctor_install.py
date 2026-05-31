@@ -306,7 +306,7 @@ def test_check_config_does_not_flag_hosted_machine_state_as_local_url_drift(tmp_
         machine_state_service,
         "load_machine_state",
         lambda: machine_state_service.MachineState(
-            runtime_url="https://david010.longhouse.ai",
+            runtime_url="https://demo.longhouse.ai",
             machine_name="cinder",
         ),
     )
@@ -314,8 +314,8 @@ def test_check_config_does_not_flag_hosted_machine_state_as_local_url_drift(tmp_
         "zerg.services.local_health.collect_launch_readiness",
         lambda: {
             "reasons": [],
-            "runner": {"runner_urls": ["https://david010.longhouse.ai"], "runner_name": "cinder"},
-            "control_plane_url": "https://david010.longhouse.ai",
+            "runner": {"runner_urls": ["https://demo.longhouse.ai"], "runner_name": "cinder"},
+            "control_plane_url": "https://demo.longhouse.ai",
             "machine_name": "cinder",
         },
     )

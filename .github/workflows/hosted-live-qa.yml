@@ -12,10 +12,11 @@ jobs:
   hosted-live-qa:
     name: "hosted-live-qa"
     runs-on: cube-deploy
+    if: github.repository == 'cipher982/longhouse'
     timeout-minutes: 25
     env:
       CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
-      QA_INSTANCE_SUBDOMAIN: david010
+      QA_INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN || 'demo' }}
       QA_HOME: /tmp/hosted-live-qa-${{ github.run_id }}-${{ github.run_attempt }}
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
 

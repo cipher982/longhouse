@@ -108,7 +108,7 @@ def test_detect_install_metadata_prefers_runtime_editable_path_over_stale_record
         lambda package_name="longhouse": update_manager.DistributionInstallProbe(
             install_method="uv",
             install_source="editable-path",
-            package_ref="/Users/davidrose/git/zerg/longhouse/server",
+            package_ref="/Users/example/git/zerg/longhouse/server",
         ),
     )
 
@@ -116,7 +116,7 @@ def test_detect_install_metadata_prefers_runtime_editable_path_over_stale_record
 
     assert metadata_payload.install_method == "uv"
     assert metadata_payload.install_source == "editable-path"
-    assert metadata_payload.package_ref == "/Users/davidrose/git/zerg/longhouse/server"
+    assert metadata_payload.package_ref == "/Users/example/git/zerg/longhouse/server"
     assert metadata_payload.installed_version == "0.1.8"
     assert metadata_payload.installed_at == "2026-04-07T00:00:00+00:00"
 
@@ -283,7 +283,7 @@ def test_upgrade_command_rewrites_stale_metadata_from_runtime_probe(monkeypatch,
         lambda package_name="longhouse": update_manager.DistributionInstallProbe(
             install_method="uv",
             install_source="editable-path",
-            package_ref="/Users/davidrose/git/zerg/longhouse/server",
+            package_ref="/Users/example/git/zerg/longhouse/server",
         ),
     )
     monkeypatch.setattr(update_manager, "_reconcile_runtime_after_upgrade", lambda: None)
@@ -295,7 +295,7 @@ def test_upgrade_command_rewrites_stale_metadata_from_runtime_probe(monkeypatch,
     metadata_payload = update_manager.load_install_metadata()
     assert metadata_payload is not None
     assert metadata_payload.install_source == "editable-path"
-    assert metadata_payload.package_ref == "/Users/davidrose/git/zerg/longhouse/server"
+    assert metadata_payload.package_ref == "/Users/example/git/zerg/longhouse/server"
     assert metadata_payload.installed_version == "0.1.8"
 
 

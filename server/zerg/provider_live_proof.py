@@ -1,6 +1,6 @@
 """Local provider live-proof artifacts consumed by local health.
 
-Sauron owns provider release-status verdicts. Local machines with real provider
+An external release scanner owns provider release-status verdicts. Local machines with real provider
 CLIs can separately prove operation behavior for the installed version. This
 module keeps that proof as an independent feed so release readiness and local
 operation evidence do not collapse into one envelope.

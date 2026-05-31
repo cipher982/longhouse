@@ -1,8 +1,8 @@
 """Provider release-status artifacts consumed by local health.
 
-Sauron owns the release watcher and publishes one latest status artifact per
-provider. Longhouse treats those artifacts as advisory release-safety signals;
-they do not replace local process/runtime truth.
+An external release scanner owns the release watcher and publishes one latest
+status artifact per provider. Longhouse treats those artifacts as advisory
+release-safety signals; they do not replace local process/runtime truth.
 """
 
 from __future__ import annotations
@@ -206,10 +206,10 @@ def _load_provider_artifact(provider: str) -> tuple[dict[str, Any] | None, dict[
 
 
 def _normalize_provider_artifact(provider: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Accept raw artifacts and Sauron API envelopes.
+    """Accept raw artifacts and external scanner API envelopes.
 
-    The jobs pack writes raw JSON artifacts, while the Sauron runtime exposes
-    them as ``{"provider": "...", "artifact": {...}}`` for API clarity.
+    The jobs pack writes raw JSON artifacts, while the external release scanner
+    exposes them as ``{"provider": "...", "artifact": {...}}`` for API clarity.
     Local health should classify the inner artifact, not the transport wrapper.
     """
     embedded = payload.get("artifact")

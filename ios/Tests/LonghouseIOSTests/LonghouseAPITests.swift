@@ -5,7 +5,7 @@ import Testing
 struct LonghouseAPITests {
     @Test
     func sessionWorkspaceURLIncludesLimitAndBranchMode() throws {
-        let baseURL = try #require(URL(string: "https://david010.longhouse.ai"))
+        let baseURL = try #require(URL(string: "https://demo.longhouse.ai"))
 
         let url = LonghouseAPI.sessionWorkspaceURL(
             baseURL: baseURL,
@@ -16,7 +16,7 @@ struct LonghouseAPITests {
         let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
 
         #expect(components.scheme == "https")
-        #expect(components.host == "david010.longhouse.ai")
+        #expect(components.host == "demo.longhouse.ai")
         #expect(components.path == "/api/timeline/sessions/session-1/workspace")
         #expect(components.queryItems == [
             URLQueryItem(name: "limit", value: "200"),
@@ -26,7 +26,7 @@ struct LonghouseAPITests {
 
     @Test
     func sessionMobileTailURLIncludesTailPagingFields() throws {
-        let baseURL = try #require(URL(string: "https://david010.longhouse.ai"))
+        let baseURL = try #require(URL(string: "https://demo.longhouse.ai"))
 
         let url = LonghouseAPI.sessionMobileTailURL(
             baseURL: baseURL,
@@ -49,7 +49,7 @@ struct LonghouseAPITests {
 
     @Test
     func sessionWorkspaceStreamURLSkipsInitialSnapshotByDefault() throws {
-        let baseURL = try #require(URL(string: "https://david010.longhouse.ai"))
+        let baseURL = try #require(URL(string: "https://demo.longhouse.ai"))
 
         let url = SessionWorkspaceStream.streamURL(baseURL: baseURL, sessionId: "session-1")
         let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
@@ -228,59 +228,59 @@ struct LonghouseAPITests {
 
     @Test
     func compactWorkspacePathReplacesUserHomePrefix() {
-        #expect(LonghouseAPI.compactWorkspacePath("/Users/davidrose/git/zerg/longhouse") == "~/git/zerg/longhouse")
+        #expect(LonghouseAPI.compactWorkspacePath("/Users/example/git/zerg/longhouse") == "~/git/zerg/longhouse")
         #expect(LonghouseAPI.compactWorkspacePath("/var/app-data/longhouse") == "/var/app-data/longhouse")
     }
 
     @Test
     func commonWorkspacePathSuggestionsUsesRecentParentsAndObservedRoots() {
         let paths = LonghouseAPI.commonWorkspacePathSuggestions(from: [
-            "/Users/davidrose/git/zerg/longhouse",
-            "/Users/davidrose/Projects/longhouse-ios",
+            "/Users/example/git/zerg/longhouse",
+            "/Users/example/Projects/longhouse-ios",
         ])
 
         #expect(paths == [
-            "/Users/davidrose/git/zerg",
-            "/Users/davidrose/git",
-            "/Users/davidrose/Projects",
+            "/Users/example/git/zerg",
+            "/Users/example/git",
+            "/Users/example/Projects",
         ])
     }
 
     @Test
     func commonWorkspacePathSuggestionsDoesNotInventUnseenSiblingRoots() {
         let paths = LonghouseAPI.commonWorkspacePathSuggestions(from: [
-            "/Users/davidrose/git/zerg/longhouse",
+            "/Users/example/git/zerg/longhouse",
         ])
 
-        #expect(paths.contains("/Users/davidrose/git"))
-        #expect(!paths.contains("/Users/davidrose/code"))
-        #expect(!paths.contains("/Users/davidrose/src"))
+        #expect(paths.contains("/Users/example/git"))
+        #expect(!paths.contains("/Users/example/code"))
+        #expect(!paths.contains("/Users/example/src"))
     }
 
     @Test
     func commonWorkspacePathSuggestionsDedupesAgainstRecentAndSkipsHome() {
         let paths = LonghouseAPI.commonWorkspacePathSuggestions(from: [
-            "/Users/davidrose/git/zerg/longhouse",
-            "/Users/davidrose/git",
-            "/Users/davidrose/git/",
+            "/Users/example/git/zerg/longhouse",
+            "/Users/example/git",
+            "/Users/example/git/",
         ])
 
-        #expect(paths == ["/Users/davidrose/git/zerg"])
+        #expect(paths == ["/Users/example/git/zerg"])
     }
 
     @Test
     func commonWorkspacePathSuggestionsKeepsNonUserParentsAndHonorsLimit() {
         let paths = LonghouseAPI.commonWorkspacePathSuggestions(from: [
             "/opt/acme/service",
-            "/Users/davidrose/git/zerg/longhouse",
-            "/Users/davidrose/Projects/app/mobile",
+            "/Users/example/git/zerg/longhouse",
+            "/Users/example/Projects/app/mobile",
         ], limit: 4)
 
         #expect(paths == [
             "/opt/acme",
-            "/Users/davidrose/git/zerg",
-            "/Users/davidrose/git",
-            "/Users/davidrose/Projects/app",
+            "/Users/example/git/zerg",
+            "/Users/example/git",
+            "/Users/example/Projects/app",
         ])
     }
 

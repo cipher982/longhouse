@@ -57,7 +57,7 @@ def test_assistant_events_contain_ignores_user_echo() -> None:
 def test_discover_machine_picks_online_codex_capable_machine(monkeypatch) -> None:
     def fake_http_json(method, url, **kwargs):
         assert method == "GET"
-        assert url == "https://david010.longhouse.ai/api/timeline/machines"
+        assert url == "https://demo.longhouse.ai/api/timeline/machines"
         return smoke.HttpResult(
             200,
             "{}",
@@ -76,8 +76,8 @@ def test_discover_machine_picks_online_codex_capable_machine(monkeypatch) -> Non
                         "can_launch_codex": False,
                     },
                     {
-                        "device_id": "cube",
-                        "machine_name": "cube",
+                        "device_id": "demo-machine",
+                        "machine_name": "demo-machine",
                         "online": True,
                         "supports": ["codex.launch"],
                         "can_launch_codex": True,
@@ -88,9 +88,9 @@ def test_discover_machine_picks_online_codex_capable_machine(monkeypatch) -> Non
 
     monkeypatch.setattr(smoke, "_http_json", fake_http_json)
 
-    machine = smoke.discover_machine("https://david010.longhouse.ai", "cookie")
+    machine = smoke.discover_machine("https://demo.longhouse.ai", "cookie")
 
-    assert machine["device_id"] == "cube"
+    assert machine["device_id"] == "demo-machine"
 
 
 def test_parse_last_json_line_skips_logs() -> None:
@@ -121,7 +121,7 @@ def test_http_json_uses_browser_like_user_agent(monkeypatch) -> None:
 
     monkeypatch.setattr(smoke, "urlopen", fake_urlopen)
 
-    result = smoke._http_json("GET", "https://david010.longhouse.ai/api/health")
+    result = smoke._http_json("GET", "https://demo.longhouse.ai/api/health")
 
     assert result.status == 200
     assert "Mozilla/5.0" in captured["user_agent"]
@@ -137,7 +137,7 @@ def test_remote_python_ssh_accepts_new_host_keys(monkeypatch) -> None:
 
     monkeypatch.setattr(smoke.subprocess, "run", fake_run)
 
-    smoke._run_remote_python("zerg", container="longhouse-david010", script="print('ok')")
+    smoke._run_remote_python("zerg", container="longhouse-demo", script="print('ok')")
 
     assert captured["command"][:5] == [
         "ssh",
@@ -166,10 +166,10 @@ def test_launch_session_rejects_non_live_state(monkeypatch) -> None:
 
     try:
         smoke.launch_session(
-            "https://david010.longhouse.ai",
+            "https://demo.longhouse.ai",
             "cookie",
-            device_id="cube",
-            cwd="/Users/davidrose/git/zerg/longhouse",
+            device_id="demo-machine",
+            cwd="/Users/example/git/zerg/longhouse",
             project="zerg",
             display_name="smoke",
             client_request_id="rid",

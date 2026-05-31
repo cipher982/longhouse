@@ -32,8 +32,8 @@ DEPLOY_GATE_JOB = "Queue deploy behind earlier main SHAs + green CI"
 RUNTIME_IMAGE_WORKFLOW = "Publish Runtime Image"
 RUNTIME_IMAGE_JOB = "build-and-push"
 CANARY_SURFACE = "Canary"
-DEFAULT_CANARY_CONTAINER_NAME = "longhouse-david010"
-DEFAULT_CANARY_HEALTH_URL = "https://david010.longhouse.ai/api/health"
+DEFAULT_CANARY_CONTAINER_NAME = "longhouse-" + os.environ.get("LONGHOUSE_DEFAULT_SUBDOMAIN", "demo")
+DEFAULT_CANARY_HEALTH_URL = "https://" + os.environ.get("LONGHOUSE_DEFAULT_SUBDOMAIN", "demo") + ".longhouse.ai/api/health"
 
 
 class NoRunsError(RuntimeError):

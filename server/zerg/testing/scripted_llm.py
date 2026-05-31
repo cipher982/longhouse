@@ -109,10 +109,9 @@ def find_matching_scenario(prompt: str, role: str) -> Optional[Dict[str, Any]]:
         }
 
     is_disk = any(k in text for k in ("disk", "storage", "space"))
-    is_cube = "cube" in text
-    is_clifford = "clifford" in text
+    is_deploy_host = "deploy-host" in text
     is_zerg = "zerg" in text
-    host_count = sum([is_cube, is_clifford, is_zerg])
+    host_count = sum([is_deploy_host, is_zerg])
     # Heuristic: multi-host disk checks imply parallel intent even without the keyword.
     is_parallel = "parallel" in text or host_count >= 2
     is_math = "2+2" in text or "2 + 2" in text
@@ -126,7 +125,7 @@ def find_matching_scenario(prompt: str, role: str) -> Optional[Dict[str, Any]]:
     resume_session_id = session_match.group(1) if session_match else None
 
     if role == "commis":
-        if is_disk and (is_cube or is_clifford or is_zerg):
+        if is_disk and (is_deploy_host or is_zerg):
             return {
                 "role": "commis",
                 "name": "disk_space_commis",
@@ -167,7 +166,7 @@ def find_matching_scenario(prompt: str, role: str) -> Optional[Dict[str, Any]]:
         }
 
     # Coordinator: match disk check and provide a generic fallback for everything else.
-    if is_disk and is_cube:
+    if is_disk and is_deploy_host:
         return {
             "role": "coordinator",
             "name": "disk_space_coordinator",
@@ -461,10 +460,10 @@ class ScriptedChatLLM:
                     final_text = "Workspace commis completed successfully. Repository analyzed and changes captured."
                 elif "45%" in content:
                     # Disk space check with evidence in tool result
-                    final_text = "Cube is at 45% disk usage; biggest usage is Docker images/volumes."
+                    final_text = "deploy-host is at 45% disk usage; biggest usage is Docker images/volumes."
                 elif scenario and scenario.get("evidence_keyword") == "45%":
                     # Disk space scenario - inject evidence keyword even if not in tool result
-                    final_text = "Cube is at 45% disk usage; biggest usage is Docker images/volumes."
+                    final_text = "deploy-host is at 45% disk usage; biggest usage is Docker images/volumes."
                 else:
                     final_text = "Task completed successfully."
 
@@ -508,8 +507,8 @@ class ScriptedChatLLM:
 
         if role == "coordinator" and scenario and scenario.get("name") == "disk_space_parallel_coordinator":
             tasks = [
-                "Check disk space on cube and identify what is using space",
-                "Check disk space on clifford and identify what is using space",
+                "Check disk space on deploy-host and identify what is using space",
+                "Check disk space on deploy-host and identify what is using space",
                 "Check disk space on zerg and identify what is using space",
             ]
             tool_calls = [
@@ -526,7 +525,7 @@ class ScriptedChatLLM:
             tool_call = {
                 "id": f"call_{uuid.uuid4().hex[:8]}",
                 "name": "spawn_commis",
-                "args": {"task": "Check disk space on cube and identify what is using space"},
+                "args": {"task": "Check disk space on deploy-host and identify what is using space"},
             }
             return AIMessage(content="", tool_calls=[tool_call])
 
@@ -534,7 +533,7 @@ class ScriptedChatLLM:
             tool_call = {
                 "id": f"call_{uuid.uuid4().hex[:8]}",
                 "name": "runner_exec",
-                "args": {"target": "cube", "command": "df -h"},
+                "args": {"target": "deploy-host", "command": "df -h"},
             }
             return AIMessage(content="", tool_calls=[tool_call])
 

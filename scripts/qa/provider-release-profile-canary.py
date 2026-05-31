@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Provider release canary profile artifact generator.
 
-This emits the shared Sauron-facing release artifact for every managed provider.
+This emits the shared external-release-scanner-facing release artifact for every managed provider.
 Provider-specific live canaries fill in their own evidence later; this wrapper
 keeps the artifact schema and provider contract facts consistent across Codex,
 Claude, OpenCode, and Antigravity.
@@ -381,7 +381,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--source-review-note",
-        default="Sauron source review should fill this section before publishing a release recommendation.",
+        default="External source review should fill this section before publishing a release recommendation.",
     )
     parser.add_argument("--json", action="store_true")
     return parser

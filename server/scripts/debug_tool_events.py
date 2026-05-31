@@ -59,7 +59,7 @@ async def simulate_tool_events():
             "run_id": run_id,
             "tool_name": "ssh_exec",
             "tool_call_id": "call_001",
-            "tool_args_preview": "{'host': 'cube', 'command': 'df -h'}",
+            "tool_args_preview": "{'host': 'deploy-host', 'command': 'df -h'}",
             "timestamp": datetime.now(UTC).isoformat(),
         },
     )

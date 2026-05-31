@@ -3,7 +3,7 @@
 Status: Launch gate
 Owner: Machine Agent + managed Codex bridge
 Updated: 2026-05-24
-Related: `managed-codex-close-lifecycle.md`, `managed-codex-liveness.md`, `remote-session-launch.md`
+Related: the managed Codex close-lifecycle design (internal spec), the managed Codex liveness design (internal spec), `remote-session-launch.md`
 
 ## Problem
 

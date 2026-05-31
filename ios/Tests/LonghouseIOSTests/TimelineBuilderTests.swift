@@ -136,10 +136,10 @@ final class TimelineBuilderTests: XCTestCase {
             id: 1,
             role: "assistant",
             tool: "Bash",
-            input: ["command": .string("ssh clifford 'ls'\necho done")],
+            input: ["command": .string("ssh deploy-host 'ls'\necho done")],
             callId: "t1"
         )
-        XCTAssertEqual(TimelineBuilder.inputSummary(for: ev), "ssh clifford 'ls'")
+        XCTAssertEqual(TimelineBuilder.inputSummary(for: ev), "ssh deploy-host 'ls'")
     }
 
     func testInputSummaryForGrepReturnsPattern() {

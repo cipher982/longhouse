@@ -556,7 +556,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             id: sessionID,
             provider: "codex",
             project: "longhouse",
-            cwd: "/Users/davidrose/git/zerg/longhouse",
+            cwd: "/Users/example/git/zerg/longhouse",
             gitBranch: "main",
             summary: "Chat UI fixture",
             summaryTitle: "Chat UI Fixture",
@@ -653,7 +653,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         ))
         events.append(SessionEvent(
             id: next(), role: "assistant",
-            contentText: "Now I can see exactly what Oleg did. Two new blocker tickets appeared: **PAASSE-22459** and **PAASSE-22460**. Let me pull those.",
+            contentText: "Now I can see exactly what Alex did. Two new blocker tickets appeared: **PROJ-101** and **PROJ-102**. Let me pull those.",
             toolName: nil, toolInputJSON: nil, toolOutputText: nil, toolCallId: nil,
             toolCallState: nil, timestamp: ts(), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
         ))
@@ -667,7 +667,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         events.append(SessionEvent(
             id: next(), role: "tool", contentText: nil,
             toolName: "getJiraIssue", toolInputJSON: nil,
-            toolOutputText: "PAASSE-22459: blocked on MR rename by Oleg at 18:42.",
+            toolOutputText: "PROJ-101: blocked on MR rename by Alex at 18:42.",
             toolCallId: callId, toolCallState: .completed, timestamp: ts(),
             inActiveContext: true, isHeadBranch: true, inputOrigin: nil
         ))
@@ -694,7 +694,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         ))
         events.append(SessionEvent(
             id: next(), role: "assistant",
-            contentText: "The MR was renamed by Oleg at 18:42, then moved back to In Review.",
+            contentText: "The MR was renamed by Alex at 18:42, then moved back to In Review.",
             toolName: nil, toolInputJSON: nil, toolOutputText: nil, toolCallId: nil,
             toolCallState: nil, timestamp: ts(), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
         ))

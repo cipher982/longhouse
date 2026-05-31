@@ -85,12 +85,12 @@ def test_infer_origin_label_uses_specific_environment_before_device_id() -> None
     assert (
         infer_origin_label(
             origin_label=None,
-            environment="davidrose-mbp",
+            environment="example-mbp",
             device_id="shipper-zerg",
             execution_home=None,
             continuation_kind=None,
         )
-        == "davidrose-mbp"
+        == "example-mbp"
     )
 
 
@@ -99,11 +99,11 @@ def test_infer_origin_label_falls_back_to_device_id_then_local() -> None:
         infer_origin_label(
             origin_label=None,
             environment="development",
-            device_id="shipper-davidrose",
+            device_id="shipper-example",
             execution_home=None,
             continuation_kind=None,
         )
-        == "davidrose"
+        == "example"
     )
     assert (
         infer_origin_label(

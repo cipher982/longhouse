@@ -270,7 +270,7 @@ def test_register_runner_reenroll_returns_existing_capabilities(tmp_path):
             runner_crud.create_runner(
                 db=db,
                 owner_id=user.id,
-                name="clifford",
+                name="demo-runner",
                 auth_secret="old-secret",
                 capabilities=["exec.full"],
             )
@@ -288,14 +288,14 @@ def test_register_runner_reenroll_returns_existing_capabilities(tmp_path):
                     client = TestClient(app, backend="asyncio")
                     response = client.post(
                         "/api/runners/register",
-                        json={"enroll_token": enroll_token, "name": "clifford"},
+                        json={"enroll_token": enroll_token, "name": "demo-runner"},
                     )
             finally:
                 api_app.dependency_overrides.clear()
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["name"] == "clifford"
+    assert payload["name"] == "demo-runner"
     assert payload["runner_capabilities_csv"] == "exec.full"
 
 
@@ -336,12 +336,12 @@ def test_register_runner_respects_requested_capabilities(tmp_path):
                     client = TestClient(app, backend="asyncio")
                     response = client.post(
                         "/api/runners/register",
-                        json={"enroll_token": enroll_token, "name": "cube", "capabilities": ["exec.full", "docker"]},
+                        json={"enroll_token": enroll_token, "name": "demo-machine", "capabilities": ["exec.full", "docker"]},
                     )
             finally:
                 api_app.dependency_overrides.clear()
 
-            runner = runner_crud.get_runner_by_name(db, owner_id=user.id, name="cube")
+            runner = runner_crud.get_runner_by_name(db, owner_id=user.id, name="demo-machine")
 
     assert response.status_code == 200
     payload = response.json()

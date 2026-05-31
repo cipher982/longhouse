@@ -45,10 +45,6 @@ else
     echo "Migrations complete"
 fi
 
-# Auto-seed personal tool credentials if local config exists (idempotent)
-echo "Checking for personal credentials seed..."
-python scripts/seed_personal_credentials.py 2>&1 || echo "Credentials seeding skipped or failed (non-fatal)"
-
 echo "Starting uvicorn with hot reload..."
 exec uvicorn zerg.main:app \
     --host 0.0.0.0 \

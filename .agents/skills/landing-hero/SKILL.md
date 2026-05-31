@@ -240,7 +240,7 @@ This loop is for layout/story exploration. The AI image pipeline below is for wh
 - `make dev` or `make dev-demo` running (for web screenshots)
 - OpenRouter API key: `python3 ~/git/me/scripts/infisical-get.py OPENROUTER_API_KEY`
 - Xcode 16+ with Swift 6 (for widget snapshot tool — no simulator needed)
-- Zeta GCP credentials (for Imagen 4 only, optional — skip if unavailable, Gemini Pro via OpenRouter is the recommended path)
+- GCP credentials (for Imagen 4 only, optional — skip if unavailable, Gemini Pro via OpenRouter is the recommended path)
 
 ## Step 1: Capture Web Screenshots
 
@@ -330,7 +330,7 @@ Capture a real Claude Code session in iTerm2 (or any standard terminal — avoid
 # 1. Open iTerm2 and launch claude with a task that triggers tool calls
 osascript -e 'tell application "iTerm" to activate'
 # Then via System Events, type a command like:
-/Users/davidrose/.local/bin/claude 'Read server/zerg/routers/auth_browser.py briefly and suggest a fix'
+~/.local/bin/claude 'Read server/zerg/routers/auth_browser.py briefly and suggest a fix'
 
 # 2. Wait for rendering (8-30s depending on task complexity)
 # Capture mid-thought for "thinking" state, or after completion for full output
@@ -353,7 +353,7 @@ Tips:
 - Capture at ~30s for completed output with code analysis, diffs, tool calls
 - Use `claude` (no `-p` flag) for the full TUI with status bar, colored prompts
 - The `❯` prompt, `zerg git:(main)` status bar, and bullet formatting are the real Claude Code look
-- Must use full path `/Users/davidrose/.local/bin/claude` in Terminal.app (PATH not loaded in `-sh`)
+- Must use the full path `~/.local/bin/claude` in Terminal.app (PATH not loaded in `-sh`)
 
 ## Solo-Device 0→1 Pipeline (recommended default)
 
@@ -560,7 +560,7 @@ If you Read the same `/tmp/output.png` path after regenerating, the model may st
 
 ### Playwright scripts must live in-repo
 
-Running an ad-hoc `chromium.launch()` script from `/tmp/foo.mjs` fails — the repo's Playwright install doesn't resolve modules from outside the project root. Drop the mjs file inside `/Users/davidrose/git/zerg/` (gitignored or cleaned up after) and import `'playwright'` normally.
+Running an ad-hoc `chromium.launch()` script from `/tmp/foo.mjs` fails — the repo's Playwright install doesn't resolve modules from outside the project root. Drop the mjs file inside the repo root (gitignored or cleaned up after) and import `'playwright'` normally.
 
 Common issues to check:
 - Phone screen facing backward (re-prompt with "screen facing viewer")
@@ -596,9 +596,9 @@ If you regenerate assets, keep these invariants:
 |-------|-------------|------------|---------|----------------|----------|
 | **Gemini 3 Pro Image** (OpenRouter) | YES | ~1500x700 | Sharp, legible | Stylized/3D | **Hero composition with real screenshots** |
 | **Gemini 3.1 Flash Image** (OpenRouter) | YES | ~1500x700 | Good | Moderate | Fast iteration |
-| **Gemini 2.5 Flash Image** (Vertex/Zeta) | YES | ~1470x700 | Decent | Moderate | Free option, lower quality |
-| **Imagen 4 Ultra** (Vertex/Zeta) | NO (text-only) | 2816x1536 | Blurry | Photorealistic | Device frames without real screenshots |
-| **Imagen 4 Standard** (Vertex/Zeta) | NO (text-only) | 2816x1536 | Blurry | Photorealistic | Same as Ultra, cheaper |
+| **Gemini 2.5 Flash Image** (Vertex) | YES | ~1470x700 | Decent | Moderate | Free option, lower quality |
+| **Imagen 4 Ultra** (Vertex) | NO (text-only) | 2816x1536 | Blurry | Photorealistic | Device frames without real screenshots |
+| **Imagen 4 Standard** (Vertex) | NO (text-only) | 2816x1536 | Blurry | Photorealistic | Same as Ultra, cheaper |
 
 **Verdict:** Gemini Pro Image is the only model that accepts input images AND produces legible UI. Imagen 4 has higher resolution but fabricates all UI content. For production, use Gemini Pro for composition then consider upscaling.
 
@@ -607,11 +607,11 @@ If you regenerate assets, keep these invariants:
 For photorealistic device mockups WITHOUT real screenshot content:
 
 ```bash
-TOKEN=$(CLOUDSDK_CONFIG=~/.config/gcloud-zeta \
+TOKEN=$(CLOUDSDK_CONFIG=~/.config/gcloud \
   /opt/homebrew/share/google-cloud-sdk/bin/gcloud auth print-access-token)
 
 curl -s -X POST \
-  "https://us-central1-aiplatform.googleapis.com/v1/projects/zeta-phoenix/locations/us-central1/publishers/google/models/imagen-4.0-ultra-generate-001:predict" \
+  "https://us-central1-aiplatform.googleapis.com/v1/projects/your-gcp-project/locations/us-central1/publishers/google/models/imagen-4.0-ultra-generate-001:predict" \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{

@@ -25,7 +25,7 @@ def _session(**overrides):
         "execution_home": "managed_local",
         "managed_transport": "codex_app_server",
         "source_runner_id": 17,
-        "source_runner_name": "David MacBook",
+        "source_runner_name": "Demo MacBook",
         "continuation_kind": None,
         "origin_label": None,
         "environment": "development",
