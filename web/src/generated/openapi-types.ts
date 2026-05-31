@@ -4428,6 +4428,10 @@ export interface paths {
         /**
          * Health Db
          * @description Database readiness check - verifies critical tables are initialized.
+         *
+         *     Returns ready/initializing/error. Schema detail (which table is missing,
+         *     the verified table list) is operator-only; untrusted callers get a bare
+         *     status so this isn't a public schema-disclosure surface.
          */
         get: operations["health_db_check"];
         put?: never;
@@ -4490,7 +4494,14 @@ export interface paths {
         };
         /**
          * Health Check
-         * @description Readiness probe: core dependencies are available.
+         * @description Health probe: core dependencies are available.
+         *
+         *     Returns HTTP 503 when any critical check fails so monitors and the README
+         *     smoke test (`curl -sf`) correctly treat an unhealthy body as a failure.
+         *
+         *     Verbose, infra-revealing detail (DB path, email addresses, migration log,
+         *     env specifics) is included only for trusted callers (loopback, admin
+         *     session, or internal token); public callers get a minimal status body.
          */
         get: operations["health_check_get"];
         put?: never;
