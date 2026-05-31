@@ -515,11 +515,7 @@ verify_fresh_shell_path() {
 
 # Print final instructions
 print_success() {
-    local has_launcher_cli=0
     local is_macos=0
-    if has_command claude || has_command codex; then
-        has_launcher_cli=1
-    fi
     if [[ "$(uname -s)" == "Darwin" ]]; then
         is_macos=1
     fi
@@ -554,11 +550,6 @@ print_success() {
         echo ""
         echo "Later, when you want control after launch:"
         echo "  longhouse codex"
-    fi
-    if [[ "$has_launcher_cli" == "1" ]]; then
-        echo ""
-        echo "Optional:"
-        echo "  longhouse wrap --install    Keep typing bare claude/codex through Longhouse"
     fi
     echo ""
     echo "Repair tools (only if you need them later):"
