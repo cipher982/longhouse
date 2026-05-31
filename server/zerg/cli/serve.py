@@ -540,13 +540,13 @@ def serve(
             typer.echo("  re-run with --allow-public-no-auth to accept the risk.")
             raise typer.Exit(code=1)
 
-    # Prevent SQLite with multiple workers
+    # Prevent SQLite with multiple workers (Longhouse is SQLite-only).
     if is_sqlite and workers > 1:
         typer.secho(
             "ERROR: SQLite does not support multiple workers.",
             fg=typer.colors.RED,
         )
-        typer.echo("  Use --workers 1 with SQLite, or switch to Postgres.")
+        typer.echo("  Use --workers 1.")
         raise typer.Exit(code=1)
 
     # Daemon mode incompatible with reload
@@ -606,8 +606,7 @@ def serve(
         typer.echo("")
 
     typer.echo("Starting Longhouse server...")
-    typer.echo(f"  Database: {_mask_db_url(db_url)}")
-    typer.echo(f"  Mode: {'lite (SQLite)' if is_sqlite else 'full (Postgres)'}")
+    typer.echo(f"  Database: {_mask_db_url(db_url)} (SQLite)")
     typer.echo(f"  Frontend: {frontend_source}")
     if daemon:
         typer.echo("  Daemon: yes")

@@ -490,7 +490,7 @@ export default function SessionsPage() {
           <div className="sessions-guided-steps">
             <p className="sessions-guided-steps-label">Run this on your machine:</p>
             <ol className="sessions-guided-steps-list">
-              <li><code>curl -fsSL https://longhouse.ai/install.sh | sh</code> &mdash; install the CLI</li>
+              <li><code>curl -fsSL https://get.longhouse.ai/install.sh | bash</code> &mdash; install the CLI</li>
               <li><code>longhouse connect --install</code> &mdash; link this machine and start background import</li>
               <li><code>longhouse ship</code> &mdash; pull your existing sessions in now</li>
             </ol>
