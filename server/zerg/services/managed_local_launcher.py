@@ -143,7 +143,7 @@ def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchPar
     if not str(params.machine_name or "").strip():
         raise ManagedLocalLaunchError(
             "Browser-launched managed-local sessions were removed. Launch from the target machine with "
-            "`longhouse claude`, `longhouse codex`, `longhouse opencode`, or `longhouse antigravity`.",
+            "`longhouse claude`, `longhouse codex`, `longhouse opencode`, or `longhouse agy`.",
             status_code=410,
         )
 

@@ -68,15 +68,29 @@ def _host_is_public(host: str) -> bool:
 def _effective_auth_disabled() -> bool:
     """Return True when runtime auth will be OFF, mirroring config resolution.
 
-    Auth is disabled when AUTH_DISABLED, DEMO_MODE, or TESTING is truthy — the
-    same inputs config.resolve_app_mode() uses. This is read after the repo
-    .env has been loaded so file-based config cannot slip past the gate.
+    Delegates to the SAME resolution the runtime uses so the gate can't drift:
+    auth is disabled when AUTH_DISABLED/DEMO_MODE/TESTING is truthy OR when
+    APP_MODE resolves to demo (APP_MODE=dev alone does NOT disable auth in
+    config). Read after the repo .env is loaded so file-based config cannot
+    slip past the gate.
     """
 
     def _truthy(value: str | None) -> bool:
         return bool(value) and value.strip().lower() in {"1", "true", "yes", "on"}
 
-    return _truthy(os.environ.get("AUTH_DISABLED")) or _truthy(os.environ.get("DEMO_MODE")) or _truthy(os.environ.get("TESTING"))
+    if _truthy(os.environ.get("AUTH_DISABLED")) or _truthy(os.environ.get("DEMO_MODE")) or _truthy(os.environ.get("TESTING")):
+        return True
+    # Mirror config exactly: demo_mode (which now includes APP_MODE=demo) also
+    # disables auth. Catch it here so `APP_MODE=demo serve --host 0.0.0.0`
+    # cannot slip past the public-bind gate. (APP_MODE=dev alone does NOT
+    # disable auth in config, so it is intentionally not treated as such here.)
+    try:
+        from zerg.config import AppMode
+        from zerg.config import resolve_app_mode
+
+        return resolve_app_mode() is AppMode.DEMO
+    except Exception:
+        return False
 
 
 def _load_repo_env_for_gate() -> None:

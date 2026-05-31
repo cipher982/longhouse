@@ -19,6 +19,9 @@ logger = logging.getLogger(__name__)
 _ALLOWED_POST_PREFIXES: tuple[str, ...] = (
     "/api/agents/demo",
     "/api/system/seed-demo-sessions",
+    # The timeline UI seeds demo sessions here (SessionsPage auto-seed + the
+    # opt-in/retry button); must stay POST-able in demo mode.
+    "/api/timeline/demo",
     "/api/auth/",
 )
 

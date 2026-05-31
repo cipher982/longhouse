@@ -400,8 +400,13 @@ function SessionDetailWorkspaceRoute({
     </div>
   );
 
+  // Proactive operator mode (Loop Mode: Assist/Autopilot) is frozen for launch
+  // per VISION ("proactive operator mode" under Frozen/removed). The Autopilot
+  // value is currently inert, so a visible toggle would imply behavior that does
+  // not exist. Keep the component + handlers wired but do not surface the pill
+  // until the capability ships and VISION changes. Demo mode may still show it.
   const showLoopModePill =
-    interaction.isManagedLocalSession && !sessionEnded && !config.demoMode;
+    config.demoMode && interaction.isManagedLocalSession && !sessionEnded;
 
   return (
     <div

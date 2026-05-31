@@ -81,7 +81,7 @@ export default function QuickStartPage() {
       <CodeBlock title="terminal">
         {`longhouse claude       # Claude Code with control channel
 longhouse codex        # Codex CLI with control channel
-longhouse antigravity  # Antigravity CLI, managed observe-only
+longhouse agy          # Antigravity CLI, managed observe-only
 longhouse opencode     # OpenCode, managed observe-only`}
       </CodeBlock>
       <p>
@@ -97,7 +97,7 @@ longhouse opencode     # OpenCode, managed observe-only`}
           but managed sessions keep Longhouse ownership of the launch and
           observation path. Use <code>longhouse claude</code> or{" "}
           <code>longhouse codex</code> for steerable sessions, and{" "}
-          <code>longhouse antigravity</code> or <code>longhouse opencode</code>{" "}
+          <code>longhouse agy</code> or <code>longhouse opencode</code>{" "}
           for managed observe-only archive and signals.
         </p>
       </div>

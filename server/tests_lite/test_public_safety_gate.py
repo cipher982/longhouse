@@ -29,8 +29,12 @@ def _run_serve(args, env):
     base = {"DATABASE_URL": "sqlite:///:memory:"}
     base.update(env)
     with mock.patch.dict(os.environ, base, clear=False):
-        if "AUTH_DISABLED" not in env:
-            os.environ.pop("AUTH_DISABLED", None)
+        # The lite-test harness exports TESTING=1 (and may set other auth-
+        # disabling vars); clear the auth-disabling inputs unless this case
+        # explicitly provides them, so the gate logic is exercised honestly.
+        for var in ("AUTH_DISABLED", "TESTING", "DEMO_MODE", "APP_MODE"):
+            if var not in env:
+                os.environ.pop(var, None)
         with (
             mock.patch("uvicorn.run") as uvicorn_run,
             mock.patch("zerg.cli.serve._get_lan_ip", return_value=None),
@@ -59,6 +63,14 @@ def test_concrete_non_loopback_host_with_auth_disabled_is_refused():
 def test_demo_mode_on_public_bind_is_refused():
     """B1 bypass (Codex P0): DEMO_MODE disables auth too — gate must catch it."""
     result, started = _run_serve(["--host", "0.0.0.0"], {"DEMO_MODE": "1"})
+    assert result.exit_code == 1
+    assert not started
+    assert "Refusing to bind a public interface" in result.output
+
+
+def test_app_mode_demo_on_public_bind_is_refused():
+    """APP_MODE=demo disables auth via config; the gate must catch it too."""
+    result, started = _run_serve(["--host", "0.0.0.0"], {"APP_MODE": "demo"})
     assert result.exit_code == 1
     assert not started
     assert "Refusing to bind a public interface" in result.output

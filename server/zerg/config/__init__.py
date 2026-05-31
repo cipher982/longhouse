@@ -441,8 +441,13 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
                 if value is not None:
                     os.environ[key] = value
 
-    demo_mode = _truthy(os.getenv("DEMO_MODE"))
     app_mode = resolve_app_mode()
+    # demo_mode must agree with app_mode: APP_MODE=demo is a demo instance even
+    # if DEMO_MODE is unset. Frontend derives its demoMode from app_mode, and
+    # demo-only write behavior (e.g. auto-seeding synthetic sessions) keys off
+    # this flag — they must not diverge or a demo instance could be treated as
+    # real (or vice versa).
+    demo_mode = _truthy(os.getenv("DEMO_MODE")) or app_mode is AppMode.DEMO
 
     return Settings(
         app_mode=app_mode,

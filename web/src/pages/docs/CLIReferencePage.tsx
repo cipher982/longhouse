@@ -25,7 +25,7 @@ longhouse serve --port 9090    # custom port
 longhouse serve --demo         # start with demo data`}
       </CodeBlock>
 
-      <h3>longhouse claude / codex / antigravity / opencode</h3>
+      <h3>longhouse claude / codex / agy / opencode</h3>
       <p>
         Launch a managed provider CLI session with a Longhouse control channel.
         The session runs in your terminal and stays reachable from other
@@ -34,7 +34,7 @@ longhouse serve --demo         # start with demo data`}
       <CodeBlock title="terminal">
         {`longhouse claude               # start Claude Code (steerable)
 longhouse codex                # start Codex CLI (steerable)
-longhouse antigravity          # start Antigravity CLI (managed observe-only)
+longhouse agy                  # start Antigravity CLI (managed observe-only)
 longhouse opencode             # start OpenCode (managed observe-only)`}
       </CodeBlock>
       <p>

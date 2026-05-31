@@ -331,16 +331,14 @@ describe("SessionDetailPage", () => {
       "session-workspace-route--managed",
       "session-workspace-route--tone-running",
     );
-    // Loop mode lives on the composer dock in the new layout.
-    expect(screen.getByTestId("session-loop-mode-pill")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Assist" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    expect(screen.getByRole("button", { name: "Autopilot" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
+    // Loop Mode (proactive operator) is frozen for launch per VISION: the pill
+    // is not surfaced outside demo mode, even for a managed live session.
+    expect(
+      screen.queryByTestId("session-loop-mode-pill"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Autopilot" }),
+    ).not.toBeInTheDocument();
     // Drawer-only context (summary / metadata / terminal attach) is hidden by default.
     expect(screen.queryByText("Summary")).not.toBeInTheDocument();
     expect(screen.queryByText("Metadata")).not.toBeInTheDocument();
