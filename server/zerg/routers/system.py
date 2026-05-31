@@ -8,11 +8,13 @@ from typing import Any
 from typing import Dict
 
 from fastapi import APIRouter
+from fastapi import Depends
 from fastapi import status
 from sqlalchemy import text
 
 from zerg.config import get_settings
 from zerg.database import get_session_factory
+from zerg.dependencies.auth import require_admin
 from zerg.models_config import is_capability_available
 
 router = APIRouter(prefix="/system", tags=["system"])
@@ -50,11 +52,13 @@ def system_capabilities() -> Dict[str, Any]:
 
 
 @router.post("/reset-sessions")
-async def reset_sessions() -> Dict[str, Any]:
-    """Clear all agent sessions (dev only).
+async def reset_sessions(_admin=Depends(require_admin)) -> Dict[str, Any]:
+    """Clear all agent sessions (admin only).
 
-    Used by ui-capture for deterministic empty state testing.
-    Disabled in production.
+    Destructive: deletes all events and sessions. Used by ui-capture for
+    deterministic empty-state testing. Requires an admin session (in
+    auth-disabled local/dev mode the local owner is admin); never reachable
+    unauthenticated on a public bind. Always disabled in production.
     """
     if _settings.environment and _settings.environment.lower() == "production":
         return {"error": "Reset disabled in production"}
@@ -70,11 +74,13 @@ async def reset_sessions() -> Dict[str, Any]:
 
 
 @router.post("/seed-demo-sessions")
-async def seed_demo_sessions() -> Dict[str, Any]:
+async def seed_demo_sessions(_admin=Depends(require_admin)) -> Dict[str, Any]:
     """Seed demo agent sessions for marketing/onboarding.
 
-    Public endpoint (no auth) for dev/demo purposes.
-    Disabled in production unless demo_mode is enabled.
+    Writes synthetic demo sessions into the database. Requires an admin
+    session (in auth-disabled local/dev mode the local owner is admin); never
+    reachable unauthenticated on a public bind. Disabled in production unless
+    demo_mode is enabled.
     """
     if _settings.environment and _settings.environment.lower() == "production" and not _settings.demo_mode:
         return {"error": "Demo seeding disabled in production"}

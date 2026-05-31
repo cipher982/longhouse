@@ -38,7 +38,11 @@ def count_users(db: Session, exclude_service: bool = False) -> int:
     """
     query = db.query(User)
     if exclude_service:
-        query = query.filter(User.provider != "service")
+        from sqlalchemy import or_
+
+        # provider is nullable; `!= "service"` excludes NULL in SQL, so OR in
+        # the NULL case to keep real (provider-less) users in the count.
+        query = query.filter(or_(User.provider != "service", User.provider.is_(None)))
     return query.count()
 
 

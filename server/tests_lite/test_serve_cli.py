@@ -33,7 +33,11 @@ def _patch_serve(monkeypatch, tmp_path, *, config):
     uvicorn_calls: list[tuple[tuple, dict]] = []
     saved_configs: list[dict] = []
 
-    monkeypatch.setattr(serve_cli, "_apply_lite_mode_defaults", lambda: os.environ.setdefault("DATABASE_URL", "sqlite:///tmp/test.db"))
+    monkeypatch.setattr(
+        serve_cli,
+        "_apply_lite_mode_defaults",
+        lambda *, public_intent=False: os.environ.setdefault("DATABASE_URL", "sqlite:///tmp/test.db"),
+    )
     monkeypatch.setattr(serve_cli, "_get_lan_ip", lambda: "192.168.1.42")
 
     import socket as socket_mod
@@ -81,6 +85,7 @@ def test_serve_uses_saved_public_url_for_runtime_env(monkeypatch, tmp_path):
         demo=False,
         demo_fresh=False,
         domain=None,
+        allow_public_no_auth=True,
     )
 
     assert os.environ["APP_PUBLIC_URL"] == "https://saved.example.com"
@@ -111,6 +116,7 @@ def test_serve_keeps_explicit_runtime_public_url_when_no_domain_passed(monkeypat
         demo=False,
         demo_fresh=False,
         domain=None,
+        allow_public_no_auth=True,
     )
 
     assert os.environ["APP_PUBLIC_URL"] == "https://env.example.com"
@@ -138,6 +144,7 @@ def test_serve_domain_overrides_runtime_env_and_persists_config(monkeypatch, tmp
         demo=False,
         demo_fresh=False,
         domain="longhouse.example.com",
+        allow_public_no_auth=True,
     )
 
     assert os.environ["APP_PUBLIC_URL"] == "https://longhouse.example.com"

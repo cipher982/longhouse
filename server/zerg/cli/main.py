@@ -34,6 +34,7 @@ from zerg.cli.opencode_channel import app as opencode_channel_app
 from zerg.cli.provider_live import app as provider_live_app
 from zerg.cli.runtime_artifact_smoke import runtime_artifact_install_command
 from zerg.cli.runtime_artifact_smoke import runtime_artifact_smoke_command
+from zerg.cli.serve import hash_password
 from zerg.cli.serve import serve
 from zerg.cli.serve import status
 from zerg.cli.sessions import app as sessions_app
@@ -256,6 +257,8 @@ app.add_typer(provider_live_app, name="provider-live", help="Managed-provider li
 
 for command in (serve, status, claude, wall, peers, message, tail, auth, ship, recall):
     app.command()(command)
+
+app.command(name="hash-password")(hash_password)
 
 app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})(opencode)
 app.command(name="agy", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})(antigravity)

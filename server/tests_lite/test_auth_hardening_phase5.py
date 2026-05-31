@@ -100,7 +100,14 @@ def test_internal_calls_require_shared_secret_even_when_auth_disabled():
 def test_single_tenant_config_requires_explicit_owner_email():
     from zerg.services.single_tenant import validate_single_tenant_config
 
-    settings = SimpleNamespace(single_tenant=True, auth_disabled=False, admin_emails="admin@example.com")
+    # No OWNER_EMAIL and no password auth configured → must fail closed.
+    settings = SimpleNamespace(
+        single_tenant=True,
+        auth_disabled=False,
+        admin_emails="admin@example.com",
+        longhouse_password="",
+        longhouse_password_hash="",
+    )
 
     with (
         patch("zerg.services.single_tenant.get_settings", return_value=settings),
@@ -108,10 +115,27 @@ def test_single_tenant_config_requires_explicit_owner_email():
     ):
         error = validate_single_tenant_config()
 
-    assert error == (
-        "Single-tenant mode with auth enabled requires OWNER_EMAIL. "
-        "Set OWNER_EMAIL to the email of the instance owner, or use AUTH_DISABLED=1 for OSS mode."
+    assert error is not None
+    assert "OWNER_EMAIL" in error
+
+
+def test_single_tenant_config_allows_password_auth_without_owner_email():
+    """B9: password-auth self-hosters may enable auth without OWNER_EMAIL."""
+    from zerg.services.single_tenant import validate_single_tenant_config
+
+    settings = SimpleNamespace(
+        single_tenant=True,
+        auth_disabled=False,
+        admin_emails="",
+        longhouse_password="",
+        longhouse_password_hash="pbkdf2_sha256$600000$abc$def",
     )
+
+    with (
+        patch("zerg.services.single_tenant.get_settings", return_value=settings),
+        patch.dict(os.environ, {}, clear=True),
+    ):
+        assert validate_single_tenant_config() is None
 
 
 def test_single_tenant_startup_fails_fast_on_owner_misconfig():
