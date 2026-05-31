@@ -11,9 +11,21 @@ import type { APIRequestContext } from "@playwright/test";
 import { test, expect, type Page } from "../fixtures";
 
 async function ensureDemoProviders(page: Page): Promise<void> {
-  // Hero empty state has no toolbar — auto-seed fires automatically; wait for toolbar
+  // The timeline no longer auto-seeds demo data outside demo mode (a real
+  // instance must not get synthetic sessions). If we land on the hero empty
+  // state, explicitly seed demo sessions via the API, then reload so the
+  // toolbar/providers render.
   const heroEmpty = page.locator(".sessions-hero-empty");
   if (await heroEmpty.isVisible({ timeout: 2000 }).catch(() => false)) {
+    const seeded = await page
+      .request.post("/api/timeline/demo")
+      .then((r) => r.ok())
+      .catch(() => false);
+    if (seeded) {
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+    }
+    // Wait for the toolbar to appear once data exists.
     await page.waitForSelector(".sessions-toolbar", { timeout: 20000 });
   }
 
@@ -204,11 +216,8 @@ test.describe("Sessions Page", () => {
     await page.goto("/timeline");
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
-    // If hero state, auto-seed fires automatically — wait for toolbar to appear
-    const heroEmpty = page.locator(".sessions-hero-empty");
-    if (await heroEmpty.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await page.waitForSelector(".sessions-toolbar", { timeout: 20000 });
-    }
+    // Seed demo data if empty so the toolbar (with the search input) renders.
+    await ensureDemoProviders(page);
 
     // Type in search
     const searchInput = page.locator('input[type="search"]');
