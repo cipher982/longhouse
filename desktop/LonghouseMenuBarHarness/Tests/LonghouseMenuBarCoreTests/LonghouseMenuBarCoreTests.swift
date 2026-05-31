@@ -29,6 +29,48 @@ private struct ThrowingHealthSnapshotSource: HealthSnapshotSource {
     }
 }
 
+private func transientEngineStatusSnapshot() -> HealthSnapshot {
+    HealthSnapshot(
+        schemaVersion: 1,
+        collectedAt: "2026-04-08T01:52:00Z",
+        healthState: "degraded",
+        severity: "yellow",
+        headline: "Longhouse local status is aging",
+        reasons: ["engine_status_stale"],
+        suggestedActions: [],
+        service: ServiceSnapshot(
+            platform: "macos",
+            status: "running",
+            serviceName: "com.longhouse.shipper",
+            serviceFile: nil,
+            logPath: nil
+        ),
+        engineStatus: EngineStatusSnapshot(
+            path: nil,
+            exists: true,
+            fresh: false,
+            ageSeconds: 3600,
+            payload: EngineStatusPayload(
+                version: "0.1.16",
+                daemonPid: 123,
+                lastShipAt: "2026-04-07T01:51:00Z",
+                spoolPendingCount: 0,
+                spoolDeadCount: 0,
+                parseErrorCount1H: 0,
+                consecutiveShipFailures: 0,
+                diskFreeBytes: nil,
+                isOffline: false,
+                recentDeadLetters: nil,
+                lastUpdated: "2026-04-07T01:52:00Z"
+            ),
+            error: nil
+        ),
+        outbox: OutboxSnapshot(path: nil, fileCount: 0, oldestAgeSeconds: nil),
+        activitySummary: nil,
+        launchReadiness: nil
+    )
+}
+
 struct LonghouseMenuBarCoreTests {
     @Test
     func statusItemSourceIconHasZeroPadding() throws {
@@ -770,6 +812,21 @@ struct LonghouseMenuBarCoreTests {
         #expect(broken.needsMenuBarAttention == true)
         #expect(degraded.needsMenuBarAttention == true)
         #expect(healthy.needsMenuBarAttention == false)
+    }
+
+    @Test
+    func recognizesTransientEngineStatusOnlyAttention() {
+        let snapshot = transientEngineStatusSnapshot()
+
+        #expect(snapshot.isTransientEngineStatusOnlyAttention)
+    }
+
+    @Test
+    @MainActor
+    func snapshotStoreDampensTransientEngineStatusAttention() {
+        let store = SnapshotStore(source: StaticHealthSnapshotSource(snapshot: transientEngineStatusSnapshot()), cacheURL: nil)
+
+        #expect(store.isTransientEngineStatusSettling)
     }
 
     @Test
