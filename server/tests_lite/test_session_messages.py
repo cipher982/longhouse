@@ -76,7 +76,7 @@ def _seed_session(
         project="zerg",
         device_id=device_id,
         device_name=device_name,
-        cwd="/Users/davidrose/git/zerg",
+        cwd="/Users/example/git/zerg",
         git_repo="git@github.com:cipher982/longhouse.git",
         git_branch="main",
         started_at=datetime.now(timezone.utc),
@@ -463,7 +463,7 @@ def test_presence_safe_transition_delivers_oldest_queued_message(monkeypatch, tm
             json={
                 "session_id": str(to_session.id),
                 "state": "idle",
-                "cwd": "/Users/davidrose/git/zerg",
+                "cwd": "/Users/example/git/zerg",
                 "provider": "claude",
             },
         )
@@ -617,7 +617,7 @@ def test_presence_safe_transition_drains_multiple_queued_messages(monkeypatch, t
             json={
                 "session_id": str(to_session.id),
                 "state": "idle",
-                "cwd": "/Users/davidrose/git/zerg",
+                "cwd": "/Users/example/git/zerg",
                 "provider": "claude",
             },
         )
@@ -689,7 +689,7 @@ def test_presence_safe_transition_stops_drain_when_session_leaves_safe_boundary(
             json={
                 "session_id": str(to_session.id),
                 "state": "idle",
-                "cwd": "/Users/davidrose/git/zerg",
+                "cwd": "/Users/example/git/zerg",
                 "provider": "claude",
             },
         )
@@ -741,7 +741,7 @@ def test_presence_stale_safe_payload_does_not_deliver_when_canonical_state_is_bu
                 "session_id": str(to_session.id),
                 "state": "blocked",
                 "tool_name": "Bash",
-                "cwd": "/Users/davidrose/git/zerg",
+                "cwd": "/Users/example/git/zerg",
                 "provider": "claude",
                 "occurred_at": now.isoformat(),
                 "dedupe_key": "blocked-new",
@@ -754,7 +754,7 @@ def test_presence_stale_safe_payload_does_not_deliver_when_canonical_state_is_bu
             json={
                 "session_id": str(to_session.id),
                 "state": "idle",
-                "cwd": "/Users/davidrose/git/zerg",
+                "cwd": "/Users/example/git/zerg",
                 "provider": "claude",
                 "occurred_at": (now - timedelta(seconds=30)).isoformat(),
                 "dedupe_key": "idle-old",
@@ -780,7 +780,7 @@ def test_create_message_stored_only_for_unmanaged_target(monkeypatch, tmp_path):
 
     with session_local() as db:
         from_session = _seed_session(db, execution_home="unmanaged_local")
-        to_session = _seed_session(db, execution_home="unmanaged_local", device_id="shipper-cube", device_name="cube")
+        to_session = _seed_session(db, execution_home="unmanaged_local", device_id="shipper-demo-machine", device_name="demo-machine")
 
     async def fail_if_called(**_kwargs):
         raise AssertionError("send_text_to_managed_local_session should not be called for unmanaged sessions")
@@ -814,7 +814,7 @@ def test_list_messages_returns_inbound_rows_without_mutation(tmp_path):
 
     with session_local() as db:
         from_session = _seed_session(db, execution_home="unmanaged_local")
-        to_session = _seed_session(db, execution_home="unmanaged_local", device_id="shipper-cube", device_name="cube")
+        to_session = _seed_session(db, execution_home="unmanaged_local", device_id="shipper-demo-machine", device_name="demo-machine")
         db.add(
             SessionMessage(
                 from_session_id=from_session.id,
@@ -825,7 +825,7 @@ def test_list_messages_returns_inbound_rows_without_mutation(tmp_path):
         )
         db.commit()
 
-    client, api_app_ref = _make_client(session_local, token_device_id="shipper-cube")
+    client, api_app_ref = _make_client(session_local, token_device_id="shipper-demo-machine")
     try:
         response = client.get("/api/agents/messages", params={"session_id": str(to_session.id)})
         assert response.status_code == 200, response.text
@@ -846,7 +846,7 @@ def test_create_message_uses_current_session_header_when_body_omitted(tmp_path):
 
     with session_local() as db:
         from_session = _seed_session(db, execution_home="unmanaged_local")
-        to_session = _seed_session(db, execution_home="unmanaged_local", device_id="shipper-cube", device_name="cube")
+        to_session = _seed_session(db, execution_home="unmanaged_local", device_id="shipper-demo-machine", device_name="demo-machine")
 
     client, api_app_ref = _make_client(session_local)
     try:
@@ -872,7 +872,7 @@ def test_create_message_rejects_header_body_mismatch(tmp_path):
     with session_local() as db:
         from_session = _seed_session(db, execution_home="unmanaged_local")
         other_session = _seed_session(db, execution_home="unmanaged_local")
-        to_session = _seed_session(db, execution_home="unmanaged_local", device_id="shipper-cube", device_name="cube")
+        to_session = _seed_session(db, execution_home="unmanaged_local", device_id="shipper-demo-machine", device_name="demo-machine")
 
     client, api_app_ref = _make_client(session_local)
     try:
@@ -896,7 +896,7 @@ def test_list_messages_rejects_device_session_mismatch(tmp_path):
 
     with session_local() as db:
         from_session = _seed_session(db, execution_home="unmanaged_local")
-        to_session = _seed_session(db, execution_home="unmanaged_local", device_id="shipper-cube", device_name="cube")
+        to_session = _seed_session(db, execution_home="unmanaged_local", device_id="shipper-demo-machine", device_name="demo-machine")
         db.add(
             SessionMessage(
                 from_session_id=from_session.id,
@@ -921,7 +921,7 @@ def test_acknowledge_message_sets_acknowledged_at_and_filters_unacknowledged(tmp
 
     with session_local() as db:
         from_session = _seed_session(db, execution_home="unmanaged_local")
-        to_session = _seed_session(db, execution_home="unmanaged_local", device_id="shipper-cube", device_name="cube")
+        to_session = _seed_session(db, execution_home="unmanaged_local", device_id="shipper-demo-machine", device_name="demo-machine")
         db.add(
             SessionMessage(
                 from_session_id=from_session.id,
@@ -934,7 +934,7 @@ def test_acknowledge_message_sets_acknowledged_at_and_filters_unacknowledged(tmp
         message = db.query(SessionMessage).one()
         message_id = message.id
 
-    client, api_app_ref = _make_client(session_local, token_device_id="shipper-cube")
+    client, api_app_ref = _make_client(session_local, token_device_id="shipper-demo-machine")
     try:
         ack_response = client.post(
             f"/api/agents/messages/{message_id}/ack",
@@ -959,7 +959,7 @@ def test_acknowledge_message_rejects_queued_delivery(tmp_path):
 
     with session_local() as db:
         from_session = _seed_session(db, execution_home="unmanaged_local")
-        to_session = _seed_session(db, execution_home="managed_local", device_id="shipper-cube", device_name="cube")
+        to_session = _seed_session(db, execution_home="managed_local", device_id="shipper-demo-machine", device_name="demo-machine")
         db.add(
             SessionMessage(
                 from_session_id=from_session.id,
@@ -972,7 +972,7 @@ def test_acknowledge_message_rejects_queued_delivery(tmp_path):
         message = db.query(SessionMessage).one()
         message_id = message.id
 
-    client, api_app_ref = _make_client(session_local, token_device_id="shipper-cube")
+    client, api_app_ref = _make_client(session_local, token_device_id="shipper-demo-machine")
     try:
         response = client.post(
             f"/api/agents/messages/{message_id}/ack",

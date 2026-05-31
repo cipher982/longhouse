@@ -90,7 +90,7 @@ async def test_peers_infers_repo_from_current_session(monkeypatch):
                         {
                             "session_id": "22222222-2222-2222-2222-222222222222",
                             "has_live_presence": True,
-                            "device_name": "cube",
+                            "device_name": "demo-machine",
                             "provider": "codex",
                             "presence_state": "thinking",
                             "summary_title": "Peer",
@@ -130,7 +130,7 @@ async def test_peers_falls_back_to_cwd_when_no_git_repo(monkeypatch):
         (),
         {
             "status_code": 200,
-            "text": '{"id":"11111111-1111-1111-1111-111111111111","git_repo":null,"cwd":"/Users/dev/git/zeta/athena-horizon"}',
+            "text": '{"id":"11111111-1111-1111-1111-111111111111","git_repo":null,"cwd":"/Users/dev/git/acme/project"}',
         },
     )()
     wall_resp = type(
@@ -152,6 +152,6 @@ async def test_peers_falls_back_to_cwd_when_no_git_repo(monkeypatch):
     payload = json.loads(result)
     assert "error" not in payload
     assert mock_get.await_args_list[1].kwargs["params"] == {
-        "repo": "/Users/dev/git/zeta/athena-horizon",
+        "repo": "/Users/dev/git/acme/project",
         "days": 7,
     }

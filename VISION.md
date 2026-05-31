@@ -17,7 +17,6 @@ This is the north-star document. It is intentionally short. If a proposal confli
 - `README.md` for the install and demo loop
 - `docs/specs/agents-machine-surface.md` for the canonical machine-facing contract
 - `docs/specs/macos-launch-product-shape.md` for the macOS launch-product decision
-- `docs/specs/prelaunch-simplification-cut-plan.md` for the launch-pruning order
 
 ## Naming
 

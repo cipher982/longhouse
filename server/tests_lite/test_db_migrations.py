@@ -230,7 +230,7 @@ def test_startup_migration_adds_runner_availability_policy_and_backfills_default
             INSERT INTO runners (owner_id, name, capabilities, status, auth_secret_hash, runner_metadata)
             VALUES
               (1, 'cinder', '["exec.full"]', 'offline', 'hash1', '{"install_mode":"desktop"}'),
-              (1, 'clifford', '["exec.full"]', 'offline', 'hash2', '{"install_mode":"server"}'),
+              (1, 'demo-runner', '["exec.full"]', 'offline', 'hash2', '{"install_mode":"server"}'),
               (1, 'lh-vm-canary-20260317', '["exec.full"]', 'offline', 'hash3', '{"install_mode":"server"}')
             """
         )
@@ -244,7 +244,7 @@ def test_startup_migration_adds_runner_availability_policy_and_backfills_default
     assert "availability_policy" in columns
     assert rows == [
         ("cinder", "on_demand"),
-        ("clifford", "always_on"),
+        ("demo-runner", "always_on"),
         ("lh-vm-canary-20260317", "ephemeral"),
     ]
 

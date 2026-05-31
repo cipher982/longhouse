@@ -27,7 +27,7 @@ function makeRunner(overrides: Partial<Runner> = {}): Runner {
   return {
     id: 1,
     owner_id: 1,
-    name: "cube",
+    name: "demo-machine",
     availability_policy: "always_on",
     labels: null,
     capabilities: ["exec.full"],
@@ -38,7 +38,7 @@ function makeRunner(overrides: Partial<Runner> = {}): Runner {
     last_seen_age_seconds: 3,
     heartbeat_interval_ms: 30_000,
     stale_after_seconds: 90,
-    runner_metadata: { hostname: "cube" },
+    runner_metadata: { hostname: "demo-machine" },
     install_mode: "native",
     auto_update_policy: "notify",
     install_layout_version: 1,
@@ -127,7 +127,7 @@ describe("RunnersPage", () => {
   it("removes runner-card launch actions regardless of runner readiness", () => {
     mockUseRunners.mockReturnValue({
       data: [
-        makeRunner({ id: 1, name: "cube" }),
+        makeRunner({ id: 1, name: "demo-machine" }),
         makeRunner({
           id: 2,
           name: "laptop",

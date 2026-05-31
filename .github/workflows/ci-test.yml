@@ -30,8 +30,6 @@ on:
 
 env:
   FERNET_SECRET: ${{ secrets.FERNET_SECRET }}
-  LIFE_HUB_API_KEY: ${{ secrets.LIFE_HUB_API_KEY }}
-  LIFE_HUB_URL: https://data.drose.io
   E2E_DB_DIR: /tmp/zerg_e2e_dbs/${{ github.run_id }}-${{ github.run_attempt }}
   PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
 

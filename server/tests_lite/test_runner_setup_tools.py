@@ -41,7 +41,7 @@ def test_runner_list_suggests_doctor_when_all_runners_are_offline(tmp_path: Path
 
         runner = Runner(
             owner_id=user.id,
-            name="cube",
+            name="demo-machine",
             auth_secret_hash="hash",
             availability_policy="always_on",
             capabilities=["exec.full"],

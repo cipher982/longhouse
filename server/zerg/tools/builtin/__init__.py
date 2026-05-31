@@ -4,8 +4,6 @@ This module contains the standard tools that come with the platform.
 All tools in this module are aggregated into a single list for registry construction.
 """
 
-import os
-
 from zerg.tools.builtin.connector_tools import TOOLS as CONNECTOR_TOOLS
 from zerg.tools.builtin.contact_user import TOOLS as CONTACT_USER_TOOLS
 from zerg.tools.builtin.datetime_tools import TOOLS as DATETIME_TOOLS
@@ -32,15 +30,6 @@ from zerg.tools.builtin.web_search import TOOLS as WEB_SEARCH_TOOLS
 
 TELEGRAM_TOOLS = [_TELEGRAM_TOOL]
 
-# Personal tools (WHOOP, Obsidian) are David-specific integrations,
-# not part of the OSS core. Gate behind PERSONAL_TOOLS_ENABLED env var.
-_PERSONAL_TOOLS_ENABLED = os.getenv("PERSONAL_TOOLS_ENABLED", "").lower() in ("1", "true", "yes")
-
-if _PERSONAL_TOOLS_ENABLED:
-    from zerg.tools.builtin.personal_tools import TOOLS as PERSONAL_TOOLS
-else:
-    PERSONAL_TOOLS = []
-
 BUILTIN_TOOLS = (
     CONNECTOR_TOOLS
     + CONTACT_USER_TOOLS
@@ -55,7 +44,6 @@ BUILTIN_TOOLS = (
     + LINEAR_TOOLS
     + MEMORY_TOOLS
     + NOTION_TOOLS
-    + PERSONAL_TOOLS
     + RUNNER_TOOLS
     + RUNNER_SETUP_TOOLS
     + SLACK_TOOLS
@@ -70,5 +58,4 @@ BUILTIN_TOOLS = (
 
 __all__ = [
     "BUILTIN_TOOLS",
-    "_PERSONAL_TOOLS_ENABLED",
 ]

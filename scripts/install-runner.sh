@@ -8,7 +8,7 @@
 #
 # Usage:
 #   curl -sSL https://get.longhouse.ai/install-runner.sh | bash -s -- \
-#     --name cube \
+#     --name demo-machine \
 #     --token <enrollment-token> \
 #     --url wss://api.longhouse.ai \
 #     --version v0.1.0

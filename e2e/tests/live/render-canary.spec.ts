@@ -1,7 +1,7 @@
 /**
  * Render-canary E2E: measure the last 50ms of the realtime pipeline.
  *
- * The synthetic canary (producer on cube) proves ingest → pubsub → SSE
+ * The synthetic canary (producer on the build host) proves ingest → pubsub → SSE
  * works. What it does NOT prove is that a real browser EventSource
  * actually receives frames and React actually re-renders without dropping
  * them. This test closes that gap.
@@ -186,7 +186,7 @@ test("render canary: SSE frame arrival → browser paint under SLA", async ({
   if (samples.length === 0) {
     throw new Error(
       `No SSE workspace_changed frames arrived in ${OBSERVE_WINDOW_MS}ms. ` +
-        `Check that the canary producer is running (cube systemd) and the ` +
+        `Check that the canary producer is running (build host systemd) and the ` +
         `session ${canarySessionId} exists on ${frontendBaseUrl}.`,
     );
   }

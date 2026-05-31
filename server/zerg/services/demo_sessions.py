@@ -352,7 +352,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
     ]
 
     # -------------------------------------------------------------------------
-    # Session 3: Antigravity - Sauron job failing silently (sauron)
+    # Session 3: Antigravity - daily digest job failing silently (acme-api)
     # Medium ops/debug session, 18 events
     # -------------------------------------------------------------------------
     t3 = anchor - timedelta(days=3, hours=1)
@@ -368,7 +368,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         EventIngest(
             role="assistant",
             tool_name="Bash",
-            tool_input_json={"command": "ssh zerg 'docker logs longhouse-david010 --since 24h | grep -i digest'"},
+            tool_input_json={"command": "ssh deploy-host 'docker logs longhouse-demo --since 24h | grep -i digest'"},
             timestamp=t3 + timedelta(minutes=1),
         ),
         EventIngest(
@@ -391,7 +391,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             tool_name="Bash",
             tool_call_id="call_s3_01",
             tool_input_json={
-                "command": "grep -n 'days_back\\|timedelta\\|utc\\|now()' ~/git/sauron/jobs/jobs/worklog/daily_digest.py | head -20"
+                "command": "grep -n 'days_back\\|timedelta\\|utc\\|now()' ~/git/acme-api/jobs/jobs/worklog/daily_digest.py | head -20"
             },
             timestamp=t3 + timedelta(minutes=3),
         ),
@@ -400,7 +400,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             tool_name="Bash",
             tool_call_id="call_s3_02",
             tool_input_json={
-                "command": "ssh clifford 'date && docker exec sauron python3 -c \"from datetime import datetime; print(datetime.now())\"'"
+                "command": "ssh deploy-host 'date && docker exec app python3 -c \"from datetime import datetime; print(datetime.now())\"'"
             },
             timestamp=t3 + timedelta(minutes=3),
         ),
@@ -429,7 +429,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         EventIngest(
             role="assistant",
             tool_name="Bash",
-            tool_input_json={"command": "sed -n '38,50p' ~/git/sauron/jobs/jobs/worklog/daily_digest.py"},
+            tool_input_json={"command": "sed -n '38,50p' ~/git/acme-api/jobs/jobs/worklog/daily_digest.py"},
             timestamp=t3 + timedelta(minutes=5),
         ),
         EventIngest(
@@ -446,7 +446,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             role="assistant",
             tool_name="Edit",
             tool_input_json={
-                "file_path": "~/git/sauron/jobs/jobs/worklog/daily_digest.py",
+                "file_path": "~/git/acme-api/jobs/jobs/worklog/daily_digest.py",
                 "old_string": "    cutoff = datetime.now() - timedelta(days=days_back)",
                 "new_string": "    cutoff = datetime.now(timezone.utc) - timedelta(days=days_back)",
             },
@@ -456,7 +456,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         EventIngest(
             role="assistant",
             tool_name="Bash",
-            tool_input_json={"command": "cd ~/git/sauron/jobs && uv run pytest tests/ -x -q -k digest"},
+            tool_input_json={"command": "cd ~/git/acme-api/jobs && uv run pytest tests/ -x -q -k digest"},
             timestamp=t3 + timedelta(minutes=8),
         ),
         EventIngest(
@@ -744,7 +744,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             tool_name="Bash",
             tool_call_id="call_s6_01",
             tool_input_json={
-                "command": "ssh zerg 'free -h && docker stats --no-stream --format \"{{.Name}}\\t{{.MemUsage}}\" | sort -t/ -k1 -h'"
+                "command": "ssh deploy-host 'free -h && docker stats --no-stream --format \"{{.Name}}\\t{{.MemUsage}}\" | sort -t/ -k1 -h'"
             },
             timestamp=t6 + timedelta(minutes=1),
         ),
@@ -753,7 +753,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             tool_name="Bash",
             tool_call_id="call_s6_02",
             tool_input_json={
-                "command": "ssh zerg 'docker exec longhouse-david010 python3 -c \"import tracemalloc; tracemalloc.start(); import zerg.main\"'"
+                "command": "ssh deploy-host 'docker exec longhouse-demo python3 -c \"import tracemalloc; tracemalloc.start(); import zerg.main\"'"
             },
             timestamp=t6 + timedelta(minutes=1),
         ),
@@ -764,7 +764,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
                 "1.882",
                 0,
                 334,
-                "              total        used        free\nMem:            15G        14G       512M\nlonghouse-david010\t1.8GiB / 15GiB\nnginx-proxy\t\t48MiB / 15GiB\nlonghouse-control\t312MiB / 15GiB",
+                "              total        used        free\nMem:            15G        14G       512M\nlonghouse-demo\t1.8GiB / 15GiB\nnginx-proxy\t\t48MiB / 15GiB\nlonghouse-control\t312MiB / 15GiB",
             ),
             timestamp=t6 + timedelta(minutes=1, seconds=2),
         ),
@@ -783,7 +783,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             role="assistant",
             tool_name="Bash",
             tool_input_json={
-                "command": "ssh zerg 'docker logs longhouse-david010 --since 2h | grep -E \"embedding|backfill|cache|OOM|ERROR\" | tail -30'"
+                "command": "ssh deploy-host 'docker logs longhouse-demo --since 2h | grep -E \"embedding|backfill|cache|OOM|ERROR\" | tail -30'"
             },
             timestamp=t6 + timedelta(minutes=3),
         ),
@@ -805,14 +805,14 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         EventIngest(
             role="assistant",
             tool_name="Bash",
-            tool_input_json={"command": "ssh zerg 'docker exec longhouse-david010 kill -SIGTERM $(pgrep -f backfill_embeddings)'"},
+            tool_input_json={"command": "ssh deploy-host 'docker exec longhouse-demo kill -SIGTERM $(pgrep -f backfill_embeddings)'"},
             timestamp=t6 + timedelta(minutes=5),
         ),
         EventIngest(role="tool", tool_output_text=_lh("1.112", 0, 22, ""), timestamp=t6 + timedelta(minutes=5, seconds=2)),
         EventIngest(
             role="assistant",
             tool_name="Bash",
-            tool_input_json={"command": "ssh zerg 'sleep 10 && free -h | grep Mem'"},
+            tool_input_json={"command": "ssh deploy-host 'sleep 10 && free -h | grep Mem'"},
             timestamp=t6 + timedelta(minutes=6),
         ),
         EventIngest(
@@ -948,13 +948,13 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         EventIngest(
             role="tool",
             tool_call_id="call_s8_01",
-            tool_output_text='{"matches": [{"session_id": "longhouse-incident-1", "chunk_index": 0, "score": 0.93, "total_events": 18, "context": [{"role": "assistant", "content_text": "Race condition in ingest upsert caused intermittent write failures."}]}, {"session_id": "sauron-digest-2", "chunk_index": 0, "score": 0.89, "total_events": 12, "context": [{"role": "assistant", "content_text": "Naive datetime handling caused empty daily digest windows."}]}, {"session_id": "longhouse-backfill-3", "chunk_index": 1, "score": 0.87, "total_events": 24, "context": [{"role": "assistant", "content_text": "Embedding backfill exhausted memory on large datasets."}]}], "total": 3}',
+            tool_output_text='{"matches": [{"session_id": "longhouse-incident-1", "chunk_index": 0, "score": 0.93, "total_events": 18, "context": [{"role": "assistant", "content_text": "Race condition in ingest upsert caused intermittent write failures."}]}, {"session_id": "acme-api-digest-2", "chunk_index": 0, "score": 0.89, "total_events": 12, "context": [{"role": "assistant", "content_text": "Naive datetime handling caused empty daily digest windows."}]}, {"session_id": "longhouse-backfill-3", "chunk_index": 1, "score": 0.87, "total_events": 24, "context": [{"role": "assistant", "content_text": "Embedding backfill exhausted memory on large datasets."}]}], "total": 3}',
             timestamp=t8 + timedelta(minutes=1, seconds=3),
         ),
         EventIngest(
             role="tool",
             tool_call_id="call_s8_02",
-            tool_output_text='{"sessions": [{"project": "longhouse", "summary_title": "Production OOM incident"}, {"project": "sauron", "summary_title": "Daily digest sending empty emails"}, {"project": "hdr", "summary_title": "Upload pipeline rejecting valid images"}]}',
+            tool_output_text='{"sessions": [{"project": "longhouse", "summary_title": "Production OOM incident"}, {"project": "acme-api", "summary_title": "Daily digest sending empty emails"}, {"project": "hdr", "summary_title": "Upload pipeline rejecting valid images"}]}',
             timestamp=t8 + timedelta(minutes=1, seconds=3),
         ),
         EventIngest(
@@ -973,7 +973,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         ),
         EventIngest(
             role="assistant",
-            content_text="**Cross-project failure summary (past 7 days):**\n\n- **longhouse** (2 issues): Race condition in session ingest upsert (fixed), OOM in embedding backfill job — both resolved this week.\n- **sauron** (1 issue): Naive `datetime.now()` vs UTC-aware DB timestamps in digest job — fixed.\n- **hdr** (1 issue): Watermark false-positives rejecting valid images — threshold tuned, tests added.\n\nCommon thread: **timezone/UTC discipline** and **generator vs list** patterns appear in 3/4 incidents. Worth adding linting rules for both.",
+            content_text="**Cross-project failure summary (past 7 days):**\n\n- **longhouse** (2 issues): Race condition in session ingest upsert (fixed), OOM in embedding backfill job — both resolved this week.\n- **acme-api** (1 issue): Naive `datetime.now()` vs UTC-aware DB timestamps in digest job — fixed.\n- **hdr** (1 issue): Watermark false-positives rejecting valid images — threshold tuned, tests added.\n\nCommon thread: **timezone/UTC discipline** and **generator vs list** patterns appear in 3/4 incidents. Worth adding linting rules for both.",
             timestamp=t8 + timedelta(minutes=5),
         ),
     ]
@@ -1168,10 +1168,10 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         SessionIngest(
             provider="antigravity",
             environment="production",
-            project="sauron",
+            project="acme-api",
             device_id="shipper-laptop",
-            cwd="/Users/demo/git/sauron-jobs",
-            git_repo="https://github.com/demo/sauron-jobs",
+            cwd="/Users/demo/git/acme-api",
+            git_repo="https://github.com/demo/acme-api",
             git_branch="fix/digest-timezone",
             started_at=t3,
             ended_at=t3 + timedelta(minutes=12),

@@ -29,9 +29,6 @@ class ConnectorType(str, Enum):
     LINEAR = "linear"
     NOTION = "notion"
     IMESSAGE = "imessage"
-    # Personal integrations
-    WHOOP = "whoop"
-    OBSIDIAN = "obsidian"
 
 
 class CredentialField(TypedDict):
@@ -291,69 +288,6 @@ CONNECTOR_REGISTRY: dict[ConnectorType, ConnectorDefinition] = {
                 "placeholder": "true",
                 "required": True,
             }
-        ],
-    },
-    # Personal integrations
-    ConnectorType.WHOOP: {
-        "type": ConnectorType.WHOOP,
-        "name": "WHOOP",
-        "description": "Get health metrics from WHOOP fitness tracker",
-        "category": "personal",
-        "icon": "activity",
-        "docs_url": "https://developer.whoop.com/docs/introduction",
-        "fields": [
-            {
-                "key": "client_id",
-                "label": "OAuth Client ID",
-                "type": "text",
-                "placeholder": "From WHOOP Developer Portal",
-                "required": True,
-            },
-            {
-                "key": "client_secret",
-                "label": "OAuth Client Secret",
-                "type": "password",
-                "placeholder": "From WHOOP Developer Portal",
-                "required": True,
-            },
-            {
-                "key": "access_token",
-                "label": "Access Token",
-                "type": "password",
-                "placeholder": "OAuth access token",
-                "required": True,
-            },
-            {
-                "key": "refresh_token",
-                "label": "Refresh Token",
-                "type": "password",
-                "placeholder": "OAuth refresh token (enables auto-refresh)",
-                "required": False,
-            },
-        ],
-    },
-    ConnectorType.OBSIDIAN: {
-        "type": ConnectorType.OBSIDIAN,
-        "name": "Obsidian",
-        "description": "Search notes in Obsidian vault (via Runner)",
-        "category": "personal",
-        "icon": "book-open",
-        "docs_url": "https://obsidian.md/",
-        "fields": [
-            {
-                "key": "vault_path",
-                "label": "Vault Path",
-                "type": "text",
-                "placeholder": "~/obsidian_vault",
-                "required": True,
-            },
-            {
-                "key": "runner_name",
-                "label": "Runner Name",
-                "type": "text",
-                "placeholder": "laptop",
-                "required": True,
-            },
         ],
     },
 }

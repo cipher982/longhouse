@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Codex provider release canary artifact generator.
 
-This is the Sauron-facing wrapper around Longhouse's managed Codex contract
+This is the external-release-scanner-facing wrapper around Longhouse's managed Codex contract
 checks. It emits one JSON artifact with pass/warn/fail status per canary and
 keeps raw evidence under an isolated evidence directory.
 """
@@ -883,11 +883,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--source-review-status",
         choices=["not_run", "pass", "warn", "fail"],
         default="not_run",
-        help="Sauron source-review result. not_run keeps the artifact yellow with insufficient_coverage.",
+        help="External source-review result. not_run keeps the artifact yellow with insufficient_coverage.",
     )
     parser.add_argument(
         "--source-review-note",
-        default="Sauron source review should fill this section before publishing a release recommendation.",
+        default="External source review should fill this section before publishing a release recommendation.",
     )
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--canary-timeout-secs", type=int, default=90)

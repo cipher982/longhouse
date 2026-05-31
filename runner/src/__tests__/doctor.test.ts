@@ -13,7 +13,7 @@ function deps(overrides: Partial<DoctorDeps> = {}): DoctorDeps {
     platform: 'linux',
     env: {
       LONGHOUSE_URL: 'https://demo.longhouse.test',
-      RUNNER_NAME: 'clifford',
+      RUNNER_NAME: 'demo-runner',
       RUNNER_SECRET: 'secret',
       RUNNER_INSTALL_MODE: 'server',
       RUNNER_INSTALL_ROOT: '/home/test/.local/share/longhouse-runner',
@@ -26,7 +26,7 @@ function deps(overrides: Partial<DoctorDeps> = {}): DoctorDeps {
       longhouseUrl: 'https://demo.longhouse.test',
       longhouseUrls: ['https://demo.longhouse.test'],
       runnerId: null,
-      runnerName: 'clifford',
+      runnerName: 'demo-runner',
       runnerSecret: 'secret',
       heartbeatIntervalMs: 30000,
       reconnectDelayMs: 5000,
@@ -109,7 +109,7 @@ describe('collectDoctorReport', () => {
     const report = await collectDoctorReport({}, deps({
       env: {
         LONGHOUSE_URL: 'https://demo.longhouse.test',
-        RUNNER_NAME: 'clifford',
+        RUNNER_NAME: 'demo-runner',
         RUNNER_SECRET: 'secret',
         RUNNER_INSTALL_MODE: 'server',
       },

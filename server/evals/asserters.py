@@ -112,7 +112,7 @@ def assert_not_tool_called(
     """Assert that a specific tool was NOT called during the run.
 
     Useful for testing that fiches pick the right specialized tool
-    instead of a generic fallback (e.g., get_whoop_data instead of web_search).
+    instead of a generic fallback (e.g., github_list_issues instead of http_request).
 
     Args:
         metrics: EvalMetrics from run

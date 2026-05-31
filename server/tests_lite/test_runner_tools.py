@@ -40,7 +40,7 @@ class _FakeDispatcher:
             "ok": True,
             "data": {
                 "exit_code": 0,
-                "stdout": "/Users/davidrose\n",
+                "stdout": "/Users/example\n",
                 "stderr": "",
                 "duration_ms": 21,
             },
@@ -78,7 +78,7 @@ def test_runner_exec_uses_credential_resolver_when_no_commis_context():
     assert result["ok"] is True
     assert result["data"]["target"] == "cinder"
     assert result["data"]["command"] == "bash -lc pwd"
-    assert result["data"]["stdout"] == "/Users/davidrose\n"
+    assert result["data"]["stdout"] == "/Users/example\n"
     assert dispatcher.calls == [
         {
             "db": fake_db,
@@ -97,7 +97,7 @@ def test_runner_exec_requires_authenticated_context():
         patch("zerg.tools.builtin.runner_tools.get_commis_context", return_value=None),
         patch("zerg.tools.builtin.runner_tools.get_credential_resolver", return_value=None),
     ):
-        result = runner_tools.runner_exec("cube", "hostname")
+        result = runner_tools.runner_exec("demo-machine", "hostname")
 
     assert result["ok"] is False
     assert result["error_type"] == "validation_error"

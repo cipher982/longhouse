@@ -2,9 +2,9 @@
 
 Status: Reviewed, building
 Last updated: 2026-04-27
-Owner: david010
-Related: `session-runtime-display-contract.md`, `managed-codex-liveness.md`, `machine-local-managed-session-state.md`
-Review: Hatch Codex review incorporated 2026-04-27 — see "Review findings" section below.
+Owner: maintainer
+Related: the session runtime display contract design (internal spec), the managed Codex liveness design (internal spec), the machine-local managed session state design (internal spec)
+Review: Internal review incorporated 2026-04-27 — see "Review findings" section below.
 
 ## One-sentence summary
 
@@ -14,7 +14,7 @@ Timeline cards confidently label unmanaged sessions "CLOSED" while the underlyin
 
 ### Observed behavior
 
-On `david010.longhouse.ai/timeline`, multiple unmanaged Codex session cards (`imgt`, `bar`) render a bold "CLOSED" pill with a "just now" / "1m ago" timestamp. The underlying `codex` TUI processes on the laptop are alive, attached, and still producing turns. A message landed ~30s before the screenshot; the card still said CLOSED.
+On `tenant.example.com/timeline`, multiple unmanaged Codex session cards (`imgt`, `bar`) render a bold "CLOSED" pill with a "just now" / "1m ago" timestamp. The underlying `codex` TUI processes on the laptop are alive, attached, and still producing turns. A message landed ~30s before the screenshot; the card still said CLOSED.
 
 ### Root cause: `ended_at` means two different things
 
@@ -143,7 +143,7 @@ Backend changes (minimum to unblock frontend):
 
 No storage change, no engine change. `ended_at` still holds parser-derived values; we just stop consuming them as terminal truth.
 
-**Ship criteria:** `bar` and `imgt` cards on david010 do not render CLOSED while their `codex` processes are alive. Session detail pages keep polling for active unmanaged sessions.
+**Ship criteria:** `bar` and `imgt` cards on the hosted tenant do not render CLOSED while their `codex` processes are alive. Session detail pages keep polling for active unmanaged sessions.
 
 ### Phase 2 — Fix the data model
 
@@ -186,9 +186,9 @@ Use `local-health` to promote unmanaged sessions to `closed` when we have ground
 
 **Ship criteria:** Visual QA across timeline, session detail, iOS shelf, widget. No code path outside of display layer reads `last_activity_at` to infer closure.
 
-## Review findings (Hatch Codex, 2026-04-27)
+## Review findings (internal review, 2026-04-27)
 
-Codex reviewed the draft and found several material gaps. Revisions folded into the phased plan above; key corrections:
+An internal review of the draft found several material gaps. Revisions folded into the phased plan above; key corrections:
 
 - **Phase 1 scope was too narrow.** The `ended_at` lie propagates through `session_runtime.py:273-321` (fallback turns `ended_at` into `status="completed"` / `terminal_state="finished"`) and `session_runtime_display.py:195-202`. Gating only `SessionCard.tsx` on `session.ended_at` is insufficient — the same lie enters through runtime fallback. Phase 1 now covers the full web stop-the-lie surface: `SessionCard.tsx`, `SessionRuntimeStrip.tsx`, `SessionDetailPage.tsx`, `useSessionWorkspace.ts`, `sessionRuntime.ts`, `sessionUtils.tsx`. Backend fallback must stop emitting `completed`/`finished` from parser-derived `ended_at`.
 - **Three-axis model had pollution.** `lifecycle = active / idle` is not lifecycle — it's recency/phase. Correct axes:

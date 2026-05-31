@@ -59,8 +59,8 @@ describe("Layout mobile navigation", () => {
   it("treats the mobile nav as a modal sheet with a dismissible scrim", async () => {
     authMocks.useAuth.mockReturnValue({
       user: {
-        email: "david010@gmail.com",
-        display_name: "David Rose",
+        email: "demo@gmail.com",
+        display_name: "Demo User",
         role: "ADMIN",
       },
       logout: vi.fn(),

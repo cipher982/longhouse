@@ -55,7 +55,7 @@
           "content_text": null,
           "tool_name": "Bash",
           "tool_input_json": null,
-          "tool_output_text": "/Users/davidrose/git/zerg/longhouse",
+          "tool_output_text": "/Users/example/git/zerg/longhouse",
           "tool_call_id": "call-explicit",
           "timestamp": "2026-05-15T18:00:02Z",
           "in_active_context": true,

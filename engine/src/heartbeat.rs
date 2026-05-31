@@ -1477,7 +1477,7 @@ mod tests {
             session_id: session_id.to_string(),
             provider_session_id: Some(session_id.to_string()),
             state_file: PathBuf::from("/tmp/live.json"),
-            cwd: Some("/Users/test/git/zeta".to_string()),
+            cwd: Some("/Users/test/git/acme".to_string()),
             claude_pid: Some(123),
             bridge_pid: Some(124),
             ready: true,
@@ -1753,7 +1753,7 @@ mod tests {
             session_id: "managed-claude".to_string(),
             provider_session_id: Some("claude-provider-session".to_string()),
             state_file: PathBuf::from("/tmp/managed-claude.json"),
-            cwd: Some("/Users/test/git/zeta".to_string()),
+            cwd: Some("/Users/test/git/acme".to_string()),
             claude_pid: Some(321),
             bridge_pid: Some(322),
             ready: true,
@@ -1782,10 +1782,10 @@ mod tests {
         let session = &sessions[0];
         assert_eq!(session.provider, "claude");
         assert_eq!(session.control_path, "managed");
-        assert_eq!(session.workspace.label.as_deref(), Some("zeta"));
+        assert_eq!(session.workspace.label.as_deref(), Some("acme"));
         assert_eq!(
             session.workspace.cwd.as_deref(),
-            Some("/Users/test/git/zeta")
+            Some("/Users/test/git/acme")
         );
     }
 

@@ -20,7 +20,7 @@ struct PushNotificationsTests {
         defer { PushNotificationStore.clearAPNSDeviceSyncState() }
         let now = Date(timeIntervalSince1970: 1_000)
         let signature = PushNotificationStore.apnsDeviceRegistrationSignature(
-            serverURL: " https://david010.longhouse.ai ",
+            serverURL: " https://demo.longhouse.ai ",
             deviceToken: "ABCD01EF",
             pushEnvironment: "sandbox",
             appBuildId: "debug+123",

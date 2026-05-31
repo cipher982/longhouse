@@ -22,12 +22,11 @@ jobs:
     name: "🧪 Product Smoke Test"
     runs-on: cube-deploy
     timeout-minutes: 10
-    if: ${{ github.event_name != 'schedule' || vars.SMOKE_AFTER_DEPLOY_ENABLED != 'false' }}
+    if: ${{ github.repository == 'cipher982/longhouse' && (github.event_name != 'schedule' || vars.SMOKE_AFTER_DEPLOY_ENABLED != 'false') }}
     env:
       PUBLIC_DEMO_URL: https://longhouse.ai
       CONTROL_PLANE_URL: https://control.longhouse.ai
-      INSTANCE_SUBDOMAIN: david010
-
+      INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN || 'demo' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -68,7 +67,7 @@ jobs:
     runs-on: cube-deploy
     timeout-minutes: 5
     continue-on-error: true
-    if: ${{ github.event_name != 'schedule' || vars.SMOKE_AFTER_DEPLOY_ENABLED != 'false' }}
+    if: ${{ github.repository == 'cipher982/longhouse' && (github.event_name != 'schedule' || vars.SMOKE_AFTER_DEPLOY_ENABLED != 'false') }}
     env:
       PUBLIC_DEMO_URL: https://longhouse.ai
 

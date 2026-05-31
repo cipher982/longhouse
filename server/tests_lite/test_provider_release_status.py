@@ -364,8 +364,8 @@ def test_reads_provider_status_user_config_file_when_env_absent(monkeypatch, tmp
     assert status["statuses"]["codex"]["status"] == "ok"
 
 
-def test_accepts_sauron_provider_status_url_envelope(monkeypatch) -> None:
-    monkeypatch.setenv(prs.PROVIDER_RELEASE_STATUS_URL_ENV, "https://sauron.local/provider-release-status/{provider}")
+def test_accepts_external_provider_status_url_envelope(monkeypatch) -> None:
+    monkeypatch.setenv(prs.PROVIDER_RELEASE_STATUS_URL_ENV, "https://release-status.example/provider-release-status/{provider}")
     monkeypatch.setattr(
         prs,
         "_read_json_url",

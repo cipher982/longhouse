@@ -147,7 +147,7 @@ Antigravity hook-inbox input but cannot remote-launch Antigravity.
 - If TLS, auth, runtime URL, or control WebSocket setup breaks, local health
   and the launch sheet identify the failure class instead of only saying that
   `codex.launch` is missing.
-- A web launch into `/Users/davidrose/git/zerg/longhouse` creates a managed
+- A web launch into `<repo>` creates a managed
   Codex session on `cinder`, reaches `live` or a typed actionable failure, and
   session detail can send the first turn.
 - Tests cover backend machine truth, frontend launch gating/empty states,

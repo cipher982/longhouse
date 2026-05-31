@@ -1193,7 +1193,7 @@ def _run_antigravity_plugin_command(
 def _antigravity_plugin_argv(binary: str, *args: str) -> list[str]:
     """Build an agy plugin command that still works under isolated HOME.
 
-    David's dogfood binary may be a tiny wrapper that resolves the real agy as
+    The maintainer's dogfood binary may be a tiny wrapper that resolves the real agy as
     ``$HOME/.local/bin/agy``. The plugin contract intentionally changes HOME to
     isolate Antigravity config writes, so run that wrapper's underlying binary
     directly when the wrapper shape is detected.

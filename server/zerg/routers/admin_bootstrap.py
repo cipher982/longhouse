@@ -164,9 +164,8 @@ async def seed_credentials(
     db: Session = Depends(get_db),
     auth_user=Depends(require_bootstrap_auth),
 ):
-    """Seed personal credentials for the admin user.
+    """Seed connector credentials for the admin user.
 
-    This replaces file-based seeding from ~/.config/zerg/personal_credentials.json.
     All credentials are Fernet-encrypted before storage.
     Idempotent - skips credentials that already exist.
     """

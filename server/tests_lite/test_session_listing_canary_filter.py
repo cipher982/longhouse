@@ -57,9 +57,9 @@ def _seed_session(
 def test_default_session_listing_hides_internal_canary_sessions(tmp_path):
     factory = _make_db(tmp_path)
     with factory() as db:
-        canary = _seed_session(db, provider="canary", project="canary", device_id="cube-canary")
-        legacy_typo = _seed_session(db, provider="cnary", project="cnary", device_id="cube-cnary")
-        _seed_session(db, provider="codex", project="canary-stress", device_id="cube-canary", user_messages=1)
+        canary = _seed_session(db, provider="canary", project="canary", device_id="demo-machine-canary")
+        legacy_typo = _seed_session(db, provider="cnary", project="cnary", device_id="demo-machine-cnary")
+        _seed_session(db, provider="codex", project="canary-stress", device_id="demo-machine-canary", user_messages=1)
         visible = _seed_session(db, provider="codex", project="zerg", device_id="cinder", user_messages=1)
         store = AgentsStore(db)
 
@@ -87,9 +87,9 @@ def test_default_session_listing_hides_internal_canary_sessions(tmp_path):
 def test_timeline_thread_listing_hides_internal_canary_sessions_by_default(tmp_path):
     factory = _make_db(tmp_path)
     with factory() as db:
-        canary = _seed_session(db, provider="canary", project="canary-stress", device_id="cube-canary")
-        typo = _seed_session(db, provider="cnary", project="cnary", device_id="cube-cnary")
-        _seed_session(db, provider="codex", project="zerg", device_id="cube-canary", user_messages=1)
+        canary = _seed_session(db, provider="canary", project="canary-stress", device_id="demo-machine-canary")
+        typo = _seed_session(db, provider="cnary", project="cnary", device_id="demo-machine-cnary")
+        _seed_session(db, provider="codex", project="zerg", device_id="demo-machine-canary", user_messages=1)
         visible = _seed_session(db, provider="claude", project="zerg", device_id="cinder", user_messages=1)
         store = AgentsStore(db)
 
@@ -122,7 +122,7 @@ def test_canary_sessions_do_not_make_demo_data_count_as_real(tmp_path):
     factory = _make_db(tmp_path)
     with factory() as db:
         _seed_session(db, provider="claude", project="demo", device_id="demo-mac", user_messages=1)
-        _seed_session(db, provider="canary", project="canary", device_id="cube-canary")
+        _seed_session(db, provider="canary", project="canary", device_id="demo-machine-canary")
 
         assert has_real_sessions(db, default_when_empty=False) is False
 
@@ -155,9 +155,9 @@ def test_recall_hides_internal_canary_sessions(monkeypatch, tmp_path):
     monkeypatch.setattr("zerg.services.session_processing.embeddings.generate_embedding", fake_generate_embedding)
 
     with factory() as db:
-        canary = _seed_session(db, provider="canary", project="canary", device_id="cube-canary", user_messages=1)
-        typo = _seed_session(db, provider="cnary", project="cnary", device_id="cube-cnary", user_messages=1)
-        mislabeled = _seed_session(db, provider="codex", project="canary-stress", device_id="cube-canary", user_messages=1)
+        canary = _seed_session(db, provider="canary", project="canary", device_id="demo-machine-canary", user_messages=1)
+        typo = _seed_session(db, provider="cnary", project="cnary", device_id="demo-machine-cnary", user_messages=1)
+        mislabeled = _seed_session(db, provider="codex", project="canary-stress", device_id="demo-machine-canary", user_messages=1)
         visible = _seed_session(db, provider="codex", project="zerg", device_id="cinder", user_messages=1)
         for session in (canary, typo, mislabeled, visible):
             db.add(

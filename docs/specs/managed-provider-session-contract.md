@@ -3,7 +3,7 @@
 Status: Pre-launch hardening
 Owner: Machine Agent + provider launchers + local-health
 Updated: 2026-05-27
-Related: `machine-local-managed-session-state.md`, `managed-codex-state-compat.md`, `session-liveness-honesty.md`
+Related: the machine-local managed session state design (internal spec), `managed-codex-state-compat.md`, `session-liveness-honesty.md`
 
 ## Goal
 

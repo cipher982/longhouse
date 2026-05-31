@@ -30,7 +30,7 @@ async function ingestSession(
       project: overrides.project || "session-messages-e2e",
       device_id: overrides.device_id || `device-${sessionId.slice(0, 8)}`,
       device_name: overrides.device_name || `Device ${sessionId.slice(0, 4)}`,
-      cwd: overrides.cwd || "/Users/davidrose/git/zerg",
+      cwd: overrides.cwd || "/Users/example/git/zerg",
       git_repo:
         overrides.git_repo === undefined
           ? "git@github.com:cipher982/longhouse.git"
@@ -93,7 +93,7 @@ async function sendPresence(
     data: {
       session_id: sessionId,
       state,
-      cwd: "/Users/davidrose/git/zerg",
+      cwd: "/Users/example/git/zerg",
       provider: "codex",
     },
   });

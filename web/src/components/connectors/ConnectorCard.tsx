@@ -17,7 +17,6 @@ import {
   ClipboardListIcon,
   MapPinIcon,
   HeartIcon,
-  FileTextIcon,
   MailIcon,
   PlugIcon,
   CheckCircleIcon,
@@ -47,7 +46,6 @@ const CONNECTOR_CONFIG: Record<string, { icon: ReactNode; color: string }> = {
   notion: { icon: <NotionIcon {...iconSize} />, color: "#FFFFFF" },
   google_maps: { icon: <MapPinIcon {...iconSize} />, color: "#4285F4" },
   oura: { icon: <HeartIcon {...iconSize} />, color: "#00C896" },
-  obsidian: { icon: <FileTextIcon {...iconSize} />, color: "#7C3AED" },
   sendgrid: { icon: <MailIcon {...iconSize} />, color: "#1A82E2" },
   email: { icon: <MailIcon {...iconSize} />, color: "#EA4335" },
 };

@@ -110,7 +110,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     project: "zerg",
     device_id: "device-1",
     environment: "laptop",
-    cwd: "/Users/davidrose/git/zerg",
+    cwd: "/Users/example/git/zerg",
     git_repo: "https://github.com/cipher982/longhouse.git",
     git_branch: "main",
     started_at: now,
@@ -190,7 +190,7 @@ function makeRunner(overrides: Partial<Runner> = {}): Runner {
   return {
     id: 1,
     owner_id: 1,
-    name: "cube",
+    name: "demo-machine",
     availability_policy: "always_on",
     labels: null,
     capabilities: ["exec.full"],
@@ -201,7 +201,7 @@ function makeRunner(overrides: Partial<Runner> = {}): Runner {
     last_seen_age_seconds: 3,
     heartbeat_interval_ms: 30_000,
     stale_after_seconds: 90,
-    runner_metadata: { hostname: "cube" },
+    runner_metadata: { hostname: "demo-machine" },
     install_mode: "native",
     auto_update_policy: "notify",
     install_layout_version: 1,
@@ -307,7 +307,7 @@ describe("SessionsPage", () => {
       data: {
         projects: ["zerg", "longhouse"],
         providers: ["codex", "claude"],
-        machines: ["laptop", "cube"],
+        machines: ["laptop", "demo-machine"],
       },
       isLoading: false,
     });

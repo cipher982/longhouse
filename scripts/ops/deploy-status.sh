@@ -2,9 +2,10 @@
 # deploy-status.sh — print deployed SHA, uptime, and health for all Longhouse surfaces.
 set -euo pipefail
 
-ZERG_HOST="${ZERG_HOST:-zerg}"
-CANARY_CONTAINER_NAME="${CANARY_CONTAINER_NAME:-longhouse-david010}"
-CANARY_HEALTH_URL="${CANARY_HEALTH_URL:-https://david010.longhouse.ai/api/health}"
+# SSH alias for the runtime host (configured by scripts/ci/setup-deploy-ssh.sh)
+RUNTIME_HOST="${RUNTIME_HOST:-runtime-host}"
+CANARY_CONTAINER_NAME="${CANARY_CONTAINER_NAME:-longhouse-${LONGHOUSE_DEFAULT_SUBDOMAIN:-demo}}"
+CANARY_HEALTH_URL="${CANARY_HEALTH_URL:-https://${LONGHOUSE_DEFAULT_SUBDOMAIN:-demo}.longhouse.ai/api/health}"
 
 # --- Gather container state from zerg ----------------------------------------
 
@@ -12,7 +13,7 @@ read_container() {
     local name_or_label="$1"
     local filter="$2"
     local info
-    info=$(ssh "$ZERG_HOST" "docker ps --format '{{.Image}} {{.Status}}' $filter" 2>/dev/null | head -1)
+    info=$(ssh "$RUNTIME_HOST" "docker ps --format '{{.Image}} {{.Status}}' $filter" 2>/dev/null | head -1)
     if [[ -z "$info" ]]; then
         echo "- - -"
         return
@@ -37,7 +38,7 @@ cp_uptime=$(echo "$cp_raw" | cut -d' ' -f2-)
 
 # Canary — direct container name
 if [[ -n "$CANARY_CONTAINER_NAME" ]]; then
-    canary_raw=$(ssh "$ZERG_HOST" "docker ps --format '{{.Image}} {{.Status}}' --filter 'name=$CANARY_CONTAINER_NAME'" 2>/dev/null | head -1)
+    canary_raw=$(ssh "$RUNTIME_HOST" "docker ps --format '{{.Image}} {{.Status}}' --filter 'name=$CANARY_CONTAINER_NAME'" 2>/dev/null | head -1)
 else
     canary_raw=""
 fi

@@ -14,11 +14,11 @@
     "platform": "macos",
     "status": "running",
     "service_name": "com.longhouse.shipper",
-    "service_file": "/Users/davidrose/Library/LaunchAgents/com.longhouse.shipper.plist",
-    "log_path": "/Users/davidrose/.longhouse/agent/logs/engine.log.*"
+    "service_file": "/Users/example/Library/LaunchAgents/com.longhouse.shipper.plist",
+    "log_path": "/Users/example/.longhouse/agent/logs/engine.log.*"
   },
   "engine_status": {
-    "path": "/Users/davidrose/.longhouse/agent/engine-status.json",
+    "path": "/Users/example/.longhouse/agent/engine-status.json",
     "exists": true,
     "fresh": false,
     "age_seconds": 137,
@@ -38,12 +38,12 @@
     "error": null
   },
   "outbox": {
-    "path": "/Users/davidrose/.longhouse/agent/outbox",
+    "path": "/Users/example/.longhouse/agent/outbox",
     "file_count": 1,
     "oldest_age_seconds": 23
   },
   "activity_summary": {
-    "path": "/Users/davidrose/.longhouse/agent/longhouse-shipper.db",
+    "path": "/Users/example/.longhouse/agent/longhouse-shipper.db",
     "exists": true,
     "error": null,
     "sessions_today": 11,
@@ -65,7 +65,7 @@
     "machine_name": "cinder",
     "service_machine_name": "cinder",
     "runner": {
-      "path": "/Users/davidrose/.config/longhouse/runner.env",
+      "path": "/Users/example/.config/longhouse/runner.env",
       "exists": true,
       "error": null,
       "runner_name": "cinder",

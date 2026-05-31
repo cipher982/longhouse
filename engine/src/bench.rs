@@ -463,7 +463,7 @@ fn pct(sorted: &[f64], q: f64) -> Option<f64> {
 
 /// Discover all JSONL session files under ~/.claude/projects/
 pub fn discover_session_files() -> Vec<PathBuf> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/davidrose".to_string());
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/example".to_string());
     let projects_dir = PathBuf::from(home).join(".claude").join("projects");
 
     let mut files = Vec::new();

@@ -21,12 +21,6 @@ from zerg.models.models import User
 logger = logging.getLogger(__name__)
 
 # Config file locations (checked in order)
-CREDENTIALS_PATHS = [
-    Path("/app/scripts/personal_credentials.local.json"),  # Docker dev
-    Path(__file__).parent.parent.parent / "scripts" / "personal_credentials.local.json",  # Local dev
-    Path.home() / ".config" / "zerg" / "personal_credentials.json",  # Prod/personal
-]
-
 RUNNERS_PATHS = [
     Path("/app/scripts/runners.local.json"),  # Docker dev
     Path(__file__).parent.parent.parent / "scripts" / "runners.local.json",  # Local dev
@@ -40,75 +34,6 @@ def _find_config_file(paths: list[Path]) -> Path | None:
         if path.exists():
             return path
     return None
-
-
-def _seed_personal_credentials() -> bool:
-    """Seed personal tool credentials from local config file.
-
-    Seeds for all admin users.
-
-    Returns:
-        True if seeding succeeded or was skipped (idempotent), False on error.
-    """
-    config_path = _find_config_file(CREDENTIALS_PATHS)
-    if not config_path:
-        logger.debug("No personal credentials config found - skipping seed")
-        return True
-
-    logger.info(f"Seeding personal credentials from: {config_path}")
-
-    try:
-        # Import the seeding function from the script
-        # This reuses the existing logic which handles encryption, etc.
-        import sys
-
-        scripts_dir = config_path.parent
-        if str(scripts_dir) not in sys.path:
-            sys.path.insert(0, str(scripts_dir))
-
-        from seed_personal_credentials import seed_credentials_for_user
-
-        db = default_session_factory()
-        try:
-            # Seed for all admin users
-            admin_users = db.query(User).filter(User.role == "ADMIN").all()
-
-            if not admin_users:
-                logger.debug("No admin users in database yet - skipping credentials seed")
-                return True
-
-            # Load credentials
-            with open(config_path) as f:
-                creds = json.load(f)
-
-            seeded_count = 0
-            for user in admin_users:
-                # Seed (idempotent - won't overwrite existing)
-                seeded = seed_credentials_for_user(db, user.id, creds, force=False, merge=True)
-                if seeded:
-                    logger.info(f"Seeded personal credentials for {user.email}")
-                    seeded_count += 1
-                else:
-                    logger.debug(f"Personal credentials already exist for {user.email}")
-
-            if seeded_count > 0:
-                logger.info(f"Seeded credentials for {seeded_count} admin user(s)")
-            return True
-
-        except Exception as e:
-            logger.warning(f"Failed to seed personal credentials: {e}")
-            db.rollback()
-            return False
-        finally:
-            db.close()
-
-    except ImportError:
-        # seed_personal_credentials script not available - skip silently
-        logger.debug("Personal credentials seeder not available - skipping")
-        return True
-    except Exception as e:
-        logger.warning(f"Failed to seed personal credentials: {e}")
-        return False
 
 
 def _seed_runners() -> bool:
@@ -249,17 +174,8 @@ def run_auto_seed() -> dict:
         pass
 
     results = {
-        "credentials": "skipped",
         "runners": "skipped",
     }
-
-    # Seed personal credentials (WHOOP, Obsidian, etc.)
-    if _seed_personal_credentials():
-        config_path = _find_config_file(CREDENTIALS_PATHS)
-        if config_path:
-            results["credentials"] = f"ok ({config_path.name})"
-    else:
-        results["credentials"] = "failed"
 
     # Seed runners (dev infrastructure connectors)
     if _seed_runners():

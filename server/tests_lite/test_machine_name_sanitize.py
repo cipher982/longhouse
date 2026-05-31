@@ -53,5 +53,5 @@ def test_sanitize_numbers_ok():
 
 
 def test_sanitize_already_clean_hostname():
-    """Real-world hostname like 'davidrose-macbook-pro' is unchanged."""
-    assert sanitize_machine_name("davidrose-macbook-pro") == "davidrose-macbook-pro"
+    """Real-world hostname like 'example-macbook-pro' is unchanged."""
+    assert sanitize_machine_name("example-macbook-pro") == "example-macbook-pro"

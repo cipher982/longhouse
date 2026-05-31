@@ -1,6 +1,6 @@
 """Token counting and truncation utilities using tiktoken.
 
-Ported from sauron-jobs/shared/tokens.py for use in digest jobs.
+Ported from an internal shared module for use in digest jobs.
 """
 
 from __future__ import annotations

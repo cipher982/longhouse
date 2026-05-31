@@ -455,7 +455,7 @@ def write_summary(path: Path, summary: dict[str, Any]) -> None:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--session-id", help="Managed Claude session id. Defaults to newest local managed Claude row.")
-    parser.add_argument("--subdomain", default="david010", help="Hosted instance subdomain for hosted-session-debug.")
+    parser.add_argument("--subdomain", default=os.environ.get("LONGHOUSE_DEFAULT_SUBDOMAIN", "demo"), help="Hosted instance subdomain for hosted-session-debug.")
     parser.add_argument("--claude-dir", type=Path, default=Path.home() / ".claude")
     parser.add_argument("--longhouse-home", type=Path, default=Path.home() / ".longhouse")
     parser.add_argument("--duration-secs", type=float, default=0.0, help="Repeat observations for this many seconds.")

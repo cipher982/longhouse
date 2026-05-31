@@ -1,6 +1,6 @@
 [
   {
-    "body" : "Investigate the failing job and report what Oleg changed.",
+    "body" : "Investigate the failing job and report what Alex changed.",
     "calls" : [
 
     ],
@@ -10,7 +10,7 @@
     "role" : "user"
   },
   {
-    "body" : "Now I can see what Oleg did. Two blockers appeared: **PAASSE-22459** and **PAASSE-22460**. Here is a `code` span and a [link](https:\/\/example.com).",
+    "body" : "Now I can see what Alex did. Two blockers appeared: **PROJ-101** and **PROJ-102**. Here is a `code` span and a [link](https:\/\/example.com).",
     "calls" : [
 
     ],
@@ -26,9 +26,9 @@
     "collapsed" : false,
     "duration" : "1.0s",
     "id" : "tool:3",
-    "input" : "{\n  \"issueKey\" : \"PAASSE-22459\"\n}",
+    "input" : "{\n  \"issueKey\" : \"PROJ-101\"\n}",
     "kind" : "tool",
-    "output" : "PAASSE-22459: blocked on MR rename by Oleg at 18:42.",
+    "output" : "PROJ-101: blocked on MR rename by Alex at 18:42.",
     "status" : "done",
     "subtitle" : "",
     "title" : "getJiraIssue"

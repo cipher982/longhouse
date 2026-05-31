@@ -9,7 +9,7 @@ description: Zerg/Longhouse full ship cycle — test, deploy, QA, verify. Use wh
 
 - **Public demo runtime** — `https://longhouse.ai` — Coolify app `longhouse-demo`
 - **Control plane** — `https://control.longhouse.ai` — private repo/service; public deploys only health-check it
-- **Hosted tenant runtime** — `https://david010.longhouse.ai` — reprovisioned runtime container managed by the control plane
+- **Hosted tenant runtime** — `https://<subdomain>.longhouse.ai` — reprovisioned runtime container managed by the control plane
 
 `longhouse.ai` is a demo-mode Longhouse runtime, not a static landing page.
 
@@ -17,7 +17,7 @@ description: Zerg/Longhouse full ship cycle — test, deploy, QA, verify. Use wh
 
 Do not blur these lanes:
 
-- **Hosted deploy** — updates public Longhouse runtime surfaces running on `zerg`:
+- **Hosted deploy** — updates public Longhouse runtime surfaces running on the hosted runtime host:
   public demo runtime and hosted tenant runtimes. The hosted control plane is
   an external private service for this public repo; runtime deploys may check
   it, but do not ship it.
@@ -86,7 +86,7 @@ make ship-watch SHA="<full-sha>"
 
 This skill is the single source of truth for the repo's `cowbell` ship flow.
 
-When David says `cowbell`, the agent owns the whole ship loop:
+When the maintainer says `cowbell`, the agent owns the whole ship loop:
 
 - resolve the task SHA yourself
 - if the task is still uncommitted work, commit it now
@@ -163,17 +163,17 @@ Data survives reprovision. Hosted tenant SQLite lives at `/var/app-data/longhous
 ## Logs When Things Break
 
 ```bash
-ssh zerg 'docker logs longhouse-david010 --tail 50'
+ssh <runtime-host> 'docker logs longhouse-<subdomain> --tail 50'
 coolify app logs longhouse-demo
 coolify app logs longhouse-control-plane
 ```
 
 ## Local Dogfood Refresh (MANDATORY after every ship)
 
-**Hosted ship does NOT update David's laptop.** The `longhouse` CLI,
+**Hosted ship does NOT update the maintainer's laptop.** The `longhouse` CLI,
 `longhouse-engine` daemon, and `Longhouse.app` menu bar are installed
 into his system and only move when rebuilt locally. If you forget this
-step, the menu bar will show "restart pending" and David is stuck
+step, the menu bar will show "restart pending" and the maintainer is stuck
 dogfooding old code.
 
 After **every** successful `make ship` — not conditionally, not "if
@@ -193,7 +193,7 @@ does not apply to engine, hooks, connect, desktop app, or iOS.
 
 ### iOS
 
-If the change touched `ios/`, tell David explicitly at the end of
+If the change touched `ios/`, tell the maintainer explicitly at the end of
 the ship: iOS has no TestFlight/App Store path yet. He has to plug
 his phone in via USB and build via Xcode. Do not claim "shipped"
 for iOS changes without calling this out.

@@ -42,7 +42,7 @@ def _seed_session(
     *,
     session_id=None,
     provider_session_id="resume-root",
-    cwd="/Users/davidrose/git/zerg",
+    cwd="/Users/example/git/zerg",
     git_repo="git@github.com:cipher982/longhouse.git",
     git_branch="main",
 ):
@@ -127,7 +127,7 @@ def test_workspace_resolver_creates_managed_scratch_workspace_for_missing_non_re
 
     resolved = asyncio.run(
         resolver.resolve(
-            original_cwd="/Users/davidrose/git/nonexistent/session-workspace",
+            original_cwd="/Users/example/git/nonexistent/session-workspace",
             git_repo=None,
             git_branch=None,
             session_id="session-123",

@@ -74,12 +74,6 @@ CONNECTOR_TOOL_MAPPING = {
     ConnectorType.IMESSAGE: [
         "send_imessage",
     ],
-    ConnectorType.WHOOP: [
-        "get_whoop_data",
-    ],
-    ConnectorType.OBSIDIAN: [
-        "search_notes",
-    ],
 }
 
 # Human-readable capability descriptions for each connector
@@ -129,17 +123,6 @@ CONNECTOR_CAPABILITIES = {
     ConnectorType.IMESSAGE: [
         "Send iMessages (requires macOS host)",
         "Deliver mobile notifications",
-    ],
-    ConnectorType.WHOOP: [
-        "Access recovery and HRV data",
-        "View sleep metrics",
-        "Track daily strain",
-        "Monitor health trends",
-    ],
-    ConnectorType.OBSIDIAN: [
-        "Search personal notes",
-        "Access vault content",
-        "Query knowledge base",
     ],
 }
 

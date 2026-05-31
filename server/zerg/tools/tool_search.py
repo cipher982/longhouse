@@ -68,8 +68,6 @@ CATEGORY_PREFIXES = {
     "get_commis": "coordination",
     "contact_user": "coordination",
     "get_current_": "personal",
-    "get_whoop_": "personal",
-    "search_notes": "personal",
     "datetime_": "utility",
     "generate_uuid": "utility",
     "math_": "utility",

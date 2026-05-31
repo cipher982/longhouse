@@ -61,7 +61,7 @@ class AgentSession(AgentsBase):
     # Context
     project = Column(String(255), nullable=True, index=True)  # Project name (parsed from cwd)
     device_id = Column(String(255), nullable=True, index=True)  # Machine identifier
-    device_name = Column(String(255), nullable=True)  # Human-friendly device label (e.g. "laptop", "cube")
+    device_name = Column(String(255), nullable=True)  # Human-friendly device label (e.g. "laptop", "demo-machine")
     cwd = Column(Text, nullable=True)  # Working directory
     git_repo = Column(String(500), nullable=True)  # Git remote URL
     git_branch = Column(String(255), nullable=True)  # Git branch name

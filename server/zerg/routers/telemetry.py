@@ -419,7 +419,7 @@ async def canary_observation(obs: CanaryObservation) -> dict:
 
     Gated by X-Canary-Token (shared secret env var). Keeps random clients
     from polluting SLA signal without requiring a browser cookie — the
-    producer + observer run without a browser cookie on cube.
+    producer + observer run without a browser cookie on the build host.
     """
     latency_s = obs.latency_ms / 1000.0
     canary_latency_seconds.labels(hop=obs.hop, surface=obs.surface).observe(latency_s)

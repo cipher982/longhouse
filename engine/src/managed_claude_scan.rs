@@ -601,8 +601,8 @@ mod tests {
     #[test]
     fn parses_lsof_cwd_output() {
         assert_eq!(
-            parse_lsof_cwd_output("p11713\nfcwd\nn/Users/test/git/zeta\n").as_deref(),
-            Some("/Users/test/git/zeta")
+            parse_lsof_cwd_output("p11713\nfcwd\nn/Users/test/git/acme\n").as_deref(),
+            Some("/Users/test/git/acme")
         );
     }
 }

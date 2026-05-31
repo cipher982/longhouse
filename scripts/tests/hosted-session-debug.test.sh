@@ -53,7 +53,7 @@ if [[ "$cmd" == python3\ -* ]]; then
       "provider": "claude",
       "project": "zerg",
       "device_id": "cinder",
-      "cwd": "/Users/davidrose/git/zerg",
+      "cwd": "/Users/example/git/zerg",
       "started_at": "2026-04-27 20:35:26",
       "ended_at": "2026-04-27 22:12:06",
       "last_activity_at": "2026-04-27 22:12:06",

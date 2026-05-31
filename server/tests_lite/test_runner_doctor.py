@@ -57,12 +57,12 @@ def test_runner_doctor_reports_healthy_online_runner(tmp_path: Path):
     try:
         runner = Runner(
             owner_id=user.id,
-            name="clifford",
+            name="demo-runner",
             auth_secret_hash="hash",
             capabilities=["exec.full"],
             status="online",
             runner_metadata={
-                "hostname": "clifford",
+                "hostname": "deploy-host",
                 "platform": "linux",
                 "runner_version": "0.1.7",
                 "install_mode": "server",
@@ -96,12 +96,12 @@ def test_runner_doctor_flags_capability_mismatch(tmp_path: Path):
     try:
         runner = Runner(
             owner_id=user.id,
-            name="cube",
+            name="demo-machine",
             auth_secret_hash="hash",
             capabilities=["exec.full"],
             status="online",
             runner_metadata={
-                "hostname": "cube",
+                "hostname": "demo-machine",
                 "platform": "linux",
                 "install_mode": "server",
                 "auto_update_policy": "notify",
@@ -198,12 +198,12 @@ def test_runner_doctor_warns_for_legacy_layout_even_when_online(tmp_path: Path):
     try:
         runner = Runner(
             owner_id=user.id,
-            name="cube",
+            name="demo-machine",
             auth_secret_hash="hash",
             capabilities=["exec.full"],
             status="online",
             runner_metadata={
-                "hostname": "cube",
+                "hostname": "demo-machine",
                 "platform": "linux",
                 "runner_version": "0.1.7",
                 "install_mode": "server",
@@ -329,11 +329,11 @@ def test_runner_preflight_reports_authenticated_server_view(tmp_path: Path):
         runner = runner_crud.create_runner(
             db=db,
             owner_id=user.id,
-            name="clifford",
+            name="demo-runner",
             auth_secret="runner-secret",
             capabilities=["exec.full"],
             metadata={
-                "hostname": "clifford",
+                "hostname": "deploy-host",
                 "platform": "linux",
                 "runner_version": "0.1.7",
                 "install_mode": "server",
@@ -348,7 +348,7 @@ def test_runner_preflight_reports_authenticated_server_view(tmp_path: Path):
         ):
             response = client.post(
                 "/runners/preflight",
-                json={"runner_name": "clifford", "secret": "runner-secret"},
+                json={"runner_name": "demo-runner", "secret": "runner-secret"},
             )
         assert response.status_code == 200
         payload = response.json()

@@ -9,7 +9,7 @@ The producer must be running first so a canary session exists and
 ~/.longhouse/canary-session-id is populated.
 
 Usage:
-    LONGHOUSE_CANARY_URL=https://david010.longhouse.ai \
+    LONGHOUSE_CANARY_URL=https://your-instance.longhouse.ai \
     LONGHOUSE_CANARY_TOKEN=<shared-secret-set-on-server> \
     python3 scripts/canary/observer.py
 

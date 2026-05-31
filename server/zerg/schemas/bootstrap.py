@@ -42,34 +42,15 @@ class RunnersSeedRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class WhoopCredentials(BaseModel):
-    """WHOOP health tracker OAuth credentials."""
-
-    client_id: str = Field(..., description="OAuth client ID")
-    client_secret: str = Field(..., description="OAuth client secret")
-    access_token: str = Field(..., description="OAuth access token")
-    refresh_token: str | None = Field(None, description="OAuth refresh token")
-
-
-class ObsidianCredentials(BaseModel):
-    """Obsidian vault access credentials."""
-
-    vault_path: str = Field(..., description="Path to Obsidian vault")
-    runner_name: str = Field(..., description="Runner name with vault access")
-
-
 class CredentialsSeedRequest(BaseModel):
-    """Request to seed personal credentials for the admin user.
+    """Request to seed connector credentials for the admin user.
 
-    This replaces file-based seeding from ~/.config/zerg/personal_credentials.json.
-    All credentials are Fernet-encrypted before storage.
+    Each top-level key is a connector type whose value is that connector's
+    credential object; all values are Fernet-encrypted before storage.
     """
 
-    whoop: WhoopCredentials | None = Field(None, description="WHOOP health credentials")
-    obsidian: ObsidianCredentials | None = Field(None, description="Obsidian vault credentials")
-
     class Config:
-        extra = "allow"  # Allow additional connector types
+        extra = "allow"  # Connector types are open-ended
 
 
 # ---------------------------------------------------------------------------

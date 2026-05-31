@@ -38,7 +38,7 @@ final class SessionChatUITests: XCTestCase {
         // Assistant prose renders, confirming the tool-bearing fixture loaded
         // and the timeline built through the tool/orphan-tool pairing path.
         XCTAssertTrue(
-            app.staticTexts["The MR was renamed by Oleg at 18:42, then moved back to In Review."]
+            app.staticTexts["The MR was renamed by Alex at 18:42, then moved back to In Review."]
                 .waitForExistence(timeout: 6)
         )
     }
@@ -169,7 +169,7 @@ final class SessionChatUITests: XCTestCase {
 
         XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: 8), file: file, line: line)
         XCTAssertTrue(
-            app.staticTexts["The MR was renamed by Oleg at 18:42, then moved back to In Review."]
+            app.staticTexts["The MR was renamed by Alex at 18:42, then moved back to In Review."]
                 .waitForExistence(timeout: 6),
             file: file,
             line: line

@@ -8,7 +8,7 @@ Updated: 2026-04-14
 
 Define the clean macOS product shape for launch without breaking the existing machine contract or the CLI-first power-user path.
 
-Detailed onboarding, packaging, and naming cleanup planning lives in `docs/specs/local-app-product-unification.md`.
+Detailed onboarding, packaging, and naming cleanup planning lives in the local app product unification design (internal spec).
 
 ## Decision
 

@@ -95,7 +95,7 @@ def _seed_agent_session(db, *, seed_kernel_rows: bool = True, **overrides) -> Ag
         "execution_home": "managed_local",
         "managed_transport": "codex_app_server",
         "source_runner_id": 17,
-        "source_runner_name": "David MacBook",
+        "source_runner_name": "Demo MacBook",
     }
     values.update(overrides)
     if values["thread_root_session_id"] is None:
@@ -387,7 +387,7 @@ def test_capability_response_prefers_source_runner_name_for_display_label():
         execution_home="managed_local",
         managed_transport="claude_channel_bridge",
         source_runner_id=17,
-        source_runner_name="David MacBook",
+        source_runner_name="Demo MacBook",
     )
     capabilities = build_session_capabilities(session)
 
@@ -397,7 +397,7 @@ def test_capability_response_prefers_source_runner_name_for_display_label():
         runtime_display=_runtime_display(),
     )
 
-    assert response.display_label == "Live on David MacBook"
+    assert response.display_label == "Live on Demo MacBook"
     assert response.display_tone == "success"
 
 
@@ -422,7 +422,7 @@ def test_capability_response_does_not_claim_live_without_runtime_truth():
         execution_home="managed_local",
         managed_transport="claude_channel_bridge",
         source_runner_id=17,
-        source_runner_name="David MacBook",
+        source_runner_name="Demo MacBook",
     )
     capabilities = build_session_capabilities(session)
 
@@ -439,7 +439,7 @@ def test_capability_response_marks_closed_managed_session_not_live_or_reattachab
         execution_home="managed_local",
         managed_transport="claude_channel_bridge",
         source_runner_id=17,
-        source_runner_name="David MacBook",
+        source_runner_name="Demo MacBook",
     )
     capabilities = build_session_capabilities(session)
 
@@ -463,7 +463,7 @@ def test_capability_response_marks_disconnected_managed_session_control_offline(
         execution_home="managed_local",
         managed_transport="claude_channel_bridge",
         source_runner_id=17,
-        source_runner_name="David MacBook",
+        source_runner_name="Demo MacBook",
     )
     capabilities = build_session_capabilities(session)
 
@@ -703,7 +703,7 @@ def test_capability_response_prefers_facts_over_runtime_display_labels():
         execution_home="managed_local",
         managed_transport="codex_app_server",
         source_runner_id=17,
-        source_runner_name="David MacBook",
+        source_runner_name="Demo MacBook",
     )
     capabilities = build_session_capabilities(session)
 

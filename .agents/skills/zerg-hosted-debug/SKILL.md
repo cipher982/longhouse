@@ -1,6 +1,6 @@
 ---
 name: zerg-hosted-debug
-description: Debug hosted Longhouse instances on zerg. Use when investigating david010/live prod behavior, control-plane-managed tenants, managed session state, hosted auth, or tenant SQLite state.
+description: Debug hosted Longhouse instances on the runtime host. Use when investigating a hosted tenant / live prod behavior, control-plane-managed tenants, managed session state, hosted auth, or tenant SQLite state.
 ---
 
 # Zerg Hosted Debug
@@ -10,16 +10,16 @@ Use this when the question is about a live hosted tenant, not local `make dev`.
 For hosted 502s, slow Runtime Host startup, large tenant SQLite files, WAL
 growth, or disk pressure, use the SQLite path in this skill before touching the
 database. Longhouse history is the product value; do not prune archived session
-logs as a recovery shortcut unless David explicitly approves data loss.
+logs as a recovery shortcut unless the maintainer approves data loss.
 
 ## Default Path
 
 Start with the repo helper:
 
 ```bash
-bash scripts/ops/hosted-session-debug.sh --subdomain david010 --session <session-id> --limit 20
-bash scripts/ops/hosted-session-debug.sh --subdomain david010 --session <session-id> --logs
-bash scripts/ops/hosted-session-debug.sh --subdomain david010 --session <session-id> --json
+bash scripts/ops/hosted-session-debug.sh --subdomain <subdomain> --session <session-id> --limit 20
+bash scripts/ops/hosted-session-debug.sh --subdomain <subdomain> --session <session-id> --logs
+bash scripts/ops/hosted-session-debug.sh --subdomain <subdomain> --session <session-id> --json
 ```
 
 It does the right order automatically:
@@ -36,7 +36,7 @@ Prefer this over ad hoc `ssh` + guessed DB paths + nested heredoc quoting.
 - Tenant container mount: `/data`
 - Tenant DB: `/data/longhouse.db`
 
-This is an explicit Longhouse exception on `zerg`; do not assume the generic VPS `/var/lib/docker/data/...` layout.
+This is an explicit Longhouse exception on the runtime host; do not assume the generic VPS `/var/lib/docker/data/...` layout.
 
 ## Auth / Control Plane
 
@@ -70,9 +70,9 @@ curl -fsS https://<subdomain>.longhouse.ai/api/health
 Check host/container state:
 
 ```bash
-ssh zerg "docker ps -a --filter name=longhouse-<subdomain>"
-ssh zerg "df -h /var/app-data && ls -lh /var/app-data/longhouse/<subdomain>/longhouse.db*"
-ssh zerg "docker logs --tail 300 longhouse-<subdomain> 2>&1 | grep -E 'Startup step|Database initialization step|Application startup|readyz|ERROR'"
+ssh <runtime-host> "docker ps -a --filter name=longhouse-<subdomain>"
+ssh <runtime-host> "df -h /var/app-data && ls -lh /var/app-data/longhouse/<subdomain>/longhouse.db*"
+ssh <runtime-host> "docker logs --tail 300 longhouse-<subdomain> 2>&1 | grep -E 'Startup step|Database initialization step|Application startup|readyz|ERROR'"
 ```
 
 Startup logs should show both coarse and database-specific timings:
@@ -90,14 +90,14 @@ SQLite locks, FTS, migrations, or container health checks.
 When the tenant container is running:
 
 ```bash
-ssh zerg "docker exec longhouse-<subdomain> python -m zerg.cli.main db doctor --json"
+ssh <runtime-host> "docker exec longhouse-<subdomain> python -m zerg.cli.main db doctor --json"
 ```
 
 When the tenant container cannot stay up, run the same command in a temporary
 runtime container with tenant data mounted:
 
 ```bash
-ssh zerg "docker run --rm \
+ssh <runtime-host> "docker run --rm \
   -v /var/app-data/longhouse/<subdomain>:/data \
   -e DATABASE_URL=sqlite:////data/longhouse.db \
   <runtime-image> \
@@ -134,13 +134,13 @@ If `sqlite_stat1` is missing or obviously stale, run explicit planner
 maintenance:
 
 ```bash
-ssh zerg "docker exec longhouse-<subdomain> python -m zerg.cli.main db optimize --json"
+ssh <runtime-host> "docker exec longhouse-<subdomain> python -m zerg.cli.main db optimize --json"
 ```
 
 For a down container:
 
 ```bash
-ssh zerg "docker run --rm \
+ssh <runtime-host> "docker run --rm \
   -v /var/app-data/longhouse/<subdomain>:/data \
   -e DATABASE_URL=sqlite:////data/longhouse.db \
   <runtime-image> \
@@ -196,6 +196,6 @@ backup footprint, or disk free changed before the outage.
 
 ## Host Notes
 
-- SSH host is `zerg`
+- SSH host is the runtime host (a configured SSH alias)
 - `rg` is not guaranteed on the server; use `grep` in remote log commands
 - Coolify app container names are hashy, but hosted tenant containers are stable `longhouse-<subdomain>`

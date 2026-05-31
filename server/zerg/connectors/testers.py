@@ -54,8 +54,6 @@ def test_connector(connector_type: ConnectorType | str, credentials: dict[str, A
         ConnectorType.LINEAR: _test_linear,
         ConnectorType.NOTION: _test_notion,
         ConnectorType.IMESSAGE: _test_imessage,
-        ConnectorType.WHOOP: _test_whoop,
-        ConnectorType.OBSIDIAN: _test_obsidian,
     }
 
     tester = testers.get(connector_type)
@@ -416,72 +414,4 @@ def _test_imessage(creds: dict[str, Any]) -> dict[str, Any]:
         "success": True,
         "message": "iMessage configured (requires macOS host at runtime)",
         "metadata": {"enabled": True},
-    }
-
-
-def _test_whoop(creds: dict[str, Any]) -> dict[str, Any]:
-    """Validate WHOOP credentials by fetching user profile.
-
-    Uses the access token to fetch user profile info. If refresh_token is
-    provided, we could refresh the token, but for a simple test we just
-    verify the current token works.
-    """
-    access_token = creds.get("access_token")
-
-    if not access_token:
-        return {"success": False, "message": "Missing access_token"}
-
-    response = httpx.get(
-        "https://api.prod.whoop.com/developer/v1/user/profile/basic",
-        headers={"Authorization": f"Bearer {access_token}"},
-        timeout=TEST_TIMEOUT,
-    )
-
-    if response.status_code == 200:
-        try:
-            data = response.json()
-            first_name = data.get("first_name", "")
-            last_name = data.get("last_name", "")
-            name = f"{first_name} {last_name}".strip() or "WHOOP User"
-
-            return {
-                "success": True,
-                "message": f"Connected as {name}",
-                "metadata": {
-                    "user_id": data.get("user_id"),
-                    "name": name,
-                },
-            }
-        except Exception:
-            return {"success": True, "message": "WHOOP token valid"}
-
-    if response.status_code == 401:
-        return {"success": False, "message": "Invalid or expired access token"}
-    if response.status_code == 403:
-        return {"success": False, "message": "Token lacks required scopes"}
-    return {"success": False, "message": f"WHOOP returned {response.status_code}"}
-
-
-def _test_obsidian(creds: dict[str, Any]) -> dict[str, Any]:
-    """Validate Obsidian configuration.
-
-    Obsidian access happens via a Runner that has filesystem access to the vault.
-    We can only verify the configuration is set - actual access depends on the
-    Runner being online and having the vault path accessible.
-    """
-    vault_path = creds.get("vault_path")
-    runner_name = creds.get("runner_name")
-
-    if not vault_path:
-        return {"success": False, "message": "Missing vault_path"}
-    if not runner_name:
-        return {"success": False, "message": "Missing runner_name"}
-
-    return {
-        "success": True,
-        "message": f"Configured for runner '{runner_name}'",
-        "metadata": {
-            "vault_path": vault_path,
-            "runner_name": runner_name,
-        },
     }

@@ -1693,7 +1693,7 @@ def test_empty_managed_snapshot_marks_only_same_device_control_offline(tmp_path)
                 session_id=second.id,
                 provider="claude",
                 device_id="other-device",
-                machine_id="cube",
+                machine_id="demo-machine",
                 transport="claude_channel_bridge",
                 lease_state="attached",
                 control_state="online",

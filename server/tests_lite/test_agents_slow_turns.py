@@ -202,7 +202,7 @@ def test_slow_turns_route_returns_managed_completed_turns_with_machine_health(tm
             provider="claude",
             project="zerg",
             device_id="broken-machine",
-            device_name="cube",
+            device_name="demo-machine",
             managed_transport="claude_channel_bridge",
         )
         healthy_session = _seed_session(
@@ -330,7 +330,7 @@ def test_slow_turns_route_returns_managed_completed_turns_with_machine_health(tm
         assert first["provider"] == "claude"
         assert first["project"] == "zerg"
         assert first["device_id"] == "broken-machine"
-        assert first["device_name"] == "cube"
+        assert first["device_name"] == "demo-machine"
         assert first["managed_transport"] == "claude_channel_bridge"
         assert first["total_turn_time_ms"] == 72000
         assert first["completed_at"] == "2026-04-23T19:01:12Z"

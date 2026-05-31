@@ -10,7 +10,7 @@ Runs forever. Re-uses the same canary session_id across restarts so all
 probes aggregate into one session on the server.
 
 Usage:
-    LONGHOUSE_CANARY_URL=https://david010.longhouse.ai \
+    LONGHOUSE_CANARY_URL=https://your-instance.longhouse.ai \
     LONGHOUSE_AGENTS_TOKEN=<agents-device-token> \
     LONGHOUSE_CANARY_TOKEN=<shared-secret-set-on-server> \
     python3 scripts/canary/producer.py

@@ -154,16 +154,17 @@ jobs:
   deploy-and-verify:
     name: "Deploy demo + canary + hosted live QA"
     runs-on: cube-deploy
+    if: github.repository == 'cipher982/longhouse'
     timeout-minutes: 60
     needs: gate
     env:
       CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
       CONTROL_PLANE_URL: https://control.longhouse.ai
       PUBLIC_DEMO_URL: https://longhouse.ai
-      INSTANCE_SUBDOMAIN: david010
+      INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN || 'demo' }}
       QA_HOME: /tmp/hosted-live-qa-${{ github.run_id }}-${{ github.run_attempt }}
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
-      ZERG_HOST: 100.120.197.80
+      RUNTIME_HOST: ${{ secrets.DEPLOY_RUNTIME_HOST }}
 
     steps:
       - uses: actions/checkout@v6
@@ -219,6 +220,10 @@ jobs:
       - name: Setup SSH
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_COOLIFY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          RUNTIME_HOST: ${{ secrets.DEPLOY_RUNTIME_HOST }}
+          RUNTIME_USER: ${{ secrets.DEPLOY_SSH_USER }}
         run: ./scripts/ci/setup-deploy-ssh.sh
 
       - name: Log in to GHCR

@@ -20,7 +20,7 @@
         "event": {
           "id": 1,
           "role": "user",
-          "content_text": "Investigate the failing job and report what Oleg changed.",
+          "content_text": "Investigate the failing job and report what Alex changed.",
           "tool_name": null,
           "tool_input_json": null,
           "tool_output_text": null,
@@ -37,7 +37,7 @@
         "event": {
           "id": 2,
           "role": "assistant",
-          "content_text": "Now I can see what Oleg did. Two blockers appeared: **PAASSE-22459** and **PAASSE-22460**. Here is a `code` span and a [link](https://example.com).",
+          "content_text": "Now I can see what Alex did. Two blockers appeared: **PROJ-101** and **PROJ-102**. Here is a `code` span and a [link](https://example.com).",
           "tool_name": null,
           "tool_input_json": null,
           "tool_output_text": null,
@@ -57,7 +57,7 @@
           "content_text": null,
           "tool_name": "getJiraIssue",
           "tool_input_json": {
-            "issueKey": "PAASSE-22459"
+            "issueKey": "PROJ-101"
           },
           "tool_output_text": null,
           "tool_call_id": "call-jira-1",
@@ -77,7 +77,7 @@
           "content_text": null,
           "tool_name": "getJiraIssue",
           "tool_input_json": null,
-          "tool_output_text": "PAASSE-22459: blocked on MR rename by Oleg at 18:42.",
+          "tool_output_text": "PROJ-101: blocked on MR rename by Alex at 18:42.",
           "tool_call_id": "call-jira-1",
           "tool_call_state": "completed",
           "timestamp": "2026-05-30T18:00:03Z",

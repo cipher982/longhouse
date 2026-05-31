@@ -614,9 +614,8 @@ export interface paths {
         put?: never;
         /**
          * Seed Credentials
-         * @description Seed personal credentials for the admin user.
+         * @description Seed connector credentials for the admin user.
          *
-         *     This replaces file-based seeding from ~/.config/zerg/personal_credentials.json.
          *     All credentials are Fernet-encrypted before storage.
          *     Idempotent - skips credentials that already exist.
          */
@@ -1954,10 +1953,12 @@ export interface paths {
         put?: never;
         /**
          * Reset Sessions
-         * @description Clear all agent sessions (dev only).
+         * @description Clear all agent sessions (admin only).
          *
-         *     Used by ui-capture for deterministic empty state testing.
-         *     Disabled in production.
+         *     Destructive: deletes all events and sessions. Used by ui-capture for
+         *     deterministic empty-state testing. Requires an admin session (in
+         *     auth-disabled local/dev mode the local owner is admin); never reachable
+         *     unauthenticated on a public bind. Always disabled in production.
          */
         post: operations["reset_sessions_system_reset_sessions_post"];
         delete?: never;
@@ -1979,8 +1980,10 @@ export interface paths {
          * Seed Demo Sessions
          * @description Seed demo agent sessions for marketing/onboarding.
          *
-         *     Public endpoint (no auth) for dev/demo purposes.
-         *     Disabled in production unless demo_mode is enabled.
+         *     Writes synthetic demo sessions into the database. Requires an admin
+         *     session (in auth-disabled local/dev mode the local owner is admin); never
+         *     reachable unauthenticated on a public bind. Disabled in production unless
+         *     demo_mode is enabled.
          */
         post: operations["seed_demo_sessions_system_seed_demo_sessions_post"];
         delete?: never;
@@ -3468,7 +3471,7 @@ export interface paths {
          * Stream Canary Workspace
          * @description Canary-only SSE: same generator as the browser endpoint, token-auth.
          *
-         *     The always-on canary observer on cube uses this; requires X-Canary-Token
+         *     The always-on canary observer on the build host uses this; requires X-Canary-Token
          *     matching LONGHOUSE_CANARY_TOKEN. Admin users can still use the browser
          *     endpoint.
          */
@@ -5540,17 +5543,12 @@ export interface components {
         };
         /**
          * CredentialsSeedRequest
-         * @description Request to seed personal credentials for the admin user.
+         * @description Request to seed connector credentials for the admin user.
          *
-         *     This replaces file-based seeding from ~/.config/zerg/personal_credentials.json.
-         *     All credentials are Fernet-encrypted before storage.
+         *     Each top-level key is a connector type whose value is that connector's
+         *     credential object; all values are Fernet-encrypted before storage.
          */
         CredentialsSeedRequest: {
-            /** @description WHOOP health credentials */
-            whoop?: components["schemas"]["WhoopCredentials"] | null;
-            /** @description Obsidian vault credentials */
-            obsidian?: components["schemas"]["ObsidianCredentials"] | null;
-        } & {
             [key: string]: unknown;
         };
         /**
@@ -6826,22 +6824,6 @@ export interface components {
              * @description Total slow turns in the current filtered turn slice before slow_turn_limit truncation.
              */
             slow_turn_total: number;
-        };
-        /**
-         * ObsidianCredentials
-         * @description Obsidian vault access credentials.
-         */
-        ObsidianCredentials: {
-            /**
-             * Vault Path
-             * @description Path to Obsidian vault
-             */
-            vault_path: string;
-            /**
-             * Runner Name
-             * @description Runner name with vault access
-             */
-            runner_name: string;
         };
         /**
          * OpsSeriesPoint
@@ -10757,32 +10739,6 @@ export interface components {
              * @default 0
              */
             tool_calls: number;
-        };
-        /**
-         * WhoopCredentials
-         * @description WHOOP health tracker OAuth credentials.
-         */
-        WhoopCredentials: {
-            /**
-             * Client Id
-             * @description OAuth client ID
-             */
-            client_id: string;
-            /**
-             * Client Secret
-             * @description OAuth client secret
-             */
-            client_secret: string;
-            /**
-             * Access Token
-             * @description OAuth access token
-             */
-            access_token: string;
-            /**
-             * Refresh Token
-             * @description OAuth refresh token
-             */
-            refresh_token?: string | null;
         };
     };
     responses: never;

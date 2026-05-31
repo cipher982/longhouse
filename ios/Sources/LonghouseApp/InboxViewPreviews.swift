@@ -106,9 +106,9 @@ private func mockSession(
         ),
         mockSession(
             id: "2",
-            project: "zeta",
-            title: "Confirmed GCP Credentials Path Blocker MR Review",
-            summary: "Re-verified MR 1009 against design docs and test plan CT-4, confirming path mismatch from legacy SSM to required self-service shape.",
+            project: "acme",
+            title: "Confirmed credentials path blocker in PR review",
+            summary: "Re-verified PR 1009 against design docs and test plan CT-4, confirming path mismatch from legacy config to required self-service shape.",
             provider: "codex",
             statusLabel: "Idle",
             statusTone: "idle",
@@ -182,7 +182,7 @@ private func mockSession(
         ),
         mockSession(
             id: "6",
-            project: "sauron",
+            project: "acme-api",
             title: "Scheduler Maintenance Sweep",
             summary: "Closed cleanly after job graph drained.",
             provider: "claude",

@@ -123,7 +123,7 @@ async function seedSessionDetailFixture(
       environment: "development",
       project: "mobile-session-detail-e2e",
       device_id: "e2e-mobile-device",
-      cwd: "/Users/davidrose/git/zerg/web/src/components/session-workspace",
+      cwd: "/Users/example/git/zerg/web/src/components/session-workspace",
       git_repo: "git@github.com:cipher982/longhouse.git",
       git_branch: "fix/mobile-session-layout-readability",
       provider_session_id: `claude-session-${sessionId}`,

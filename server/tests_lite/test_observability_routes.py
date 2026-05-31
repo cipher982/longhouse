@@ -208,7 +208,7 @@ def test_browser_observability_routes_expose_overview_and_raw_slices(tmp_path, m
             provider="claude",
             project="zerg",
             device_id="broken-machine",
-            device_name="cube",
+            device_name="demo-machine",
             managed_transport="claude_channel_bridge",
         )
         healthy_session = _seed_session(

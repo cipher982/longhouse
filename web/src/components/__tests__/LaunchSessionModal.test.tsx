@@ -231,9 +231,9 @@ describe("LaunchSessionModal", () => {
     apiMocks.fetchAgentSessions.mockResolvedValue({
       sessions: [
         {
-          head: { cwd: "/Users/davidrose/git/zerg/longhouse" },
-          detail: { cwd: "/Users/davidrose/git/zerg/longhouse" },
-          root: { cwd: "/Users/davidrose/git/zerg/longhouse" },
+          head: { cwd: "/Users/example/git/zerg/longhouse" },
+          detail: { cwd: "/Users/example/git/zerg/longhouse" },
+          root: { cwd: "/Users/example/git/zerg/longhouse" },
         },
       ],
       total: 1,
@@ -244,10 +244,10 @@ describe("LaunchSessionModal", () => {
     renderModal();
 
     const cwdInput = await screen.findByTestId("launch-cwd-input");
-    await waitFor(() => expect(cwdInput).toHaveValue("/Users/davidrose/git/zerg/longhouse"));
+    await waitFor(() => expect(cwdInput).toHaveValue("/Users/example/git/zerg/longhouse"));
 
     await user.click(screen.getByRole("button", { name: "~/git/zerg" }));
-    expect(cwdInput).toHaveValue("/Users/davidrose/git/zerg");
+    expect(cwdInput).toHaveValue("/Users/example/git/zerg");
   });
 
   it("keeps immediate launch failures in the modal instead of navigating", async () => {
@@ -274,7 +274,7 @@ describe("LaunchSessionModal", () => {
     renderModal({ onLaunched });
 
     const cwdInput = await screen.findByTestId("launch-cwd-input");
-    await user.type(cwdInput, "/Users/davidrose/git/zerg");
+    await user.type(cwdInput, "/Users/example/git/zerg");
     await user.click(screen.getByTestId("launch-submit"));
 
     expect(await screen.findByTestId("launch-error")).toHaveTextContent(

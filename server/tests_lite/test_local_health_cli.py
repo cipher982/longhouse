@@ -462,7 +462,7 @@ def test_collect_local_health_surfaces_control_channel_status(monkeypatch, tmp_p
             "control_channel": {
                 "enabled": True,
                 "status": "disconnected",
-                "ws_url": "wss://david010.longhouse.ai/api/agents/control/ws",
+                "ws_url": "wss://demo.longhouse.ai/api/agents/control/ws",
                 "last_error_code": "connect_failed",
                 "last_error_message": "tls handshake failed",
                 "reconnect_backoff_seconds": 4,
@@ -496,7 +496,7 @@ def test_collect_local_health_marks_connected_control_channel_launch_ready(monke
             "control_channel": {
                 "enabled": True,
                 "status": "connected",
-                "ws_url": "wss://david010.longhouse.ai/api/agents/control/ws",
+                "ws_url": "wss://demo.longhouse.ai/api/agents/control/ws",
                 "supports": ["codex.launch", "claude.launch", "opencode.launch"],
             }
         },
@@ -541,7 +541,7 @@ def test_collect_local_health_marks_opencode_only_control_channel_launch_ready(m
             "control_channel": {
                 "enabled": True,
                 "status": "connected",
-                "ws_url": "wss://david010.longhouse.ai/api/agents/control/ws",
+                "ws_url": "wss://demo.longhouse.ai/api/agents/control/ws",
                 "supports": ["opencode.launch"],
             }
         },
@@ -566,7 +566,7 @@ def test_collect_local_health_reports_antigravity_send_without_launchability(mon
             "control_channel": {
                 "enabled": True,
                 "status": "connected",
-                "ws_url": "wss://david010.longhouse.ai/api/agents/control/ws",
+                "ws_url": "wss://demo.longhouse.ai/api/agents/control/ws",
                 "supports": ["antigravity.send"],
             }
         },
@@ -1803,7 +1803,7 @@ def test_collect_local_health_flags_orphaned_managed_bridge(monkeypatch, tmp_pat
             "pid": 8881,
             "codex_bin": "/opt/homebrew/bin/codex",
             "ws_url": "ws://127.0.0.1:49888",
-            "cwd": "/Users/test/git/citi",
+            "cwd": "/Users/test/git/acme",
             "status": "ready",
             "updated_at": "2026-04-17T18:02:00Z",
         },
@@ -1841,7 +1841,7 @@ def test_collect_local_health_flags_orphaned_managed_bridge(monkeypatch, tmp_pat
             "liveness_model": "codex_bridge",
             "provider_cli": {"path": "/opt/homebrew/bin/codex", "source": "bridge_state"},
             "pid": 8881,
-            "workspace_label": "citi",
+            "workspace_label": "acme",
             "status": "orphan",
             "started_at": "2026-04-17T18:02:00Z",
             "heartbeat_at": "2026-04-17T18:02:00Z",
@@ -2932,7 +2932,7 @@ def test_collect_local_health_recent_touches_use_workspace_context_and_ignore_me
     now = datetime(2026, 4, 12, 18, 0, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(local_health_service, "_utc_now", lambda: now)
 
-    claude_session = tmp_path / "projects" / "-Users-davidrose-git-crims" / "claude-session.jsonl"
+    claude_session = tmp_path / "projects" / "-Users-example-git-crims" / "claude-session.jsonl"
     claude_session.parent.mkdir(parents=True, exist_ok=True)
     claude_session.write_text(
         "\n".join(
@@ -2943,7 +2943,7 @@ def test_collect_local_health_recent_touches_use_workspace_context_and_ignore_me
                     {
                         "type": "user",
                         "message": {
-                            "cwd": "/Users/davidrose/git/crims",
+                            "cwd": "/Users/example/git/crims",
                             "gitBranch": "feature/recent-activity",
                         },
                     }
@@ -2960,7 +2960,7 @@ def test_collect_local_health_recent_touches_use_workspace_context_and_ignore_me
             {
                 "type": "session_meta",
                 "payload": {
-                    "cwd": "/Users/davidrose/git/zerg",
+                    "cwd": "/Users/example/git/zerg",
                     "git": {"branch": "main"},
                 },
             }
@@ -2968,7 +2968,7 @@ def test_collect_local_health_recent_touches_use_workspace_context_and_ignore_me
         + "\n"
     )
 
-    ignored_meta = tmp_path / "projects" / "-Users-davidrose-git-crims" / "claude-session.meta.json"
+    ignored_meta = tmp_path / "projects" / "-Users-example-git-crims" / "claude-session.meta.json"
     ignored_meta.write_text("{}\n")
 
     _write_shipper_db(
@@ -3011,7 +3011,7 @@ def test_collect_local_health_recent_touch_context_scan_counts_physical_lines(mo
     now = datetime(2026, 4, 12, 18, 0, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(local_health_service, "_utc_now", lambda: now)
 
-    session = tmp_path / "projects" / "-Users-davidrose-git-path-fallback" / "claude-session.jsonl"
+    session = tmp_path / "projects" / "-Users-example-git-path-fallback" / "claude-session.jsonl"
     session.parent.mkdir(parents=True, exist_ok=True)
     session.write_text(
         "\n".join(
@@ -3022,7 +3022,7 @@ def test_collect_local_health_recent_touch_context_scan_counts_physical_lines(mo
                 "still-not-json",
                 "",
                 json.dumps({"type": "assistant"}),
-                json.dumps({"message": {"cwd": "/Users/davidrose/git/late-cwd", "gitBranch": "too-late"}}),
+                json.dumps({"message": {"cwd": "/Users/example/git/late-cwd", "gitBranch": "too-late"}}),
             ]
         )
         + "\n"
@@ -3069,8 +3069,8 @@ def test_collect_local_health_surfaces_live_unmanaged_processes_separately_from_
             (
                 managed_a,
                 "claude",
-                "/Users/test/git/zeta/athena-horizon",
-                "athena-horizon",
+                "/Users/test/git/acme/project",
+                "project",
                 "thinking",
                 "Read",
                 "claude_hook",
@@ -3080,8 +3080,8 @@ def test_collect_local_health_surfaces_live_unmanaged_processes_separately_from_
             (
                 managed_b,
                 "claude",
-                "/Users/test/git/zeta/athena-horizon",
-                "athena-horizon",
+                "/Users/test/git/acme/project",
+                "project",
                 "needs_user",
                 None,
                 "claude_hook",
@@ -3094,14 +3094,14 @@ def test_collect_local_health_surfaces_live_unmanaged_processes_separately_from_
         tmp_path,
         [
             (
-                "/Users/test/.claude/projects/-Users-test-git-zeta-athena-horizon/55c61956-7554-4713-8c9b-fb0fa6164c2c.jsonl",
+                "/Users/test/.claude/projects/-Users-test-git-acme-project/55c61956-7554-4713-8c9b-fb0fa6164c2c.jsonl",
                 "claude",
                 managed_a,
                 managed_a,
                 (now - timedelta(minutes=1)).isoformat(),
             ),
             (
-                "/Users/test/.claude/projects/-Users-test-git-zeta-athena-horizon/918ec866-e194-4339-a227-d41c8bf48ea9.jsonl",
+                "/Users/test/.claude/projects/-Users-test-git-acme-project/918ec866-e194-4339-a227-d41c8bf48ea9.jsonl",
                 "claude",
                 managed_b,
                 managed_b,
@@ -3124,14 +3124,14 @@ def test_collect_local_health_surfaces_live_unmanaged_processes_separately_from_
                 cmdline=["claude", "--session-id", managed_a],
                 create_time=(now - timedelta(minutes=28)).timestamp(),
                 env={"LONGHOUSE_MANAGED_SESSION_ID": managed_a},
-                cwd="/Users/test/git/zeta/athena-horizon",
+                cwd="/Users/test/git/acme/project",
             ),
             _FakeProc(
                 pid=72211,
                 cmdline=["claude", "--session-id", managed_b],
                 create_time=(now - timedelta(minutes=5)).timestamp(),
                 env={"LONGHOUSE_MANAGED_SESSION_ID": managed_b},
-                cwd="/Users/test/git/zeta/athena-horizon",
+                cwd="/Users/test/git/acme/project",
             ),
             _FakeProc(
                 pid=48047,
@@ -4226,7 +4226,7 @@ def test_process_scan_humanizes_needs_user_phase(monkeypatch, tmp_path: Path):
         cmdline=["claude", "--session-id", session_id],
         create_time=now.timestamp() - 60,
         env={"LONGHOUSE_MANAGED_SESSION_ID": session_id},
-        cwd="/Users/test/git/citi",
+        cwd="/Users/test/git/acme",
     )
     _patch_process_iter(monkeypatch, [proc])
     _write_managed_session_state_rows(
@@ -4235,8 +4235,8 @@ def test_process_scan_humanizes_needs_user_phase(monkeypatch, tmp_path: Path):
             (
                 session_id,
                 "claude",
-                "/Users/test/git/citi",
-                "citi",
+                "/Users/test/git/acme",
+                "acme",
                 "needs_user",
                 None,
                 "claude_hook",
@@ -4265,7 +4265,7 @@ def test_process_scan_marks_unknown_phase_contract_drift(monkeypatch, tmp_path: 
         cmdline=["claude", "--session-id", session_id],
         create_time=now.timestamp() - 60,
         env={"LONGHOUSE_MANAGED_SESSION_ID": session_id},
-        cwd="/Users/test/git/citi",
+        cwd="/Users/test/git/acme",
     )
     _patch_process_iter(monkeypatch, [proc])
     _write_managed_session_state_rows(
@@ -4274,8 +4274,8 @@ def test_process_scan_marks_unknown_phase_contract_drift(monkeypatch, tmp_path: 
             (
                 session_id,
                 "claude",
-                "/Users/test/git/citi",
-                "citi",
+                "/Users/test/git/acme",
+                "acme",
                 "future_magic",
                 None,
                 "claude_hook",
@@ -4335,7 +4335,7 @@ def test_local_health_command_surfaces_managed_phase_contract_from_raw_hook_even
             cmdline=["claude", "--session-id", session_id],
             create_time=now.timestamp(),
             env={"LONGHOUSE_MANAGED_SESSION_ID": session_id},
-            cwd="/Users/test/git/citi",
+            cwd="/Users/test/git/acme",
         )
         _patch_process_iter(monkeypatch, [proc])
         tool_name = _contract_tool_name(case)
@@ -4366,8 +4366,8 @@ def test_managed_session_phase_state_keeps_persisted_rows_without_freshness_gati
             (
                 "sess-stale",
                 "claude",
-                "/Users/test/git/citi",
-                "citi",
+                "/Users/test/git/acme",
+                "acme",
                 "running",
                 "Bash",
                 "claude_hook",
@@ -4394,8 +4394,8 @@ def test_managed_session_phase_state_drops_stale_finished_rows_after_retention(m
             (
                 "sess-recent",
                 "claude",
-                "/Users/test/git/citi",
-                "citi",
+                "/Users/test/git/acme",
+                "acme",
                 "finished",
                 None,
                 "claude_hook",
@@ -4405,8 +4405,8 @@ def test_managed_session_phase_state_drops_stale_finished_rows_after_retention(m
             (
                 "sess-stale",
                 "claude",
-                "/Users/test/git/citi",
-                "citi",
+                "/Users/test/git/acme",
+                "acme",
                 "finished",
                 None,
                 "claude_hook",
@@ -4436,8 +4436,8 @@ def test_managed_session_phase_state_keeps_finished_rows_at_retention_boundary(m
             (
                 "sess-boundary",
                 "claude",
-                "/Users/test/git/citi",
-                "citi",
+                "/Users/test/git/acme",
+                "acme",
                 "finished",
                 None,
                 "claude_hook",
@@ -4461,8 +4461,8 @@ def test_managed_session_phase_state_drops_finished_rows_with_invalid_timestamp(
             (
                 "sess-invalid",
                 "claude",
-                "/Users/test/git/citi",
-                "citi",
+                "/Users/test/git/acme",
+                "acme",
                 "finished",
                 None,
                 "claude_hook",
@@ -4486,8 +4486,8 @@ def test_managed_session_phase_state_prefers_newer_outbox_signal(monkeypatch, tm
             (
                 "sess-1",
                 "claude",
-                "/Users/test/git/citi",
-                "citi",
+                "/Users/test/git/acme",
+                "acme",
                 "idle",
                 None,
                 "claude_hook",
@@ -4518,8 +4518,8 @@ def test_managed_session_phase_state_keeps_newer_stored_last_activity_when_outbo
             (
                 "sess-1",
                 "claude",
-                "/Users/test/git/citi",
-                "citi",
+                "/Users/test/git/acme",
+                "acme",
                 "idle",
                 None,
                 "claude_hook",
@@ -4541,8 +4541,8 @@ def test_managed_session_phase_state_keeps_newer_stored_last_activity_when_outbo
     assert overlay["sess-1"]["phase"] == "thinking"
     assert overlay["sess-1"]["observed_at"] == outbox_observed_at
     assert overlay["sess-1"]["last_activity_at"] == stored_last_activity_at
-    assert overlay["sess-1"]["workspace_path"] == "/Users/test/git/citi"
-    assert overlay["sess-1"]["workspace_label"] == "citi"
+    assert overlay["sess-1"]["workspace_path"] == "/Users/test/git/acme"
+    assert overlay["sess-1"]["workspace_label"] == "acme"
 
 
 def test_process_scan_falls_back_to_argv_when_env_empty(monkeypatch, tmp_path: Path):
@@ -4589,7 +4589,7 @@ def test_collect_unmanaged_processes_reports_live_bare_provider_clis(monkeypatch
         cmdline=["claude", "--session-id", "11111111-2222-3333-4444-555555555555"],
         create_time=now.timestamp(),
         env={"LONGHOUSE_MANAGED_SESSION_ID": "11111111-2222-3333-4444-555555555555"},
-        cwd="/Users/test/git/zeta/athena-horizon",
+        cwd="/Users/test/git/acme/project",
     )
     unmanaged_zerg_codex = _FakeProc(
         pid=11468,
@@ -4705,7 +4705,7 @@ def test_collect_unmanaged_processes_skips_managed_codex_remote_tui(monkeypatch)
         ],
         create_time=now.timestamp(),
         env={"LONGHOUSE_MANAGED_SESSION_ID": "sess-codex-managed"},
-        cwd="/Users/test/git/zeta/athena-horizon",
+        cwd="/Users/test/git/acme/project",
     )
     _patch_process_iter(monkeypatch, [managed_wrapper])
 

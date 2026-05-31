@@ -34,18 +34,18 @@ async def test_rebind_mechanism():
     print(f"   Core tools bound: {len(binder.get_bound_tools())}")
     print(f"   Core tools: {sorted(binder.loaded_tool_names)}")
 
-    # Verify get_current_location is NOT loaded
-    assert not binder.is_loaded("get_current_location"), "get_current_location should not be pre-loaded"
-    print("   ✓ get_current_location is NOT loaded (correct)")
+    # Verify github_list_issues is NOT loaded (non-core, lazily loaded tool)
+    assert not binder.is_loaded("github_list_issues"), "github_list_issues should not be pre-loaded"
+    print("   ✓ github_list_issues is NOT loaded (correct)")
 
     # Simulate search_tools result
     print("\n2. Simulating search_tools result:")
     search_result = {
         "tools": [
-            {"name": "get_current_location", "summary": "Get GPS location"},
-            {"name": "get_whoop_data", "summary": "Get health data"},
+            {"name": "github_list_issues", "summary": "List GitHub issues"},
+            {"name": "notion_search", "summary": "Search Notion"},
         ],
-        "query": "location",
+        "query": "github issues",
     }
     print(f"   search_tools returned: {[t['name'] for t in search_result['tools']]}")
 
@@ -75,12 +75,12 @@ async def test_rebind_mechanism():
     # Check results
     print("\n4. Final state:")
     print(f"   Total tools bound: {len(binder.get_bound_tools())}")
-    print(f"   get_current_location loaded: {binder.is_loaded('get_current_location')}")
-    print(f"   get_whoop_data loaded: {binder.is_loaded('get_whoop_data')}")
+    print(f"   github_list_issues loaded: {binder.is_loaded('github_list_issues')}")
+    print(f"   notion_search loaded: {binder.is_loaded('notion_search')}")
 
     # Verify tools are now loaded
-    assert binder.is_loaded("get_current_location"), "get_current_location should be loaded"
-    assert binder.is_loaded("get_whoop_data"), "get_whoop_data should be loaded"
+    assert binder.is_loaded("github_list_issues"), "github_list_issues should be loaded"
+    assert binder.is_loaded("notion_search"), "notion_search should be loaded"
     assert binder.needs_rebind(), "Binder should need rebind after loading new tools"
 
     print("\n" + "=" * 70)

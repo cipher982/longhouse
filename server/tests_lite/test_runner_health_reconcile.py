@@ -43,7 +43,7 @@ async def test_reconcile_opens_offline_incident_and_marks_cached_status(tmp_path
 
         runner = Runner(
             owner_id=user.id,
-            name="cube",
+            name="demo-machine",
             auth_secret_hash="hash",
             capabilities=["exec.full"],
             status="online",
