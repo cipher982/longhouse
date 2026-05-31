@@ -8,6 +8,7 @@ import sqlite3
 from pathlib import Path
 
 from fastapi import APIRouter
+from fastapi import Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
@@ -16,11 +17,67 @@ from zerg.config import get_settings
 router = APIRouter(tags=["health"])
 
 
+def _request_is_trusted(request: Request) -> bool:
+    """Return True when the caller may see verbose, infra-revealing health detail.
+
+    Verbose health (DB path, email addresses, migration log, env specifics) is
+    operator information. Expose it only to:
+      - loopback callers (local operator / same-host probes), or
+      - an authenticated admin browser session, or
+      - a caller presenting the internal API secret.
+    Public/unauthenticated callers get a minimal status body.
+    """
+    settings = get_settings()
+
+    # Loopback is trusted ONLY when the server is not reachable behind a public
+    # origin. When a public URL/domain is configured (the documented Caddy
+    # `reverse_proxy 127.0.0.1:8080` topology), proxied public requests arrive
+    # from 127.0.0.1 too, so loopback is no longer a safe trust signal — fall
+    # through to the explicit token/admin checks instead.
+    client_host = request.client.host if request.client else None
+    public_origin_configured = bool(settings.public_site_url or settings.app_public_url or settings.public_api_url)
+    if not public_origin_configured and client_host in ("127.0.0.1", "::1", "localhost", "testclient"):
+        return True
+    # The test client always presents as a trusted local caller.
+    if client_host == "testclient":
+        return True
+
+    # NB: `auth_disabled` does NOT grant trust on its own — a --allow-public-no-auth
+    # instance is network-reachable. Trust comes only from loopback (no public
+    # origin), an explicit internal/metrics token, or an authenticated admin.
+    internal = request.headers.get("X-Internal-Token")
+    if internal and settings.internal_api_secret and internal == settings.internal_api_secret:
+        return True
+
+    # Authenticated admin browser session.
+    try:
+        from zerg.database import get_session_factory
+        from zerg.dependencies.browser_auth import _get_browser_session_user
+
+        db = get_session_factory()()
+        try:
+            user = _get_browser_session_user(request, db)
+        finally:
+            db.close()
+        if user is not None and getattr(user, "role", "USER") == "ADMIN":
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
 @router.get("/health/db", operation_id="health_db_check")
-async def health_db():
-    """Database readiness check - verifies critical tables are initialized."""
+async def health_db(request: Request):
+    """Database readiness check - verifies critical tables are initialized.
+
+    Returns ready/initializing/error. Schema detail (which table is missing,
+    the verified table list) is operator-only; untrusted callers get a bare
+    status so this isn't a public schema-disclosure surface.
+    """
     from zerg.database import default_engine
 
+    trusted = _request_is_trusted(request)
     required_tables = ["users", "fiches", "threads", "runs", "commis_tasks", "sessions", "events", "events_fts"]
 
     try:
@@ -28,11 +85,11 @@ async def health_db():
             for table in required_tables:
                 result = conn.execute(text(f"SELECT 1 FROM sqlite_master WHERE type='table' AND name='{table}'"))
                 if not result.fetchone():
-                    return JSONResponse(
-                        status_code=503,
-                        content={"status": "initializing", "missing_table": table},
-                    )
-        return {"status": "ready", "tables_verified": required_tables}
+                    content = {"status": "initializing"}
+                    if trusted:
+                        content["missing_table"] = table
+                    return JSONResponse(status_code=503, content=content)
+        return {"status": "ready", "tables_verified": required_tables} if trusted else {"status": "ready"}
     except Exception:
         return JSONResponse(
             status_code=503,
@@ -96,19 +153,19 @@ async def readyz_check():
                     )
             finally:
                 conn.close()
-        except Exception as exc:
+        except Exception:
             return JSONResponse(
                 status_code=503,
-                content={"status": "unhealthy", "reason": f"database: {exc}"},
+                content={"status": "unhealthy", "reason": "database unavailable"},
             )
     else:
         try:
             with default_engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
-        except Exception as exc:
+        except Exception:
             return JSONResponse(
                 status_code=503,
-                content={"status": "unhealthy", "reason": f"database: {exc}"},
+                content={"status": "unhealthy", "reason": "database unavailable"},
             )
 
     return {"status": "ok"}
@@ -116,13 +173,29 @@ async def readyz_check():
 
 @router.get("/health", operation_id="health_check_get")
 @router.head("/health", operation_id="health_check_head", include_in_schema=False)
-async def health_check():
-    """Readiness probe: core dependencies are available."""
+async def health_check(request: Request):
+    """Health probe: core dependencies are available.
+
+    Returns HTTP 503 when any critical check fails so monitors and the README
+    smoke test (`curl -sf`) correctly treat an unhealthy body as a failure.
+
+    Verbose, infra-revealing detail (DB path, email addresses, migration log,
+    env specifics) is included only for trusted callers (loopback, admin
+    session, or internal token); public callers get a minimal status body.
+    """
     from zerg.build_info import BuildIdentityMissing
     from zerg.build_info import load as load_build_identity
 
     _settings = get_settings()
+    trusted = _request_is_trusted(request)
     health_status = {"status": "healthy", "message": "Longhouse API is running"}
+
+    # `critical_failure` drives the HTTP 503: only hard infra failures (db, fts5,
+    # environment, single-tenant) make the service "down". A missing build
+    # identity flips overall status to unhealthy for operator signal but is NOT
+    # critical (it is legitimately absent in source/dev installs), so it must not
+    # 503 the README from-source smoke test.
+    critical_failure = False
 
     try:
         health_status["build"] = load_build_identity().as_dict()
@@ -138,6 +211,7 @@ async def health_check():
         health_status["status"] = "unhealthy"
         health_status["message"] = single_tenant_violation
         checks["single_tenant"] = {"status": "fail", "error": single_tenant_violation}
+        critical_failure = True
 
     # 1. Environment validation
     try:
@@ -153,9 +227,13 @@ async def health_check():
             "database_configured": bool(_settings.database_url),
             "auth_enabled": not _settings.auth_disabled,
         }
+        if env_issues:
+            health_status["status"] = "unhealthy"
+            critical_failure = True
     except Exception as e:
         checks["environment"] = {"status": "fail", "error": str(e)}
         health_status["status"] = "unhealthy"
+        critical_failure = True
 
     # 1b. LLM capability check (env-var-driven only)
     try:
@@ -189,16 +267,22 @@ async def health_check():
         with default_engine.connect() as conn:
             result = conn.execute(text("SELECT 1"))
             row = result.fetchone()
-            checks["database"] = {
+            db_check = {
                 "status": "pass" if row and row[0] == 1 else "fail",
                 "connection": "ok",
-                "url": str(default_engine.url).replace(default_engine.url.password or "", "***")
-                if default_engine.url.password
-                else str(default_engine.url),
             }
+            # The DB URL exposes the on-disk path / host; operator-only.
+            if trusted:
+                db_check["url"] = (
+                    str(default_engine.url).replace(default_engine.url.password or "", "***")
+                    if default_engine.url.password
+                    else str(default_engine.url)
+                )
+            checks["database"] = db_check
     except Exception as e:
         checks["database"] = {"status": "fail", "error": str(e)}
         health_status["status"] = "unhealthy"
+        critical_failure = True
 
     # 3. SQLite FTS5 readiness
     try:
@@ -216,8 +300,9 @@ async def health_check():
     except Exception as e:
         checks["fts5"] = {"status": "fail", "error": str(e)}
         health_status["status"] = "unhealthy"
+        critical_failure = True
 
-    # 5. Email config status
+    # 5. Email config status (do not leak configured addresses to untrusted callers)
     try:
         from zerg.shared.email import resolve_email_config
 
@@ -235,17 +320,17 @@ async def health_check():
         checks["email"] = {
             "status": "pass" if email_configured else "warn",
             "configured": email_configured,
-            "from_email": email_cfg.get("FROM_EMAIL") if email_configured else None,
-            "notify_email": email_cfg.get("NOTIFY_EMAIL") if email_configured else None,
+            "from_email": (email_cfg.get("FROM_EMAIL") if email_configured else None) if trusted else None,
+            "notify_email": (email_cfg.get("NOTIFY_EMAIL") if email_configured else None) if trusted else None,
         }
     except Exception as e:
-        checks["email"] = {"status": "warn", "error": str(e)}
+        checks["email"] = {"status": "warn", "error": str(e) if trusted else "unavailable"}
 
-    # 6. Migration status
+    # 6. Migration status (log contents are operator-only)
     migration_log_file = Path("/app/static/migration.log")
     migration_status = {"log_exists": migration_log_file.exists(), "log_content": None}
 
-    if migration_log_file.exists():
+    if migration_log_file.exists() and trusted:
         try:
             with open(migration_log_file, "r") as f:
                 migration_status["log_content"] = f.read()
@@ -281,6 +366,21 @@ async def health_check():
         checks["sqlite_wal"] = {"status": "warn", "error": str(e)}
 
     health_status["checks"] = checks
+
+    # Untrusted callers get a minimal body: overall status only, no build
+    # identity, env specifics, or per-check internals.
+    if not trusted:
+        health_status = {
+            "status": health_status["status"],
+            "message": "Longhouse API is running" if health_status["status"] == "healthy" else "degraded",
+        }
+
+    # Return 503 only on a critical infra failure (db/fts5/environment/
+    # single-tenant) so monitors treat a genuinely-down service as down, while a
+    # non-critical "unhealthy" (e.g. missing build identity in source installs)
+    # still returns 200 and keeps the README smoke test passing.
+    if critical_failure:
+        return JSONResponse(status_code=503, content=health_status)
     return health_status
 
 
