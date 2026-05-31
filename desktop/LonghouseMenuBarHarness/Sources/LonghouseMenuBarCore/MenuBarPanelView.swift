@@ -88,6 +88,45 @@ public struct MenuBarBootingView: View {
     }
 }
 
+public struct MenuBarSettlingView: View {
+    public init() {}
+
+    public var body: some View {
+        PanelChrome(accent: .blue) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .center, spacing: 12) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.blue.opacity(0.14))
+                            .frame(width: 34, height: 34)
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Catching Up Longhouse")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(Color.primary)
+                        Text("The local engine is refreshing after an idle gap.")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(Color.secondary)
+                    }
+                }
+
+                PanelSection(title: "Status") {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Warnings appear if status keeps aging.")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(Color.primary)
+                    }
+                }
+            }
+        }
+    }
+}
+
 public struct MenuBarFailureView: View {
     private let message: String
     private let retry: () -> Void

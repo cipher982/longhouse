@@ -162,6 +162,26 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         }
     }
 
+    public var isTransientEngineStatusOnlyAttention: Bool {
+        guard parsedSeverity == .yellow else {
+            return false
+        }
+        guard service?.status == "running" else {
+            return false
+        }
+        guard !reasons.isEmpty,
+              reasons.allSatisfy({ $0 == "engine_status_aging" || $0 == "engine_status_stale" }) else {
+            return false
+        }
+        let pending = engineStatus?.payload?.spoolPendingCount ?? 0
+        let dead = engineStatus?.payload?.spoolDeadCount ?? 0
+        let failures = engineStatus?.payload?.consecutiveShipFailures ?? 0
+        guard pending == 0, dead == 0, failures == 0, outboxCount == 0 else {
+            return false
+        }
+        return engineStatus?.payload?.isOffline != true
+    }
+
     public var lastShipLabel: String {
         engineStatus?.payload?.lastShipAt ?? "No shipments yet"
     }
