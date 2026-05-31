@@ -11,7 +11,6 @@ public enum SnapshotRefreshReason: Sendable {
 public final class SnapshotStore: ObservableObject {
     public static let historyRetentionMinutes = 30
     public static let bootGraceSeconds: TimeInterval = 10
-    public static let transientEngineStatusAttentionGraceSeconds: TimeInterval = 60
     public static let staleCacheFailureSeconds: TimeInterval = 120
 
     @Published public private(set) var snapshot: HealthSnapshot?
@@ -20,15 +19,12 @@ public final class SnapshotStore: ObservableObject {
     @Published public private(set) var isInitialLoading: Bool
     @Published public private(set) var isManualRefreshActive: Bool
     @Published public private(set) var isBooting: Bool
-    @Published public private(set) var isTransientEngineStatusSettling: Bool
     @Published public private(set) var presentationDate: Date
     @Published public private(set) var feedback: HealthActionFeedback?
 
     private let source: any HealthSnapshotSource
     private var refreshTask: Task<Void, Never>?
     private var bootGraceTask: Task<Void, Never>?
-    private var transientEngineStatusGraceTask: Task<Void, Never>?
-    private var transientEngineStatusFirstSeenAt: Date?
     private var activeRefreshReason: SnapshotRefreshReason?
     private var queuedManualRefresh = false
     private var presentationTimer: Timer?
@@ -44,7 +40,6 @@ public final class SnapshotStore: ObservableObject {
         self.isInitialLoading = false
         self.isManualRefreshActive = false
         self.isBooting = false
-        self.isTransientEngineStatusSettling = false
         self.presentationDate = Date()
         self.feedback = nil
         if let cachedSnapshot = Self.loadCachedSnapshot(from: self.cacheURL) {
@@ -63,7 +58,6 @@ public final class SnapshotStore: ObservableObject {
                 appendHistorySample(for: loadedSnapshot)
                 persistCachedSnapshot(loadedSnapshot)
                 loadError = nil
-                updateTransientEngineStatusSettling(for: loadedSnapshot)
             } catch {
                 loadError = error.localizedDescription
             }
@@ -73,7 +67,6 @@ public final class SnapshotStore: ObservableObject {
     deinit {
         refreshTask?.cancel()
         bootGraceTask?.cancel()
-        transientEngineStatusGraceTask?.cancel()
     }
 
     private func scheduleBootGraceTimeout() {
@@ -95,37 +88,6 @@ public final class SnapshotStore: ObservableObject {
             isBooting = false
             bootGraceTask?.cancel()
             bootGraceTask = nil
-        }
-    }
-
-    private func updateTransientEngineStatusSettling(for snapshot: HealthSnapshot) {
-        guard snapshot.isTransientEngineStatusOnlyAttention else {
-            transientEngineStatusFirstSeenAt = nil
-            transientEngineStatusGraceTask?.cancel()
-            transientEngineStatusGraceTask = nil
-            isTransientEngineStatusSettling = false
-            return
-        }
-
-        let firstSeenAt = transientEngineStatusFirstSeenAt ?? Date()
-        transientEngineStatusFirstSeenAt = firstSeenAt
-        let elapsed = Date().timeIntervalSince(firstSeenAt)
-        let shouldSettle = elapsed < Self.transientEngineStatusAttentionGraceSeconds
-        isTransientEngineStatusSettling = shouldSettle
-        guard shouldSettle, transientEngineStatusGraceTask == nil else {
-            return
-        }
-
-        let remaining = max(0, Self.transientEngineStatusAttentionGraceSeconds - elapsed)
-        transientEngineStatusGraceTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(remaining))
-            guard !Task.isCancelled, let self else {
-                return
-            }
-            if self.snapshot?.isTransientEngineStatusOnlyAttention == true {
-                self.isTransientEngineStatusSettling = false
-            }
-            self.transientEngineStatusGraceTask = nil
         }
     }
 
@@ -222,7 +184,6 @@ public final class SnapshotStore: ObservableObject {
                 self.appendHistorySample(for: snapshot)
                 self.persistCachedSnapshot(snapshot)
                 self.loadError = nil
-                self.updateTransientEngineStatusSettling(for: snapshot)
                 self.exitBootingIfReady(for: snapshot)
             case let .failure(message):
                 self.loadError = message
