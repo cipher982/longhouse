@@ -28,6 +28,17 @@ logger = logging.getLogger(__name__)
 # Default user email for OSS instances (no config needed)
 OSS_DEFAULT_EMAIL = "local@zerg"
 
+# Default owner identity for password-auth self-hosters who enable auth but do
+# not run a hosted control plane (no OWNER_EMAIL, no OAuth). Password auth binds
+# a single local owner, so a stable synthetic email is sufficient.
+PASSWORD_AUTH_DEFAULT_EMAIL = "owner@longhouse.local"
+
+
+def _password_auth_configured() -> bool:
+    """Return True when simple password auth is configured for this instance."""
+    settings = get_settings()
+    return bool(settings.longhouse_password or settings.longhouse_password_hash)
+
 
 class SingleTenantViolation(Exception):
     """Raised when single-tenant invariant is violated (>1 user exists)."""
@@ -70,6 +81,13 @@ def get_owner_email() -> str:
     settings = get_settings()
     if settings.auth_disabled or settings.testing:
         return OSS_DEFAULT_EMAIL
+
+    # Password-auth self-hosters enable auth without a hosted control plane or
+    # OAuth. They bind a single local owner, so a stable synthetic email lets
+    # the simplest documented setup (set LONGHOUSE_PASSWORD_HASH) work without
+    # also requiring OWNER_EMAIL.
+    if _password_auth_configured():
+        return PASSWORD_AUTH_DEFAULT_EMAIL
 
     raise RuntimeError("OWNER_EMAIL is required when auth is enabled for single-tenant instances.")
 
@@ -210,12 +228,15 @@ def validate_single_tenant_config() -> str | None:
         return None  # Multi-tenant mode, no validation needed
 
     # If auth is enabled, OWNER_EMAIL must be explicit so hosted instances
-    # fail closed instead of inheriting unrelated admin config.
+    # fail closed instead of inheriting unrelated admin config — UNLESS simple
+    # password auth is configured, which binds a single local owner and does
+    # not need a hosted identity.
     if not settings.auth_disabled:
         owner_email = os.getenv("OWNER_EMAIL", "").strip()
-        if not owner_email:
+        if not owner_email and not _password_auth_configured():
             return (
-                "Single-tenant mode with auth enabled requires OWNER_EMAIL. "
+                "Single-tenant mode with auth enabled requires OWNER_EMAIL "
+                "(or configure password auth via LONGHOUSE_PASSWORD_HASH). "
                 "Set OWNER_EMAIL to the email of the instance owner, or use AUTH_DISABLED=1 for OSS mode."
             )
 

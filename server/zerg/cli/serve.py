@@ -47,6 +47,61 @@ def _get_lan_ip() -> str | None:
         return None
 
 
+def _host_is_public(host: str) -> bool:
+    """Return True when binding ``host`` exposes the server beyond this machine.
+
+    Wildcard binds ("", 0.0.0.0, ::) are public. A concrete address is public
+    when it is not a loopback address. ``localhost`` is the only hostname we
+    treat as local; any other hostname is assumed routable (fail safe).
+    """
+    if host in ("", "0.0.0.0", "::"):
+        return True
+    if host == "localhost":
+        return False
+    try:
+        return not ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        # Not an IP literal and not "localhost" → assume routable hostname.
+        return True
+
+
+def _effective_auth_disabled() -> bool:
+    """Return True when runtime auth will be OFF, mirroring config resolution.
+
+    Auth is disabled when AUTH_DISABLED, DEMO_MODE, or TESTING is truthy — the
+    same inputs config.resolve_app_mode() uses. This is read after the repo
+    .env has been loaded so file-based config cannot slip past the gate.
+    """
+
+    def _truthy(value: str | None) -> bool:
+        return bool(value) and value.strip().lower() in {"1", "true", "yes", "on"}
+
+    return _truthy(os.environ.get("AUTH_DISABLED")) or _truthy(os.environ.get("DEMO_MODE")) or _truthy(os.environ.get("TESTING"))
+
+
+def _load_repo_env_for_gate() -> None:
+    """Load the repo-root .env so the public-bind gate sees runtime auth config.
+
+    Mirrors config._load_settings(): the real runtime loads .env with
+    override=True when not testing. Without this, an AUTH_DISABLED=1 / DEMO_MODE=1
+    in .env would bypass the gate (the gate runs before app config loads).
+    Skipped under TESTING so unit tests are not polluted by a real .env.
+    """
+    if os.getenv("TESTING", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return
+    try:
+        from dotenv import load_dotenv
+
+        from zerg.config import _REPO_ROOT  # safe: config import does not load the DB
+
+        env_path = _REPO_ROOT / ".env"
+        if env_path.exists():
+            load_dotenv(env_path, override=True)
+    except Exception:
+        # Never let env discovery crash startup; the gate then sees process env only.
+        pass
+
+
 def _apply_runtime_public_url(public_url: str | None, *, force: bool = False) -> str | None:
     """Seed runtime env vars from the CLI/public config when needed."""
     configured = os.getenv("APP_PUBLIC_URL") or os.getenv("PUBLIC_SITE_URL")
@@ -140,22 +195,28 @@ def _mask_db_url(url: str) -> str:
         return url
 
 
-def _apply_lite_mode_defaults() -> None:
+def _apply_lite_mode_defaults(*, public_intent: bool = False) -> None:
     """Apply default environment variables for lite (SQLite) mode.
 
     Sets up sensible defaults for zero-config OSS startup:
     - SQLite database in ~/.longhouse/longhouse.db
-    - Auth disabled (single-user local install)
+    - Auth disabled (single-user local install) ONLY on a loopback bind
     - Single-tenant mode
     - Auto-generated secrets (FERNET_SECRET, TRIGGER_SIGNING_SECRET)
+
+    ``public_intent`` is True when the operator asked to bind beyond loopback
+    (``--host 0.0.0.0``/``::`` or ``--domain``). In that case we do NOT silently
+    default ``AUTH_DISABLED=1`` — an unauthenticated server must never be the
+    default on a public interface. The caller enforces the explicit gate.
     """
     # Database URL
     if not os.environ.get("DATABASE_URL"):
         default_db = _get_default_db_path()
         os.environ["DATABASE_URL"] = f"sqlite:///{default_db}"
 
-    # Auth disabled for local use
-    if "AUTH_DISABLED" not in os.environ:
+    # Auth disabled for local use only. On a public bind we leave AUTH_DISABLED
+    # unset so auth is enabled by default; the operator must opt in explicitly.
+    if "AUTH_DISABLED" not in os.environ and not public_intent:
         os.environ["AUTH_DISABLED"] = "1"
 
     # Single-tenant mode
@@ -330,11 +391,17 @@ def serve(
         "--domain",
         help="Public domain (e.g. longhouse.example.com). Stored in config, shown at startup.",
     ),
+    allow_public_no_auth: bool = typer.Option(
+        False,
+        "--allow-public-no-auth",
+        help="Allow binding to a public interface with auth disabled (e.g. behind a trusted reverse proxy that authenticates). Dangerous; off by default.",
+    ),
 ) -> None:
     """Start the Longhouse server.
 
-    By default, uses SQLite for zero-config startup. For production,
-    configure a Postgres DATABASE_URL in your environment.
+    Uses SQLite for zero-config startup. On a loopback bind auth is disabled
+    for frictionless local use; on a public bind (``--host 0.0.0.0``/``::`` or
+    ``--domain``) auth is REQUIRED unless you pass ``--allow-public-no-auth``.
 
     Examples:
         longhouse serve                                     # SQLite on localhost:8080
@@ -342,9 +409,8 @@ def serve(
         longhouse serve --demo-fresh                        # Rebuild demo data on start
         longhouse serve --daemon                            # Run in background
         longhouse serve --stop                              # Stop background server
-        longhouse serve --host 0.0.0.0 --port 80            # Bind to all interfaces
+        longhouse serve --host 0.0.0.0 --port 80            # Public bind (auth required)
         longhouse serve --host 0.0.0.0 --domain my.host.com # LAN + public domain
-        longhouse serve --db postgresql://...               # Use Postgres
         longhouse serve --reload                            # Dev mode with auto-reload
     """
     import uvicorn
@@ -388,8 +454,17 @@ def serve(
             typer.echo("Use 'longhouse serve --stop' to stop it first")
             raise typer.Exit(code=1)
 
-    # Apply lite mode defaults early (before any imports that trigger config loading)
-    _apply_lite_mode_defaults()
+    # Load the repo .env first so the gate evaluates the SAME auth inputs the
+    # runtime will (file-based AUTH_DISABLED/DEMO_MODE must not slip past).
+    _load_repo_env_for_gate()
+
+    # Determine public intent before applying defaults: any non-loopback host or
+    # a configured public domain means the server is reachable beyond this machine.
+    public_intent = _host_is_public(host) or bool(domain)
+
+    # Apply lite mode defaults early (before any imports that trigger config loading).
+    # On a public bind we do NOT auto-disable auth.
+    _apply_lite_mode_defaults(public_intent=public_intent)
 
     # Handle demo mode (may override DATABASE_URL set above)
     if demo or demo_fresh:
@@ -414,21 +489,56 @@ def serve(
     db_url = os.environ["DATABASE_URL"]
     is_sqlite = db_url.startswith("sqlite")
 
-    # Safety checks
-    is_public_bind = host in ("0.0.0.0", "::", "")
-    auth_disabled = os.environ.get("AUTH_DISABLED", "").lower() in ("1", "true", "yes")
+    # Safety gate: never expose an unauthenticated server on a public interface.
+    # Evaluate the full set of auth-disabling inputs (AUTH_DISABLED/DEMO_MODE/
+    # TESTING), matching how runtime config resolves auth_disabled.
+    auth_disabled = _effective_auth_disabled()
 
-    # Warn about public bind with auth disabled
-    if is_public_bind and auth_disabled:
-        typer.secho(
-            "WARNING: Binding to public interface with auth disabled!",
-            fg=typer.colors.YELLOW,
-        )
-        typer.secho(
-            "  Set AUTH_DISABLED=0 and configure OAuth for production use.",
-            fg=typer.colors.YELLOW,
-        )
-        typer.echo("")
+    # Coerce to a real bool: direct (non-Typer) callers may pass the Typer
+    # OptionInfo sentinel, which is truthy and would silently open the gate.
+    allow_public_no_auth = allow_public_no_auth is True
+
+    if public_intent and auth_disabled:
+        if allow_public_no_auth:
+            typer.secho(
+                "WARNING: Public bind with auth disabled (--allow-public-no-auth).",
+                fg=typer.colors.YELLOW,
+            )
+            typer.secho(
+                "  Anyone who can reach this address has full, unauthenticated access.",
+                fg=typer.colors.YELLOW,
+            )
+            typer.secho(
+                "  Only safe behind a trusted reverse proxy that authenticates requests.",
+                fg=typer.colors.YELLOW,
+            )
+            typer.echo("")
+        else:
+            typer.secho(
+                "ERROR: Refusing to bind a public interface with authentication disabled.",
+                fg=typer.colors.RED,
+            )
+            typer.echo("")
+            typer.echo("  You bound a non-loopback host or set --domain, but AUTH_DISABLED=1.")
+            typer.echo("  This would expose an unauthenticated server to the network.")
+            typer.echo("")
+            typer.echo("  Enable password auth (simplest):")
+            typer.secho(
+                '    export LONGHOUSE_PASSWORD_HASH="$(longhouse hash-password)"',
+                fg=typer.colors.BRIGHT_BLACK,
+            )
+            typer.secho(
+                "    export JWT_SECRET=$(openssl rand -hex 32)",
+                fg=typer.colors.BRIGHT_BLACK,
+            )
+            typer.secho(
+                "    export INTERNAL_API_SECRET=$(openssl rand -hex 32)",
+                fg=typer.colors.BRIGHT_BLACK,
+            )
+            typer.echo("")
+            typer.echo("  Or, if a trusted reverse proxy already authenticates requests,")
+            typer.echo("  re-run with --allow-public-no-auth to accept the risk.")
+            raise typer.Exit(code=1)
 
     # Prevent SQLite with multiple workers
     if is_sqlite and workers > 1:
@@ -681,5 +791,43 @@ def status(
         raise typer.Exit(code=1)
 
 
+@app.command(name="hash-password")
+def hash_password(
+    password: Optional[str] = typer.Option(
+        None,
+        "--password",
+        help="Password to hash. Omit to be prompted (hidden input, recommended).",
+    ),
+) -> None:
+    """Generate a LONGHOUSE_PASSWORD_HASH for password auth.
+
+    Prints a pbkdf2_sha256 hash. Use it to enable auth on a public bind:
+
+        export LONGHOUSE_PASSWORD_HASH="$(longhouse hash-password)"
+
+    The plaintext password is never stored or logged.
+    """
+    if password is None:
+        # Prompt on stderr so stdout stays clean for $(longhouse hash-password).
+        password = typer.prompt("Password", hide_input=True, confirmation_prompt=True, err=True)
+
+    if not password:
+        typer.secho("ERROR: password must not be empty", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+    import hashlib
+
+    iterations = 600_000
+    salt = secrets.token_bytes(16)
+    derived = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    encoded = "pbkdf2_sha256${}${}${}".format(
+        iterations,
+        base64.b64encode(salt).decode("ascii"),
+        base64.b64encode(derived).decode("ascii"),
+    )
+    # Print only the hash on stdout so it can be captured by $(...).
+    typer.echo(encoded)
+
+
 # Export for main.py
-__all__ = ["app", "serve", "status"]
+__all__ = ["app", "serve", "status", "hash_password"]

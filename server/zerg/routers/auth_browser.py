@@ -470,6 +470,8 @@ def _resolve_password_user(db: Session):
     settings = get_settings()
 
     if settings.single_tenant and not settings.testing:
+        import os
+
         from fastapi import HTTPException
         from fastapi import status
 
@@ -481,14 +483,26 @@ def _resolve_password_user(db: Session):
         if user:
             return user
 
-        existing = db.query(User).filter(User.provider != "service").order_by(User.id.asc()).first()
-        if existing:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Password auth is bound to the configured owner. Existing user does not match OWNER_EMAIL.",
-            )
+        from sqlalchemy import or_
 
-        return create_user(db, email=owner_email, provider="password", skip_notification=True)
+        # NB: provider is nullable; `!= "service"` excludes NULL in SQL, so OR in
+        # the NULL case to avoid missing a real pre-existing owner.
+        existing = db.query(User).filter(or_(User.provider != "service", User.provider.is_(None))).order_by(User.id.asc()).first()
+        if existing:
+            # When OWNER_EMAIL is explicitly configured, password auth is bound
+            # to that identity — a different existing user is a real misconfig,
+            # so fail closed. But a password-auth self-hoster with NO explicit
+            # OWNER_EMAIL is just upgrading a prior local (no-auth) instance:
+            # adopt the single existing owner instead of locking them out.
+            owner_email_explicit = bool(os.getenv("OWNER_EMAIL", "").strip())
+            if owner_email_explicit:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Password auth is bound to the configured owner. Existing user does not match OWNER_EMAIL.",
+                )
+            return existing
+
+        return create_user(db, email=owner_email, provider="password", role="ADMIN", skip_notification=True)
 
     user = get_user_by_email(db, "local@longhouse")
     if not user:

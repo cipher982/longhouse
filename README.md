@@ -47,9 +47,13 @@ longhouse tail <session-id>
 
 A laptop runtime stops when the laptop sleeps. For real durability, run the Runtime Host on an always-on box (VPS, homelab, Mac mini) and point your dev machines at it.
 
-**On the always-on box:**
+**On the always-on box** — a public bind requires auth, so set it up first:
 
 ```bash
+export LONGHOUSE_PASSWORD_HASH="$(longhouse hash-password)"   # prompts for a password
+export JWT_SECRET=$(openssl rand -hex 32)
+export INTERNAL_API_SECRET=$(openssl rand -hex 32)
+
 longhouse serve --host 0.0.0.0 --domain longhouse.example.com
 ```
 
@@ -59,7 +63,7 @@ longhouse serve --host 0.0.0.0 --domain longhouse.example.com
 longhouse connect --domain longhouse.example.com --install
 ```
 
-Set `LONGHOUSE_PASSWORD_HASH` before binding beyond localhost. For TLS, put Caddy in front — `reverse_proxy 127.0.0.1:8080` is the whole config.
+Binding beyond localhost without auth is refused by default — `longhouse serve` exits and tells you what to set. The three exports above are the whole requirement: a password hash plus two random secrets. (If a trusted reverse proxy already authenticates requests, pass `--allow-public-no-auth` to accept the risk.) For TLS, put Caddy in front — `reverse_proxy 127.0.0.1:8080` is the whole config.
 
 Or skip running the box — hosted (we run the Runtime Host for you) is available at <https://control.longhouse.ai/signup>.
 
