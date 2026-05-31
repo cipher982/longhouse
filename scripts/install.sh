@@ -209,6 +209,30 @@ download_and_install_macos_app_release_asset() {
         return 1
     fi
 
+    # Integrity check: if the release publishes a <asset>.sha256 sidecar, verify
+    # it. If absent, warn and continue (download is over HTTPS from the canonical
+    # GitHub releases host). Set LONGHOUSE_REQUIRE_CHECKSUM=1 to fail closed when
+    # no checksum is published.
+    local checksum_url="${asset_url}.sha256"
+    local checksum_path="$tmp_dir/${asset_name}.sha256"
+    if curl -fsL "$checksum_url" -o "$checksum_path" 2>/dev/null; then
+        local expected actual
+        expected="$(awk '{print $1}' "$checksum_path" | head -1)"
+        actual="$(shasum -a 256 "$archive_path" | awk '{print $1}')"
+        if [[ -z "$expected" || "$expected" != "$actual" ]]; then
+            rm -rf "$tmp_dir"
+            error "Checksum mismatch for $asset_name (expected $expected, got $actual)"
+            return 1
+        fi
+        info "Verified Longhouse.app checksum (sha256)"
+    elif [[ "${LONGHOUSE_REQUIRE_CHECKSUM:-0}" == "1" ]]; then
+        rm -rf "$tmp_dir"
+        error "No published checksum for $asset_name and LONGHOUSE_REQUIRE_CHECKSUM=1"
+        return 1
+    else
+        warn "No published checksum for $asset_name; proceeding (HTTPS from github.com)"
+    fi
+
     if ! ditto -x -k "$archive_path" "$tmp_dir"; then
         rm -rf "$tmp_dir"
         error "Could not extract Longhouse.app release asset"

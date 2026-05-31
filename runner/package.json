@@ -2,6 +2,7 @@
   "name": "@longhouse/runner",
   "version": "0.1.16",
   "description": "Longhouse runner daemon for executing commands on user infrastructure",
+  "license": "Apache-2.0",
   "scripts": {
     "start": "bun run src/index.ts",
     "dev": "bun --watch run src/index.ts",

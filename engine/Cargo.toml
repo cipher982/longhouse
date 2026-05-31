@@ -3,7 +3,7 @@ name = "longhouse-engine"
 version = "0.1.16"
 edition = "2021"
 description = "Longhouse session shipper — high-performance Rust engine"
-license = "MIT"
+license = "Apache-2.0"
 
 [[bin]]
 name = "longhouse-engine"
