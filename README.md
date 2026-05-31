@@ -93,7 +93,7 @@ This repository is the Apache-2.0 Longhouse core: CLI, Machine Agent, Runtime Ho
 
 Longhouse Cloud's hosted signup, billing, provisioning, fleet operations, and deployment automation are proprietary and live outside this repository. The public Runtime Host can integrate with a hosted control plane by URL, but self-hosted Longhouse does not require it.
 
-See `EDITIONS.md` and `TRADEMARKS.md` for the boundary.
+See `EDITIONS.md` and `TRADEMARKS.md` for the boundary, and `NOTICE` for attribution.
 
 ## Contributing
 

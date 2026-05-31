@@ -1,6 +1,8 @@
 {
   "name": "zerg-e2e-tests",
   "version": "1.0.0",
+  "private": true,
+  "license": "Apache-2.0",
   "description": "End-to-end tests for Longhouse automations and session surfaces",
   "scripts": {
     "test": "NODE_ENV=test playwright test",
