@@ -46,6 +46,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     public let headline: String
     public let reasons: [String]
     public let suggestedActions: [String]
+    public let attention: AttentionSnapshot?
     public let service: ServiceSnapshot?
     public let engineStatus: EngineStatusSnapshot?
     public let outbox: OutboxSnapshot?
@@ -66,6 +67,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         headline: String,
         reasons: [String],
         suggestedActions: [String],
+        attention: AttentionSnapshot? = nil,
         service: ServiceSnapshot?,
         engineStatus: EngineStatusSnapshot?,
         outbox: OutboxSnapshot?,
@@ -85,6 +87,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         self.headline = headline
         self.reasons = reasons
         self.suggestedActions = suggestedActions
+        self.attention = attention
         self.service = service
         self.engineStatus = engineStatus
         self.outbox = outbox
@@ -108,6 +111,36 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             return managedAttentionSeverity
         }
         return parsedSeverity
+    }
+
+    public var effectiveHeadline: String {
+        let attentionHeadline = attention?.headline?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let attentionHeadline, !attentionHeadline.isEmpty {
+            return attentionHeadline
+        }
+        return headline
+    }
+
+    public var menuBarAttentionSeverity: HarnessSeverity? {
+        guard let attention else {
+            switch parsedSeverity {
+            case .yellow:
+                return .yellow
+            case .red:
+                return .red
+            case .green, .gray:
+                return nil
+            }
+        }
+
+        switch attention.normalizedState {
+        case "repair":
+            return .red
+        case "needs_attention":
+            return .yellow
+        default:
+            return nil
+        }
     }
 
     public var isSetupRequired: Bool {
@@ -154,32 +187,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         if isInstallLocationBlocked || isSetupRequired {
             return true
         }
-        switch parsedSeverity {
-        case .yellow, .red:
-            return true
-        case .green, .gray:
-            return false
-        }
-    }
-
-    public var isTransientEngineStatusOnlyAttention: Bool {
-        guard parsedSeverity == .yellow else {
-            return false
-        }
-        guard service?.status == "running" else {
-            return false
-        }
-        guard !reasons.isEmpty,
-              reasons.allSatisfy({ $0 == "engine_status_aging" || $0 == "engine_status_stale" }) else {
-            return false
-        }
-        let pending = engineStatus?.payload?.spoolPendingCount ?? 0
-        let dead = engineStatus?.payload?.spoolDeadCount ?? 0
-        let failures = engineStatus?.payload?.consecutiveShipFailures ?? 0
-        guard pending == 0, dead == 0, failures == 0, outboxCount == 0 else {
-            return false
-        }
-        return engineStatus?.payload?.isOffline != true
+        return menuBarAttentionSeverity != nil
     }
 
     public var lastShipLabel: String {
@@ -816,6 +824,11 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         case .green:
             return "Shipping is healthy on this Mac. Leave Longhouse running quietly in the menu bar."
         case .yellow:
+            if attention?.normalizedState == "watching",
+               let summary = attention?.summary?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !summary.isEmpty {
+                return summary
+            }
             if let shippingBacklogAttentionLabel {
                 return shippingBacklogAttentionLabel
             }
@@ -824,6 +837,10 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             }
             if let primaryReason {
                 return "\(primaryReason). Refresh or inspect logs if this keeps aging."
+            }
+            if let summary = attention?.summary?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !summary.isEmpty {
+                return summary
             }
             return "Longhouse is still shipping, but local status is aging."
         case .red:
@@ -835,6 +852,10 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             }
             if let primaryReason {
                 return "\(primaryReason). Repair is the fastest path to restore shipping."
+            }
+            if let summary = attention?.summary?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !summary.isEmpty {
+                return summary
             }
             return "Shipping is blocked on this Mac. Repair is the fastest path to restore it."
         case .gray:
@@ -1225,6 +1246,36 @@ public struct UpdateInfoSnapshot: Codable, Equatable, Sendable {
 
     public var shouldNudge: Bool {
         (updateAvailable ?? false) && (supported ?? false)
+    }
+}
+
+public struct AttentionSnapshot: Codable, Equatable, Sendable {
+    public let state: String?
+    public let headline: String?
+    public let summary: String?
+    public let reasons: [String]?
+    public let suggestedActions: [String]?
+
+    public init(
+        state: String?,
+        headline: String? = nil,
+        summary: String? = nil,
+        reasons: [String]? = nil,
+        suggestedActions: [String]? = nil
+    ) {
+        self.state = state
+        self.headline = headline
+        self.summary = summary
+        self.reasons = reasons
+        self.suggestedActions = suggestedActions
+    }
+
+    public var normalizedState: String {
+        let normalized = state?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let normalized, !normalized.isEmpty {
+            return normalized
+        }
+        return "quiet"
     }
 }
 

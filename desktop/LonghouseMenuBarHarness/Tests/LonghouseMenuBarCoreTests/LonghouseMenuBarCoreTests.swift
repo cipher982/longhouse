@@ -29,7 +29,7 @@ private struct ThrowingHealthSnapshotSource: HealthSnapshotSource {
     }
 }
 
-private func transientEngineStatusSnapshot() -> HealthSnapshot {
+private func watchingAttentionSnapshot() -> HealthSnapshot {
     HealthSnapshot(
         schemaVersion: 1,
         collectedAt: "2026-04-08T01:52:00Z",
@@ -38,6 +38,13 @@ private func transientEngineStatusSnapshot() -> HealthSnapshot {
         headline: "Longhouse local status is aging",
         reasons: ["engine_status_stale"],
         suggestedActions: [],
+        attention: AttentionSnapshot(
+            state: "watching",
+            headline: "Longhouse is retrying quietly",
+            summary: "Recent local shipping retries are recorded in diagnostics, but there is no durable backlog or repair step yet.",
+            reasons: ["engine_status_stale"],
+            suggestedActions: []
+        ),
         service: ServiceSnapshot(
             platform: "macos",
             status: "running",
@@ -765,7 +772,7 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
-    func yellowAndRedSnapshotsRequestMenuBarAttention() {
+    func legacyYellowAndRedSnapshotsRequestMenuBarAttentionWhenAttentionIsAbsent() {
         let broken = HealthSnapshot(
             schemaVersion: 1,
             collectedAt: "2026-04-08T01:52:00Z",
@@ -815,18 +822,35 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
-    func recognizesTransientEngineStatusOnlyAttention() {
-        let snapshot = transientEngineStatusSnapshot()
+    func watchingAttentionSuppressesMenuBarAttention() {
+        let snapshot = watchingAttentionSnapshot()
 
-        #expect(snapshot.isTransientEngineStatusOnlyAttention)
+        #expect(snapshot.needsMenuBarAttention == false)
+        #expect(snapshot.menuBarAttentionSeverity == nil)
+        #expect(snapshot.effectiveHeadline == "Longhouse is retrying quietly")
+        #expect(snapshot.attentionSummaryLabel.contains("no durable backlog"))
     }
 
     @Test
-    @MainActor
-    func snapshotStoreDampensTransientEngineStatusAttention() {
-        let store = SnapshotStore(source: StaticHealthSnapshotSource(snapshot: transientEngineStatusSnapshot()), cacheURL: nil)
+    func needsAttentionStateRequestsMenuBarAttention() {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-08T01:52:00Z",
+            healthState: "degraded",
+            severity: "yellow",
+            headline: "Longhouse shipping is degraded",
+            reasons: ["outbox_stuck"],
+            suggestedActions: ["Inspect logs"],
+            attention: AttentionSnapshot(state: "needs_attention"),
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
 
-        #expect(store.isTransientEngineStatusSettling)
+        #expect(snapshot.needsMenuBarAttention == true)
+        #expect(snapshot.menuBarAttentionSeverity == .yellow)
     }
 
     @Test
@@ -839,6 +863,10 @@ struct LonghouseMenuBarCoreTests {
             headline: "Longhouse shipping is degraded",
             reasons: ["spool_pending", "outbox_backlog"],
             suggestedActions: ["Run: longhouse machine repair"],
+            attention: AttentionSnapshot(
+                state: "needs_attention",
+                summary: "Longhouse is still running, but this state is persistent or actionable enough to inspect."
+            ),
             service: nil,
             engineStatus: EngineStatusSnapshot(
                 path: nil,
@@ -880,6 +908,10 @@ struct LonghouseMenuBarCoreTests {
             headline: "Longhouse shipping is degraded",
             reasons: ["consecutive_failures"],
             suggestedActions: ["Run: longhouse machine repair"],
+            attention: AttentionSnapshot(
+                state: "needs_attention",
+                summary: "Longhouse is still running, but this state is persistent or actionable enough to inspect."
+            ),
             service: nil,
             engineStatus: EngineStatusSnapshot(
                 path: nil,
@@ -1060,6 +1092,44 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.recentTouches.first?.lastUpdated == "2026-04-11T10:00:00Z")
         #expect(snapshot.recentTouchTitle(snapshot.recentTouches[0]) == "zerg · Claude")
         #expect(snapshot.recentTouchTitle(snapshot.recentTouches[1]) == "crims · Codex")
+    }
+
+    @Test
+    func decodesAttentionAndKeepsLegacyFallbackWhenAbsent() throws {
+        let watchingData = Data("""
+        {
+          "health_state": "degraded",
+          "severity": "yellow",
+          "headline": "Longhouse shipping is degraded",
+          "reasons": ["consecutive_failures"],
+          "suggested_actions": [],
+          "attention": {
+            "state": "watching",
+            "headline": "Longhouse is retrying quietly",
+            "summary": "Recent local shipping retries are recorded in diagnostics, but there is no durable backlog or repair step yet.",
+            "reasons": ["consecutive_failures"],
+            "suggested_actions": []
+          }
+        }
+        """.utf8)
+        let legacyData = Data("""
+        {
+          "health_state": "degraded",
+          "severity": "yellow",
+          "headline": "Longhouse shipping is degraded",
+          "reasons": ["consecutive_failures"],
+          "suggested_actions": []
+        }
+        """.utf8)
+
+        let watching = try HealthSnapshotDecoder.decode(data: watchingData)
+        let legacy = try HealthSnapshotDecoder.decode(data: legacyData)
+
+        #expect(watching.attention?.normalizedState == "watching")
+        #expect(watching.needsMenuBarAttention == false)
+        #expect(watching.effectiveHeadline == "Longhouse is retrying quietly")
+        #expect(legacy.attention == nil)
+        #expect(legacy.needsMenuBarAttention == true)
     }
 
     @Test

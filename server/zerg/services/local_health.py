@@ -2809,6 +2809,19 @@ class _HealthClassificationContext:
     repair_action: str
 
 
+_WATCHING_REASONS = {
+    "consecutive_failures",
+    "connect_errors",
+    "server_errors",
+    "rate_limited",
+    "retryable_client_errors",
+    "reported_offline",
+    "engine_status_missing",
+    "engine_status_aging",
+    "engine_status_stale",
+}
+
+
 def _repair_action_for_launch_readiness(launch_readiness: dict[str, Any]) -> str:
     return _repair_command(
         can_reconcile_from_state=_can_reconcile_launch_from_state(
@@ -3321,6 +3334,90 @@ def _is_uninstalled_health(context: _HealthClassificationContext) -> bool:
     )
 
 
+def _outbox_is_actionable(context: _HealthClassificationContext) -> bool:
+    outbox_oldest = context.outbox_oldest
+    degraded_outbox_is_old = outbox_oldest is not None and outbox_oldest > OUTBOX_DEGRADED_AGE_SECONDS
+    return context.outbox_count >= DEGRADED_BACKLOG_COUNT or (context.outbox_count > 0 and degraded_outbox_is_old)
+
+
+def _degraded_state_is_watching(
+    *,
+    context: _HealthClassificationContext,
+    reasons: list[str],
+) -> bool:
+    if context.service_status != "running":
+        return False
+    if context.engine_error:
+        return False
+    if context.launch_state == "degraded":
+        return False
+    if context.canonical_sessions_missing or context.canonical_sessions_invalid:
+        return False
+    if context.orphan_bridge_count > 0 or context.managed_degraded > 0 or context.managed_detached > 0:
+        return False
+    if context.unknown_managed_phase_count > 0:
+        return False
+    if context.spool_pending >= DEGRADED_BACKLOG_COUNT:
+        return False
+    if _outbox_is_actionable(context):
+        return False
+    if "reported_offline" in reasons and (context.spool_pending > 0 or context.outbox_count > 0):
+        return False
+    if not reasons:
+        return True
+    return all(reason in _WATCHING_REASONS for reason in reasons)
+
+
+def _derive_attention(
+    *,
+    health_state: str,
+    headline: str,
+    reasons: list[str],
+    suggested_actions: list[str],
+    context: _HealthClassificationContext,
+) -> dict[str, Any]:
+    normalized_state = str(health_state or "").strip().lower()
+    if normalized_state == "broken":
+        return {
+            "state": "repair",
+            "headline": headline,
+            "summary": "Repair is the fastest path to restore dependable Longhouse shipping on this Mac.",
+            "reasons": reasons,
+            "suggested_actions": suggested_actions,
+        }
+    if normalized_state == "degraded":
+        if _degraded_state_is_watching(context=context, reasons=reasons):
+            return {
+                "state": "watching",
+                "headline": "Longhouse is retrying quietly",
+                "summary": "Recent shipping retries are recorded, but no durable backlog or repair step exists yet.",
+                "reasons": reasons,
+                "suggested_actions": [],
+            }
+        return {
+            "state": "needs_attention",
+            "headline": headline,
+            "summary": "Longhouse is still running, but this state is persistent or actionable enough to inspect.",
+            "reasons": reasons,
+            "suggested_actions": suggested_actions,
+        }
+    if normalized_state == "uninstalled":
+        return {
+            "state": "quiet",
+            "headline": headline,
+            "summary": "Longhouse local shipping is not installed on this Mac.",
+            "reasons": reasons,
+            "suggested_actions": suggested_actions,
+        }
+    return {
+        "state": "quiet",
+        "headline": "Longhouse is quiet",
+        "summary": "Shipping is healthy on this Mac.",
+        "reasons": [],
+        "suggested_actions": [],
+    }
+
+
 def _classify_health(
     *,
     service: dict[str, Any],
@@ -3651,9 +3748,11 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         headline = "Installed provider release is blocked"
     else:
         release_statuses = dict(provider_release_status.get("statuses") or {})
-        version_probe_failed_providers = sorted(
-            provider for provider, raw_info in release_statuses.items() if dict(raw_info or {}).get("status") == "unknown_local_version"
-        )
+        version_probe_failed_providers = []
+        for provider, raw_info in release_statuses.items():
+            if dict(raw_info or {}).get("status") == "unknown_local_version":
+                version_probe_failed_providers.append(provider)
+        version_probe_failed_providers.sort()
         if version_probe_failed_providers:
             if "provider_cli_version_unknown" not in reasons:
                 reasons.append("provider_cli_version_unknown")
@@ -3666,9 +3765,11 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
                 severity = "yellow"
                 headline = "Provider CLI version check needs attention"
         support_providers = dict(provider_support_state.get("providers") or {})
-        support_attention_providers = sorted(
-            provider for provider, raw_info in support_providers.items() if dict(raw_info or {}).get("state") == "needs_attention"
-        )
+        support_attention_providers = []
+        for provider, raw_info in support_providers.items():
+            if dict(raw_info or {}).get("state") == "needs_attention":
+                support_attention_providers.append(provider)
+        support_attention_providers.sort()
         if support_attention_providers:
             if "provider_support_needs_attention" not in reasons:
                 reasons.append("provider_support_needs_attention")
@@ -3697,6 +3798,22 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
             severity = "yellow"
             headline = "Hosted provider-live route proof is incomplete"
     build_identity = _collect_build_identity(engine_status=engine_status)
+    attention_context = _health_classification_context(
+        service=service,
+        engine_status=engine_status,
+        transport_sample=transport_sample,
+        outbox=outbox,
+        launch_readiness=launch_readiness,
+        managed_summary=managed_summary,
+        managed_sessions=managed_sessions,
+    )
+    attention = _derive_attention(
+        health_state=health_state,
+        headline=headline,
+        reasons=reasons,
+        suggested_actions=suggested_actions,
+        context=attention_context,
+    )
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -3707,6 +3824,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         "headline": headline,
         "reasons": reasons,
         "suggested_actions": suggested_actions,
+        "attention": attention,
         "service": service,
         "engine_status": engine_status,
         "transport_health": _serialize_transport_health(

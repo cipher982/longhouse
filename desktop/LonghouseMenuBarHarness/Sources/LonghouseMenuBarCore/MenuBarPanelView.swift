@@ -243,7 +243,7 @@ public struct MenuBarPanelView: View {
             return "Longhouse"
         }
 
-        let trimmed = snapshot.headline.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = snapshot.effectiveHeadline.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.lowercased().hasPrefix("longhouse ") else {
             return trimmed
         }

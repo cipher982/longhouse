@@ -616,6 +616,7 @@ def test_collect_local_health_degrades_for_old_outbox_file(monkeypatch, tmp_path
 
     assert snapshot["health_state"] == "degraded"
     assert "outbox_stuck" in snapshot["reasons"]
+    assert snapshot["attention"]["state"] == "needs_attention"
 
 
 def test_collect_local_health_classifies_deleted_cwd_hook_spawn_errors(monkeypatch, tmp_path: Path):
@@ -1084,6 +1085,7 @@ def test_collect_local_health_degrades_for_blocked_provider_release(monkeypatch,
     assert snapshot["severity"] == "red"
     assert snapshot["headline"] == "Installed provider release is blocked"
     assert "provider_release_blocked" in snapshot["reasons"]
+    assert snapshot["attention"]["state"] == "repair"
     assert snapshot["provider_release_status"]["statuses"]["codex"]["status"] == "blocked"
 
 
@@ -1499,6 +1501,8 @@ def test_collect_local_health_uses_shared_transport_burst_classifier(monkeypatch
 
     assert snapshot["health_state"] == "degraded"
     assert "connect_errors" in snapshot["reasons"]
+    assert snapshot["attention"]["state"] == "watching"
+    assert "no durable backlog" in snapshot["attention"]["summary"]
     assert snapshot["transport_health"]["status"] == "degraded"
     assert snapshot["transport_health"]["status_reason"] == "connect_errors"
     assert snapshot["transport_health"]["status_summary"] == "5 ship connect error(s) in the last hour."
@@ -1524,6 +1528,7 @@ def test_collect_local_health_keeps_recovered_transient_connect_errors_healthy(m
     snapshot = local_health_service.collect_local_health(tmp_path)
 
     assert snapshot["health_state"] == "healthy"
+    assert snapshot["attention"]["state"] == "quiet"
     assert snapshot["transport_health"]["status"] == "healthy"
     assert "connect_errors" not in snapshot["reasons"]
 
@@ -1551,10 +1556,51 @@ def test_collect_local_health_uses_active_transport_window_when_present(monkeypa
     snapshot = local_health_service.collect_local_health(tmp_path)
 
     assert snapshot["health_state"] == "healthy"
+    assert snapshot["attention"]["state"] == "quiet"
     assert snapshot["transport_health"]["status"] == "healthy"
     assert snapshot["transport_health"]["ship_connect_errors_1h"] == 12
     assert snapshot["transport_health"]["ship_connect_errors_10m"] == 0
     assert "connect_errors" not in snapshot["reasons"]
+
+
+def test_collect_local_health_watches_offline_without_backlog(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(
+        tmp_path,
+        age_seconds=5,
+        payload={
+            "is_offline": True,
+            "spool_pending_count": 0,
+            "spool_dead_count": 0,
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "degraded"
+    assert "reported_offline" in snapshot["reasons"]
+    assert snapshot["attention"]["state"] == "watching"
+
+
+def test_collect_local_health_offline_with_pending_work_needs_attention(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(
+        tmp_path,
+        age_seconds=5,
+        payload={
+            "is_offline": True,
+            "spool_pending_count": 1,
+            "spool_dead_count": 0,
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "degraded"
+    assert "reported_offline" in snapshot["reasons"]
+    assert snapshot["attention"]["state"] == "needs_attention"
 
 
 def test_collect_local_health_includes_last_transport_error_detail(monkeypatch, tmp_path: Path):
@@ -2501,6 +2547,7 @@ def test_collect_local_health_broken_when_service_stopped_with_stuck_outbox(monk
     assert snapshot["severity"] == "red"
     assert "service_stopped" in snapshot["reasons"]
     assert "outbox_stuck" in snapshot["reasons"]
+    assert snapshot["attention"]["state"] == "repair"
     assert "Run: longhouse machine repair" in snapshot["suggested_actions"]
 
 
