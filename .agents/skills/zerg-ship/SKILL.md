@@ -35,6 +35,17 @@ do not say "deployed" as if hosted users now have it. That kind of change
 needs a CLI/package release, and sometimes users must rerun
 `longhouse connect --install` after upgrading.
 
+For launch readiness, use the exact-SHA verifier after the hosted and release
+lanes have both run:
+
+```bash
+make launch-readiness SHA="<full-sha>"
+```
+
+This is stricter than hosted deploy success: it also checks latest release and
+PyPI package build identity so the public installer cannot silently point at old
+code.
+
 ## Background Wait Rule
 
 If a tool or workflow already gives you a completion event or a blocking wait primitive, use it once and move on. Do not burn tool calls on `pgrep`, repeated curls, or ad hoc status polling loops while a background task is running.
