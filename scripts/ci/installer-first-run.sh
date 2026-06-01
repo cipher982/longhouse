@@ -963,10 +963,13 @@ if [[ "$ENABLE_E2E_BROWSER" == "1" ]]; then
   if ! command -v bunx >/dev/null 2>&1; then
     fail "bunx not found — required for --e2e-browser"
   fi
+  if ! (cd "$ROOT_DIR" && bun install --frozen-lockfile --silent); then
+    fail "Failed to install E2E Node dependencies"
+  fi
   if ! (cd "$ROOT_DIR/e2e" && bunx playwright install --with-deps chromium 2>/dev/null); then
     fail "Failed to install Playwright chromium"
   fi
-  if ! (cd "$ROOT_DIR" && bunx tsx e2e/scripts/verify-installer-browser.ts --url "http://127.0.0.1:${DEMO_PORT}"); then
+  if ! (cd "$ROOT_DIR/e2e" && bunx tsx scripts/verify-installer-browser.ts --url "http://127.0.0.1:${DEMO_PORT}"); then
     fail "Browser verification failed: timeline did not render demo sessions"
   fi
   log "✅ Browser E2E verification passed"

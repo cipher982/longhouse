@@ -29,6 +29,7 @@ class Check:
     name: str
     ok: bool
     detail: str
+    terminal: bool = False
 
 
 def repo_root() -> Path:
@@ -127,11 +128,13 @@ def check_workflows(repo: str, sha: str, required: tuple[str, ...]) -> list[Chec
         run_id = run_info.get("databaseId")
         url = run_info.get("url")
         ok = status == "completed" and conclusion in ACCEPTED_CONCLUSIONS
+        terminal = status == "completed" and not ok
         checks.append(
             Check(
                 f"workflow:{workflow}",
                 ok,
                 f"run {run_id} {status}/{conclusion or '-'} {url}",
+                terminal=terminal,
             )
         )
     return checks
@@ -245,7 +248,15 @@ def main(argv: list[str] | None = None) -> int:
         attempt += 1
         checks = run_checks(args, sha, required)
         ok = all(check.ok for check in checks)
+        terminal_failures = [check for check in checks if not check.ok and check.terminal]
         if ok or not args.wait or time.time() >= deadline:
+            break
+        if terminal_failures:
+            print(
+                "Launch readiness failed terminal checks for "
+                f"{sha[:12]}: {', '.join(check.name for check in terminal_failures)}",
+                file=sys.stderr,
+            )
             break
         failing = ", ".join(check.name for check in checks if not check.ok) or "unknown"
         print(
