@@ -75,6 +75,9 @@ def _validate_models_config_startup() -> None:
     """Fail fast when configured model providers are missing required keys."""
     if _settings.testing or _settings.llm_disabled or _settings.demo_mode:
         return
+    if not _settings.llm_available:
+        logger.warning("Models config validation skipped: no LLM provider API keys configured")
+        return
 
     from zerg.models_config import iter_required_provider_keys
     from zerg.models_config import validate_startup_config
