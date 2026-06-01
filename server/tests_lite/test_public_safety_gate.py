@@ -82,6 +82,17 @@ def test_localhost_hostname_is_local_and_starts():
     assert started
 
 
+def test_env_var_escape_hatch_allows_public_no_auth():
+    """The hosted/managed runtime image sets LONGHOUSE_ALLOW_PUBLIC_NO_AUTH=1 to
+    permit its fixed public+no-auth CMD; the env var is equivalent to the flag."""
+    result, started = _run_serve(
+        ["--host", "0.0.0.0"],
+        {"AUTH_DISABLED": "1", "LONGHOUSE_ALLOW_PUBLIC_NO_AUTH": "1"},
+    )
+    assert started
+    assert result.exit_code == 0
+
+
 def test_host_classifier():
     """Unit-level: _host_is_public must treat loopback as local, else public."""
     from zerg.cli.serve import _host_is_public
