@@ -7,6 +7,8 @@
 #
 # Environment:
 #   http_proxy/https_proxy Proxy settings (honored automatically)
+#   LONGHOUSE_INSTALL_VERSION Pin the PyPI version to install (for release gates/debugging)
+#   LONGHOUSE_PKG_SOURCE      Override package source for local/dev installs
 #
 set -euo pipefail
 
@@ -101,6 +103,26 @@ install_python() {
     success "Python 3.12 installed"
 }
 
+resolve_latest_longhouse_pypi_version() {
+    local py_path
+    py_path="$(uv python find 3.12 2>/dev/null || command -v python3 2>/dev/null || true)"
+    if [[ -z "$py_path" ]]; then
+        return 1
+    fi
+
+    curl -fsSL https://pypi.org/pypi/longhouse/json | "$py_path" -c '
+import json
+import sys
+
+payload = json.load(sys.stdin)
+version = str(payload.get("info", {}).get("version") or "").strip()
+files = payload.get("releases", {}).get(version) or []
+if not version or not files:
+    raise SystemExit(1)
+print(version)
+'
+}
+
 # Install Longhouse CLI
 install_longhouse() {
     step "Installing Longhouse CLI"
@@ -110,10 +132,30 @@ install_longhouse() {
     local pkg_source="${LONGHOUSE_PKG_SOURCE:-longhouse}"
     local custom_source=0
     local install_source="pypi"
+    local package_ref=""
+    local install_version="${LONGHOUSE_INSTALL_VERSION:-}"
 
-    if [[ "$pkg_source" != "longhouse" ]]; then
+    if [[ "$pkg_source" == "longhouse" ]]; then
+        if [[ -n "$install_version" ]]; then
+            install_version="${install_version#v}"
+            info "Using requested Longhouse version: $install_version"
+        elif install_version="$(resolve_latest_longhouse_pypi_version)"; then
+            info "Resolved latest Longhouse version: $install_version"
+        else
+            warn "Could not resolve latest Longhouse version; falling back to unpinned PyPI install"
+            install_version=""
+        fi
+
+        if [[ -n "$install_version" ]]; then
+            pkg_source="longhouse==$install_version"
+            package_ref="$pkg_source"
+        fi
+    elif [[ "$pkg_source" == longhouse==* ]]; then
+        package_ref="$pkg_source"
+    else
         custom_source=1
         install_source="custom"
+        package_ref="$pkg_source"
     fi
 
     # Install the longhouse package as a tool
@@ -122,6 +164,9 @@ install_longhouse() {
         # Non-PyPI sources can otherwise reuse a stale cached wheel and miss
         # recent code changes during disposable installer validation.
         uv tool uninstall longhouse 2>/dev/null || true
+        uv tool install --force --no-cache "$pkg_source"
+    elif [[ "$pkg_source" == longhouse==* ]]; then
+        info "Installing longhouse from PyPI: $pkg_source"
         uv tool install --force --no-cache "$pkg_source"
     elif uv tool list 2>/dev/null | grep -q "^longhouse"; then
         info "Upgrading existing longhouse installation..."
@@ -148,8 +193,8 @@ install_longhouse() {
             --package-name longhouse
             --channel stable
         )
-        if [[ "$custom_source" -eq 1 ]]; then
-            record_install_args+=(--package-ref "$pkg_source")
+        if [[ -n "$package_ref" ]]; then
+            record_install_args+=(--package-ref "$package_ref")
         fi
         success "longhouse installed: $(longhouse --version 2>/dev/null || echo 'installed')"
         if ! longhouse "${record_install_args[@]}" >/dev/null 2>&1; then
