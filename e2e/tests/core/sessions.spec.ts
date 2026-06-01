@@ -10,21 +10,23 @@ import { randomUUID } from "crypto";
 import type { APIRequestContext } from "@playwright/test";
 import { test, expect, type Page } from "../fixtures";
 
-async function ensureDemoProviders(page: Page): Promise<void> {
+async function ensureDemoProviders(
+  page: Page,
+  request: APIRequestContext,
+): Promise<void> {
   // The timeline no longer auto-seeds demo data outside demo mode (a real
   // instance must not get synthetic sessions). If we land on the hero empty
-  // state, explicitly seed demo sessions via the API, then reload so the
-  // toolbar/providers render.
+  // state, explicitly seed demo sessions. Seed via the `request` fixture (not
+  // page.request) — it carries the X-Test-Commis header that routes writes to
+  // this worker's isolated DB schema, which is the same schema the page reads.
   const heroEmpty = page.locator(".sessions-hero-empty");
   if (await heroEmpty.isVisible({ timeout: 2000 }).catch(() => false)) {
-    const seeded = await page
-      .request.post("/api/timeline/demo")
-      .then((r) => r.ok())
-      .catch(() => false);
-    if (seeded) {
-      await page.reload({ waitUntil: "domcontentloaded" });
-      await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
+    const resp = await request.post("/api/timeline/demo").catch(() => null);
+    if (!resp || !resp.ok()) {
+      throw new Error(`Demo seed failed: ${resp ? resp.status() : "no response"}`);
     }
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
     // Wait for the toolbar to appear once data exists.
     await page.waitForSelector(".sessions-toolbar", { timeout: 20000 });
   }
@@ -171,12 +173,12 @@ test.describe("Sessions Page", () => {
     expect(hasSessions || hasHeroEmpty).toBe(true);
   });
 
-  test("Filter bar is visible and interactive", async ({ page }) => {
+  test("Filter bar is visible and interactive", async ({ page, request }) => {
     await page.goto("/timeline");
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
     // Seed demos first so toolbar is visible (hero state has no toolbar)
-    await ensureDemoProviders(page);
+    await ensureDemoProviders(page, request);
 
     // Toolbar should be visible
     const toolbar = page.locator(".sessions-toolbar");
@@ -198,11 +200,11 @@ test.describe("Sessions Page", () => {
     ).toBeVisible();
   });
 
-  test("Filter by provider updates URL", async ({ page }) => {
+  test("Filter by provider updates URL", async ({ page, request }) => {
     await page.goto("/timeline");
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
-    await ensureDemoProviders(page);
+    await ensureDemoProviders(page, request);
     const claudeBtn = page.locator(
       '[data-filter-section="provider"] [data-filter-option="claude"]',
     );
@@ -212,12 +214,12 @@ test.describe("Sessions Page", () => {
     await expect(page).toHaveURL(/provider=claude/);
   });
 
-  test("Search input triggers debounced query", async ({ page }) => {
+  test("Search input triggers debounced query", async ({ page, request }) => {
     await page.goto("/timeline");
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
     // Seed demo data if empty so the toolbar (with the search input) renders.
-    await ensureDemoProviders(page);
+    await ensureDemoProviders(page, request);
 
     // Type in search
     const searchInput = page.locator('input[type="search"]');
@@ -731,9 +733,9 @@ test.describe("Sessions Page", () => {
 });
 
 test.describe("Filter Chips and Popover", () => {
-  test("selecting a filter creates a chip in the toolbar", async ({ page }) => {
+  test("selecting a filter creates a chip in the toolbar", async ({ page, request }) => {
     await gotoTimelineReady(page);
-    await ensureDemoProviders(page);
+    await ensureDemoProviders(page, request);
 
     // Select provider filter via popover
     await page
@@ -774,7 +776,7 @@ test.describe("Filter Chips and Popover", () => {
     });
 
     await gotoTimelineReady(page);
-    await ensureDemoProviders(page);
+    await ensureDemoProviders(page, request);
 
     // Select provider
     await page
@@ -802,9 +804,9 @@ test.describe("Filter Chips and Popover", () => {
     await expect(page).toHaveURL(new RegExp(`device_id=${machineName}`));
   });
 
-  test("Escape closes the filter popover", async ({ page }) => {
+  test("Escape closes the filter popover", async ({ page, request }) => {
     await gotoTimelineReady(page);
-    await ensureDemoProviders(page);
+    await ensureDemoProviders(page, request);
 
     // Popover is open (ensureDemoProviders opened it)
     await expect(page.locator("#filter-panel")).toBeVisible();
@@ -815,9 +817,9 @@ test.describe("Filter Chips and Popover", () => {
     await expect(page.locator("#filter-panel")).toHaveCount(0);
   });
 
-  test("clicking outside the popover closes it", async ({ page }) => {
+  test("clicking outside the popover closes it", async ({ page, request }) => {
     await gotoTimelineReady(page);
-    await ensureDemoProviders(page);
+    await ensureDemoProviders(page, request);
 
     await expect(page.locator("#filter-panel")).toBeVisible();
 
@@ -827,9 +829,9 @@ test.describe("Filter Chips and Popover", () => {
     await expect(page.locator("#filter-panel")).toHaveCount(0);
   });
 
-  test("non-default days filter creates a chip", async ({ page }) => {
+  test("non-default days filter creates a chip", async ({ page, request }) => {
     await gotoTimelineReady(page);
-    await ensureDemoProviders(page);
+    await ensureDemoProviders(page, request);
 
     // Select 30d in the popover
     const days30 = page.locator(
@@ -1279,7 +1281,7 @@ test.describe("Machine Filter", () => {
 
     await page.goto("/timeline");
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
-    await ensureDemoProviders(page);
+    await ensureDemoProviders(page, request);
 
     // Filter popover should have a machine section with the ingested machine name
     const filterPanel = page.locator("#filter-panel");
@@ -1298,7 +1300,7 @@ test.describe("Machine Filter", () => {
 
     await page.goto("/timeline");
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
-    await ensureDemoProviders(page);
+    await ensureDemoProviders(page, request);
 
     const filterPanel = page.locator("#filter-panel");
 
