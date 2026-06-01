@@ -68,6 +68,9 @@ One release number advances all public component manifests in one shot. This is 
 2. Run `bump-my-version bump --new-version X.Y.Z`. This edits the public version manifests.
 3. Commit the bump, push to main, create GitHub release.
 4. Wait for `publish.yml` + `local-runtime-release.yml`, verify assets + notarization.
+5. Run launch readiness for the exact bump SHA: required workflows, demo/canary
+   health build identity, latest GitHub release, and PyPI package build identity
+   must all agree on the same commit.
 
 ### Why share one number
 
@@ -90,6 +93,22 @@ Every surface that shows a version reads `build-identity.json`. Never re-infer, 
 | Docker image | `/app/build-identity.json` + OCI `org.opencontainers.image.revision` label | same file + registry metadata |
 
 We collapse `/api/version` and `/api/system/info` version-adjacent fields into `/api/health`. One endpoint.
+
+## Launch readiness
+
+`scripts/ops/launch-readiness.py` is the launch-level invariant checker. It
+does not infer from "latest green" workflow state. It takes one target SHA and
+checks that:
+
+- launch-critical exact-SHA workflows completed successfully
+- `https://longhouse.ai/api/health` reports that build commit
+- the hosted canary `/api/health` reports that build commit
+- the latest GitHub release resolves to that commit
+- the PyPI package for that release reports that same bundled build identity
+
+This is intentionally stricter than hosted deploy verification. Hosted can be
+green while the public installer still resolves to an older PyPI wheel; launch
+readiness is where that becomes a hard failure.
 
 ### Mismatch detection
 

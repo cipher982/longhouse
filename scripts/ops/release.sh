@@ -196,6 +196,10 @@ fi
 echo "  [OK] app and DMG are notarized"
 
 echo ""
+echo "Verifying launch readiness for $BUMP_SHA..."
+"$ROOT/scripts/ops/launch-readiness.py" --sha "$BUMP_SHA" --wait --timeout 7200 --poll 30
+
+echo ""
 echo "Release $VERSION shipped and verified."
 echo "  gh release view $VERSION"
 echo "  Users can upgrade: uv tool upgrade longhouse && longhouse connect --install"

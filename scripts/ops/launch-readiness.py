@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -62,6 +63,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--skip-live", action="store_true")
     parser.add_argument("--skip-release", action="store_true")
     parser.add_argument("--skip-public-package", action="store_true")
+    parser.add_argument("--wait", action="store_true", help="Poll until every check passes or timeout elapses.")
+    parser.add_argument("--timeout", type=int, default=3600, help="Wait timeout in seconds. Default: 3600.")
+    parser.add_argument("--poll", type=int, default=30, help="Wait poll interval in seconds. Default: 30.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     return parser.parse_args(argv)
 
@@ -213,12 +217,7 @@ def print_human(checks: list[Check]) -> None:
         print(f"{prefix} {check.name}: {check.detail}")
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = parse_args(argv)
-    root = repo_root()
-    sha = resolve_sha(root, args.sha)
-    required = tuple(args.required_workflows or DEFAULT_REQUIRED_WORKFLOWS)
-
+def run_checks(args: argparse.Namespace, sha: str, required: tuple[str, ...]) -> list[Check]:
     checks: list[Check] = []
     if not args.skip_workflows:
         checks.extend(check_workflows(args.repo, sha, required))
@@ -231,14 +230,37 @@ def main(argv: list[str] | None = None) -> int:
         checks.append(release_check)
     if not args.skip_public_package and release_tag:
         checks.append(check_public_package(release_tag, sha))
+    return checks
 
-    ok = all(check.ok for check in checks)
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    root = repo_root()
+    sha = resolve_sha(root, args.sha)
+    required = tuple(args.required_workflows or DEFAULT_REQUIRED_WORKFLOWS)
+
+    deadline = time.time() + args.timeout
+    attempt = 0
+    while True:
+        attempt += 1
+        checks = run_checks(args, sha, required)
+        ok = all(check.ok for check in checks)
+        if ok or not args.wait or time.time() >= deadline:
+            break
+        failing = ", ".join(check.name for check in checks if not check.ok) or "unknown"
+        print(
+            f"Launch readiness pending for {sha[:12]}: {failing}; retrying in {args.poll}s",
+            file=sys.stderr,
+        )
+        time.sleep(args.poll)
+
     if args.json:
         print(
             json.dumps(
                 {
                     "target_sha": sha,
                     "ok": ok,
+                    "attempts": attempt,
                     "checks": [check.__dict__ for check in checks],
                 },
                 indent=2,
