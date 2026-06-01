@@ -128,6 +128,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Print the engine's compiled build identity
+    BuildIdentity {
+        /// Emit the full build identity as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Parse a JSONL file and report event counts (dev/validation tool)
     Parse {
         /// Path to session JSONL file
@@ -700,6 +707,7 @@ fn prune_old_logs(log_dir: &std::path::Path, keep_days: u64) {
 fn command_name(command: &Commands) -> &'static str {
     match command {
         Commands::Parse { .. } => "parse",
+        Commands::BuildIdentity { .. } => "build-identity",
         Commands::Bench { .. } => "bench",
         Commands::Ship { .. } => "ship",
         Commands::Connect { .. } => "connect",
@@ -778,6 +786,19 @@ fn main() -> anyhow::Result<()> {
     let _ = &otel_shutdown_guard;
 
     match cli.command {
+        Commands::BuildIdentity { json } => {
+            let identity = build_identity::BuildIdentity::current();
+            if json {
+                println!("{}", serde_json::to_string_pretty(&identity)?);
+            } else {
+                println!("version: {}", identity.version);
+                println!("commit: {}", identity.commit);
+                println!("commit_short: {}", identity.commit_short);
+                println!("dirty: {}", identity.dirty);
+                println!("built_at: {}", identity.built_at);
+                println!("channel: {}", identity.channel);
+            }
+        }
         Commands::Connect {
             url,
             token,

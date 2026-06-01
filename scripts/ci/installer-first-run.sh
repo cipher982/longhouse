@@ -146,6 +146,7 @@ build_desktop_app_bundle() {
     --short-version 0.0.0-dev \
     --output-dir "$bundle_root" \
     --icon-png "$ROOT_DIR/web/public/favicon-512.png" \
+    --build-identity "$ROOT_DIR/.build/build-identity.json" \
     --lsuielement true >/dev/null
 
   if [[ ! -d "$app_path" ]]; then
@@ -461,7 +462,21 @@ smoke_runtime_artifact() {
     trap 'rm -f "$artifact_json"; rm -rf "$artifact_home"' EXIT
 
     cd "$ROOT_DIR/server"
-    HOME="$artifact_home" uv run python ../scripts/ci/runtime-artifact-smoke.py --component "$component" --overwrite --json > "$artifact_json"
+    local artifact_args=(--component "$component" --overwrite --json)
+    if [[ -n "$EXPECTED_BUILD_COMMIT" ]]; then
+      artifact_args+=(--expected-build-commit "$EXPECTED_BUILD_COMMIT")
+    fi
+    if [[ -n "$EXPECTED_BUILD_VERSION" ]]; then
+      artifact_args+=(--expected-build-version "$EXPECTED_BUILD_VERSION")
+    fi
+    env \
+      -u LONGHOUSE_ENGINE_SOURCE \
+      -u LONGHOUSE_DESKTOP_APP_SOURCE \
+      -u LONGHOUSE_LOCAL_HEALTH_APP_SOURCE \
+      -u LONGHOUSE_DESKTOP_WINDOW_SOURCE \
+      -u LONGHOUSE_LOCAL_HEALTH_WINDOW_SOURCE \
+      HOME="$artifact_home" \
+      uv run python ../scripts/ci/runtime-artifact-smoke.py "${artifact_args[@]}" > "$artifact_json"
     validate_runtime_artifact_json "$artifact_json" "$component"
     launch_path="$(runtime_artifact_launch_path "$artifact_json")"
 
@@ -796,6 +811,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   if [[ "$ENABLE_MENUBAR_SMOKE" == "1" ]]; then
     log "⚠️  macOS ambient smoke enabled. This is the heavy local path; prefer GitHub Actions unless you are debugging menu bar install behavior."
   fi
+  ensure_build_identity
   APP_BUNDLE_STAGE_DIR="$HOME/.longhouse-app-build"
   LONGHOUSE_APP_BUNDLE="$(build_desktop_app_bundle "$APP_BUNDLE_STAGE_DIR")"
   export LONGHOUSE_DESKTOP_APP_SOURCE="$LONGHOUSE_APP_BUNDLE"

@@ -269,6 +269,7 @@ jobs:
             --short-version "$VERSION" \
             --output-dir "$APP_STAGE_DIR" \
             --icon-png web/public/favicon-512.png \
+            --build-identity .build/build-identity.json \
             --lsuielement true
 
       - name: Sign macOS desktop app bundle
@@ -729,15 +730,15 @@ jobs:
           rm -rf "$LONGHOUSE_VERIFY_HOME"
           mkdir -p "$LONGHOUSE_VERIFY_HOME"
           export HOME="$LONGHOUSE_VERIFY_HOME"
+          expected_commit="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}" --jq .sha)"
           # Drive the wheel's own runtime-artifact fetcher. This proves the
-          # engine URL derived from the wheel's version resolves to a real
-          # asset on this release.
-          uv tool run --from "$LONGHOUSE_VERIFY_WHEEL" python - <<'PY'
-          from zerg.services.runtime_artifacts import ensure_runtime_binary, RuntimeComponent
-          result = ensure_runtime_binary(RuntimeComponent.ENGINE)
-          print("engine path:", result.path)
-          print("installed_now:", result.installed_now)
-          PY
+          # engine URL derived from the wheel's version resolves to the exact
+          # build identity expected for this release.
+          uv tool run --from "$LONGHOUSE_VERIFY_WHEEL" python scripts/ci/runtime-artifact-smoke.py \
+            --component engine \
+            --overwrite \
+            --expected-build-commit "$expected_commit" \
+            --expected-build-version "${RELEASE_TAG#v}"
 
       - name: Assert engine binary is executable
         run: |
