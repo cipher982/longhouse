@@ -132,7 +132,26 @@ def test_lifespan_model_validation_skips_when_llm_disabled(monkeypatch):
     monkeypatch.setattr(
         lifespan,
         "_settings",
-        SimpleNamespace(testing=False, llm_disabled=True, demo_mode=False),
+        SimpleNamespace(testing=False, llm_disabled=True, demo_mode=False, llm_available=False),
+    )
+    monkeypatch.setattr(
+        "zerg.models_config.validate_startup_config",
+        lambda: (_ for _ in ()).throw(AssertionError("validation should be skipped")),
+    )
+
+    lifespan._validate_models_config_startup()
+
+
+def test_lifespan_model_validation_skips_when_no_llm_keys(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("TESTING", "1")
+    import zerg.lifespan as lifespan
+
+    monkeypatch.setattr(
+        lifespan,
+        "_settings",
+        SimpleNamespace(testing=False, llm_disabled=False, demo_mode=False, llm_available=False),
     )
     monkeypatch.setattr(
         "zerg.models_config.validate_startup_config",
@@ -155,7 +174,7 @@ def test_lifespan_model_validation_raises_when_enabled(tmp_path, monkeypatch):
     monkeypatch.setattr(
         lifespan,
         "_settings",
-        SimpleNamespace(testing=False, llm_disabled=False, demo_mode=False),
+        SimpleNamespace(testing=False, llm_disabled=False, demo_mode=False, llm_available=True),
     )
 
     with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
