@@ -249,6 +249,8 @@ def check_runtime_artifact(root: Path, tag: str, sha: str, component: str) -> Ch
             [
                 "uv",
                 "run",
+                "--python",
+                "3.12",
                 "--no-project",
                 "--isolated",
                 "--with",

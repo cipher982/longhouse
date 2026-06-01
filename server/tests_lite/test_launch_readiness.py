@@ -193,6 +193,8 @@ def test_runtime_artifact_check_requires_exact_identity(monkeypatch, tmp_path):
     assert check.ok is True
     assert "version=0.1.17" in check.detail
     cmd, kwargs = calls[0]
+    assert "--python" in cmd
+    assert "3.12" in cmd
     assert f"longhouse==0.1.17" in cmd
     assert "--expected-build-commit" in cmd
     assert sha in cmd
