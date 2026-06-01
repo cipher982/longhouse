@@ -102,7 +102,37 @@ def test_required_workflow_must_succeed(monkeypatch):
 
     checks = mod.check_workflows("cipher982/longhouse", sha, ("Launch Gate",))
 
-    assert checks == [mod.Check("workflow:Launch Gate", False, "run 12 completed/skipped https://example.test/run/12")]
+    assert checks == [
+        mod.Check(
+            "workflow:Launch Gate",
+            False,
+            "run 12 completed/skipped https://example.test/run/12",
+            terminal=True,
+        )
+    ]
+
+
+def test_wait_mode_exits_on_terminal_workflow_failure(monkeypatch, capsys):
+    mod = _load_module()
+    sha = "3b40315871558fe77984c90423851d0194337923"
+    checks = [
+        mod.Check(
+            "workflow:Launch Gate",
+            False,
+            "run 12 completed/failure https://example.test/run/12",
+            terminal=True,
+        )
+    ]
+
+    monkeypatch.setattr(mod, "resolve_sha", lambda root, rev: sha)
+    monkeypatch.setattr(mod, "run_checks", lambda args, target, required: checks)
+    monkeypatch.setattr(mod.time, "sleep", lambda seconds: (_ for _ in ()).throw(AssertionError("should not sleep")))
+
+    rc = mod.main(["--sha", sha, "--wait", "--timeout", "600", "--poll", "30"])
+
+    captured = capsys.readouterr()
+    assert rc == 1
+    assert "failed terminal checks" in captured.err
 
 
 def test_public_package_requires_version_and_commit(monkeypatch):
