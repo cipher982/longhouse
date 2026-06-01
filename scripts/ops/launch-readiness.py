@@ -6,8 +6,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from dataclasses import dataclass
@@ -36,8 +38,14 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def run(cmd: list[str], *, cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
-    proc = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True)
+def run(
+    cmd: list[str],
+    *,
+    cwd: Path | None = None,
+    check: bool = True,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    proc = subprocess.run(cmd, cwd=cwd, env=env, text=True, capture_output=True)
     if check and proc.returncode != 0:
         detail = (proc.stderr or proc.stdout).strip()
         raise RuntimeError(f"{' '.join(cmd)} failed: {detail}")
@@ -64,6 +72,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--skip-live", action="store_true")
     parser.add_argument("--skip-release", action="store_true")
     parser.add_argument("--skip-public-package", action="store_true")
+    parser.add_argument("--skip-runtime-artifacts", action="store_true")
     parser.add_argument("--wait", action="store_true", help="Poll until every check passes or timeout elapses.")
     parser.add_argument("--timeout", type=int, default=3600, help="Wait timeout in seconds. Default: 3600.")
     parser.add_argument("--poll", type=int, default=30, help="Wait poll interval in seconds. Default: 30.")
@@ -214,6 +223,67 @@ def check_public_package(tag: str, sha: str) -> Check:
     return Check("package:pypi", ok, f"version={actual_version} commit={commit}")
 
 
+def runtime_artifact_components() -> tuple[str, ...]:
+    components = ["engine"]
+    if platform.system() == "Darwin":
+        components.append("desktop-app")
+    return tuple(components)
+
+
+def check_runtime_artifact(root: Path, tag: str, sha: str, component: str) -> Check:
+    version = tag.removeprefix("v")
+    script = root / "scripts" / "ci" / "runtime-artifact-smoke.py"
+    with tempfile.TemporaryDirectory(prefix=f"longhouse-{component}-readiness-") as home:
+        env = os.environ.copy()
+        env["HOME"] = home
+        env["LONGHOUSE_SKIP_UPDATE_NOTIFIER"] = "1"
+        for key in (
+            "LONGHOUSE_ENGINE_SOURCE",
+            "LONGHOUSE_DESKTOP_APP_SOURCE",
+            "LONGHOUSE_LOCAL_HEALTH_APP_SOURCE",
+            "LONGHOUSE_DESKTOP_WINDOW_SOURCE",
+            "LONGHOUSE_LOCAL_HEALTH_WINDOW_SOURCE",
+        ):
+            env.pop(key, None)
+        proc = run(
+            [
+                "uv",
+                "run",
+                "--no-project",
+                "--isolated",
+                "--with",
+                f"longhouse=={version}",
+                "python",
+                str(script),
+                "--component",
+                component,
+                "--overwrite",
+                "--expected-build-commit",
+                sha,
+                "--expected-build-version",
+                version,
+                "--json",
+            ],
+            cwd=root,
+            check=False,
+            env=env,
+        )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout).strip()
+        return Check(f"runtime-artifact:{component}", False, detail)
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError as exc:
+        return Check(f"runtime-artifact:{component}", False, f"smoke did not emit JSON: {exc}")
+    build = payload.get("build_identity") if isinstance(payload, dict) else None
+    if not isinstance(build, dict):
+        return Check(f"runtime-artifact:{component}", False, "smoke payload missing build_identity object")
+    commit = str(build.get("commit") or "")
+    actual_version = str(build.get("version") or "")
+    ok = commit_matches(commit, sha) and actual_version == version
+    return Check(f"runtime-artifact:{component}", ok, f"version={actual_version} commit={commit}")
+
+
 def print_human(checks: list[Check]) -> None:
     for check in checks:
         prefix = "OK" if check.ok else "FAIL"
@@ -233,6 +303,9 @@ def run_checks(args: argparse.Namespace, sha: str, required: tuple[str, ...]) ->
         checks.append(release_check)
     if not args.skip_public_package and release_tag:
         checks.append(check_public_package(release_tag, sha))
+    if not args.skip_runtime_artifacts and release_tag:
+        for component in runtime_artifact_components():
+            checks.append(check_runtime_artifact(repo_root(), release_tag, sha, component))
     return checks
 
 

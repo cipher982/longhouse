@@ -12,6 +12,7 @@ Usage: macos-package-app.sh \
   --short-version <marketing-version> \
   --output-dir <dir> \
   [--icon-png <path>] \
+  [--build-identity <path>] \
   [--min-macos <version>] \
   [--category <uti>] \
   [--lsuielement true|false]
@@ -38,6 +39,7 @@ VERSION=""
 SHORT_VERSION=""
 OUTPUT_DIR=""
 ICON_PNG=""
+BUILD_IDENTITY=""
 MIN_MACOS="14.0"
 CATEGORY="public.app-category.developer-tools"
 LSUIELEMENT="false"
@@ -82,6 +84,11 @@ while [[ $# -gt 0 ]]; do
     --icon-png)
       require_value "$1" "${2:-}"
       ICON_PNG="$2"
+      shift 2
+      ;;
+    --build-identity)
+      require_value "$1" "${2:-}"
+      BUILD_IDENTITY="$2"
       shift 2
       ;;
     --min-macos)
@@ -198,6 +205,14 @@ if [[ -n "$ICON_PNG" ]]; then
   make_icon 1024 icon_512x512@2x.png
 
   iconutil -c icns "$ICONSET_DIR" -o "${RESOURCES_DIR}/AppIcon.icns"
+fi
+
+if [[ -n "$BUILD_IDENTITY" ]]; then
+  if [[ ! -f "$BUILD_IDENTITY" ]]; then
+    echo "Build identity JSON not found: $BUILD_IDENTITY" >&2
+    exit 1
+  fi
+  cp "$BUILD_IDENTITY" "${RESOURCES_DIR}/build-identity.json"
 fi
 
 cat > "${CONTENTS_DIR}/Info.plist" <<EOF

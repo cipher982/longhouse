@@ -171,3 +171,45 @@ def test_public_package_fails_on_stale_commit(monkeypatch):
 
     assert check.ok is False
     assert "a1160df0" in check.detail
+
+
+def test_runtime_artifact_check_requires_exact_identity(monkeypatch, tmp_path):
+    mod = _load_module()
+    sha = "3b40315871558fe77984c90423851d0194337923"
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return SimpleNamespace(
+            returncode=0,
+            stdout=json.dumps({"build_identity": {"version": "0.1.17", "commit": sha}}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(mod, "run", fake_run)
+
+    check = mod.check_runtime_artifact(tmp_path, "v0.1.17", sha, "engine")
+
+    assert check.ok is True
+    assert "version=0.1.17" in check.detail
+    cmd, kwargs = calls[0]
+    assert f"longhouse==0.1.17" in cmd
+    assert "--expected-build-commit" in cmd
+    assert sha in cmd
+    assert kwargs["env"]["HOME"]
+    assert "LONGHOUSE_ENGINE_SOURCE" not in kwargs["env"]
+
+
+def test_runtime_artifact_check_fails_on_missing_identity(monkeypatch, tmp_path):
+    mod = _load_module()
+
+    monkeypatch.setattr(
+        mod,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=json.dumps({}), stderr=""),
+    )
+
+    check = mod.check_runtime_artifact(tmp_path, "v0.1.17", "3b403158", "engine")
+
+    assert check.ok is False
+    assert "missing build_identity" in check.detail
