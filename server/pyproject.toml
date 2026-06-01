@@ -1,6 +1,6 @@
 [project]
 name = "longhouse"
-version = "0.1.22"
+version = "0.1.23"
 description = "Keep Claude Code, Codex CLI, and Antigravity CLI sessions in one searchable timeline."
 authors = [
     {name = "David Rose", email = "david.github@drose.io"}
