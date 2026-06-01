@@ -115,15 +115,53 @@ struct WebTranscriptView: UIViewRepresentable {
         timelineItems: [TimelineItem],
         submittedInputs: [SubmittedInput]
     ) -> [WebTranscriptPayloadItem] {
-        var rows = timelineItems.map { item in
-            payloadItem(item)
-        }
         let durableUserInputs = durableUserInputIdentities(timelineItems)
-        rows.append(contentsOf: submittedInputs
-            .filter { !durableUserInputs.contains($0) }
-            .map(payloadSubmittedInput)
-        )
+        let visibleSubmittedInputs = submittedInputs.filter { !durableUserInputs.contains($0) }
+        guard !visibleSubmittedInputs.isEmpty else {
+            return timelineItems.map(payloadItem)
+        }
+
+        var rows: [WebTranscriptPayloadItem] = []
+        var remainingSubmittedInputs = visibleSubmittedInputs
+        for item in timelineItems {
+            if let previewDate = liveProvisionalAssistantDate(item) {
+                let insertion = submittedInputsToPlaceBeforeLivePreview(
+                    remainingSubmittedInputs,
+                    previewDate: previewDate
+                )
+                if !insertion.isEmpty {
+                    let insertionIds = Set(insertion.map(\.id))
+                    rows.append(contentsOf: insertion.map(payloadSubmittedInput))
+                    remainingSubmittedInputs.removeAll { insertionIds.contains($0.id) }
+                }
+            }
+            rows.append(payloadItem(item))
+        }
+
+        rows.append(contentsOf: remainingSubmittedInputs.map(payloadSubmittedInput))
         return rows
+    }
+
+    private nonisolated static func liveProvisionalAssistantDate(_ item: TimelineItem) -> Date? {
+        guard case .assistant(let event) = item else { return nil }
+        guard event.eventOrigin == "live_provisional" || event.id < 0 else { return nil }
+        return LonghouseDateParser.parse(event.timestamp) ?? .distantPast
+    }
+
+    private nonisolated static func submittedInputsToPlaceBeforeLivePreview(
+        _ inputs: [SubmittedInput],
+        previewDate: Date
+    ) -> [SubmittedInput] {
+        inputs.filter { input in
+            switch input.phase {
+            case .submitting, .sent:
+                return true
+            case .queued:
+                return input.createdAt <= previewDate
+            case .failed, .needsUserDecision:
+                return false
+            }
+        }
     }
 
     private nonisolated static func durableUserInputIdentities(_ timelineItems: [TimelineItem]) -> DurableUserInputIdentities {
@@ -345,6 +383,26 @@ struct WebTranscriptView: UIViewRepresentable {
         /// re-sent when it changes by ≥0.5pt to avoid churn during streaming.
         private var lastBottomInset: CGFloat = 18
 
+        override init() {
+            super.init()
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(keyboardFrameWillChange(_:)),
+                name: UIResponder.keyboardWillChangeFrameNotification,
+                object: nil
+            )
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(keyboardFrameDidChange(_:)),
+                name: UIResponder.keyboardDidChangeFrameNotification,
+                object: nil
+            )
+        }
+
+        deinit {
+            NotificationCenter.default.removeObserver(self)
+        }
+
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             isLoaded = true
             Task { @MainActor in
@@ -374,8 +432,6 @@ struct WebTranscriptView: UIViewRepresentable {
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             emitNearTopIfNeeded(scrollView)
-            guard !userScrollInProgress else { return }
-            updateStickiness(scrollView)
         }
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
@@ -408,6 +464,34 @@ struct WebTranscriptView: UIViewRepresentable {
         private func updateStickiness(_ scrollView: UIScrollView) {
             let distanceFromBottom = scrollView.contentSize.height - scrollView.contentOffset.y - scrollView.bounds.height
             shouldStickToBottom = distanceFromBottom < 96
+        }
+
+        @objc private func keyboardFrameWillChange(_ notification: Notification) {
+            let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? TimeInterval
+            repinToBottomIfSticky(reason: "keyboard_will_change", followUpDelay: duration)
+        }
+
+        @objc private func keyboardFrameDidChange(_ notification: Notification) {
+            repinToBottomIfSticky(reason: "keyboard_did_change", followUpDelay: 0.05)
+        }
+
+        private func repinToBottomIfSticky(reason: String, followUpDelay: TimeInterval? = nil) {
+            guard shouldStickToBottom, !userScrollInProgress else { return }
+            repinToBottom(reason: reason)
+            if let followUpDelay {
+                let delay = max(0.05, min(0.5, followUpDelay))
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    self?.repinToBottom(reason: "\(reason)_settled")
+                }
+            }
+        }
+
+        private func repinToBottom(reason: String) {
+            guard let webView, isLoaded, !userScrollInProgress else { return }
+            shouldStickToBottom = true
+            suppressNearTopUntil = Date().addingTimeInterval(0.75)
+            logger.debug("webkit transcript repin reason=\(reason, privacy: .public)")
+            webView.evaluateJavaScript("window.scrollTranscriptToBottom && window.scrollTranscriptToBottom();")
         }
 
         private func emitNearTopIfNeeded(_ scrollView: UIScrollView) {
@@ -1141,6 +1225,8 @@ private extension WebTranscriptView {
         window.scrollTo(0, document.documentElement.scrollHeight);
       });
     }
+
+    window.scrollTranscriptToBottom = scrollToBottom;
 
     function toolDetails(item) {
       const meta = item.status === 'running' ? 'running'

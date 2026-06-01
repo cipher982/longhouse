@@ -1,5 +1,6 @@
 import SwiftUI
 import PhotosUI
+import UIKit
 
 struct SessionWorkspaceStreamSource: Sendable {
     let start: @Sendable () async -> AsyncStream<SessionWorkspaceStream.Event>
@@ -31,10 +32,19 @@ struct SessionView: View {
     @StateObject private var attachmentStore = ComposerAttachmentStore()
     @State private var pickerSelection: [PhotosPickerItem] = []
     @State private var isLoadingPickerItems: Bool = false
-    /// Measured height (pt) of the floating control card. Fed to the WebKit
-    /// transcript (plus the bottom safe area) as DOM clearance so the last row
-    /// clears the card while the transcript scrolls full-bleed underneath it.
-    @State private var chromeHeight: CGFloat = 18
+    /// DOM clearance (pt) needed for the last transcript row to rest above the
+    /// floating controls while the WebKit transcript scrolls full-bleed behind
+    /// them.
+    @State private var transcriptBottomInset: CGFloat = Self.minimumTranscriptBottomInset
+    @State private var restingBottomSafeArea: CGFloat = 0
+    @State private var keyboardPresented: Bool = false
+    private static let minimumTranscriptBottomInset: CGFloat = 18
+    private static let bottomChromeShadowRadius: CGFloat = 16
+    private static let bottomChromeShadowYOffset: CGFloat = 5
+    private static let bottomChromeVisualBleedAbove: CGFloat = max(0, bottomChromeShadowRadius - bottomChromeShadowYOffset)
+    private static let transcriptBottomComfortGap: CGFloat = 8
+    private static let unmeasuredRestingBottomSafeAreaFallback: CGFloat = 48
+    private static let keyboardSafeAreaInflationThreshold: CGFloat = 80
 
     init(
         sessionId: String,
@@ -77,22 +87,29 @@ struct SessionView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 bottomChrome
                     .background(
-                        // Measure the card height PLUS the bottom safe-area gap
-                        // beneath it (home indicator): the WebView is full-bleed
-                        // to the physical bottom, so DOM clearance must cover the
-                        // card and everything below it. safeAreaInsets.bottom read
-                        // here is the gap from the inset content to the screen edge.
                         GeometryReader { proxy in
                             Color.clear.preference(
-                                key: ChromeHeightKey.self,
-                                value: proxy.size.height + proxy.safeAreaInsets.bottom
+                                key: BottomChromeMetricsKey.self,
+                                value: BottomChromeMetrics(
+                                    chromeHeight: proxy.size.height,
+                                    bottomSafeArea: proxy.safeAreaInsets.bottom
+                                )
                             )
                         }
                     )
                     .frame(maxWidth: .infinity)
             }
-            .onPreferenceChange(ChromeHeightKey.self) { height in
-                chromeHeight = max(18, height)
+            .onPreferenceChange(BottomChromeMetricsKey.self) { metrics in
+                updateBottomChromeMetrics(metrics)
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                keyboardPresented = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { _ in
+                keyboardPresented = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in
+                keyboardPresented = false
             }
             .navigationTitle(viewModel.detail?.displayTitle ?? fallbackTitle)
         .navigationBarTitleDisplayMode(.inline)
@@ -151,10 +168,40 @@ struct SessionView: View {
                         )
                 )
                 .shadow(color: .black.opacity(0.28), radius: 16, y: 5)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("session-chat-bottom-chrome-card")
             }
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 10)
+    }
+
+    private func updateBottomChromeMetrics(_ metrics: BottomChromeMetrics) {
+        guard metrics.chromeHeight > 0 else { return }
+
+        // DOM bottom clearance is the actual obstruction model:
+        // card layout height + resting bottom safe area + visual shadow bleed
+        // + a small intentional comfort gap. Keyboard height is not part of
+        // the obstruction because SwiftUI already lifts the control card above
+        // the keyboard.
+        let reportedBottomSafeArea = max(0, metrics.bottomSafeArea)
+        let reportedBottomLooksKeyboardInflated = restingBottomSafeArea > 0
+            && reportedBottomSafeArea > restingBottomSafeArea + Self.keyboardSafeAreaInflationThreshold
+        let useRestingBottomSafeArea = keyboardPresented || reportedBottomLooksKeyboardInflated
+
+        if !useRestingBottomSafeArea {
+            restingBottomSafeArea = reportedBottomSafeArea
+        }
+        let bottomSafeArea = useRestingBottomSafeArea
+            ? (restingBottomSafeArea > 0
+                ? restingBottomSafeArea
+                : min(reportedBottomSafeArea, Self.unmeasuredRestingBottomSafeAreaFallback))
+            : reportedBottomSafeArea
+        let obstruction = metrics.chromeHeight + bottomSafeArea + Self.bottomChromeVisualBleedAbove
+        transcriptBottomInset = max(
+            Self.minimumTranscriptBottomInset,
+            obstruction + Self.transcriptBottomComfortGap
+        )
     }
 
     @ViewBuilder
@@ -240,7 +287,7 @@ struct SessionView: View {
                 items: viewModel.items,
                 submittedInputs: viewModel.submittedInputs,
                 errorMessage: viewModel.errorMessage,
-                bottomInset: chromeHeight,
+                bottomInset: transcriptBottomInset,
                 onNearTop: {
                     Task { await viewModel.loadOlder(sessionId: sessionId, appState: appState) }
                 },
@@ -617,12 +664,21 @@ struct SessionView: View {
     }
 }
 
-/// Carries the measured floating-card height up to SessionView so it can be fed
-/// to the WebKit transcript as DOM bottom clearance (scroll-under-glass).
-private struct ChromeHeightKey: PreferenceKey {
-    static let defaultValue: CGFloat = 18
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
+private struct BottomChromeMetrics: Equatable {
+    var chromeHeight: CGFloat = 0
+    var bottomSafeArea: CGFloat = 0
+}
+
+/// Carries the measured floating-control geometry up to SessionView so it can
+/// derive the DOM bottom clearance for the scroll-under-glass transcript.
+private struct BottomChromeMetricsKey: PreferenceKey {
+    static let defaultValue = BottomChromeMetrics()
+    static func reduce(value: inout BottomChromeMetrics, nextValue: () -> BottomChromeMetrics) {
+        let next = nextValue()
+        value = BottomChromeMetrics(
+            chromeHeight: max(value.chromeHeight, next.chromeHeight),
+            bottomSafeArea: max(value.bottomSafeArea, next.bottomSafeArea)
+        )
     }
 }
 

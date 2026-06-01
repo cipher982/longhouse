@@ -392,7 +392,8 @@ struct SessionTranscriptPreview: Codable, Hashable, Sendable {
             timestamp: timestamp ?? "",
             inActiveContext: true,
             isHeadBranch: true,
-            inputOrigin: nil
+            inputOrigin: nil,
+            eventOrigin: eventOrigin
         )
     }
 }
@@ -724,6 +725,37 @@ struct SessionEvent: Codable, Identifiable, Sendable {
     let inActiveContext: Bool
     let isHeadBranch: Bool
     let inputOrigin: SessionInputOrigin?
+    let eventOrigin: String?
+
+    init(
+        id: Int,
+        role: String,
+        contentText: String?,
+        toolName: String?,
+        toolInputJSON: [String: JSONValue]?,
+        toolOutputText: String?,
+        toolCallId: String?,
+        toolCallState: ToolCallState?,
+        timestamp: String,
+        inActiveContext: Bool,
+        isHeadBranch: Bool,
+        inputOrigin: SessionInputOrigin?,
+        eventOrigin: String? = nil
+    ) {
+        self.id = id
+        self.role = role
+        self.contentText = contentText
+        self.toolName = toolName
+        self.toolInputJSON = toolInputJSON
+        self.toolOutputText = toolOutputText
+        self.toolCallId = toolCallId
+        self.toolCallState = toolCallState
+        self.timestamp = timestamp
+        self.inActiveContext = inActiveContext
+        self.isHeadBranch = isHeadBranch
+        self.inputOrigin = inputOrigin
+        self.eventOrigin = eventOrigin
+    }
 
     private enum CodingKeys: String, CodingKey {
         case id
@@ -738,6 +770,7 @@ struct SessionEvent: Codable, Identifiable, Sendable {
         case inActiveContext
         case isHeadBranch
         case inputOrigin
+        case eventOrigin
     }
 
     /// Lookup a top-level key from the tool input JSON as a string.

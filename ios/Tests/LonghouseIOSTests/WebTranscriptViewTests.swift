@@ -105,20 +105,75 @@ final class WebTranscriptViewTests: XCTestCase {
         XCTAssertEqual(rows.map(\.body), ["same visible text", "same visible text"])
     }
 
+    func testPayloadPlacesSentInputBeforeLiveProvisionalAssistantPreview() {
+        let rows = WebTranscriptView.payloadItems(
+            timelineItems: [
+                .user(makeUserEvent(
+                    id: 11,
+                    content: "prior durable text",
+                    inputOrigin: nil
+                )),
+                .assistant(makeAssistantEvent(
+                    id: -99,
+                    content: "streaming answer",
+                    timestamp: "2026-05-02T20:00:05Z",
+                    eventOrigin: "live_provisional"
+                )),
+            ],
+            submittedInputs: [
+                makeSubmittedInput(
+                    text: "new local prompt",
+                    clientRequestId: "ios-request-1",
+                    serverInputId: 7
+                ),
+            ]
+        )
+
+        XCTAssertEqual(rows.map(\.kind), ["message", "submitted", "message"])
+        XCTAssertEqual(rows.map(\.body), ["prior durable text", "new local prompt", "streaming answer"])
+    }
+
+    func testPayloadKeepsNewQueuedInputAfterExistingLivePreview() {
+        let rows = WebTranscriptView.payloadItems(
+            timelineItems: [
+                .assistant(makeAssistantEvent(
+                    id: -99,
+                    content: "already streaming",
+                    timestamp: "2026-05-02T20:00:05Z",
+                    eventOrigin: "live_provisional"
+                )),
+            ],
+            submittedInputs: [
+                makeSubmittedInput(
+                    text: "queue after this turn",
+                    clientRequestId: "ios-request-1",
+                    serverInputId: 7,
+                    phase: .queued,
+                    createdAt: date("2026-05-02T20:00:06Z")
+                ),
+            ]
+        )
+
+        XCTAssertEqual(rows.map(\.kind), ["message", "submitted"])
+        XCTAssertEqual(rows.map(\.body), ["already streaming", "queue after this turn"])
+    }
+
     private func makeSubmittedInput(
         text: String,
         clientRequestId: String,
-        serverInputId: Int?
+        serverInputId: Int?,
+        phase: SubmittedInputPhase = .sent,
+        createdAt: Date = Date(timeIntervalSince1970: 0)
     ) -> SubmittedInput {
         SubmittedInput(
             id: clientRequestId,
             clientRequestId: clientRequestId,
             text: text,
             intent: "auto",
-            phase: .sent,
+            phase: phase,
             serverInputId: serverInputId,
             lastError: nil,
-            createdAt: Date(timeIntervalSince1970: 0)
+            createdAt: createdAt
         )
     }
 
@@ -142,5 +197,32 @@ final class WebTranscriptViewTests: XCTestCase {
             isHeadBranch: isHeadBranch,
             inputOrigin: inputOrigin
         )
+    }
+
+    private func makeAssistantEvent(
+        id: Int,
+        content: String,
+        timestamp: String,
+        eventOrigin: String?
+    ) -> SessionEvent {
+        SessionEvent(
+            id: id,
+            role: "assistant",
+            contentText: content,
+            toolName: nil,
+            toolInputJSON: nil,
+            toolOutputText: nil,
+            toolCallId: nil,
+            toolCallState: nil,
+            timestamp: timestamp,
+            inActiveContext: true,
+            isHeadBranch: true,
+            inputOrigin: nil,
+            eventOrigin: eventOrigin
+        )
+    }
+
+    private func date(_ value: String) -> Date {
+        LonghouseDateParser.parse(value) ?? Date(timeIntervalSince1970: 0)
     }
 }
