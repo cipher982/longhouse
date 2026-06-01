@@ -172,6 +172,12 @@ ENV PATH="/app/.venv/bin:$PATH" \
     MODELS_CONFIG_PATH="/config/models.json" \
     LONGHOUSE_RUNTIME_PORT="8000"
 
+# NOTE: this image binds 0.0.0.0, so the public-bind safety gate refuses to
+# start when auth is disabled. A public no-auth deployment (e.g. the maintainer's
+# demo behind a TLS proxy) must opt in by setting LONGHOUSE_ALLOW_PUBLIC_NO_AUTH=1
+# in the *deployment* environment — intentionally NOT baked into the image so a
+# pulled image is not public-no-auth by default.
+
 # Health check — /api/readyz returns 503 on unhealthy (unlike /api/health which always 200s)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD sh -lc 'curl -f "http://localhost:${LONGHOUSE_RUNTIME_PORT}/api/readyz" || exit 1'

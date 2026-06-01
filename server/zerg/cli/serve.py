@@ -512,6 +512,13 @@ def serve(
     # OptionInfo sentinel, which is truthy and would silently open the gate.
     allow_public_no_auth = allow_public_no_auth is True
 
+    # Env-var equivalent of --allow-public-no-auth, for container/managed deploys
+    # (e.g. the hosted demo runtime) where the start command is fixed in the
+    # image and the public-no-auth decision is made by the operator's env. A
+    # self-hoster who doesn't set this still gets the hard refusal below.
+    if os.environ.get("LONGHOUSE_ALLOW_PUBLIC_NO_AUTH", "").strip().lower() in ("1", "true", "yes", "on"):
+        allow_public_no_auth = True
+
     if public_intent and auth_disabled:
         if allow_public_no_auth:
             typer.secho(
