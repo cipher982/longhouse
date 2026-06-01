@@ -372,13 +372,20 @@ async def health_check(request: Request):
 
     health_status["checks"] = checks
 
-    # Untrusted callers get a minimal body: overall status only, no build
-    # identity, env specifics, or per-check internals.
+    # Untrusted callers get a minimal body: overall status, message, and the
+    # build identity ONLY. The commit/version is already public (git history +
+    # the image tag) and the deploy verifier reads it from here to confirm a
+    # rollout, so it is safe to expose. Everything genuinely sensitive — DB
+    # path, email addresses, migration log, env specifics, per-check internals —
+    # stays behind the trust gate.
     if not trusted:
-        health_status = {
+        minimal = {
             "status": health_status["status"],
             "message": "Longhouse API is running" if health_status["status"] == "healthy" else "degraded",
         }
+        if "build" in health_status:
+            minimal["build"] = health_status["build"]
+        health_status = minimal
 
     # Return 503 only on a critical infra failure (db/fts5/environment/
     # single-tenant) so monitors treat a genuinely-down service as down, while a

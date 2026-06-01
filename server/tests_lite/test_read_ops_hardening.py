@@ -47,10 +47,22 @@ def test_health_untrusted_caller_gets_minimal_body(monkeypatch):
     with _client() as client:
         resp = client.get("/api/health")
     body = resp.json()
-    # Minimal body: no checks/build/env detail leaked.
+    # Minimal body: status/message plus the (public) build identity only — no
+    # per-check internals, env, db path, or email detail.
     assert "checks" not in body
-    assert "build" not in body
-    assert set(body.keys()) <= {"status", "message"}
+    assert set(body.keys()) <= {"status", "message", "build"}
+    if "build" in body:
+        # build block carries only version/commit info, nothing infra-sensitive.
+        assert set(body["build"].keys()) <= {
+            "version",
+            "commit",
+            "commit_short",
+            "dirty",
+            "built_at",
+            "channel",
+            "error",
+            "detail",
+        }
 
 
 def test_health_minimal_body_has_no_db_url_or_email(monkeypatch):
