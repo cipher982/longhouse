@@ -49,20 +49,25 @@ def _request_is_trusted(request: Request) -> bool:
     if internal and settings.internal_api_secret and internal == settings.internal_api_secret:
         return True
 
-    # Authenticated admin browser session.
-    try:
-        from zerg.database import get_session_factory
-        from zerg.dependencies.browser_auth import _get_browser_session_user
-
-        db = get_session_factory()()
+    # Authenticated admin browser session — ONLY when auth is enabled. On an
+    # auth-disabled instance (the public demo / --allow-public-no-auth) the
+    # browser-auth helper returns the dev admin user for ANY request, which would
+    # grant verbose health to every anonymous caller. So a real admin session can
+    # only be a trust signal when auth is actually enforced.
+    if not settings.auth_disabled:
         try:
-            user = _get_browser_session_user(request, db)
-        finally:
-            db.close()
-        if user is not None and getattr(user, "role", "USER") == "ADMIN":
-            return True
-    except Exception:
-        pass
+            from zerg.database import get_session_factory
+            from zerg.dependencies.browser_auth import _get_browser_session_user
+
+            db = get_session_factory()()
+            try:
+                user = _get_browser_session_user(request, db)
+            finally:
+                db.close()
+            if user is not None and getattr(user, "role", "USER") == "ADMIN":
+                return True
+        except Exception:
+            pass
 
     return False
 

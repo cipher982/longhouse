@@ -64,6 +64,33 @@ def test_health_minimal_body_has_no_db_url_or_email(monkeypatch):
     assert "@" not in raw  # no email addresses
 
 
+def test_request_not_trusted_on_auth_disabled_public_instance(monkeypatch):
+    """The demo scenario: auth_disabled + public origin + remote caller.
+
+    The browser-auth helper returns the dev admin user for ANY request when auth
+    is disabled, so the admin-session trust branch must be skipped — otherwise
+    every anonymous caller gets verbose health on the public no-auth demo.
+    """
+    from types import SimpleNamespace
+
+    from zerg.routers import health as health_mod
+
+    settings = SimpleNamespace(
+        auth_disabled=True,
+        public_site_url="https://longhouse.ai",
+        app_public_url="https://longhouse.ai",
+        public_api_url=None,
+        internal_api_secret="x" * 32,
+    )
+    monkeypatch.setattr(health_mod, "get_settings", lambda: settings)
+
+    class _Req:
+        client = SimpleNamespace(host="203.0.113.7")  # remote
+        headers: dict = {}
+
+    assert health_mod._request_is_trusted(_Req()) is False
+
+
 # ---------------------------------------------------------------------------
 # /metrics — not public
 # ---------------------------------------------------------------------------
