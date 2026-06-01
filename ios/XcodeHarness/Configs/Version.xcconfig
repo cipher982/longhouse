@@ -2,5 +2,5 @@
 // .bumpversion.toml at the repo root. Not the same as build identity —
 // build identity is per-commit and lives in .build/build-identity.json.
 // Do not hand-edit unless you're cutting a release outside the normal flow.
-MARKETING_VERSION = 0.1.22
+MARKETING_VERSION = 0.1.23
 CURRENT_PROJECT_VERSION = 1
