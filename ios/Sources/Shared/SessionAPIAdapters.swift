@@ -172,7 +172,8 @@ extension APIEventResponse {
             timestamp: timestamp,
             inActiveContext: inActiveContext ?? true,
             isHeadBranch: isHeadBranch ?? true,
-            inputOrigin: inputOrigin?.sessionInputOrigin
+            inputOrigin: inputOrigin?.sessionInputOrigin,
+            eventOrigin: eventOrigin
         )
     }
 }
