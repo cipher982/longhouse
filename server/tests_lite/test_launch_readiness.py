@@ -65,6 +65,46 @@ def test_live_surface_fails_when_commit_differs(monkeypatch):
     assert "a1160df0" in check.detail
 
 
+def test_live_surface_rejects_truncated_build_commit(monkeypatch):
+    mod = _load_module()
+    sha = "3b40315871558fe77984c90423851d0194337923"
+
+    monkeypatch.setattr(
+        mod,
+        "fetch_json_url",
+        lambda url: {"status": "ok", "build": {"commit": "3b403158"}},
+    )
+
+    check = mod.check_live_surface("demo", "https://example.test/api/health", sha)
+
+    assert check.ok is False
+
+
+def test_required_workflow_must_succeed(monkeypatch):
+    mod = _load_module()
+    sha = "3b40315871558fe77984c90423851d0194337923"
+    payload = [
+        {
+            "workflowName": "Launch Gate",
+            "databaseId": 12,
+            "status": "completed",
+            "conclusion": "skipped",
+            "headSha": sha,
+            "url": "https://example.test/run/12",
+        }
+    ]
+
+    monkeypatch.setattr(
+        mod,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr=""),
+    )
+
+    checks = mod.check_workflows("cipher982/longhouse", sha, ("Launch Gate",))
+
+    assert checks == [mod.Check("workflow:Launch Gate", False, "run 12 completed/skipped https://example.test/run/12")]
+
+
 def test_public_package_requires_version_and_commit(monkeypatch):
     mod = _load_module()
     sha = "3b40315871558fe77984c90423851d0194337923"
