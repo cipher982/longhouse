@@ -281,15 +281,22 @@ test_caddy() {
 run_health_checks() {
     run_test test_http "API health" "$API_URL/api/health" "200"
     run_test test_json "Health status" "$API_URL/api/health" ".status" "healthy"
-    INSTANCE_AUTH_ENABLED=$(curl -s "$API_URL/api/health" 2>/dev/null | jq -r '.checks.environment.auth_enabled // "unknown"' 2>/dev/null)
-    if [[ "$INSTANCE_AUTH_ENABLED" == "true" ]]; then
+    # /api/health hides per-check internals from unauthenticated callers, so read
+    # auth state from the public /api/system/info (auth_disabled) instead of
+    # .checks.environment.auth_enabled, and verify DB readiness via /api/readyz
+    # (the purpose-built probe that 503s when the DB is unavailable).
+    INSTANCE_AUTH_DISABLED=$(curl -s "$API_URL/api/system/info" 2>/dev/null | jq -r '.auth_disabled // "unknown"' 2>/dev/null)
+    if [[ "$INSTANCE_AUTH_DISABLED" == "false" ]]; then
         pass "Auth enabled (true)"
-    elif [[ "$INSTANCE_AUTH_ENABLED" == "false" ]]; then
+        INSTANCE_AUTH_ENABLED="true"
+    elif [[ "$INSTANCE_AUTH_DISABLED" == "true" ]]; then
         pass "Auth enabled (false)"
+        INSTANCE_AUTH_ENABLED="false"
     else
-        warn "Auth enabled state unknown ($INSTANCE_AUTH_ENABLED)"
+        warn "Auth enabled state unknown ($INSTANCE_AUTH_DISABLED)"
+        INSTANCE_AUTH_ENABLED="unknown"
     fi
-    run_test test_json "DB connected" "$API_URL/api/health" ".checks.database.status" "pass"
+    run_test test_http "DB ready (readyz)" "$API_URL/api/readyz" "200"
 }
 
 run_frontend_checks() {
