@@ -423,6 +423,7 @@ struct WebTranscriptView: UIViewRepresentable {
             lastBottomInset = inset
             guard isLoaded else { return }   // applied in didFinish otherwise
             applyBottomInset(inset, on: webView)
+            repinToBottomIfSticky(reason: "bottom_inset_changed", followUpDelay: 0.05)
         }
 
         private func applyBottomInset(_ inset: CGFloat, on webView: WKWebView) {

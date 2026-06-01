@@ -109,6 +109,7 @@ final class SessionChatUITests: XCTestCase {
         composer.typeText("typing keeps transcript pinned")
 
         XCTAssertTrue(waitUntilHittable(currentLastMessage, timeout: 5))
+        assertAnchoredAboveBottomChrome(currentLastMessage, app: app)
         assertScreenIsVisiblyRendered(app)
         assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."])
     }
@@ -132,6 +133,7 @@ final class SessionChatUITests: XCTestCase {
         composer.tap()
 
         XCTAssertTrue(liveUpdate.waitForExistence(timeout: 10))
+        assertAnchoredAboveBottomChrome(liveUpdate, app: app)
         assertScreenIsVisiblyRendered(app)
         assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."])
     }
@@ -145,6 +147,7 @@ final class SessionChatUITests: XCTestCase {
         composer.tap()
 
         XCTAssertTrue(finalChunk.waitForExistence(timeout: 10))
+        assertAnchoredAboveBottomChrome(finalChunk, app: app)
         assertScreenIsVisiblyRendered(app)
         assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."])
     }
@@ -274,7 +277,7 @@ final class SessionChatUITests: XCTestCase {
     private func assertClearsBottomChrome(
         _ element: XCUIElement,
         app: XCUIApplication,
-        minimumGap: CGFloat = 8,
+        minimumGap: CGFloat = 0,
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
@@ -284,6 +287,34 @@ final class SessionChatUITests: XCTestCase {
             element.frame.maxY,
             bottomChromeCard.frame.minY - minimumGap,
             "Latest transcript row overlaps the floating control card",
+            file: file,
+            line: line
+        )
+    }
+
+    private func assertAnchoredAboveBottomChrome(
+        _ element: XCUIElement,
+        app: XCUIApplication,
+        minimumGap: CGFloat = 8,
+        maximumGap: CGFloat = 96,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        let bottomChromeCard = app.descendants(matching: .any)["session-chat-bottom-chrome-card"]
+        XCTAssertTrue(bottomChromeCard.waitForExistence(timeout: 5), file: file, line: line)
+
+        let gap = bottomChromeCard.frame.minY - element.frame.maxY
+        XCTAssertGreaterThanOrEqual(
+            gap,
+            minimumGap,
+            "Latest transcript row overlaps the floating control card",
+            file: file,
+            line: line
+        )
+        XCTAssertLessThanOrEqual(
+            gap,
+            maximumGap,
+            "Latest transcript row is visibly detached from the floating control card",
             file: file,
             line: line
         )
