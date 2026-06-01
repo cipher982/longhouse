@@ -8,7 +8,7 @@ COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/dock
 E2E_BACKEND_PORT ?=
 E2E_FRONTEND_PORT ?=
 
-.PHONY: help dev dev-demo stop test test-ios test-ios-session-open test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-runner test-e2e test-e2e-core test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-ios-api validate-makefile validate-build-identity validate-managed-codex-contract validate-managed-session-contract validate-provider-cli-canaries validate-ship-monitor regen-ws generate-sdk generate-ios-api qa-live qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e reprovision deploy-status ship-watch ship release ui-capture qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check
+.PHONY: help dev dev-demo stop test test-ios test-ios-session-open test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-runner test-e2e test-e2e-core test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-ios-api validate-makefile validate-build-identity validate-managed-codex-contract validate-managed-session-contract validate-provider-cli-canaries validate-ship-monitor regen-ws generate-sdk generate-ios-api qa-live qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e reprovision deploy-status launch-readiness ship-watch ship release ui-capture qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check
 
 # ---------------------------------------------------------------------------
 # Help
@@ -374,6 +374,9 @@ reprovision: ## Reprovision hosted instance (SUBDOMAIN=$LONGHOUSE_DEFAULT_SUBDOM
 
 deploy-status: ## Show deployed SHA + health for all surfaces
 	@./scripts/ops/deploy-status.sh
+
+launch-readiness: ## Verify launch-critical workflows, live surfaces, release, and PyPI all match SHA
+	@./scripts/ops/launch-readiness.py $(if $(SHA),--sha $(SHA),) $(ARGS)
 
 ship-watch: ## Wait for exact-SHA push workflows + live deploy verification (SHA defaults to HEAD)
 	@./scripts/ops/ship-monitor.py $(if $(SHA),--sha $(SHA),) $(ARGS)
