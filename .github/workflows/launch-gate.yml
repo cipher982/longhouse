@@ -173,8 +173,13 @@ jobs:
             --e2e-browser
           )
           if [[ "${{ github.event_name }}" == "release" ]]; then
+            expected_commit="$(git rev-parse HEAD)"
+            expected_version="${{ github.event.release.tag_name }}"
+            expected_version="${expected_version#v}"
             args+=(--installer remote)
             args+=(--runtime-artifact-smoke)
+            args+=(--expected-build-commit "$expected_commit")
+            args+=(--expected-build-version "$expected_version")
           else
             args+=(--wheel)
           fi

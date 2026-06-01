@@ -144,11 +144,17 @@ jobs:
         run: |
           chmod +x scripts/ci/installer-first-run.sh
           chmod +x scripts/ci/check-public-installer-sync.sh
+          release_json="$(gh release view --json tagName)"
+          release_tag="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["tagName"])' <<< "$release_json")"
+          expected_commit="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${release_tag}" --jq .sha)"
+          expected_version="${release_tag#v}"
           ./scripts/ci/installer-first-run.sh \
             --installer remote \
             --shell "${{ matrix.shell_path }}" \
             --installer-onboard \
-            --runtime-artifact-smoke
+            --runtime-artifact-smoke \
+            --expected-build-commit "$expected_commit" \
+            --expected-build-version "$expected_version"
 
   installer-upgrade-local:
     if: ${{ github.event_name != 'schedule' }}
