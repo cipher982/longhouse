@@ -674,6 +674,11 @@ jobs:
       GH_TOKEN: ${{ github.token }}
 
     steps:
+      - name: Checkout release source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
@@ -706,6 +711,14 @@ jobs:
             echo "CLI version mismatch: expected $expected, got $actual" >&2
             exit 1
           fi
+
+      - name: Verify installed CLI build identity matches release commit
+        run: |
+          set -euo pipefail
+          expected_commit="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}" --jq .sha)"
+          python3 scripts/ci/assert-installed-build-identity.py \
+            --expected-commit "$expected_commit" \
+            --expected-version "${RELEASE_TAG#v}"
 
       - name: Fetch engine binary from the same release via the installed wheel
         env:

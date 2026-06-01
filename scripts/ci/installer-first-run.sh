@@ -8,6 +8,8 @@ INSTALLER_SCRIPT=""
 PACKAGE_SOURCE=""
 UPGRADE_PACKAGE_SOURCE=""
 EXPECTED_UPGRADE_VERSION=""
+EXPECTED_BUILD_COMMIT="${INSTALLER_TEST_EXPECTED_BUILD_COMMIT:-}"
+EXPECTED_BUILD_VERSION="${INSTALLER_TEST_EXPECTED_BUILD_VERSION:-}"
 KEEP_HOME=0
 PORT=""
 DEMO_PORT=""
@@ -21,6 +23,7 @@ ENABLE_E2E_BROWSER="${INSTALLER_TEST_E2E_BROWSER:-0}"
 BUILD_WHEEL="${INSTALLER_TEST_WHEEL:-0}"
 ENABLE_RUNTIME_ARTIFACT_SMOKE="${INSTALLER_TEST_RUNTIME_ARTIFACT_SMOKE:-0}"
 BUILD_IDENTITY_GENERATED=0
+DEBUG_DUMPED=0
 
 usage() {
   cat <<'USAGE'
@@ -37,6 +40,10 @@ Options:
   --upgrade-pkg-source <path> Package source to use with `longhouse upgrade`
   --expected-upgrade-version <version>
                               Expected installed version after upgrade
+  --expected-build-commit <sha>
+                              Expected `longhouse version --json` build.commit after install
+  --expected-build-version <version>
+                              Expected `longhouse version --json` build.version after install
   --shell <path>              Shell to simulate for PATH/profile checks (default: $SHELL)
   --menubar                   Enable macOS ambient menu bar smoke (heavy; explicit opt-in)
   --rebuild-frontend          Force a fresh web/dist build for local package installs
@@ -56,6 +63,9 @@ log() {
 
 fail() {
   printf '❌ %s\n' "$*" >&2
+  if declare -F dump_debug >/dev/null 2>&1; then
+    dump_debug >&2 || true
+  fi
   exit 1
 }
 
@@ -504,6 +514,11 @@ verify_remote_installer_sync() {
 }
 
 dump_debug() {
+  if [[ "$DEBUG_DUMPED" == "1" ]]; then
+    return
+  fi
+  DEBUG_DUMPED=1
+
   if [[ -z "$HOME" || ! -d "$HOME" ]]; then
     return
   fi
@@ -564,6 +579,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --expected-upgrade-version)
       EXPECTED_UPGRADE_VERSION="${2:-}"
+      shift 2
+      ;;
+    --expected-build-commit)
+      EXPECTED_BUILD_COMMIT="${2:-}"
+      shift 2
+      ;;
+    --expected-build-version)
+      EXPECTED_BUILD_VERSION="${2:-}"
       shift 2
       ;;
     --shell)
@@ -671,6 +694,25 @@ if [[ "$BUILD_WHEEL" == "1" && "$INSTALLER_MODE" == "local" ]]; then
   PACKAGE_SOURCE="$WHEEL_PATH"
 fi
 
+if [[ -z "$EXPECTED_BUILD_COMMIT" && "$INSTALLER_MODE" == "local" ]]; then
+  EXPECTED_BUILD_COMMIT="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+fi
+
+if [[ -z "$EXPECTED_BUILD_VERSION" && "$INSTALLER_MODE" == "local" ]]; then
+  EXPECTED_BUILD_VERSION="$(
+    python3 - "$ROOT_DIR/server/pyproject.toml" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+match = re.search(r'^version\s*=\s*"([^"]+)"', Path(sys.argv[1]).read_text(), re.MULTILINE)
+if not match:
+    raise SystemExit("server/pyproject.toml has no version line")
+print(match.group(1))
+PY
+  )"
+fi
+
 if [[ -n "$PACKAGE_SOURCE" && "$INSTALLER_MODE" == "local" && -d "$PACKAGE_SOURCE" ]]; then
   # Directory source: build frontend for bundling at install time.
   ensure_frontend_dist
@@ -723,6 +765,8 @@ log "  frontend rebuild: $REBUILD_FRONTEND"
 log "  e2e browser: $ENABLE_E2E_BROWSER"
 log "  wheel install: $BUILD_WHEEL"
 log "  runtime artifact smoke: $ENABLE_RUNTIME_ARTIFACT_SMOKE"
+log "  expected build commit: ${EXPECTED_BUILD_COMMIT:-<not checked>}"
+log "  expected build version: ${EXPECTED_BUILD_VERSION:-<not checked>}"
 
 EXPECT_SERVICE_INSTALL=0
 
@@ -794,6 +838,15 @@ assert_fresh_shell_path "$PROFILE_PATH" "$TEST_SHELL"
 
 log "🏷️  Verifying version command..."
 longhouse version >/dev/null
+if [[ -n "$EXPECTED_BUILD_COMMIT" ]]; then
+  identity_args=(
+    --expected-commit "$EXPECTED_BUILD_COMMIT"
+  )
+  if [[ -n "$EXPECTED_BUILD_VERSION" ]]; then
+    identity_args+=(--expected-version "$EXPECTED_BUILD_VERSION")
+  fi
+  "$ROOT_DIR/scripts/ci/assert-installed-build-identity.py" "${identity_args[@]}"
+fi
 
 if [[ -n "$UPGRADE_PACKAGE_SOURCE" ]]; then
   log "⬆️  Running CLI upgrade from override package source..."
