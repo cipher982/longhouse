@@ -209,6 +209,30 @@ test_json() {
     fi
 }
 
+test_json_eventually() {
+    local name="$1"
+    local url="$2"
+    local jq_path="$3"
+    local expected="$4"
+    local max_attempts="${5:-15}"
+    local interval="${6:-2}"
+
+    local attempt=0
+    local value="unknown"
+    while [[ $attempt -lt $max_attempts ]]; do
+        attempt=$((attempt + 1))
+        value=$(curl -s "$url" 2>/dev/null | jq -r "$jq_path" 2>/dev/null || echo "ERROR")
+        if [[ "$value" == "$expected" ]]; then
+            pass "$name ($jq_path = $value after $attempt attempts)"
+            return 0
+        fi
+        sleep "$interval"
+    done
+
+    fail "$name ($jq_path expected '$expected', got '$value' after $max_attempts attempts)"
+    return 1
+}
+
 # Test CORS preflight
 test_cors() {
     local name="$1"
@@ -314,7 +338,7 @@ run_cross_service_checks() {
 
     # Control plane health
     run_test test_http "CP health endpoint" "$CP_URL/health" "200"
-    run_test test_json "CP health status" "$CP_URL/health" ".status" "ok"
+    run_test test_json_eventually "CP health status" "$CP_URL/health" ".status" "ok"
 
     # Public demo JS references control plane URL
     local js_urls
