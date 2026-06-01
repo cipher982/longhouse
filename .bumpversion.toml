@@ -10,7 +10,7 @@
 # every commit. See docs/specs/release-and-build-identity.md.
 
 [tool.bumpversion]
-current_version = "0.1.24"
+current_version = "0.1.25"
 # Only bump on explicit --new-version; we don't use semantic components.
 parse = "(?P<major>\\d+)\\.(?P<minor>\\d+)\\.(?P<patch>\\d+)"
 serialize = ["{major}.{minor}.{patch}"]
