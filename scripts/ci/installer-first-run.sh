@@ -778,6 +778,8 @@ env_vars=(
 
 if [[ -n "$PACKAGE_SOURCE" ]]; then
   env_vars+=("LONGHOUSE_PKG_SOURCE=$PACKAGE_SOURCE")
+elif [[ -n "$EXPECTED_BUILD_VERSION" ]]; then
+  env_vars+=("LONGHOUSE_INSTALL_VERSION=$EXPECTED_BUILD_VERSION")
 fi
 
 if [[ "$INSTALLER_MODE" == "local" && -x "$ROOT_DIR/engine/target/release/longhouse-engine" ]]; then
