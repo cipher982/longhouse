@@ -89,9 +89,15 @@ echo "Bumping all manifests from $CURRENT_VERSION to $PYVER (shared release vers
 # agent likely hand-edited one of the manifests.
 (cd "$ROOT" && bump-my-version bump --new-version "$PYVER")
 
+echo "Refreshing package lockfiles for $PYVER..."
+(cd "$ROOT/server" && uv lock)
+(cd "$ROOT/engine" && cargo metadata --format-version 1 >/dev/null)
+
 git -C "$ROOT" add \
   server/pyproject.toml \
+  server/uv.lock \
   engine/Cargo.toml \
+  engine/Cargo.lock \
   runner/package.json \
   ios/XcodeHarness/Configs/Version.xcconfig \
   .bumpversion.toml
