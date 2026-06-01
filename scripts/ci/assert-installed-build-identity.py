@@ -15,7 +15,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--expected-commit",
         required=True,
-        help="Expected git commit. Full SHAs and unambiguous prefixes are accepted.",
+        help="Expected full git commit SHA.",
     )
     parser.add_argument(
         "--expected-version",
@@ -54,7 +54,7 @@ def load_installed_build(longhouse_bin: str) -> dict[str, Any]:
 def commit_matches(actual: str, expected: str) -> bool:
     if not actual or not expected:
         return False
-    return actual == expected or actual.startswith(expected) or expected.startswith(actual)
+    return actual == expected
 
 
 def main(argv: list[str] | None = None) -> int:

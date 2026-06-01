@@ -46,12 +46,12 @@ def test_accepts_matching_full_commit_and_version(monkeypatch, capsys):
     assert "matches commit" in capsys.readouterr().out
 
 
-def test_accepts_unambiguous_commit_prefix(monkeypatch):
+def test_rejects_truncated_installed_commit(monkeypatch, capsys):
     mod = _load_module()
     payload = {
         "build": {
             "version": "0.1.17",
-            "commit": "3b40315871558fe77984c90423851d0194337923",
+            "commit": "3b403158",
         }
     }
 
@@ -61,7 +61,10 @@ def test_accepts_unambiguous_commit_prefix(monkeypatch):
         lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr=""),
     )
 
-    assert mod.main(["--expected-commit", "3b403158"]) == 0
+    result = mod.main(["--expected-commit", "3b40315871558fe77984c90423851d0194337923"])
+
+    assert result == 1
+    assert "commit mismatch" in capsys.readouterr().err
 
 
 def test_fails_on_commit_mismatch(monkeypatch, capsys):
@@ -79,7 +82,7 @@ def test_fails_on_commit_mismatch(monkeypatch, capsys):
         lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr=""),
     )
 
-    result = mod.main(["--expected-commit", "3b403158"])
+    result = mod.main(["--expected-commit", "3b40315871558fe77984c90423851d0194337923"])
 
     assert result == 1
     assert "commit mismatch" in capsys.readouterr().err

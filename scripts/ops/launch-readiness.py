@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 
-ACCEPTED_CONCLUSIONS = {"success", "neutral", "skipped"}
+ACCEPTED_CONCLUSIONS = {"success"}
 DEFAULT_REQUIRED_WORKFLOWS = (
     "CI",
     "Deploy and Verify",
@@ -78,7 +78,7 @@ def resolve_sha(root: Path, rev: str | None) -> str:
 def commit_matches(actual: str | None, expected: str) -> bool:
     actual = (actual or "").strip()
     expected = expected.strip()
-    return bool(actual and expected and (actual == expected or actual.startswith(expected) or expected.startswith(actual)))
+    return bool(actual and expected and actual == expected)
 
 
 def latest_run_by_workflow(runs: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
