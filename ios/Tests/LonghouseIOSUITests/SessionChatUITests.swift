@@ -121,6 +121,17 @@ final class SessionChatUITests: XCTestCase {
 
         XCTAssertTrue(currentLastMessage.waitForExistence(timeout: 5))
         XCTAssertTrue(waitUntilHittable(liveUpdate, timeout: 5))
+        assertAnchoredAboveBottomChrome(liveUpdate, app: app)
+        assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."])
+    }
+
+    func testLongAssistantUpdateKeepsWrappedTailAboveBottomChrome() {
+        let app = launchChatFixture(name: "assistant-update-long", eventCount: 40)
+        let liveUpdate = app.staticTexts["Assistant fixture live update with wrapped tail above the floating composer card."]
+
+        XCTAssertTrue(waitUntilHittable(liveUpdate, timeout: 10))
+        assertAnchoredAboveBottomChrome(liveUpdate, app: app)
+        assertScreenIsVisiblyRendered(app)
         assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."])
     }
 

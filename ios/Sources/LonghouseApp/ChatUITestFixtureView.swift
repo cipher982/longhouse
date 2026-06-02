@@ -70,9 +70,14 @@ struct ChatUITestFixtureView: View {
             let delay: UInt64 = fixtureName == "assistant-update-keyboard"
                 ? 2_500_000_000
                 : 900_000_000
-            let message = fixtureName == "assistant-update-keyboard"
-                ? "Assistant fixture keyboard update at bottom."
-                : "Assistant fixture live update at bottom."
+            let message: String
+            if fixtureName == "assistant-update-keyboard" {
+                message = "Assistant fixture keyboard update at bottom."
+            } else if fixtureName == "assistant-update-long" {
+                message = "Assistant fixture live update with wrapped tail above the floating composer card."
+            } else {
+                message = "Assistant fixture live update at bottom."
+            }
             try? await Task.sleep(nanoseconds: delay)
             await client.appendAssistantMessage(message)
             await viewModel.reload(sessionId: client.sessionID, appState: appState)
