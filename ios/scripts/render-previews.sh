@@ -3,6 +3,7 @@
 # Usage: ios/scripts/render-previews.sh [output-dir]
 #
 # Default output: /tmp/lh-previews
+# Override build cache with LH_DERIVED_DATA_PATH=/tmp/custom-derived-data.
 # Each preview is attached to the .xcresult by SnapshotPreviews and extracted
 # by xcresulttool. Filenames look like preview-<TypeName>-<index>.png.
 
@@ -12,6 +13,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 IOS_DIR="$REPO_ROOT/ios"
 OUT_DIR="${1:-/tmp/lh-previews}"
 RESULT_BUNDLE="/tmp/lh-previews.xcresult"
+DERIVED_DATA_PATH="${LH_DERIVED_DATA_PATH:-/tmp/lh-previews-derived-data}"
 SIM_NAME="${LH_SIM_NAME:-iPhone 17 Pro}"
 
 cd "$IOS_DIR"
@@ -26,8 +28,9 @@ if [ -z "$SIM_ID" ]; then
 fi
 xcrun simctl boot "$SIM_ID" 2>/dev/null || true
 
-# Wipe prior artifacts.
-rm -rf "$RESULT_BUNDLE" "$OUT_DIR"
+# Wipe prior artifacts. Keep previews isolated from Xcode's shared DerivedData
+# so regenerated harness projects do not reuse stale source membership.
+rm -rf "$RESULT_BUNDLE" "$OUT_DIR" "$DERIVED_DATA_PATH"
 mkdir -p "$OUT_DIR"
 
 echo ">> Running snapshot tests on $SIM_NAME ($SIM_ID)"
@@ -42,6 +45,7 @@ xcodebuild test \
   -configuration Debug \
   -only-testing:LonghouseIOSTests/PreviewSnapshots \
   -resultBundlePath "$RESULT_BUNDLE" \
+  -derivedDataPath "$DERIVED_DATA_PATH" \
   -quiet
 TEST_EXIT=$?
 set -e
