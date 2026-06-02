@@ -3859,7 +3859,7 @@ def test_collect_local_health_warns_on_failed_provider_live_route_e2e(monkeypatc
     assert "provider_live_route_e2e_warning" in snapshot["reasons"]
 
 
-def test_collect_local_health_warns_on_missing_provider_live_route_coverage(monkeypatch, tmp_path: Path):
+def test_collect_local_health_keeps_missing_provider_live_route_coverage_advisory(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     monkeypatch.setattr(
@@ -3897,10 +3897,9 @@ def test_collect_local_health_warns_on_missing_provider_live_route_coverage(monk
     assert snapshot["provider_live_route_e2e"]["status"] == "ok"
     assert snapshot["provider_live_route_e2e"]["coverage_status"] == "missing"
     assert snapshot["provider_live_route_e2e"]["missing_providers"] == ["claude"]
-    assert snapshot["health_state"] == "degraded"
-    assert snapshot["severity"] == "yellow"
-    assert snapshot["headline"] == "Hosted provider-live route proof is incomplete"
-    assert "provider_live_route_e2e_coverage_missing" in snapshot["reasons"]
+    assert snapshot["health_state"] == "healthy"
+    assert snapshot["severity"] == "green"
+    assert "provider_live_route_e2e_coverage_missing" not in snapshot["reasons"]
 
 
 def test_update_info_present_in_json_cli_output(monkeypatch, tmp_path: Path):

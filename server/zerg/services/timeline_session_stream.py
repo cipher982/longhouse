@@ -92,8 +92,10 @@ async def stream_timeline_sessions_for_browser(
                 # subsequent timeline publish can use a targeted card update
                 # instead of replaying the full window.
                 if preflight_enabled:
-                    with session_factory() as db:
-                        previous_window_signature = _load_timeline_stream_window_signature(db=db, params=params)
+                    previous_window_signature = await _load_timeline_stream_window_signature_async(
+                        session_factory=session_factory,
+                        params=params,
+                    )
                     previous_session_threads = _index_timeline_window_signature(previous_window_signature)
                 skip_initial_replay = False
                 pending_timeline_message = await _wait_for_timeline_change(timeline_subscription)
@@ -103,21 +105,22 @@ async def stream_timeline_sessions_for_browser(
                 targeted_session_id = _timeline_message_session_id(pending_timeline_message)
                 targeted_thread_id = previous_session_threads.get(targeted_session_id or "")
                 if targeted_session_id and not targeted_thread_id:
-                    with session_factory() as db:
-                        current_window_signature = _load_timeline_stream_window_signature(db=db, params=params)
+                    current_window_signature = await _load_timeline_stream_window_signature_async(
+                        session_factory=session_factory,
+                        params=params,
+                    )
                     current_session_threads = _index_timeline_window_signature(current_window_signature)
                     targeted_thread_id = current_session_threads.get(targeted_session_id)
                     if targeted_thread_id:
                         previous_window_signature = current_window_signature
                         previous_session_threads.update(current_session_threads)
                 if targeted_session_id and targeted_thread_id:
-                    with session_factory() as db:
-                        targeted_card = _load_timeline_stream_card(
-                            db=db,
-                            thread_id=targeted_thread_id,
-                            session_id=targeted_session_id,
-                            owner_id=owner_id,
-                        )
+                    targeted_card = await _load_timeline_stream_card_async(
+                        session_factory=session_factory,
+                        thread_id=targeted_thread_id,
+                        session_id=targeted_session_id,
+                        owner_id=owner_id,
+                    )
                     if targeted_card is not None:
                         payload, signature = _session_payload_signature(targeted_card)
                         if previous_signatures.get(targeted_card.thread_id) != signature:
@@ -132,15 +135,19 @@ async def stream_timeline_sessions_for_browser(
                                 "event": "session_upsert",
                                 "data": json.dumps(event_data),
                             }
-                    with session_factory() as db:
-                        previous_window_signature = _load_timeline_stream_window_signature(db=db, params=params)
+                    previous_window_signature = await _load_timeline_stream_window_signature_async(
+                        session_factory=session_factory,
+                        params=params,
+                    )
                     previous_session_threads.update(_index_timeline_window_signature(previous_window_signature))
                     pending_timeline_message = await _wait_for_timeline_change(timeline_subscription)
                     continue
 
             if preflight_enabled:
-                with session_factory() as db:
-                    current_window_signature = _load_timeline_stream_window_signature(db=db, params=params)
+                current_window_signature = await _load_timeline_stream_window_signature_async(
+                    session_factory=session_factory,
+                    params=params,
+                )
                 if previous_window_signature is not None and current_window_signature == previous_window_signature:
                     now = monotonic()
                     if now - last_heartbeat >= TIMELINE_STREAM_HEARTBEAT_SECONDS:
@@ -276,6 +283,25 @@ def _load_timeline_stream_card(
     return cards[0] if cards else None
 
 
+async def _load_timeline_stream_card_async(
+    *,
+    session_factory: sessionmaker,
+    thread_id: str,
+    session_id: str,
+    owner_id: int | None = None,
+) -> TimelineSessionCardResponse | None:
+    def _load() -> TimelineSessionCardResponse | None:
+        with session_factory() as db:
+            return _load_timeline_stream_card(
+                db=db,
+                thread_id=thread_id,
+                session_id=session_id,
+                owner_id=owner_id,
+            )
+
+    return await asyncio.to_thread(_load)
+
+
 def _effective_stream_sort(query: str | None, sort: str | None) -> str:
     return sort or ("relevance" if query else "recency")
 
@@ -308,6 +334,18 @@ def _load_timeline_stream_window_signature(
     )
     live_preview_signatures = _load_live_preview_signatures(db=db, rows=rows)
     return tuple((*row, live_preview_signatures.get(row[1])) for row in rows)
+
+
+async def _load_timeline_stream_window_signature_async(
+    *,
+    session_factory: sessionmaker,
+    params: TimelineSessionListParams,
+) -> TimelineWindowSignature:
+    def _load() -> TimelineWindowSignature:
+        with session_factory() as db:
+            return _load_timeline_stream_window_signature(db=db, params=params)
+
+    return await asyncio.to_thread(_load)
 
 
 def _load_live_preview_signatures(

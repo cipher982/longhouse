@@ -25,7 +25,8 @@ logger = logging.getLogger(__name__)
 
 SUMMARY_RECONCILER_POLL_SECONDS = float(os.getenv("SESSION_SUMMARY_POLL_SECONDS", "5"))
 SUMMARY_RECONCILER_BATCH_SIZE = int(os.getenv("SESSION_SUMMARY_BATCH_SIZE", "50"))
-SESSION_SUMMARY_CONCURRENCY = int(os.getenv("SESSION_SUMMARY_CONCURRENCY", "4"))
+SUMMARY_SELECT_TIMEOUT_SECONDS = float(os.getenv("SESSION_SUMMARY_SELECT_TIMEOUT_SECONDS", "2"))
+SESSION_SUMMARY_CONCURRENCY = int(os.getenv("SESSION_SUMMARY_CONCURRENCY", "0"))
 
 _active_summary_session_ids: set[str] = set()
 _active_summary_lock = asyncio.Lock()
@@ -177,11 +178,25 @@ async def reconcile_summaries_once(
     )
 
     active_ids = await active_summary_session_ids()
-    db = factory()
+
+    def _select_stale_ids() -> list[str]:
+        db = factory()
+        try:
+            return select_stale_summary_session_ids(db, limit=limit, exclude_session_ids=active_ids)
+        finally:
+            db.close()
+
     try:
-        selected_ids = select_stale_summary_session_ids(db, limit=limit, exclude_session_ids=active_ids)
-    finally:
-        db.close()
+        selected_ids = await asyncio.wait_for(
+            asyncio.to_thread(_select_stale_ids),
+            timeout=SUMMARY_SELECT_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        logger.warning(
+            "Session summary reconciler selection timed out after %.1fs; skipping tick",
+            SUMMARY_SELECT_TIMEOUT_SECONDS,
+        )
+        return SummaryReconcileResult(fast_forwarded=fast_forwarded, selected=0, started=0)
 
     claimed_ids = await _claim_summary_session_ids(selected_ids)
     if not claimed_ids:

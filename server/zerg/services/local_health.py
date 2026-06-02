@@ -3785,13 +3785,9 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
             severity = "yellow"
             headline = "Hosted provider-live route proof needs attention"
     elif provider_live_route_e2e.get("configured") and provider_live_route_e2e.get("coverage_status") == "missing":
-        if "provider_live_route_e2e_coverage_missing" not in reasons:
-            reasons.append("provider_live_route_e2e_coverage_missing")
-        suggested_actions.append("Run dogfood refresh to prove every current provider route.")
-        if health_state == "healthy":
-            health_state = "degraded"
-            severity = "yellow"
-            headline = "Hosted provider-live route proof is incomplete"
+        # Coverage gaps are useful operator detail, but a green proof for the
+        # providers it covers must not make managed launch look broken.
+        pass
     build_identity = _collect_build_identity(engine_status=engine_status)
     attention_context = _health_classification_context(
         service=service,
