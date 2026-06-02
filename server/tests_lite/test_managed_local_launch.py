@@ -205,6 +205,49 @@ def test_this_device_launch_does_not_require_runner_record(monkeypatch, tmp_path
     assert session.source_runner_id is None
 
 
+def test_this_device_launch_does_not_use_write_serializer(monkeypatch, tmp_path):
+    from zerg.services import managed_local_launcher
+    from zerg.services import write_serializer
+
+    SessionLocal = _make_db(tmp_path)
+
+    def fail_serializer():
+        raise AssertionError("managed-local this-device launch must not queue behind WriteSerializer")
+
+    with SessionLocal() as db:
+        user = User(email="managed-local@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        device_token = SimpleNamespace(owner_id=user.id, device_id="cinder")
+        client, api_app = _make_device_client(db, device_token)
+        monkeypatch.setattr(write_serializer, "get_write_serializer", fail_serializer)
+        monkeypatch.setattr(
+            managed_local_launcher,
+            "get_runner_connection_manager",
+            lambda: SimpleNamespace(is_online=lambda *_args: False),
+        )
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local/this-device",
+                json={
+                    "cwd": "/tmp/demo",
+                    "provider": "codex",
+                    "project": "demo",
+                },
+            )
+        finally:
+            api_app.dependency_overrides = {}
+
+        payload = response.json()
+        session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
+
+    assert response.status_code == 200, response.text
+    assert payload["managed_transport"] == "codex_app_server"
+    assert session.source_runner_id is None
+
+
 def test_this_device_launch_rejects_claude_without_native_channels(monkeypatch, tmp_path):
     from zerg.services import managed_local_launcher
 

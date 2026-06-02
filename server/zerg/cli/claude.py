@@ -232,10 +232,12 @@ def _launch_managed_local_from_api(
         claude_launch_env=claude_launch_env,
     )
 
+    launch_url = f"{url.rstrip('/')}/api/sessions/managed-local/this-device"
+    typer.echo(f"Creating Longhouse managed {provider} session: POST {launch_url}")
     try:
         with httpx.Client(timeout=30) as client:
             response = client.post(
-                f"{url.rstrip('/')}/api/sessions/managed-local/this-device",
+                launch_url,
                 headers={"X-Agents-Token": token},
                 json=payload,
             )
@@ -243,7 +245,11 @@ def _launch_managed_local_from_api(
         typer.secho(f"Could not connect to {url}", fg=typer.colors.RED)
         raise typer.Exit(code=EXIT_SETUP_FAILED)
     except httpx.TimeoutException:
-        typer.secho(f"Request timed out connecting to {url}", fg=typer.colors.RED)
+        typer.secho(
+            f"Timed out waiting for Longhouse to create the managed {provider} session at {url}. "
+            f"No local {provider} process was started.",
+            fg=typer.colors.RED,
+        )
         raise typer.Exit(code=EXIT_SETUP_FAILED)
 
     if response.status_code == 401:

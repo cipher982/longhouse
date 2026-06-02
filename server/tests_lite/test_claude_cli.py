@@ -136,6 +136,38 @@ def test_launch_managed_local_from_api_uses_this_device_endpoint(monkeypatch, tm
     ]
 
 
+def test_launch_managed_local_from_api_timeout_says_no_provider_started(monkeypatch, tmp_path, capsys):
+    class TimeoutClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *_args, **_kwargs):
+            raise claude_cli.httpx.ReadTimeout("timed out")
+
+    monkeypatch.setattr(claude_cli, "_infer_git_context", lambda cwd: (None, None))
+    monkeypatch.setattr(claude_cli.httpx, "Client", lambda timeout: TimeoutClient())
+
+    with pytest.raises(ClickExit) as exc_info:
+        claude_cli._launch_managed_local_from_api(
+            url="https://longhouse.test",
+            token="zdt_test_token",
+            cwd=tmp_path,
+            project="demo",
+            loop_mode=SessionLoopMode.ASSIST,
+            name=None,
+            machine_name="work-laptop",
+            provider="codex",
+        )
+
+    output = capsys.readouterr().out
+    assert exc_info.value.exit_code == claude_cli.EXIT_SETUP_FAILED
+    assert "Creating Longhouse managed codex session" in output
+    assert "No local codex process was started" in output
+
+
 def test_claude_command_fails_when_native_channels_unavailable(monkeypatch, tmp_path):
     runner = CliRunner()
     launch_calls: list[dict] = []

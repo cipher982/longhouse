@@ -76,7 +76,6 @@ from zerg.services.session_inputs import retry_failed_input
 from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
 from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
 from zerg.services.session_runtime import current_presence_state_for_session
-from zerg.services.write_serializer import get_write_serializer
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.session_loop_mode import coerce_session_loop_mode
 
@@ -569,12 +568,11 @@ async def launch_managed_local_this_device(
             native_claude_channels_available=body.native_claude_channels_available,
             claude_launch_env=body.claude_launch_env,
         )
-        ws = get_write_serializer()
-        result = await ws.execute_or_direct(
-            lambda write_db: launch_managed_local_session_sync(write_db, params),
-            db,
-            label="managed-launch",
-        )
+        # Managed-local launch is a tiny user-facing write that must not wait
+        # behind archive ingest/replay jobs already occupying the single writer.
+        # Let SQLite arbitrate directly; launch_managed_local_session_sync
+        # owns its commit/rollback boundary.
+        result = launch_managed_local_session_sync(db, params)
     except ManagedLocalLaunchError as exc:
         db.rollback()
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
