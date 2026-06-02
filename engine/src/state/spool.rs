@@ -7,6 +7,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension};
+use std::time::Duration;
 
 /// Maximum spool entries before backpressure kicks in.
 const MAX_QUEUE_SIZE: usize = 10_000;
@@ -311,6 +312,30 @@ impl<'a> Spool<'a> {
     /// Mark entry as failed with exponential backoff. Returns true if now permanently dead.
     pub fn mark_failed(&self, entry_id: i64, error: &str) -> Result<bool> {
         self.mark_failed_with_max(entry_id, error, DEFAULT_MAX_RETRIES)
+    }
+
+    /// Defer all pending entries for a path without incrementing retry_count.
+    ///
+    /// Runtime backpressure is not a bad pointer and should not march backlog
+    /// entries toward dead-lettering; it only means the host asked us to come
+    /// back later.
+    pub fn defer_pending_for_path(
+        &self,
+        file_path: &str,
+        error: &str,
+        delay: Duration,
+    ) -> Result<usize> {
+        let chrono_delay = chrono::Duration::from_std(delay)
+            .unwrap_or_else(|_| chrono::Duration::seconds(BACKOFF_MAX as i64));
+        let next_retry = Utc::now() + chrono_delay;
+        let changed = self.conn.execute(
+            "UPDATE spool_queue
+             SET last_error = ?1,
+                 next_retry_at = ?2
+             WHERE status = 'pending' AND file_path = ?3",
+            rusqlite::params![error, next_retry.to_rfc3339(), file_path],
+        )?;
+        Ok(changed)
     }
 
     /// Mark failed with custom max retries.
@@ -723,6 +748,37 @@ mod tests {
         assert_eq!(entry.0, 1);
         // next_retry_at should be in the future
         let next: DateTime<Utc> = DateTime::parse_from_rfc3339(&entry.1)
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(next > Utc::now());
+    }
+
+    #[test]
+    fn test_defer_pending_for_path_does_not_increment_retry_count() {
+        let (_tmp, conn) = setup();
+        let spool = Spool::new(&conn);
+
+        spool.enqueue("claude", "/f", 0, 100, None).unwrap();
+
+        let changed = spool
+            .defer_pending_for_path(
+                "/f",
+                "503:{\"detail\":\"Archive ingest backlog is throttled; retry shortly\"}",
+                Duration::from_secs(60),
+            )
+            .unwrap();
+
+        assert_eq!(changed, 1);
+        let entry: (i32, String, String) = conn
+            .query_row(
+                "SELECT retry_count, last_error, next_retry_at FROM spool_queue WHERE file_path = '/f'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(entry.0, 0);
+        assert!(entry.1.contains("Archive ingest backlog is throttled"));
+        let next: DateTime<Utc> = DateTime::parse_from_rfc3339(&entry.2)
             .unwrap()
             .with_timezone(&Utc);
         assert!(next > Utc::now());

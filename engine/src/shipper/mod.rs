@@ -48,6 +48,7 @@ const ARCHIVE_TARGET_BATCH_BYTES: u64 = 4 * 1024 * 1024;
 // the batch after the client has already marked it retryable.
 const ARCHIVE_INGEST_TIMEOUT: Duration = Duration::from_secs(35);
 const LIVE_TRANSCRIPT_INGEST_TIMEOUT: Duration = Duration::from_secs(20);
+const ARCHIVE_BACKPRESSURE_RETRY_DELAY: Duration = Duration::from_secs(60);
 
 /// Batch sizing band, independent of `SourceLineMode`. `SourceLineMode` is a
 /// Codex-specific axis (whether to ship full source lines or event-only); the
@@ -1380,6 +1381,7 @@ async fn attempt_ship(
     }
     let span = tracing::Span::current();
     let (outcome, http_status) = classify_ship_attempt_result(&result);
+    let is_backpressure = ship_result_is_backpressure(&result);
     span.record(
         "longhouse.ship.outcome",
         tracing::field::display(outcome.as_str()),
@@ -1395,7 +1397,7 @@ async fn attempt_ship(
     if let Some(kind) = error_kind {
         span.record("longhouse.ship.error_kind", tracing::field::display(kind));
     }
-    if let Some(stats) = ship_stats {
+    if let Some(stats) = ship_stats.filter(|_| !is_backpressure) {
         if error_kind.is_none() && error_message.is_none() {
             stats.record(outcome, latency_ms, http_status);
         } else {
@@ -1412,6 +1414,15 @@ async fn attempt_ship(
             // the bench harness and phase-2 controller see real eps numbers.
             stats.record_events_shipped(item.event_count as u32, latency_ms);
         }
+    } else if is_backpressure {
+        tracing::debug!(
+            path = %item.path_str,
+            provider = %item.provider,
+            error_kind = error_kind.unwrap_or("backpressure"),
+            error = %error_message.as_deref().unwrap_or("runtime backpressure"),
+            latency_ms,
+            "Runtime asked archive replay to retry later"
+        );
     }
 
     match result {
@@ -1474,29 +1485,45 @@ async fn attempt_ship(
                 "retryable",
             );
             let error = error_message.unwrap_or_else(|| transient_error_message(&result));
-            let should_log = tracker.map_or(true, |t| t.record_error());
+            let should_log = if is_backpressure {
+                true
+            } else {
+                tracker.map_or(true, |t| t.record_error())
+            };
             if should_log {
-                let count = tracker.map_or(1, |t| t.consecutive_count());
-                if count > 1 {
-                    tracing::warn!(
+                if is_backpressure {
+                    tracing::info!(
                         path = %item.path_str,
                         provider = %item.provider,
-                        error_kind = error_kind.unwrap_or("unknown"),
+                        error_kind = error_kind.unwrap_or("backpressure"),
                         error = %error,
+                        retry_after_ms = ARCHIVE_BACKPRESSURE_RETRY_DELAY.as_millis() as u64,
                         latency_ms,
-                        "Ship still failing after {} attempts",
-                        count
+                        "Archive replay deferred by runtime backpressure"
                     );
                 } else {
-                    tracing::warn!(
-                        path = %item.path_str,
-                        provider = %item.provider,
-                        error_kind = error_kind.unwrap_or("unknown"),
-                        error = %error,
-                        latency_ms,
-                        ingest_url = %client.ingest_url(),
-                        "Shipping attempt failed; queued range for retry"
-                    );
+                    let count = tracker.map_or(1, |t| t.consecutive_count());
+                    if count > 1 {
+                        tracing::warn!(
+                            path = %item.path_str,
+                            provider = %item.provider,
+                            error_kind = error_kind.unwrap_or("unknown"),
+                            error = %error,
+                            latency_ms,
+                            "Ship still failing after {} attempts",
+                            count
+                        );
+                    } else {
+                        tracing::warn!(
+                            path = %item.path_str,
+                            provider = %item.provider,
+                            error_kind = error_kind.unwrap_or("unknown"),
+                            error = %error,
+                            latency_ms,
+                            ingest_url = %client.ingest_url(),
+                            "Shipping attempt failed; queued range for retry"
+                        );
+                    }
                 }
             }
 
@@ -1504,6 +1531,7 @@ async fn attempt_ship(
                 item,
                 error,
                 is_connect_error: matches!(result, ShipResult::ConnectError(_)),
+                is_backpressure,
             }
         }
         ShipResult::PayloadTooLarge(body) => {
@@ -1779,6 +1807,14 @@ fn transient_error_message(result: &ShipResult) -> String {
     }
 }
 
+fn ship_result_is_backpressure(result: &ShipResult) -> bool {
+    match result {
+        ShipResult::RateLimited => true,
+        ShipResult::ServerError(503, body) => body.contains("Archive ingest backlog is throttled"),
+        _ => false,
+    }
+}
+
 pub async fn ship_prepared_file(
     prepared: PreparedFile,
     client: &ShipperClient,
@@ -1903,6 +1939,7 @@ pub async fn ship_prepared_file_with_trace(
                         item,
                         error: _,
                         is_connect_error,
+                        is_backpressure: _,
                     } => {
                         if cursor_mode == CursorMode::Live {
                             outcome.fully_processed = false;
@@ -2374,7 +2411,23 @@ async fn replay_spool_entries(
                             item: _,
                             error,
                             is_connect_error,
+                            is_backpressure,
                         } => {
+                            if is_backpressure {
+                                let deferred = spool.defer_pending_for_path(
+                                    &entry.file_path,
+                                    &error,
+                                    ARCHIVE_BACKPRESSURE_RETRY_DELAY,
+                                )?;
+                                tracing::info!(
+                                    path = %entry.file_path,
+                                    deferred,
+                                    retry_after_ms = ARCHIVE_BACKPRESSURE_RETRY_DELAY.as_millis() as u64,
+                                    "Deferred spool path after runtime backpressure"
+                                );
+                                outcome.failed += 1;
+                                break 'entry_loop;
+                            }
                             spool.mark_failed(entry.id, &error)?;
                             outcome.failed += 1;
                             if is_connect_error {

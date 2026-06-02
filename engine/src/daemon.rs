@@ -56,9 +56,9 @@ pub struct ConnectConfig {
 /// and the reconciliation scanner.
 const WATCHER_FLUSH_INTERVAL: Duration = Duration::from_millis(15);
 
-const INITIAL_SPOOL_PATH_LIMIT: usize = 100;
-const PERIODIC_SPOOL_PATH_LIMIT: usize = 50;
-const PATH_SPOOL_REPLAY_LIMIT: usize = 50;
+const INITIAL_SPOOL_PATH_LIMIT: usize = 10;
+const PERIODIC_SPOOL_PATH_LIMIT: usize = 5;
+const PATH_SPOOL_REPLAY_LIMIT: usize = 1;
 const LOCAL_RETRY_DELAY_SECS: u64 = 5;
 const LIVE_LOCAL_RETRY_DELAY: Duration = Duration::from_millis(500);
 const STARTUP_RECONCILIATION_SCAN_DELAY: Duration = Duration::from_secs(120);

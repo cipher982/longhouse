@@ -105,6 +105,7 @@ class TransportHealthAssessment:
 
 def transport_health_sample_from_heartbeat(row: AgentHeartbeat) -> TransportHealthSample:
     raw = _heartbeat_raw_json(row)
+    last_ship_http_status = getattr(row, "last_ship_http_status", None) or raw.get("last_ship_http_status")
     return TransportHealthSample(
         spool_pending=_normalize_int(getattr(row, "spool_pending", 0)),
         spool_dead=_normalize_int(getattr(row, "spool_dead", 0)),
@@ -125,9 +126,7 @@ def transport_health_sample_from_heartbeat(row: AgentHeartbeat) -> TransportHeal
         ship_retryable_client_errors_10m=_normalize_present_int(raw, "ship_retryable_client_errors_10m"),
         ship_connect_errors_10m=_normalize_present_int(raw, "ship_connect_errors_10m"),
         last_ship_result=_normalize_optional_str(getattr(row, "last_ship_result", None) or raw.get("last_ship_result")),
-        last_ship_http_status=_normalize_optional_int(
-            getattr(row, "last_ship_http_status", None) or raw.get("last_ship_http_status")
-        ),
+        last_ship_http_status=_normalize_optional_int(last_ship_http_status),
         last_ship_error_kind=_normalize_optional_str(raw.get("last_ship_error_kind")),
         last_ship_error_message=_normalize_optional_str(raw.get("last_ship_error_message")),
         is_offline=bool(getattr(row, "is_offline", False)),
@@ -164,7 +163,11 @@ def transport_health_sample_from_engine_status_payload(payload: Mapping[str, Any
 
 
 def is_transport_error_burst(
-    *, error_count: int, ship_attempts: int, last_ship_result: str | None, result_kind: str
+    *,
+    error_count: int,
+    ship_attempts: int,
+    last_ship_result: str | None,
+    result_kind: str,
 ) -> bool:
     """Return True for current failure or sustained transport noise."""
     if error_count <= 0:
@@ -173,10 +176,9 @@ def is_transport_error_burst(
         return True
     if ship_attempts <= 0:
         return False
-    return (
-        error_count >= TRANSPORT_ERROR_DEGRADED_MIN_COUNT
-        and (error_count / ship_attempts) >= TRANSPORT_ERROR_DEGRADED_MIN_RATE
-    )
+    if error_count < TRANSPORT_ERROR_DEGRADED_MIN_COUNT:
+        return False
+    return (error_count / ship_attempts) >= TRANSPORT_ERROR_DEGRADED_MIN_RATE
 
 
 def _transport_window_phrase(sample: TransportHealthSample) -> str:
@@ -230,9 +232,6 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
         reasons.append("rate_limited")
     if retryable_client_error_burst:
         reasons.append("retryable_client_errors")
-    if sample.spool_pending >= SPOOL_PENDING_DEGRADED_MIN_COUNT:
-        reasons.append("spool_pending")
-
     if sample.spool_dead > 0:
         status = "broken"
         status_reason = "spool_dead"
@@ -281,18 +280,16 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
     elif retryable_client_error_burst:
         status = "degraded"
         status_reason = "retryable_client_errors"
-        retryable_summary = (
-            f"{sample.ship_retryable_client_errors_active} retryable client error(s) "
-            f"{_transport_window_phrase(sample)}."
-        )
+        retryable_window = _transport_window_phrase(sample)
+        retryable_summary = f"{sample.ship_retryable_client_errors_active} retryable client error(s) {retryable_window}."
         status_summary = _append_last_ship_error_detail(
             retryable_summary,
             sample,
         )
     elif sample.spool_pending >= SPOOL_PENDING_DEGRADED_MIN_COUNT:
-        status = "degraded"
+        status = "healthy"
         status_reason = "spool_pending"
-        status_summary = f"{sample.spool_pending} pending spool item(s)."
+        status_summary = f"{sample.spool_pending} pending spool item(s) queued for retry."
     else:
         status = "healthy"
         status_reason = "healthy"

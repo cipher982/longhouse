@@ -210,6 +210,7 @@ pub(crate) enum AttemptedShip {
         item: ShipItem,
         error: String,
         is_connect_error: bool,
+        is_backpressure: bool,
     },
     PayloadTooLarge {
         item: ShipItem,

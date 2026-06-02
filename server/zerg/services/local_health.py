@@ -2960,8 +2960,7 @@ def _add_spool_pending_reason(
     *,
     spool_pending: int,
 ) -> None:
-    if spool_pending >= DEGRADED_BACKLOG_COUNT and "spool_pending" not in reasons:
-        reasons.append("spool_pending")
+    _ = reasons, spool_pending
 
 
 def _add_outbox_reasons(
@@ -3043,8 +3042,6 @@ def _broken_shipping_flag(
     if outbox_count >= BROKEN_BACKLOG_COUNT:
         return True
     if outbox_count > 0 and outbox_oldest is not None and outbox_oldest > OUTBOX_BROKEN_AGE_SECONDS:
-        return True
-    if spool_pending >= BROKEN_BACKLOG_COUNT:
         return True
     if service_status != "running" and (outbox_count > 0 or spool_pending > 0):
         return True
@@ -3356,8 +3353,6 @@ def _degraded_state_is_watching(
     if context.orphan_bridge_count > 0 or context.managed_degraded > 0 or context.managed_detached > 0:
         return False
     if context.unknown_managed_phase_count > 0:
-        return False
-    if context.spool_pending >= DEGRADED_BACKLOG_COUNT:
         return False
     if _outbox_is_actionable(context):
         return False

@@ -212,9 +212,10 @@ def test_transport_health_degrades_for_spool_backlog():
 
     assessment = assess_transport_health(sample)
 
-    assert assessment.status == "degraded"
+    assert assessment.status == "healthy"
     assert assessment.status_reason == "spool_pending"
-    assert assessment.reasons == ("spool_pending",)
+    assert assessment.status_summary == "5 pending spool item(s) queued for retry."
+    assert assessment.reasons == ()
 
 
 def test_transport_health_surfaces_last_transport_error_detail():
