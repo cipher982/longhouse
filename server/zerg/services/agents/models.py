@@ -23,7 +23,10 @@ class EventIngest(BaseModel):
     tool_name: Optional[str] = Field(None, description="Tool name if this is a tool call")
     tool_input_json: Optional[Dict[str, Any]] = Field(None, description="Tool call parameters")
     tool_output_text: Optional[str] = Field(None, description="Tool result")
-    tool_call_id: Optional[str] = Field(None, description="Cross-provider call/result linkage ID (Claude tool_use_id, Codex call_id)")
+    tool_call_id: Optional[str] = Field(
+        None,
+        description="Cross-provider call/result linkage ID (Claude tool_use_id, Codex call_id)",
+    )
     timestamp: datetime = Field(..., description="Event timestamp")
     source_path: Optional[str] = Field(None, description="Original source file path")
     source_offset: Optional[int] = Field(None, description="Byte offset in source file")
@@ -54,13 +57,19 @@ class SessionIngest(BaseModel):
     environment: str = Field(..., description="Environment: production, development, test, e2e")
     project: Optional[str] = Field(None, description="Project name")
     device_id: Optional[str] = Field(None, description="Device/machine identifier")
-    device_name: Optional[str] = Field(None, description="Human-friendly device label (e.g. 'laptop', 'demo-machine')")
+    device_name: Optional[str] = Field(
+        None,
+        description="Human-friendly device label (e.g. 'laptop', 'demo-machine')",
+    )
     cwd: Optional[str] = Field(None, description="Working directory")
     git_repo: Optional[str] = Field(None, description="Git remote URL")
     git_branch: Optional[str] = Field(None, description="Git branch name")
     started_at: datetime = Field(..., description="Session start time")
     ended_at: Optional[datetime] = Field(None, description="Session end time")
-    provider_session_id: Optional[str] = Field(None, description="Provider-specific session ID (e.g., Claude Code session UUID)")
+    provider_session_id: Optional[str] = Field(
+        None,
+        description="Provider-specific session ID (e.g., Claude Code session UUID)",
+    )
     thread_root_session_id: Optional[UUID] = Field(None, description="Logical thread root session UUID")
     continued_from_session_id: Optional[UUID] = Field(None, description="Parent continuation session UUID")
     continuation_kind: Optional[str] = Field(None, description="Continuation kind: local|cloud|runner")
@@ -69,8 +78,22 @@ class SessionIngest(BaseModel):
         None,
         description="Internal execution home: legacy|managed_local|managed_hosted|cloud_takeover",
     )
-    branched_from_event_id: Optional[int] = Field(None, description="Event ID where this continuation branched from its parent")
+    branched_from_event_id: Optional[int] = Field(
+        None,
+        description="Event ID where this continuation branched from its parent",
+    )
     is_sidechain: bool = Field(False, description="True when session is a Task sub-agent (isSidechain:true in JSONL)")
+    parent_provider_session_id: Optional[str] = Field(
+        None,
+        description="Provider session/thread id of the parent when this payload is a subagent/fork",
+    )
+    subagent_id: Optional[str] = Field(None, description="Provider-specific subagent id, e.g. Claude agentId")
+    subagent_prompt_id: Optional[str] = Field(
+        None,
+        description="Provider-specific subagent prompt id, e.g. Claude promptId",
+    )
+    subagent_tool_use_id: Optional[str] = Field(None, description="Parent tool-call id that spawned the subagent")
+    workflow_run_id: Optional[str] = Field(None, description="Provider workflow/fan-out run id when available")
     events: List[EventIngest] = Field(default_factory=list, description="Session events")
     source_lines: List[SourceLineIngest] = Field(default_factory=list, description="Lossless source-line archive")
     rewind_hints: List[SourceRewindHintIngest] = Field(

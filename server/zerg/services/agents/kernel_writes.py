@@ -17,6 +17,9 @@ from __future__ import annotations
 from datetime import datetime
 from datetime import timezone
 from typing import Optional
+from uuid import NAMESPACE_URL
+from uuid import UUID
+from uuid import uuid5
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -109,6 +112,131 @@ def record_thread_alias(
         # Concurrent insert won the race. The unique index made this safe;
         # we just lost the write and the existing row is good.
         pass
+
+
+def resolve_primary_thread_by_provider_session_id(
+    db: Session,
+    *,
+    provider: str,
+    provider_session_id: str | None,
+) -> SessionThread | None:
+    """Resolve a provider root/session id to a primary thread.
+
+    Claude root transcript ids are UUID-shaped and normally match
+    ``AgentSession.id``. Other providers may use aliases. Prefer the direct
+    session lookup for UUID-shaped ids, then fall back to provider aliases.
+    """
+
+    provider_session_id = str(provider_session_id or "").strip()
+    if not provider_session_id:
+        return None
+
+    try:
+        session_uuid = UUID(provider_session_id)
+    except ValueError:
+        session_uuid = None
+
+    if session_uuid is not None:
+        session = db.query(AgentSession).filter(AgentSession.id == session_uuid).one_or_none()
+        if session is not None:
+            return ensure_primary_thread(db, session)
+
+    return (
+        db.query(SessionThread)
+        .join(SessionThreadAlias, SessionThreadAlias.thread_id == SessionThread.id)
+        .filter(SessionThread.provider == provider)
+        .filter(SessionThread.is_primary == 1)
+        .filter(SessionThreadAlias.provider == provider)
+        .filter(SessionThreadAlias.alias_kind == "provider_session_id")
+        .filter(SessionThreadAlias.alias_value == provider_session_id)
+        .order_by(SessionThread.created_at.asc(), SessionThread.id.asc())
+        .first()
+    )
+
+
+def ensure_subagent_thread(
+    db: Session,
+    *,
+    parent_thread: SessionThread,
+    provider: str,
+    source_path: str | None = None,
+    child_longhouse_session_id: str | None = None,
+    child_provider_session_id: str | None = None,
+    subagent_id: str | None = None,
+    subagent_prompt_id: str | None = None,
+    subagent_tool_use_id: str | None = None,
+    workflow_run_id: str | None = None,
+    parent_provider_session_id: str | None = None,
+) -> SessionThread:
+    """Return a non-primary child thread for a provider subagent transcript.
+
+    The preferred identity is the source transcript path. We derive a stable
+    UUID from parent thread + child key so concurrent replays of the same child
+    file converge on the same row even though aliases are intentionally not
+    globally unique.
+    """
+
+    alias_pairs: list[tuple[str, str]] = []
+    for kind, value in (
+        ("source_path", source_path),
+        ("longhouse_session_id", child_longhouse_session_id),
+        ("provider_session_id", child_provider_session_id),
+        ("claude_agent_id", subagent_id),
+        ("claude_prompt_id", subagent_prompt_id),
+        ("claude_tool_use_id", subagent_tool_use_id),
+        ("workflow_run_id", workflow_run_id),
+        ("forked_from_provider_session_id", parent_provider_session_id),
+    ):
+        normalized = str(value or "").strip()
+        if normalized:
+            alias_pairs.append((kind, normalized))
+
+    for alias_kind, alias_value in alias_pairs:
+        existing = (
+            db.query(SessionThread)
+            .join(SessionThreadAlias, SessionThreadAlias.thread_id == SessionThread.id)
+            .filter(SessionThread.session_id == parent_thread.session_id)
+            .filter(SessionThread.parent_thread_id == parent_thread.id)
+            .filter(SessionThread.branch_kind == "subagent")
+            .filter(SessionThreadAlias.provider == provider)
+            .filter(SessionThreadAlias.alias_kind == alias_kind)
+            .filter(SessionThreadAlias.alias_value == alias_value)
+            .order_by(SessionThread.created_at.asc(), SessionThread.id.asc())
+            .first()
+        )
+        if existing is not None:
+            thread = existing
+            break
+    else:
+        identity_kind, identity_value = alias_pairs[0] if alias_pairs else ("generated", str(uuid5(NAMESPACE_URL, str(parent_thread.id))))
+        thread_id = uuid5(
+            NAMESPACE_URL,
+            f"longhouse:subagent-thread:{parent_thread.id}:{provider}:{identity_kind}:{identity_value}",
+        )
+        thread = SessionThread(
+            id=thread_id,
+            session_id=parent_thread.session_id,
+            provider=provider,
+            parent_thread_id=parent_thread.id,
+            branch_kind="subagent",
+            is_primary=0,
+        )
+        try:
+            with db.begin_nested():
+                db.add(thread)
+                db.flush()
+        except IntegrityError:
+            thread = db.query(SessionThread).filter(SessionThread.id == thread_id).one()
+
+    for alias_kind, alias_value in alias_pairs:
+        record_thread_alias(
+            db,
+            thread=thread,
+            provider=provider,
+            alias_kind=alias_kind,
+            alias_value=alias_value,
+        )
+    return thread
 
 
 def resolve_thread_id_for_session(db: Session, session_id) -> Optional[str]:

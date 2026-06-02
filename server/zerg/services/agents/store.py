@@ -33,8 +33,11 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionRuntimeState
+from zerg.models.agents import SessionThread
 from zerg.services.agents.kernel_writes import ensure_primary_thread
+from zerg.services.agents.kernel_writes import ensure_subagent_thread
 from zerg.services.agents.kernel_writes import record_thread_alias
+from zerg.services.agents.kernel_writes import resolve_primary_thread_by_provider_session_id
 from zerg.services.internal_sessions import internal_canary_session_clause
 from zerg.services.internal_sessions import is_internal_canary_provider_filter
 from zerg.services.provisional_events import durable_transcript_event_predicate
@@ -834,6 +837,26 @@ class AgentsStore:
             )
         return normalized
 
+    @staticmethod
+    def _primary_source_path_for_ingest(
+        data: SessionIngest,
+        source_lines: list[SourceLineIngest],
+    ) -> str | None:
+        for event_data in data.events:
+            if event_data.source_path:
+                return event_data.source_path
+        for line_data in source_lines:
+            if line_data.source_path:
+                return line_data.source_path
+        return None
+
+    @staticmethod
+    def _source_path_looks_like_subagent(source_path: str | None) -> bool:
+        if not source_path:
+            return False
+        normalized = source_path.replace("\\", "/")
+        return "/subagents/" in normalized
+
     def _get_head_branch(self, session_id: UUID) -> AgentSessionBranch | None:
         """Return the current head branch for a session."""
         return (
@@ -1315,12 +1338,43 @@ class AgentsStore:
 
         stage_started = time.monotonic()
         session_id = data.id if data.id else uuid4()
+        source_lines = self._normalize_source_lines_for_ingest(data)
+        primary_source_path = self._primary_source_path_for_ingest(data, source_lines)
 
-        existing = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
+        resolved_child_thread = None
+        existing = None
+        if data.is_sidechain and data.parent_provider_session_id:
+            parent_thread = resolve_primary_thread_by_provider_session_id(
+                self.db,
+                provider=data.provider,
+                provider_session_id=data.parent_provider_session_id,
+            )
+            if parent_thread is not None:
+                parent_session = self.db.query(AgentSession).filter(AgentSession.id == parent_thread.session_id).first()
+                if parent_session is not None:
+                    existing = parent_session
+                    resolved_child_thread = ensure_subagent_thread(
+                        self.db,
+                        parent_thread=parent_thread,
+                        provider=data.provider,
+                        source_path=primary_source_path,
+                        child_longhouse_session_id=str(session_id),
+                        child_provider_session_id=data.provider_session_id or str(session_id),
+                        subagent_id=data.subagent_id,
+                        subagent_prompt_id=data.subagent_prompt_id,
+                        subagent_tool_use_id=data.subagent_tool_use_id,
+                        workflow_run_id=data.workflow_run_id,
+                        parent_provider_session_id=data.parent_provider_session_id,
+                    )
+                    session_id = parent_session.id
+
+        if existing is None:
+            existing = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
         session_created = False
 
         if existing:
-            self._refresh_existing_session_metadata(existing, data)
+            if resolved_child_thread is None:
+                self._refresh_existing_session_metadata(existing, data)
             session_id = existing.id
         else:
             # Derive device_name from device_id if not explicitly provided
@@ -1357,11 +1411,31 @@ class AgentsStore:
         # any provider_session_id evidence as a thread alias. Reducers below
         # use observation.thread_id to stamp child rows.
         primary_thread = ensure_primary_thread(self.db, existing)
-        thread_id = primary_thread.id
+        if resolved_child_thread is None and data.is_sidechain and self._source_path_looks_like_subagent(primary_source_path):
+            primary_thread.branch_kind = "subagent"
+            if data.parent_provider_session_id:
+                record_thread_alias(
+                    self.db,
+                    thread=primary_thread,
+                    provider=existing.provider,
+                    alias_kind="forked_from_provider_session_id",
+                    alias_value=str(data.parent_provider_session_id),
+                )
+            if primary_source_path:
+                record_thread_alias(
+                    self.db,
+                    thread=primary_thread,
+                    provider=existing.provider,
+                    alias_kind="source_path",
+                    alias_value=primary_source_path,
+                )
+
+        thread = resolved_child_thread or primary_thread
+        thread_id = thread.id
         if data.provider_session_id:
             record_thread_alias(
                 self.db,
-                thread=primary_thread,
+                thread=thread,
                 provider=existing.provider,
                 alias_kind="provider_session_id",
                 alias_value=str(data.provider_session_id),
@@ -1370,7 +1444,6 @@ class AgentsStore:
         _record_stage("session_setup", stage_started)
 
         stage_started = time.monotonic()
-        source_lines = self._normalize_source_lines_for_ingest(data)
         ingest_branch, rewind_signal = self._resolve_ingest_branch(
             session_id,
             source_lines,
@@ -2169,6 +2242,15 @@ class AgentsStore:
             # the previous filter with the surviving signals: keep sessions
             # that have user messages or are still open.
             stmt = stmt.where(or_(AgentSession.user_messages > 0, AgentSession.ended_at.is_(None)))
+            unresolved_child_primary = (
+                select(SessionThread.id)
+                .where(SessionThread.session_id == AgentSession.id)
+                .where(SessionThread.is_primary == 1)
+                .where(SessionThread.branch_kind == "subagent")
+                .where(SessionThread.parent_thread_id.is_(None))
+                .exists()
+            )
+            stmt = stmt.where(~unresolved_child_primary)
 
         if exclude_user_states:
             excluded_state = AgentSession.user_state.notin_(exclude_user_states)
