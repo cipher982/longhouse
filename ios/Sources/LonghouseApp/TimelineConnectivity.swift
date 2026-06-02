@@ -15,7 +15,7 @@ enum TimelineFreshness: Equatable {
     case stale
 }
 
-enum TimelineConnectivityBanner: Equatable {
+enum TimelineConnectivityBanner: Equatable, Hashable {
     case none
     case updating
     case degraded
@@ -49,6 +49,7 @@ enum TimelineNetworkPathStatus: Equatable {
 }
 
 enum TimelineConnectivityEvent: Equatable {
+    case cacheLoaded(hasLoadedData: Bool, savedAt: Date)
     case snapshotSucceeded(hasLoadedData: Bool)
     case snapshotFailed
     case authFailed
@@ -111,6 +112,11 @@ struct TimelineConnectivityState: Equatable {
 
     mutating func apply(_ event: TimelineConnectivityEvent, now: Date) {
         switch event {
+        case .cacheLoaded(let hasLoadedData, let savedAt):
+            self.hasLoadedData = hasLoadedData
+            if hasLoadedData {
+                lastUpdatedAt = savedAt
+            }
         case .snapshotSucceeded(let hasLoadedData):
             reachability = .reachable
             consecutiveSnapshotFailures = 0

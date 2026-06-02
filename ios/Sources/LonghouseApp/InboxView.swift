@@ -10,14 +10,14 @@ struct TimelineView: View {
     @State private var path: [SessionRoute] = []
     @State private var launchSheetPresented = false
     #if DEBUG
-    @State private var forcedConnectionState: ConnectionState?
+    @State private var forcedConnectionBanner: TimelineConnectivityBanner?
     #endif
 
-    private var effectiveConnectionState: ConnectionState {
+    private var effectiveConnectionBanner: TimelineConnectivityBanner {
         #if DEBUG
-        forcedConnectionState ?? viewModel.connectionState
+        forcedConnectionBanner ?? viewModel.connectionBanner
         #else
-        viewModel.connectionState
+        viewModel.connectionBanner
         #endif
     }
 
@@ -51,7 +51,7 @@ struct TimelineView: View {
     @ViewBuilder
     private func nonScrollingShell<Inner: View>(@ViewBuilder _ inner: () -> Inner) -> some View {
         VStack(spacing: 0) {
-            ConnectionStatusStrip(state: effectiveConnectionState)
+            ConnectionStatusStrip(banner: effectiveConnectionBanner)
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
             inner()
@@ -75,12 +75,18 @@ struct TimelineView: View {
                 #if DEBUG
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
-                        Button("Auto (\(label(for: viewModel.connectionState)))") {
-                            forcedConnectionState = nil
+                        Button("Auto (\(label(for: viewModel.connectionBanner)))") {
+                            forcedConnectionBanner = nil
                         }
                         Divider()
-                        ForEach([ConnectionState.connecting, .healthy, .reconnecting, .offline], id: \.self) { s in
-                            Button("Force: \(label(for: s))") { forcedConnectionState = s }
+                        ForEach([
+                            TimelineConnectivityBanner.none,
+                            .updating,
+                            .degraded,
+                            .offline,
+                            .authRequired,
+                        ], id: \.self) { banner in
+                            Button("Force: \(label(for: banner))") { forcedConnectionBanner = banner }
                         }
                     } label: {
                         Image(systemName: "ladybug")
@@ -136,7 +142,7 @@ struct TimelineView: View {
             // the large title and tucks under the compact nav bar instead
             // of pinning awkwardly under it like a stuck banner.
             LazyVStack(alignment: .leading, spacing: 14) {
-                ConnectionStatusStrip(state: effectiveConnectionState)
+                ConnectionStatusStrip(banner: effectiveConnectionBanner)
                     .padding(.horizontal, 0)
                 timelineSection(title: "Recent", sessions: sessions, emphasized: false)
             }
@@ -162,7 +168,7 @@ struct TimelineView: View {
                         TimelineSessionCardRow(
                             session: session,
                             emphasized: emphasized,
-                            connectionState: viewModel.connectionState
+                            connectivityBanner: viewModel.connectionBanner
                         )
                     }
                     .buttonStyle(.plain)
@@ -215,10 +221,10 @@ private struct SessionRoute: Hashable {
 struct TimelineSessionCardRow: View {
     let session: SessionSummary
     let emphasized: Bool
-    var connectionState: ConnectionState = .healthy
+    var connectivityBanner: TimelineConnectivityBanner = .none
 
     var body: some View {
-        let cardAccent = timelineCardAccentColor(session, connectionState: connectionState)
+        let cardAccent = timelineCardAccentColor(session, connectivityBanner: connectivityBanner)
 
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
@@ -239,7 +245,7 @@ struct TimelineSessionCardRow: View {
                 .lineLimit(1)
 
                 HStack(spacing: 8) {
-                    RuntimeBadge(session: session, connectionState: connectionState)
+                    RuntimeBadge(session: session, connectivityBanner: connectivityBanner)
                     CapabilityBadge(session: session)
                 }
             }
@@ -307,14 +313,14 @@ private struct ProviderBadge: View {
 
 private struct RuntimeBadge: View {
     let session: SessionSummary
-    let connectionState: ConnectionState
+    let connectivityBanner: TimelineConnectivityBanner
 
     var body: some View {
         let isClosed = session.timelineStatusLabel == "Closed"
-        // Only .healthy preserves the status color. .connecting,
-        // .reconnecting, and .offline all retract to .secondary so a
-        // non-pulsing colored dot can't masquerade as "live".
-        let globalHealthy = connectionState == .healthy
+        // Only a clear global banner suppresses status color. Transient
+        // stream churn stays invisible here so live session badges do not
+        // dim just because the realtime optimization reconnected.
+        let globalHealthy = connectivityBanner == .none
         let attentionTone = timelineAttentionTone(session.timelineStatusTone)
         let withinDeadline = session.runtimeDisplay.activityRecency == "live"
         let sessionStale = !withinDeadline && !isClosed
@@ -361,10 +367,10 @@ private struct RuntimeBadge: View {
 /// Anything else paints a thin colored bar with text. Pull to refresh
 /// is the retry path; this view is purely informational.
 struct ConnectionStatusStrip: View {
-    let state: ConnectionState
+    let banner: TimelineConnectivityBanner
 
     var body: some View {
-        if let style = style(for: state) {
+        if let style = style(for: banner) {
             HStack(spacing: 6) {
                 if let symbol = style.symbol {
                     Image(systemName: symbol)
@@ -390,29 +396,24 @@ struct ConnectionStatusStrip: View {
         let background: Color
     }
 
-    private func style(for state: ConnectionState) -> Style? {
-        switch state {
-        case .healthy:
-            #if DEBUG
-            // Always render in DEBUG so the codepath is visible — we
-            // can't tell "healthy" apart from "the strip never ran" by
-            // looking at it. Release builds hide healthy entirely.
-            return Style(label: "Connected", symbol: nil,
-                         foreground: .green,
-                         background: Color.green.opacity(0.14))
-            #else
+    private func style(for banner: TimelineConnectivityBanner) -> Style? {
+        switch banner {
+        case .none:
             return nil
-            #endif
-        case .connecting:
-            return Style(label: "Connecting", symbol: nil,
-                         foreground: .secondary,
-                         background: Color(.tertiarySystemGroupedBackground))
-        case .reconnecting:
-            return Style(label: "Reconnecting", symbol: "arrow.triangle.2.circlepath",
+        case .updating:
+            return Style(label: "Updating", symbol: "arrow.triangle.2.circlepath",
                          foreground: .yellow,
                          background: Color.yellow.opacity(0.18))
+        case .degraded:
+            return Style(label: "Connection degraded", symbol: "exclamationmark.triangle",
+                         foreground: .orange,
+                         background: Color.orange.opacity(0.18))
         case .offline:
             return Style(label: "Offline", symbol: "exclamationmark.triangle.fill",
+                         foreground: .red,
+                         background: Color.red.opacity(0.18))
+        case .authRequired:
+            return Style(label: "Sign in required", symbol: "person.crop.circle.badge.exclamationmark",
                          foreground: .red,
                          background: Color.red.opacity(0.18))
         }
@@ -420,12 +421,13 @@ struct ConnectionStatusStrip: View {
 }
 
 #if DEBUG
-private func label(for state: ConnectionState) -> String {
-    switch state {
-    case .connecting: return "Connecting"
-    case .healthy:    return "Healthy"
-    case .reconnecting: return "Reconnecting"
-    case .offline:    return "Offline"
+private func label(for banner: TimelineConnectivityBanner) -> String {
+    switch banner {
+    case .none: return "Hidden"
+    case .updating: return "Updating"
+    case .degraded: return "Degraded"
+    case .offline: return "Offline"
+    case .authRequired: return "Sign in required"
     }
 }
 #endif
@@ -503,34 +505,22 @@ private struct MetadataBadge: View {
     }
 }
 
-/// Connection state, derived from the auto-refresh contract — no time
-/// thresholds. The poll either succeeded, is in-flight, or failed; we
-/// just read what already happened.
-enum ConnectionState: Equatable, Hashable {
-    case connecting        // No successful refresh yet (cold start in flight)
-    case healthy           // Most recent scheduled refresh succeeded
-    case reconnecting      // 1 consecutive failure; retry already scheduled
-    case offline           // 2+ consecutive failures
+protocol TimelineSessionsClient: Sendable {
+    func recentSessions(limit: Int) async throws -> [SessionSummary]
+}
 
-    /// Pure derivation of connection state from observable inputs. Lives at
-    /// file scope so unit tests can lock in the state machine without having
-    /// to spin up a `TimelineViewModel` (which depends on `AppState`/network).
-    static func derive(failures: Int, lastUpdatedAt: Date?) -> ConnectionState {
-        // Defensive: a negative failure count is semantically "no failures".
-        let failures = max(0, failures)
-        // Cold start (no successful poll yet): stay in .connecting through
-        // the first failure so a single hiccup doesn't immediately read as
-        // "reconnecting" — there's nothing to reconnect to. Two failures
-        // with no success on record means we're truly offline.
-        if lastUpdatedAt == nil {
-            return failures >= 2 ? .offline : .connecting
-        }
-        // We have at least one successful poll on record: standard ladder.
-        switch failures {
-        case 0:  return .healthy
-        case 1:  return .reconnecting
-        default: return .offline
-        }
+extension LonghouseAPI: TimelineSessionsClient {}
+
+struct TimelineSessionsStreamSource: Sendable {
+    let start: @Sendable () async -> AsyncStream<TimelineSessionsStream.Event>
+    let stop: @Sendable () async -> Void
+
+    static func live(baseURL: URL, limit: Int) -> TimelineSessionsStreamSource {
+        let stream = TimelineSessionsStream(baseURL: baseURL, limit: limit)
+        return TimelineSessionsStreamSource(
+            start: { await stream.start() },
+            stop: { await stream.stop() }
+        )
     }
 }
 
@@ -548,25 +538,49 @@ enum TimelineLoadState: Equatable {
 @MainActor
 final class TimelineViewModel: ObservableObject {
     @Published private(set) var state: TimelineLoadState = .initial
-    @Published var lastUpdatedAt: Date?
-    @Published private(set) var consecutiveRefreshFailures = 0
+    @Published private(set) var connectivity = TimelineConnectivityState()
+    @Published private(set) var connectivityNow = Date()
 
     private var streamTask: Task<Void, Never>?
-    private var stream: TimelineSessionsStream?
+    private var stream: TimelineSessionsStreamSource?
     private var reconcileTask: Task<Void, Never>?
     private var persistTask: Task<Void, Never>?
+    private var connectivityClockTask: Task<Void, Never>?
     private var lastWidgetReloadAt: Date?
     private var isRefreshInFlight = false
     private var loggedFirstPaint = false
     private var streamGeneration: UInt64 = 0
     private var hasReceivedFirstConnect = false
+    private let apiFactory: (String) -> TimelineSessionsClient?
+    private let streamFactory: (URL, Int) -> TimelineSessionsStreamSource
+    private let enableRealtime: Bool
+    private let enableConnectivityClock: Bool
     private let limit = 40
     private let reconcileIntervalNanoseconds: UInt64 = 120_000_000_000 // 120s safety net
+    private let connectivityClockIntervalNanoseconds: UInt64 = 15_000_000_000 // 15s freshness tick
     private let persistDebounceNanoseconds: UInt64 = 250_000_000 // 250ms cache/widget coalesce
     private let logger = Logger(subsystem: "ai.longhouse.ios", category: "Timeline")
 
-    var connectionState: ConnectionState {
-        ConnectionState.derive(failures: consecutiveRefreshFailures, lastUpdatedAt: lastUpdatedAt)
+    var connectionBanner: TimelineConnectivityBanner {
+        connectivity.banner(at: connectivityNow)
+    }
+
+    init(
+        apiFactory: @escaping (String) -> TimelineSessionsClient? = { LonghouseAPI(host: $0) },
+        streamFactory: @escaping (URL, Int) -> TimelineSessionsStreamSource = { baseURL, limit in
+            TimelineSessionsStreamSource.live(baseURL: baseURL, limit: limit)
+        },
+        enableRealtime: Bool = true,
+        enableConnectivityClock: Bool = true
+    ) {
+        self.apiFactory = apiFactory
+        self.streamFactory = streamFactory
+        self.enableRealtime = enableRealtime
+        self.enableConnectivityClock = enableConnectivityClock
+    }
+
+    func connectionBanner(at now: Date) -> TimelineConnectivityBanner {
+        connectivity.banner(at: now)
     }
 
     private var isInitial: Bool {
@@ -580,10 +594,11 @@ final class TimelineViewModel: ObservableObject {
     }
 
     func load(using appState: AppState) async {
+        startConnectivityClock()
         guard isInitial else { return }
         if let cached = TimelineCacheStore.load(serverURL: appState.serverURL) {
             applySessions(cached.sessions, source: "cache")
-            lastUpdatedAt = cached.savedAt
+            applyConnectivity(.cacheLoaded(hasLoadedData: !cached.sessions.isEmpty, savedAt: cached.savedAt))
             logger.info("timeline cache hit sessions=\(cached.sessions.count, privacy: .public)")
             Task { [weak self] in
                 await self?.refresh(using: appState, reloadWidget: true)
@@ -599,7 +614,7 @@ final class TimelineViewModel: ObservableObject {
             logger.debug("timeline refresh skipped reason=in_flight")
             return
         }
-        guard let api = LonghouseAPI(host: appState.serverURL) else {
+        guard let api = apiFactory(appState.serverURL) else {
             state = .error("Invalid server URL")
             return
         }
@@ -618,21 +633,28 @@ final class TimelineViewModel: ObservableObject {
             }
             let attentionIds = Set(sessions.filter(\.needsAttention).map(\.id))
             applySessions(sessions, source: "network")
+            applyConnectivity(.snapshotSucceeded(hasLoadedData: !sessions.isEmpty))
             schedulePersist(sessions: sessions, appState: appState)
             PushNotificationStore.removeResolvedAttentionNotifications(activeSessionIDs: attentionIds)
-            self.lastUpdatedAt = Date()
-            self.consecutiveRefreshFailures = 0
             if reloadWidget {
                 reloadWidgetTimelineIfNeeded()
             }
             logger.info("timeline refresh finished sessions=\(sessions.count, privacy: .public) elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
         } catch LonghouseAPIError.notAuthenticated {
-            consecutiveRefreshFailures += 1
+            guard generation == streamGeneration || generation == 0 else {
+                logger.info("timeline refresh auth failure dropped stale generation=\(generation, privacy: .public) current=\(self.streamGeneration, privacy: .public)")
+                return
+            }
+            applyConnectivity(.authFailed)
             // Auth errors override stale data — re-login is required.
             state = .error("Session expired. Sign in again.")
             logger.error("timeline refresh unauthenticated elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
         } catch {
-            consecutiveRefreshFailures += 1
+            guard generation == streamGeneration || generation == 0 else {
+                logger.info("timeline refresh failure dropped stale generation=\(generation, privacy: .public) current=\(self.streamGeneration, privacy: .public)")
+                return
+            }
+            applyConnectivity(.snapshotFailed)
             // While we have data on screen, refresh failures are silent —
             // the connection strip is the signal. Only surface an error
             // page when there's nothing else to show.
@@ -650,6 +672,8 @@ final class TimelineViewModel: ObservableObject {
     }
 
     func startStream(using appState: AppState) {
+        guard enableRealtime else { return }
+        startConnectivityClock()
         guard streamTask == nil else { return }
         guard let baseURL = URL(string: appState.serverURL) else {
             logger.error("timeline stream invalid serverURL=\(appState.serverURL, privacy: .public)")
@@ -658,7 +682,7 @@ final class TimelineViewModel: ObservableObject {
         streamGeneration &+= 1
         let generation = streamGeneration
         hasReceivedFirstConnect = false
-        let stream = TimelineSessionsStream(baseURL: baseURL, limit: limit)
+        let stream = streamFactory(baseURL, limit)
         self.stream = stream
         streamTask = Task { [weak self] in
             let events = await stream.start()
@@ -677,6 +701,7 @@ final class TimelineViewModel: ObservableObject {
         // Bump generation first so any event already in flight is dropped
         // by the guard in handleStreamEvent before it can mutate state.
         streamGeneration &+= 1
+        applyConnectivity(.lifecycleStopped)
         streamTask?.cancel()
         streamTask = nil
         if let stream {
@@ -685,6 +710,7 @@ final class TimelineViewModel: ObservableObject {
         stream = nil
         reconcileTask?.cancel()
         reconcileTask = nil
+        stopConnectivityClock()
         // Flush any pending debounced cache/widget save before tearing down
         // so a fast stream stop (scene background) doesn't drop the last
         // snapshot. The detached task in schedulePersist already snapshots
@@ -729,37 +755,91 @@ final class TimelineViewModel: ObservableObject {
         guard generation == streamGeneration else { return }
         switch event {
         case .connected:
-            consecutiveRefreshFailures = 0
             // Reconnects need a snapshot resync because the stream has no
             // Last-Event-ID replay. The very first connect is already
             // covered by the `load()` REST bootstrap, so skip it. Don't
-            // stamp lastUpdatedAt yet on reconnects — wait until the
-            // bootstrap actually lands so connectionState doesn't lie.
+            // stamp data freshness on reconnects — wait until the bootstrap
+            // actually lands so the banner doesn't lie.
             if hasReceivedFirstConnect {
+                applyConnectivity(.streamSignal(.reconnected), generation: generation)
                 logger.info("timeline stream reconnected — bootstrapping snapshot")
                 await refresh(using: appState, reloadWidget: true)
             } else {
                 hasReceivedFirstConnect = true
-                lastUpdatedAt = Date()
+                applyConnectivity(.streamSignal(.firstConnected), generation: generation)
             }
         case .upsert(let card, _, _):
             applyUpsert(card.sessionSummary, appState: appState)
-            lastUpdatedAt = Date()
-            consecutiveRefreshFailures = 0
+            applyConnectivity(.streamSignal(.upsert), generation: generation)
         case .remove(let threadId, _, _):
             applyRemove(threadId: threadId, appState: appState)
-            lastUpdatedAt = Date()
-            consecutiveRefreshFailures = 0
+            applyConnectivity(.streamSignal(.remove), generation: generation)
         case .heartbeat:
-            lastUpdatedAt = Date()
-            consecutiveRefreshFailures = 0
+            applyConnectivity(.streamSignal(.heartbeat), generation: generation)
         case .disconnected(let error):
-            consecutiveRefreshFailures += 1
+            let reason = classifyStreamDisconnect(error)
+            applyConnectivity(.streamDisconnected(reason), generation: generation)
             if let apiError = error as? LonghouseAPIError, case .notAuthenticated = apiError {
                 state = .error("Session expired. Sign in again.")
             }
-            logger.info("timeline stream disconnected error=\(error?.localizedDescription ?? "nil", privacy: .public)")
+            logger.info("timeline stream disconnected reason=\(String(describing: reason), privacy: .public) error=\(error?.localizedDescription ?? "nil", privacy: .public)")
         }
+    }
+
+    private func applyConnectivity(
+        _ event: TimelineConnectivityEvent,
+        now: Date = Date(),
+        generation: UInt64? = nil
+    ) {
+        var next = connectivity
+        if let generation {
+            next.apply(event, now: now, eventGeneration: generation, currentGeneration: streamGeneration)
+        } else {
+            next.apply(event, now: now)
+        }
+        connectivity = next
+        connectivityNow = now
+    }
+
+    private func startConnectivityClock() {
+        guard enableConnectivityClock, connectivityClockTask == nil else { return }
+        let interval = connectivityClockIntervalNanoseconds
+        connectivityClockTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: interval)
+                if Task.isCancelled { break }
+                await self?.tickConnectivityClock()
+            }
+        }
+    }
+
+    private func stopConnectivityClock() {
+        connectivityClockTask?.cancel()
+        connectivityClockTask = nil
+    }
+
+    private func tickConnectivityClock() {
+        connectivityNow = Date()
+    }
+
+    private func classifyStreamDisconnect(_ error: Error?) -> StreamDisconnectReason {
+        guard let error else { return .serverEOF }
+        if error is CancellationError { return .cancelled }
+        if let apiError = error as? LonghouseAPIError, case .notAuthenticated = apiError {
+            return .authFailure
+        }
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .cancelled:
+                return .cancelled
+            case .notConnectedToInternet, .networkConnectionLost, .cannotFindHost,
+                 .cannotConnectToHost, .dnsLookupFailed, .timedOut:
+                return .networkError
+            default:
+                return .unknown
+            }
+        }
+        return .unknown
     }
 
     private func applyUpsert(_ session: SessionSummary, appState: AppState) {
@@ -881,10 +961,10 @@ private func timelineAttentionTone(_ tone: String) -> TimelineAttentionTone {
     }
 }
 
-private func timelineCardAccentColor(_ session: SessionSummary, connectionState: ConnectionState) -> Color {
-    // A non-healthy connection suppresses per-card attention color; the
+private func timelineCardAccentColor(_ session: SessionSummary, connectivityBanner: TimelineConnectivityBanner) -> Color {
+    // A visible global banner suppresses per-card attention color; the
     // connection strip owns that severity signal.
-    guard connectionState == .healthy else { return .secondary.opacity(0.45) }
+    guard connectivityBanner == .none else { return .secondary.opacity(0.45) }
 
     switch timelineAttentionTone(session.timelineBorderTone) {
     case .attention:

@@ -181,6 +181,18 @@ struct TimelineConnectivityTests {
     }
 
     @Test
+    func cacheLoadedProvidesFreshnessWithoutReachability() {
+        var state = TimelineConnectivityState()
+
+        state.apply(.cacheLoaded(hasLoadedData: true, savedAt: now.addingTimeInterval(-60)), now: now)
+
+        #expect(state.reachability == .unknown)
+        #expect(state.hasLoadedData)
+        #expect(state.freshness(at: now) == .fresh)
+        #expect(state.banner(at: now) == .none)
+    }
+
+    @Test
     func firstConnectDoesNotMakeEmptyColdStartLookFresh() {
         var state = TimelineConnectivityState()
 
