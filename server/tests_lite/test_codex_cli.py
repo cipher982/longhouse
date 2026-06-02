@@ -710,7 +710,7 @@ def test_codex_command_no_attach_prints_attach_command(monkeypatch, tmp_path):
     assert bridge_calls[0]["launch_mode"] == "detached_ui"
 
 
-def test_codex_command_preserves_bridge_when_active_turn_survives(monkeypatch, tmp_path):
+def test_codex_command_preserves_bridge_when_auto_attach_exits_nonzero(monkeypatch, tmp_path):
     runner = CliRunner()
     stop_calls: list[dict[str, object]] = []
 
@@ -739,14 +739,19 @@ def test_codex_command_preserves_bridge_when_active_turn_survives(monkeypatch, t
     )
     monkeypatch.setattr(codex_cli, "_interactive_stdio", lambda: True)
     monkeypatch.setattr(codex_cli, "_run_native_codex_tui", lambda **_kwargs: 7)
-    monkeypatch.setattr(codex_cli, "_active_turn_survived_tui_exit", lambda state_file: state_file == "/tmp/state.json")
+    monkeypatch.setattr(codex_cli, "_active_turn_survived_tui_exit", lambda _state_file: False)
     monkeypatch.setattr(codex_cli, "_stop_native_codex_bridge", lambda **kwargs: stop_calls.append(kwargs) or None)
 
     result = runner.invoke(app, ["codex", "--cwd", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
+    assert "Auto-attach exited with code 7" in result.output
     assert "still running and reattachable" in result.output
+    assert "Attach: LONGHOUSE_MANAGED_SESSION_ID=session-123" in result.output
     assert stop_calls == []
+    contracts = list_managed_session_contracts(tmp_path / ".longhouse")
+    assert contracts[0]["provider"] == "codex"
+    assert contracts[0]["session_id"] == "session-123"
 
 
 def test_codex_command_signal_cleanup_stops_once(monkeypatch, tmp_path):

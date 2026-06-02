@@ -905,52 +905,42 @@ def codex(
         )
     finally:
         _restore_signal_handlers(previous_handlers)
-    keep_bridge_alive = exit_code != 0 and _active_turn_survived_tui_exit(state_file)
-    stop_error = None if keep_bridge_alive else bridge_stopper.stop(reason=_CODEX_STOP_REASON_TERMINAL_DISCONNECTED)
-    if not keep_bridge_alive:
-        remove_managed_provider_contract(
-            provider="codex",
-            session_id=result.session_id,
-            config_dir=resolved_config_dir,
-            config_dir_is_provider_home=True,
-        )
     if exit_code != 0:
-        if keep_bridge_alive:
-            attach_thread_id = ""
-            state = _load_native_codex_bridge_state(state_file)
-            if state is not None:
-                attach_thread_id = str(state.get("thread_id") or "").strip()
-            attach_cmd = _build_codex_attach_command(
-                codex_bin=resolved_codex_bin,
-                ws_url=ws_url,
-                bypass_approvals=bypass_approvals,
-                model=model,
-                model_reasoning_effort=model_reasoning_effort,
-                session_id=result.session_id,
-                thread_id=attach_thread_id or None,
-            )
-            typer.secho(
-                "Auto-attach exited, but the managed Codex session is still running and reattachable.",
-                fg=typer.colors.YELLOW,
-            )
-            typer.echo(f"Attach: {attach_cmd}")
-            return
+        attach_thread_id = ""
+        state = _load_native_codex_bridge_state(state_file)
+        if state is not None:
+            attach_thread_id = str(state.get("thread_id") or "").strip()
+        attach_cmd = _build_codex_attach_command(
+            codex_bin=resolved_codex_bin,
+            ws_url=ws_url,
+            bypass_approvals=bypass_approvals,
+            model=model,
+            model_reasoning_effort=model_reasoning_effort,
+            session_id=result.session_id,
+            thread_id=attach_thread_id or None,
+        )
         _emit_warp_cli_agent_event(
-            event="stop",
+            event="status",
             session_id=result.session_id,
             cwd=cwd,
             project=project,
-            response=(
-                f"Managed Codex auto-attach exited with code {exit_code}; "
-                + ("bridge cleanup completed." if stop_error is None else f"bridge cleanup failed: {stop_error}")
-            ),
+            response=(f"Managed Codex auto-attach exited with code {exit_code}; " "bridge left running for reattach."),
         )
         typer.secho(
-            f"Auto-attach exited with code {exit_code}. Managed bridge cleanup was "
-            + ("successful." if stop_error is None else f"not successful: {stop_error}"),
+            f"Auto-attach exited with code {exit_code}. " "Managed Codex session is still running and reattachable.",
             fg=typer.colors.YELLOW,
         )
-    elif stop_error is not None:
+        typer.echo(f"Attach: {attach_cmd}")
+        return
+
+    stop_error = bridge_stopper.stop(reason=_CODEX_STOP_REASON_TERMINAL_DISCONNECTED)
+    remove_managed_provider_contract(
+        provider="codex",
+        session_id=result.session_id,
+        config_dir=resolved_config_dir,
+        config_dir_is_provider_home=True,
+    )
+    if stop_error is not None:
         _emit_warp_cli_agent_event(
             event="stop",
             session_id=result.session_id,

@@ -53,6 +53,7 @@ Codex launch modes:
 - **TUI-attached managed**: long-running Codex app-server plus visible `codex` TUI attached through `--remote`.
 - **Detached-UI managed**: long-running Codex app-server and Longhouse bridge, but no visible terminal TUI. Browser/iOS remote launch uses this mode so the session remains steerable from Longhouse without opening a terminal window.
 - **One-shot/batch**: prompt is passed to a provider process and the process exits after one turn. Do not call this "headless" in managed-session code or docs; it is a different execution model and is not equivalent to detached-ui managed control.
+- A nonzero `codex --remote` auto-attach exit is a foreground TUI/client-link failure, not proof the managed session ended. Preserve the bridge and print a reattach command; only explicit stop paths should terminate the bridge/app-server.
 
 Bridge state compatibility:
 
