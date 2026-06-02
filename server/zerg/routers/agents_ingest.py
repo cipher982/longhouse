@@ -83,8 +83,11 @@ def _ship_trace_id(ship_trace: dict | None) -> str | None:
 _INGEST_CHUNK_BY_LABEL: dict[str, int] = {
     "ingest-live": 200,
     "ingest": 500,
-    "ingest-replay": 1000,
-    "ingest-scan": 1000,
+    # Archive repair can arrive as a large historical backlog after reboot or
+    # deploy repair. Keep these chunks modest so replay cannot monopolize the
+    # single SQLite writer long enough to starve health and launch requests.
+    "ingest-replay": 100,
+    "ingest-scan": 100,
 }
 
 
@@ -202,8 +205,7 @@ def _record_server_fanout_observation(
         record_session_observation(
             db,
             observation_id=(
-                f"server_fanout:{session_id}:"
-                f"{trace_id or payload.get('latest_event_id') or payload.get('server_fanout_at_ms')}"
+                f"server_fanout:{session_id}:" f"{trace_id or payload.get('latest_event_id') or payload.get('server_fanout_at_ms')}"
             ),
             session_id=session_id,
             runtime_key=None,
@@ -329,9 +331,7 @@ async def decompress_if_gzipped(request: Request) -> tuple[bytes, int, str]:
         if len(body) > MAX_DECOMPRESSED_BODY_BYTES:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=(
-                    f"Identity body exceeds {MAX_DECOMPRESSED_BODY_BYTES} bytes"
-                ),
+                detail=(f"Identity body exceeds {MAX_DECOMPRESSED_BODY_BYTES} bytes"),
             )
     else:
         raise HTTPException(
@@ -353,10 +353,7 @@ def _decompress_bounded_gzip(body: bytes) -> bytes:
             if len(out) + len(chunk) > MAX_DECOMPRESSED_BODY_BYTES:
                 raise HTTPException(
                     status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                    detail=(
-                        f"Decompressed gzip body exceeds "
-                        f"{MAX_DECOMPRESSED_BODY_BYTES} bytes"
-                    ),
+                    detail=(f"Decompressed gzip body exceeds " f"{MAX_DECOMPRESSED_BODY_BYTES} bytes"),
                 )
             out.extend(chunk)
     return bytes(out)
@@ -374,10 +371,7 @@ def _decompress_bounded_zstd(body: bytes) -> bytes:
             if len(out) + len(chunk) > MAX_DECOMPRESSED_BODY_BYTES:
                 raise HTTPException(
                     status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                    detail=(
-                        f"Decompressed zstd body exceeds "
-                        f"{MAX_DECOMPRESSED_BODY_BYTES} bytes"
-                    ),
+                    detail=(f"Decompressed zstd body exceeds " f"{MAX_DECOMPRESSED_BODY_BYTES} bytes"),
                 )
             out.extend(chunk)
     return bytes(out)
