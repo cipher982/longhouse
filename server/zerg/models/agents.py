@@ -592,7 +592,6 @@ class AgentEvent(AgentsBase):
         ),
         Index("ix_events_session_timestamp", "session_id", "timestamp"),
         Index("ix_events_session_branch_timestamp", "session_id", "branch_id", "timestamp"),
-        Index("ix_events_session_branch_thread_timestamp", "session_id", "branch_id", "thread_id", "timestamp"),
         Index("ix_events_role_tool", "role", "tool_name"),
     )
 

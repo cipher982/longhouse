@@ -28,10 +28,12 @@ def test_initialize_database_sqlite_creates_tables(tmp_path):
     assert "events_fts" in tables
 
     event_indexes = {item["name"] for item in inspector.get_indexes("events")}
-    assert "ix_events_session_branch_thread_timestamp" in event_indexes
+    assert "ix_events_session_branch_timestamp" in event_indexes
+    assert "ix_events_thread_id" in event_indexes
+    assert "ix_events_session_branch_thread_timestamp" not in event_indexes
 
 
-def test_initialize_database_sqlite_bounds_thread_projection_queries(tmp_path):
+def test_initialize_database_sqlite_bounds_projection_queries_without_heavy_thread_index(tmp_path):
     db_path = tmp_path / "zerg.db"
     engine = make_engine(f"sqlite:///{db_path}")
 
@@ -46,18 +48,17 @@ def test_initialize_database_sqlite_bounds_thread_projection_queries(tmp_path):
                 FROM events
                 WHERE session_id = :session_id
                   AND branch_id = :branch_id
-                  AND (thread_id = :thread_id OR thread_id IS NULL)
                 """
             ),
             {
                 "session_id": "019e89b4-abc5-7460-9122-c51dc20a9bfb",
                 "branch_id": 20339,
-                "thread_id": "d80edca3-ed6d-412d-9182-42b5f77f14b9",
             },
         ).fetchall()
 
     plan = "\n".join(str(row[-1]) for row in plan_rows)
-    assert "ix_events_session_branch_thread_timestamp" in plan
+    assert "ix_events_session_branch_timestamp" in plan
+    assert "ix_events_session_branch_thread_timestamp" not in plan
     assert "ix_events_thread_id" not in plan
 
 

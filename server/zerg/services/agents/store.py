@@ -2632,14 +2632,31 @@ class AgentsStore:
         row = self.db.query(AgentSession.primary_thread_id).filter(AgentSession.id == session_id).first()
         return row[0] if row is not None else None
 
-    def _apply_event_thread_filter(self, stmt, session_id: UUID, thread_id: UUID | None):
+    def _event_thread_predicate(self, session_id: UUID, thread_id: UUID | None):
         if thread_id is not None:
-            return stmt.where(AgentEvent.thread_id == thread_id)
+            return AgentEvent.thread_id == thread_id
 
         effective_thread_id = self._default_event_thread_id(session_id)
         if effective_thread_id is None:
+            return None
+
+        has_primary_thread_events = (
+            self.db.query(AgentEvent.id)
+            .filter(AgentEvent.session_id == session_id)
+            .filter(AgentEvent.thread_id == effective_thread_id)
+            .limit(1)
+            .first()
+            is not None
+        )
+        if has_primary_thread_events:
+            return AgentEvent.thread_id == effective_thread_id
+        return AgentEvent.thread_id.is_(None)
+
+    def _apply_event_thread_filter(self, stmt, session_id: UUID, thread_id: UUID | None):
+        predicate = self._event_thread_predicate(session_id, thread_id)
+        if predicate is None:
             return stmt
-        return stmt.where(or_(AgentEvent.thread_id == effective_thread_id, AgentEvent.thread_id.is_(None)))
+        return stmt.where(predicate)
 
     def get_session_events(
         self,
