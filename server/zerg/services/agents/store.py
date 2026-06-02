@@ -2633,10 +2633,13 @@ class AgentsStore:
         return row[0] if row is not None else None
 
     def _apply_event_thread_filter(self, stmt, session_id: UUID, thread_id: UUID | None):
-        effective_thread_id = thread_id or self._default_event_thread_id(session_id)
+        if thread_id is not None:
+            return stmt.where(AgentEvent.thread_id == thread_id)
+
+        effective_thread_id = self._default_event_thread_id(session_id)
         if effective_thread_id is None:
             return stmt
-        return stmt.where(AgentEvent.thread_id == effective_thread_id)
+        return stmt.where(or_(AgentEvent.thread_id == effective_thread_id, AgentEvent.thread_id.is_(None)))
 
     def get_session_events(
         self,
