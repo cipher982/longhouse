@@ -226,10 +226,10 @@ Rules are ordered by strength of evidence.
    `TimelineConnectivityBanner.authRequired`.
 2. Any successful snapshot sets `SnapshotReachability.reachable`, clears
    snapshot failure counters, and refreshes `lastUpdatedAt`.
-3. Any stream event or heartbeat refreshes `lastUpdatedAt`.
-   - `connected` is freshness evidence on first connect only. On reconnect,
-     wait for the snapshot bootstrap or a real heartbeat/upsert/remove before
-     stamping freshness.
+3. Data-bearing stream events (`session_upsert` / `session_remove`) refresh
+   `lastUpdatedAt`; transport-only events (`connected` / `heartbeat`) do not.
+   - On reconnect, wait for the snapshot bootstrap or a data-bearing stream
+     event before stamping freshness.
 4. Intentional lifecycle stops are diagnostics only and do not alter snapshot
    reachability or user banner.
 5. Stream disconnects are diagnostics only and do not alter snapshot
@@ -241,8 +241,9 @@ Rules are ordered by strength of evidence.
    failure with no usable data becomes `offline`.
 8. OS no-connectivity evidence from `NWPathMonitor` may accelerate `offline`,
    but only when no trustworthy fresh data is available.
-9. Recovery is edge-triggered: a stream heartbeat/event or successful snapshot
-   clears visible degraded/offline state as soon as the state is trustworthy.
+9. Recovery is edge-triggered: a data-bearing stream event or successful
+   snapshot clears visible degraded/offline state as soon as the state is
+   trustworthy.
 
 ## UX contract
 
@@ -394,7 +395,7 @@ Add a structured debug event for banner transitions so field logs can answer:
 - Auth expiry is rendered as sign-in-required, not offline.
 - Backgrounding or navigating away does not increment product-health failure
   counters.
-- A successful stream heartbeat/event or REST snapshot clears visible warnings.
+- A data-bearing stream event or REST snapshot clears visible warnings.
 - Field logs can explain every visible banner transition from concrete evidence.
 - The reducer is clock-injected and covered at freshness thresholds.
 

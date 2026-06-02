@@ -34,7 +34,7 @@ enum StreamDisconnectReason: Equatable {
     case unknown
 }
 
-enum TimelineStreamFreshnessSignal: Equatable {
+enum TimelineStreamSignal: Equatable {
     case firstConnected
     case reconnected
     case heartbeat
@@ -53,7 +53,7 @@ enum TimelineConnectivityEvent: Equatable {
     case snapshotSucceeded(hasLoadedData: Bool)
     case snapshotFailed
     case authFailed
-    case streamSignal(TimelineStreamFreshnessSignal)
+    case streamSignal(TimelineStreamSignal)
     case streamDisconnected(StreamDisconnectReason)
     case lifecycleStopped
     case networkPathChanged(TimelineNetworkPathStatus)
@@ -163,17 +163,16 @@ struct TimelineConnectivityState: Equatable {
         apply(event, now: now)
     }
 
-    private mutating func applyStreamSignal(_ signal: TimelineStreamFreshnessSignal, now: Date) {
+    private mutating func applyStreamSignal(_ signal: TimelineStreamSignal, now: Date) {
         switch signal {
-        case .firstConnected, .heartbeat:
-            lastUpdatedAt = now
+        case .firstConnected, .reconnected, .heartbeat:
+            // Transport-only signals do not prove data freshness or recovery.
+            break
         case .upsert, .remove:
             hasLoadedData = true
             lastUpdatedAt = now
-        case .reconnected:
-            break
+            recoveryActive = false
         }
-        recoveryActive = false
     }
 
     private mutating func applyNetworkPathStatus(_ status: TimelineNetworkPathStatus, now: Date) {

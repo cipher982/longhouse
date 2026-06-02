@@ -203,6 +203,46 @@ struct TimelineConnectivityTests {
     }
 
     @Test
+    func firstConnectDoesNotFreshenStaleCache() {
+        var state = TimelineConnectivityState()
+        let savedAt = now.addingTimeInterval(-300)
+
+        state.apply(.cacheLoaded(hasLoadedData: true, savedAt: savedAt), now: now)
+        state.apply(.streamSignal(.firstConnected), now: now.addingTimeInterval(1))
+
+        #expect(state.lastUpdatedAt == savedAt)
+        #expect(state.freshness(at: now.addingTimeInterval(1)) == .stale)
+        #expect(state.banner(at: now.addingTimeInterval(1)) == .none)
+    }
+
+    @Test
+    func heartbeatDoesNotFreshenStaleCache() {
+        var state = TimelineConnectivityState()
+        let savedAt = now.addingTimeInterval(-300)
+
+        state.apply(.cacheLoaded(hasLoadedData: true, savedAt: savedAt), now: now)
+        state.apply(.streamSignal(.heartbeat), now: now.addingTimeInterval(1))
+
+        #expect(state.lastUpdatedAt == savedAt)
+        #expect(state.freshness(at: now.addingTimeInterval(1)) == .stale)
+    }
+
+    @Test
+    func heartbeatDoesNotClearRecoveryWithoutFreshData() {
+        var state = TimelineConnectivityState()
+        let savedAt = now.addingTimeInterval(-300)
+
+        state.apply(.cacheLoaded(hasLoadedData: true, savedAt: savedAt), now: now)
+        state.apply(.streamDisconnected(.serverEOF), now: now.addingTimeInterval(1))
+        #expect(state.banner(at: now.addingTimeInterval(1)) == .updating)
+
+        state.apply(.streamSignal(.heartbeat), now: now.addingTimeInterval(2))
+
+        #expect(state.recoveryActive)
+        #expect(state.banner(at: now.addingTimeInterval(2)) == .updating)
+    }
+
+    @Test
     func reconnectDoesNotStampFreshnessUntilBootstrapOrRealEvent() {
         var state = TimelineConnectivityState(
             reachability: .reachable,
