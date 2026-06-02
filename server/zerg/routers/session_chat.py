@@ -6,6 +6,7 @@ Longhouse. Per-session locks prevent concurrent send collisions.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -21,6 +22,7 @@ from fastapi import status
 from pydantic import BaseModel
 from pydantic import Field
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
@@ -84,6 +86,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/sessions", tags=["session-chat"])
 agents_router = APIRouter(prefix="/agents/sessions", tags=["agents"])
 _STEER_ACTIVE_PRESENCE_STATES = frozenset({"thinking", "running"})
+_MANAGED_LOCAL_SQLITE_LOCK_RETRY_DELAYS = (0.15, 0.5, 1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +131,39 @@ class RemoteSessionLaunchResponse(BaseModel):
     launch_state: RemoteLaunchLifecycleState
     launch_error_code: RemoteLaunchErrorCode | None = None
     launch_error_message: str | None = None
+
+
+def _is_sqlite_database_locked(exc: OperationalError) -> bool:
+    text = str(getattr(exc, "orig", exc)).lower()
+    return "database is locked" in text or "database table is locked" in text
+
+
+async def _launch_managed_local_session_with_lock_retry(db: Session, params: ManagedLocalLaunchParams):
+    for attempt in range(len(_MANAGED_LOCAL_SQLITE_LOCK_RETRY_DELAYS) + 1):
+        try:
+            return launch_managed_local_session_sync(db, params)
+        except OperationalError as exc:
+            if not _is_sqlite_database_locked(exc):
+                raise
+            db.rollback()
+            if attempt >= len(_MANAGED_LOCAL_SQLITE_LOCK_RETRY_DELAYS):
+                raise ManagedLocalLaunchError(
+                    "Managed local launch is waiting for the local database writer; retry shortly.",
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                ) from exc
+            delay = _MANAGED_LOCAL_SQLITE_LOCK_RETRY_DELAYS[attempt]
+            logger.warning(
+                "Managed local launch hit SQLite writer lock; retrying",
+                extra={
+                    "attempt": attempt + 1,
+                    "retry_delay_seconds": delay,
+                    "provider": params.provider,
+                    "runner_target": params.runner_target,
+                },
+            )
+            await asyncio.sleep(delay)
+
+    raise AssertionError("unreachable managed-local launch retry state")
 
 
 class RemoteSessionContinueRequest(BaseModel):
@@ -570,9 +606,9 @@ async def launch_managed_local_this_device(
         )
         # Managed-local launch is a tiny user-facing write that must not wait
         # behind archive ingest/replay jobs already occupying the single writer.
-        # Let SQLite arbitrate directly; launch_managed_local_session_sync
-        # owns its commit/rollback boundary.
-        result = launch_managed_local_session_sync(db, params)
+        # Retry short SQLite writer-lock contention directly; the launcher owns
+        # the successful commit boundary.
+        result = await _launch_managed_local_session_with_lock_retry(db, params)
     except ManagedLocalLaunchError as exc:
         db.rollback()
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc

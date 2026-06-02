@@ -4,6 +4,7 @@ import asyncio
 import os
 from types import SimpleNamespace
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
@@ -246,6 +247,87 @@ def test_this_device_launch_does_not_use_write_serializer(monkeypatch, tmp_path)
     assert response.status_code == 200, response.text
     assert payload["managed_transport"] == "codex_app_server"
     assert session.source_runner_id is None
+
+
+def test_this_device_launch_retries_sqlite_writer_lock(monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    from zerg.routers import session_chat
+
+    class DummyDB:
+        def __init__(self):
+            self.rollbacks = 0
+
+        def rollback(self):
+            self.rollbacks += 1
+
+    db = DummyDB()
+    expected = object()
+    sleeps: list[float] = []
+    calls = 0
+
+    def fake_launch(_db, _params):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OperationalError("INSERT", {}, Exception("database is locked"))
+        return expected
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(session_chat, "launch_managed_local_session_sync", fake_launch)
+    monkeypatch.setattr(session_chat.asyncio, "sleep", fake_sleep)
+
+    result = asyncio.run(
+        session_chat._launch_managed_local_session_with_lock_retry(
+            db,
+            SimpleNamespace(provider="codex", runner_target="cinder"),
+        )
+    )
+
+    assert result is expected
+    assert calls == 2
+    assert db.rollbacks == 1
+    assert sleeps == [session_chat._MANAGED_LOCAL_SQLITE_LOCK_RETRY_DELAYS[0]]
+
+
+def test_this_device_launch_reports_503_after_sqlite_writer_lock_retries(monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    from zerg.routers import session_chat
+
+    class DummyDB:
+        def __init__(self):
+            self.rollbacks = 0
+
+        def rollback(self):
+            self.rollbacks += 1
+
+    db = DummyDB()
+    sleeps: list[float] = []
+
+    def fake_launch(_db, _params):
+        raise OperationalError("INSERT", {}, Exception("database is locked"))
+
+    async def fake_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(session_chat, "launch_managed_local_session_sync", fake_launch)
+    monkeypatch.setattr(session_chat.asyncio, "sleep", fake_sleep)
+
+    with pytest.raises(session_chat.ManagedLocalLaunchError) as exc_info:
+        asyncio.run(
+            session_chat._launch_managed_local_session_with_lock_retry(
+                db,
+                SimpleNamespace(provider="codex", runner_target="cinder"),
+            )
+        )
+
+    assert exc_info.value.status_code == 503
+    assert "database writer" in exc_info.value.detail
+    assert db.rollbacks == len(session_chat._MANAGED_LOCAL_SQLITE_LOCK_RETRY_DELAYS) + 1
+    assert sleeps == list(session_chat._MANAGED_LOCAL_SQLITE_LOCK_RETRY_DELAYS)
 
 
 def test_this_device_launch_rejects_claude_without_native_channels(monkeypatch, tmp_path):
