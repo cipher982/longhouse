@@ -53,6 +53,7 @@ scripts:
   - 'scripts/**'
 
 runtime_image:
+  - '.dockerignore'
   - 'bun.lock'
   - 'config/**'
   - 'docker/entrypoint.sh'
@@ -63,6 +64,7 @@ runtime_image:
   - '.github/workflows/runtime-image.yml'
 
 deploy_verify:
+  - '.dockerignore'
   - 'bun.lock'
   - 'config/**'
   - 'docker/entrypoint.sh'
