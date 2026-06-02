@@ -156,6 +156,7 @@ def _phase_signal_freshness_ms(event: RuntimeEventIngest, phase: str) -> int | N
 class RuntimeEventIngest(BaseModel):
     runtime_key: str = Field(..., min_length=1, max_length=255)
     session_id: UUID | None = None
+    thread_id: UUID | None = None
     provider: str = Field(..., min_length=1, max_length=64)
     device_id: str | None = Field(None, max_length=255)
     source: str = Field(..., min_length=1, max_length=64)
@@ -603,6 +604,7 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
             db,
             event,
             received_at=received_at,
+            thread_id=event.thread_id,
             load_observation=not bridge_transcript_event,
         )
         if not observation_result.inserted:
@@ -651,6 +653,7 @@ def runtime_event_from_observation(observation) -> RuntimeEventIngest | None:
             str(observation.session_id or "unknown"),
         ),
         session_id=observation.session_id,
+        thread_id=observation.thread_id,
         provider=observation.provider,
         device_id=observation.device_id,
         source=observation.source,
@@ -746,7 +749,7 @@ def _ensure_state(db: Session, event: RuntimeEventIngest) -> SessionRuntimeState
     occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
     from zerg.services.agents.kernel_writes import ensure_thread_id_for_session
 
-    thread_id = ensure_thread_id_for_session(db, event.session_id) if event.session_id is not None else None
+    thread_id = event.thread_id or (ensure_thread_id_for_session(db, event.session_id) if event.session_id is not None else None)
     state = SessionRuntimeState(
         runtime_key=event.runtime_key,
         session_id=event.session_id,
@@ -795,7 +798,9 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         state.session_id = event.session_id
         from zerg.services.agents.kernel_writes import ensure_thread_id_for_session
 
-        state.thread_id = ensure_thread_id_for_session(db, event.session_id)
+        state.thread_id = event.thread_id or ensure_thread_id_for_session(db, event.session_id)
+    elif event.thread_id is not None and state.thread_id != event.thread_id:
+        state.thread_id = event.thread_id
     if event.provider and state.provider != event.provider:
         state.provider = event.provider
     if event.device_id is not None and state.device_id != event.device_id:

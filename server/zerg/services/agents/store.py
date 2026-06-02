@@ -1228,12 +1228,14 @@ class AgentsStore:
         session_obj = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
         if session_obj is None:
             return
+        primary_thread_id = session_obj.primary_thread_id
 
         user_count = (
             self.db.query(func.count())
             .select_from(AgentEvent)
             .filter(AgentEvent.session_id == session_id)
             .filter(AgentEvent.branch_id == head_branch_id)
+            .filter(AgentEvent.thread_id == primary_thread_id if primary_thread_id is not None else text("1=1"))
             .filter(durable_transcript_event_predicate())
             .filter(AgentEvent.role == "user")
             .filter(
@@ -1250,6 +1252,7 @@ class AgentsStore:
             .select_from(AgentEvent)
             .filter(AgentEvent.session_id == session_id)
             .filter(AgentEvent.branch_id == head_branch_id)
+            .filter(AgentEvent.thread_id == primary_thread_id if primary_thread_id is not None else text("1=1"))
             .filter(durable_transcript_event_predicate())
             .filter(AgentEvent.role == "assistant")
             .filter(AgentEvent.tool_name.is_(None))
@@ -1261,6 +1264,7 @@ class AgentsStore:
             .select_from(AgentEvent)
             .filter(AgentEvent.session_id == session_id)
             .filter(AgentEvent.branch_id == head_branch_id)
+            .filter(AgentEvent.thread_id == primary_thread_id if primary_thread_id is not None else text("1=1"))
             .filter(durable_transcript_event_predicate())
             .filter(AgentEvent.role == "assistant")
             .filter(AgentEvent.tool_name.isnot(None))
@@ -1726,32 +1730,35 @@ class AgentsStore:
         from zerg.services.session_runtime import ingest_runtime_events
         from zerg.services.session_runtime import runtime_key_for_session
 
-        runtime_key = runtime_key_for_session(data.provider, str(session_id))
+        runtime_identity = str(thread_id) if resolved_child_thread is not None else str(session_id)
+        runtime_key = runtime_key_for_session(data.provider, runtime_identity)
         runtime_events = [
             RuntimeEventIngest(
                 runtime_key=runtime_key,
                 session_id=session_id,
+                thread_id=thread_id,
                 provider=data.provider,
                 device_id=data.device_id,
                 source="agents_ingest",
                 kind="binding_signal",
                 occurred_at=_normalize_utc_naive(data.started_at) or datetime.now(timezone.utc).replace(tzinfo=None),
-                dedupe_key=f"binding:{runtime_key}:{session_id}",
+                dedupe_key=f"binding:{runtime_key}:{thread_id}",
                 payload={},
             )
         ]
         if events_inserted > 0 and transcript_changed and latest_inserted_timestamp is not None:
-            latest_event_id = self.get_latest_event_id(session_id)
+            progress_anchor = latest_inserted_event_id or latest_inserted_timestamp.isoformat()
             runtime_events.append(
                 RuntimeEventIngest(
                     runtime_key=runtime_key,
                     session_id=session_id,
+                    thread_id=thread_id,
                     provider=data.provider,
                     device_id=data.device_id,
                     source="agents_ingest",
                     kind="progress_signal",
                     occurred_at=latest_inserted_timestamp,
-                    dedupe_key=f"progress:{session_id}:{latest_event_id or latest_inserted_timestamp.isoformat()}",
+                    dedupe_key=f"progress:{runtime_key}:{progress_anchor}",
                     payload={"progress_kind": "transcript_append"},
                 )
             )

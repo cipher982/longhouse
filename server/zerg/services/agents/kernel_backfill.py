@@ -420,16 +420,28 @@ def backfill_subagent_child_threads(db: Session) -> dict[str, int]:
         parent_session = db.query(AgentSession).filter(AgentSession.id == parent_session_id).first()
         if parent_session is None:
             continue
+        primary_thread_id = parent_session.primary_thread_id
         parent_session.user_messages = (
-            db.query(func.count(AgentEvent.id)).filter(AgentEvent.session_id == parent_session_id, AgentEvent.role == "user").scalar() or 0
+            db.query(func.count(AgentEvent.id))
+            .filter(AgentEvent.session_id == parent_session_id)
+            .filter(AgentEvent.thread_id == primary_thread_id if primary_thread_id is not None else text("1=1"))
+            .filter(AgentEvent.role == "user")
+            .scalar()
+            or 0
         )
         parent_session.assistant_messages = (
-            db.query(func.count(AgentEvent.id)).filter(AgentEvent.session_id == parent_session_id, AgentEvent.role == "assistant").scalar()
+            db.query(func.count(AgentEvent.id))
+            .filter(AgentEvent.session_id == parent_session_id)
+            .filter(AgentEvent.thread_id == primary_thread_id if primary_thread_id is not None else text("1=1"))
+            .filter(AgentEvent.role == "assistant")
+            .scalar()
             or 0
         )
         parent_session.tool_calls = (
             db.query(func.count(AgentEvent.id))
-            .filter(AgentEvent.session_id == parent_session_id, AgentEvent.tool_name.isnot(None))
+            .filter(AgentEvent.session_id == parent_session_id)
+            .filter(AgentEvent.thread_id == primary_thread_id if primary_thread_id is not None else text("1=1"))
+            .filter(AgentEvent.tool_name.isnot(None))
             .scalar()
             or 0
         )

@@ -26,6 +26,7 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionEmbedding
+from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTask
 from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
@@ -156,6 +157,13 @@ def test_claude_child_ingest_creates_child_thread_not_session(tmp_path):
         child_source_line = db.query(AgentSourceLine).filter(AgentSourceLine.source_path.like("%/subagents/%")).one()
         assert child_source_line.session_id == PARENT_ID
         assert child_source_line.thread_id == child_thread.id
+
+        child_runtime = db.query(SessionRuntimeState).filter(SessionRuntimeState.thread_id == child_thread.id).one()
+        assert child_runtime.session_id == PARENT_ID
+        assert str(child_thread.id) in child_runtime.runtime_key
+
+        parent = db.query(AgentSession).filter(AgentSession.id == PARENT_ID).one()
+        assert parent.user_messages == 1
 
         aliases = _thread_alias_values(db, child_thread.id)
         assert ("longhouse_session_id", str(CHILD_ID)) in aliases
@@ -328,7 +336,11 @@ def test_backfill_moves_existing_leaked_child_session_under_parent(tmp_path):
         assert child_source_line.session_id == PARENT_ID
         assert child_source_line.thread_id == child_thread.id
         parent_session = db.query(AgentSession).filter(AgentSession.id == PARENT_ID).one()
-        assert parent_session.user_messages == db.query(AgentEvent).filter(AgentEvent.session_id == PARENT_ID, AgentEvent.role == "user").count()
+        parent_user_events = (
+            db.query(AgentEvent).filter(AgentEvent.session_id == PARENT_ID, AgentEvent.role == "user").count()
+        )
+        assert parent_user_events == 2
+        assert parent_session.user_messages == 1
         assert bool(parent_session.needs_embedding) is True
 
         second_report = backfill_subagent_child_threads(db)
