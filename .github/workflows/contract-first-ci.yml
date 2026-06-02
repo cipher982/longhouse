@@ -27,6 +27,7 @@ jobs:
       frontend:       ${{ steps.filter.outputs.frontend }}
       engine:         ${{ steps.filter.outputs.engine }}
       schemas:        ${{ steps.filter.outputs.schemas }}
+      ci_plumbing:    ${{ steps.filter.outputs.ci_plumbing }}
       packaging:      ${{ steps.filter.outputs.packaging }}
       runner:         ${{ steps.filter.outputs.runner }}
       ios:            ${{ steps.filter.outputs.ios }}
@@ -44,7 +45,7 @@ jobs:
 
   validate:
     needs: changes
-    if: ${{ (needs.changes.outputs.schemas == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    if: ${{ (needs.changes.outputs.schemas == 'true' || needs.changes.outputs.scripts == 'true' || needs.changes.outputs.ci_plumbing == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     name: "Validation"
     timeout-minutes: 15
