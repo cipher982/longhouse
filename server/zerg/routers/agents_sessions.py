@@ -253,7 +253,7 @@ async def list_sessions(
 
 
 @router.get("/sessions/archive-manifest", response_model=SessionArchiveManifestResponse)
-async def list_archive_manifest(
+def list_archive_manifest(
     include_test: bool = Query(False, description="Include test/e2e sessions in archive enumeration"),
     hide_autonomous: bool = Query(False, description="Hide autonomous sessions from archive enumeration"),
     days_back: int = Query(90, ge=1, le=3650, description="Days to look back"),
@@ -295,7 +295,7 @@ async def list_archive_manifest(
 
 
 @router.get("/sessions/startup-context", response_model=StartupContextResponse)
-async def get_startup_context(
+def get_startup_context(
     project: str = Query(..., description="Project name to get startup continuity for"),
     limit: int = Query(
         STARTUP_CONTEXT_DEFAULT_LIMIT,
@@ -357,7 +357,7 @@ async def get_startup_context(
 
 
 @router.get("/sessions/summary", response_model=SessionsSummaryResponse)
-async def list_session_summaries(
+def list_session_summaries(
     project: Optional[str] = Query(None, description="Filter by project"),
     provider: Optional[str] = Query(None, description="Filter by provider"),
     environment: Optional[str] = Query(None, description="Filter by environment (production, development, test, e2e)"),
@@ -432,7 +432,7 @@ async def list_session_summaries(
 
 
 @router.get("/sessions/wall", response_model=WallResponse)
-async def wall_query(
+def wall_query(
     repo: Optional[str] = Query(None, description="Filter by git_repo (substring match)"),
     project: Optional[str] = Query(None, description="Filter by project name"),
     days: int = Query(7, ge=1, le=90, description="Days to look back"),
@@ -451,7 +451,7 @@ async def wall_query(
 
 
 @router.get("/sessions/{session_id}/tail")
-async def session_tail(
+def session_tail(
     session_id: UUID,
     limit: int = Query(30, ge=1, le=100, description="Number of recent events to return"),
     db: Session = Depends(get_db),
@@ -519,7 +519,7 @@ async def get_session_turns(
 
 
 @router.get("/sessions/{session_id}/turns/{turn_id}", response_model=SessionTurnEnvelopeResponse)
-async def get_session_turn_detail(
+def get_session_turn_detail(
     session_id: UUID,
     turn_id: int,
     db: Session = Depends(get_db),
@@ -546,7 +546,7 @@ async def get_session_turn_detail(
 
 
 @router.get("/sessions/active", response_model=ActiveSessionsResponse)
-async def list_active_sessions(
+def list_active_sessions(
     project: Optional[str] = Query(None, description="Filter by project"),
     status_filter: Optional[str] = Query(
         None,
@@ -636,7 +636,7 @@ async def list_active_sessions(
 
 
 @router.get("/sessions/{session_id}/preview", response_model=SessionPreviewResponse)
-async def preview_session(
+def preview_session(
     session_id: UUID,
     last_n: int = Query(6, ge=2, le=20, description="Number of messages to return"),
     db: Session = Depends(get_db),
@@ -671,7 +671,7 @@ async def preview_session(
 
 
 @router.get("/filters", response_model=FiltersResponse)
-async def get_filters(
+def get_filters(
     response: Response,
     days_back: int = Query(90, ge=1, le=365, description="Days to look back for distinct values"),
     db: Session = Depends(get_db),
@@ -746,7 +746,7 @@ async def set_session_loop_mode(
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
-async def get_session(
+def get_session(
     session_id: UUID,
     response: Response,
     db: Session = Depends(get_db),
@@ -804,7 +804,7 @@ async def get_session(
 
 
 @router.get("/sessions/{session_id}/thread", response_model=SessionThreadResponse)
-async def get_session_thread(
+def get_session_thread(
     session_id: UUID,
     response: Response,
     db: Session = Depends(get_db),
@@ -878,9 +878,12 @@ async def get_session_thread(
 
 
 @router.get("/sessions/{session_id}/events", response_model=EventsListResponse)
-async def get_session_events(
+def get_session_events(
     session_id: UUID,
-    thread_id: Optional[UUID] = Query(None, description="Thread lane to inspect; defaults to the primary session thread"),
+    thread_id: Optional[UUID] = Query(
+        None,
+        description="Thread lane to inspect; defaults to the primary session thread",
+    ),
     roles: Optional[str] = Query(None, description="Comma-separated roles to filter"),
     tool_name: Optional[str] = Query(None, description="Exact tool name filter, e.g. Bash"),
     query: Optional[str] = Query(None, description="Content search within session events"),
@@ -981,10 +984,13 @@ async def get_session_events(
 
 
 @router.get("/sessions/{session_id}/projection", response_model=SessionProjectionResponse)
-async def get_session_projection(
+def get_session_projection(
     session_id: UUID,
     response: Response,
-    thread_id: Optional[UUID] = Query(None, description="Thread lane to project; defaults to the primary session thread"),
+    thread_id: Optional[UUID] = Query(
+        None,
+        description="Thread lane to project; defaults to the primary session thread",
+    ),
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
     anchor: str = Query("start", description="Page anchor: start|tail"),
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
@@ -1117,7 +1123,7 @@ async def get_session_projection(
 
 
 @router.get("/sessions/{session_id}/workspace", response_model=SessionWorkspaceResponse)
-async def get_session_workspace(
+def get_session_workspace(
     session_id: UUID,
     response: Response,
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
@@ -1143,7 +1149,7 @@ async def get_session_workspace(
 
 
 @router.get("/sessions/{session_id}/export")
-async def export_session(
+def export_session(
     session_id: UUID,
     branch_mode: str = Query("head", description="Branch projection mode for export: head|all"),
     db: Session = Depends(get_db),
@@ -1187,7 +1193,7 @@ async def export_session(
 
 
 @router.get("/sessions/{session_id}/archive-bundle", response_model=SessionArchiveBundleResponse)
-async def export_session_archive_bundle(
+def export_session_archive_bundle(
     session_id: UUID,
     branch_mode: str = Query("head", description="Archive bundle branch projection mode. v1 supports head only."),
     db: Session = Depends(get_db),

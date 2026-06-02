@@ -6,6 +6,7 @@ the current listing, search, runtime-overlay, and response-header behavior.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -43,7 +44,8 @@ async def list_agent_sessions(
             owner_id=owner_id,
         )
 
-    return _list_lexical_sessions(
+    return await asyncio.to_thread(
+        _list_lexical_sessions,
         db=db,
         params=params,
         effective_sort=effective_sort,
@@ -133,7 +135,10 @@ def _list_lexical_sessions(
         sessions = apply_sort(sessions, effective_sort, bm25_order=bm25_order)
 
     session_ids = [s.id for s in sessions]
-    match_map = store.get_session_matches(session_ids, params.query, context_mode=params.context_mode) if params.query else {}
+    if params.query:
+        match_map = store.get_session_matches(session_ids, params.query, context_mode=params.context_mode)
+    else:
+        match_map = {}
     response_sessions = build_session_response_list(
         db=db,
         store=store,

@@ -305,7 +305,7 @@ async def stream_timeline_sessions(
 
 
 @router.get("/sessions/summary", response_model=SessionsSummaryResponse)
-async def list_timeline_session_summaries(
+def list_timeline_session_summaries(
     response: Response,
     project: Optional[str] = Query(None, description="Filter by project"),
     provider: Optional[str] = Query(None, description="Filter by provider"),
@@ -324,7 +324,7 @@ async def list_timeline_session_summaries(
 ):
     effective_limit = min(limit, 100)
     response.headers["X-Limit-Cap"] = "100"
-    return await _sessions_router.list_session_summaries(
+    return _sessions_router.list_session_summaries(
         project=project,
         provider=provider,
         environment=environment,
@@ -342,12 +342,12 @@ async def list_timeline_session_summaries(
 
 
 @router.get("/sessions/{session_id}/preview", response_model=SessionPreviewResponse)
-async def preview_timeline_session(
+def preview_timeline_session(
     session_id: UUID,
     last_n: int = Query(6, ge=2, le=20, description="Number of messages to return"),
     db: Session = Depends(get_db),
 ):
-    return await _sessions_router.preview_session(
+    return _sessions_router.preview_session(
         session_id=session_id,
         last_n=last_n,
         db=db,
@@ -357,7 +357,7 @@ async def preview_timeline_session(
 
 
 @router.get("/filters", response_model=FiltersResponse)
-async def get_timeline_filters(
+def get_timeline_filters(
     response: Response,
     days_back: int = Query(90, ge=1, le=365, description="Days to look back for distinct values"),
     db: Session = Depends(get_db),
@@ -375,7 +375,7 @@ async def get_timeline_filters(
             return cached.response
 
     with timing.span("distinct_filters"):
-        filters = await _sessions_router.get_filters(
+        filters = _sessions_router.get_filters(
             days_back=days_back,
             response=response,
             db=db,
@@ -432,13 +432,13 @@ async def set_timeline_session_loop_mode(
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
-async def get_timeline_session(
+def get_timeline_session(
     session_id: UUID,
     response: Response,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_browser_user),
 ):
-    return await _sessions_router.get_session(
+    return _sessions_router.get_session(
         session_id=session_id,
         response=response,
         db=db,
@@ -449,13 +449,13 @@ async def get_timeline_session(
 
 
 @router.get("/sessions/{session_id}/thread", response_model=SessionThreadResponse)
-async def get_timeline_session_thread(
+def get_timeline_session_thread(
     session_id: UUID,
     response: Response,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_browser_user),
 ):
-    return await _sessions_router.get_session_thread(
+    return _sessions_router.get_session_thread(
         session_id=session_id,
         response=response,
         db=db,
@@ -492,12 +492,12 @@ async def get_timeline_session_turns(
 
 
 @router.get("/sessions/{session_id}/turns/{turn_id}", response_model=SessionTurnEnvelopeResponse)
-async def get_timeline_session_turn(
+def get_timeline_session_turn(
     session_id: UUID,
     turn_id: int,
     db: Session = Depends(get_db),
 ):
-    return await _sessions_router.get_session_turn_detail(
+    return _sessions_router.get_session_turn_detail(
         session_id=session_id,
         turn_id=turn_id,
         db=db,
@@ -507,7 +507,7 @@ async def get_timeline_session_turn(
 
 
 @router.get("/sessions/{session_id}/events", response_model=EventsListResponse)
-async def get_timeline_session_events(
+def get_timeline_session_events(
     session_id: UUID,
     thread_id: Optional[UUID] = Query(
         None,
@@ -523,7 +523,7 @@ async def get_timeline_session_events(
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: Session = Depends(get_db),
 ):
-    return await _sessions_router.get_session_events(
+    return _sessions_router.get_session_events(
         session_id=session_id,
         thread_id=thread_id,
         roles=roles,
@@ -541,7 +541,7 @@ async def get_timeline_session_events(
 
 
 @router.get("/sessions/{session_id}/projection", response_model=SessionProjectionResponse)
-async def get_timeline_session_projection(
+def get_timeline_session_projection(
     session_id: UUID,
     response: Response,
     thread_id: Optional[UUID] = Query(
@@ -554,7 +554,7 @@ async def get_timeline_session_projection(
     offset: int = Query(0, ge=0, description="Offset within the stitched projection"),
     db: Session = Depends(get_db),
 ):
-    return await _sessions_router.get_session_projection(
+    return _sessions_router.get_session_projection(
         session_id=session_id,
         thread_id=thread_id,
         branch_mode=branch_mode,
@@ -569,7 +569,7 @@ async def get_timeline_session_projection(
 
 
 @router.get("/sessions/{session_id}/workspace", response_model=SessionWorkspaceResponse)
-async def get_timeline_session_workspace(
+def get_timeline_session_workspace(
     session_id: UUID,
     response: Response,
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
@@ -592,7 +592,7 @@ async def get_timeline_session_workspace(
 
 
 @router.get("/sessions/{session_id}/mobile-tail", response_model=SessionMobileTailResponse)
-async def get_timeline_session_mobile_tail(
+def get_timeline_session_mobile_tail(
     session_id: UUID,
     response: Response,
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
@@ -622,12 +622,12 @@ async def get_timeline_session_mobile_tail(
 
 
 @router.get("/sessions/{session_id}/export")
-async def export_timeline_session(
+def export_timeline_session(
     session_id: UUID,
     branch_mode: str = Query("head", description="Branch projection mode for export: head|all"),
     db: Session = Depends(get_db),
 ) -> Response:
-    return await _sessions_router.export_session(
+    return _sessions_router.export_session(
         session_id=session_id,
         branch_mode=branch_mode,
         db=db,

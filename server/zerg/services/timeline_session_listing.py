@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -119,6 +120,22 @@ async def list_timeline_sessions_for_browser(
             compatibility_raw=True,
         )
 
+    return await asyncio.to_thread(
+        _list_timeline_sessions_for_browser_sync,
+        db=db,
+        params=params,
+        timing=timing,
+        owner_id=owner_id,
+    )
+
+
+def _list_timeline_sessions_for_browser_sync(
+    *,
+    db: Session,
+    params: TimelineSessionListParams,
+    timing: ServerTimingRecorder | None,
+    owner_id: int | None,
+) -> TimelineSessionListResult:
     store = AgentsStore(db)
     since = datetime.now(timezone.utc) - timedelta(days=params.days_back)
     with _timing_span(timing, "list_threads"):
