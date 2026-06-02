@@ -395,6 +395,32 @@ def _needs_session_identity_kernel_backfill(conn: Connection) -> tuple[bool, str
     if _has_null_value(conn, "session_turns", "run_id"):
         reasons.append("session_turns.run_id has NULL rows")
 
+    if _table_exists(conn, "source_lines") and _table_exists(conn, "events"):
+        leaked_source_line = conn.execute(
+            text(
+                """
+                SELECT 1
+                FROM source_lines
+                WHERE source_path LIKE '%/subagents/%'
+                  AND instr(source_path, CAST(session_id AS TEXT) || '/subagents/') = 0
+                LIMIT 1
+                """
+            )
+        ).fetchone()
+        leaked_event = conn.execute(
+            text(
+                """
+                SELECT 1
+                FROM events
+                WHERE source_path LIKE '%/subagents/%'
+                  AND instr(source_path, CAST(session_id AS TEXT) || '/subagents/') = 0
+                LIMIT 1
+                """
+            )
+        ).fetchone()
+        if leaked_source_line is not None or leaked_event is not None:
+            reasons.append("provider subagent transcript rows are stored as standalone sessions")
+
     threads_missing_run = conn.execute(
         text(
             """

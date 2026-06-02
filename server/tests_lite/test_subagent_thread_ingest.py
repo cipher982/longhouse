@@ -27,6 +27,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
+from zerg.services.agents.kernel_backfill import backfill_subagent_child_threads
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
@@ -279,6 +280,37 @@ def test_env_style_sidechain_without_child_path_remains_timeline_visible(tmp_pat
         total, rows = store.list_timeline_thread_page(hide_autonomous=True, include_test=True)
         assert total == 1
         assert rows[0][1] == str(sidechain_id)
+
+
+def test_backfill_moves_existing_leaked_child_session_under_parent(tmp_path):
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        store.ingest_session(_root_payload())
+
+        leaked_payload = _claude_child_payload().model_copy(update={"parent_provider_session_id": None})
+        leaked = store.ingest_session(leaked_payload)
+        assert leaked.session_id == CHILD_ID
+        assert db.query(AgentSession).count() == 2
+
+        report = backfill_subagent_child_threads(db)
+
+        assert report["candidates_resolved"] == 1
+        assert report["sessions_removed"] == 1
+        assert db.query(AgentSession).count() == 1
+        assert db.query(AgentSession).filter(AgentSession.id == CHILD_ID).first() is None
+
+        child_thread = db.query(SessionThread).filter(SessionThread.branch_kind == "subagent").one()
+        assert child_thread.session_id == PARENT_ID
+        child_event = db.query(AgentEvent).filter(AgentEvent.content_text == "Deploy crims on drose.io").one()
+        assert child_event.session_id == PARENT_ID
+        assert child_event.thread_id == child_thread.id
+        child_source_line = db.query(AgentSourceLine).filter(AgentSourceLine.source_path.like("%/subagents/%")).one()
+        assert child_source_line.session_id == PARENT_ID
+        assert child_source_line.thread_id == child_thread.id
+
+        second_report = backfill_subagent_child_threads(db)
+        assert second_report["candidates_resolved"] == 0
 
 
 def test_timeline_sessions_api_collapses_parent_with_children(tmp_path):

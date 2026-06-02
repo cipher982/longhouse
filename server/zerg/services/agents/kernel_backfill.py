@@ -14,23 +14,129 @@ See docs/specs/session-identity-kernel.md.
 
 from __future__ import annotations
 
+import json
+import re
 from datetime import datetime
 from datetime import timezone
+from uuid import UUID
 
 from sqlalchemy import update as sql_update
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionInput
+from zerg.models.agents import SessionLaunchAttempt
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
 from zerg.models.agents import SessionTurn
+from zerg.services.agents.kernel_writes import ensure_subagent_thread
+from zerg.services.agents.kernel_writes import resolve_primary_thread_by_provider_session_id
+from zerg.services.raw_json_compression import decode_raw_json
+
+_CLAUDE_SUBAGENT_PARENT_RE = re.compile(
+    r"/(?P<parent>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/subagents/"
+)
+_CLAUDE_AGENT_FILE_RE = re.compile(r"/agent-(?P<agent>[^/]+)\.jsonl$")
+
+
+def _ensure_head_branch(db: Session, session_id: UUID) -> AgentSessionBranch:
+    head = (
+        db.query(AgentSessionBranch)
+        .filter(AgentSessionBranch.session_id == session_id)
+        .filter(AgentSessionBranch.is_head == 1)
+        .order_by(AgentSessionBranch.id.desc())
+        .first()
+    )
+    if head is not None:
+        return head
+    head = AgentSessionBranch(
+        session_id=session_id,
+        parent_branch_id=None,
+        branched_at_source_path=None,
+        branched_at_offset=None,
+        branch_reason="root",
+        is_head=1,
+    )
+    db.add(head)
+    db.flush()
+    return head
+
+
+def _subagent_source_parent(source_path: str | None) -> str | None:
+    if not source_path:
+        return None
+    match = _CLAUDE_SUBAGENT_PARENT_RE.search(source_path.replace("\\", "/"))
+    return match.group("parent") if match is not None else None
+
+
+def _subagent_id_from_source_path(source_path: str | None) -> str | None:
+    if not source_path:
+        return None
+    match = _CLAUDE_AGENT_FILE_RE.search(source_path.replace("\\", "/"))
+    return match.group("agent") if match is not None else None
+
+
+def _sidechain_metadata_from_raw(raw_json: str | None) -> tuple[str | None, str | None, str | None]:
+    if not raw_json:
+        return None, None, None
+    try:
+        value = json.loads(raw_json)
+    except json.JSONDecodeError:
+        return None, None, None
+    if not isinstance(value, dict) or value.get("isSidechain") is not True:
+        return None, None, None
+    parent = value.get("sessionId")
+    agent_id = value.get("agentId")
+    prompt_id = value.get("promptId")
+    return (
+        parent if isinstance(parent, str) else None,
+        agent_id if isinstance(agent_id, str) else None,
+        prompt_id if isinstance(prompt_id, str) else None,
+    )
+
+
+def _candidate_subagent_sessions(db: Session) -> dict[UUID, set[str]]:
+    candidates: dict[UUID, set[str]] = {}
+    for session_id, source_path in (
+        db.query(AgentSourceLine.session_id, AgentSourceLine.source_path).filter(AgentSourceLine.source_path.like("%/subagents/%")).all()
+    ):
+        candidates.setdefault(session_id, set()).add(source_path)
+    for session_id, source_path in (
+        db.query(AgentEvent.session_id, AgentEvent.source_path).filter(AgentEvent.source_path.like("%/subagents/%")).all()
+    ):
+        candidates.setdefault(session_id, set()).add(source_path)
+    return candidates
+
+
+def _raw_sidechain_metadata_for_session(db: Session, session_id: UUID) -> tuple[str | None, str | None, str | None]:
+    for row in (
+        db.query(AgentSourceLine)
+        .filter(AgentSourceLine.session_id == session_id)
+        .order_by(AgentSourceLine.source_offset.asc(), AgentSourceLine.id.asc())
+        .limit(50)
+        .all()
+    ):
+        parent, agent_id, prompt_id = _sidechain_metadata_from_raw(decode_raw_json(row))
+        if parent:
+            return parent, agent_id, prompt_id
+    for row in (
+        db.query(AgentEvent)
+        .filter(AgentEvent.session_id == session_id)
+        .order_by(AgentEvent.source_offset.asc(), AgentEvent.id.asc())
+        .limit(50)
+        .all()
+    ):
+        parent, agent_id, prompt_id = _sidechain_metadata_from_raw(decode_raw_json(row))
+        if parent:
+            return parent, agent_id, prompt_id
+    return None, None, None
 
 
 def backfill_root_threads(db: Session) -> dict[str, int]:
@@ -54,13 +160,7 @@ def backfill_root_threads(db: Session) -> dict[str, int]:
     # primary_thread_id. (Aliases and per-session thread checks still need a
     # walk if pointers are set but a session lacks an alias — we rely on the
     # caller's idempotency for that, since it's the rarer fix-up path.)
-    if (
-        db.query(AgentSession.id)
-        .filter(AgentSession.primary_thread_id.is_(None))
-        .limit(1)
-        .first()
-        is None
-    ):
+    if db.query(AgentSession.id).filter(AgentSession.primary_thread_id.is_(None)).limit(1).first() is None:
         return {
             "sessions_seen": 0,
             "threads_created": 0,
@@ -72,11 +172,7 @@ def backfill_root_threads(db: Session) -> dict[str, int]:
     for session in sessions:
         sessions_seen += 1
 
-        thread = (
-            db.query(SessionThread)
-            .filter(SessionThread.session_id == session.id, SessionThread.is_primary == 1)
-            .one_or_none()
-        )
+        thread = db.query(SessionThread).filter(SessionThread.session_id == session.id, SessionThread.is_primary == 1).one_or_none()
         if thread is None:
             thread = SessionThread(
                 session_id=session.id,
@@ -154,36 +250,170 @@ def backfill_child_thread_ids(db: Session) -> dict[str, int]:
     # Cheap early-out: if no child row anywhere has thread_id IS NULL, we're done.
     has_null = False
     for model in _CHILD_THREAD_ID_TABLES:
-        if (
-            db.query(model.thread_id)
-            .filter(model.thread_id.is_(None))
-            .limit(1)
-            .first()
-            is not None
-        ):
+        if db.query(model.thread_id).filter(model.thread_id.is_(None)).limit(1).first() is not None:
             has_null = True
             break
     if not has_null:
         return counts
 
-    primaries = dict(
-        db.query(SessionThread.session_id, SessionThread.id)
-        .filter(SessionThread.is_primary == 1)
-        .all()
-    )
+    primaries = dict(db.query(SessionThread.session_id, SessionThread.id).filter(SessionThread.is_primary == 1).all())
     for model in _CHILD_THREAD_ID_TABLES:
         updated = 0
         for session_id, thread_id in primaries.items():
-            stmt = (
-                sql_update(model)
-                .where(model.session_id == session_id, model.thread_id.is_(None))
-                .values(thread_id=thread_id)
-            )
+            stmt = sql_update(model).where(model.session_id == session_id, model.thread_id.is_(None)).values(thread_id=thread_id)
             result = db.execute(stmt)
             updated += int(result.rowcount or 0)
         counts[model.__tablename__] = updated
     db.flush()
     return counts
+
+
+def backfill_subagent_child_threads(db: Session) -> dict[str, int]:
+    """Move leaked provider subagent sessions under their parent session.
+
+    Older engine/server pairs imported Claude ``subagents/agent-*.jsonl`` files
+    as standalone sessions. This backfill resolves those rows by durable source
+    evidence, creates a child ``SessionThread`` under the parent session, and
+    re-stamps transcript/runtime rows to the parent session + child thread.
+    """
+
+    candidates_seen = 0
+    candidates_resolved = 0
+    sessions_removed = 0
+    events_moved = 0
+    source_lines_moved = 0
+    observations_moved = 0
+    turns_moved = 0
+    inputs_moved = 0
+    runtime_rows_moved = 0
+    runs_moved = 0
+
+    for child_session_id, source_paths in _candidate_subagent_sessions(db).items():
+        candidates_seen += 1
+        child_session = db.query(AgentSession).filter(AgentSession.id == child_session_id).first()
+        if child_session is None:
+            continue
+
+        source_path = sorted(source_paths)[0] if source_paths else None
+        parent_provider_id = None
+        for candidate_path in sorted(source_paths):
+            parent_provider_id = _subagent_source_parent(candidate_path)
+            if parent_provider_id:
+                source_path = candidate_path
+                break
+        raw_parent_id, raw_agent_id, raw_prompt_id = _raw_sidechain_metadata_for_session(db, child_session_id)
+        parent_provider_id = parent_provider_id or raw_parent_id
+        if not parent_provider_id or str(parent_provider_id) == str(child_session_id):
+            continue
+
+        parent_thread = resolve_primary_thread_by_provider_session_id(
+            db,
+            provider=child_session.provider,
+            provider_session_id=parent_provider_id,
+        )
+        if parent_thread is None:
+            continue
+
+        child_thread = ensure_subagent_thread(
+            db,
+            parent_thread=parent_thread,
+            provider=child_session.provider,
+            source_path=source_path,
+            child_longhouse_session_id=str(child_session.id),
+            child_provider_session_id=str(child_session.id),
+            subagent_id=raw_agent_id or _subagent_id_from_source_path(source_path),
+            subagent_prompt_id=raw_prompt_id,
+            parent_provider_session_id=parent_provider_id,
+        )
+        parent_branch = _ensure_head_branch(db, parent_thread.session_id)
+
+        old_thread_ids = [row.id for row in db.query(SessionThread.id).filter(SessionThread.session_id == child_session_id).all()]
+
+        result = db.execute(
+            sql_update(AgentEvent)
+            .where(AgentEvent.session_id == child_session_id)
+            .values(
+                session_id=parent_thread.session_id,
+                thread_id=child_thread.id,
+                branch_id=parent_branch.id,
+            )
+        )
+        events_moved += int(result.rowcount or 0)
+
+        result = db.execute(
+            sql_update(AgentSourceLine)
+            .where(AgentSourceLine.session_id == child_session_id)
+            .values(
+                session_id=parent_thread.session_id,
+                thread_id=child_thread.id,
+                branch_id=parent_branch.id,
+            )
+        )
+        source_lines_moved += int(result.rowcount or 0)
+
+        result = db.execute(
+            sql_update(SessionObservation)
+            .where(SessionObservation.session_id == child_session_id)
+            .values(session_id=parent_thread.session_id, thread_id=child_thread.id)
+        )
+        observations_moved += int(result.rowcount or 0)
+
+        result = db.execute(
+            sql_update(SessionTurn)
+            .where(SessionTurn.session_id == child_session_id)
+            .values(session_id=parent_thread.session_id, thread_id=child_thread.id)
+        )
+        turns_moved += int(result.rowcount or 0)
+
+        result = db.execute(
+            sql_update(SessionInput)
+            .where(SessionInput.session_id == child_session_id)
+            .values(session_id=parent_thread.session_id, thread_id=child_thread.id)
+        )
+        inputs_moved += int(result.rowcount or 0)
+
+        result = db.execute(
+            sql_update(SessionRuntimeState)
+            .where(SessionRuntimeState.session_id == child_session_id)
+            .values(session_id=parent_thread.session_id, thread_id=child_thread.id)
+        )
+        runtime_rows_moved += int(result.rowcount or 0)
+
+        if old_thread_ids:
+            result = db.execute(sql_update(SessionRun).where(SessionRun.thread_id.in_(old_thread_ids)).values(thread_id=child_thread.id))
+            runs_moved += int(result.rowcount or 0)
+            db.execute(
+                sql_update(SessionLaunchAttempt)
+                .where(SessionLaunchAttempt.thread_id.in_(old_thread_ids))
+                .values(session_id=parent_thread.session_id, thread_id=child_thread.id)
+            )
+
+        candidates_resolved += 1
+
+        remaining = 0
+        for model in (AgentEvent, AgentSourceLine, SessionObservation, SessionTurn, SessionInput, SessionRuntimeState):
+            remaining += db.query(model).filter(model.session_id == child_session_id).limit(1).count()
+        if remaining == 0:
+            if old_thread_ids:
+                db.query(SessionThreadAlias).filter(SessionThreadAlias.thread_id.in_(old_thread_ids)).delete(synchronize_session=False)
+                db.query(SessionThread).filter(SessionThread.id.in_(old_thread_ids)).delete(synchronize_session=False)
+            db.query(AgentSessionBranch).filter(AgentSessionBranch.session_id == child_session_id).delete(synchronize_session=False)
+            db.query(AgentSession).filter(AgentSession.id == child_session_id).delete(synchronize_session=False)
+            sessions_removed += 1
+
+    db.flush()
+    return {
+        "candidates_seen": candidates_seen,
+        "candidates_resolved": candidates_resolved,
+        "sessions_removed": sessions_removed,
+        "events_moved": events_moved,
+        "source_lines_moved": source_lines_moved,
+        "observations_moved": observations_moved,
+        "turns_moved": turns_moved,
+        "inputs_moved": inputs_moved,
+        "runtime_rows_moved": runtime_rows_moved,
+        "runs_moved": runs_moved,
+    }
 
 
 def backfill_runs_and_connections(db: Session) -> dict[str, int]:
@@ -221,20 +451,9 @@ def backfill_runs_and_connections(db: Session) -> dict[str, int]:
         .limit(1)
         .first()
     )
-    runtime_null = (
-        db.query(SessionRuntimeState.runtime_key)
-        .filter(SessionRuntimeState.run_id.is_(None))
-        .limit(1)
-        .first()
-    )
-    turn_null = (
-        db.query(SessionTurn.id).filter(SessionTurn.run_id.is_(None)).limit(1).first()
-    )
-    if (
-        threads_missing_run_subq is None
-        and runtime_null is None
-        and turn_null is None
-    ):
+    runtime_null = db.query(SessionRuntimeState.runtime_key).filter(SessionRuntimeState.run_id.is_(None)).limit(1).first()
+    turn_null = db.query(SessionTurn.id).filter(SessionTurn.run_id.is_(None)).limit(1).first()
+    if threads_missing_run_subq is None and runtime_null is None and turn_null is None:
         return {
             "runs_created": 0,
             "connections_created": 0,
@@ -242,11 +461,7 @@ def backfill_runs_and_connections(db: Session) -> dict[str, int]:
             "turn_run_ids": 0,
         }
 
-    threads = (
-        db.query(SessionThread)
-        .filter(SessionThread.is_primary == 1)
-        .all()
-    )
+    threads = db.query(SessionThread).filter(SessionThread.is_primary == 1).all()
     now = datetime.now(timezone.utc)
 
     for thread in threads:
@@ -257,11 +472,7 @@ def backfill_runs_and_connections(db: Session) -> dict[str, int]:
             .first()
         )
         if existing_run is None:
-            session = (
-                db.query(AgentSession)
-                .filter(AgentSession.id == thread.session_id)
-                .first()
-            )
+            session = db.query(AgentSession).filter(AgentSession.id == thread.session_id).first()
             if session is None:
                 continue
             run = SessionRun(
@@ -333,7 +544,9 @@ def backfill_session_identity_kernel(db: Session) -> dict[str, dict[str, int]]:
 
     1. ``backfill_root_threads`` — primary thread + provider_session_id alias.
     2. ``backfill_child_thread_ids`` — stamp thread_id on every legacy child row.
-    3. ``backfill_runs_and_connections`` — synthesize one observe-only run +
+    3. ``backfill_subagent_child_threads`` — move leaked provider subagent
+       sessions under their parent session as child threads.
+    4. ``backfill_runs_and_connections`` — synthesize one observe-only run +
        connection per session for sessions without launcher-owned runs.
 
     Idempotent end-to-end. Safe to run on every startup or as a one-shot CLI.
@@ -342,5 +555,6 @@ def backfill_session_identity_kernel(db: Session) -> dict[str, dict[str, int]]:
     return {
         "threads": backfill_root_threads(db),
         "children": backfill_child_thread_ids(db),
+        "subagents": backfill_subagent_child_threads(db),
         "runs": backfill_runs_and_connections(db),
     }
