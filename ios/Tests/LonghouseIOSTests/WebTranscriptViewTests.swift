@@ -1,9 +1,34 @@
+import CoreGraphics
 import Foundation
 import XCTest
 
 @testable import Longhouse
 
 final class WebTranscriptViewTests: XCTestCase {
+    func testBottomInsetIncludesTabBarAreaWhenKeyboardIsClosed() {
+        let inset = SessionBottomInsetCalculator.bottomInset(
+            viewportFrame: CGRect(x: 0, y: 100, width: 393, height: 620),
+            surfaceFrame: CGRect(x: 0, y: 610, width: 393, height: 120),
+            cardFrame: CGRect(x: 12, y: 620, width: 369, height: 110),
+            keyboardPresented: false,
+            screenMaxY: 852
+        )
+
+        XCTAssertEqual(inset, 269)
+    }
+
+    func testBottomInsetDoesNotCountKeyboardHeightWhenKeyboardIsPresented() {
+        let inset = SessionBottomInsetCalculator.bottomInset(
+            viewportFrame: CGRect(x: 0, y: 100, width: 393, height: 510),
+            surfaceFrame: CGRect(x: 0, y: 500, width: 393, height: 120),
+            cardFrame: CGRect(x: 12, y: 510, width: 369, height: 110),
+            keyboardPresented: true,
+            screenMaxY: 852
+        )
+
+        XCTAssertEqual(inset, 147)
+    }
+
     func testPreparedPayloadReportsDiagnosticsFacts() {
         let payload = WebTranscriptView.preparedPayload(
             timelineItems: [
