@@ -31,6 +31,14 @@ inputs:
     description: Maximum time to wait before failing
     required: false
     default: "1200"
+  ignored_failure_jobs:
+    description: Comma- or newline-separated job names whose failures should not block this gate
+    required: false
+    default: ""
+  required_jobs:
+    description: Comma- or newline-separated job names that must complete successfully or be skipped before this gate passes
+    required: false
+    default: ""
 
 runs:
   using: composite
@@ -44,6 +52,8 @@ runs:
         REQUIRE_SUCCESS: ${{ inputs.require_success }}
         ALLOW_MISSING: ${{ inputs.allow_missing }}
         TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
+        IGNORED_FAILURE_JOBS: ${{ inputs.ignored_failure_jobs }}
+        REQUIRED_JOBS: ${{ inputs.required_jobs }}
       with:
         github-token: ${{ inputs.github_token }}
         script: |
@@ -57,11 +67,111 @@ runs:
           const timeoutSeconds = Number(process.env.TIMEOUT_SECONDS || '1200');
           const maxAttempts = Math.max(1, Math.ceil((timeoutSeconds * 1000) / delayMs));
           const missingGraceAttempts = 6;
+          const ignoredFailureJobs = new Set(
+            (process.env.IGNORED_FAILURE_JOBS || '')
+              .split(/[\n,]/)
+              .map((name) => name.trim())
+              .filter(Boolean),
+          );
+          const requiredJobs = new Set(
+            (process.env.REQUIRED_JOBS || '')
+              .split(/[\n,]/)
+              .map((name) => name.trim())
+              .filter(Boolean),
+          );
           let lastMatchedRun = null;
 
           if (!sha) {
             core.info('No head_sha supplied; skipping wait');
             return;
+          }
+
+          async function listRunJobs(run) {
+            const jobs = [];
+            let page = 1;
+            for (;;) {
+              const { data } = await github.rest.actions.listJobsForWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id,
+                per_page: 100,
+                page,
+              });
+              jobs.push(...(data.jobs || []));
+              if (!data.jobs || data.jobs.length < 100) {
+                return jobs;
+              }
+              page += 1;
+            }
+          }
+
+          function jobIsIgnored(job) {
+            return ignoredFailureJobs.has(job.name);
+          }
+
+          function isAcceptedJobConclusion(job) {
+            return job.conclusion === 'success' || job.conclusion === 'skipped';
+          }
+
+          function findBlockingJob(jobs, consideredJobs = null) {
+            const considered = consideredJobs || jobs.filter((job) => !jobIsIgnored(job));
+            return (
+              considered.find((job) => job.status !== 'completed') ||
+              considered.find((job) => job.conclusion && !isAcceptedJobConclusion(job))
+            );
+          }
+
+          function appendJobDetail(summary, blockingJob) {
+            if (!blockingJob) {
+              return summary;
+            }
+            let detail = `${summary}; blocking job="${blockingJob.name}" status=${blockingJob.status} conclusion=${blockingJob.conclusion || '-'}`;
+            if (blockingJob.runner_name) {
+              detail += ` runner="${blockingJob.runner_name}"`;
+            }
+            if (blockingJob.labels && blockingJob.labels.length) {
+              detail += ` labels="${blockingJob.labels.join(',')}"`;
+            }
+            const blockingStep = (blockingJob.steps || []).find((step) => step.status !== 'completed');
+            if (blockingStep) {
+              detail += ` step="${blockingStep.name}" step_status=${blockingStep.status} step_conclusion=${blockingStep.conclusion || '-'}`;
+            }
+            return detail;
+          }
+
+          async function ignoredFailureGatePassed(run) {
+            if (!ignoredFailureJobs.size && !requiredJobs.size) {
+              return false;
+            }
+            const jobs = await listRunJobs(run);
+            const considered = requiredJobs.size
+              ? jobs.filter((job) => requiredJobs.has(job.name))
+              : jobs.filter((job) => !jobIsIgnored(job));
+            if (requiredJobs.size) {
+              const present = new Set(considered.map((job) => job.name));
+              const missing = [...requiredJobs].filter((name) => !present.has(name));
+              if (missing.length) {
+                core.info(`${workflowId} run ${run.id}: waiting for required job(s) to appear: ${missing.join(', ')}`);
+                return false;
+              }
+            } else if (run.status !== 'completed') {
+              return false;
+            }
+            if (!considered.length) {
+              return false;
+            }
+            const blockingJob = findBlockingJob(jobs, considered);
+            if (blockingJob) {
+              core.info(appendJobDetail(`${workflowId} run ${run.id}: waiting on non-ignored jobs`, blockingJob));
+              return false;
+            }
+            const ignored = jobs.filter((job) => jobIsIgnored(job) && job.conclusion && !isAcceptedJobConclusion(job));
+            if (ignored.length) {
+              core.warning(
+                `Ignoring non-blocking failed job(s): ${ignored.map((job) => `${job.name}=${job.conclusion}`).join(', ')}`,
+              );
+            }
+            return true;
           }
 
           async function describeRun(run) {
@@ -71,33 +181,17 @@ runs:
 
             let summary = `${workflowId} run ${run.id}: status=${run.status} conclusion=${run.conclusion}`;
             try {
-              const { data } = await github.rest.actions.listJobsForWorkflowRun({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                run_id: run.id,
-                per_page: 100,
-              });
-              const jobs = data.jobs || [];
+              const jobs = await listRunJobs(run);
               const blockingJob =
+                findBlockingJob(jobs) ||
                 jobs.find((job) => job.status !== 'completed') ||
-                jobs.find((job) => job.conclusion && job.conclusion !== 'success');
+                jobs.find((job) => job.conclusion && !isAcceptedJobConclusion(job));
 
               if (!blockingJob) {
                 return summary;
               }
 
-              summary += `; blocking job="${blockingJob.name}" status=${blockingJob.status} conclusion=${blockingJob.conclusion || '-'}`;
-              if (blockingJob.runner_name) {
-                summary += ` runner="${blockingJob.runner_name}"`;
-              }
-              if (blockingJob.labels && blockingJob.labels.length) {
-                summary += ` labels="${blockingJob.labels.join(',')}"`;
-              }
-
-              const blockingStep = (blockingJob.steps || []).find((step) => step.status !== 'completed');
-              if (blockingStep) {
-                summary += ` step="${blockingStep.name}" step_status=${blockingStep.status} step_conclusion=${blockingStep.conclusion || '-'}`;
-              }
+              summary = appendJobDetail(summary, blockingJob);
             } catch (error) {
               summary += `; job detail unavailable: ${error.message || error}`;
             }
@@ -131,6 +225,9 @@ runs:
             if (run) {
               lastMatchedRun = run;
               core.info(`${workflowId} run ${run.id}: status=${run.status} conclusion=${run.conclusion}`);
+              if (await ignoredFailureGatePassed(run)) {
+                return;
+              }
               if (run.status === 'completed') {
                 if (!requireSuccess || run.conclusion === 'success') {
                   return;
