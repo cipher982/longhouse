@@ -170,7 +170,7 @@ def test_deploy_heartbeat_names_active_deploy_step() -> None:
                 "steps": [],
             },
             {
-                "name": ship_monitor.DEPLOY_AND_VERIFY_JOB,
+                "name": ship_monitor.DEPLOY_DEMO_JOB,
                 "status": "in_progress",
                 "steps": [
                     {"name": "Deploy public demo runtime", "status": "in_progress"},
@@ -186,7 +186,7 @@ def test_deploy_heartbeat_names_active_deploy_step() -> None:
     summary = ship_monitor.summarize_incomplete_runs("cipher982/longhouse", "abc123", runs)
 
     assert (
-        "Deploy and Verify #1 / Deploy demo + canary + fast smoke / "
+        "Deploy and Verify #1 / Deploy public demo runtime / "
         "Deploy public demo runtime: in_progress"
     ) in summary
 

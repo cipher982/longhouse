@@ -114,17 +114,14 @@ jobs:
           required_jobs: Backend tests,Engine tests,End-to-end tests,CLI wheel packaging
           ignored_failure_jobs: OSS onboarding smoke
 
-  deploy-and-verify:
-    name: "Deploy demo + canary + fast smoke"
+  deploy_demo:
+    name: "Deploy public demo runtime"
     runs-on: cube-deploy
     if: github.repository == 'cipher982/longhouse'
     timeout-minutes: 60
     needs: [changes, gate]
     env:
-      CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
-      CONTROL_PLANE_URL: https://control.longhouse.ai
       PUBLIC_DEMO_URL: https://longhouse.ai
-      INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN || 'demo' }}
       RUNTIME_HOST: ${{ secrets.DEPLOY_RUNTIME_HOST }}
 
     steps:
@@ -134,14 +131,6 @@ jobs:
           fetch-depth: 1
           filter: blob:none
           show-progress: false
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - name: Ensure make available
-        run: ./scripts/ci/ensure-make.sh
 
       - name: Setup SSH
         env:
@@ -189,6 +178,41 @@ jobs:
             "${{ needs.gate.outputs.runtime_image_ref }}" \
             240
 
+  reprovision_canary:
+    name: "Reprovision hosted canary"
+    runs-on: cube-deploy
+    if: github.repository == 'cipher982/longhouse'
+    timeout-minutes: 60
+    needs: [changes, gate]
+    outputs:
+      instance_id: ${{ steps.instance.outputs.instance_id }}
+      instance_url: ${{ steps.instance.outputs.instance_url }}
+      frontend_url: ${{ steps.instance.outputs.frontend_url }}
+      api_url: ${{ steps.instance.outputs.api_url }}
+    env:
+      CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
+      CONTROL_PLANE_URL: https://control.longhouse.ai
+      INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN || 'demo' }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.gate.outputs.head_sha }}
+          fetch-depth: 1
+          filter: blob:none
+          show-progress: false
+
+      - name: Wait for runtime image publish
+        if: ${{ github.event_name == 'push' && needs.changes.outputs.runtime_image == 'true' }}
+        uses: ./.github/actions/wait-for-ci
+        with:
+          head_sha: ${{ needs.gate.outputs.head_sha }}
+          head_branch: ${{ needs.gate.outputs.head_branch }}
+          github_token: ${{ github.token }}
+          workflow_id: runtime-image.yml
+          event: push
+          timeout_seconds: "1200"
+
       - name: Wait for control plane
         run: ./scripts/ci/wait-for-http.sh "$CONTROL_PLANE_URL/health" "Control plane"
 
@@ -209,9 +233,30 @@ jobs:
           . scripts/lib/hosted-instance.sh
           lh_hosted_reprovision "${{ steps.instance.outputs.instance_id }}" "${{ needs.gate.outputs.runtime_image_ref }}"
 
+  fast_smoke:
+    name: "Fast smoke + hosted QA dispatch"
+    runs-on: cube-deploy
+    if: github.repository == 'cipher982/longhouse'
+    timeout-minutes: 20
+    needs: [gate, deploy_demo, reprovision_canary]
+    env:
+      CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
+      CONTROL_PLANE_URL: https://control.longhouse.ai
+      PUBLIC_DEMO_URL: https://longhouse.ai
+      INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN || 'demo' }}
+      API_URL: ${{ needs.reprovision_canary.outputs.api_url }}
+      FRONTEND_URL: ${{ needs.reprovision_canary.outputs.frontend_url }}
+      INSTANCE_URL: ${{ needs.reprovision_canary.outputs.instance_url }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.gate.outputs.head_sha }}
+          fetch-depth: 1
+          filter: blob:none
+          show-progress: false
+
       - name: Wait for public demo, control plane, and hosted canary
-        env:
-          API_URL: ${{ steps.instance.outputs.api_url }}
         run: |
           ./scripts/ci/wait-for-http.sh "$PUBLIC_DEMO_URL/api/health" "Public demo runtime"
           ./scripts/ci/wait-for-http.sh "$CONTROL_PLANE_URL/health" "Control plane"
@@ -219,10 +264,6 @@ jobs:
 
       - name: Run fast smoke tests
         id: fast_smoke
-        env:
-          API_URL: ${{ steps.instance.outputs.api_url }}
-          FRONTEND_URL: ${{ steps.instance.outputs.frontend_url }}
-          INSTANCE_URL: ${{ steps.instance.outputs.instance_url }}
         run: ./scripts/qa/smoke-prod.sh --fast --no-llm
 
       - name: Trigger hosted live QA asynchronously
@@ -258,7 +299,7 @@ jobs:
             echo "## Runtime Deploy + Verify Results"
             echo ""
             echo "- **Hosted canary:** $INSTANCE_SUBDOMAIN"
-            echo "- **Hosted canary URL:** ${{ steps.instance.outputs.instance_url || 'unresolved' }}"
+            echo "- **Hosted canary URL:** $INSTANCE_URL"
             echo "- **Public demo:** $PUBLIC_DEMO_URL"
             echo "- **Control plane:** $CONTROL_PLANE_URL"
             echo "- **Commit:** ${{ needs.gate.outputs.head_sha }}"
@@ -289,7 +330,6 @@ jobs:
             exit 0
           fi
           COMMIT_SHA="${{ needs.gate.outputs.head_sha }}"
-          INSTANCE_URL="${{ steps.instance.outputs.instance_url }}"
           gh issue create \
             --title "Runtime deploy smoke failed for ${COMMIT_SHA:0:7}" \
             --body "$(cat <<EOF_BODY
@@ -307,7 +347,7 @@ jobs:
   profile-deploy:
     name: "Profile deploy wall time"
     runs-on: ubuntu-latest
-    needs: [changes, deploy-and-verify]
+    needs: [changes, deploy_demo, reprovision_canary, fast_smoke]
     if: ${{ always() && needs.changes.outputs.deploy_verify == 'true' }}
     steps:
       - uses: actions/checkout@v6
