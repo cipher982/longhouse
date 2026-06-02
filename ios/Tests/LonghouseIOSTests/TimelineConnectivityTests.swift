@@ -188,8 +188,22 @@ struct TimelineConnectivityTests {
 
         #expect(state.reachability == .unknown)
         #expect(state.hasLoadedData)
+        #expect(state.hasFreshnessEvidence)
         #expect(state.freshness(at: now) == .fresh)
         #expect(state.banner(at: now) == .none)
+    }
+
+    @Test
+    func emptySnapshotSuccessStillProvidesFreshness() {
+        var state = TimelineConnectivityState()
+
+        state.apply(.snapshotSucceeded(hasLoadedData: false), now: now)
+
+        #expect(state.reachability == .reachable)
+        #expect(!state.hasLoadedData)
+        #expect(state.hasFreshnessEvidence)
+        #expect(state.freshness(at: now.addingTimeInterval(1)) == .fresh)
+        #expect(state.banner(at: now.addingTimeInterval(1)) == .none)
     }
 
     @Test
@@ -238,11 +252,30 @@ struct TimelineConnectivityTests {
         state.apply(.cacheLoaded(hasLoadedData: true, savedAt: savedAt), now: now)
         state.apply(.snapshotFailed, now: now.addingTimeInterval(1))
         #expect(state.recoveryActive)
-        #expect(state.banner(at: now.addingTimeInterval(1)) == .degraded)
+        #expect(state.banner(at: now.addingTimeInterval(1)) == .updating)
 
         state.apply(.streamSignal(.heartbeat), now: now.addingTimeInterval(2))
 
         #expect(state.recoveryActive)
+        #expect(state.banner(at: now.addingTimeInterval(2)) == .updating)
+    }
+
+    @Test
+    func staleCacheNeedsRepeatedSnapshotFailuresBeforeDegradedBanner() {
+        var state = TimelineConnectivityState()
+        let savedAt = now.addingTimeInterval(-300)
+
+        state.apply(.cacheLoaded(hasLoadedData: true, savedAt: savedAt), now: now)
+        state.apply(.snapshotFailed, now: now.addingTimeInterval(1))
+
+        #expect(state.reachability == .degraded)
+        #expect(state.consecutiveSnapshotFailures == 1)
+        #expect(state.banner(at: now.addingTimeInterval(1)) == .updating)
+
+        state.apply(.snapshotFailed, now: now.addingTimeInterval(2))
+
+        #expect(state.reachability == .degraded)
+        #expect(state.consecutiveSnapshotFailures == 2)
         #expect(state.banner(at: now.addingTimeInterval(2)) == .degraded)
     }
 

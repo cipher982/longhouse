@@ -165,6 +165,8 @@ Suggested thresholds are implementation constants, not product vocabulary:
 - `unknown`: no successful snapshot/cache/stream event yet
 
 The reducer must take a clock so tests can prove boundary behavior.
+Successful empty snapshots still count as freshness evidence: an empty timeline
+can be current.
 
 ### `TimelineConnectivityBanner`
 

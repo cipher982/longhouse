@@ -68,11 +68,30 @@ struct TimelineConnectivityState: Equatable {
     var consecutiveSnapshotFailures = 0
     var lastUpdatedAt: Date?
     var hasLoadedData = false
+    var hasFreshnessEvidence = false
     var recoveryActive = false
     var networkPathStatus: TimelineNetworkPathStatus = .unknown
 
+    init(
+        reachability: SnapshotReachability = .unknown,
+        consecutiveSnapshotFailures: Int = 0,
+        lastUpdatedAt: Date? = nil,
+        hasLoadedData: Bool = false,
+        hasFreshnessEvidence: Bool? = nil,
+        recoveryActive: Bool = false,
+        networkPathStatus: TimelineNetworkPathStatus = .unknown
+    ) {
+        self.reachability = reachability
+        self.consecutiveSnapshotFailures = consecutiveSnapshotFailures
+        self.lastUpdatedAt = lastUpdatedAt
+        self.hasLoadedData = hasLoadedData
+        self.hasFreshnessEvidence = hasFreshnessEvidence ?? hasLoadedData
+        self.recoveryActive = recoveryActive
+        self.networkPathStatus = networkPathStatus
+    }
+
     func freshness(at now: Date) -> TimelineFreshness {
-        guard hasLoadedData, let lastUpdatedAt else { return .unknown }
+        guard hasFreshnessEvidence, let lastUpdatedAt else { return .unknown }
         let age = max(0, now.timeIntervalSince(lastUpdatedAt))
         if age <= Self.freshAfterSeconds { return .fresh }
         if age <= Self.staleAfterSeconds { return .aging }
@@ -96,7 +115,7 @@ struct TimelineConnectivityState: Equatable {
             case .aging:
                 return .updating
             case .stale:
-                return .degraded
+                return consecutiveSnapshotFailures >= Self.offlineAfterSnapshotFailures ? .degraded : .updating
             }
         case .offline:
             switch freshness {
@@ -115,18 +134,22 @@ struct TimelineConnectivityState: Equatable {
         case .cacheLoaded(let hasLoadedData, let savedAt):
             self.hasLoadedData = hasLoadedData
             if hasLoadedData {
+                hasFreshnessEvidence = true
                 lastUpdatedAt = savedAt
             }
         case .snapshotSucceeded(let hasLoadedData):
             reachability = .reachable
             consecutiveSnapshotFailures = 0
             self.hasLoadedData = hasLoadedData
+            hasFreshnessEvidence = true
             lastUpdatedAt = now
             recoveryActive = false
         case .snapshotFailed:
             consecutiveSnapshotFailures += 1
             recoveryActive = true
             if hasLoadedData {
+                reachability = .degraded
+            } else if hasFreshnessEvidence && consecutiveSnapshotFailures < Self.offlineAfterSnapshotFailures {
                 reachability = .degraded
             } else if consecutiveSnapshotFailures >= Self.offlineAfterSnapshotFailures {
                 reachability = .offline
@@ -176,6 +199,7 @@ struct TimelineConnectivityState: Equatable {
             break
         case .upsert, .remove:
             hasLoadedData = true
+            hasFreshnessEvidence = true
             lastUpdatedAt = now
             recoveryActive = false
         }

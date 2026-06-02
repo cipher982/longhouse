@@ -66,6 +66,22 @@ struct TimelineViewModelConnectivityTests {
     }
 
     @Test
+    func emptySnapshotSuccessStillCountsAsFreshConnectivity() async {
+        let api = FakeTimelineSessionsClient([.success([])])
+        let stream = TimelineStreamRecorder()
+        let model = makeModel(api: api, stream: stream)
+        let appState = makeAppState()
+
+        await model.refresh(using: appState, force: true)
+        let loadedAt = model.connectivity.lastUpdatedAt ?? Date()
+
+        #expect(model.connectivity.reachability == .reachable)
+        #expect(!model.connectivity.hasLoadedData)
+        #expect(model.connectivity.hasFreshnessEvidence)
+        #expect(model.connectionBanner(at: loadedAt.addingTimeInterval(1)) == .none)
+    }
+
+    @Test
     func streamAuthFailureShowsAuthRequiredInsteadOfOffline() async {
         let session = makeSession()
         let api = FakeTimelineSessionsClient([.success([session])])
