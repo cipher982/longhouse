@@ -37,6 +37,7 @@ from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTurn
+from zerg.services.agents.store import AgentsStore
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 
 
@@ -547,6 +548,51 @@ def test_timeline_session_workspace_projects_claude_channel_display_text(tmp_pat
         with session_local() as db:
             stored = db.query(AgentEvent).filter(AgentEvent.id == event_id).one()
             assert stored.content_text == raw_text
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
+
+
+def test_timeline_session_workspace_uses_page_bounded_tool_state(tmp_path, monkeypatch):
+    session_local = _make_db(tmp_path)
+    base = datetime.now(timezone.utc)
+    with session_local() as db:
+        _seed_user(db)
+        session_id = _seed_session(db)
+        call = AgentEvent(
+            session_id=session_id,
+            role="assistant",
+            tool_name="Bash",
+            tool_call_id="toolu_page",
+            tool_input_json={"command": "true"},
+            timestamp=base,
+        )
+        result = AgentEvent(
+            session_id=session_id,
+            role="tool",
+            tool_call_id="toolu_page",
+            tool_output_text="ok",
+            timestamp=base + timedelta(seconds=1),
+        )
+        db.add_all([call, result])
+        db.commit()
+
+    def fail_full_ledger_tool_scan(*args, **kwargs):
+        raise AssertionError("workspace first paint must not load full-session tool events")
+
+    monkeypatch.setattr(AgentsStore, "get_session_tool_call_events", fail_full_ledger_tool_scan)
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            response = client.get(f"/timeline/sessions/{session_id}/workspace?limit=50")
+
+        assert response.status_code == 200
+        events = [item["event"] for item in response.json()["projection"]["items"] if item["kind"] == "event"]
+        call_event = next(event for event in events if event["role"] == "assistant")
+        assert call_event["tool_call_state"] == "completed"
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()

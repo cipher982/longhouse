@@ -2720,6 +2720,53 @@ class AgentsStore:
         stmt = self._apply_event_thread_filter(stmt, session_id, thread_id)
         return list(self.db.execute(stmt).scalars().all())
 
+    def get_tool_call_pairing_events_for_page(
+        self,
+        session_id: UUID,
+        call_events: list[AgentEvent],
+        *,
+        thread_id: UUID | None = None,
+        branch_mode: str = "head",
+    ) -> list[AgentEvent]:
+        """Return visible page calls plus matching result rows.
+
+        First paint should be proportional to the rendered page, not to the
+        full session ledger. Modern providers expose ``tool_call_id``; legacy
+        rows without an id keep a FIFO-compatible result query from the first
+        visible call onward.
+        """
+        visible_calls = [event for event in call_events if (event.role or "").strip().lower() == "assistant" and event.tool_name]
+        if not visible_calls:
+            return []
+
+        call_ids = sorted({event.tool_call_id for event in visible_calls if event.tool_call_id})
+        include_legacy_fifo = any(not event.tool_call_id for event in visible_calls)
+        min_timestamp = min(event.timestamp for event in visible_calls)
+
+        result_filters = []
+        if call_ids:
+            result_filters.append(AgentEvent.tool_call_id.in_(call_ids))
+        if include_legacy_fifo:
+            result_filters.append(AgentEvent.tool_call_id.is_(None))
+
+        stmt = (
+            select(AgentEvent)
+            .where(AgentEvent.session_id == session_id)
+            .where(visible_transcript_event_predicate())
+            .where(AgentEvent.role == "tool")
+            .where(AgentEvent.timestamp >= min_timestamp)
+            .where(or_(*result_filters))
+            .order_by(AgentEvent.timestamp, AgentEvent.id)
+        )
+        stmt = self._apply_branch_mode_filter(stmt, session_id, branch_mode)
+        stmt = self._apply_event_thread_filter(stmt, session_id, thread_id)
+
+        result_events = list(self.db.execute(stmt).scalars().all())
+        event_by_id = {int(event.id): event for event in visible_calls}
+        for event in result_events:
+            event_by_id[int(event.id)] = event
+        return sorted(event_by_id.values(), key=lambda event: (event.timestamp, int(event.id)))
+
     def count_session_events(
         self,
         session_id: UUID,

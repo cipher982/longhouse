@@ -1703,9 +1703,9 @@ def build_tool_call_state_map(
     present, FIFO otherwise. A call without a paired result is "dropped" if
     the session is closed (lifecycle terminal or ended_at stamped) or the call
     is older than ``DROPPED_TOOL_AGE``; otherwise "running". A paired call is
-    "completed". The events list MUST be the full session ledger (head branch),
-    not a paginated slice, or completed/running calls outside the page will be
-    misclassified as dropped.
+    "completed". The events list must include the assistant tool-call rows being
+    rendered plus any matching result rows needed to classify those calls; it
+    should not be the full session ledger on first-paint paths.
     """
     now_utc = normalize_utc(now) or datetime.now(timezone.utc)
     threshold = now_utc - DROPPED_TOOL_AGE

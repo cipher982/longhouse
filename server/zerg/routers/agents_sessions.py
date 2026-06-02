@@ -939,7 +939,12 @@ def get_session_events(
     head_branch_id = store.get_head_branch_id(session_id)
     input_origin_map = build_event_input_origin_map(store, events)
     tool_call_state_map = build_tool_call_state_map(
-        store.get_session_tool_call_events(session_id, thread_id=thread_id, branch_mode=branch_mode),
+        store.get_tool_call_pairing_events_for_page(
+            session_id,
+            events,
+            thread_id=thread_id,
+            branch_mode=branch_mode,
+        ),
         session_closed=is_session_closed(session),
     )
 
@@ -1046,10 +1051,14 @@ def get_session_projection(
             sessions_by_id.setdefault(item.session.id, item.session)
     tool_call_state_map: dict[int, Any] = {}
     for sid, path_session in sessions_by_id.items():
+        page_events = [
+            item.event for item in projection.items if item.kind == "event" and item.event is not None and item.session.id == sid
+        ]
         tool_call_state_map.update(
             build_tool_call_state_map(
-                store.get_session_tool_call_events(
+                store.get_tool_call_pairing_events_for_page(
                     sid,
+                    page_events,
                     thread_id=thread_id if sid == session.id else None,
                     branch_mode=branch_mode,
                 ),

@@ -358,9 +358,16 @@ def _build_projection_response(
             sessions_by_id.setdefault(item.session.id, item.session)
     tool_call_state_map: dict[int, object] = {}
     for sid, path_session in sessions_by_id.items():
+        page_events = [
+            item.event for item in projection.items if item.kind == "event" and item.event is not None and item.session.id == sid
+        ]
         tool_call_state_map.update(
             build_tool_call_state_map(
-                store.get_session_tool_call_events(sid, branch_mode=branch_mode),
+                store.get_tool_call_pairing_events_for_page(
+                    sid,
+                    page_events,
+                    branch_mode=branch_mode,
+                ),
                 session_closed=is_session_closed(path_session),
             )
         )
