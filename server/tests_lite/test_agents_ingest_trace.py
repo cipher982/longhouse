@@ -7,6 +7,10 @@ from types import SimpleNamespace
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
+import pytest
+from fastapi import HTTPException
+from fastapi import Response
+from fastapi import status
 from fastapi.testclient import TestClient
 
 from zerg.database import Base
@@ -17,6 +21,8 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
+from zerg.routers.agents_ingest import _acquire_archive_ingest_slot
+from zerg.routers.agents_ingest import _release_archive_ingest_slot
 from zerg.routers.agents_ingest import _write_serializer_label_for_ship_trace
 
 
@@ -46,6 +52,40 @@ def test_ship_trace_live_transcript_uses_live_ingest_label():
     assert _write_serializer_label_for_ship_trace({"work_context": "reconciliation_scan"}) == "ingest-scan"
     assert _write_serializer_label_for_ship_trace({"work_context": "spool_replay"}) == "ingest-replay"
     assert _write_serializer_label_for_ship_trace(None) == "ingest"
+
+
+@pytest.mark.asyncio
+async def test_archive_ingest_admission_rejects_when_archive_slot_busy():
+    acquired = await _acquire_archive_ingest_slot("ingest-replay", Response())
+    assert acquired is True
+    try:
+        response = Response()
+        with pytest.raises(HTTPException) as exc:
+            await _acquire_archive_ingest_slot("ingest-scan", response)
+        assert exc.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        assert "Archive ingest backlog is throttled" in exc.value.detail
+        assert response.headers["Retry-After"] == "5"
+    finally:
+        _release_archive_ingest_slot(acquired)
+
+
+@pytest.mark.asyncio
+async def test_archive_ingest_admission_rejects_when_writer_busy(monkeypatch):
+    class BusySerializer:
+        writer_active = True
+        queue_depth = 0
+
+    monkeypatch.setattr(
+        "zerg.services.write_serializer.get_write_serializer",
+        lambda: BusySerializer(),
+    )
+    response = Response()
+
+    with pytest.raises(HTTPException) as exc:
+        await _acquire_archive_ingest_slot("ingest-replay", response)
+
+    assert exc.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert response.headers["Retry-After"] == "5"
 
 
 def test_agents_ingest_persists_ship_trace_runtime_event(tmp_path):

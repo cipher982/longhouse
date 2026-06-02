@@ -91,10 +91,47 @@ _INGEST_CHUNK_BY_LABEL: dict[str, int] = {
 }
 
 _ARCHIVE_INGEST_LABELS = {"ingest-replay", "ingest-scan"}
+_ARCHIVE_INGEST_BACKPRESSURE_DETAIL = "Archive ingest backlog is throttled; retry shortly"
+_ARCHIVE_INGEST_RETRY_AFTER_SECONDS = "5"
+_ARCHIVE_INGEST_SLOTS = asyncio.Semaphore(1)
 
 
 def _ingest_chunk_for_label(label: str) -> int:
     return _INGEST_CHUNK_BY_LABEL.get(label, 200)
+
+
+def _raise_archive_ingest_backpressure(response: Response) -> None:
+    response.headers["Retry-After"] = _ARCHIVE_INGEST_RETRY_AFTER_SECONDS
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=_ARCHIVE_INGEST_BACKPRESSURE_DETAIL,
+    )
+
+
+async def _acquire_archive_ingest_slot(write_label: str, response: Response) -> bool:
+    """Admit at most one background archive ingest into heavy request work.
+
+    Archive replay/scan batches are reconstructable from local provider files.
+    When a backlog wakes after deploy or repair, rejecting before body decode is
+    much cheaper than letting many requests synchronously decompress and parse
+    only to queue behind the single SQLite writer.
+    """
+    if write_label not in _ARCHIVE_INGEST_LABELS:
+        return False
+
+    from zerg.services.write_serializer import get_write_serializer
+
+    ws = get_write_serializer()
+    if ws.writer_active or ws.queue_depth > 0 or _ARCHIVE_INGEST_SLOTS.locked():
+        _raise_archive_ingest_backpressure(response)
+
+    await _ARCHIVE_INGEST_SLOTS.acquire()
+    return True
+
+
+def _release_archive_ingest_slot(acquired: bool) -> None:
+    if acquired:
+        _ARCHIVE_INGEST_SLOTS.release()
 
 
 def _json_timestamp(value: datetime) -> str:
@@ -309,8 +346,12 @@ async def decompress_if_gzipped(request: Request) -> tuple[bytes, int, str]:
     Unsupported encodings are rejected with 415.
     """
     body = await request.body()
-    wire_bytes = len(body)
     content_encoding = request.headers.get("Content-Encoding", "").lower()
+    return await asyncio.to_thread(_decode_body_bytes, body, content_encoding)
+
+
+def _decode_body_bytes(body: bytes, content_encoding: str) -> tuple[bytes, int, str]:
+    wire_bytes = len(body)
 
     if content_encoding == "gzip":
         try:
@@ -412,16 +453,21 @@ async def ingest_session(
     decode_finished_at_ms: int | None = None
     validate_finished_at_ms: int | None = None
     ship_trace = _ship_trace_from_request(request)
+    write_label = _write_serializer_label_for_ship_trace(ship_trace)
+    archive_slot_acquired = False
     with tracer.start_as_current_span("longhouse.ingest") as span:
         set_span_attributes(
             span,
             {
                 "http.route": "/api/agents/ingest",
                 "longhouse.ingest.auth_kind": auth_kind_label,
+                "longhouse.ingest.write_label": write_label,
             },
         )
 
         try:
+            archive_slot_acquired = await _acquire_archive_ingest_slot(write_label, response)
+
             with tracer.start_as_current_span("longhouse.ingest.decode") as decode_span:
                 decode_started = time.monotonic()
                 body, wire_bytes, content_encoding = await decompress_if_gzipped(request)
@@ -449,7 +495,7 @@ async def ingest_session(
 
             with tracer.start_as_current_span("longhouse.ingest.validate") as validate_span:
                 try:
-                    payload = json.loads(body)
+                    payload = await asyncio.to_thread(json.loads, body)
                 except json.JSONDecodeError as e:
                     request_status_label = "invalid_json"
                     raise HTTPException(
@@ -458,7 +504,7 @@ async def ingest_session(
                     )
 
                 try:
-                    data = SessionIngest(**payload)
+                    data = await asyncio.to_thread(lambda: SessionIngest(**payload))
                 except Exception as e:
                     request_status_label = "invalid_payload"
                     raise HTTPException(
@@ -552,16 +598,11 @@ async def ingest_session(
             from zerg.services.write_serializer import get_write_serializer
 
             ws = get_write_serializer()
-            write_label = _write_serializer_label_for_ship_trace(ship_trace)
             is_archive_ingest = write_label in _ARCHIVE_INGEST_LABELS
             writer_queue_busy = ws.writer_active or ws.queue_depth > 0
             if is_archive_ingest and writer_queue_busy:
                 request_status_label = "archive_backpressure"
-                response.headers["Retry-After"] = "5"
-                raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="Archive ingest backlog is throttled; retry shortly",
-                )
+                _raise_archive_ingest_backpressure(response)
 
             ingest_chunk = _ingest_chunk_for_label(write_label)
 
@@ -708,6 +749,7 @@ async def ingest_session(
                 detail="Failed to ingest session",
             )
         finally:
+            _release_archive_ingest_slot(archive_slot_acquired)
             agents_ingest_requests_total.labels(
                 auth_kind=auth_kind_label,
                 provider=provider_label,

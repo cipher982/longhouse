@@ -34,14 +34,11 @@ use crate::state::spool::Spool;
 const LIVE_TARGET_BATCH_BYTES: u64 = 512 * 1024;
 const BACKGROUND_REPAIR_TARGET_BATCH_BYTES: u64 = 32 * 1024;
 
-/// Archive / replay batch target. Per phase-4 review (codex), use two discrete
-/// bands rather than a log-shaped controller — a second controller layered on
-/// top of the phase-2 AIMD limiter is where oscillation comes from. 4 MiB
-/// compressed sits well below `max_batch_bytes` (default 50 MiB) and well below
-/// the server's 256 MiB decompressed cap, but lets archive/replay drains
-/// amortize an HTTP round trip across many more events than the 512 KiB live
-/// target.
-const ARCHIVE_TARGET_BATCH_BYTES: u64 = 4 * 1024 * 1024;
+/// Archive / replay batch target. This lane is reconstructable background
+/// repair, so bound each server write first and accept extra HTTP overhead.
+/// Large replay batches can spend seconds in SQLite/source-line dedupe on a
+/// huge tenant DB, which defeats the runtime's interactive control SLO.
+const ARCHIVE_TARGET_BATCH_BYTES: u64 = 256 * 1024;
 
 // The Runtime Host allows /api/agents/ingest to run for 30s. Archive and
 // replay sends should not give up first; otherwise the server may still commit
@@ -91,7 +88,7 @@ mod target_batch_bytes_tests {
     }
 
     #[test]
-    fn archive_band_grows_to_archive_target_when_ceiling_allows() {
+    fn archive_band_stays_below_live_work_when_ceiling_allows() {
         assert_eq!(
             target_batch_bytes_for_band(BatchBand::Archive, u64::MAX),
             ARCHIVE_TARGET_BATCH_BYTES
@@ -103,10 +100,11 @@ mod target_batch_bytes_tests {
     }
 
     #[test]
-    fn archive_target_is_strictly_larger_than_live_target() {
-        // Phase-4 invariant: archive/replay drains amortize the round trip
-        // across more events than live ships do.
-        assert!(ARCHIVE_TARGET_BATCH_BYTES > LIVE_TARGET_BATCH_BYTES);
+    fn archive_target_is_below_live_target() {
+        // Archive/replay is reconstructable background repair. Keep accepted
+        // requests shorter than live ships so one old backlog cannot starve
+        // provider control and liveness after deploy.
+        assert!(ARCHIVE_TARGET_BATCH_BYTES < LIVE_TARGET_BATCH_BYTES);
     }
 
     #[test]
@@ -121,7 +119,7 @@ mod target_batch_bytes_tests {
             target_batch_bytes_for_band(BatchBand::BackgroundRepair, 50 * 1024 * 1024),
             BACKGROUND_REPAIR_TARGET_BATCH_BYTES
         );
-        assert!(BACKGROUND_REPAIR_TARGET_BATCH_BYTES < LIVE_TARGET_BATCH_BYTES);
+        assert!(BACKGROUND_REPAIR_TARGET_BATCH_BYTES < ARCHIVE_TARGET_BATCH_BYTES);
     }
 
     #[test]
