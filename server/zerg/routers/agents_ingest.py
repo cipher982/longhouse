@@ -90,6 +90,9 @@ _INGEST_CHUNK_BY_LABEL: dict[str, int] = {
     "ingest-scan": 100,
 }
 
+_ARCHIVE_INGEST_LABELS = {"ingest-replay", "ingest-scan"}
+_ARCHIVE_INGEST_MAX_QUEUE_DEPTH = 1
+
 
 def _ingest_chunk_for_label(label: str) -> int:
     return _INGEST_CHUNK_BY_LABEL.get(label, 200)
@@ -202,11 +205,10 @@ def _record_server_fanout_observation(
         )
         trace_id = _ship_trace_id(ship_trace)
         cursor = f"trace:{trace_id}" if trace_id else f"event:{payload.get('latest_event_id') or 'unknown'}"
+        fanout_key = trace_id or payload.get("latest_event_id") or payload.get("server_fanout_at_ms")
         record_session_observation(
             db,
-            observation_id=(
-                f"server_fanout:{session_id}:" f"{trace_id or payload.get('latest_event_id') or payload.get('server_fanout_at_ms')}"
-            ),
+            observation_id=f"server_fanout:{session_id}:{fanout_key}",
             session_id=session_id,
             runtime_key=None,
             provider=provider,
@@ -552,6 +554,15 @@ async def ingest_session(
 
             ws = get_write_serializer()
             write_label = _write_serializer_label_for_ship_trace(ship_trace)
+            is_archive_ingest = write_label in _ARCHIVE_INGEST_LABELS
+            writer_queue_busy = ws.writer_active and ws.queue_depth >= _ARCHIVE_INGEST_MAX_QUEUE_DEPTH
+            if is_archive_ingest and writer_queue_busy:
+                request_status_label = "archive_backpressure"
+                response.headers["Retry-After"] = "5"
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="Archive ingest backlog is throttled; retry shortly",
+                )
 
             ingest_chunk = _ingest_chunk_for_label(write_label)
 

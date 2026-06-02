@@ -256,6 +256,14 @@ class WriteSerializer:
     def stats(self) -> WriteStats:
         return self._stats
 
+    @property
+    def queue_depth(self) -> int:
+        return len(self._queue)
+
+    @property
+    def writer_active(self) -> bool:
+        return self._writer_active
+
     async def execute(
         self,
         fn: Callable[[Session], T],
