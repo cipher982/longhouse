@@ -13,6 +13,7 @@ if [[ -n "${COMMAND}" ]]; then
 fi
 
 DEFAULT_ROUTE_E2E_PROVIDER="auto"
+ENGINE_PROFILE="${LONGHOUSE_DOGFOOD_ENGINE_PROFILE:-ci}"
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 URL_OVERRIDE="${LONGHOUSE_DOGFOOD_URL:-}"
 MACHINE_NAME_OVERRIDE="${LONGHOUSE_DOGFOOD_MACHINE_NAME:-}"
@@ -55,6 +56,7 @@ Notes:
   - Refresh reports a no-token hosted provider-live route E2E after install unless --skip-route-e2e is set.
     The default provider set is auto from current sidecars. Set LONGHOUSE_DOGFOOD_PROVIDER_LIVE_ROUTE_STRICT=1 to fail refresh on this remote check.
     The hosted route check is capped by LONGHOUSE_DOGFOOD_PROVIDER_LIVE_ROUTE_HTTP_TIMEOUT_S (default 45s) and LONGHOUSE_DOGFOOD_PROVIDER_LIVE_ROUTE_ATTEMPTS (default 1).
+  - Engine builds use LONGHOUSE_DOGFOOD_ENGINE_PROFILE=ci by default. Set it to release to force the slower release-LTO profile.
 EOF
 }
 
@@ -144,21 +146,28 @@ install_engine_from_source() {
   require_cmd cargo
   mkdir -p "$HOME/.local/bin"
 
-  log "==> Building Rust engine"
+  case "$ENGINE_PROFILE" in
+    ci|release) ;;
+    *) fail "Unsupported LONGHOUSE_DOGFOOD_ENGINE_PROFILE=$ENGINE_PROFILE (expected ci or release)" ;;
+  esac
+
+  local engine_binary="$ENGINE_DIR/target/$ENGINE_PROFILE/longhouse-engine"
+
+  log "==> Building Rust engine ($ENGINE_PROFILE profile)"
   # build-identity.json must be regenerated for the current HEAD before
   # cargo runs, otherwise engine/build.rs reads a stale identity and the
   # resulting binary reports the previous commit's SHA. See "BUILD DRIFT"
   # in the menu bar if this is wrong.
   python3 "$ROOT_DIR/scripts/build/generate_build_identity.py"
-  (cd "$ENGINE_DIR" && cargo build --release)
+  (cd "$ENGINE_DIR" && cargo build --profile "$ENGINE_PROFILE")
 
   if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign >/dev/null 2>&1; then
     log "==> Ad-hoc signing engine"
-    codesign -s - "$ENGINE_DIR/target/release/longhouse-engine" >/dev/null
+    codesign -s - "$engine_binary" >/dev/null
   fi
 
   rm -f "$HOME/.local/bin/longhouse-engine"
-  install -m 755 "$ENGINE_DIR/target/release/longhouse-engine" "$HOME/.local/bin/longhouse-engine"
+  install -m 755 "$engine_binary" "$HOME/.local/bin/longhouse-engine"
   log "Engine ready at $HOME/.local/bin/longhouse-engine"
 }
 
