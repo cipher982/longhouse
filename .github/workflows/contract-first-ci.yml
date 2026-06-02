@@ -45,13 +45,22 @@ jobs:
   validate:
     needs: changes
     if: ${{ (needs.changes.outputs.schemas == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube
+    runs-on: ubuntu-latest
     name: "Validation"
+    timeout-minutes: 15
 
     steps:
     - uses: actions/checkout@v6
       with:
         fetch-depth: 1
+
+    - name: Restore Bun download cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.bun/install/cache
+        key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+        restore-keys: |
+          longhouse-bun-${{ runner.os }}-
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -69,8 +78,45 @@ jobs:
     - name: Ensure make available
       run: ./scripts/ci/ensure-make.sh
 
-    - name: Validate
-      run: make validate
+    - name: Validate WebSocket contract
+      timeout-minutes: 3
+      run: make validate-ws
+
+    - name: Validate SDK drift
+      timeout-minutes: 8
+      run: make validate-sdk
+
+    - name: Validate iOS API DTO drift
+      timeout-minutes: 2
+      run: make validate-ios-api
+
+    - name: Validate Makefile metadata
+      timeout-minutes: 2
+      run: make validate-makefile
+
+    - name: Validate build identity
+      timeout-minutes: 2
+      run: make validate-build-identity
+
+    - name: Validate managed Codex contract
+      timeout-minutes: 3
+      run: make validate-managed-codex-contract
+
+    - name: Validate managed session contract
+      timeout-minutes: 4
+      run: make validate-managed-session-contract
+
+    - name: Validate provider CLI canaries
+      timeout-minutes: 8
+      run: make validate-provider-cli-canaries
+
+    - name: Validate ship monitor
+      timeout-minutes: 2
+      run: make validate-ship-monitor
+
+    - name: Lint test patterns
+      timeout-minutes: 2
+      run: make lint-test-patterns
 
   backend-tests:
     needs: changes
