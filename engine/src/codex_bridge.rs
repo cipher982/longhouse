@@ -2526,19 +2526,29 @@ async fn process_notification(
             }
             if let Some(next_id) = different_notification_thread_id(&params, context) {
                 let next_path = extract_notification_thread_path(&params);
-                if unused_prestarted_tui_thread_can_yield(context) {
+                let can_follow_active_tui_thread =
+                    active_tui_thread_switch_can_follow(method, context);
+                if can_follow_active_tui_thread || unused_prestarted_tui_thread_can_yield(context) {
                     let previous_thread_id = context.state.thread_id.clone();
                     if adopt_thread_identity(
                         config,
                         context,
                         Some(next_id.clone()),
                         next_path,
-                        false,
+                        can_follow_active_tui_thread,
                     )? {
-                        eprintln!(
-                            "[codex-bridge] adopted TUI thread {next_id} over unused prestarted thread {}",
-                            previous_thread_id.as_deref().unwrap_or("unknown")
-                        );
+                        mark_bridge_ready_after_thread_switch(context)?;
+                        if can_follow_active_tui_thread {
+                            eprintln!(
+                                "[codex-bridge] following active TUI thread switch: {} -> {next_id}",
+                                previous_thread_id.as_deref().unwrap_or("unknown")
+                            );
+                        } else {
+                            eprintln!(
+                                "[codex-bridge] adopted TUI thread {next_id} over unused prestarted thread {}",
+                                previous_thread_id.as_deref().unwrap_or("unknown")
+                            );
+                        }
                         emit_runtime_updates(
                             config,
                             context,
@@ -2579,11 +2589,25 @@ async fn process_notification(
             }
         }
         "turn/started" | "item/started" | "item/completed" | "thread/status/changed" => {
+            let mut adopted_active_tui_thread = false;
             if let Some(next_id) = different_notification_thread_id(&params, context) {
                 if context.rejected_thread_ids.contains(&next_id) {
                     eprintln!(
                         "[codex-bridge] ignoring notification for rejected Codex thread: {next_id}"
                     );
+                    return Ok(None);
+                } else if active_tui_thread_switch_can_follow(method, context) {
+                    adopted_active_tui_thread = adopt_thread_identity(
+                        config,
+                        context,
+                        Some(next_id.clone()),
+                        extract_notification_thread_path(&params),
+                        true,
+                    )?;
+                    if adopted_active_tui_thread {
+                        mark_bridge_ready_after_thread_switch(context)?;
+                        eprintln!("[codex-bridge] following active TUI thread switch: {next_id}");
+                    }
                 } else {
                     mark_provider_thread_switched(
                         config,
@@ -2592,8 +2616,8 @@ async fn process_notification(
                         &next_id,
                         extract_notification_thread_path(&params),
                     )?;
+                    return Ok(None);
                 }
-                return Ok(None);
             }
             let _ = adopt_thread_identity(
                 config,
@@ -2621,7 +2645,14 @@ async fn process_notification(
             let updates = context.runtime_tracker.handle_notification(method, &params);
             emit_runtime_updates(config, context, updates).await;
             if followup.is_none() {
-                followup = pending_thread_subscription(context)?;
+                followup = if adopted_active_tui_thread
+                    && method == "thread/status/changed"
+                    && context.state.thread_path.is_none()
+                {
+                    subscribe_current_thread_without_path(context)?
+                } else {
+                    pending_thread_subscription(context)?
+                };
             }
         }
         "item/agentMessage/delta"
@@ -2873,6 +2904,30 @@ fn unused_prestarted_tui_thread_can_yield(context: &BridgeContext) -> bool {
         .as_deref()
         .map(|path| !thread_rollout_is_ready(path))
         .unwrap_or(true)
+}
+
+fn active_tui_thread_switch_can_follow(method: &str, context: &BridgeContext) -> bool {
+    context.state.launch_mode.as_deref() == Some(LAUNCH_MODE_TUI)
+        && matches!(method, "thread/started" | "thread/status/changed")
+}
+
+fn mark_bridge_ready_after_thread_switch(context: &mut BridgeContext) -> Result<()> {
+    context.state.status = "ready".to_string();
+    context.state.last_error = None;
+    write_state_file(&context.state_file, &context.state)
+}
+
+fn subscribe_current_thread_without_path(
+    context: &mut BridgeContext,
+) -> Result<Option<BridgeFollowup>> {
+    let Some(thread_id) = context.state.thread_id.clone() else {
+        return Ok(None);
+    };
+    update_thread_subscription_tracking(context, ThreadSubscriptionStatus::ReadyToSubscribe, None)?;
+    Ok(Some(BridgeFollowup::SubscribeThread {
+        thread_id,
+        thread_path: None,
+    }))
 }
 
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
@@ -5962,7 +6017,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_notification_does_not_replace_materialized_prestarted_thread() {
+    async fn process_notification_follows_active_tui_thread_switch_after_materialized_thread() {
         let temp = tempfile::tempdir().unwrap();
         let config = make_test_run_config(&temp);
         let mut context = make_test_context(&temp);
@@ -5998,24 +6053,26 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(followup, None);
-        assert_eq!(context.state.thread_id.as_deref(), Some("thr-prestarted"));
+        assert_eq!(
+            followup,
+            Some(BridgeFollowup::SubscribeThread {
+                thread_id: "thr-tui".to_string(),
+                thread_path: Some(tui_rollout_path_string.clone()),
+            })
+        );
+        assert_eq!(context.state.thread_id.as_deref(), Some("thr-tui"));
         assert_eq!(
             context.state.thread_path.as_deref(),
-            Some(prestarted_rollout_path_string.as_str())
+            Some(tui_rollout_path_string.as_str())
         );
-        assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-prestarted"));
+        assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-tui"));
         assert_eq!(
             context.state.thread_subscription_status.as_deref(),
-            Some(ThreadSubscriptionStatus::ProviderThreadSwitched.as_str())
+            Some(ThreadSubscriptionStatus::ReadyToSubscribe.as_str())
         );
-        assert_eq!(context.state.status, "degraded");
-        assert!(context
-            .state
-            .last_error
-            .as_deref()
-            .is_some_and(|message| message.contains(PROVIDER_THREAD_SWITCHED_REASON)));
-        assert!(context.rejected_thread_ids.contains("thr-tui"));
+        assert_eq!(context.state.status, "ready");
+        assert_eq!(context.state.last_error, None);
+        assert!(!context.rejected_thread_ids.contains("thr-tui"));
     }
 
     #[tokio::test]
@@ -6270,7 +6327,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_notification_degrades_on_foreign_root_thread_started_without_rebinding() {
+    async fn process_notification_adopts_provider_side_resume_thread_started() {
         let temp = tempfile::tempdir().unwrap();
         let config = make_test_run_config(&temp);
         let mut context = make_test_context(&temp);
@@ -6319,6 +6376,71 @@ mod tests {
         .await
         .unwrap();
 
+        assert_eq!(
+            followup,
+            Some(BridgeFollowup::SubscribeThread {
+                thread_id: "thr-resumed".to_string(),
+                thread_path: Some(resumed.clone()),
+            })
+        );
+        assert_eq!(context.state.thread_id.as_deref(), Some("thr-resumed"));
+        assert_eq!(context.state.thread_path.as_deref(), Some(resumed.as_str()));
+        assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-resumed"));
+        assert_eq!(context.state.status, "ready");
+        assert_eq!(
+            context.state.thread_subscription_status.as_deref(),
+            Some(ThreadSubscriptionStatus::ReadyToSubscribe.as_str())
+        );
+        assert_eq!(context.state.last_error, None);
+        assert_eq!(
+            binding
+                .get(&normalize_binding_path(&parent))
+                .unwrap()
+                .as_deref(),
+            None
+        );
+        assert_eq!(
+            binding
+                .get(&normalize_binding_path(&resumed))
+                .unwrap()
+                .as_deref(),
+            Some(context.state.session_id.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn process_notification_degrades_on_detached_foreign_root_thread_started() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+        let parent_path = temp.path().join("parent.jsonl");
+        let resumed_path = temp.path().join("resumed.jsonl");
+        fs::write(&parent_path, "{}\n").unwrap();
+        fs::write(&resumed_path, "{}\n").unwrap();
+        let parent = parent_path.display().to_string();
+        let resumed = resumed_path.display().to_string();
+        context.state.launch_mode = Some(LAUNCH_MODE_DETACHED_UI.to_string());
+        context.state.thread_id = Some("thr-parent".to_string());
+        context.state.thread_path = Some(parent.clone());
+        context.runtime.thread_id = Some("thr-parent".to_string());
+        context.subscribed_thread_id = Some("thr-parent".to_string());
+
+        let followup = process_notification(
+            &json!({
+                "method": "thread/started",
+                "params": {
+                    "thread": {
+                        "id": "thr-resumed",
+                        "path": resumed
+                    }
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
         assert_eq!(followup, None);
         assert_eq!(context.state.thread_id.as_deref(), Some("thr-parent"));
         assert_eq!(context.state.thread_path.as_deref(), Some(parent.as_str()));
@@ -6333,16 +6455,53 @@ mod tests {
             .last_error
             .as_deref()
             .is_some_and(|message| message.contains("observed_thread=thr-resumed")));
+    }
+
+    #[tokio::test]
+    async fn process_notification_follows_active_tui_status_thread_switch_without_path() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+        let parent_path = temp.path().join("parent.jsonl");
+        fs::write(&parent_path, "{}\n").unwrap();
+        let parent = parent_path.display().to_string();
+        context.state.thread_id = Some("thr-parent".to_string());
+        context.state.thread_path = Some(parent.clone());
+        context.runtime.thread_id = Some("thr-parent".to_string());
+        context.subscribed_thread_id = Some("thr-parent".to_string());
+
+        let followup = process_notification(
+            &json!({
+                "method": "thread/status/changed",
+                "params": {
+                    "threadId": "thr-resumed",
+                    "status": {
+                        "type": "active",
+                        "activeFlags": ["waitingOnUserInput"]
+                    }
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
         assert_eq!(
-            binding
-                .get(&normalize_binding_path(&parent))
-                .unwrap()
-                .as_deref(),
-            Some(context.state.session_id.as_str())
+            followup,
+            Some(BridgeFollowup::SubscribeThread {
+                thread_id: "thr-resumed".to_string(),
+                thread_path: None,
+            })
         );
+        assert_eq!(context.state.thread_id.as_deref(), Some("thr-resumed"));
+        assert_eq!(context.state.thread_path, None);
+        assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-resumed"));
+        assert_eq!(context.state.status, "ready");
+        assert_eq!(context.state.last_error, None);
         assert_eq!(
-            binding.get(&normalize_binding_path(&resumed)).unwrap(),
-            None
+            context.state.thread_subscription_status.as_deref(),
+            Some(ThreadSubscriptionStatus::ReadyToSubscribe.as_str())
         );
     }
 
