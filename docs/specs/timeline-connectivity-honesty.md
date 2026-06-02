@@ -212,6 +212,7 @@ Classified diagnostic input, not product-health state:
 - `networkError`
 - `cancelled`
 - `authFailure`
+- `waitingForConnectivity`
 - `unknown`
 
 The raw `Error?` is not enough to infer this. `stopStream()` and watchdog code
