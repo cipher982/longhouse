@@ -8233,6 +8233,8 @@ export interface components {
             runtime_key: string;
             /** Session Id */
             session_id?: string | null;
+            /** Thread Id */
+            thread_id?: string | null;
             /** Provider */
             provider: string;
             /** Device Id */
@@ -16659,6 +16661,8 @@ export interface operations {
     get_timeline_session_events_timeline_sessions__session_id__events_get: {
         parameters: {
             query?: {
+                /** @description Thread lane to inspect; defaults to the primary session thread */
+                thread_id?: string | null;
                 /** @description Comma-separated roles to filter */
                 roles?: string | null;
                 /** @description Exact tool name filter, e.g. Bash */
@@ -16707,6 +16711,8 @@ export interface operations {
     get_timeline_session_projection_timeline_sessions__session_id__projection_get: {
         parameters: {
             query?: {
+                /** @description Thread lane to project; defaults to the primary session thread */
+                thread_id?: string | null;
                 /** @description Branch projection mode: head|all */
                 branch_mode?: string;
                 /** @description Page anchor: start|tail */
@@ -17653,6 +17659,8 @@ export interface operations {
     get_session_events_agents_sessions__session_id__events_get: {
         parameters: {
             query?: {
+                /** @description Thread lane to inspect; defaults to the primary session thread */
+                thread_id?: string | null;
                 /** @description Comma-separated roles to filter */
                 roles?: string | null;
                 /** @description Exact tool name filter, e.g. Bash */
@@ -17701,6 +17709,8 @@ export interface operations {
     get_session_projection_agents_sessions__session_id__projection_get: {
         parameters: {
             query?: {
+                /** @description Thread lane to project; defaults to the primary session thread */
+                thread_id?: string | null;
                 /** @description Branch projection mode: head|all */
                 branch_mode?: string;
                 /** @description Page anchor: start|tail */
