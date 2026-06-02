@@ -215,8 +215,15 @@ final class LonghousePushAppDelegate: NSObject, UIApplicationDelegate, UNUserNot
         didReceiveRemoteNotification userInfo: [AnyHashable: Any],
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
     ) {
+        let event = userInfo["event"] as? String
+        let attentionState = userInfo["attention_state"] as? String
+        let resolvedSessionID = userInfo["session_id"] as? String
         Task {
-            let result = await Self.handleBackgroundPushPayload(userInfo)
+            let result = await Self.handleBackgroundPushPayload(
+                event: event,
+                attentionState: attentionState,
+                resolvedSessionID: resolvedSessionID
+            )
             completionHandler(result)
         }
     }
@@ -249,14 +256,16 @@ final class LonghousePushAppDelegate: NSObject, UIApplicationDelegate, UNUserNot
         }
     }
 
-    private nonisolated static func handleBackgroundPushPayload(_ userInfo: [AnyHashable: Any]) async -> UIBackgroundFetchResult {
-        let event = userInfo["event"] as? String
-        let attentionState = userInfo["attention_state"] as? String
+    private nonisolated static func handleBackgroundPushPayload(
+        event: String?,
+        attentionState: String?,
+        resolvedSessionID rawSessionID: String?
+    ) async -> UIBackgroundFetchResult {
         guard event == "attention_resolved" || attentionState == "resolved" else {
             return .noData
         }
 
-        let resolvedSessionID = (userInfo["session_id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedSessionID = rawSessionID?.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let serverURL = SharedAuthStore.loadServerURL(), let api = LonghouseAPI(host: serverURL) else {
             if let resolvedSessionID, !resolvedSessionID.isEmpty {
                 PushNotificationStore.removeDeliveredAttentionNotifications(sessionIDs: [resolvedSessionID])
