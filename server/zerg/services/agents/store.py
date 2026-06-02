@@ -18,9 +18,11 @@ from typing import Optional
 from uuid import UUID
 from uuid import uuid4
 
+from sqlalchemy import String
 from sqlalchemy import and_
 from sqlalchemy import bindparam
 from sqlalchemy import case
+from sqlalchemy import cast
 from sqlalchemy import func
 from sqlalchemy import or_
 from sqlalchemy import select
@@ -2640,17 +2642,12 @@ class AgentsStore:
         if effective_thread_id is None:
             return None
 
-        has_primary_thread_events = (
-            self.db.query(AgentEvent.id)
-            .filter(AgentEvent.session_id == session_id)
-            .filter(AgentEvent.thread_id == effective_thread_id)
-            .limit(1)
-            .first()
-            is not None
-        )
-        if has_primary_thread_events:
-            return AgentEvent.thread_id == effective_thread_id
-        return AgentEvent.thread_id.is_(None)
+        # Preserve the default projection contract: primary-thread rows plus
+        # legacy NULL-thread rows. Avoid an OR/IS NULL predicate here because
+        # SQLite otherwise chooses the global thread_id index and scans across
+        # every hosted session before applying session/branch filters.
+        effective_thread = str(effective_thread_id)
+        return func.coalesce(cast(AgentEvent.thread_id, String), effective_thread) == effective_thread
 
     def _apply_event_thread_filter(self, stmt, session_id: UUID, thread_id: UUID | None):
         predicate = self._event_thread_predicate(session_id, thread_id)

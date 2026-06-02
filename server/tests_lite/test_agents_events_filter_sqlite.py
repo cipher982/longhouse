@@ -7,6 +7,9 @@ from sqlalchemy.orm import sessionmaker
 
 from zerg.database import initialize_database
 from zerg.database import make_engine
+from zerg.models.agents import AgentEvent
+from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionThread
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
@@ -152,6 +155,53 @@ def test_count_session_events_unfiltered(tmp_path):
 
     total = store.count_session_events(session)
     assert total == 5
+
+
+def test_default_thread_projection_keeps_legacy_null_events_without_child_threads(tmp_path):
+    store, db = _make_store(tmp_path, "default_thread_projection.db")
+    session_id = _seed_session(store)
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+    branch_id = store.get_head_branch_id(session_id)
+
+    first_event = (
+        db.query(AgentEvent)
+        .filter(AgentEvent.session_id == session_id)
+        .order_by(AgentEvent.id.asc())
+        .first()
+    )
+    first_event.thread_id = None
+
+    child_thread = SessionThread(
+        session_id=session_id,
+        provider="claude",
+        parent_thread_id=session.primary_thread_id,
+        branch_kind="subagent",
+        is_primary=0,
+    )
+    db.add(child_thread)
+    db.flush()
+    db.add(
+        AgentEvent(
+            session_id=session_id,
+            thread_id=child_thread.id,
+            branch_id=branch_id,
+            role="assistant",
+            content_text="child-only event",
+            timestamp=datetime(2026, 2, 5, 0, 0, 1, tzinfo=timezone.utc),
+            source_path="/tmp/child.jsonl",
+            source_offset=0,
+            event_hash="child-only",
+        )
+    )
+    db.commit()
+
+    events = store.get_session_events(session_id)
+    contents = [event.content_text for event in events if event.content_text]
+
+    assert "please run a bash command" in contents
+    assert "done with the task" in contents
+    assert "child-only event" not in contents
+    assert store.count_session_events(session_id) == 5
 
 
 def test_count_session_events_by_tool_name(tmp_path):

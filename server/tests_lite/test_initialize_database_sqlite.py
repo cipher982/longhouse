@@ -48,11 +48,13 @@ def test_initialize_database_sqlite_bounds_projection_queries_without_heavy_thre
                 FROM events
                 WHERE session_id = :session_id
                   AND branch_id = :branch_id
+                  AND coalesce(thread_id, :thread_id) = :thread_id
                 """
             ),
             {
                 "session_id": "019e89b4-abc5-7460-9122-c51dc20a9bfb",
                 "branch_id": 20339,
+                "thread_id": "d80edca3-ed6d-412d-9182-42b5f77f14b9",
             },
         ).fetchall()
 
