@@ -36,6 +36,7 @@ from zerg.provider_live_proof import collect_provider_live_proof
 from zerg.provider_live_route_e2e import collect_provider_live_route_e2e
 from zerg.provider_live_route_e2e import expected_route_providers_from_live_proof
 from zerg.provider_release_status import collect_provider_release_status
+from zerg.services.archive_backlog import collect_archive_backlog
 from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_log_dir
 from zerg.services.longhouse_paths import get_agent_outbox_dir
@@ -2792,6 +2793,9 @@ class _HealthClassificationContext:
     engine_error: Any
     engine_age: Any
     spool_pending: int
+    archive_state: str
+    archive_pending_ranges: int
+    archive_pending_bytes: int
     disk_free_bytes: Any
     outbox_count: int
     outbox_oldest: Any
@@ -2963,6 +2967,25 @@ def _add_spool_pending_reason(
     _ = reasons, spool_pending
 
 
+def _add_archive_backlog_reason(
+    reasons: list[str],
+    actions: list[str],
+    *,
+    archive_state: str,
+    archive_pending_ranges: int,
+    archive_pending_bytes: int,
+) -> None:
+    if archive_pending_ranges <= 0 and archive_pending_bytes <= 0:
+        return
+    if archive_state == "paused":
+        reasons.append("archive_repair_paused")
+    elif archive_state == "draining":
+        reasons.append("archive_repair_draining")
+    else:
+        reasons.append("archive_backlog_pending")
+    _with_action(actions, "Inspect archive backlog: longhouse archive status")
+
+
 def _add_outbox_reasons(
     reasons: list[str],
     actions: list[str],
@@ -3088,6 +3111,8 @@ def _health_flags(
     outbox_count: int,
     outbox_oldest: Any,
     spool_pending: int,
+    archive_pending_ranges: int,
+    archive_pending_bytes: int,
     orphan_bridge_count: int,
     managed_degraded: int,
     managed_detached: int,
@@ -3097,6 +3122,8 @@ def _health_flags(
 ) -> tuple[bool, bool]:
     broken, degraded = _launch_health_flags(launch_state)
     if canonical_sessions_missing or canonical_sessions_invalid:
+        degraded = True
+    if archive_pending_ranges > 0 or archive_pending_bytes > 0:
         degraded = True
     managed_broken, managed_degraded_flag = _managed_health_flags(
         orphan_bridge_count=orphan_bridge_count,
@@ -3199,6 +3226,12 @@ def _degraded_health_headline(
         headline = "A provider session working directory was replaced"
     elif REASON_BRIDGE_STATE_PATH_MISSING in reasons:
         headline = "A managed provider bridge state file is missing"
+    elif "archive_repair_paused" in reasons:
+        headline = "Longhouse archive repair is paused"
+    elif "archive_repair_draining" in reasons:
+        headline = "Longhouse archive repair is draining"
+    elif "archive_backlog_pending" in reasons:
+        headline = "Longhouse archive repair pending"
     elif "managed_session_detached" in reasons:
         if managed_detached == 1 and managed_attached == 0:
             headline = "Managed session is running in background"
@@ -3214,6 +3247,7 @@ def _health_classification_context(
     transport_sample: TransportHealthSample | None,
     outbox: dict[str, Any],
     launch_readiness: dict[str, Any],
+    archive_repair: dict[str, Any],
     managed_summary: dict[str, Any] | None,
     managed_sessions: list[dict[str, Any]],
 ) -> _HealthClassificationContext:
@@ -3224,6 +3258,9 @@ def _health_classification_context(
         spool_pending = transport_sample.spool_pending
     else:
         spool_pending = int(payload.get("spool_pending_count") or 0)
+    archive_state = str(archive_repair.get("state") or "idle")
+    archive_pending_ranges = int(archive_repair.get("pending_ranges") or 0)
+    archive_pending_bytes = int(archive_repair.get("pending_bytes") or 0)
     unknown_managed_phase_count = 0
     for session in managed_sessions:
         if _managed_phase_is_unknown(session.get("raw_phase")):
@@ -3237,6 +3274,9 @@ def _health_classification_context(
         engine_error=engine_status.get("error"),
         engine_age=engine_status.get("age_seconds"),
         spool_pending=spool_pending,
+        archive_state=archive_state,
+        archive_pending_ranges=archive_pending_ranges,
+        archive_pending_bytes=archive_pending_bytes,
         disk_free_bytes=payload.get("disk_free_bytes"),
         outbox_count=int(outbox.get("file_count") or 0),
         outbox_oldest=outbox.get("oldest_age_seconds"),
@@ -3301,6 +3341,13 @@ def _collect_health_reasons(
         reasons,
         spool_pending=context.spool_pending,
     )
+    _add_archive_backlog_reason(
+        reasons,
+        actions,
+        archive_state=context.archive_state,
+        archive_pending_ranges=context.archive_pending_ranges,
+        archive_pending_bytes=context.archive_pending_bytes,
+    )
     _add_managed_session_reasons(
         reasons,
         actions,
@@ -3327,6 +3374,7 @@ def _is_uninstalled_health(context: _HealthClassificationContext) -> bool:
         and not context.engine_exists
         and context.outbox_count == 0
         and context.spool_pending == 0
+        and context.archive_pending_ranges == 0
         and context.launch_state != "broken"
     )
 
@@ -3355,6 +3403,8 @@ def _degraded_state_is_watching(
     if context.unknown_managed_phase_count > 0:
         return False
     if _outbox_is_actionable(context):
+        return False
+    if context.archive_pending_ranges > 0 or context.archive_pending_bytes > 0:
         return False
     if "reported_offline" in reasons and (context.spool_pending > 0 or context.outbox_count > 0):
         return False
@@ -3423,6 +3473,7 @@ def _classify_health(
     launch_readiness: dict[str, Any],
     managed_summary: dict[str, Any] | None,
     managed_sessions: list[dict[str, Any]],
+    archive_repair: dict[str, Any],
 ) -> tuple[str, str, str, list[str], list[str]]:
     context = _health_classification_context(
         service=service,
@@ -3430,6 +3481,7 @@ def _classify_health(
         transport_sample=transport_sample,
         outbox=outbox,
         launch_readiness=launch_readiness,
+        archive_repair=archive_repair,
         managed_summary=managed_summary,
         managed_sessions=managed_sessions,
     )
@@ -3458,6 +3510,8 @@ def _classify_health(
         outbox_count=context.outbox_count,
         outbox_oldest=context.outbox_oldest,
         spool_pending=context.spool_pending,
+        archive_pending_ranges=context.archive_pending_ranges,
+        archive_pending_bytes=context.archive_pending_bytes,
         orphan_bridge_count=context.orphan_bridge_count,
         managed_degraded=context.managed_degraded,
         managed_detached=context.managed_detached,
@@ -3680,6 +3734,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
     )
     launch_readiness = _collect_launch_readiness(resolved_base_dir, service=service)
     transport_sample, transport_assessment = _collect_transport_health(engine_status)
+    archive_repair = collect_archive_backlog(resolved_base_dir, engine_status_payload=engine_status.get("payload"))
     control_channel = _collect_control_channel_health(engine_status)
     provider_support_state = collect_provider_support_state(
         provider_clis=provider_clis,
@@ -3705,6 +3760,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         transport_assessment=transport_assessment,
         outbox=outbox,
         launch_readiness=launch_readiness,
+        archive_repair=archive_repair,
         managed_summary=managed_summary,
         managed_sessions=managed_sessions,
     )
@@ -3795,6 +3851,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
         transport_sample=transport_sample,
         outbox=outbox,
         launch_readiness=launch_readiness,
+        archive_repair=archive_repair,
         managed_summary=managed_summary,
         managed_sessions=managed_sessions,
     )
@@ -3822,6 +3879,7 @@ def collect_local_health(claude_dir: str | Path | None = None, *, fast: bool = F
             sample=transport_sample,
             assessment=transport_assessment,
         ),
+        "archive_repair": archive_repair,
         "control_channel": control_channel,
         "outbox": outbox,
         "provider_clis": provider_clis,

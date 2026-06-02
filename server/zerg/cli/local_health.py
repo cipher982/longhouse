@@ -40,6 +40,19 @@ def _format_age(age_seconds: int | None) -> str:
     return f"{age_seconds // 3600}h"
 
 
+def _format_bytes(value: object) -> str:
+    size = int(value or 0)
+    units = ("B", "KB", "MB", "GB", "TB")
+    scaled = float(size)
+    for unit in units:
+        if scaled < 1024 or unit == units[-1]:
+            if unit == "B":
+                return f"{size} B"
+            return f"{scaled:.1f} {unit}"
+        scaled /= 1024
+    return f"{size} B"
+
+
 def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
     if json_output:
         typer.echo(json.dumps(snapshot, indent=2))
@@ -87,6 +100,19 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
     typer.echo(f"  spool dead: {payload.get('spool_dead_count', 0)}")
     typer.echo(f"  ship failures: {payload.get('consecutive_ship_failures', 0)}")
     typer.echo(f"  offline: {'yes' if payload.get('is_offline') else 'no'}")
+
+    archive_repair = dict(snapshot.get("archive_repair") or {})
+    if archive_repair and (
+        archive_repair.get("pending_ranges") or archive_repair.get("pending_bytes") or archive_repair.get("dead_ranges")
+    ):
+        typer.echo("")
+        typer.echo("Archive Repair")
+        typer.echo(f"  state: {archive_repair.get('state') or '-'}")
+        typer.echo(f"  mode: {archive_repair.get('mode') or '-'}")
+        typer.echo(f"  pending ranges: {archive_repair.get('pending_ranges', 0)}")
+        typer.echo(f"  pending bytes: {_format_bytes(archive_repair.get('pending_bytes'))}")
+        typer.echo(f"  pending paths: {archive_repair.get('pending_paths', 0)}")
+        typer.echo(f"  dead ranges: {archive_repair.get('dead_ranges', 0)}")
 
     control_channel = dict(snapshot.get("control_channel") or {})
     if control_channel:

@@ -34,6 +34,7 @@ const COMMAND_INTERRUPT: &str = "session.interrupt";
 const COMMAND_STEER_TEXT: &str = "session.steer_text";
 const COMMAND_LAUNCH: &str = "session.launch";
 const COMMAND_PROVIDER_LIVE_PROOF: &str = "provider.live_proof";
+const COMMAND_ARCHIVE_BACKLOG_CONTROL: &str = "archive.backlog_control";
 const DEFAULT_CODEX_BIN: &str = "codex";
 const DEFAULT_LONGHOUSE_BIN: &str = "longhouse";
 const REMOTE_CODEX_APPROVAL_POLICY: &str = "on-request";
@@ -411,6 +412,7 @@ fn control_supports_for_path_with_env(
     env_lookup: &dyn Fn(&str) -> Option<OsString>,
 ) -> Vec<String> {
     let mut supports = Vec::new();
+    supports.push(COMMAND_ARCHIVE_BACKLOG_CONTROL.to_string());
     let longhouse_available = command_exists_in_path(DEFAULT_LONGHOUSE_BIN, path_value);
     for contract in managed_provider_contract_items() {
         let requires_longhouse = contract
@@ -729,6 +731,9 @@ async fn execute_command(
     if command_type == COMMAND_PROVIDER_LIVE_PROOF {
         return run_provider_live_proof_command(&payload).await;
     }
+    if command_type == COMMAND_ARCHIVE_BACKLOG_CONTROL {
+        return run_archive_backlog_control_command(&payload).await;
+    }
 
     let session_id = required_string(frame, "session_id")?;
 
@@ -968,6 +973,55 @@ async fn execute_command(
             message: format!("Unsupported command_type={other}"),
         }),
     }
+}
+
+async fn run_archive_backlog_control_command(
+    payload: &Value,
+) -> std::result::Result<Value, CommandError> {
+    let mode = payload_required_string(payload, "mode")?;
+    let normalized_mode = match mode.trim().to_ascii_lowercase().as_str() {
+        "paused" | "pause" => "paused",
+        "trickle" | "resume" => "trickle",
+        "drain" | "drain-now" => "drain",
+        other => {
+            return Err(CommandError {
+                code: "archive_control_invalid_mode".to_string(),
+                message: format!("unsupported archive repair mode {other}"),
+            });
+        }
+    };
+    let mut control = json!({
+        "mode": normalized_mode,
+        "updated_at": timestamp_now(),
+    });
+    if let Some(max_tick_bytes) = payload.get("max_tick_bytes").and_then(Value::as_u64) {
+        control["max_tick_bytes"] = json!(max_tick_bytes);
+    }
+    if let Some(include_huge) = payload.get("include_huge").and_then(Value::as_bool) {
+        control["include_huge"] = json!(include_huge);
+    }
+
+    let path =
+        crate::config::get_agent_archive_repair_control_path().map_err(|err| CommandError {
+            code: "archive_control_write_failed".to_string(),
+            message: err.to_string(),
+        })?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| CommandError {
+            code: "archive_control_write_failed".to_string(),
+            message: err.to_string(),
+        })?;
+    }
+    let bytes = serde_json::to_vec_pretty(&control).map_err(CommandError::command_failed)?;
+    std::fs::write(&path, bytes).map_err(|err| CommandError {
+        code: "archive_control_write_failed".to_string(),
+        message: err.to_string(),
+    })?;
+
+    Ok(json!({
+        "mode": normalized_mode,
+        "path": path.to_string_lossy(),
+    }))
 }
 
 fn claude_channel_args(
@@ -1959,6 +2013,7 @@ mod tests {
         assert_eq!(
             supports,
             vec![
+                "archive.backlog_control".to_string(),
                 "opencode.send".to_string(),
                 "opencode.interrupt".to_string(),
                 "opencode.launch".to_string(),

@@ -95,8 +95,8 @@ def test_transport_health_keeps_recovered_server_error_burst_healthy():
     assessment = assess_transport_health(sample)
 
     assert assessment.status == "healthy"
-    assert assessment.status_reason == "spool_pending"
-    assert assessment.status_summary == "2760 pending spool item(s) queued for retry."
+    assert assessment.status_reason == "healthy"
+    assert assessment.status_summary == "Shipping healthy."
     assert assessment.reasons == ()
 
 
@@ -220,7 +220,7 @@ def test_transport_health_keeps_small_spool_retry_healthy():
     assert assessment.reasons == ()
 
 
-def test_transport_health_degrades_for_spool_backlog():
+def test_transport_health_keeps_spool_backlog_out_of_live_transport_status():
     sample = transport_health_sample_from_engine_status_payload(
         {
             "ship_attempts_1h": 12,
@@ -234,8 +234,8 @@ def test_transport_health_degrades_for_spool_backlog():
     assessment = assess_transport_health(sample)
 
     assert assessment.status == "healthy"
-    assert assessment.status_reason == "spool_pending"
-    assert assessment.status_summary == "5 pending spool item(s) queued for retry."
+    assert assessment.status_reason == "healthy"
+    assert assessment.status_summary == "Shipping healthy."
     assert assessment.reasons == ()
 
 

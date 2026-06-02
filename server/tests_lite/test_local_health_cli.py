@@ -1563,6 +1563,41 @@ def test_collect_local_health_uses_active_transport_window_when_present(monkeypa
     assert "connect_errors" not in snapshot["reasons"]
 
 
+def test_collect_local_health_surfaces_archive_backlog_without_breaking_live_shipping(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(
+        tmp_path,
+        age_seconds=5,
+        payload={
+            "ship_attempts_1h": 14,
+            "ship_successes_1h": 14,
+            "spool_pending_count": 6375,
+            "spool_dead_count": 0,
+            "archive_backlog": {
+                "state": "pending",
+                "mode": "trickle",
+                "pending_ranges": 6375,
+                "pending_paths": 6374,
+                "pending_sessions": 6306,
+                "pending_bytes": 16_699_227_012,
+                "dead_ranges": 0,
+                "dead_bytes": 0,
+            },
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "degraded"
+    assert snapshot["severity"] == "yellow"
+    assert snapshot["headline"] == "Longhouse archive repair pending"
+    assert "archive_backlog_pending" in snapshot["reasons"]
+    assert snapshot["transport_health"]["status"] == "healthy"
+    assert snapshot["transport_health"]["status_reason"] == "healthy"
+    assert snapshot["archive_repair"]["pending_bytes"] == 16_699_227_012
+
+
 def test_collect_local_health_watches_offline_without_backlog(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))

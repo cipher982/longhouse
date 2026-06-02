@@ -53,6 +53,7 @@ class MachineHealthItemResponse(UTCBaseModel):
     ship_connect_errors_10m: int | None = None
     spool_pending: int
     spool_dead: int
+    archive_repair: dict[str, Any] = Field(default_factory=dict)
     parse_errors_1h: int
     consecutive_failures: int
     disk_free_bytes: int

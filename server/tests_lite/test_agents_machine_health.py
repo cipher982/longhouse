@@ -9,17 +9,19 @@ from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
 
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
+os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 import zerg.services.agent_heartbeat_health as machine_health_service
+from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.models.agents import AgentHeartbeat
-from zerg.database import Base
 
 
 def _make_db(tmp_path):
@@ -207,6 +209,61 @@ def test_machine_health_route_keeps_single_transient_connect_error_healthy(tmp_p
         assert machine["status_summary"] == "Shipping healthy."
         assert machine["ship_connect_errors_1h"] == 1
         assert machine["reasons"] == []
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_machine_archive_backlog_route_returns_latest_heartbeat_archive_state(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    pinned_now = datetime(2026, 6, 2, 20, 15, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+
+    archive_backlog = {
+        "state": "pending",
+        "mode": "trickle",
+        "pending_ranges": 6375,
+        "pending_paths": 6374,
+        "pending_sessions": 6306,
+        "pending_bytes": 16_699_227_012,
+        "dead_ranges": 0,
+        "dead_bytes": 0,
+    }
+    with SessionLocal() as db:
+        db.add(
+            AgentHeartbeat(
+                device_id="cinder",
+                received_at=pinned_now - timedelta(seconds=30),
+                version="0.6.0",
+                spool_pending=6375,
+                spool_dead=0,
+                parse_errors_1h=0,
+                consecutive_failures=0,
+                ship_attempts_1h=10,
+                ship_successes_1h=10,
+                disk_free_bytes=100,
+                is_offline=0,
+                raw_json=json.dumps({"archive_backlog": archive_backlog}),
+            )
+        )
+        db.commit()
+
+    client, api_app_ref = _make_client(SessionLocal)
+
+    try:
+        response = client.get("/api/agents/machines/cinder/archive-backlog")
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["device_id"] == "cinder"
+        assert payload["archive_repair"]["state"] == "pending"
+        assert payload["archive_repair"]["pending_ranges"] == 6375
+        assert payload["archive_repair"]["pending_bytes"] == 16_699_227_012
+
+        health = client.get("/api/agents/machines/health?device_id=cinder&stale_after_seconds=3600")
+        assert health.status_code == 200
+        machine = health.json()["machines"][0]
+        assert machine["status"] == "healthy"
+        assert machine["status_reason"] == "healthy"
+        assert machine["archive_repair"]["pending_ranges"] == 6375
     finally:
         api_app_ref.dependency_overrides = {}
 

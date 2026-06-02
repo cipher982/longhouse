@@ -20,6 +20,9 @@ from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.device_token import DeviceToken
+from zerg.schemas.machines import ArchiveBacklogControlRequest
+from zerg.schemas.machines import ArchiveBacklogControlResponse
+from zerg.schemas.machines import ArchiveBacklogResponse
 from zerg.schemas.machines import MachineDirectoryEntry
 from zerg.schemas.machines import MachineDirectoryResponse
 from zerg.schemas.machines import ProviderLiveProofRequest
@@ -36,6 +39,7 @@ from zerg.services.session_chat_impl import _resolve_agents_owner_id
 router = APIRouter(prefix="/agents/machines", tags=["agents"])
 
 PROVIDER_LIVE_PROOF_COMMAND = "provider.live_proof"
+ARCHIVE_BACKLOG_CONTROL_COMMAND = "archive.backlog_control"
 PROVIDER_LIVE_PROOF_COMMAND_HEADROOM_SECS = 15
 _PROVIDER_LIVE_PROOF_IN_FLIGHT: set[tuple[int, str, str]] = set()
 _PROVIDER_LIVE_PROOF_IN_FLIGHT_LOCK = asyncio.Lock()
@@ -76,6 +80,68 @@ def list_machine_health(
         limit=limit,
     )
     return build_machine_health_list_response(summaries, total=total)
+
+
+@router.get("/{device_id}/archive-backlog", response_model=ArchiveBacklogResponse)
+def get_machine_archive_backlog(
+    device_id: str,
+    db: Session = Depends(get_db),
+    _auth: object = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> ArchiveBacklogResponse:
+    summaries, _total = list_machine_transport_health(
+        db,
+        device_id=device_id,
+        limit=1,
+    )
+    if not summaries:
+        raise HTTPException(status_code=404, detail="Machine heartbeat not found")
+    return ArchiveBacklogResponse(
+        device_id=device_id,
+        archive_repair=summaries[0].archive_repair,
+    )
+
+
+@router.post("/{device_id}/archive-backlog/control", response_model=ArchiveBacklogControlResponse)
+async def control_machine_archive_backlog(
+    device_id: str,
+    request: ArchiveBacklogControlRequest,
+    db: Session = Depends(get_db),
+    device_token: DeviceToken | None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> ArchiveBacklogControlResponse:
+    owner_id = _resolve_agents_owner_id(db, device_token)
+    registry = get_machine_control_channel_registry()
+    info = registry.info(owner_id=owner_id, device_id=device_id)
+    if info is None:
+        raise HTTPException(status_code=503, detail="Machine Agent control channel is offline")
+    if not registry.supports(owner_id=owner_id, device_id=device_id, capability=ARCHIVE_BACKLOG_CONTROL_COMMAND):
+        raise HTTPException(status_code=409, detail="Machine Agent does not advertise archive backlog control")
+
+    payload = request.model_dump(exclude_none=True)
+    payload.pop("timeout_secs", None)
+    command = await registry.send_command(
+        owner_id=owner_id,
+        device_id=device_id,
+        session_id=None,
+        command_type=ARCHIVE_BACKLOG_CONTROL_COMMAND,
+        payload=payload,
+        timeout_secs=request.timeout_secs or 15,
+    )
+    if not command.transport_ok:
+        raise HTTPException(status_code=503, detail=command.error or "Machine control command failed")
+    message = dict(command.message or {})
+    if not message.get("ok"):
+        error = message.get("error") if isinstance(message.get("error"), dict) else {}
+        raise HTTPException(
+            status_code=502,
+            detail=error.get("message") or "Machine Agent archive backlog control failed",
+        )
+    return ArchiveBacklogControlResponse(
+        device_id=device_id,
+        command_id=str(message.get("command_id") or ""),
+        result=dict(message.get("result") or {}),
+    )
 
 
 @router.post("/{device_id}/provider-live-proof", response_model=ProviderLiveProofResponse)

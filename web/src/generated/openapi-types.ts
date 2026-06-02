@@ -3551,6 +3551,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/machines/{device_id}/archive-backlog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Machine Archive Backlog */
+        get: operations["get_machine_archive_backlog_agents_machines__device_id__archive_backlog_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/machines/{device_id}/archive-backlog/control": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Control Machine Archive Backlog */
+        post: operations["control_machine_archive_backlog_agents_machines__device_id__archive_backlog_control_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/machines/{device_id}/provider-live-proof": {
         parameters: {
             query?: never;
@@ -4925,6 +4959,60 @@ export interface components {
             /** Offset */
             offset: number;
         };
+        /** ArchiveBacklogControlRequest */
+        ArchiveBacklogControlRequest: {
+            /**
+             * Mode
+             * @description Archive repair mode to apply on the Machine Agent.
+             * @enum {string}
+             */
+            mode: "paused" | "trickle" | "drain";
+            /**
+             * Max Tick Bytes
+             * @description Optional per-tick byte budget consumed by the Machine Agent archive scheduler.
+             */
+            max_tick_bytes?: number | null;
+            /**
+             * Include Huge
+             * @description Allow replaying archive ranges >=100MB in explicit drain mode.
+             * @default false
+             */
+            include_huge: boolean;
+            /**
+             * Timeout Secs
+             * @description Machine-control command timeout.
+             */
+            timeout_secs?: number | null;
+        };
+        /** ArchiveBacklogControlResponse */
+        ArchiveBacklogControlResponse: {
+            /**
+             * Device Id
+             * @description Machine that received the archive control command.
+             */
+            device_id: string;
+            /**
+             * Command Id
+             * @description Machine-control command id.
+             */
+            command_id: string;
+            /** Result */
+            result?: {
+                [key: string]: unknown;
+            };
+        };
+        /** ArchiveBacklogResponse */
+        ArchiveBacklogResponse: {
+            /**
+             * Device Id
+             * @description Machine whose archive backlog was inspected.
+             */
+            device_id: string;
+            /** Archive Repair */
+            archive_repair?: {
+                [key: string]: unknown;
+            };
+        };
         /** Automation */
         Automation: {
             /** Name */
@@ -6016,6 +6104,10 @@ export interface components {
              * @default 0
              */
             spool_dead_count: number;
+            /** Archive Backlog */
+            archive_backlog?: {
+                [key: string]: unknown;
+            };
             /**
              * Parse Error Count 1H
              * @default 0
@@ -6555,6 +6647,10 @@ export interface components {
             spool_pending: number;
             /** Spool Dead */
             spool_dead: number;
+            /** Archive Repair */
+            archive_repair?: {
+                [key: string]: unknown;
+            };
             /** Parse Errors 1H */
             parse_errors_1h: number;
             /** Consecutive Failures */
@@ -16958,6 +17054,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MachineHealthListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_machine_archive_backlog_agents_machines__device_id__archive_backlog_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchiveBacklogResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    control_machine_archive_backlog_agents_machines__device_id__archive_backlog_control_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ArchiveBacklogControlRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArchiveBacklogControlResponse"];
                 };
             };
             /** @description Validation Error */

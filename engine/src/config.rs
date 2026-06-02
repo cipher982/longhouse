@@ -283,6 +283,10 @@ pub fn get_agent_db_path() -> Result<PathBuf> {
     Ok(get_agent_dir()?.join("longhouse-shipper.db"))
 }
 
+pub fn get_agent_archive_repair_control_path() -> Result<PathBuf> {
+    Ok(get_agent_dir()?.join("archive-repair-control.json"))
+}
+
 pub fn get_agent_log_dir() -> Result<PathBuf> {
     Ok(get_agent_dir()?.join("logs"))
 }

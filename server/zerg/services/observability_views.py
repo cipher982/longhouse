@@ -60,6 +60,7 @@ def build_machine_health_item_response(item: MachineTransportHealthSummary) -> M
         ship_connect_errors_10m=item.ship_connect_errors_10m,
         spool_pending=item.spool_pending,
         spool_dead=item.spool_dead,
+        archive_repair=item.archive_repair,
         parse_errors_1h=item.parse_errors_1h,
         consecutive_failures=item.consecutive_failures,
         disk_free_bytes=item.disk_free_bytes,

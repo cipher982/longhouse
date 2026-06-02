@@ -18,7 +18,6 @@ TRANSPORT_ERROR_DEGRADED_MIN_COUNT = 3
 TRANSPORT_ERROR_DEGRADED_MIN_RATE = 0.25
 CURRENT_TRANSPORT_ERROR_DEGRADED_MIN_COUNT = 2
 CONSECUTIVE_FAILURES_DEGRADED_MIN_COUNT = 2
-SPOOL_PENDING_DEGRADED_MIN_COUNT = 5
 ACTIVE_TRANSPORT_WINDOW_LABEL = "last 10 minutes"
 
 
@@ -288,10 +287,6 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
             retryable_summary,
             sample,
         )
-    elif sample.spool_pending >= SPOOL_PENDING_DEGRADED_MIN_COUNT:
-        status = "healthy"
-        status_reason = "spool_pending"
-        status_summary = f"{sample.spool_pending} pending spool item(s) queued for retry."
     else:
         status = "healthy"
         status_reason = "healthy"

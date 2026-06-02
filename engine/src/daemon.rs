@@ -56,9 +56,11 @@ pub struct ConnectConfig {
 /// and the reconciliation scanner.
 const WATCHER_FLUSH_INTERVAL: Duration = Duration::from_millis(15);
 
-const INITIAL_SPOOL_PATH_LIMIT: usize = 10;
+const INITIAL_SPOOL_PATH_LIMIT: usize = 1;
 const PERIODIC_SPOOL_PATH_LIMIT: usize = 5;
 const PATH_SPOOL_REPLAY_LIMIT: usize = 1;
+const ARCHIVE_TRICKLE_TICK_BYTES: u64 = 25 * 1024 * 1024;
+const ARCHIVE_DRAIN_TICK_BYTES: u64 = 250 * 1024 * 1024;
 const LOCAL_RETRY_DELAY_SECS: u64 = 5;
 const LIVE_LOCAL_RETRY_DELAY: Duration = Duration::from_millis(500);
 const STARTUP_RECONCILIATION_SCAN_DELAY: Duration = Duration::from_secs(120);
@@ -224,6 +226,78 @@ struct ManagedObservationScanResult {
     codex_observations: Vec<managed_bridge_scan::CodexBridgeObservation>,
     claude_observations: Vec<managed_claude_scan::ClaudeChannelObservation>,
     elapsed_ms: u64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct ArchiveRepairControl {
+    mode: Option<String>,
+    max_tick_bytes: Option<u64>,
+    include_huge: Option<bool>,
+}
+
+impl ArchiveRepairControl {
+    fn normalized_mode(&self) -> &'static str {
+        match self
+            .mode
+            .as_deref()
+            .unwrap_or("trickle")
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "paused" | "pause" => "paused",
+            "drain" | "drain-now" => "drain",
+            _ => "trickle",
+        }
+    }
+
+    fn is_paused(&self) -> bool {
+        self.normalized_mode() == "paused"
+    }
+
+    fn tick_bytes(&self) -> u64 {
+        match self.normalized_mode() {
+            "drain" => self.max_tick_bytes.unwrap_or(ARCHIVE_DRAIN_TICK_BYTES),
+            _ => self.max_tick_bytes.unwrap_or(ARCHIVE_TRICKLE_TICK_BYTES),
+        }
+    }
+
+    fn includes_huge(&self) -> bool {
+        self.include_huge.unwrap_or(false)
+    }
+}
+
+fn read_archive_repair_control() -> ArchiveRepairControl {
+    let Ok(path) = config::get_agent_archive_repair_control_path() else {
+        return ArchiveRepairControl::default();
+    };
+    let Ok(bytes) = std::fs::read(&path) else {
+        return ArchiveRepairControl::default();
+    };
+    match serde_json::from_slice::<ArchiveRepairControl>(&bytes) {
+        Ok(control) => control,
+        Err(err) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %err,
+                "Ignoring invalid archive repair control file"
+            );
+            ArchiveRepairControl::default()
+        }
+    }
+}
+
+fn apply_archive_repair_control(
+    payload: &mut heartbeat::HeartbeatPayload,
+    control: &ArchiveRepairControl,
+) {
+    let mode = control.normalized_mode().to_string();
+    payload.archive_backlog.mode = mode.clone();
+    if control.is_paused() && payload.archive_backlog.pending_ranges > 0 {
+        payload.archive_backlog.state = "paused".to_string();
+    } else if mode == "drain" && payload.archive_backlog.pending_ranges > 0 {
+        payload.archive_backlog.state = "draining".to_string();
+    }
 }
 
 /// Run the connect daemon. This function blocks until shutdown signal.
@@ -1247,6 +1321,8 @@ fn write_local_status_snapshot(
         last_ship_at: last_ship_at.clone(),
     };
     let mut payload = heartbeat::HeartbeatPayload::build(&stats);
+    let archive_control = read_archive_repair_control();
+    apply_archive_repair_control(&mut payload, &archive_control);
     payload.adaptive_backlog_limiter = limiter.map(|l| l.snapshot());
     let now = chrono::Utc::now();
     payload.managed_sessions =
@@ -1839,8 +1915,16 @@ fn queue_pending_spool_paths(
         tracing::info!("Cleaned {} old spool entries", cleaned);
     }
 
+    let control = read_archive_repair_control();
+    if control.is_paused() {
+        tracing::debug!("Archive replay paused by local control file");
+        return Ok(0);
+    }
+
     let mut queued = 0usize;
-    for pending in spool.pending_paths(limit)? {
+    for pending in
+        spool.pending_paths_budgeted(limit, control.tick_bytes(), control.includes_huge())?
+    {
         let Some(provider) = provider_name_to_static(&pending.provider) else {
             tracing::warn!(
                 "Skipping pending spool path with unknown provider {}: {}",
@@ -2563,6 +2647,7 @@ mod tests {
             last_ship_error_message: None,
             spool_pending_count: 0,
             spool_dead_count: 0,
+            archive_backlog: crate::state::spool::ArchiveBacklogSnapshot::default(),
             parse_error_count_1h: 0,
             consecutive_ship_failures: 0,
             ship_attempts_1h: 0,

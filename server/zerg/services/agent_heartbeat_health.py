@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
+from typing import Any
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentHeartbeat
+from zerg.services.archive_backlog import default_archive_backlog
+from zerg.services.archive_backlog import normalize_archive_backlog
 from zerg.services.transport_health import TransportHealthAssessment
 from zerg.services.transport_health import assess_transport_health
 from zerg.services.transport_health import transport_health_sample_from_heartbeat
@@ -65,6 +69,7 @@ class MachineTransportHealthSummary:
     ship_connect_errors_10m: int | None
     spool_pending: int
     spool_dead: int
+    archive_repair: dict[str, Any]
     parse_errors_1h: int
     consecutive_failures: int
     disk_free_bytes: int
@@ -160,6 +165,7 @@ def build_machine_transport_health_summary(
     ship_success_rate_1h = sample.ship_success_rate_1h
     spool_pending = sample.spool_pending
     spool_dead = sample.spool_dead
+    archive_repair = _archive_repair_from_heartbeat(row, spool_pending=spool_pending)
     parse_errors_1h = sample.parse_errors_1h
     consecutive_failures = sample.consecutive_failures
     ship_rate_limited_1h = sample.ship_rate_limited_1h
@@ -224,11 +230,31 @@ def build_machine_transport_health_summary(
         ship_connect_errors_10m=ship_connect_errors_10m,
         spool_pending=spool_pending,
         spool_dead=spool_dead,
+        archive_repair=archive_repair,
         parse_errors_1h=parse_errors_1h,
         consecutive_failures=consecutive_failures,
         disk_free_bytes=disk_free_bytes,
         is_offline=is_offline,
     )
+
+
+def _archive_repair_from_heartbeat(row: AgentHeartbeat, *, spool_pending: int) -> dict[str, Any]:
+    raw_json = getattr(row, "raw_json", None)
+    raw: dict[str, Any] = {}
+    if raw_json:
+        try:
+            parsed = json.loads(raw_json)
+            if isinstance(parsed, dict):
+                raw = parsed
+        except (TypeError, ValueError):
+            raw = {}
+    archive_backlog = raw.get("archive_backlog")
+    if isinstance(archive_backlog, dict):
+        return normalize_archive_backlog(archive_backlog, source="heartbeat")
+    fallback = default_archive_backlog(source="heartbeat_legacy")
+    if spool_pending > 0:
+        fallback.update({"state": "pending", "mode": "trickle", "pending_ranges": int(spool_pending)})
+    return fallback
 
 
 def _overlay_heartbeat_staleness(

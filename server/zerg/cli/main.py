@@ -11,6 +11,7 @@ from zerg.build_info import BuildIdentityMissing
 from zerg.build_info import load as load_build_identity
 from zerg.cli.antigravity import antigravity
 from zerg.cli.antigravity_channel import app as antigravity_channel_app
+from zerg.cli.archive import app as archive_app
 from zerg.cli.claude import claude
 from zerg.cli.claude_channel import app as claude_channel_app
 from zerg.cli.codex import app as codex_app
@@ -253,6 +254,7 @@ app.add_typer(antigravity_channel_app, name="antigravity-channel", help="Antigra
 app.add_typer(codex_app, name="codex")
 app.add_typer(local_health_app, name="local-health")
 app.add_typer(machine_app, name="machine", help="Machine runtime repair and reconciliation")
+app.add_typer(archive_app, name="archive", help="Archive backlog inspection and control")
 app.add_typer(provider_live_app, name="provider-live", help="Managed-provider live proof canaries")
 
 for command in (serve, status, claude, wall, peers, message, tail, auth, ship, recall):

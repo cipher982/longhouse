@@ -6,7 +6,10 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use rand::Rng;
 use rusqlite::{Connection, OptionalExtension};
+use serde::Serialize;
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 /// Maximum spool entries before backpressure kicks in.
@@ -20,6 +23,8 @@ const BACKOFF_MAX: f64 = 3600.0;
 
 /// Default max retries before marking dead.
 const DEFAULT_MAX_RETRIES: u32 = 50;
+
+const HUGE_RANGE_BYTES: u64 = 100 * 1024 * 1024;
 
 /// A spool entry — pointer to a byte range in a source file.
 #[derive(Debug, Clone)]
@@ -49,6 +54,66 @@ pub struct DeadLetterEntry {
     pub session_id: Option<String>,
     pub last_error: Option<String>,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct ArchiveBacklogSnapshot {
+    pub state: String,
+    pub mode: String,
+    pub pending_ranges: usize,
+    pub pending_paths: usize,
+    pub pending_sessions: usize,
+    pub pending_bytes: u64,
+    pub dead_ranges: usize,
+    pub dead_bytes: u64,
+    pub huge_pending_ranges: usize,
+    pub huge_pending_bytes: u64,
+    pub oldest_pending_at: Option<String>,
+    pub newest_pending_at: Option<String>,
+    pub next_retry_at_min: Option<String>,
+    pub next_retry_at_max: Option<String>,
+    pub providers: Vec<ArchiveProviderSummary>,
+    pub size_buckets: BTreeMap<String, ArchiveSizeBucketSummary>,
+}
+
+impl Default for ArchiveBacklogSnapshot {
+    fn default() -> Self {
+        Self {
+            state: "idle".to_string(),
+            mode: "idle".to_string(),
+            pending_ranges: 0,
+            pending_paths: 0,
+            pending_sessions: 0,
+            pending_bytes: 0,
+            dead_ranges: 0,
+            dead_bytes: 0,
+            huge_pending_ranges: 0,
+            huge_pending_bytes: 0,
+            oldest_pending_at: None,
+            newest_pending_at: None,
+            next_retry_at_min: None,
+            next_retry_at_max: None,
+            providers: Vec::new(),
+            size_buckets: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct ArchiveProviderSummary {
+    pub provider: String,
+    pub pending_ranges: usize,
+    pub pending_paths: usize,
+    pub pending_sessions: usize,
+    pub pending_bytes: u64,
+    pub dead_ranges: usize,
+    pub dead_bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct ArchiveSizeBucketSummary {
+    pub pending_ranges: usize,
+    pub pending_bytes: u64,
 }
 
 /// Spool operations on a shared SQLite connection.
@@ -175,26 +240,71 @@ impl<'a> Spool<'a> {
         Ok(result)
     }
 
-    /// Get unique file paths with pending retry work, oldest-first.
-    pub fn pending_paths(&self, limit: usize) -> Result<Vec<PendingPath>> {
+    /// Get unique file paths with ready archive work, small/recent first and
+    /// bounded by the caller's per-tick byte budget.
+    pub fn pending_paths_budgeted(
+        &self,
+        limit: usize,
+        max_total_bytes: u64,
+        include_huge: bool,
+    ) -> Result<Vec<PendingPath>> {
         let now = Utc::now().to_rfc3339();
         let mut stmt = self.conn.prepare(
-            "SELECT provider, file_path
-             FROM spool_queue
-             WHERE status = 'pending' AND next_retry_at <= ?1
-             GROUP BY provider, file_path
-             ORDER BY MIN(created_at) ASC, MIN(id) ASC
-             LIMIT ?2",
+            "SELECT provider, file_path, path_bytes
+             FROM (
+                 SELECT provider,
+                        file_path,
+                        SUM(CASE WHEN end_offset > start_offset THEN end_offset - start_offset ELSE 0 END) AS path_bytes,
+                        MIN(id) AS first_id,
+                        MAX(created_at) AS newest_created_at
+                 FROM spool_queue
+                 WHERE status = 'pending' AND next_retry_at <= ?1
+                 GROUP BY provider, file_path
+             )
+             WHERE ?2 OR path_bytes < ?3
+             ORDER BY
+                CASE
+                    WHEN path_bytes < 1048576 THEN 0
+                    WHEN path_bytes < 10485760 THEN 1
+                    WHEN path_bytes < 104857600 THEN 2
+                    ELSE 3
+                END ASC,
+                newest_created_at DESC,
+                first_id ASC
+             LIMIT ?4",
         )?;
-        let rows = stmt.query_map(rusqlite::params![now, limit as i64], |row| {
-            Ok(PendingPath {
-                provider: row.get(0)?,
-                file_path: row.get(1)?,
-            })
-        })?;
+        let rows = stmt.query_map(
+            rusqlite::params![
+                now,
+                include_huge,
+                HUGE_RANGE_BYTES as i64,
+                (limit.max(1) * 4) as i64
+            ],
+            |row| {
+                Ok((
+                    PendingPath {
+                        provider: row.get(0)?,
+                        file_path: row.get(1)?,
+                    },
+                    row.get::<_, i64>(2)?.max(0) as u64,
+                ))
+            },
+        )?;
         let mut result = Vec::new();
+        let mut selected_bytes = 0u64;
         for row in rows {
-            result.push(row?);
+            let (pending, path_bytes) = row?;
+            if result.len() >= limit {
+                break;
+            }
+            if path_bytes > max_total_bytes && !result.is_empty() {
+                continue;
+            }
+            if selected_bytes.saturating_add(path_bytes) > max_total_bytes && !result.is_empty() {
+                continue;
+            }
+            selected_bytes = selected_bytes.saturating_add(path_bytes);
+            result.push(pending);
         }
         Ok(result)
     }
@@ -325,16 +435,25 @@ impl<'a> Spool<'a> {
         error: &str,
         delay: Duration,
     ) -> Result<usize> {
-        let chrono_delay = chrono::Duration::from_std(delay)
-            .unwrap_or_else(|_| chrono::Duration::seconds(BACKOFF_MAX as i64));
-        let next_retry = Utc::now() + chrono_delay;
-        let changed = self.conn.execute(
-            "UPDATE spool_queue
-             SET last_error = ?1,
-                 next_retry_at = ?2
-             WHERE status = 'pending' AND file_path = ?3",
-            rusqlite::params![error, next_retry.to_rfc3339(), file_path],
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id FROM spool_queue WHERE status = 'pending' AND file_path = ?1")?;
+        let ids = stmt
+            .query_map([file_path], |row| row.get::<_, i64>(0))?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(stmt);
+
+        let mut changed = 0usize;
+        for id in ids {
+            let next_retry = Utc::now() + jittered_chrono_delay(delay);
+            changed += self.conn.execute(
+                "UPDATE spool_queue
+                 SET last_error = ?1,
+                     next_retry_at = ?2
+                 WHERE status = 'pending' AND id = ?3",
+                rusqlite::params![error, next_retry.to_rfc3339(), id],
+            )?;
+        }
         Ok(changed)
     }
 
@@ -363,9 +482,11 @@ impl<'a> Spool<'a> {
             return Ok(true);
         }
 
-        // Exponential backoff: min(5 * 2^retry, 3600)
+        // Exponential backoff with full jitter: min(5 * 2^retry, 3600).
+        // Without jitter, host backpressure can stamp thousands of archive
+        // ranges with the same next_retry_at and create a replay herd.
         let backoff_secs = (BACKOFF_BASE * 2.0_f64.powi(new_count)).min(BACKOFF_MAX);
-        let next_retry = Utc::now() + chrono::Duration::seconds(backoff_secs as i64);
+        let next_retry = Utc::now() + jittered_chrono_delay(Duration::from_secs_f64(backoff_secs));
 
         self.conn.execute(
             "UPDATE spool_queue SET retry_count = ?1, last_error = ?2, next_retry_at = ?3
@@ -393,6 +514,157 @@ impl<'a> Spool<'a> {
             |row| row.get(0),
         )?;
         Ok(count as usize)
+    }
+
+    pub fn archive_backlog_snapshot(&self) -> Result<ArchiveBacklogSnapshot> {
+        let aggregate = self.conn.query_row(
+            "SELECT
+                COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0),
+                COUNT(DISTINCT CASE WHEN status = 'pending' THEN provider || char(31) || file_path END),
+                COUNT(DISTINCT CASE WHEN status = 'pending' THEN session_id END),
+                COALESCE(SUM(CASE WHEN status = 'pending' AND end_offset > start_offset THEN end_offset - start_offset ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN status = 'dead' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN status = 'dead' AND end_offset > start_offset THEN end_offset - start_offset ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN status = 'pending' AND end_offset - start_offset >= ?1 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN status = 'pending' AND end_offset - start_offset >= ?1 THEN end_offset - start_offset ELSE 0 END), 0),
+                MIN(CASE WHEN status = 'pending' THEN created_at END),
+                MAX(CASE WHEN status = 'pending' THEN created_at END),
+                MIN(CASE WHEN status = 'pending' THEN next_retry_at END),
+                MAX(CASE WHEN status = 'pending' THEN next_retry_at END)
+             FROM spool_queue",
+            [HUGE_RANGE_BYTES as i64],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?.max(0) as usize,
+                    row.get::<_, i64>(1)?.max(0) as usize,
+                    row.get::<_, i64>(2)?.max(0) as usize,
+                    row.get::<_, i64>(3)?.max(0) as u64,
+                    row.get::<_, i64>(4)?.max(0) as usize,
+                    row.get::<_, i64>(5)?.max(0) as u64,
+                    row.get::<_, i64>(6)?.max(0) as usize,
+                    row.get::<_, i64>(7)?.max(0) as u64,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, Option<String>>(10)?,
+                    row.get::<_, Option<String>>(11)?,
+                ))
+            },
+        )?;
+        let (
+            pending_ranges,
+            pending_paths,
+            pending_sessions,
+            pending_bytes,
+            dead_ranges,
+            dead_bytes,
+            huge_pending_ranges,
+            huge_pending_bytes,
+            oldest_pending_at,
+            newest_pending_at,
+            next_retry_at_min,
+            next_retry_at_max,
+        ) = aggregate;
+
+        let state = if dead_ranges > 0 {
+            "dead_lettered"
+        } else if pending_ranges > 0 {
+            "pending"
+        } else {
+            "idle"
+        }
+        .to_string();
+
+        Ok(ArchiveBacklogSnapshot {
+            state,
+            mode: if pending_ranges > 0 {
+                "trickle"
+            } else {
+                "idle"
+            }
+            .to_string(),
+            pending_ranges,
+            pending_paths,
+            pending_sessions,
+            pending_bytes,
+            dead_ranges,
+            dead_bytes,
+            huge_pending_ranges,
+            huge_pending_bytes,
+            oldest_pending_at,
+            newest_pending_at,
+            next_retry_at_min,
+            next_retry_at_max,
+            providers: self.archive_provider_summaries()?,
+            size_buckets: self.archive_size_buckets()?,
+        })
+    }
+
+    fn archive_provider_summaries(&self) -> Result<Vec<ArchiveProviderSummary>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT provider,
+                    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END),
+                    COUNT(DISTINCT CASE WHEN status = 'pending' THEN file_path END),
+                    COUNT(DISTINCT CASE WHEN status = 'pending' THEN session_id END),
+                    COALESCE(SUM(CASE WHEN status = 'pending' AND end_offset > start_offset THEN end_offset - start_offset ELSE 0 END), 0),
+                    SUM(CASE WHEN status = 'dead' THEN 1 ELSE 0 END),
+                    COALESCE(SUM(CASE WHEN status = 'dead' AND end_offset > start_offset THEN end_offset - start_offset ELSE 0 END), 0)
+             FROM spool_queue
+             GROUP BY provider
+             ORDER BY 5 DESC, provider ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(ArchiveProviderSummary {
+                provider: row.get(0)?,
+                pending_ranges: row.get::<_, i64>(1)?.max(0) as usize,
+                pending_paths: row.get::<_, i64>(2)?.max(0) as usize,
+                pending_sessions: row.get::<_, i64>(3)?.max(0) as usize,
+                pending_bytes: row.get::<_, i64>(4)?.max(0) as u64,
+                dead_ranges: row.get::<_, i64>(5)?.max(0) as usize,
+                dead_bytes: row.get::<_, i64>(6)?.max(0) as u64,
+            })
+        })?;
+        let mut result = Vec::new();
+        for row in rows {
+            let summary = row?;
+            if summary.pending_ranges > 0 || summary.dead_ranges > 0 {
+                result.push(summary);
+            }
+        }
+        Ok(result)
+    }
+
+    fn archive_size_buckets(&self) -> Result<BTreeMap<String, ArchiveSizeBucketSummary>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT
+                CASE
+                    WHEN end_offset - start_offset < 1024 THEN 'tiny_lt_1kb'
+                    WHEN end_offset - start_offset < 1048576 THEN 'small_lt_1mb'
+                    WHEN end_offset - start_offset < 10485760 THEN 'medium_lt_10mb'
+                    WHEN end_offset - start_offset < 104857600 THEN 'large_lt_100mb'
+                    ELSE 'huge_gte_100mb'
+                END AS bucket,
+                COUNT(*),
+                COALESCE(SUM(CASE WHEN end_offset > start_offset THEN end_offset - start_offset ELSE 0 END), 0)
+             FROM spool_queue
+             WHERE status = 'pending'
+             GROUP BY bucket
+             ORDER BY bucket ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                ArchiveSizeBucketSummary {
+                    pending_ranges: row.get::<_, i64>(1)?.max(0) as usize,
+                    pending_bytes: row.get::<_, i64>(2)?.max(0) as u64,
+                },
+            ))
+        })?;
+        let mut result = BTreeMap::new();
+        for row in rows {
+            let (bucket, summary) = row?;
+            result.insert(bucket, summary);
+        }
+        Ok(result)
     }
 
     /// Return recent dead-lettered ranges, newest first.
@@ -454,6 +726,12 @@ impl<'a> Spool<'a> {
     }
 }
 
+fn jittered_chrono_delay(delay: Duration) -> chrono::Duration {
+    let max_millis = delay.as_millis().min((BACKOFF_MAX * 1000.0) as u128).max(1) as i64;
+    let jitter_millis = rand::thread_rng().gen_range(1..=max_millis);
+    chrono::Duration::milliseconds(jitter_millis)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -497,51 +775,6 @@ mod tests {
     }
 
     #[test]
-    fn test_pending_paths_returns_unique_oldest_first() {
-        let (_tmp, conn) = setup();
-        conn.execute(
-            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
-             VALUES ('claude', '/b.jsonl', 0, 10, '2026-03-10T00:00:00+00:00', '2026-03-10T00:00:00+00:00', 'pending')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
-             VALUES ('claude', '/a.jsonl', 0, 10, '2026-03-11T00:00:00+00:00', '2026-03-11T00:00:00+00:00', 'pending')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
-             VALUES ('claude', '/a.jsonl', 10, 20, '2026-03-12T00:00:00+00:00', '2026-03-12T00:00:00+00:00', 'pending')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
-             VALUES ('claude', '/dead.jsonl', 0, 10, '2026-03-09T00:00:00+00:00', '2026-03-09T00:00:00+00:00', 'dead')",
-            [],
-        )
-        .unwrap();
-
-        let spool = Spool::new(&conn);
-        let pending = spool.pending_paths(10).unwrap();
-        assert_eq!(
-            pending,
-            vec![
-                PendingPath {
-                    provider: "claude".to_string(),
-                    file_path: "/b.jsonl".to_string(),
-                },
-                PendingPath {
-                    provider: "claude".to_string(),
-                    file_path: "/a.jsonl".to_string(),
-                },
-            ]
-        );
-    }
-
-    #[test]
     fn test_pending_entries_for_path_filters_and_orders() {
         let (_tmp, conn) = setup();
         conn.execute(
@@ -568,6 +801,48 @@ mod tests {
         assert_eq!(pending.len(), 2);
         assert_eq!(pending[0].start_offset, 0);
         assert_eq!(pending[1].start_offset, 10);
+    }
+
+    #[test]
+    fn test_pending_paths_budgeted_prefers_small_recent_and_skips_huge_by_default() {
+        let (_tmp, conn) = setup();
+        conn.execute(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
+             VALUES ('codex', '/huge.jsonl', 0, 209715200, '2026-03-11T00:00:00+00:00', '2026-03-11T00:00:00+00:00', 'pending')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
+             VALUES ('codex', '/old-small.jsonl', 0, 1000, '2026-03-10T00:00:00+00:00', '2026-03-10T00:00:00+00:00', 'pending')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO spool_queue (provider, file_path, start_offset, end_offset, created_at, next_retry_at, status)
+             VALUES ('codex', '/new-small.jsonl', 0, 1000, '2026-03-12T00:00:00+00:00', '2026-03-12T00:00:00+00:00', 'pending')",
+            [],
+        )
+        .unwrap();
+
+        let spool = Spool::new(&conn);
+        let pending = spool
+            .pending_paths_budgeted(10, 25 * 1024 * 1024, false)
+            .unwrap();
+
+        assert_eq!(
+            pending,
+            vec![
+                PendingPath {
+                    provider: "codex".to_string(),
+                    file_path: "/new-small.jsonl".to_string(),
+                },
+                PendingPath {
+                    provider: "codex".to_string(),
+                    file_path: "/old-small.jsonl".to_string(),
+                },
+            ]
+        );
     }
 
     #[test]

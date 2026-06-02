@@ -12,6 +12,7 @@ from pydantic import Field
 from zerg.utils.time import UTCBaseModel
 
 ProviderLiveProofProvider = Literal["claude", "opencode", "antigravity"]
+ArchiveBacklogControlMode = Literal["paused", "trickle", "drain"]
 
 ControlChannelStatus = Literal["connected", "disconnected"]
 LaunchBlockedBy = Literal[
@@ -93,3 +94,35 @@ class ProviderLiveProofResponse(UTCBaseModel):
     provider: ProviderLiveProofProvider = Field(..., description="Provider that was proved.")
     command_id: str = Field(..., description="Machine-control command id.")
     result: dict[str, Any] = Field(..., description="Structured provider-live result returned by the Machine Agent.")
+
+
+class ArchiveBacklogResponse(UTCBaseModel):
+    device_id: str = Field(..., description="Machine whose archive backlog was inspected.")
+    archive_repair: dict[str, Any] = Field(default_factory=dict)
+
+
+class ArchiveBacklogControlRequest(UTCBaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mode: ArchiveBacklogControlMode = Field(..., description="Archive repair mode to apply on the Machine Agent.")
+    max_tick_bytes: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional per-tick byte budget consumed by the Machine Agent archive scheduler.",
+    )
+    include_huge: bool = Field(
+        default=False,
+        description="Allow replaying archive ranges >=100MB in explicit drain mode.",
+    )
+    timeout_secs: int | None = Field(
+        default=None,
+        ge=1,
+        le=60,
+        description="Machine-control command timeout.",
+    )
+
+
+class ArchiveBacklogControlResponse(UTCBaseModel):
+    device_id: str = Field(..., description="Machine that received the archive control command.")
+    command_id: str = Field(..., description="Machine-control command id.")
+    result: dict[str, Any] = Field(default_factory=dict)
