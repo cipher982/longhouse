@@ -171,6 +171,25 @@ def test_claude_child_ingest_creates_child_thread_not_session(tmp_path):
         assert ("claude_agent_id", "a0325d64b2dc7300f") in aliases
         assert ("forked_from_provider_session_id", str(PARENT_ID)) in aliases
 
+        parent_events = store.get_session_events(PARENT_ID)
+        assert [event.content_text for event in parent_events] == ["Profile README redesign"]
+        assert store.count_session_events(PARENT_ID) == 1
+
+        child_events = store.get_session_events(PARENT_ID, thread_id=child_thread.id)
+        assert [event.content_text for event in child_events] == ["Deploy crims on drose.io"]
+        assert store.count_session_events(PARENT_ID, thread_id=child_thread.id) == 1
+
+        projection = store.get_session_projection_page(PARENT_ID)
+        assert projection.total == 1
+        assert [item.event.content_text for item in projection.items if item.event is not None] == [
+            "Profile README redesign"
+        ]
+        child_projection = store.get_session_projection_page(PARENT_ID, thread_id=child_thread.id)
+        assert child_projection.total == 1
+        assert [item.event.content_text for item in child_projection.items if item.event is not None] == [
+            "Deploy crims on drose.io"
+        ]
+
 
 def test_replaying_same_claude_child_reuses_child_thread(tmp_path):
     SessionLocal = _session_factory(tmp_path)
@@ -367,6 +386,9 @@ def test_timeline_sessions_api_collapses_parent_with_children(tmp_path):
                     ),
                 )
             )
+        child_thread = db.query(SessionThread).filter(SessionThread.branch_kind == "subagent").first()
+        assert child_thread is not None
+        child_thread_id = str(child_thread.id)
         db.commit()
 
     def override_db():
@@ -387,5 +409,17 @@ def test_timeline_sessions_api_collapses_parent_with_children(tmp_path):
         assert body["total"] == 1
         assert len(body["sessions"]) == 1
         assert body["sessions"][0]["head"]["id"] == str(PARENT_ID)
+
+        events_response = client.get(f"/timeline/sessions/{PARENT_ID}/events")
+        assert events_response.status_code == 200, events_response.text
+        events_body = events_response.json()
+        assert events_body["total"] == 1
+        assert [event["content_text"] for event in events_body["events"]] == ["Profile README redesign"]
+
+        child_response = client.get(f"/timeline/sessions/{PARENT_ID}/events?thread_id={child_thread_id}")
+        assert child_response.status_code == 200, child_response.text
+        child_body = child_response.json()
+        assert child_body["total"] == 3
+        assert {event["content_text"] for event in child_body["events"]} == {"Deploy crims on drose.io"}
     finally:
         api_app.dependency_overrides.clear()

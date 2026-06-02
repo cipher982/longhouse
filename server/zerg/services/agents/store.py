@@ -226,6 +226,7 @@ class AgentsStore:
         self,
         session_or_id: UUID | AgentSession,
         *,
+        thread_id: UUID | None = None,
         branch_mode: str = "head",
         limit: int = 100,
         offset: int = 0,
@@ -247,13 +248,14 @@ class AgentsStore:
         abandoned_events = 0
 
         for index, path_session in enumerate(path_sessions):
-            visible_count = self.count_session_events(path_session.id, branch_mode=branch_mode)
+            event_thread_id = thread_id if index == len(path_sessions) - 1 else None
+            visible_count = self.count_session_events(path_session.id, thread_id=event_thread_id, branch_mode=branch_mode)
             event_counts.append(visible_count)
             total += visible_count
             if index > 0:
                 total += 1
             if branch_mode == "head":
-                forensic_total = self.count_session_events(path_session.id, branch_mode="all")
+                forensic_total = self.count_session_events(path_session.id, thread_id=event_thread_id, branch_mode="all")
                 abandoned_events += max(0, forensic_total - visible_count)
 
         if load_from_end:
@@ -296,6 +298,7 @@ class AgentsStore:
             if fetch_count > 0:
                 events = self.get_session_events(
                     path_session.id,
+                    thread_id=thread_id if index == len(path_sessions) - 1 else None,
                     branch_mode=branch_mode,
                     limit=fetch_count,
                     offset=local_offset,
@@ -2198,7 +2201,9 @@ class AgentsStore:
                 func.max(SessionRuntimeState.runtime_version).label("runtime_version"),
                 func.max(SessionRuntimeState.timeline_anchor_at).label("runtime_timeline_anchor_at"),
             )
+            .outerjoin(SessionThread, SessionRuntimeState.thread_id == SessionThread.id)
             .where(SessionRuntimeState.session_id.is_not(None))
+            .where(or_(SessionRuntimeState.thread_id.is_(None), SessionThread.is_primary == 1))
             .group_by(SessionRuntimeState.session_id)
             .subquery()
         )
@@ -2623,10 +2628,21 @@ class AgentsStore:
             return stmt
         return stmt.where(AgentEvent.branch_id == head_branch_id)
 
+    def _default_event_thread_id(self, session_id: UUID) -> UUID | None:
+        row = self.db.query(AgentSession.primary_thread_id).filter(AgentSession.id == session_id).first()
+        return row[0] if row is not None else None
+
+    def _apply_event_thread_filter(self, stmt, session_id: UUID, thread_id: UUID | None):
+        effective_thread_id = thread_id or self._default_event_thread_id(session_id)
+        if effective_thread_id is None:
+            return stmt
+        return stmt.where(AgentEvent.thread_id == effective_thread_id)
+
     def get_session_events(
         self,
         session_id: UUID,
         *,
+        thread_id: UUID | None = None,
         roles: Optional[List[str]] = None,
         tool_name: Optional[str] = None,
         query: Optional[str] = None,
@@ -2644,6 +2660,7 @@ class AgentsStore:
             .order_by(AgentEvent.timestamp, AgentEvent.id)
         )
         stmt = self._apply_branch_mode_filter(stmt, session_id, branch_mode)
+        stmt = self._apply_event_thread_filter(stmt, session_id, thread_id)
 
         if context_mode == "active_context":
             boundary = self.get_active_context_boundary(session_id, branch_mode=branch_mode)
@@ -2674,6 +2691,7 @@ class AgentsStore:
         self,
         session_id: UUID,
         *,
+        thread_id: UUID | None = None,
         branch_mode: str = "head",
     ) -> List[AgentEvent]:
         """Return tool-call/result events for the full session, ordered.
@@ -2696,12 +2714,14 @@ class AgentsStore:
             .order_by(AgentEvent.timestamp, AgentEvent.id)
         )
         stmt = self._apply_branch_mode_filter(stmt, session_id, branch_mode)
+        stmt = self._apply_event_thread_filter(stmt, session_id, thread_id)
         return list(self.db.execute(stmt).scalars().all())
 
     def count_session_events(
         self,
         session_id: UUID,
         *,
+        thread_id: UUID | None = None,
         roles: Optional[List[str]] = None,
         tool_name: Optional[str] = None,
         query: Optional[str] = None,
@@ -2716,6 +2736,7 @@ class AgentsStore:
             .where(visible_transcript_event_predicate())
         )
         stmt = self._apply_branch_mode_filter(stmt, session_id, branch_mode)
+        stmt = self._apply_event_thread_filter(stmt, session_id, thread_id)
 
         if context_mode == "active_context":
             boundary = self.get_active_context_boundary(session_id, branch_mode=branch_mode)

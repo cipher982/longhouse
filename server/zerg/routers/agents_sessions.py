@@ -880,6 +880,7 @@ async def get_session_thread(
 @router.get("/sessions/{session_id}/events", response_model=EventsListResponse)
 async def get_session_events(
     session_id: UUID,
+    thread_id: Optional[UUID] = Query(None, description="Thread lane to inspect; defaults to the primary session thread"),
     roles: Optional[str] = Query(None, description="Comma-separated roles to filter"),
     tool_name: Optional[str] = Query(None, description="Exact tool name filter, e.g. Bash"),
     query: Optional[str] = Query(None, description="Content search within session events"),
@@ -921,6 +922,7 @@ async def get_session_events(
 
     events = store.get_session_events(
         session_id,
+        thread_id=thread_id,
         roles=role_list,
         tool_name=tool_name,
         query=query,
@@ -934,12 +936,13 @@ async def get_session_events(
     head_branch_id = store.get_head_branch_id(session_id)
     input_origin_map = build_event_input_origin_map(store, events)
     tool_call_state_map = build_tool_call_state_map(
-        store.get_session_tool_call_events(session_id, branch_mode=branch_mode),
+        store.get_session_tool_call_events(session_id, thread_id=thread_id, branch_mode=branch_mode),
         session_closed=is_session_closed(session),
     )
 
     total = store.count_session_events(
         session_id,
+        thread_id=thread_id,
         roles=role_list,
         tool_name=tool_name,
         query=query,
@@ -950,6 +953,7 @@ async def get_session_events(
     if branch_mode == "head":
         forensic_total = store.count_session_events(
             session_id,
+            thread_id=thread_id,
             roles=role_list,
             tool_name=tool_name,
             query=query,
@@ -980,6 +984,7 @@ async def get_session_events(
 async def get_session_projection(
     session_id: UUID,
     response: Response,
+    thread_id: Optional[UUID] = Query(None, description="Thread lane to project; defaults to the primary session thread"),
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
     anchor: str = Query("start", description="Page anchor: start|tail"),
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
@@ -1014,6 +1019,7 @@ async def get_session_projection(
     with timing.span("load_projection"):
         projection = store.get_session_projection_page(
             session,
+            thread_id=thread_id,
             branch_mode=branch_mode,
             limit=limit,
             offset=offset,
@@ -1036,7 +1042,11 @@ async def get_session_projection(
     for sid, path_session in sessions_by_id.items():
         tool_call_state_map.update(
             build_tool_call_state_map(
-                store.get_session_tool_call_events(sid, branch_mode=branch_mode),
+                store.get_session_tool_call_events(
+                    sid,
+                    thread_id=thread_id if sid == session.id else None,
+                    branch_mode=branch_mode,
+                ),
                 session_closed=is_session_closed(path_session),
             )
         )

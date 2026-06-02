@@ -509,6 +509,7 @@ async def get_timeline_session_turn(
 @router.get("/sessions/{session_id}/events", response_model=EventsListResponse)
 async def get_timeline_session_events(
     session_id: UUID,
+    thread_id: Optional[UUID] = Query(None, description="Thread lane to inspect; defaults to the primary session thread"),
     roles: Optional[str] = Query(None, description="Comma-separated roles to filter"),
     tool_name: Optional[str] = Query(None, description="Exact tool name filter, e.g. Bash"),
     query: Optional[str] = Query(None, description="Content search within session events"),
@@ -521,6 +522,7 @@ async def get_timeline_session_events(
 ):
     return await _sessions_router.get_session_events(
         session_id=session_id,
+        thread_id=thread_id,
         roles=roles,
         tool_name=tool_name,
         query=query,
@@ -539,6 +541,7 @@ async def get_timeline_session_events(
 async def get_timeline_session_projection(
     session_id: UUID,
     response: Response,
+    thread_id: Optional[UUID] = Query(None, description="Thread lane to project; defaults to the primary session thread"),
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
     anchor: str = Query("start", description="Page anchor: start|tail"),
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
@@ -547,6 +550,7 @@ async def get_timeline_session_projection(
 ):
     return await _sessions_router.get_session_projection(
         session_id=session_id,
+        thread_id=thread_id,
         branch_mode=branch_mode,
         anchor=anchor,
         limit=limit,
