@@ -110,10 +110,11 @@ When the maintainer says `cowbell`, the agent owns the whole ship loop:
 - cite exact SHAs and workflow run ids when reporting status
 
 `deploy-and-verify.yml` waits for the matching `contract-first-ci.yml` and
-`runtime-image.yml` runs for the same SHA before any remote deploy action. It
-then deploys the exact SHA image to demo + canary, runs fast health/config/auth
-gate smoke, and dispatches full hosted live QA asynchronously. Manual dispatch
-stays isolated for recovery use.
+`runtime-image.yml` runs when the push builds a new runtime image. It then
+deploys the exact SHA image to demo + canary, runs fast health/config/auth gate
+smoke, and dispatches full hosted live QA asynchronously. Workflow/script-only
+deploy verification reuses the current `latest` image and skips the full CI
+gate. Manual dispatch stays isolated for recovery use.
 
 If `make ship` returns non-zero for the target SHA, ship failed. You may explain why you think it failed, including suspected pre-existing drift, but do not relabel that outcome as success.
 
