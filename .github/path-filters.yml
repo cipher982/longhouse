@@ -15,9 +15,11 @@ schemas:
   - 'scripts/generate/**'
   - 'Makefile'
 
-packaging:
+ci_plumbing:
   - '.github/path-filters.yml'
   - '.github/workflows/contract-first-ci.yml'
+
+packaging:
   - 'server/hatch_build.py'
   - 'server/pyproject.toml'
   - 'server/setup.cfg'
@@ -32,12 +34,9 @@ ios:
   - 'ios/**'
   - 'scripts/build/generate_build_identity.py'
   - 'scripts/build/stage_ios_build_identity.sh'
-  # Re-run iOS tests when CI plumbing changes to verify the job itself
   - 'Makefile'
   - 'scripts/ci/run_ios_tests.sh'
   - 'scripts/ci/select_ios_simulator.py'
-  - '.github/path-filters.yml'
-  - '.github/workflows/contract-first-ci.yml'
 
 e2e:
   - 'e2e/**'
@@ -52,10 +51,9 @@ models:
 
 scripts:
   - 'scripts/**'
-  - '.github/path-filters.yml'
-  - '.github/workflows/contract-first-ci.yml'
 
 runtime_image:
+  - '.dockerignore'
   - 'bun.lock'
   - 'config/**'
   - 'docker/entrypoint.sh'
@@ -66,6 +64,7 @@ runtime_image:
   - '.github/workflows/runtime-image.yml'
 
 deploy_verify:
+  - '.dockerignore'
   - 'bun.lock'
   - 'config/**'
   - 'docker/entrypoint.sh'
