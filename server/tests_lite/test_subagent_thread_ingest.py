@@ -25,6 +25,8 @@ from zerg.main import api_app
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
+from zerg.models.agents import SessionEmbedding
+from zerg.models.agents import SessionTask
 from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
 from zerg.services.agents.kernel_backfill import backfill_subagent_child_threads
@@ -292,13 +294,30 @@ def test_backfill_moves_existing_leaked_child_session_under_parent(tmp_path):
         leaked = store.ingest_session(leaked_payload)
         assert leaked.session_id == CHILD_ID
         assert db.query(AgentSession).count() == 2
+        db.add(SessionTask(session_id=str(CHILD_ID), task_type="summary", status="pending"))
+        db.add(
+            SessionEmbedding(
+                session_id=CHILD_ID,
+                kind="session",
+                chunk_index=-1,
+                model="test-embedding",
+                dims=1,
+                embedding=b"\x00\x00\x00\x00",
+            )
+        )
+        db.flush()
 
         report = backfill_subagent_child_threads(db)
 
         assert report["candidates_resolved"] == 1
         assert report["sessions_removed"] == 1
+        assert report["legacy_tasks_deleted"] == 1
+        assert report["embeddings_deleted"] == 1
+        assert report["parent_counts_refreshed"] == 1
         assert db.query(AgentSession).count() == 1
         assert db.query(AgentSession).filter(AgentSession.id == CHILD_ID).first() is None
+        assert db.query(SessionTask).filter(SessionTask.session_id == str(CHILD_ID)).count() == 0
+        assert db.query(SessionEmbedding).filter(SessionEmbedding.session_id == CHILD_ID).count() == 0
 
         child_thread = db.query(SessionThread).filter(SessionThread.branch_kind == "subagent").one()
         assert child_thread.session_id == PARENT_ID
@@ -308,6 +327,9 @@ def test_backfill_moves_existing_leaked_child_session_under_parent(tmp_path):
         child_source_line = db.query(AgentSourceLine).filter(AgentSourceLine.source_path.like("%/subagents/%")).one()
         assert child_source_line.session_id == PARENT_ID
         assert child_source_line.thread_id == child_thread.id
+        parent_session = db.query(AgentSession).filter(AgentSession.id == PARENT_ID).one()
+        assert parent_session.user_messages == db.query(AgentEvent).filter(AgentEvent.session_id == PARENT_ID, AgentEvent.role == "user").count()
+        assert bool(parent_session.needs_embedding) is True
 
         second_report = backfill_subagent_child_threads(db)
         assert second_report["candidates_resolved"] == 0

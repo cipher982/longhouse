@@ -6,8 +6,8 @@ every legacy child row that still has it NULL, and synthesizes a single
 complete view of historical sessions. Live launchers continue to write
 their own runs/connections.
 
-This module is purely additive — it never deletes or rewrites legacy rows
-and never displaces a launcher-owned run.
+Most helpers are additive. The subagent cleanup intentionally rewrites legacy
+rows that were previously attached to false top-level child sessions.
 
 See docs/specs/session-identity-kernel.md.
 """
@@ -20,6 +20,8 @@ from datetime import datetime
 from datetime import timezone
 from uuid import UUID
 
+from sqlalchemy import func
+from sqlalchemy import text
 from sqlalchemy import update as sql_update
 from sqlalchemy.orm import Session
 
@@ -28,11 +30,13 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionConnection
+from zerg.models.agents import SessionEmbedding
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionLaunchAttempt
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionRuntimeState
+from zerg.models.agents import SessionTask
 from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
 from zerg.models.agents import SessionTurn
@@ -287,6 +291,9 @@ def backfill_subagent_child_threads(db: Session) -> dict[str, int]:
     inputs_moved = 0
     runtime_rows_moved = 0
     runs_moved = 0
+    legacy_tasks_deleted = 0
+    embeddings_deleted = 0
+    parent_sessions_touched: set[UUID] = set()
 
     for child_session_id, source_paths in _candidate_subagent_sessions(db).items():
         candidates_seen += 1
@@ -326,6 +333,7 @@ def backfill_subagent_child_threads(db: Session) -> dict[str, int]:
             parent_provider_session_id=parent_provider_id,
         )
         parent_branch = _ensure_head_branch(db, parent_thread.session_id)
+        parent_sessions_touched.add(parent_thread.session_id)
 
         old_thread_ids = [row.id for row in db.query(SessionThread.id).filter(SessionThread.session_id == child_session_id).all()]
 
@@ -394,12 +402,51 @@ def backfill_subagent_child_threads(db: Session) -> dict[str, int]:
         for model in (AgentEvent, AgentSourceLine, SessionObservation, SessionTurn, SessionInput, SessionRuntimeState):
             remaining += db.query(model).filter(model.session_id == child_session_id).limit(1).count()
         if remaining == 0:
+            legacy_tasks_deleted += (
+                db.query(SessionTask).filter(SessionTask.session_id == str(child_session_id)).delete(synchronize_session=False)
+            )
+            embeddings_deleted += (
+                db.query(SessionEmbedding).filter(SessionEmbedding.session_id == child_session_id).delete(synchronize_session=False)
+            )
             if old_thread_ids:
                 db.query(SessionThreadAlias).filter(SessionThreadAlias.thread_id.in_(old_thread_ids)).delete(synchronize_session=False)
                 db.query(SessionThread).filter(SessionThread.id.in_(old_thread_ids)).delete(synchronize_session=False)
             db.query(AgentSessionBranch).filter(AgentSessionBranch.session_id == child_session_id).delete(synchronize_session=False)
             db.query(AgentSession).filter(AgentSession.id == child_session_id).delete(synchronize_session=False)
             sessions_removed += 1
+
+    parent_counts_refreshed = 0
+    for parent_session_id in parent_sessions_touched:
+        parent_session = db.query(AgentSession).filter(AgentSession.id == parent_session_id).first()
+        if parent_session is None:
+            continue
+        parent_session.user_messages = (
+            db.query(func.count(AgentEvent.id)).filter(AgentEvent.session_id == parent_session_id, AgentEvent.role == "user").scalar() or 0
+        )
+        parent_session.assistant_messages = (
+            db.query(func.count(AgentEvent.id)).filter(AgentEvent.session_id == parent_session_id, AgentEvent.role == "assistant").scalar()
+            or 0
+        )
+        parent_session.tool_calls = (
+            db.query(func.count(AgentEvent.id))
+            .filter(AgentEvent.session_id == parent_session_id, AgentEvent.tool_name.isnot(None))
+            .scalar()
+            or 0
+        )
+        parent_session.last_activity_at = (
+            db.query(func.max(AgentEvent.timestamp)).filter(AgentEvent.session_id == parent_session_id).scalar()
+            or parent_session.last_activity_at
+        )
+        parent_session.needs_embedding = True
+        parent_counts_refreshed += 1
+
+    fts_rebuilt = 0
+    bind = db.get_bind()
+    if getattr(getattr(bind, "dialect", None), "name", None) == "sqlite" and parent_sessions_touched:
+        fts_exists = db.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")).first()
+        if fts_exists is not None:
+            db.execute(text("INSERT INTO events_fts(events_fts) VALUES('rebuild')"))
+            fts_rebuilt = 1
 
     db.flush()
     return {
@@ -413,6 +460,10 @@ def backfill_subagent_child_threads(db: Session) -> dict[str, int]:
         "inputs_moved": inputs_moved,
         "runtime_rows_moved": runtime_rows_moved,
         "runs_moved": runs_moved,
+        "legacy_tasks_deleted": legacy_tasks_deleted,
+        "embeddings_deleted": embeddings_deleted,
+        "parent_counts_refreshed": parent_counts_refreshed,
+        "fts_rebuilt": fts_rebuilt,
     }
 
 
