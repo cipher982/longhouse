@@ -32,8 +32,9 @@ DEPLOY_GATE_JOB = "Gate exact-SHA CI + image"
 RUNTIME_IMAGE_WORKFLOW = "Publish Runtime Image"
 RUNTIME_IMAGE_JOB = "build-and-push"
 CANARY_SURFACE = "Canary"
-DEFAULT_CANARY_CONTAINER_NAME = "longhouse-" + os.environ.get("LONGHOUSE_DEFAULT_SUBDOMAIN", "demo")
-DEFAULT_CANARY_HEALTH_URL = "https://" + os.environ.get("LONGHOUSE_DEFAULT_SUBDOMAIN", "demo") + ".longhouse.ai/api/health"
+DEFAULT_CANARY_SUBDOMAIN = os.environ.get("LONGHOUSE_DEFAULT_SUBDOMAIN", "david010")
+DEFAULT_CANARY_CONTAINER_NAME = "longhouse-" + DEFAULT_CANARY_SUBDOMAIN
+DEFAULT_CANARY_HEALTH_URL = f"https://{DEFAULT_CANARY_SUBDOMAIN}.longhouse.ai/api/health"
 
 
 class NoRunsError(RuntimeError):

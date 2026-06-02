@@ -4,8 +4,8 @@ set -euo pipefail
 
 # SSH alias for the runtime host (configured by scripts/ci/setup-deploy-ssh.sh)
 RUNTIME_HOST="${RUNTIME_HOST:-runtime-host}"
-CANARY_CONTAINER_NAME="${CANARY_CONTAINER_NAME:-longhouse-${LONGHOUSE_DEFAULT_SUBDOMAIN:-demo}}"
-CANARY_HEALTH_URL="${CANARY_HEALTH_URL:-https://${LONGHOUSE_DEFAULT_SUBDOMAIN:-demo}.longhouse.ai/api/health}"
+CANARY_CONTAINER_NAME="${CANARY_CONTAINER_NAME:-longhouse-${LONGHOUSE_DEFAULT_SUBDOMAIN:-david010}}"
+CANARY_HEALTH_URL="${CANARY_HEALTH_URL:-https://${LONGHOUSE_DEFAULT_SUBDOMAIN:-david010}.longhouse.ai/api/health}"
 
 # --- Gather container state from zerg ----------------------------------------
 
@@ -13,7 +13,7 @@ read_container() {
     local name_or_label="$1"
     local filter="$2"
     local info
-    info=$(ssh "$RUNTIME_HOST" "docker ps --format '{{.Image}} {{.Status}}' $filter" 2>/dev/null | head -1)
+    info=$(ssh "$RUNTIME_HOST" "docker ps --format '{{.Image}} {{.Status}}' $filter" 2>/dev/null | head -1 || true)
     if [[ -z "$info" ]]; then
         echo "- - -"
         return
@@ -38,7 +38,7 @@ cp_uptime=$(echo "$cp_raw" | cut -d' ' -f2-)
 
 # Canary — direct container name
 if [[ -n "$CANARY_CONTAINER_NAME" ]]; then
-    canary_raw=$(ssh "$RUNTIME_HOST" "docker ps --format '{{.Image}} {{.Status}}' --filter 'name=$CANARY_CONTAINER_NAME'" 2>/dev/null | head -1)
+    canary_raw=$(ssh "$RUNTIME_HOST" "docker ps --format '{{.Image}} {{.Status}}' --filter 'name=$CANARY_CONTAINER_NAME'" 2>/dev/null | head -1 || true)
 else
     canary_raw=""
 fi
@@ -61,12 +61,31 @@ health_status() {
     echo "$result" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','unknown'))" 2>/dev/null || echo "unknown"
 }
 
+health_sha() {
+    local url="$1"
+    local result
+    local sha
+    result=$(curl -sf --max-time 5 "$url" 2>/dev/null) || { echo "-"; return; }
+    sha=$(echo "$result" | python3 -c "import sys,json; data=json.load(sys.stdin); print((data.get('build') or {}).get('commit') or data.get('commit') or '-')" 2>/dev/null || echo "-")
+    if [[ "$sha" != "-" && ${#sha} -gt 12 ]]; then
+        sha="${sha:0:10}"
+    fi
+    echo "$sha"
+}
+
 demo_health=$(health_status "https://longhouse.ai/api/health")
 cp_health=$(health_status "https://control.longhouse.ai/health")
 if [[ -n "$CANARY_HEALTH_URL" ]]; then
     canary_health=$(health_status "$CANARY_HEALTH_URL")
 else
     canary_health="-"
+fi
+
+if [[ "$demo_sha" == "-" && "$demo_health" != "unreachable" ]]; then
+    demo_sha=$(health_sha "https://longhouse.ai/api/health")
+fi
+if [[ "$canary_sha" == "-" && "$canary_health" != "unreachable" && "$CANARY_HEALTH_URL" != "" ]]; then
+    canary_sha=$(health_sha "$CANARY_HEALTH_URL")
 fi
 
 # --- Local HEAD for comparison ------------------------------------------------
