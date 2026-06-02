@@ -36,6 +36,8 @@ const COMMAND_LAUNCH: &str = "session.launch";
 const COMMAND_PROVIDER_LIVE_PROOF: &str = "provider.live_proof";
 const DEFAULT_CODEX_BIN: &str = "codex";
 const DEFAULT_LONGHOUSE_BIN: &str = "longhouse";
+const REMOTE_CODEX_APPROVAL_POLICY: &str = "on-request";
+const REMOTE_CODEX_SANDBOX: &str = "workspace-write";
 // Engine is built from the monorepo. Keep this path beside the Python reader so
 // advertised supports[] and server-side contracts cannot drift silently.
 const MANAGED_PROVIDER_CONTRACTS_JSON: &str =
@@ -54,6 +56,13 @@ const CONTROL_RECONNECT_SHORT_MAX_BACKOFF_SECS: u64 = 5;
 const CONTROL_RECONNECT_SUSTAINED_MAX_BACKOFF_SECS: u64 = 30;
 const CONTROL_RECONNECT_SHORT_WINDOW_SECS: u64 = 60;
 static MANAGED_PROVIDER_CONTRACTS: OnceLock<Value> = OnceLock::new();
+
+fn remote_codex_bridge_defaults() -> (Option<String>, Option<String>) {
+    (
+        Some(REMOTE_CODEX_APPROVAL_POLICY.to_string()),
+        Some(REMOTE_CODEX_SANDBOX.to_string()),
+    )
+}
 
 #[derive(Clone, Debug)]
 pub struct ControlChannelStatus {
@@ -769,14 +778,15 @@ async fn execute_command(
                 .await;
             }
 
+            let (approval_policy, sandbox) = remote_codex_bridge_defaults();
             let summary = cmd_codex_bridge_start(BridgeStartConfig {
                 session_id: session_id.clone(),
                 cwd,
                 api_url,
                 api_token,
                 codex_bin: DEFAULT_CODEX_BIN.to_string(),
-                approval_policy: None,
-                sandbox: None,
+                approval_policy,
+                sandbox,
                 model: None,
                 model_reasoning_effort: None,
                 machine_name: Some(config.machine_name.clone()),
@@ -1808,6 +1818,14 @@ mod tests {
         assert!(supports
             .iter()
             .any(|item| item.as_str() == Some("codex.continue")));
+    }
+
+    #[test]
+    fn remote_codex_launch_uses_interactive_managed_defaults() {
+        let (approval_policy, sandbox) = remote_codex_bridge_defaults();
+
+        assert_eq!(approval_policy.as_deref(), Some("on-request"));
+        assert_eq!(sandbox.as_deref(), Some("workspace-write"));
     }
 
     #[test]

@@ -200,7 +200,7 @@ private func mockSession(
     return ScrollView {
         VStack(spacing: 12) {
             ForEach(sessions) { session in
-                TimelineSessionCardRow(session: session, emphasized: false, connectionState: .healthy)
+                TimelineSessionCardRow(session: session, emphasized: false, connectivityBanner: .none)
             }
         }
         .padding(16)
@@ -264,7 +264,7 @@ private func mockSession(
     return ScrollView {
         VStack(spacing: 12) {
             ForEach(sessions) { session in
-                TimelineSessionCardRow(session: session, emphasized: false, connectionState: .healthy)
+                TimelineSessionCardRow(session: session, emphasized: false, connectivityBanner: .none)
             }
         }
         .padding(16)
@@ -329,7 +329,7 @@ private func mockSession(
     return ScrollView {
         VStack(spacing: 12) {
             ForEach(sessions) { session in
-                TimelineSessionCardRow(session: session, emphasized: false, connectionState: .healthy)
+                TimelineSessionCardRow(session: session, emphasized: false, connectivityBanner: .none)
             }
         }
         .padding(16)
@@ -338,34 +338,35 @@ private func mockSession(
     .preferredColorScheme(.dark)
 }
 
-#Preview("Connection states") {
+#Preview("Connection banners") {
     let session = mockSession(
         id: "1",
         project: "chaos",
         title: "Chaos BranchTrace Blog Post Refinement",
-        summary: "Same card under each global connection state.",
+        summary: "Same card under each global connection banner.",
         statusLabel: "Thinking",
         statusTone: "thinking",
         activityRecency: "live",
         anchorSecondsAgo: 5,
         seenAtSecondsAgo: 5
     )
-    let cases: [(String, ConnectionState)] = [
-        ("connecting", .connecting),
-        ("healthy", .healthy),
-        ("reconnecting", .reconnecting),
+    let cases: [(String, TimelineConnectivityBanner)] = [
+        ("hidden", .none),
+        ("updating", .updating),
+        ("degraded", .degraded),
         ("offline", .offline),
+        ("sign in required", .authRequired),
     ]
     return ScrollView {
         VStack(alignment: .leading, spacing: 18) {
-            ForEach(cases, id: \.0) { label, state in
+            ForEach(cases, id: \.0) { label, banner in
                 VStack(alignment: .leading, spacing: 0) {
                     Text(label)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .padding(.bottom, 4)
-                    ConnectionStatusStrip(state: state)
-                    TimelineSessionCardRow(session: session, emphasized: false, connectionState: state)
+                    ConnectionStatusStrip(banner: banner)
+                    TimelineSessionCardRow(session: session, emphasized: false, connectivityBanner: banner)
                         .padding(.top, 8)
                 }
             }
