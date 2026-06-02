@@ -79,6 +79,27 @@ def test_transport_health_uses_active_window_to_clear_recovered_hourly_burst():
     assert assessment.reasons == ()
 
 
+def test_transport_health_keeps_recovered_server_error_burst_healthy():
+    sample = transport_health_sample_from_engine_status_payload(
+        {
+            "ship_attempts_10m": 674,
+            "ship_successes_10m": 473,
+            "ship_server_errors_10m": 201,
+            "last_ship_result": "ok",
+            "consecutive_ship_failures": 0,
+            "spool_pending_count": 2760,
+            "spool_dead_count": 0,
+        }
+    )
+
+    assessment = assess_transport_health(sample)
+
+    assert assessment.status == "healthy"
+    assert assessment.status_reason == "spool_pending"
+    assert assessment.status_summary == "2760 pending spool item(s) queued for retry."
+    assert assessment.reasons == ()
+
+
 def test_transport_health_degrades_for_active_connect_burst():
     sample = transport_health_sample_from_engine_status_payload(
         {

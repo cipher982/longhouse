@@ -174,6 +174,8 @@ def is_transport_error_burst(
         return False
     if last_ship_result == result_kind and error_count >= CURRENT_TRANSPORT_ERROR_DEGRADED_MIN_COUNT:
         return True
+    if result_kind != "connect_error":
+        return False
     if ship_attempts <= 0:
         return False
     if error_count < TRANSPORT_ERROR_DEGRADED_MIN_COUNT:
