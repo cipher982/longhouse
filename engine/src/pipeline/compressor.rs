@@ -75,6 +75,16 @@ pub struct IngestPayload<'a> {
     // so nothing can ever misinterpret it as a terminal signal.
     pub provider_session_id: &'a str,
     pub is_sidechain: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_provider_session_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent_prompt_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent_tool_use_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workflow_run_id: Option<&'a str>,
     pub events: Vec<EventIngest<'a>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub source_lines: Vec<SourceLineIngest<'a>>,
@@ -238,6 +248,11 @@ pub fn build_payload_with_source_lines<'a>(
         // running sub-agents; the Stop hook inherits it, marking the session as automated.
         is_sidechain: metadata.is_sidechain
             || std::env::var("LONGHOUSE_IS_SIDECHAIN").as_deref() == Ok("1"),
+        parent_provider_session_id: metadata.forked_from_session_id.as_deref(),
+        subagent_id: metadata.subagent_id.as_deref(),
+        subagent_prompt_id: metadata.subagent_prompt_id.as_deref(),
+        subagent_tool_use_id: None,
+        workflow_run_id: None,
         events: event_ingests,
         source_lines: source_line_ingests,
         rewind_hints: rewind_hints.unwrap_or(&[]).to_vec(),
@@ -418,6 +433,32 @@ mod tests {
         // First event has raw_json, second doesn't
         assert!(payload.events[0].raw_json.is_some());
         assert!(payload.events[1].raw_json.is_none());
+    }
+
+    #[test]
+    fn test_build_payload_includes_sidechain_parentage() {
+        let events = make_test_events();
+        let meta = SessionMetadata {
+            session_id: "child-file-id".to_string(),
+            forked_from_session_id: Some("parent-provider-id".to_string()),
+            subagent_id: Some("agent-a0325d64b2dc7300f".to_string()),
+            subagent_prompt_id: Some("be1331ba-91c3-4670-a113-7f1c63773df8".to_string()),
+            is_sidechain: true,
+            ..Default::default()
+        };
+
+        let payload = build_payload("child-longhouse-id", &events, &meta, "/path", "claude");
+        let value = serde_json::to_value(&payload).unwrap();
+
+        assert_eq!(value["id"], "child-longhouse-id");
+        assert_eq!(value["provider_session_id"], "child-file-id");
+        assert_eq!(value["is_sidechain"], true);
+        assert_eq!(value["parent_provider_session_id"], "parent-provider-id");
+        assert_eq!(value["subagent_id"], "agent-a0325d64b2dc7300f");
+        assert_eq!(
+            value["subagent_prompt_id"],
+            "be1331ba-91c3-4670-a113-7f1c63773df8"
+        );
     }
 
     #[test]

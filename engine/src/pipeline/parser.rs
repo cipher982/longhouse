@@ -84,6 +84,8 @@ pub struct ParsedSourceLine {
 pub struct SessionMetadata {
     pub session_id: String,
     pub forked_from_session_id: Option<String>,
+    pub subagent_id: Option<String>,
+    pub subagent_prompt_id: Option<String>,
     pub cwd: Option<String>,
     pub git_branch: Option<String>,
     pub git_repo: Option<String>,
@@ -118,6 +120,12 @@ struct RawLine {
     created_at: Option<String>,
     timestamp: Option<String>,
     uuid: Option<String>,
+    #[serde(rename = "sessionId")]
+    session_id: Option<String>,
+    #[serde(rename = "agentId")]
+    agent_id: Option<String>,
+    #[serde(rename = "promptId")]
+    prompt_id: Option<String>,
     cwd: Option<String>,
     #[serde(rename = "gitBranch")]
     git_branch: Option<String>,
@@ -1277,6 +1285,36 @@ fn collect_metadata(
     // Once-true-stays-true: any line with isSidechain:true marks the whole session
     if obj.is_sidechain == Some(true) {
         meta.is_sidechain = true;
+        if meta.forked_from_session_id.is_none() {
+            if let Some(parent_session_id) = obj
+                .session_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|candidate| Uuid::parse_str(candidate).is_ok())
+            {
+                meta.forked_from_session_id = Some(parent_session_id.to_string());
+            }
+        }
+        if meta.subagent_id.is_none() {
+            if let Some(agent_id) = obj
+                .agent_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                meta.subagent_id = Some(agent_id.to_string());
+            }
+        }
+        if meta.subagent_prompt_id.is_none() {
+            if let Some(prompt_id) = obj
+                .prompt_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                meta.subagent_prompt_id = Some(prompt_id.to_string());
+            }
+        }
     }
 
     if let Some(ts) = obj
@@ -2312,6 +2350,48 @@ mod tests {
         assert_eq!(result.metadata.cwd.as_deref(), Some("/home/user/project"));
         assert_eq!(result.metadata.git_branch.as_deref(), Some("main"));
         assert_eq!(result.metadata.project.as_deref(), Some("project"));
+    }
+
+    #[test]
+    fn test_parse_claude_sidechain_parentage() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent_id = "f6a553e2-8aca-49c4-9823-3b3d8690fd2e";
+        let path = make_jsonl_file(
+            dir.path(),
+            "agent-a0325d64b2dc7300f.jsonl",
+            &[&json!({
+                "type": "user",
+                "uuid": "u1",
+                "timestamp": "2026-06-02T00:19:31.215Z",
+                "isSidechain": true,
+                "sessionId": parent_id,
+                "agentId": "a0325d64b2dc7300f",
+                "promptId": "be1331ba-91c3-4670-a113-7f1c63773df8",
+                "cwd": "/Users/davidrose/git/cipher982",
+                "gitBranch": "main",
+                "message": {"content": "Deploy crims on drose.io"}
+            })
+            .to_string()],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+
+        assert!(result.metadata.is_sidechain);
+        assert_ne!(result.metadata.session_id, parent_id);
+        assert_eq!(
+            result.metadata.forked_from_session_id.as_deref(),
+            Some(parent_id)
+        );
+        assert_eq!(
+            result.metadata.subagent_id.as_deref(),
+            Some("a0325d64b2dc7300f")
+        );
+        assert_eq!(
+            result.metadata.subagent_prompt_id.as_deref(),
+            Some("be1331ba-91c3-4670-a113-7f1c63773df8")
+        );
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].session_id, result.metadata.session_id);
     }
 
     #[test]
