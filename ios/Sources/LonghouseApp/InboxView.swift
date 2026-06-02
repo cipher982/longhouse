@@ -692,7 +692,7 @@ final class TimelineViewModel: ObservableObject {
             }
             // Stream ended (cancellation or terminal 401). Clear the slot
             // so resumeStream / scenePhase can spin up a new task.
-            await self?.streamLoopDidExit(generation: generation)
+            self?.streamLoopDidExit(generation: generation)
         }
         startReconcileSafetyNet(using: appState, generation: generation)
     }
@@ -734,7 +734,7 @@ final class TimelineViewModel: ObservableObject {
                 try? await Task.sleep(nanoseconds: interval)
                 if Task.isCancelled { break }
                 guard let self else { break }
-                if await self.streamGenerationMatches(generation) {
+                if self.streamGenerationMatches(generation) {
                     await self.refresh(using: appState, reloadWidget: true)
                 } else {
                     break
@@ -808,7 +808,7 @@ final class TimelineViewModel: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: interval)
                 if Task.isCancelled { break }
-                await self?.tickConnectivityClock()
+                self?.tickConnectivityClock()
             }
         }
     }
