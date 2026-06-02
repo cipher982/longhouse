@@ -139,11 +139,17 @@ struct TimelineConnectivityState: Equatable {
         case .streamSignal(let signal):
             applyStreamSignal(signal, now: now)
         case .streamDisconnected(let reason):
+            // Rule 5: stream disconnects are diagnostics only and must not
+            // alter snapshot reachability OR the user banner. Auth is the one
+            // terminal exception. A non-auth disconnect must NOT set
+            // `recoveryActive`, because in the `unknown + stale` cell that
+            // would surface an `Updating` strip from pure transport churn —
+            // exactly the false-health claim this model exists to kill.
+            // Recovery is owned by snapshot failures (real product-health
+            // evidence) and cleared by snapshot success / data-bearing events.
             if reason == .authFailure {
                 reachability = .authRequired
                 recoveryActive = false
-            } else {
-                recoveryActive = true
             }
         case .lifecycleStopped:
             recoveryActive = false

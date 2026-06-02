@@ -232,14 +232,37 @@ struct TimelineConnectivityTests {
         var state = TimelineConnectivityState()
         let savedAt = now.addingTimeInterval(-300)
 
+        // Recovery is driven by a real product-health signal (a failed
+        // snapshot), never by transport churn. A stream disconnect alone
+        // must not set recovery (Rule 5).
         state.apply(.cacheLoaded(hasLoadedData: true, savedAt: savedAt), now: now)
-        state.apply(.streamDisconnected(.serverEOF), now: now.addingTimeInterval(1))
-        #expect(state.banner(at: now.addingTimeInterval(1)) == .updating)
+        state.apply(.snapshotFailed, now: now.addingTimeInterval(1))
+        #expect(state.recoveryActive)
+        #expect(state.banner(at: now.addingTimeInterval(1)) == .degraded)
 
         state.apply(.streamSignal(.heartbeat), now: now.addingTimeInterval(2))
 
         #expect(state.recoveryActive)
-        #expect(state.banner(at: now.addingTimeInterval(2)) == .updating)
+        #expect(state.banner(at: now.addingTimeInterval(2)) == .degraded)
+    }
+
+    @Test
+    func streamDisconnectAloneNeverDrivesAVisibleBanner() {
+        // The exact bug class: pure transport churn on a stale cache, before
+        // any snapshot has resolved, must stay silent. No recovery flip, no
+        // Updating strip.
+        var state = TimelineConnectivityState()
+        let savedAt = now.addingTimeInterval(-300)
+
+        state.apply(.cacheLoaded(hasLoadedData: true, savedAt: savedAt), now: now)
+        #expect(state.banner(at: now) == .none)
+
+        for offset in [1.0, 2.0, 3.0] {
+            state.apply(.streamDisconnected(.serverEOF), now: now.addingTimeInterval(offset))
+            #expect(state.reachability == .unknown)
+            #expect(state.recoveryActive == false)
+            #expect(state.banner(at: now.addingTimeInterval(offset)) == .none)
+        }
     }
 
     @Test

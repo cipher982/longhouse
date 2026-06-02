@@ -188,7 +188,7 @@ Banner derivation:
 | `authRequired` | any | `authRequired` |
 | `unknown` | `unknown` | `none` |
 | `unknown` | `fresh` / `aging` | `none` |
-| `unknown` | `stale` | `updating` if recovery active, otherwise `none` |
+| `unknown` | `stale` | `updating` if recovery active, otherwise `none` (recovery now only flips on snapshot failure, which also moves reachability off `unknown`, so this cell is effectively `none` in practice) |
 | `reachable` | `fresh` / `aging` / `stale` | `none` |
 | `degraded` | `fresh` | `none` |
 | `degraded` | `aging` | `updating` |
@@ -423,6 +423,32 @@ Second Hatch Opus review, 2026-06-02:
 - No blocking findings.
 - Added the banner derivation table, first-connect freshness note, cold-start
   behavior, and explicit replacement of the old `ConnectionStateTests` ladder.
+
+Final holistic Hatch Opus review, 2026-06-02:
+
+- No release-blocking findings. `Offline`/`degraded`/`Reconnecting` are provably
+  unreachable from any stream signal or disconnect; only snapshot failure, auth,
+  or OS-path-unsatisfied can reach those reachability states.
+- Fixed one residual contract impurity (Rule 5): `.streamDisconnected` used to
+  set `recoveryActive = true`, which in the `unknown + stale` cold-start cell
+  could surface an `Updating` strip from pure transport churn. Recovery is now
+  owned solely by snapshot failures (real product-health evidence) and cleared
+  by snapshot success / data-bearing stream events. Added a regression test
+  (`streamDisconnectAloneNeverDrivesAVisibleBanner`).
+- Deferred (non-blocking, conservative-only): Phase 2's `NWPathMonitor` input
+  and explicit watchdog/`waitsForConnectivity` disconnect-reason wiring are
+  modeled and unit-tested in the reducer but not yet wired into the live view
+  model. The live classifier maps watchdog cancellation to `.cancelled`. These
+  paths can only ever *escalate* toward offline, never produce a false offline,
+  so shipping without them does not reintroduce the bug. The reducer keeps the
+  `.watchdogStop`/`.waitingForConnectivity`/`.networkPathChanged` surface ready
+  for that wiring.
+- Deferred (non-blocking): full instrumentation from the "Instrumentation
+  requirements" section (structured banner-transition debug events, last
+  snapshot/stream age on every log line) is lighter than specified. Current
+  logging covers refresh/disconnect lifecycle but does not yet fully satisfy
+  "field logs can explain every visible banner transition." Worth completing
+  before wider rollout beyond dogfood.
 
 ## Non-goals
 
