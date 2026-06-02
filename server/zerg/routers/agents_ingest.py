@@ -91,7 +91,6 @@ _INGEST_CHUNK_BY_LABEL: dict[str, int] = {
 }
 
 _ARCHIVE_INGEST_LABELS = {"ingest-replay", "ingest-scan"}
-_ARCHIVE_INGEST_MAX_QUEUE_DEPTH = 1
 
 
 def _ingest_chunk_for_label(label: str) -> int:
@@ -555,7 +554,7 @@ async def ingest_session(
             ws = get_write_serializer()
             write_label = _write_serializer_label_for_ship_trace(ship_trace)
             is_archive_ingest = write_label in _ARCHIVE_INGEST_LABELS
-            writer_queue_busy = ws.writer_active and ws.queue_depth >= _ARCHIVE_INGEST_MAX_QUEUE_DEPTH
+            writer_queue_busy = ws.writer_active or ws.queue_depth > 0
             if is_archive_ingest and writer_queue_busy:
                 request_status_label = "archive_backpressure"
                 response.headers["Retry-After"] = "5"
