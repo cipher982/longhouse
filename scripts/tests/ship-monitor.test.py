@@ -159,7 +159,7 @@ def test_deploy_heartbeat_names_active_deploy_step() -> None:
     summary = ship_monitor.summarize_incomplete_runs("cipher982/longhouse", "abc123", runs)
 
     assert (
-        "Deploy and Verify #1 / Deploy demo + canary + hosted live QA / "
+        "Deploy and Verify #1 / Deploy demo + canary + fast smoke / "
         "Deploy public demo runtime: in_progress"
     ) in summary
 

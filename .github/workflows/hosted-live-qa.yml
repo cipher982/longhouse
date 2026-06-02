@@ -3,15 +3,24 @@ name: Hosted Live QA
 on:
   schedule:
     - cron: '41 10 * * *'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: "Commit SHA that triggered this async QA run"
+        required: false
+        type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: hosted-live-qa-${{ github.repository }}
+  cancel-in-progress: true
+
 jobs:
   hosted-live-qa:
     name: "hosted-live-qa"
-    runs-on: cube-deploy
+    runs-on: ubuntu-latest
     if: github.repository == 'cipher982/longhouse'
     timeout-minutes: 25
     env:
@@ -22,6 +31,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.source_sha || github.sha }}
 
       - name: Restore Bun download cache
         uses: actions/cache@v4
@@ -103,6 +114,7 @@ jobs:
             echo "- Instance: \`$QA_INSTANCE_SUBDOMAIN\`"
             echo "- Trigger: \`${{ github.event_name }}\`"
             echo "- Commit: \`${{ github.sha }}\`"
+            echo "- Source SHA: \`${{ github.event.inputs.source_sha || github.sha }}\`"
             echo "- qa-live: \`${{ steps.qa_live.outcome || 'skipped' }}\`"
             echo "- render-canary: \`${{ steps.render_canary.outcome || 'skipped' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

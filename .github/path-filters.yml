@@ -73,7 +73,6 @@ deploy_verify:
   - 'engine/**'
   - 'server/**'
   - 'web/**'
-  - 'Makefile'
   - 'scripts/ci/setup-deploy-ssh.sh'
   - 'scripts/ci/wait-for-http.sh'
   - 'scripts/lib/hosted-instance.sh'

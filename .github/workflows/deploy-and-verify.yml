@@ -11,9 +11,13 @@ on:
         type: string
 
 permissions:
-  actions: read
+  actions: write
   contents: read
   packages: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
   changes:
@@ -44,7 +48,7 @@ jobs:
           fi
 
   gate:
-    name: "Queue deploy behind earlier main SHAs + green CI"
+    name: "Gate exact-SHA CI + image"
     runs-on: ubuntu-latest
     needs: changes
     if: ${{ needs.changes.outputs.deploy_verify == 'true' }}
@@ -119,19 +123,6 @@ jobs:
             echo "::notice::Frontend-only change detected — skipping CI gate"
           fi
 
-      - name: Wait for previous main deploy to clear
-        if: ${{ github.event_name == 'push' && steps.meta.outputs.predecessor_sha != '' }}
-        uses: ./.github/actions/wait-for-ci
-        with:
-          head_sha: ${{ steps.meta.outputs.predecessor_sha }}
-          head_branch: ${{ steps.meta.outputs.head_branch }}
-          github_token: ${{ github.token }}
-          workflow_id: deploy-and-verify.yml
-          event: push
-          require_success: "false"
-          allow_missing: "true"
-          timeout_seconds: "7200"
-
       - name: Wait for full CI gate
         if: ${{ github.event_name == 'push' && steps.scope.outputs.frontend_only != 'true' }}
         uses: ./.github/actions/wait-for-ci
@@ -152,7 +143,7 @@ jobs:
           timeout_seconds: "1200"
 
   deploy-and-verify:
-    name: "Deploy demo + canary + hosted live QA"
+    name: "Deploy demo + canary + fast smoke"
     runs-on: cube-deploy
     if: github.repository == 'cipher982/longhouse'
     timeout-minutes: 60
@@ -162,8 +153,6 @@ jobs:
       CONTROL_PLANE_URL: https://control.longhouse.ai
       PUBLIC_DEMO_URL: https://longhouse.ai
       INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN || 'demo' }}
-      QA_HOME: /tmp/hosted-live-qa-${{ github.run_id }}-${{ github.run_attempt }}
-      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
       RUNTIME_HOST: ${{ secrets.DEPLOY_RUNTIME_HOST }}
 
     steps:
@@ -174,48 +163,13 @@ jobs:
           filter: blob:none
           show-progress: false
 
-      - name: Restore Bun download cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.bun/install/cache
-          key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            longhouse-bun-${{ runner.os }}-
-
-      - name: Restore Playwright browser cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
-          key: longhouse-playwright-${{ runner.os }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
-          restore-keys: |
-            longhouse-playwright-${{ runner.os }}-
-
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: '20'
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: '1.2.20'
-
       - name: Ensure make available
         run: ./scripts/ci/ensure-make.sh
-
-      - name: Install JS deps
-        run: bun install --frozen-lockfile
-
-      - name: Install Playwright browsers + deps
-        run: cd e2e && bunx playwright install --with-deps chromium
-
-      - name: Prepare isolated QA home
-        run: mkdir -p "$QA_HOME" "$PLAYWRIGHT_BROWSERS_PATH"
 
       - name: Setup SSH
         env:
@@ -280,40 +234,39 @@ jobs:
           ./scripts/ci/wait-for-http.sh "$CONTROL_PLANE_URL/health" "Control plane"
           ./scripts/ci/wait-for-http.sh "$API_URL/api/health" "Hosted canary"
 
-      - name: Run smoke tests
+      - name: Run fast smoke tests
+        id: fast_smoke
         env:
           API_URL: ${{ steps.instance.outputs.api_url }}
           FRONTEND_URL: ${{ steps.instance.outputs.frontend_url }}
           INSTANCE_URL: ${{ steps.instance.outputs.instance_url }}
-        run: ./scripts/qa/smoke-prod.sh --no-llm
+        run: ./scripts/qa/smoke-prod.sh --fast --no-llm
 
-      - name: Run hosted live QA
-        id: qa_live
+      - name: Trigger hosted live QA asynchronously
+        id: hosted_live_qa_dispatch
         env:
-          HOME: ${{ env.QA_HOME }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.gate.outputs.head_sha }}
+          SOURCE_REF: ${{ needs.gate.outputs.head_branch }}
+          REPOSITORY: ${{ github.repository }}
         run: |
-          attempts=0
-          until make qa-live; do
-            attempts=$((attempts + 1))
-            if [[ "$attempts" -ge 2 ]]; then
-              exit 1
-            fi
-            echo "qa-live failed; retrying once after 5s..." >&2
-            sleep 5
-          done
+          payload="$(python3 - <<'PY'
+          import json
+          import os
 
-      - name: Run render-canary SLA check
-        id: render_canary
-        if: always() && steps.qa_live.outcome == 'success'
-        env:
-          HOME: ${{ env.QA_HOME }}
-          LONGHOUSE_CANARY_TOKEN: ${{ secrets.LONGHOUSE_CANARY_TOKEN }}
-        run: |
-          if [[ -z "$LONGHOUSE_CANARY_TOKEN" ]]; then
-            echo "LONGHOUSE_CANARY_TOKEN secret not set; skipping render-canary." >&2
-            exit 0
-          fi
-          make render-canary
+          print(json.dumps({
+              "ref": os.environ["SOURCE_REF"],
+              "inputs": {"source_sha": os.environ["SOURCE_SHA"]},
+          }))
+          PY
+          )"
+          curl -fsS \
+            -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -d "$payload" \
+            "https://api.github.com/repos/${REPOSITORY}/actions/workflows/hosted-live-qa.yml/dispatches"
 
       - name: Summary
         if: always()
@@ -327,8 +280,8 @@ jobs:
             echo "- **Control plane:** $CONTROL_PLANE_URL"
             echo "- **Commit:** ${{ needs.gate.outputs.head_sha }}"
             echo "- **Demo image:** \`${{ needs.gate.outputs.runtime_image_name }}:${{ needs.gate.outputs.runtime_image_tag }}\`"
-            echo "- **qa-live:** \`${{ steps.qa_live.outcome || 'skipped' }}\`"
-            echo "- **render-canary:** \`${{ steps.render_canary.outcome || 'skipped' }}\`"
+            echo "- **fast smoke:** \`${{ steps.fast_smoke.outcome || 'skipped' }}\`"
+            echo "- **hosted live QA dispatch:** \`${{ steps.hosted_live_qa_dispatch.outcome || 'skipped' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload live QA artifacts

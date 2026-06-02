@@ -5,6 +5,7 @@
 # Usage:
 #   ./scripts/smoke-prod.sh           # default: public demo + auth + basic LLM
 #   ./scripts/smoke-prod.sh --quick   # public health only
+#   ./scripts/smoke-prod.sh --fast    # deploy-blocking health/config/auth-gate checks; no hosted login
 #   ./scripts/smoke-prod.sh --full    # default + CRUD + infra
 #   ./scripts/smoke-prod.sh --no-llm  # skip LLM capability check
 #   ./scripts/smoke-prod.sh --wait    # wait 90s then test (post-deploy)
@@ -54,6 +55,7 @@ PUBLIC_DEMO_URL="${PUBLIC_DEMO_URL:-${MARKETING_URL:-https://longhouse.ai}}"
 CONTROL_PLANE_URL="${CONTROL_PLANE_URL:-${CP_URL:-https://control.longhouse.ai}}"
 CP_URL="${CP_URL:-$CONTROL_PLANE_URL}"
 WAIT_SECS="${WAIT_SECS:-90}"
+SMOKE_CURL_MAX_TIME="${SMOKE_CURL_MAX_TIME:-5}"
 INSTANCE_AUTH_ENABLED="unknown"
 
 # Counters
@@ -149,12 +151,14 @@ test_http() {
     local method="${4:-GET}"
     local data="${5:-}"
 
-    local args="-s -o /dev/null -w %{http_code}"
+    local args="-s --connect-timeout 5 --max-time $SMOKE_CURL_MAX_TIME -o /dev/null -w %{http_code}"
     [[ "$method" != "GET" ]] && args="$args -X $method"
     [[ -n "$data" ]] && args="$args -H 'Content-Type: application/json' -d '$data'"
 
     local status
-    status=$(eval "curl $args '$url'" 2>/dev/null || echo "000")
+    if ! status=$(eval "curl $args '$url'" 2>/dev/null); then
+        status="000"
+    fi
 
     if [[ "$status" == "$expected" ]]; then
         pass "$name ($status)"
@@ -174,12 +178,14 @@ test_http_auth() {
     local method="${5:-GET}"
     local data="${6:-}"
 
-    local args="-s -o /dev/null -w %{http_code} -b $cookie_jar"
+    local args="-s --connect-timeout 5 --max-time $SMOKE_CURL_MAX_TIME -o /dev/null -w %{http_code} -b $cookie_jar"
     [[ "$method" != "GET" ]] && args="$args -X $method"
     [[ -n "$data" ]] && args="$args -H 'Content-Type: application/json' -d '$data'"
 
     local status
-    status=$(eval "curl $args '$url'" 2>/dev/null || echo "000")
+    if ! status=$(eval "curl $args '$url'" 2>/dev/null); then
+        status="000"
+    fi
 
     if [[ "$status" == "$expected" ]]; then
         pass "$name ($status)"
@@ -198,7 +204,7 @@ test_json() {
     local expected="$4"
 
     local value
-    value=$(curl -s "$url" 2>/dev/null | jq -r "$jq_path" 2>/dev/null || echo "ERROR")
+    value=$(curl -s --connect-timeout 5 --max-time "$SMOKE_CURL_MAX_TIME" "$url" 2>/dev/null | jq -r "$jq_path" 2>/dev/null || echo "ERROR")
 
     if [[ "$value" == "$expected" ]]; then
         pass "$name ($jq_path = $value)"
@@ -221,7 +227,7 @@ test_json_eventually() {
     local value="unknown"
     while [[ $attempt -lt $max_attempts ]]; do
         attempt=$((attempt + 1))
-        value=$(curl -s "$url" 2>/dev/null | jq -r "$jq_path" 2>/dev/null || echo "ERROR")
+        value=$(curl -s --connect-timeout 5 --max-time "$SMOKE_CURL_MAX_TIME" "$url" 2>/dev/null | jq -r "$jq_path" 2>/dev/null || echo "ERROR")
         if [[ "$value" == "$expected" ]]; then
             pass "$name ($jq_path = $value after $attempt attempts)"
             return 0
@@ -240,7 +246,7 @@ test_cors() {
     local origin="$3"
 
     local allow_origin
-    allow_origin=$(curl -s -I -X OPTIONS "$url" \
+    allow_origin=$(curl -s --connect-timeout 5 --max-time "$SMOKE_CURL_MAX_TIME" -I -X OPTIONS "$url" \
         -H "Origin: $origin" \
         -H "Access-Control-Request-Method: POST" 2>/dev/null | \
         grep -i "access-control-allow-origin" | tr -d '\r' | awk '{print $2}')
@@ -257,7 +263,7 @@ test_cors() {
 # Test runtime config
 test_config() {
     local config
-    config=$(curl -s "$FRONTEND_URL/config.js" 2>/dev/null)
+    config=$(curl -s --connect-timeout 5 --max-time "$SMOKE_CURL_MAX_TIME" "$FRONTEND_URL/config.js" 2>/dev/null)
 
     local api_url
     api_url=$(echo "$config" | grep -o 'API_BASE_URL *= *"[^"]*"' | sed 's/.*"\([^"]*\)".*/\1/')
@@ -309,7 +315,7 @@ run_health_checks() {
     # auth state from the public /api/system/info (auth_disabled) instead of
     # .checks.environment.auth_enabled, and verify DB readiness via /api/readyz
     # (the purpose-built probe that 503s when the DB is unavailable).
-    INSTANCE_AUTH_DISABLED=$(curl -s "$API_URL/api/system/info" 2>/dev/null | jq -r '.auth_disabled // "unknown"' 2>/dev/null)
+    INSTANCE_AUTH_DISABLED=$(curl -s --connect-timeout 5 --max-time "$SMOKE_CURL_MAX_TIME" "$API_URL/api/system/info" 2>/dev/null | jq -r '.auth_disabled // "unknown"' 2>/dev/null)
     if [[ "$INSTANCE_AUTH_DISABLED" == "false" ]]; then
         pass "Auth enabled (true)"
         INSTANCE_AUTH_ENABLED="true"
@@ -342,12 +348,12 @@ run_cross_service_checks() {
 
     # Public demo JS references control plane URL
     local js_urls
-    js_urls=$(curl -s "$PUBLIC_DEMO_URL" 2>/dev/null | grep -oE 'src="/assets/[^"]+\.js"' | sed 's/src="//;s/"//' || true)
+    js_urls=$(curl -s --connect-timeout 5 --max-time "$SMOKE_CURL_MAX_TIME" "$PUBLIC_DEMO_URL" 2>/dev/null | grep -oE 'src="/assets/[^"]+\.js"' | sed 's/src="//;s/"//' || true)
     if [[ -n "$js_urls" ]]; then
         local found_cp=0
         for js_path in $js_urls; do
             local js_content
-            js_content=$(curl -s "${PUBLIC_DEMO_URL}${js_path}" 2>/dev/null || true)
+            js_content=$(curl -s --connect-timeout 5 --max-time "$SMOKE_CURL_MAX_TIME" "${PUBLIC_DEMO_URL}${js_path}" 2>/dev/null || true)
             if grep -q "control.longhouse.ai" <<< "$js_content"; then
                 found_cp=1
                 break
@@ -387,7 +393,7 @@ run_contacts_crud() {
 
     local email_response
     local email_id
-    email_response=$(curl -s -X POST "$API_URL/api/user/contacts/email" \
+    email_response=$(curl -s --connect-timeout 5 --max-time "$SMOKE_CURL_MAX_TIME" -X POST "$API_URL/api/user/contacts/email" \
         -b "$cookie_jar" \
         -H "Content-Type: application/json" \
         -d '{"name": "Smoke Test", "email": "smoke-test@example.com", "notes": "Created by smoke test"}' 2>/dev/null)
@@ -400,7 +406,7 @@ run_contacts_crud() {
 
     local phone_response
     local phone_id
-    phone_response=$(curl -s -X POST "$API_URL/api/user/contacts/phone" \
+    phone_response=$(curl -s --connect-timeout 5 --max-time "$SMOKE_CURL_MAX_TIME" -X POST "$API_URL/api/user/contacts/phone" \
         -b "$cookie_jar" \
         -H "Content-Type: application/json" \
         -d '{"name": "Smoke Test Phone", "phone": "+15551234567", "notes": "Created by smoke test"}' 2>/dev/null)
@@ -413,7 +419,7 @@ run_contacts_crud() {
 
     if [[ -n "$email_id" && "$email_id" != "null" ]]; then
         local delete_status
-        delete_status=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+        delete_status=$(curl -s --connect-timeout 5 --max-time "$SMOKE_CURL_MAX_TIME" -o /dev/null -w "%{http_code}" -X DELETE \
             "$API_URL/api/user/contacts/email/$email_id" -b "$cookie_jar" 2>/dev/null)
         if [[ "$delete_status" == "204" ]]; then
             pass "Delete email contact (204)"
@@ -424,7 +430,7 @@ run_contacts_crud() {
 
     if [[ -n "$phone_id" && "$phone_id" != "null" ]]; then
         local delete_status
-        delete_status=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+        delete_status=$(curl -s --connect-timeout 5 --max-time "$SMOKE_CURL_MAX_TIME" -o /dev/null -w "%{http_code}" -X DELETE \
             "$API_URL/api/user/contacts/phone/$phone_id" -b "$cookie_jar" 2>/dev/null)
         if [[ "$delete_status" == "204" ]]; then
             pass "Delete phone contact (204)"
@@ -435,29 +441,34 @@ run_contacts_crud() {
 }
 
 # Parse args
-MODE="default" # quick | default | full
+MODE="default" # quick | fast | default | full
 QUICK=0
+FAST=0
 FULL=0
 WAIT=0
 RUN_LLM=1
 while [[ $# -gt 0 ]]; do
     case $1 in
         --quick) QUICK=1; MODE="quick"; shift ;;
+        --fast) FAST=1; MODE="fast"; shift ;;
         --full) FULL=1; MODE="full"; shift ;;
         --no-llm) RUN_LLM=0; shift ;;
         --wait) WAIT=1; shift ;;
         --chat) FULL=1; MODE="full"; info "--chat is deprecated; use --full"; shift ;;
         -h|--help)
-            echo "Usage: ./scripts/smoke-prod.sh [--quick] [--full] [--no-llm] [--wait]"
+            echo "Usage: ./scripts/smoke-prod.sh [--quick] [--fast] [--full] [--no-llm] [--wait]"
             exit 0
             ;;
         *) shift ;;
     esac
 done
 
-if [[ $QUICK -eq 1 && $FULL -eq 1 ]]; then
-    info "--quick ignores --full"
+if [[ $QUICK -eq 1 && ($FAST -eq 1 || $FULL -eq 1) ]]; then
+    info "--quick ignores --fast/--full"
     MODE="quick"
+elif [[ $FAST -eq 1 && $FULL -eq 1 ]]; then
+    info "--fast ignores --full"
+    MODE="fast"
 fi
 
 echo ""
@@ -485,6 +496,66 @@ if [[ "$MODE" == "quick" ]]; then
     echo ""
     echo "================================================"
     echo -e "  Quick: ${GREEN}$PASSED passed${NC}, ${RED}$FAILED failed${NC}"
+    echo "================================================"
+    exit $FAILED
+fi
+
+# === Fast mode: deploy-blocking checks with no hosted login-token exchange ===
+if [[ "$MODE" == "fast" ]]; then
+    section "Health"
+    run_test test_http "API health" "$API_URL/api/health" "200"
+    if [[ $FAILED -gt 0 ]]; then
+        echo ""
+        echo "================================================"
+        echo -e "  ${RED}Fast smoke failed during API health check: $FAILED failed${NC}, ${GREEN}$PASSED passed${NC}, ${YELLOW}$WARNINGS warnings${NC}"
+        echo "================================================"
+        exit $FAILED
+    fi
+    run_test test_json "Health status" "$API_URL/api/health" ".status" "healthy"
+    INSTANCE_AUTH_DISABLED=$(curl -s --connect-timeout 5 --max-time "$SMOKE_CURL_MAX_TIME" "$API_URL/api/system/info" 2>/dev/null | jq -r '.auth_disabled // "unknown"' 2>/dev/null)
+    if [[ "$INSTANCE_AUTH_DISABLED" == "false" ]]; then
+        pass "Auth enabled (true)"
+        INSTANCE_AUTH_ENABLED="true"
+    elif [[ "$INSTANCE_AUTH_DISABLED" == "true" ]]; then
+        pass "Auth enabled (false)"
+        INSTANCE_AUTH_ENABLED="false"
+    else
+        warn "Auth enabled state unknown ($INSTANCE_AUTH_DISABLED)"
+        INSTANCE_AUTH_ENABLED="unknown"
+    fi
+    run_test test_http "DB ready (readyz)" "$API_URL/api/readyz" "200"
+    if [[ $FAILED -gt 0 ]]; then
+        echo ""
+        echo "================================================"
+        echo -e "  ${RED}Fast smoke failed during health checks: $FAILED failed${NC}, ${GREEN}$PASSED passed${NC}, ${YELLOW}$WARNINGS warnings${NC}"
+        echo "================================================"
+        exit $FAILED
+    fi
+
+    section "Frontend"
+    run_frontend_checks
+
+    section "Cross-Service"
+    run_cross_service_checks
+
+    section "CORS"
+    run_cors_checks
+
+    if [[ "$INSTANCE_AUTH_ENABLED" != "false" ]]; then
+        section "Auth gates (unauthenticated)"
+        run_auth_gate_checks
+    else
+        info "Unauthenticated auth-gate checks skipped (auth_enabled=$INSTANCE_AUTH_ENABLED)"
+    fi
+
+    echo ""
+    echo "================================================"
+    if [[ $FAILED -eq 0 ]]; then
+        echo -e "  ${GREEN}Fast smoke passed: $PASSED passed${NC}"
+        [[ $WARNINGS -gt 0 ]] && echo -e "  ${YELLOW}$WARNINGS warnings${NC}"
+    else
+        echo -e "  ${RED}$FAILED failed${NC}, ${GREEN}$PASSED passed${NC}, ${YELLOW}$WARNINGS warnings${NC}"
+    fi
     echo "================================================"
     exit $FAILED
 fi
@@ -521,7 +592,7 @@ if [[ "$INSTANCE_AUTH_ENABLED" == "true" ]]; then
             run_test test_http_auth "Timeline sessions (authed)" "$API_URL$BROWSER_TIMELINE_SESSIONS_PATH" "200" "$COOKIE_JAR"
 
             if [[ $RUN_LLM -eq 1 ]]; then
-                llm_available=$(curl -s "$API_URL/api/system/capabilities" 2>/dev/null | jq -r '.llm_available // "unknown"' 2>/dev/null)
+                llm_available=$(curl -s --connect-timeout 5 --max-time "$SMOKE_CURL_MAX_TIME" "$API_URL/api/system/capabilities" 2>/dev/null | jq -r '.llm_available // "unknown"' 2>/dev/null)
                 if [[ "$llm_available" != "true" ]]; then
                     warn "LLM unavailable (llm_available=$llm_available) - skipping LLM tests"
                 else

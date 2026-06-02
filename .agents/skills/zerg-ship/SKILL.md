@@ -105,10 +105,15 @@ When the maintainer says `cowbell`, the agent owns the whole ship loop:
 - run `make ship SHA="<task-sha>"`
 - read the start banner and confirm the exact target SHA + commit subject
 - stay in the foreground until `make ship` exits
-- do not wrap `make ship` in a short outer shell timeout; the monitor already has its own timeout and successful runtime ships commonly take around 5 to 8 minutes, sometimes longer if they wait behind earlier `main` deploys
+- do not wrap `make ship` in a short outer shell timeout; the monitor already has its own timeout, but the normal runtime lane is designed to return in a few minutes
+- deploys are latest-wins on `main`: a newer main push cancels older in-flight deploy verification instead of waiting behind it
 - cite exact SHAs and workflow run ids when reporting status
 
-`deploy-and-verify.yml` waits for the matching `contract-first-ci.yml` and `runtime-image.yml` runs for the same SHA before any remote deploy action. Manual dispatch stays isolated for recovery use.
+`deploy-and-verify.yml` waits for the matching `contract-first-ci.yml` and
+`runtime-image.yml` runs for the same SHA before any remote deploy action. It
+then deploys the exact SHA image to demo + canary, runs fast health/config/auth
+gate smoke, and dispatches full hosted live QA asynchronously. Manual dispatch
+stays isolated for recovery use.
 
 If `make ship` returns non-zero for the target SHA, ship failed. You may explain why you think it failed, including suspected pre-existing drift, but do not relabel that outcome as success.
 
@@ -121,7 +126,6 @@ Manual fallback:
   --timeout 900
 make reprovision IMAGE="ghcr.io/cipher982/longhouse-runtime:<full-commit-sha>"
 make qa-live
-make qa-live-conversations
 ```
 
 ### Hosted Control Plane
@@ -156,7 +160,11 @@ QA_INSTANCE_URL=https://other.longhouse.ai make qa-live
 make qa-live-conversations
 ```
 
-`qa-live` covers auth + timeline, forum redirect, session detail, health, agents API, AI search toggle, recall, briefings, continuation readiness, and auth refresh.
+`qa-live` covers auth + timeline, forum redirect, session detail, health,
+agents API, AI search toggle, recall, briefings, continuation readiness, and
+auth refresh. It is now an async post-promote verifier for normal runtime
+ships; failures still matter, but they should not block the fast deploy return
+path.
 
 Two auth systems:
 - Browser pages: hosted login-token → `longhouse_session` cookie
@@ -213,6 +221,7 @@ for iOS changes without calling this out.
 
 Always end a successful ship by reporting:
 - exact SHA now live on demo + canary
+- confirmation that fast smoke passed and hosted live QA was dispatched asynchronously
 - confirmation that `make dogfood-refresh` ran (or why you skipped it)
 - whether iOS needs a manual Xcode rebuild
 
@@ -225,6 +234,7 @@ Always end a successful ship by reporting:
 - [ ] Public demo runtime healthy if runtime lane changed
 - [ ] Control plane healthy if control-plane lane changed
 - [ ] Hosted canary healthy if runtime lane changed
-- [ ] `make qa-live` passed after hosted runtime changes
+- [ ] Fast deploy smoke passed after hosted runtime changes
+- [ ] Async hosted live QA was dispatched; if it fails, fix/re-run before release claims
 - [ ] `make dogfood-refresh` ran + menu bar restarted (always)
 - [ ] iOS rebuild prompt given if `ios/` changed

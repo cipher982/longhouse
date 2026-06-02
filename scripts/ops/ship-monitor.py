@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Wait for exact-SHA push workflows, then verify live deploy state."""
+"""Wait for exact-SHA push workflows, then verify fast live deploy state."""
 
 from __future__ import annotations
 
@@ -27,8 +27,8 @@ ACCEPTED_CONCLUSIONS = {"success", "neutral", "skipped"}
 RUNTIME_HEALTH = {"healthy"}
 DEPLOY_AND_VERIFY = "Deploy and Verify"
 CI_WORKFLOW = "CI"
-DEPLOY_AND_VERIFY_JOB = "Deploy demo + canary + hosted live QA"
-DEPLOY_GATE_JOB = "Queue deploy behind earlier main SHAs + green CI"
+DEPLOY_AND_VERIFY_JOB = "Deploy demo + canary + fast smoke"
+DEPLOY_GATE_JOB = "Gate exact-SHA CI + image"
 RUNTIME_IMAGE_WORKFLOW = "Publish Runtime Image"
 RUNTIME_IMAGE_JOB = "build-and-push"
 CANARY_SURFACE = "Canary"
@@ -65,7 +65,7 @@ class SurfaceInfo:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Wait for push-triggered GitHub Actions runs for one exact SHA, then verify live deploy state."
+        description="Wait for push-triggered GitHub Actions runs for one exact SHA, then verify fast live deploy state."
     )
     parser.add_argument("--sha", help="Commit SHA to monitor. Defaults to HEAD.")
     parser.add_argument("--repo", default="cipher982/longhouse", help="GitHub repo in OWNER/REPO form.")
@@ -218,23 +218,6 @@ def fetch_run_jobs(repo: str, run_id: int) -> list[dict]:
     )
     payload = json.loads(proc.stdout or "{}")
     return payload.get("jobs") or []
-
-
-def fetch_first_parent_sha(repo: str, sha: str) -> str | None:
-    proc = run(
-        [
-            "gh",
-            "api",
-            f"repos/{repo}/commits/{sha}",
-            "--jq",
-            ".parents[0].sha // empty",
-        ],
-        check=False,
-    )
-    if proc.returncode != 0:
-        return None
-    value = proc.stdout.strip()
-    return value or None
 
 
 def print_ci_profile(root: Path, repo: str, runs: list[RunInfo]) -> None:
@@ -446,12 +429,6 @@ def describe_deploy_run_blocker(repo: str, sha: str, runs: list[RunInfo], deploy
         if step_name == "Wait for runtime image publish":
             blocker = describe_blocking_workflow(repo, RUNTIME_IMAGE_WORKFLOW, sha, runs)
             return f"{DEPLOY_AND_VERIFY} #{deploy_run.databaseId} / gate -> {blocker}"
-
-        if step_name == "Wait for previous main deploy to clear":
-            parent_sha = fetch_first_parent_sha(repo, sha)
-            if parent_sha:
-                blocker = describe_blocking_workflow(repo, DEPLOY_AND_VERIFY, parent_sha)
-                return f"{DEPLOY_AND_VERIFY} #{deploy_run.databaseId} / gate -> previous main {blocker}"
 
         return (
             f"{DEPLOY_AND_VERIFY} #{deploy_run.databaseId} / {DEPLOY_GATE_JOB} / "
