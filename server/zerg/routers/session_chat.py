@@ -141,11 +141,11 @@ def _is_sqlite_database_locked(exc: OperationalError) -> bool:
 async def _launch_managed_local_session_with_lock_retry(db: Session, params: ManagedLocalLaunchParams):
     for attempt in range(len(_MANAGED_LOCAL_SQLITE_LOCK_RETRY_DELAYS) + 1):
         try:
-            return launch_managed_local_session_sync(db, params)
+            return await asyncio.to_thread(launch_managed_local_session_sync, db, params)
         except OperationalError as exc:
             if not _is_sqlite_database_locked(exc):
                 raise
-            db.rollback()
+            await asyncio.to_thread(db.rollback)
             if attempt >= len(_MANAGED_LOCAL_SQLITE_LOCK_RETRY_DELAYS):
                 raise ManagedLocalLaunchError(
                     "Managed local launch is waiting for the local database writer; retry shortly.",

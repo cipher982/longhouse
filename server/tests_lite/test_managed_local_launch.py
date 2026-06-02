@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -290,6 +291,32 @@ def test_this_device_launch_retries_sqlite_writer_lock(monkeypatch):
     assert calls == 2
     assert db.rollbacks == 1
     assert sleeps == [session_chat._MANAGED_LOCAL_SQLITE_LOCK_RETRY_DELAYS[0]]
+
+
+def test_this_device_launch_does_not_block_event_loop(monkeypatch):
+    from zerg.routers import session_chat
+
+    expected = object()
+
+    def fake_launch(_db, _params):
+        time.sleep(0.2)
+        return expected
+
+    async def run_probe():
+        monkeypatch.setattr(session_chat, "launch_managed_local_session_sync", fake_launch)
+        task = asyncio.create_task(
+            session_chat._launch_managed_local_session_with_lock_retry(
+                SimpleNamespace(rollback=lambda: None),
+                SimpleNamespace(provider="codex", runner_target="cinder"),
+            )
+        )
+        started_at = time.monotonic()
+        await asyncio.sleep(0.02)
+        assert time.monotonic() - started_at < 0.1
+        result = await task
+        assert result is expected
+
+    asyncio.run(run_probe())
 
 
 def test_this_device_launch_reports_503_after_sqlite_writer_lock_retries(monkeypatch):
