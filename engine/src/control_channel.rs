@@ -2238,13 +2238,7 @@ exit 0
         let args = std::fs::read_to_string(&args_path).unwrap();
         assert_eq!(
             args.lines().collect::<Vec<_>>(),
-            vec![
-                "provider-live",
-                "publish",
-                "--provider",
-                "claude",
-                "--json",
-            ]
+            vec!["provider-live", "publish", "--provider", "claude", "--json",]
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -559,10 +559,8 @@ mod tests {
                 }"#,
         )
         .unwrap();
-        let process_facts = HashMap::from([(
-            101,
-            fact("claude --resume", Some("2026-05-28T20:03:47Z")),
-        )]);
+        let process_facts =
+            HashMap::from([(101, fact("claude --resume", Some("2026-05-28T20:03:47Z")))]);
 
         let observations = collect_observations_from_with_processes(tmp.path(), &process_facts);
         let now = parse_rfc3339("2026-05-29T00:00:00Z").unwrap();
