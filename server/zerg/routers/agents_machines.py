@@ -42,7 +42,7 @@ _PROVIDER_LIVE_PROOF_IN_FLIGHT_LOCK = asyncio.Lock()
 
 
 @router.get("", response_model=MachineDirectoryResponse)
-async def list_machines(
+def list_machines(
     db: Session = Depends(get_db),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
@@ -54,7 +54,7 @@ async def list_machines(
 
 
 @router.get("/health", response_model=MachineHealthListResponse)
-async def list_machine_health(
+def list_machine_health(
     device_id: str | None = Query(None, description="Filter to one device"),
     status: MachineHealthStatus | None = Query(None, description="Filter by derived machine transport state"),
     limit: int = Query(20, ge=1, le=100, description="Max machine rows to return"),
