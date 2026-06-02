@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 from sqlalchemy import inspect
+from sqlalchemy import text
 
 from zerg.database import _ensure_agents_fts
 from zerg.database import initialize_database
@@ -25,6 +26,39 @@ def test_initialize_database_sqlite_creates_tables(tmp_path):
     assert "sessions" in tables
     assert "events" in tables
     assert "events_fts" in tables
+
+    event_indexes = {item["name"] for item in inspector.get_indexes("events")}
+    assert "ix_events_session_branch_thread_timestamp" in event_indexes
+
+
+def test_initialize_database_sqlite_bounds_thread_projection_queries(tmp_path):
+    db_path = tmp_path / "zerg.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+
+    initialize_database(engine)
+
+    with engine.connect() as conn:
+        plan_rows = conn.execute(
+            text(
+                """
+                EXPLAIN QUERY PLAN
+                SELECT count(*)
+                FROM events
+                WHERE session_id = :session_id
+                  AND branch_id = :branch_id
+                  AND (thread_id = :thread_id OR thread_id IS NULL)
+                """
+            ),
+            {
+                "session_id": "019e89b4-abc5-7460-9122-c51dc20a9bfb",
+                "branch_id": 20339,
+                "thread_id": "d80edca3-ed6d-412d-9182-42b5f77f14b9",
+            },
+        ).fetchall()
+
+    plan = "\n".join(str(row[-1]) for row in plan_rows)
+    assert "ix_events_session_branch_thread_timestamp" in plan
+    assert "ix_events_thread_id" not in plan
 
 
 def test_initialize_database_sqlite_does_not_plan_heavy_migrations(monkeypatch, tmp_path):

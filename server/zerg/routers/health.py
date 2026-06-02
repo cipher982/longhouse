@@ -73,7 +73,7 @@ def _request_is_trusted(request: Request) -> bool:
 
 
 @router.get("/health/db", operation_id="health_db_check")
-async def health_db(request: Request):
+def health_db(request: Request):
     """Database readiness check - verifies critical tables are initialized.
 
     Returns ready/initializing/error. Schema detail (which table is missing,
@@ -104,14 +104,14 @@ async def health_db(request: Request):
 
 @router.get("/livez", operation_id="livez_check_get")
 @router.head("/livez", operation_id="livez_check_head", include_in_schema=False)
-async def livez_check():
+def livez_check():
     """Liveness probe: process is up and serving requests."""
     return {"status": "ok"}
 
 
 @router.get("/readyz", operation_id="readyz_check_get")
 @router.head("/readyz", operation_id="readyz_check_head", include_in_schema=False)
-async def readyz_check():
+def readyz_check():
     """Readiness probe: returns 503 when core dependencies are unavailable.
 
     Uses a raw SQLite connection with a short timeout so it never blocks behind
@@ -178,7 +178,7 @@ async def readyz_check():
 
 @router.get("/health", operation_id="health_check_get")
 @router.head("/health", operation_id="health_check_head", include_in_schema=False)
-async def health_check(request: Request):
+def health_check(request: Request):
     """Health probe: core dependencies are available.
 
     Returns HTTP 503 when any critical check fails so monitors and the README
@@ -298,7 +298,6 @@ async def health_check(request: Request):
                 fts_row = conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")).fetchone()
                 if not fts_row:
                     raise RuntimeError("events_fts table is missing (FTS5 required).")
-                conn.execute(text("SELECT rowid FROM events_fts WHERE events_fts MATCH 'fts5' LIMIT 1")).fetchone()
             checks["fts5"] = {"status": "pass"}
         else:
             checks["fts5"] = {"status": "skip", "reason": "non-sqlite"}

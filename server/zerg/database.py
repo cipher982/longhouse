@@ -1490,6 +1490,12 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 )
             )
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_events_thread_id ON events(thread_id)"))
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_events_session_branch_thread_timestamp "
+                    "ON events(session_id, branch_id, thread_id, timestamp)"
+                )
+            )
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_source_lines_thread_id ON source_lines(thread_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_session_observations_thread_id ON session_observations(thread_id)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_session_runtime_state_thread_id " "ON session_runtime_state(thread_id)"))
