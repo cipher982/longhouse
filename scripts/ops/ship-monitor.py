@@ -35,6 +35,16 @@ CANARY_SURFACE = "Canary"
 DEFAULT_CANARY_SUBDOMAIN = os.environ.get("LONGHOUSE_DEFAULT_SUBDOMAIN", "david010")
 DEFAULT_CANARY_CONTAINER_NAME = "longhouse-" + DEFAULT_CANARY_SUBDOMAIN
 DEFAULT_CANARY_HEALTH_URL = f"https://{DEFAULT_CANARY_SUBDOMAIN}.longhouse.ai/api/health"
+RUNTIME_IMAGE_PATHS = (
+    "bun.lock",
+    "config",
+    "docker/entrypoint.sh",
+    "docker/runtime.dockerfile",
+    "engine",
+    "server",
+    "web",
+    ".github/workflows/runtime-image.yml",
+)
 
 
 class NoRunsError(RuntimeError):
@@ -595,6 +605,18 @@ def parse_deploy_status(output: str) -> dict[str, SurfaceInfo]:
     return surfaces
 
 
+def latest_runtime_affecting_sha(root: Path, target_sha: str) -> str | None:
+    proc = run(
+        ["git", "rev-list", "-1", target_sha, "--", *RUNTIME_IMAGE_PATHS],
+        cwd=root,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return None
+    value = proc.stdout.strip()
+    return value or None
+
+
 def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> tuple[dict[str, SurfaceInfo], list[str], str]:
     proc = run(
         [str(root / "scripts" / "ops" / "deploy-status.sh")],
@@ -606,7 +628,6 @@ def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> t
     )
     raw = proc.stdout
     surfaces = parse_deploy_status(raw)
-    short_sha = sha[:10]
     errors: list[str] = []
     jobs_by_run_id: dict[int, list[dict]] = {}
 
@@ -631,22 +652,32 @@ def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> t
             line for line in raw.splitlines() if not line.strip().startswith("⚠")
         ).rstrip() + "\n"
 
-    def require_surface(surface_name: str, allowed_health: set[str], *, check_sha: bool) -> None:
+    expected_runtime_sha = latest_runtime_affecting_sha(root, sha)
+    expected_runtime_short = expected_runtime_sha[:10] if expected_runtime_sha else None
+
+    def require_surface(surface_name: str, allowed_health: set[str], *, expected_sha: str | None) -> None:
         surface = surfaces.get(surface_name)
         if surface is None:
             errors.append(f"Missing {surface_name!r} in deploy-status output")
             return
-        if check_sha and surface.sha != short_sha:
-            errors.append(f"{surface_name} is on {surface.sha}, expected {short_sha}")
+        if expected_sha is not None and surface.sha != expected_sha:
+            errors.append(f"{surface_name} is on {surface.sha}, expected {expected_sha}")
         if surface.health not in allowed_health:
             errors.append(f"{surface_name} health is {surface.health}, expected one of {sorted(allowed_health)}")
 
-    if any(
+    deploy_run_completed = any(
+        run.workflowName == DEPLOY_AND_VERIFY
+        and run.status == "completed"
+        and run.conclusion in ACCEPTED_CONCLUSIONS
+        for run in runs
+    )
+    deploy_job_succeeded = any(
         run.workflowName == DEPLOY_AND_VERIFY and job_succeeded(run, DEPLOY_AND_VERIFY_JOB)
         for run in runs
-    ):
-        require_surface("Demo runtime", RUNTIME_HEALTH, check_sha=runtime_image_published)
-        require_surface(CANARY_SURFACE, RUNTIME_HEALTH, check_sha=runtime_image_published)
+    )
+    if deploy_run_completed or deploy_job_succeeded:
+        require_surface("Demo runtime", RUNTIME_HEALTH, expected_sha=expected_runtime_short)
+        require_surface(CANARY_SURFACE, RUNTIME_HEALTH, expected_sha=expected_runtime_short)
 
     return surfaces, errors, raw
 

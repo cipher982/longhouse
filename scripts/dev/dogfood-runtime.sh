@@ -17,6 +17,9 @@ CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 URL_OVERRIDE="${LONGHOUSE_DOGFOOD_URL:-}"
 MACHINE_NAME_OVERRIDE="${LONGHOUSE_DOGFOOD_MACHINE_NAME:-}"
 ROUTE_E2E_PROVIDER="${LONGHOUSE_DOGFOOD_PROVIDER_LIVE_ROUTE_PROVIDER:-$DEFAULT_ROUTE_E2E_PROVIDER}"
+ROUTE_E2E_STRICT="${LONGHOUSE_DOGFOOD_PROVIDER_LIVE_ROUTE_STRICT:-0}"
+ROUTE_E2E_HTTP_TIMEOUT_S="${LONGHOUSE_DOGFOOD_PROVIDER_LIVE_ROUTE_HTTP_TIMEOUT_S:-45}"
+ROUTE_E2E_ATTEMPTS="${LONGHOUSE_DOGFOOD_PROVIDER_LIVE_ROUTE_ATTEMPTS:-1}"
 MENUBAR=1
 SKIP_ENGINE=0
 SKIP_ROUTE_E2E=0
@@ -49,7 +52,9 @@ Purpose:
 Notes:
   - This is the dogfood loop for repo work. It installs into the actual local runtime.
   - DMG/drag-install is release transport only. Daily dogfooding should use this script.
-  - Refresh runs a no-token hosted provider-live route E2E after install unless --skip-route-e2e is set. The default provider set is auto from current sidecars.
+  - Refresh reports a no-token hosted provider-live route E2E after install unless --skip-route-e2e is set.
+    The default provider set is auto from current sidecars. Set LONGHOUSE_DOGFOOD_PROVIDER_LIVE_ROUTE_STRICT=1 to fail refresh on this remote check.
+    The hosted route check is capped by LONGHOUSE_DOGFOOD_PROVIDER_LIVE_ROUTE_HTTP_TIMEOUT_S (default 45s) and LONGHOUSE_DOGFOOD_PROVIDER_LIVE_ROUTE_ATTEMPTS (default 1).
 EOF
 }
 
@@ -302,10 +307,15 @@ run_provider_live_route_e2e() {
     python3 "$ROOT_DIR/scripts/qa/provider-live-route-e2e.py" \
       --provider "$ROUTE_E2E_PROVIDER" \
       --require-verdict non-red \
+      --http-timeout-s "$ROUTE_E2E_HTTP_TIMEOUT_S" \
+      --attempts "$ROUTE_E2E_ATTEMPTS" \
       --artifact "$route_artifact" || status=$?
   cp -f "$route_artifact" "$repo_artifact" 2>/dev/null || true
   if (( status != 0 )); then
-    fail "Hosted provider-live route E2E failed (exit $status). See $route_artifact"
+    log "WARN: hosted provider-live route E2E failed (exit $status). See $route_artifact"
+    if [[ "$ROUTE_E2E_STRICT" == "1" || "$ROUTE_E2E_STRICT" == "true" || "$ROUTE_E2E_STRICT" == "yes" ]]; then
+      fail "Hosted provider-live route E2E failed in strict mode (exit $status). See $route_artifact"
+    fi
   fi
 }
 

@@ -18,13 +18,14 @@ sys.modules[spec.name] = ship_monitor
 spec.loader.exec_module(ship_monitor)
 
 
-DEPLOY_STATUS_LATEST = """
+def deploy_status(demo_sha: str, canary_sha: str) -> str:
+    return f"""
 
 Surface              SHA          Health     Uptime
 -------              ---          ------     ------
-Demo runtime         latest       healthy    Up 2 minutes (healthy)
+Demo runtime         {demo_sha}   healthy    Up 2 minutes (healthy)
 Control plane        f3e42620e7   ok         Up 2 days (healthy)
-Canary               latest       healthy    Up 39 seconds (healthy)
+Canary               {canary_sha}   healthy    Up 39 seconds (healthy)
 Local HEAD           ac77b06d72
 
 """
@@ -48,9 +49,15 @@ def run_info(
     )
 
 
-def with_fakes(job_conclusions: dict[int, dict[str, str]]) -> None:
+def with_fakes(
+    job_conclusions: dict[int, dict[str, str]],
+    *,
+    latest_runtime_sha: str | None = "latest",
+    deploy_status_output: str | None = None,
+) -> None:
     def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
-        return subprocess.CompletedProcess(args=args, returncode=0, stdout=DEPLOY_STATUS_LATEST, stderr="")
+        output = deploy_status_output if deploy_status_output is not None else deploy_status("latest", "latest")
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout=output, stderr="")
 
     def fake_fetch_run_jobs(repo: str, run_id: int) -> list[dict[str, str]]:
         return [
@@ -60,6 +67,7 @@ def with_fakes(job_conclusions: dict[int, dict[str, str]]) -> None:
 
     ship_monitor.run = fake_run
     ship_monitor.fetch_run_jobs = fake_fetch_run_jobs
+    ship_monitor.latest_runtime_affecting_sha = lambda root, target_sha: latest_runtime_sha
 
 
 def test_runtime_reuse_does_not_require_exact_live_sha() -> None:
@@ -86,7 +94,8 @@ def test_runtime_publish_requires_exact_live_sha() -> None:
         {
             1: {ship_monitor.DEPLOY_AND_VERIFY_JOB: "success"},
             2: {ship_monitor.RUNTIME_IMAGE_JOB: "success"},
-        }
+        },
+        latest_runtime_sha="ac77b06d72",
     )
     runs = [
         run_info(ship_monitor.DEPLOY_AND_VERIFY, 1),
@@ -97,6 +106,24 @@ def test_runtime_publish_requires_exact_live_sha() -> None:
 
     assert "Demo runtime is on latest, expected ac77b06d72" in errors
     assert "Canary is on latest, expected ac77b06d72" in errors
+
+
+def test_skipped_tip_still_requires_latest_runtime_affecting_sha() -> None:
+    with_fakes(
+        {
+            1: {ship_monitor.DEPLOY_AND_VERIFY_JOB: "skipped"},
+        },
+        latest_runtime_sha="7e917a42689f626ed83908f7ab0a6ab21c3aafc4",
+        deploy_status_output=deploy_status("edb88b9ebe", "edb88b9ebe"),
+    )
+    runs = [
+        run_info(ship_monitor.DEPLOY_AND_VERIFY, 1, conclusion="skipped"),
+    ]
+
+    _surfaces, errors, _raw = ship_monitor.verify_live_state(ROOT, "cipher982/longhouse", "7ede50e79d", runs)
+
+    assert "Demo runtime is on edb88b9ebe, expected 7e917a4268" in errors
+    assert "Canary is on edb88b9ebe, expected 7e917a4268" in errors
 
 
 def test_gate_heartbeat_names_blocking_ci_job_and_step() -> None:
@@ -181,6 +208,7 @@ def test_manual_deploy_recovery_supersedes_failed_push_deploy() -> None:
 if __name__ == "__main__":
     test_runtime_reuse_does_not_require_exact_live_sha()
     test_runtime_publish_requires_exact_live_sha()
+    test_skipped_tip_still_requires_latest_runtime_affecting_sha()
     test_gate_heartbeat_names_blocking_ci_job_and_step()
     test_deploy_heartbeat_names_active_deploy_step()
     test_manual_deploy_recovery_supersedes_failed_push_deploy()
