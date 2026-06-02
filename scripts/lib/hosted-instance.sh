@@ -926,29 +926,45 @@ lh_hosted_reprovision() {
   local payload=""
   local api_url=""
   local http_code=""
+  local attempt=1
+  local max_attempts="${LH_HOSTED_REPROVISION_MAX_ATTEMPTS:-50}"
 
   if [[ -n "$image" ]]; then
     payload="$(_lh_hosted_json_object image "$image")" || return 1
   fi
 
-  if _lh_hosted_post_instance_action "$instance_id" "reprovision" "$payload"; then
-    if [[ -n "$image" ]]; then
-      api_url="$(_lh_hosted_reprovision_api_url)"
-      echo "Waiting for hosted runtime health to report the requested image..." >&2
-      _lh_hosted_wait_for_runtime_image "$api_url" "$image" 240
-      return $?
+  while true; do
+    if _lh_hosted_post_instance_action "$instance_id" "reprovision" "$payload"; then
+      if [[ -n "$image" ]]; then
+        api_url="$(_lh_hosted_reprovision_api_url)"
+        echo "Waiting for hosted runtime health to report the requested image..." >&2
+        _lh_hosted_wait_for_runtime_image "$api_url" "$image" 240
+        return $?
+      fi
+      return 0
     fi
-    return 0
-  fi
 
-  http_code="${LH_HOSTED_LAST_HTTP_CODE:-}"
-  if [[ "$http_code" != "524" && "$http_code" != "000" ]]; then
-    return 1
-  fi
+    http_code="${LH_HOSTED_LAST_HTTP_CODE:-}"
+    case "$http_code" in
+      409|425|429|502|503|504)
+        if [[ "$attempt" -lt "$max_attempts" ]]; then
+          echo "Hosted reprovision is temporarily unavailable (HTTP ${http_code}); retrying (${attempt}/${max_attempts})..." >&2
+          _lh_hosted_retry_sleep "$attempt"
+          attempt=$((attempt + 1))
+          continue
+        fi
+        ;;
+    esac
 
-  api_url="$(_lh_hosted_reprovision_api_url)"
-  echo "Reprovision returned HTTP ${http_code}; polling hosted runtime health for the requested image..." >&2
-  _lh_hosted_wait_for_runtime_image "$api_url" "$image" 240
+    if [[ "$http_code" != "524" && "$http_code" != "000" ]]; then
+      return 1
+    fi
+
+    api_url="$(_lh_hosted_reprovision_api_url)"
+    echo "Reprovision returned HTTP ${http_code}; polling hosted runtime health for the requested image..." >&2
+    _lh_hosted_wait_for_runtime_image "$api_url" "$image" 240
+    return $?
+  done
 }
 
 lh_hosted_deprovision() {

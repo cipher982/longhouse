@@ -184,6 +184,71 @@ if [[ "$(cat "$temp_json.health-request")" != 'https://demo.longhouse.ai/api/hea
   exit 1
 fi
 
+sleep() {
+  :
+}
+
+printf '0' >"$temp_json.attempts"
+curl() {
+  local data=""
+  local output_file=""
+  local request_url=""
+  local attempts=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -d)
+        data="$2"
+        shift 2
+        ;;
+      -o)
+        output_file="$2"
+        shift 2
+        ;;
+      -w|-H|-X|--connect-timeout|--max-time)
+        shift 2
+        ;;
+      *)
+        request_url="$1"
+        shift
+        ;;
+    esac
+  done
+
+  case "$request_url" in
+    */api/instances/7/reprovision)
+      attempts="$(cat "$temp_json.attempts")"
+      attempts=$((attempts + 1))
+      printf '%s' "$attempts" >"$temp_json.attempts"
+      printf '%s' "$request_url" >"$temp_json.request"
+      printf '%s' "$data" >"$temp_json.body"
+      if [[ "$attempts" -eq 1 ]]; then
+        printf 'instance locked' >"$output_file"
+        printf '409'
+      else
+        printf '200'
+      fi
+      ;;
+    */api/health)
+      printf '%s' "$request_url" >"$temp_json.health-request"
+      printf '{"build":{"commit":"facefeed"}}' >"$output_file"
+      printf '200'
+      ;;
+    *)
+      echo "Unexpected curl URL in reprovision lock retry test: $request_url" >&2
+      return 1
+      ;;
+  esac
+}
+
+export LH_HOSTED_REPROVISION_MAX_ATTEMPTS=2
+lh_hosted_reprovision "7" "ghcr.io/cipher982/longhouse-runtime:facefeed"
+unset LH_HOSTED_REPROVISION_MAX_ATTEMPTS
+
+if [[ "$(cat "$temp_json.attempts")" -ne 2 ]]; then
+  echo "Expected reprovision helper to retry once after HTTP 409"
+  exit 1
+fi
+
 curl() {
   local data=""
   local output_file=""
