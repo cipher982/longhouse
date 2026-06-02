@@ -157,7 +157,7 @@ test.describe("Sessions Page", () => {
     page,
   }) => {
     // Navigate to timeline (sessions)
-    await page.goto("/timeline");
+    await page.goto("/timeline", { waitUntil: "domcontentloaded" });
 
     // Wait for page to be ready
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
@@ -262,7 +262,7 @@ test.describe("Sessions Page", () => {
 
     expect(ingest.ok()).toBe(true);
 
-    await page.goto("/timeline");
+    await page.goto("/timeline", { waitUntil: "domcontentloaded" });
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
     const searchInput = page.locator('input[type="search"]');
