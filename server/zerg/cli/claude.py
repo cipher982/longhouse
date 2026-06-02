@@ -448,6 +448,9 @@ def _post_claude_terminal_signal(
         occurred_at=occurred_at,
     )
     queued_path = _queue_claude_terminal_runtime_event(event)
+    if queued_path is not None:
+        return True
+
     try:
         with httpx.Client(timeout=_CLAUDE_TERMINAL_POST_TIMEOUT_SECS) as client:
             response = client.post(
@@ -456,17 +459,11 @@ def _post_claude_terminal_signal(
                 json={"events": [event]},
             )
             response.raise_for_status()
-            if queued_path is not None:
-                queued_path.unlink(missing_ok=True)
             return True
     except Exception as exc:
-        if queued_path is not None:
-            message = f"Could not confirm Claude terminal lifecycle event before timeout ({exc})."
-            typer.secho(f"{message} Queued for Machine Agent retry.", fg=typer.colors.YELLOW)
-            return False
         typer.secho(
-            f"Could not confirm Claude terminal lifecycle event before timeout ({exc}). "
-            "Machine Agent will reconcile if the event was not accepted.",
+            f"Could not confirm Claude terminal lifecycle event after local queue failed ({exc}). "
+            "Machine Agent will reconcile if it observes the provider exit.",
             fg=typer.colors.YELLOW,
         )
         return False

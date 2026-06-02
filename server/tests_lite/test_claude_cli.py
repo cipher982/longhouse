@@ -527,7 +527,7 @@ def test_verify_claude_channel_mcp_server_raises_actionable_setup_error(monkeypa
         claude_cli._verify_claude_channel_mcp_server(workspace_path=tmp_path)
 
 
-def test_post_claude_terminal_signal_posts_runtime_event(monkeypatch, tmp_path):
+def test_post_claude_terminal_signal_queues_locally_without_hosted_post(monkeypatch, tmp_path):
     fake_client = _FakeClient(response=_FakeResponse(status_code=200, json_data={"accepted": 1}))
     monkeypatch.setattr(claude_cli.httpx, "Client", lambda timeout: fake_client)
     monkeypatch.setattr(claude_cli, "get_machine_name_label", lambda: "work-laptop")
@@ -543,11 +543,10 @@ def test_post_claude_terminal_signal_posts_runtime_event(monkeypatch, tmp_path):
     )
 
     assert ok is True
-    assert len(fake_client.calls) == 1
-    call = fake_client.calls[0]
-    assert call["url"] == "https://longhouse.test/api/agents/runtime/events/batch"
-    assert call["headers"] == {"X-Agents-Token": "zdt_test_token"}
-    event = call["json"]["events"][0]
+    assert fake_client.calls == []
+    queued = list(outbox_dir.glob("*.json"))
+    assert len(queued) == 1
+    event = json.loads(queued[0].read_text(encoding="utf-8"))
     assert event["runtime_key"] == "claude:provider-123"
     assert event["session_id"] == "11111111-1111-4111-8111-111111111111"
     assert event["provider"] == "claude"
@@ -558,13 +557,12 @@ def test_post_claude_terminal_signal_posts_runtime_event(monkeypatch, tmp_path):
     assert event["payload"]["terminal_reason"] == "provider_exit"
     assert event["payload"]["terminal_source"] == "claude_channel_wrapper"
     assert event["payload"]["exit_code"] == 0
-    assert list(outbox_dir.glob("*.json")) == []
 
 
-def test_post_claude_terminal_signal_timeout_leaves_queued_event(monkeypatch, tmp_path, capsys):
+def test_post_claude_terminal_signal_does_not_warn_when_hosted_would_timeout(monkeypatch, tmp_path, capsys):
     class _TimeoutClient:
         def __enter__(self):
-            return self
+            raise AssertionError("hosted POST should not run when local queue succeeds")
 
         def __exit__(self, exc_type, exc, tb):
             return False
@@ -585,14 +583,36 @@ def test_post_claude_terminal_signal_timeout_leaves_queued_event(monkeypatch, tm
         exit_code=0,
     )
 
-    assert ok is False
-    assert "Queued for Machine Agent retry" in capsys.readouterr().out
+    assert ok is True
+    assert capsys.readouterr().out == ""
     queued = list(outbox_dir.glob("*.json"))
     assert len(queued) == 1
     event = json.loads(queued[0].read_text(encoding="utf-8"))
     assert event["source"] == "claude_channel_wrapper"
     assert event["kind"] == "terminal_signal"
     assert event["payload"]["terminal_state"] == "session_ended"
+
+
+def test_post_claude_terminal_signal_posts_when_local_queue_fails(monkeypatch):
+    fake_client = _FakeClient(response=_FakeResponse(status_code=200, json_data={"accepted": 1}))
+    monkeypatch.setattr(claude_cli.httpx, "Client", lambda timeout: fake_client)
+    monkeypatch.setattr(claude_cli, "get_machine_name_label", lambda: "work-laptop")
+    monkeypatch.setattr(claude_cli, "_queue_claude_terminal_runtime_event", lambda event: None)
+
+    ok = claude_cli._post_claude_terminal_signal(
+        base_url="https://longhouse.test",
+        token="zdt_test_token",
+        session_id="11111111-1111-4111-8111-111111111111",
+        provider_session_id="provider-123",
+        exit_code=0,
+    )
+
+    assert ok is True
+    assert len(fake_client.calls) == 1
+    call = fake_client.calls[0]
+    assert call["url"] == "https://longhouse.test/api/agents/runtime/events/batch"
+    assert call["headers"] == {"X-Agents-Token": "zdt_test_token"}
+    assert call["json"]["events"][0]["kind"] == "terminal_signal"
 
 
 def test_collect_claude_launch_env_filters_empty_values(monkeypatch):
