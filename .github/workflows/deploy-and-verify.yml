@@ -48,7 +48,7 @@ jobs:
           fi
 
   gate:
-    name: "Gate exact-SHA CI + image"
+    name: "Resolve exact-SHA deploy metadata"
     runs-on: ubuntu-latest
     needs: changes
     if: ${{ needs.changes.outputs.deploy_verify == 'true' }}
@@ -104,27 +104,8 @@ jobs:
             echo "::notice::No runtime image changes detected; reusing ghcr.io/${{ github.repository_owner }}/longhouse-runtime:$IMAGE_TAG for deploy/QA."
           fi
 
-      - name: Detect frontend-only change
-        id: scope
-        if: ${{ github.event_name == 'push' && steps.meta.outputs.predecessor_sha != '' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # Compare changed files between predecessor and current SHA
-          CHANGED=$(gh api repos/${{ github.repository }}/compare/${{ steps.meta.outputs.predecessor_sha }}...${{ github.sha }} \
-            --jq '.files[].filename' 2>/dev/null || echo "UNKNOWN")
-
-          if [[ "$CHANGED" == "UNKNOWN" ]]; then
-            echo "frontend_only=false" >> "$GITHUB_OUTPUT"
-          elif echo "$CHANGED" | grep -qvE '^(web/|\.github/|Makefile$|docs/|\.claude/|CLAUDE\.md$|VISION\.md$|README\.md$|\.agents/)'; then
-            echo "frontend_only=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "frontend_only=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Frontend-only change detected — skipping CI gate"
-          fi
-
-      - name: Wait for full CI gate
-        if: ${{ github.event_name == 'push' && needs.changes.outputs.runtime_image == 'true' && steps.scope.outputs.frontend_only != 'true' }}
+      - name: Wait for full CI gate (optional)
+        if: ${{ github.event_name == 'push' && needs.changes.outputs.runtime_image == 'true' && vars.DEPLOY_WAIT_FULL_CI == 'true' }}
         uses: ./.github/actions/wait-for-ci
         with:
           head_sha: ${{ steps.meta.outputs.head_sha }}
@@ -133,23 +114,12 @@ jobs:
           required_jobs: Backend tests,Engine tests,End-to-end tests,CLI wheel packaging
           ignored_failure_jobs: OSS onboarding smoke
 
-      - name: Wait for runtime image publish
-        if: ${{ github.event_name == 'push' && needs.changes.outputs.runtime_image == 'true' }}
-        uses: ./.github/actions/wait-for-ci
-        with:
-          head_sha: ${{ steps.meta.outputs.head_sha }}
-          head_branch: ${{ steps.meta.outputs.head_branch }}
-          github_token: ${{ github.token }}
-          workflow_id: runtime-image.yml
-          event: push
-          timeout_seconds: "1200"
-
   deploy-and-verify:
     name: "Deploy demo + canary + fast smoke"
     runs-on: cube-deploy
     if: github.repository == 'cipher982/longhouse'
     timeout-minutes: 60
-    needs: gate
+    needs: [changes, gate]
     env:
       CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
       CONTROL_PLANE_URL: https://control.longhouse.ai
@@ -188,6 +158,17 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Wait for runtime image publish
+        if: ${{ github.event_name == 'push' && needs.changes.outputs.runtime_image == 'true' }}
+        uses: ./.github/actions/wait-for-ci
+        with:
+          head_sha: ${{ needs.gate.outputs.head_sha }}
+          head_branch: ${{ needs.gate.outputs.head_branch }}
+          github_token: ${{ github.token }}
+          workflow_id: runtime-image.yml
+          event: push
+          timeout_seconds: "1200"
 
       - name: Verify runtime image exists
         run: docker manifest inspect "${{ needs.gate.outputs.runtime_image_ref }}" >/dev/null
