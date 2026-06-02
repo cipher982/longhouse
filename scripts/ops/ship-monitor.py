@@ -37,6 +37,7 @@ DEFAULT_CANARY_SUBDOMAIN = os.environ.get("LONGHOUSE_DEFAULT_SUBDOMAIN", "david0
 DEFAULT_CANARY_CONTAINER_NAME = "longhouse-" + DEFAULT_CANARY_SUBDOMAIN
 DEFAULT_CANARY_HEALTH_URL = f"https://{DEFAULT_CANARY_SUBDOMAIN}.longhouse.ai/api/health"
 RUNTIME_IMAGE_PATHS = (
+    ".dockerignore",
     "bun.lock",
     "config",
     "docker/entrypoint.sh",
