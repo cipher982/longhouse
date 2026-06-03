@@ -2916,6 +2916,23 @@ def test_local_health_render_prints_archive_backlog_distribution(capsys):
                         "in_flight_live": 1,
                         "in_flight_retry": 2,
                         "in_flight_scan": 0,
+                        "ready_backlog_bytes": 8_589_934_592,
+                        "in_flight_backlog_bytes": 134_217_728,
+                    },
+                    "ship_lanes": {
+                        "live": {
+                            "attempts_1h": 4,
+                            "successes_1h": 4,
+                            "latency_p95_ms_1h": 140,
+                            "events_per_sec_ewma_10s": 18.5,
+                            "bytes_per_sec_ewma_10s": 4096,
+                            "stage_latency_p95_ms_1h": {
+                                "observed_to_http_send_ms": 90,
+                                "observed_to_ack_ms": 140,
+                                "enqueue_to_job_ms": 25,
+                                "http_latency_ms": 50,
+                            },
+                        }
                     },
                     "adaptive_backlog_limiter": {
                         "current_cap": 1,
@@ -2986,9 +3003,14 @@ def test_local_health_render_prints_archive_backlog_distribution(capsys):
     )
 
     output = capsys.readouterr().out
+    assert "Ship Lanes" in output
+    assert "live: 4/4 ok, 0 backpressure, p95 140ms, 18.5 events/s, 4.0 KB/s" in output
+    assert "stages p95: observed->send 90 ms, observed->ack 140 ms, enqueue->job 25 ms, http 50 ms" in output
     assert "Scheduler" in output
     assert "ready: live 1, archive 6 (retry 4, scan 2)" in output
+    assert "ready: live 1, archive 6 (retry 4, scan 2), bytes 8.0 GB" in output
     assert "active: live 1, archive 2 (retry 2, scan 0)" in output
+    assert "active: live 1, archive 2 (retry 2, scan 0), bytes 128.0 MB" in output
     assert "limits: max 32, live reserved 8, archive cap 2" in output
     assert "Archive Repair" in output
     assert "eligibility: 400 ready now, 26 deferred" in output

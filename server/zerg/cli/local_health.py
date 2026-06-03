@@ -64,6 +64,13 @@ def _format_rate(value: object, suffix: str) -> str:
     return f"{rate:.2f} {suffix}"
 
 
+def _format_ms(value: object) -> str:
+    try:
+        return f"{int(value)} ms"
+    except (TypeError, ValueError):
+        return "-"
+
+
 _ARCHIVE_SIZE_BUCKET_LABELS = {
     "tiny_lt_1kb": "tiny",
     "small_lt_1mb": "small",
@@ -205,6 +212,15 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
                 f"p95 {p95 if p95 is not None else '-'}ms, "
                 f"{eps}, {bps}/s"
             )
+            stage_p95 = dict(lane.get("stage_latency_p95_ms_1h") or {})
+            if lane_name == "live" and stage_p95:
+                typer.echo(
+                    "    stages p95: "
+                    f"observed->send {_format_ms(stage_p95.get('observed_to_http_send_ms'))}, "
+                    f"observed->ack {_format_ms(stage_p95.get('observed_to_ack_ms'))}, "
+                    f"enqueue->job {_format_ms(stage_p95.get('enqueue_to_job_ms'))}, "
+                    f"http {_format_ms(stage_p95.get('http_latency_ms'))}"
+                )
 
     ship_scheduler = dict(payload.get("ship_scheduler") or {})
     if ship_scheduler:
@@ -218,9 +234,12 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
         typer.echo("Scheduler")
         ready_archive = ready_retry + ready_scan
         active_archive = active_retry + active_scan
-        typer.echo(f"  ready: live {ready_live}, archive {ready_archive} (retry {ready_retry}, scan {ready_scan})")
+        ready_bytes = _format_bytes(ship_scheduler.get("ready_backlog_bytes"))
+        active_bytes = _format_bytes(ship_scheduler.get("in_flight_backlog_bytes"))
+        ready_summary = f"archive {ready_archive} (retry {ready_retry}, scan {ready_scan})"
+        typer.echo(f"  ready: live {ready_live}, {ready_summary}, bytes {ready_bytes}")
         active_summary = f"archive {active_archive} (retry {active_retry}, scan {active_scan})"
-        typer.echo(f"  active: live {active_live}, {active_summary}")
+        typer.echo(f"  active: live {active_live}, {active_summary}, bytes {active_bytes}")
         typer.echo(
             "  limits: "
             f"max {ship_scheduler.get('max_in_flight')}, "
