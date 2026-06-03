@@ -5,7 +5,7 @@
 //! - one record per ship attempt
 //! - summaries only, no payload content
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -48,6 +48,45 @@ pub enum ShipLane {
     Unknown,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ShipStageTimings {
+    pub observed_at_ms: Option<i64>,
+    pub latest_observed_at_ms: Option<i64>,
+    pub http_send_started_at_ms: Option<i64>,
+    pub http_finished_at_ms: Option<i64>,
+    pub observation_window_ms: Option<u64>,
+    pub observation_to_enqueue_ms: Option<u64>,
+    pub observation_to_wake_ms: Option<u64>,
+    pub wake_to_enqueue_ms: Option<u64>,
+    pub enqueue_to_job_ms: Option<u64>,
+    pub observed_to_job_ms: Option<u64>,
+    pub prepare_ms: Option<u64>,
+    pub job_to_http_ms: Option<u64>,
+    pub observed_to_http_send_ms: Option<u64>,
+    pub http_latency_ms: Option<u64>,
+    pub job_to_ack_ms: Option<u64>,
+    pub observed_to_ack_ms: Option<u64>,
+}
+
+impl ShipStageTimings {
+    fn latency_fields(&self) -> [(&'static str, Option<u64>); 12] {
+        [
+            ("observation_window_ms", self.observation_window_ms),
+            ("observation_to_enqueue_ms", self.observation_to_enqueue_ms),
+            ("observation_to_wake_ms", self.observation_to_wake_ms),
+            ("wake_to_enqueue_ms", self.wake_to_enqueue_ms),
+            ("enqueue_to_job_ms", self.enqueue_to_job_ms),
+            ("observed_to_job_ms", self.observed_to_job_ms),
+            ("prepare_ms", self.prepare_ms),
+            ("job_to_http_ms", self.job_to_http_ms),
+            ("observed_to_http_send_ms", self.observed_to_http_send_ms),
+            ("http_latency_ms", self.http_latency_ms),
+            ("job_to_ack_ms", self.job_to_ack_ms),
+            ("observed_to_ack_ms", self.observed_to_ack_ms),
+        ]
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ShipAttemptRecord {
     at: Instant,
@@ -61,6 +100,7 @@ struct ShipAttemptRecord {
     event_count: u32,
     byte_count: u64,
     is_backpressure: bool,
+    stage_timings: Option<ShipStageTimings>,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -83,10 +123,22 @@ pub struct ShipLaneStatsSummary {
     pub latency_p50_ms_1h: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latency_p95_ms_1h: Option<u64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub stage_latency_p50_ms_1h: BTreeMap<String, u64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub stage_latency_p95_ms_1h: BTreeMap<String, u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_attempt_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_success_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_observed_at_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_latest_observed_at_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_http_send_started_at_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_http_finished_at_ms: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub events_per_sec_ewma_10s: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -270,9 +322,11 @@ impl RecentShipStatsTracker {
             0,
             0,
             false,
+            None,
         );
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub fn record_with_lane_and_detail(
         &self,
@@ -286,6 +340,34 @@ impl RecentShipStatsTracker {
         byte_count: u64,
         is_backpressure: bool,
     ) {
+        self.record_with_lane_detail_and_stages(
+            lane,
+            outcome,
+            latency_ms,
+            http_status,
+            error_kind,
+            error_message,
+            event_count,
+            byte_count,
+            is_backpressure,
+            None,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_with_lane_detail_and_stages(
+        &self,
+        lane: ShipLane,
+        outcome: ShipAttemptOutcome,
+        latency_ms: u64,
+        http_status: Option<u16>,
+        error_kind: Option<&str>,
+        error_message: Option<&str>,
+        event_count: u32,
+        byte_count: u64,
+        is_backpressure: bool,
+        stage_timings: Option<ShipStageTimings>,
+    ) {
         self.record_at(
             Instant::now(),
             chrono::Utc::now().to_rfc3339(),
@@ -298,6 +380,7 @@ impl RecentShipStatsTracker {
             event_count,
             byte_count,
             is_backpressure,
+            stage_timings,
         );
         if matches!(outcome, ShipAttemptOutcome::Ok) {
             self.record_events_and_bytes_shipped(lane, event_count, byte_count, latency_ms);
@@ -418,6 +501,7 @@ impl RecentShipStatsTracker {
         event_count: u32,
         byte_count: u64,
         is_backpressure: bool,
+        stage_timings: Option<ShipStageTimings>,
     ) {
         if let Ok(mut guard) = self.inner.lock() {
             guard.push_back(ShipAttemptRecord {
@@ -432,6 +516,7 @@ impl RecentShipStatsTracker {
                 event_count,
                 byte_count,
                 is_backpressure,
+                stage_timings,
             });
             prune_old_records(&mut guard, at);
             while guard.len() > SHIP_STATS_MAX_RECORDS {
@@ -473,6 +558,7 @@ impl LaneAccumulators {
 struct LaneAccumulator {
     summary: ShipLaneStatsSummary,
     latencies: Vec<u64>,
+    stage_latencies: BTreeMap<String, Vec<u64>>,
 }
 
 impl LaneAccumulator {
@@ -482,6 +568,20 @@ impl LaneAccumulator {
         self.summary.events_1h += u64::from(record.event_count);
         self.summary.bytes_1h += record.byte_count;
         self.latencies.push(record.latency_ms);
+        if let Some(stages) = &record.stage_timings {
+            self.summary.last_observed_at_ms = stages.observed_at_ms;
+            self.summary.last_latest_observed_at_ms = stages.latest_observed_at_ms;
+            self.summary.last_http_send_started_at_ms = stages.http_send_started_at_ms;
+            self.summary.last_http_finished_at_ms = stages.http_finished_at_ms;
+            for (field, value) in stages.latency_fields() {
+                if let Some(ms) = value {
+                    self.stage_latencies
+                        .entry(field.to_string())
+                        .or_default()
+                        .push(ms);
+                }
+            }
+        }
         if record.is_backpressure {
             self.summary.backpressure_1h += 1;
         }
@@ -528,6 +628,17 @@ impl LaneAccumulator {
         self.latencies.sort_unstable();
         self.summary.latency_p50_ms_1h = percentile(&self.latencies, 0.50);
         self.summary.latency_p95_ms_1h = percentile(&self.latencies, 0.95);
+        for (field, mut values) in self.stage_latencies {
+            values.sort_unstable();
+            if let Some(value) = percentile(&values, 0.50) {
+                self.summary
+                    .stage_latency_p50_ms_1h
+                    .insert(field.clone(), value);
+            }
+            if let Some(value) = percentile(&values, 0.95) {
+                self.summary.stage_latency_p95_ms_1h.insert(field, value);
+            }
+        }
         if let Ok(t) = throughput.lock() {
             (
                 self.summary.events_per_sec_ewma_10s,
@@ -603,6 +714,7 @@ mod tests {
             0,
             0,
             false,
+            None,
         );
     }
 
@@ -829,6 +941,66 @@ mod tests {
         assert_eq!(summary.lanes.archive.bytes_1h, 5_000);
         assert!(summary.lanes.archive.events_per_sec_ewma_10s.is_some());
         assert!(summary.lanes.archive.bytes_per_sec_ewma_10s.is_some());
+    }
+
+    #[test]
+    fn lane_stats_surface_live_stage_percentiles() {
+        let tracker = RecentShipStatsTracker::new();
+        tracker.record_with_lane_detail_and_stages(
+            ShipLane::Live,
+            ShipAttemptOutcome::Ok,
+            100,
+            Some(200),
+            None,
+            None,
+            10,
+            2_048,
+            false,
+            Some(ShipStageTimings {
+                observed_at_ms: Some(1_000),
+                latest_observed_at_ms: Some(1_015),
+                http_send_started_at_ms: Some(1_080),
+                http_finished_at_ms: Some(1_100),
+                observation_window_ms: Some(15),
+                observation_to_enqueue_ms: Some(20),
+                observation_to_wake_ms: Some(5),
+                wake_to_enqueue_ms: Some(15),
+                enqueue_to_job_ms: Some(30),
+                observed_to_job_ms: Some(50),
+                prepare_ms: Some(10),
+                job_to_http_ms: Some(30),
+                observed_to_http_send_ms: Some(80),
+                http_latency_ms: Some(20),
+                job_to_ack_ms: Some(50),
+                observed_to_ack_ms: Some(100),
+            }),
+        );
+
+        let summary = tracker.summary();
+        let live = summary.lanes.live;
+
+        assert_eq!(live.last_observed_at_ms, Some(1_000));
+        assert_eq!(live.last_latest_observed_at_ms, Some(1_015));
+        assert_eq!(live.last_http_send_started_at_ms, Some(1_080));
+        assert_eq!(live.last_http_finished_at_ms, Some(1_100));
+        assert_eq!(
+            live.stage_latency_p50_ms_1h
+                .get("observed_to_ack_ms")
+                .copied(),
+            Some(100)
+        );
+        assert_eq!(
+            live.stage_latency_p95_ms_1h
+                .get("observed_to_http_send_ms")
+                .copied(),
+            Some(80)
+        );
+        assert_eq!(
+            live.stage_latency_p95_ms_1h
+                .get("observation_to_enqueue_ms")
+                .copied(),
+            Some(20)
+        );
     }
 
     #[test]

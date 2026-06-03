@@ -23,7 +23,9 @@ use crate::pipeline::batcher::{self, PlannedRangeAction, ShipRange};
 use crate::pipeline::compressor::{self, CompressionAlgo};
 use crate::pipeline::parser::{self, ParseResult};
 use crate::shipping::client::{ShipResult, ShipperClient};
-use crate::shipping_stats::{RecentShipStatsTracker, ShipAttemptOutcome, ShipLane};
+use crate::shipping_stats::{
+    RecentShipStatsTracker, ShipAttemptOutcome, ShipLane, ShipStageTimings,
+};
 use crate::state::file_identity::identity_from_metadata;
 use crate::state::file_state::FileState;
 use crate::state::live_file_state::LiveFileState;
@@ -1449,6 +1451,12 @@ async fn attempt_ship(
         ShipResult::Ok { .. } => None,
         _ => Some(transient_error_message(&result)),
     };
+    let stage_timings = stage_timings_for_trace(
+        ship_trace,
+        http_send_started_at_ms,
+        http_finished_at_ms,
+        latency_ms,
+    );
     if let Some(kind) = error_kind {
         span.record("longhouse.ship.error_kind", tracing::field::display(kind));
     }
@@ -1458,7 +1466,7 @@ async fn attempt_ship(
         }
     }
     if let Some(stats) = ship_stats {
-        stats.record_with_lane_and_detail(
+        stats.record_with_lane_detail_and_stages(
             ship_lane,
             outcome,
             latency_ms,
@@ -1468,6 +1476,7 @@ async fn attempt_ship(
             item.event_count as u32,
             byte_count,
             is_backpressure,
+            stage_timings,
         );
     }
     if is_backpressure {
@@ -1647,6 +1656,48 @@ async fn attempt_ship(
             }
         }
     }
+}
+
+fn nonnegative_delta_ms(start_ms: i64, end_ms: i64) -> Option<u64> {
+    end_ms
+        .checked_sub(start_ms)
+        .and_then(|delta| u64::try_from(delta).ok())
+}
+
+fn stage_timings_for_trace(
+    trace: Option<&ShipTraceContext>,
+    http_send_started_at_ms: i64,
+    http_finished_at_ms: i64,
+    http_latency_ms: u64,
+) -> Option<ShipStageTimings> {
+    let trace = trace?;
+    Some(ShipStageTimings {
+        observed_at_ms: Some(trace.observed_at_ms),
+        latest_observed_at_ms: trace.latest_observed_at_ms,
+        http_send_started_at_ms: Some(http_send_started_at_ms),
+        http_finished_at_ms: Some(http_finished_at_ms),
+        observation_window_ms: trace
+            .latest_observed_at_ms
+            .and_then(|latest_ms| nonnegative_delta_ms(trace.observed_at_ms, latest_ms)),
+        observation_to_enqueue_ms: nonnegative_delta_ms(trace.observed_at_ms, trace.enqueued_at_ms),
+        observation_to_wake_ms: trace
+            .wake_received_at_ms
+            .and_then(|wake_ms| nonnegative_delta_ms(trace.observed_at_ms, wake_ms)),
+        wake_to_enqueue_ms: trace
+            .wake_received_at_ms
+            .and_then(|wake_ms| nonnegative_delta_ms(wake_ms, trace.enqueued_at_ms)),
+        enqueue_to_job_ms: nonnegative_delta_ms(trace.enqueued_at_ms, trace.job_started_at_ms),
+        observed_to_job_ms: nonnegative_delta_ms(trace.observed_at_ms, trace.job_started_at_ms),
+        prepare_ms: nonnegative_delta_ms(trace.prepare_started_at_ms, trace.prepare_finished_at_ms),
+        job_to_http_ms: nonnegative_delta_ms(trace.job_started_at_ms, http_send_started_at_ms),
+        observed_to_http_send_ms: nonnegative_delta_ms(
+            trace.observed_at_ms,
+            http_send_started_at_ms,
+        ),
+        http_latency_ms: Some(http_latency_ms),
+        job_to_ack_ms: nonnegative_delta_ms(trace.job_started_at_ms, http_finished_at_ms),
+        observed_to_ack_ms: nonnegative_delta_ms(trace.observed_at_ms, http_finished_at_ms),
+    })
 }
 
 fn build_ship_trace_value(
@@ -5613,5 +5664,32 @@ mod tests {
                 .and_then(Value::as_i64),
             Some(60)
         );
+    }
+
+    #[test]
+    fn test_stage_timings_for_trace_surfaces_observed_to_ack() {
+        let mut trace = make_ship_trace("live_transcript");
+        trace.observed_at_ms = 1_000;
+        trace.latest_observed_at_ms = Some(1_025);
+        trace.wake_received_at_ms = Some(1_010);
+        trace.enqueued_at_ms = 1_030;
+        trace.job_started_at_ms = 1_045;
+        trace.prepare_started_at_ms = 1_046;
+        trace.prepare_finished_at_ms = 1_060;
+
+        let timings = stage_timings_for_trace(Some(&trace), 1_080, 1_105, 25).unwrap();
+
+        assert_eq!(timings.observed_at_ms, Some(1_000));
+        assert_eq!(timings.latest_observed_at_ms, Some(1_025));
+        assert_eq!(timings.http_send_started_at_ms, Some(1_080));
+        assert_eq!(timings.http_finished_at_ms, Some(1_105));
+        assert_eq!(timings.observation_window_ms, Some(25));
+        assert_eq!(timings.observation_to_wake_ms, Some(10));
+        assert_eq!(timings.wake_to_enqueue_ms, Some(20));
+        assert_eq!(timings.enqueue_to_job_ms, Some(15));
+        assert_eq!(timings.prepare_ms, Some(14));
+        assert_eq!(timings.job_to_http_ms, Some(35));
+        assert_eq!(timings.http_latency_ms, Some(25));
+        assert_eq!(timings.observed_to_ack_ms, Some(105));
     }
 }
