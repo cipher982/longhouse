@@ -13,6 +13,7 @@ pub struct ShipItem {
     pub new_offset: u64,
     pub event_count: usize,
     pub session_id: String,
+    pub source_line_offsets: Vec<u64>,
     pub compressed: Vec<u8>,
 }
 

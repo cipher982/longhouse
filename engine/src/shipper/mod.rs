@@ -311,6 +311,11 @@ pub fn prepare_file(
         new_offset,
         event_count,
         session_id: parse_result.metadata.session_id.clone(),
+        source_line_offsets: parse_result
+            .source_lines
+            .iter()
+            .map(|line| line.source_offset)
+            .collect(),
         compressed,
     }))
 }
@@ -581,6 +586,16 @@ fn ack_only_from_raw_range(
     }
 }
 
+fn replay_split_offset_for_payload_too_large(item: &ShipItem) -> Option<u64> {
+    let interior_offsets: Vec<u64> = item
+        .source_line_offsets
+        .iter()
+        .copied()
+        .filter(|offset| *offset > item.offset && *offset < item.new_offset)
+        .collect();
+    interior_offsets.get(interior_offsets.len() / 2).copied()
+}
+
 fn truncation_rewind_hint(path_str: &str) -> compressor::SourceRewindHint {
     compressor::SourceRewindHint {
         source_path: path_str.to_string(),
@@ -730,6 +745,7 @@ fn prepare_whole_document_action(
             new_offset: end_offset,
             event_count: parse_result.events.len(),
             session_id: payload_session_id.to_string(),
+            source_line_offsets: Vec::new(),
             compressed,
         })]);
     }
@@ -793,6 +809,14 @@ fn materialize_ship_range(
                     .end
                     .saturating_sub(range.event_range.start),
                 session_id: payload_session_id.to_string(),
+                source_line_offsets: match source_line_mode {
+                    SourceLineMode::Full => parse_result.source_lines
+                        [range.source_line_range.clone()]
+                    .iter()
+                    .map(|line| line.source_offset)
+                    .collect(),
+                    SourceLineMode::EventOnly => Vec::new(),
+                },
                 compressed,
             })],
             rewind_hint.is_some(),
@@ -2647,7 +2671,39 @@ async fn replay_spool_entries(
                             }
                             continue 'entry_loop;
                         }
-                        AttemptedShip::PayloadTooLarge { item: _ } => {
+                        AttemptedShip::PayloadTooLarge { item } => {
+                            if let Some(split_offset) =
+                                replay_split_offset_for_payload_too_large(&item)
+                            {
+                                let mut ranges = vec![
+                                    (item.offset, split_offset),
+                                    (split_offset, item.new_offset),
+                                ];
+                                if item.new_offset < entry.end_offset {
+                                    ranges.push((item.new_offset, entry.end_offset));
+                                }
+                                let written = spool.replace_pending_entry_with_ranges(
+                                    entry.id,
+                                    &item.provider,
+                                    &item.path_str,
+                                    Some(&item.session_id),
+                                    &ranges,
+                                    "413 payload too large during replay; split range for immediate retry",
+                                )?;
+                                if written > 0 {
+                                    tracing::info!(
+                                        path = %item.path_str,
+                                        offset = item.offset,
+                                        split_offset,
+                                        new_offset = item.new_offset,
+                                        tail_end_offset = entry.end_offset,
+                                        child_ranges = written,
+                                        "Split archive replay range after 413 payload rejection"
+                                    );
+                                    outcome.failed += 1;
+                                    continue 'entry_loop;
+                                }
+                            }
                             spool.mark_failed_with_max(
                                 entry.id,
                                 "413 payload too large during replay",
@@ -5341,15 +5397,13 @@ mod tests {
     }
 
     #[test]
-    fn test_replay_413_stays_pending_with_backoff() {
+    fn test_replay_413_without_split_boundary_stays_pending_with_backoff() {
         let (_tmp, conn) = make_db();
-        let dir = write_session_file(
-            claude_session_lines(),
-            "99991111-2222-3333-4444-555566667777.jsonl",
-        );
+        let dir = tempfile::tempdir().unwrap();
         let path = dir
             .path()
             .join("99991111-2222-3333-4444-555566667777.jsonl");
+        std::fs::write(&path, format!("{}\n", make_line("413-one-line", "only"))).unwrap();
         let path_str = path.to_string_lossy().to_string();
         let file_size = std::fs::metadata(&path).unwrap().len();
         let fs = FileState::new(&conn);
@@ -5400,6 +5454,148 @@ mod tests {
         assert_eq!(status, "pending");
         assert_eq!(retry_count, 1);
         assert!(last_error.contains("413"));
+    }
+
+    #[test]
+    fn test_replay_413_splits_ready_child_ranges_at_source_line_boundary() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("split4131111-2222-3333-4444-555566667777.jsonl");
+        let lines = vec![
+            make_line("split-1", &"a".repeat(64)),
+            make_line("split-2", &"b".repeat(64)),
+            make_line("split-3", &"c".repeat(64)),
+            make_line("split-4", &"d".repeat(64)),
+            make_line("split-5", &"e".repeat(64)),
+            make_line("split-6", &"f".repeat(64)),
+        ];
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n{}\n{}\n{}\n{}\n",
+                lines[0], lines[1], lines[2], lines[3], lines[4], lines[5]
+            ),
+        )
+        .unwrap();
+
+        let full_end = std::fs::metadata(&path).unwrap().len();
+        let path_str = path.to_string_lossy().to_string();
+        let fs = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+        fs.set_queued_offset(
+            &path_str,
+            full_end,
+            "claude",
+            "split4131111-2222-3333-4444-555566667777",
+            "split4131111-2222-3333-4444-555566667777",
+        )
+        .unwrap();
+        spool
+            .enqueue(
+                "claude",
+                &path_str,
+                0,
+                full_end,
+                Some("split4131111-2222-3333-4444-555566667777"),
+            )
+            .unwrap();
+
+        let prepared = prepare_path_range(
+            &path,
+            "claude",
+            0,
+            Some(full_end),
+            CompressionAlgo::Gzip,
+            800,
+            None,
+        )
+        .unwrap()
+        .expect("replay range should prepare into multiple batches");
+        let ship_items: Vec<&ShipItem> = prepared
+            .actions
+            .iter()
+            .filter_map(|action| match action {
+                PreparedAction::Ship(item) => Some(item),
+                PreparedAction::DeadLetter(_) | PreparedAction::AckOnly(_) => None,
+            })
+            .collect();
+        let failed_index = ship_items
+            .iter()
+            .position(|item| replay_split_offset_for_payload_too_large(item).is_some())
+            .expect("prepared replay should include at least one splittable ship batch");
+        let progress_offset = if failed_index == 0 {
+            0
+        } else {
+            ship_items[failed_index - 1].new_offset
+        };
+        let failed_item = ship_items[failed_index];
+        let split_offset = replay_split_offset_for_payload_too_large(failed_item)
+            .expect("failed batch should have an interior source-line split point");
+
+        let mut responses = vec![("200 OK", "{}"); failed_index];
+        responses.push(("413 Payload Too Large", "too large"));
+        let (url, _captured, handle) = spawn_http_sequence_server(&responses);
+        let client = make_test_client(&url);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        let (shipped, failed) = rt
+            .block_on(replay_spool_batch_with_batch_bytes(
+                &conn,
+                &client,
+                CompressionAlgo::Gzip,
+                10,
+                800,
+            ))
+            .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(shipped, 0);
+        assert_eq!(failed, 1);
+        assert_eq!(fs.get_offset(&path_str).unwrap(), progress_offset);
+
+        let rows: Vec<(i64, i64, i64, String)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT start_offset, end_offset, retry_count, status
+                     FROM spool_queue
+                     WHERE file_path = ?1
+                     ORDER BY start_offset ASC",
+                )
+                .unwrap();
+            stmt.query_map([&path_str], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap()
+        };
+
+        let mut expected = vec![
+            (
+                failed_item.offset as i64,
+                split_offset as i64,
+                0,
+                "pending".to_string(),
+            ),
+            (
+                split_offset as i64,
+                failed_item.new_offset as i64,
+                0,
+                "pending".to_string(),
+            ),
+        ];
+        if failed_item.new_offset < full_end {
+            expected.push((
+                failed_item.new_offset as i64,
+                full_end as i64,
+                0,
+                "pending".to_string(),
+            ));
+        }
+        assert_eq!(rows, expected);
+        assert_eq!(spool.dequeue_batch(10).unwrap().len(), expected.len());
     }
 
     #[test]
@@ -5709,6 +5905,7 @@ mod tests {
             new_offset: 20,
             event_count: 2,
             session_id: "session-1".to_string(),
+            source_line_offsets: Vec::new(),
             compressed: b"secret transcript payload".to_vec(),
         };
 
@@ -5729,6 +5926,7 @@ mod tests {
             new_offset: 20,
             event_count: 2,
             session_id: "session-1".to_string(),
+            source_line_offsets: Vec::new(),
             compressed: Vec::new(),
         };
         let mut trace = make_ship_trace("live_transcript");

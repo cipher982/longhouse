@@ -559,6 +559,93 @@ impl<'a> Spool<'a> {
         Ok(())
     }
 
+    /// Replace one pending entry with smaller ready child ranges.
+    ///
+    /// This is used when the Runtime Host rejects an archive replay POST as
+    /// too large even after local batch planning. The source transcript is
+    /// still authoritative; smaller byte pointers let the next replay loop
+    /// rebuild smaller payloads without blocking the rest of the backlog behind
+    /// exponential backoff on the original range.
+    pub fn replace_pending_entry_with_ranges(
+        &self,
+        entry_id: i64,
+        provider: &str,
+        file_path: &str,
+        session_id: Option<&str>,
+        ranges: &[(u64, u64)],
+        error: &str,
+    ) -> Result<usize> {
+        let ranges: Vec<(u64, u64)> = ranges
+            .iter()
+            .copied()
+            .filter(|(start, end)| start < end)
+            .collect();
+        let Some((first_start, first_end)) = ranges.first().copied() else {
+            return Ok(0);
+        };
+
+        let now = Utc::now().to_rfc3339();
+        let tx = self.conn.unchecked_transaction()?;
+        let changed = tx.execute(
+            "UPDATE spool_queue
+             SET provider = ?1,
+                 file_path = ?2,
+                 start_offset = ?3,
+                 end_offset = ?4,
+                 session_id = COALESCE(session_id, ?5),
+                 retry_count = 0,
+                 next_retry_at = ?6,
+                 last_error = ?7,
+                 status = 'pending'
+             WHERE id = ?8 AND status = 'pending'",
+            rusqlite::params![
+                provider,
+                file_path,
+                first_start as i64,
+                first_end as i64,
+                session_id,
+                now,
+                error,
+                entry_id,
+            ],
+        )?;
+        if changed == 0 {
+            tx.rollback()?;
+            return Ok(0);
+        }
+
+        let mut written = 1usize;
+        for (start, end) in ranges.into_iter().skip(1) {
+            let inserted = tx.execute(
+                "INSERT OR IGNORE INTO spool_queue (
+                    provider,
+                    file_path,
+                    start_offset,
+                    end_offset,
+                    session_id,
+                    created_at,
+                    retry_count,
+                    next_retry_at,
+                    last_error,
+                    status
+                 )
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?6, ?7, 'pending')",
+                rusqlite::params![
+                    provider,
+                    file_path,
+                    start as i64,
+                    end as i64,
+                    session_id,
+                    now,
+                    error,
+                ],
+            )?;
+            written += inserted;
+        }
+        tx.commit()?;
+        Ok(written)
+    }
+
     /// Mark entry as failed with exponential backoff. Returns true if now permanently dead.
     pub fn mark_failed(&self, entry_id: i64, error: &str) -> Result<bool> {
         self.mark_failed_with_max(entry_id, error, DEFAULT_MAX_RETRIES)
@@ -1338,6 +1425,57 @@ mod tests {
         let updated = spool.dequeue_batch(10).unwrap();
         assert_eq!(updated[0].start_offset, 200);
         assert_eq!(updated[0].end_offset, 500);
+    }
+
+    #[test]
+    fn test_replace_pending_entry_with_ranges_resets_ready_children() {
+        let (_tmp, conn) = setup();
+        let spool = Spool::new(&conn);
+
+        spool.enqueue("claude", "/f", 0, 900, Some("s1")).unwrap();
+        let entry = spool.dequeue_batch(10).unwrap().remove(0);
+        spool
+            .mark_failed(entry.id, "413 payload too large")
+            .unwrap();
+
+        let written = spool
+            .replace_pending_entry_with_ranges(
+                entry.id,
+                "claude",
+                "/f",
+                Some("s1"),
+                &[(0, 300), (300, 600), (600, 900)],
+                "413 payload too large during replay; split range for immediate retry",
+            )
+            .unwrap();
+
+        assert_eq!(written, 3);
+        let rows: Vec<(i64, i64, i64, String)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT start_offset, end_offset, retry_count, status
+                     FROM spool_queue
+                     WHERE file_path = '/f'
+                     ORDER BY start_offset ASC",
+                )
+                .unwrap();
+            stmt.query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap()
+        };
+
+        assert_eq!(
+            rows,
+            vec![
+                (0, 300, 0, "pending".to_string()),
+                (300, 600, 0, "pending".to_string()),
+                (600, 900, 0, "pending".to_string()),
+            ]
+        );
+        assert_eq!(spool.dequeue_batch(10).unwrap().len(), 3);
     }
 
     #[test]
