@@ -1640,6 +1640,9 @@ async fn attempt_ship(
                 item.path_str,
                 truncate_http_body(&body)
             );
+            if let Some(limiter) = limiter {
+                limiter.observe_backpressure(Some(ARCHIVE_BACKPRESSURE_RETRY_DELAY));
+            }
             AttemptedShip::PayloadTooLarge { item }
         }
         ShipResult::PayloadRejected(status_code, body) => {
@@ -5397,6 +5400,70 @@ mod tests {
         assert_eq!(status, "pending");
         assert_eq!(retry_count, 1);
         assert!(last_error.contains("413"));
+    }
+
+    #[test]
+    fn test_replay_413_cools_archive_batch_target() {
+        let (_tmp, conn) = make_db();
+        let dir = write_session_file(
+            claude_session_lines(),
+            "99992222-2222-3333-4444-555566667777.jsonl",
+        );
+        let path = dir
+            .path()
+            .join("99992222-2222-3333-4444-555566667777.jsonl");
+        let path_str = path.to_string_lossy().to_string();
+        let file_size = std::fs::metadata(&path).unwrap().len();
+        let fs = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+        fs.set_queued_offset(
+            &path_str,
+            file_size,
+            "claude",
+            "99992222-2222-3333-4444-555566667777",
+            "99992222-2222-3333-4444-555566667777",
+        )
+        .unwrap();
+        spool
+            .enqueue(
+                "claude",
+                &path_str,
+                0,
+                file_size,
+                Some("99992222-2222-3333-4444-555566667777"),
+            )
+            .unwrap();
+
+        let limiter = crate::scheduler::AdaptiveLimiter::new();
+        let (url, handle) = spawn_http_response_server("413 Payload Too Large", "too large");
+        let client = make_test_client(&url);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+
+        let outcome = rt
+            .block_on(replay_spool_for_path_with_batch_bytes_and_parse_tracker(
+                &conn,
+                &client,
+                CompressionAlgo::Gzip,
+                &path,
+                10,
+                u64::MAX,
+                None,
+                None,
+                None,
+                None,
+                Some(limiter.as_ref()),
+            ))
+            .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(outcome.resolved, 0);
+        assert_eq!(outcome.failed, 1);
+        let snapshot = limiter.snapshot();
+        assert_eq!(
+            snapshot.archive_target_batch_bytes,
+            crate::scheduler::ARCHIVE_BATCH_TARGET_MIN_BYTES
+        );
+        assert_eq!(snapshot.total_backpressure, 1);
     }
 
     #[test]
