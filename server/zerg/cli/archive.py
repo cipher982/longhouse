@@ -51,6 +51,25 @@ def _format_ms(value: Any) -> str:
         return "-"
 
 
+def _format_duration(seconds: Any) -> str:
+    try:
+        total_seconds = int(float(seconds))
+    except (TypeError, ValueError):
+        return "-"
+    if total_seconds < 0:
+        return "-"
+    if total_seconds < 60:
+        return f"{total_seconds}s"
+    minutes, remaining_seconds = divmod(total_seconds, 60)
+    if minutes < 60:
+        return f"{minutes}m {remaining_seconds}s"
+    hours, remaining_minutes = divmod(minutes, 60)
+    if hours < 48:
+        return f"{hours}h {remaining_minutes}m"
+    days, remaining_hours = divmod(hours, 24)
+    return f"{days}d {remaining_hours}h"
+
+
 def _format_epoch_ms(value: Any) -> str:
     try:
         timestamp_ms = int(value)
@@ -69,6 +88,17 @@ def _shipper_diagnostics(
     live_lane = dict(lanes.get("live") or {})
     archive_lane = dict(lanes.get("archive") or {})
     return shipper, scheduler, limiter, live_lane, archive_lane
+
+
+def _eta_seconds(pending_bytes: Any, bytes_per_sec: Any) -> float | None:
+    try:
+        pending = float(pending_bytes or 0)
+        rate = float(bytes_per_sec or 0)
+    except (TypeError, ValueError):
+        return None
+    if pending <= 0 or rate < 1.0:
+        return None
+    return pending / rate
 
 
 @app.command("status")
@@ -205,6 +235,7 @@ def speed_command(
     )
     speed = {
         "archive": {
+            "pending_bytes": summary.get("pending_bytes", 0),
             "bytes_per_sec_ewma_10s": archive_lane.get("bytes_per_sec_ewma_10s"),
             "events_per_sec_ewma_10s": archive_lane.get("events_per_sec_ewma_10s"),
             "attempts_1h": archive_lane.get("attempts_1h", 0),
@@ -236,6 +267,10 @@ def speed_command(
             "total_backpressure": limiter.get("total_backpressure", 0),
         },
     }
+    speed["archive"]["eta_seconds_ewma_10s"] = _eta_seconds(
+        speed["archive"]["pending_bytes"],
+        speed["archive"]["bytes_per_sec_ewma_10s"],
+    )
     if json_output:
         typer.echo(json.dumps(speed, indent=2))
         return
@@ -247,6 +282,11 @@ def speed_command(
         f"{_format_bytes(speed['archive']['bytes_per_sec_ewma_10s'])}/s, "
         f"{speed['archive']['successes_1h']}/{speed['archive']['attempts_1h']} ok, "
         f"{speed['archive']['backpressure_1h']} backpressure"
+    )
+    typer.echo(
+        "  remaining: "
+        f"{_format_bytes(speed['archive']['pending_bytes'])}, "
+        f"eta {_format_duration(speed['archive']['eta_seconds_ewma_10s'])} at current EWMA"
     )
     typer.echo(f"  totals 1h: {_format_bytes(speed['archive']['bytes_1h'])}, {speed['archive']['events_1h']} events")
     typer.echo(

@@ -203,6 +203,7 @@ def test_archive_status_prefers_engine_status_and_includes_shipper_diagnostics(t
     assert speed_result.exit_code == 0
     assert "Archive speed" in speed_result.stdout
     assert "archive: 7.5 events/s, 512 B/s, 6/8 ok, 2 backpressure" in speed_result.stdout
+    assert "remaining: 4.0 KB, eta 8s at current EWMA" in speed_result.stdout
     assert (
         "live guardrail: p95 80ms, observed->ack p95 140ms, state healthy, limiter p95 80ms, enqueue->job 20ms"
     ) in speed_result.stdout
@@ -212,7 +213,9 @@ def test_archive_status_prefers_engine_status_and_includes_shipper_diagnostics(t
 
     assert speed_json_result.exit_code == 0
     speed_payload = json.loads(speed_json_result.stdout)
+    assert speed_payload["archive"]["pending_bytes"] == 4096
     assert speed_payload["archive"]["bytes_per_sec_ewma_10s"] == 512.0
+    assert speed_payload["archive"]["eta_seconds_ewma_10s"] == 8.0
     assert speed_payload["live"]["observed_to_ack_p95_ms_1h"] == 140
     assert speed_payload["live"]["limiter_state"] == "healthy"
 
