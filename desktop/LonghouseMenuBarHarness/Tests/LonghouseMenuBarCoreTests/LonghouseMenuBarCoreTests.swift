@@ -899,6 +899,60 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func attentionSummaryExplainsArchiveBacklogAsDrainWork() {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-08T01:52:00Z",
+            healthState: "degraded",
+            severity: "yellow",
+            headline: "Longhouse archive repair is draining",
+            reasons: ["archive_repair_draining"],
+            suggestedActions: ["Inspect archive backlog: longhouse archive status"],
+            attention: AttentionSnapshot(
+                state: "watching",
+                summary: nil
+            ),
+            service: nil,
+            engineStatus: EngineStatusSnapshot(
+                path: nil,
+                exists: true,
+                fresh: true,
+                ageSeconds: 4,
+                payload: EngineStatusPayload(
+                    version: "0.1.16",
+                    daemonPid: 123,
+                    lastShipAt: "2026-04-08T01:51:00Z",
+                    spoolPendingCount: 6375,
+                    spoolDeadCount: 0,
+                    archiveBacklog: ArchiveBacklogStatus(
+                        state: "draining",
+                        mode: "drain",
+                        pendingRanges: 6375,
+                        pendingPaths: 6374,
+                        pendingSessions: 6306,
+                        pendingBytes: 16_699_227_012,
+                        deadRanges: 0,
+                        deadBytes: 0
+                    ),
+                    parseErrorCount1H: 0,
+                    consecutiveShipFailures: 0,
+                    diskFreeBytes: nil,
+                    isOffline: false,
+                    recentDeadLetters: nil,
+                    lastUpdated: "2026-04-08T01:52:00Z"
+                ),
+                error: nil
+            ),
+            outbox: OutboxSnapshot(path: nil, fileCount: 0, oldestAgeSeconds: nil),
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+
+        #expect(snapshot.attentionSummaryLabel.contains("Archive backlog has 6375 transcript ranges to drain"))
+        #expect(snapshot.attentionSummaryLabel.contains("keep parsing and uploading"))
+    }
+
+    @Test
     func attentionSummaryExplainsConsecutiveShippingFailures() {
         let snapshot = HealthSnapshot(
             schemaVersion: 1,

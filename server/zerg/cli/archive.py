@@ -83,9 +83,9 @@ def pause_command(
 
 @app.command("resume")
 def resume_command(
-    mode: str = typer.Option("trickle", "--mode", help="Resume mode: trickle or drain."),
-    budget: str | None = typer.Option(None, "--budget", help="Per-tick byte budget, e.g. 25MB or 250MB."),
-    include_huge: bool = typer.Option(False, "--include-huge", help="Allow ranges >=100MB."),
+    mode: str = typer.Option("drain", "--mode", help="Resume mode: trickle or drain."),
+    budget: str | None = typer.Option(None, "--budget", help="Per-tick byte budget, e.g. 512MB or 4GB."),
+    include_huge: bool = typer.Option(True, "--include-huge/--exclude-huge", help="Allow ranges >=100MB."),
     state_root: Path | None = typer.Option(None, "--state-root", help="Longhouse home override for tests/debugging."),
 ) -> None:
     """Resume local archive repair replay."""
@@ -101,8 +101,8 @@ def resume_command(
 
 @app.command("drain")
 def drain_command(
-    budget: str = typer.Option("250MB", "--budget", help="Per-tick byte budget, e.g. 250MB."),
-    include_huge: bool = typer.Option(False, "--include-huge", help="Allow ranges >=100MB."),
+    budget: str = typer.Option("4GB", "--budget", help="Per-tick byte budget, e.g. 4GB."),
+    include_huge: bool = typer.Option(True, "--include-huge/--exclude-huge", help="Allow ranges >=100MB."),
     max_minutes: int | None = typer.Option(
         None,
         "--max-minutes",

@@ -353,11 +353,21 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
 
     private var shippingBacklogAttentionLabel: String? {
         let pending = engineStatus?.payload?.spoolPendingCount ?? 0
+        let archivePending = engineStatus?.payload?.archiveBacklog?.pendingRanges ?? 0
         let outboxFiles = outboxCount
         let dead = engineStatus?.payload?.spoolDeadCount ?? 0
 
         if dead > 0 {
             return "\(dead) dead queued shipping item\(dead == 1 ? "" : "s") need manual attention before Longhouse can drain the backlog."
+        }
+
+        if archivePending > 0 || reasons.contains("archive_backlog_pending") || reasons.contains("archive_repair_draining") {
+            let backlog = archivePending > 0 ? archivePending : pending
+            var parts = ["\(backlog) transcript range\(backlog == 1 ? "" : "s")"]
+            if outboxFiles > 0 {
+                parts.append("\(outboxFiles) local hook event\(outboxFiles == 1 ? "" : "s")")
+            }
+            return "Archive backlog has \(parts.joined(separator: " and ")) to drain. Longhouse should keep parsing and uploading while this Mac and the Runtime Host are reachable."
         }
 
         guard pending > 0 || outboxFiles > 0 else {
@@ -1168,6 +1178,7 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
     public let lastShipAt: String?
     public let spoolPendingCount: Int?
     public let spoolDeadCount: Int?
+    public let archiveBacklog: ArchiveBacklogStatus?
     public let parseErrorCount1H: Int?
     public let consecutiveShipFailures: Int?
     public let diskFreeBytes: UInt64?
@@ -1184,6 +1195,7 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
         lastShipAt: String?,
         spoolPendingCount: Int?,
         spoolDeadCount: Int?,
+        archiveBacklog: ArchiveBacklogStatus? = nil,
         parseErrorCount1H: Int?,
         consecutiveShipFailures: Int?,
         diskFreeBytes: UInt64?,
@@ -1197,6 +1209,7 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
         self.lastShipAt = lastShipAt
         self.spoolPendingCount = spoolPendingCount
         self.spoolDeadCount = spoolDeadCount
+        self.archiveBacklog = archiveBacklog
         self.parseErrorCount1H = parseErrorCount1H
         self.consecutiveShipFailures = consecutiveShipFailures
         self.diskFreeBytes = diskFreeBytes
@@ -1212,6 +1225,7 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
         case lastShipAt
         case spoolPendingCount
         case spoolDeadCount
+        case archiveBacklog
         case parseErrorCount1H = "parseErrorCount1h"
         case consecutiveShipFailures
         case diskFreeBytes
@@ -1220,6 +1234,17 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
         case lastUpdated
         case build
     }
+}
+
+public struct ArchiveBacklogStatus: Codable, Equatable, Sendable {
+    public let state: String?
+    public let mode: String?
+    public let pendingRanges: Int?
+    public let pendingPaths: Int?
+    public let pendingSessions: Int?
+    public let pendingBytes: Int?
+    public let deadRanges: Int?
+    public let deadBytes: Int?
 }
 
 public struct DeadLetterSnapshot: Codable, Equatable, Sendable {

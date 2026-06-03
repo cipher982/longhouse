@@ -258,7 +258,11 @@ impl<'a> Spool<'a> {
                         MIN(id) AS first_id,
                         MAX(created_at) AS newest_created_at
                  FROM spool_queue
-                 WHERE status = 'pending' AND next_retry_at <= ?1
+                 WHERE status = 'pending'
+                   AND (
+                       next_retry_at <= ?1
+                       OR (retry_count = 0 AND (last_error IS NULL OR TRIM(last_error) = ''))
+                   )
                  GROUP BY provider, file_path
              )
              WHERE ?2 OR path_bytes < ?3
@@ -842,6 +846,33 @@ mod tests {
                     file_path: "/old-small.jsonl".to_string(),
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn test_pending_paths_budgeted_treats_never_failed_future_retry_as_ready() {
+        let (_tmp, conn) = setup();
+        conn.execute(
+            "INSERT INTO spool_queue
+                (provider, file_path, start_offset, end_offset, created_at, next_retry_at, retry_count, last_error, status)
+             VALUES
+                ('codex', '/never-failed.jsonl', 0, 1000, '2026-03-12T00:00:00+00:00', '2999-01-01T00:00:00+00:00', 0, NULL, 'pending'),
+                ('codex', '/backpressured.jsonl', 0, 1000, '2026-03-12T00:00:00+00:00', '2999-01-01T00:00:00+00:00', 1, '503 archive throttled', 'pending')",
+            [],
+        )
+        .unwrap();
+
+        let spool = Spool::new(&conn);
+        let pending = spool
+            .pending_paths_budgeted(10, 25 * 1024 * 1024, false)
+            .unwrap();
+
+        assert_eq!(
+            pending,
+            vec![PendingPath {
+                provider: "codex".to_string(),
+                file_path: "/never-failed.jsonl".to_string(),
+            }]
         );
     }
 

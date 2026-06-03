@@ -56,11 +56,11 @@ pub struct ConnectConfig {
 /// and the reconciliation scanner.
 const WATCHER_FLUSH_INTERVAL: Duration = Duration::from_millis(15);
 
-const INITIAL_SPOOL_PATH_LIMIT: usize = 1;
-const PERIODIC_SPOOL_PATH_LIMIT: usize = 5;
+const INITIAL_SPOOL_PATH_LIMIT: usize = 64;
+const PERIODIC_SPOOL_PATH_LIMIT: usize = 128;
 const PATH_SPOOL_REPLAY_LIMIT: usize = 1;
-const ARCHIVE_TRICKLE_TICK_BYTES: u64 = 25 * 1024 * 1024;
-const ARCHIVE_DRAIN_TICK_BYTES: u64 = 250 * 1024 * 1024;
+const ARCHIVE_TRICKLE_TICK_BYTES: u64 = 512 * 1024 * 1024;
+const ARCHIVE_DRAIN_TICK_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const LOCAL_RETRY_DELAY_SECS: u64 = 5;
 const LIVE_LOCAL_RETRY_DELAY: Duration = Duration::from_millis(500);
 const STARTUP_RECONCILIATION_SCAN_DELAY: Duration = Duration::from_secs(120);
@@ -240,7 +240,7 @@ impl ArchiveRepairControl {
         match self
             .mode
             .as_deref()
-            .unwrap_or("trickle")
+            .unwrap_or("drain")
             .trim()
             .to_ascii_lowercase()
             .as_str()
@@ -263,7 +263,7 @@ impl ArchiveRepairControl {
     }
 
     fn includes_huge(&self) -> bool {
-        self.include_huge.unwrap_or(false)
+        self.include_huge.unwrap_or(true)
     }
 }
 
