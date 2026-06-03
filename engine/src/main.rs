@@ -197,6 +197,18 @@ enum Commands {
         /// Mode B: fail when mixed live probe p95 exceeds this threshold.
         #[arg(long, default_value = "10000")]
         mixed_live_max_p95_ms: f64,
+
+        /// Generate this many synthetic Claude JSONL files instead of reading ~/.claude/projects.
+        #[arg(long, default_value = "0")]
+        synthetic_files: usize,
+
+        /// Number of synthetic transcript events per generated file.
+        #[arg(long, default_value = "200")]
+        synthetic_events_per_file: usize,
+
+        /// Approximate text bytes per synthetic event.
+        #[arg(long, default_value = "1024")]
+        synthetic_bytes_per_event: usize,
     },
 
     /// Daemon mode: watch for file changes and ship incrementally
@@ -876,6 +888,9 @@ fn main() -> anyhow::Result<()> {
             ship_concurrency,
             mixed_live_count,
             mixed_live_max_p95_ms,
+            synthetic_files,
+            synthetic_events_per_file,
+            synthetic_bytes_per_event,
         } => {
             let algo = parse_compression_algo(&compression)?;
             commands::cmd_bench::cmd_bench(
@@ -889,6 +904,9 @@ fn main() -> anyhow::Result<()> {
                 ship_concurrency.max(1),
                 mixed_live_count,
                 mixed_live_max_p95_ms,
+                synthetic_files,
+                synthetic_events_per_file,
+                synthetic_bytes_per_event,
             )?;
         }
         Commands::Ship {

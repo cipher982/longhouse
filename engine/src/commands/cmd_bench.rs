@@ -16,9 +16,30 @@ pub fn cmd_bench(
     ship_concurrency: usize,
     mixed_live_count: usize,
     mixed_live_max_p95_ms: f64,
+    synthetic_files: usize,
+    synthetic_events_per_file: usize,
+    synthetic_bytes_per_event: usize,
 ) -> anyhow::Result<()> {
-    eprintln!("Discovering session files...");
-    let all_files = crate::bench::discover_session_files();
+    let synthetic_holder = if synthetic_files > 0 {
+        eprintln!(
+            "Generating {} synthetic Claude JSONL file(s) with {} event(s)/file...",
+            synthetic_files, synthetic_events_per_file
+        );
+        Some(crate::bench::generate_synthetic_claude_files(
+            synthetic_files,
+            synthetic_events_per_file,
+            synthetic_bytes_per_event,
+        )?)
+    } else {
+        None
+    };
+
+    let all_files = if let Some(generated) = synthetic_holder.as_ref() {
+        generated.files.clone()
+    } else {
+        eprintln!("Discovering session files...");
+        crate::bench::discover_session_files()
+    };
     eprintln!("Found {} non-empty JSONL files", all_files.len());
 
     let total_bytes: u64 = all_files

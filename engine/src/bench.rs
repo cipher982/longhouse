@@ -1,5 +1,6 @@
 //! Multi-file benchmark harness for comparing against Python profiling baselines.
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -21,6 +22,94 @@ pub struct BenchResult {
     pub peak_rss_mb: f64,
     pub parallel: bool,
     pub workers: usize,
+}
+
+pub struct SyntheticBenchFiles {
+    #[allow(dead_code)]
+    tempdir: SyntheticTempDir,
+    pub files: Vec<PathBuf>,
+}
+
+struct SyntheticTempDir {
+    path: PathBuf,
+}
+
+impl SyntheticTempDir {
+    fn create() -> anyhow::Result<Self> {
+        let dir = std::env::temp_dir().join(format!(
+            "longhouse-bench-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir)?;
+        Ok(Self { path: dir })
+    }
+}
+
+impl Drop for SyntheticTempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+pub fn generate_synthetic_claude_files(
+    file_count: usize,
+    events_per_file: usize,
+    bytes_per_event: usize,
+) -> anyhow::Result<SyntheticBenchFiles> {
+    let tempdir = SyntheticTempDir::create()?;
+    let dir = tempdir.path.clone();
+    let normalized_file_count = file_count.max(1);
+    let normalized_events_per_file = events_per_file.max(1);
+    let normalized_bytes_per_event = bytes_per_event.max(1);
+    let mut files = Vec::with_capacity(normalized_file_count);
+
+    for file_index in 0..normalized_file_count {
+        let session_id = uuid::Uuid::new_v4().to_string();
+        let path = dir.join(format!("{session_id}.jsonl"));
+        let mut file = std::fs::File::create(&path)?;
+        for event_index in 0..normalized_events_per_file {
+            let role = if event_index % 2 == 0 {
+                "user"
+            } else {
+                "assistant"
+            };
+            let content = synthetic_content(file_index, event_index, normalized_bytes_per_event);
+            let message_content = if role == "assistant" {
+                serde_json::json!([{"type": "text", "text": content}])
+            } else {
+                serde_json::json!(content)
+            };
+            let line = serde_json::json!({
+                "type": role,
+                "uuid": uuid::Uuid::new_v4().to_string(),
+                "timestamp": "2026-06-03T00:00:00Z",
+                "cwd": "/tmp/longhouse-bench",
+                "gitBranch": "main",
+                "message": {
+                    "content": message_content,
+                },
+            });
+            writeln!(file, "{}", line)?;
+        }
+        files.push(path);
+    }
+
+    Ok(SyntheticBenchFiles { tempdir, files })
+}
+
+fn synthetic_content(file_index: usize, event_index: usize, bytes_per_event: usize) -> String {
+    let prefix = format!("synthetic bench file={file_index} event={event_index} ");
+    if prefix.len() >= bytes_per_event {
+        return prefix;
+    }
+    let mut content = String::with_capacity(bytes_per_event);
+    content.push_str(&prefix);
+    while content.len() < bytes_per_event {
+        content.push_str("payload ");
+    }
+    content.truncate(bytes_per_event);
+    content
 }
 
 impl BenchResult {
@@ -653,5 +742,18 @@ mod tests {
         assert!(!ship_bench_result(5, Some(100.0), 1).live_sla_passes(10_000.0));
         assert!(!ship_bench_result(5, Some(12_000.0), 0).live_sla_passes(10_000.0));
         assert!(ship_bench_result(5, Some(500.0), 0).live_sla_passes(10_000.0));
+    }
+
+    #[test]
+    fn synthetic_claude_files_parse_with_expected_event_count() {
+        let generated = generate_synthetic_claude_files(2, 3, 128).unwrap();
+
+        assert_eq!(generated.files.len(), 2);
+        for path in &generated.files {
+            let parsed = pipeline::parser::parse_session_file(path, 0).unwrap();
+            assert_eq!(parsed.events.len(), 3);
+            assert_eq!(parsed.candidate_records, 3);
+            assert!(uuid::Uuid::parse_str(&parsed.metadata.session_id).is_ok());
+        }
     }
 }
