@@ -141,13 +141,29 @@ def test_archive_status_prefers_engine_status_and_includes_shipper_diagnostics(t
                     "backlog_cap": 2,
                 },
                 "ship_lanes": {
+                    "live": {
+                        "attempts_1h": 3,
+                        "successes_1h": 3,
+                        "connect_errors_1h": 0,
+                        "latency_p50_ms_1h": 40,
+                        "latency_p95_ms_1h": 80,
+                        "last_observed_at_ms": 1_779_000_000_000,
+                        "last_http_send_started_at_ms": 1_779_000_000_100,
+                        "last_http_finished_at_ms": 1_779_000_000_140,
+                        "stage_latency_p95_ms_1h": {
+                            "observed_to_http_send_ms": 100,
+                            "observed_to_ack_ms": 140,
+                            "enqueue_to_job_ms": 20,
+                            "http_latency_ms": 40,
+                        },
+                    },
                     "archive": {
                         "attempts_1h": 8,
                         "successes_1h": 6,
                         "backpressure_1h": 2,
                         "bytes_1h": 1024,
                         "events_1h": 12,
-                    }
+                    },
                 },
             }
         )
@@ -167,6 +183,11 @@ def test_archive_status_prefers_engine_status_and_includes_shipper_diagnostics(t
     assert "Shipper controller:" in result.stdout
     assert "ready archive 5" in result.stdout
     assert "cap 2/16" in result.stdout
+    assert "live 1h: 3/3 ok, 0 connect errors, latency p50/p95 40ms/80ms" in result.stdout
+    assert "live stages p95: observed->send 100ms, observed->ack 140ms, enqueue->job 20ms, http 40ms" in result.stdout
+    assert (
+        "last live: observed 2026-05-17T06:40:00Z, send 2026-05-17T06:40:00.100000Z, ack 2026-05-17T06:40:00.140000Z"
+    ) in result.stdout
 
 
 def test_ready_archive_backlog_makes_pending_ranges_eligible(tmp_path: Path):

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -41,6 +43,21 @@ def _format_rate(value: Any, suffix: str) -> str:
     return f"{number:.1f}{suffix}"
 
 
+def _format_ms(value: Any) -> str:
+    try:
+        return f"{int(value)}ms"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _format_epoch_ms(value: Any) -> str:
+    try:
+        timestamp_ms = int(value)
+    except (TypeError, ValueError):
+        return "-"
+    return datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC).isoformat().replace("+00:00", "Z")
+
+
 @app.command("status")
 def status_command(
     json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
@@ -69,9 +86,10 @@ def status_command(
     scheduler = dict(shipper.get("ship_scheduler") or {})
     limiter = dict(shipper.get("adaptive_backlog_limiter") or {})
     lanes = dict(shipper.get("ship_lanes") or {})
+    live_lane = dict(lanes.get("live") or {})
     archive_lane = dict(lanes.get("archive") or {})
 
-    if scheduler or limiter or archive_lane:
+    if scheduler or limiter or live_lane or archive_lane:
         typer.echo("")
         typer.echo("Shipper controller:")
     if scheduler:
@@ -97,6 +115,35 @@ def status_command(
             f"exec ewma {_format_rate(limiter.get('ewma_exec_ms'), 'ms')}, "
             f"backpressure {limiter.get('total_backpressure', 0)}"
         )
+    if live_lane:
+        typer.echo(
+            "  live 1h: "
+            f"{live_lane.get('successes_1h', 0)}/{live_lane.get('attempts_1h', 0)} ok, "
+            f"{live_lane.get('connect_errors_1h', 0)} connect errors, "
+            f"latency p50/p95 "
+            f"{_format_ms(live_lane.get('latency_p50_ms_1h'))}/"
+            f"{_format_ms(live_lane.get('latency_p95_ms_1h'))}"
+        )
+        stage_p95 = dict(live_lane.get("stage_latency_p95_ms_1h") or {})
+        if stage_p95:
+            typer.echo(
+                "  live stages p95: "
+                f"observed->send {_format_ms(stage_p95.get('observed_to_http_send_ms'))}, "
+                f"observed->ack {_format_ms(stage_p95.get('observed_to_ack_ms'))}, "
+                f"enqueue->job {_format_ms(stage_p95.get('enqueue_to_job_ms'))}, "
+                f"http {_format_ms(stage_p95.get('http_latency_ms'))}"
+            )
+        if (
+            live_lane.get("last_observed_at_ms") is not None
+            or live_lane.get("last_http_send_started_at_ms") is not None
+            or live_lane.get("last_http_finished_at_ms") is not None
+        ):
+            typer.echo(
+                "  last live: "
+                f"observed {_format_epoch_ms(live_lane.get('last_observed_at_ms'))}, "
+                f"send {_format_epoch_ms(live_lane.get('last_http_send_started_at_ms'))}, "
+                f"ack {_format_epoch_ms(live_lane.get('last_http_finished_at_ms'))}"
+            )
     if archive_lane:
         typer.echo(
             "  archive 1h: "
@@ -120,7 +167,11 @@ def inspect_command(
         typer.echo(json.dumps(rows, indent=2))
         return
     for row in rows:
-        typer.echo(f"{row['provider']} {_format_bytes(row['pending_bytes'])} " f"{row['pending_ranges']} range(s) {row['file_path']}")
+        provider = row["provider"]
+        pending_bytes = _format_bytes(row["pending_bytes"])
+        pending_ranges = row["pending_ranges"]
+        file_path = row["file_path"]
+        typer.echo(f"{provider} {pending_bytes} {pending_ranges} range(s) {file_path}")
 
 
 @app.command("pause")
