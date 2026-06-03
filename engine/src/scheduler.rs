@@ -44,6 +44,13 @@ const BACKLOG_CAP_CEILING: usize = 16;
 /// the EWMA stays below this and halves it when the EWMA crosses above.
 const TARGET_QUEUE_WAIT_MS: f64 = 200.0;
 
+/// Archive replay request size controller. The lane starts conservatively,
+/// shrinks hard under host pressure, and expands only when the direct Runtime
+/// Host timing signals are comfortably below the interactive-write target.
+pub const ARCHIVE_BATCH_TARGET_MIN_BYTES: u64 = 64 * 1024;
+pub const ARCHIVE_BATCH_TARGET_BASE_BYTES: u64 = 256 * 1024;
+pub const ARCHIVE_BATCH_TARGET_MAX_BYTES: u64 = 1024 * 1024;
+
 /// EWMA smoothing factor for `queue_wait_ms`. Hand-picked to give a roughly
 /// 4-sample memory: a single spike does not flip the cap, but a sustained
 /// pattern moves the EWMA decisively.
@@ -134,6 +141,7 @@ pub struct LimiterSnapshot {
     pub pressure_state: &'static str,
     pub huge_range_eligible: bool,
     pub huge_range_suppressed_reason: Option<&'static str>,
+    pub archive_target_batch_bytes: u64,
     pub last_direction: &'static str,
     pub total_observations: u64,
     pub total_increases: u64,
@@ -340,6 +348,38 @@ impl AdaptiveLimiter {
         eligible
     }
 
+    fn archive_target_batch_bytes_for_state(state: &AdaptiveLimiterState, now: Instant) -> u64 {
+        if state
+            .backpressure_cooldown_until
+            .is_some_and(|until| until > now)
+        {
+            return ARCHIVE_BATCH_TARGET_MIN_BYTES;
+        }
+
+        let queue_wait = state.ewma_queue_wait_ms;
+        if queue_wait.is_some_and(|ewma| ewma > TARGET_QUEUE_WAIT_MS) {
+            return ARCHIVE_BATCH_TARGET_MIN_BYTES;
+        }
+
+        let exec_ms = state.ewma_exec_ms;
+        if exec_ms.is_some_and(|ewma| ewma > TARGET_QUEUE_WAIT_MS * 2.0) {
+            return ARCHIVE_BATCH_TARGET_BASE_BYTES;
+        }
+
+        if queue_wait.is_some_and(|ewma| ewma <= TARGET_QUEUE_WAIT_MS / 4.0)
+            && exec_ms.map_or(true, |ewma| ewma <= TARGET_QUEUE_WAIT_MS)
+        {
+            return ARCHIVE_BATCH_TARGET_MAX_BYTES;
+        }
+
+        ARCHIVE_BATCH_TARGET_BASE_BYTES
+    }
+
+    pub fn archive_target_batch_bytes(&self) -> u64 {
+        let state = self.state.lock().expect("limiter state poisoned");
+        Self::archive_target_batch_bytes_for_state(&state, Instant::now())
+    }
+
     fn try_adjust(&self, state: &mut AdaptiveLimiterState) {
         if state.samples_since_adjust < DAMP_MIN_SAMPLES {
             return;
@@ -413,6 +453,7 @@ impl AdaptiveLimiter {
         let now = Instant::now();
         let (huge_range_eligible, pressure_state, huge_range_suppressed_reason) =
             Self::huge_range_policy(&state, now);
+        let archive_target_batch_bytes = Self::archive_target_batch_bytes_for_state(&state, now);
         LimiterSnapshot {
             current_cap: cap,
             floor: BACKLOG_CAP_FLOOR,
@@ -430,6 +471,7 @@ impl AdaptiveLimiter {
             pressure_state,
             huge_range_eligible,
             huge_range_suppressed_reason,
+            archive_target_batch_bytes,
             last_direction: state.last_direction.as_str(),
             total_observations: state.total_observations,
             total_increases: state.total_increases,
@@ -1601,6 +1643,37 @@ mod tests {
         assert!(snap.huge_range_eligible);
         assert_eq!(snap.pressure_state, "normal");
         assert_eq!(snap.huge_range_suppressed_reason, None);
+    }
+
+    #[test]
+    fn adaptive_limiter_tunes_archive_batch_target_from_host_pressure() {
+        let limiter = AdaptiveLimiter::new();
+        assert_eq!(
+            limiter.archive_target_batch_bytes(),
+            ARCHIVE_BATCH_TARGET_BASE_BYTES
+        );
+
+        for _ in 0..DAMP_MIN_SAMPLES {
+            limiter.observe_ingest_timing(10.0, Some(50.0), None, None, None, None);
+        }
+        assert_eq!(
+            limiter.archive_target_batch_bytes(),
+            ARCHIVE_BATCH_TARGET_MAX_BYTES
+        );
+
+        for _ in 0..DAMP_MIN_SAMPLES {
+            limiter.observe_ingest_timing(2_000.0, Some(50.0), None, None, None, None);
+        }
+        assert_eq!(
+            limiter.archive_target_batch_bytes(),
+            ARCHIVE_BATCH_TARGET_MIN_BYTES
+        );
+
+        limiter.observe_backpressure(Some(Duration::from_secs(5)));
+        assert_eq!(
+            limiter.snapshot().archive_target_batch_bytes,
+            ARCHIVE_BATCH_TARGET_MIN_BYTES
+        );
     }
 
     #[test]

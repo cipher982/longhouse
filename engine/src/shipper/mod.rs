@@ -62,11 +62,20 @@ pub(crate) enum BatchBand {
 /// Pick a batch target for the given band. Live transcript ships stay small
 /// (latency); archive / replay ships go bigger (amortize round trip).
 /// `max_batch_bytes` (configurable hard ceiling) clamps both bands.
+#[cfg(test)]
 fn target_batch_bytes_for_band(band: BatchBand, max_batch_bytes: u64) -> u64 {
+    target_batch_bytes_for_band_with_archive_target(band, max_batch_bytes, None)
+}
+
+fn target_batch_bytes_for_band_with_archive_target(
+    band: BatchBand,
+    max_batch_bytes: u64,
+    archive_target_batch_bytes: Option<u64>,
+) -> u64 {
     let target = match band {
         BatchBand::Live => LIVE_TARGET_BATCH_BYTES,
         BatchBand::BackgroundRepair => BACKGROUND_REPAIR_TARGET_BATCH_BYTES,
-        BatchBand::Archive => ARCHIVE_TARGET_BATCH_BYTES,
+        BatchBand::Archive => archive_target_batch_bytes.unwrap_or(ARCHIVE_TARGET_BATCH_BYTES),
     };
     max_batch_bytes.min(target).max(1)
 }
@@ -96,6 +105,18 @@ mod target_batch_bytes_tests {
         assert_eq!(
             target_batch_bytes_for_band(BatchBand::Archive, 50 * 1024 * 1024),
             ARCHIVE_TARGET_BATCH_BYTES
+        );
+    }
+
+    #[test]
+    fn archive_band_can_use_adaptive_target_above_default() {
+        assert_eq!(
+            target_batch_bytes_for_band_with_archive_target(
+                BatchBand::Archive,
+                u64::MAX,
+                Some(crate::scheduler::ARCHIVE_BATCH_TARGET_MAX_BYTES),
+            ),
+            crate::scheduler::ARCHIVE_BATCH_TARGET_MAX_BYTES
         );
     }
 
@@ -849,6 +870,7 @@ fn build_prepared_actions(
     rewind_hint: Option<&compressor::SourceRewindHint>,
     source_line_mode: SourceLineMode,
     batch_band: BatchBand,
+    archive_target_batch_bytes: Option<u64>,
 ) -> Result<Vec<PreparedAction>> {
     if parse_result.events.is_empty()
         && parse_result.candidate_records == 0
@@ -888,7 +910,11 @@ fn build_prepared_actions(
         &parse_result.events,
         start_offset,
         end_offset,
-        target_batch_bytes_for_band(batch_band, max_batch_bytes),
+        target_batch_bytes_for_band_with_archive_target(
+            batch_band,
+            max_batch_bytes,
+            archive_target_batch_bytes,
+        ),
         max_batch_bytes,
     )? {
         match planned {
@@ -954,6 +980,7 @@ pub fn prepare_path_range(
         None,
         SourceLineMode::Full,
         BatchBand::Archive,
+        None,
     )
 }
 
@@ -969,6 +996,7 @@ pub(crate) fn prepare_path_range_with_parse_tracker(
     rewind_hint: Option<&compressor::SourceRewindHint>,
     source_line_mode: SourceLineMode,
     batch_band: BatchBand,
+    archive_target_batch_bytes: Option<u64>,
 ) -> Result<Option<PreparedFile>> {
     prepare_path_range_with_parse_tracker_and_trace(
         path,
@@ -983,6 +1011,7 @@ pub(crate) fn prepare_path_range_with_parse_tracker(
         source_line_mode,
         batch_band,
         None,
+        archive_target_batch_bytes,
     )
 }
 
@@ -999,6 +1028,7 @@ pub(crate) fn prepare_path_range_with_parse_tracker_and_trace(
     source_line_mode: SourceLineMode,
     batch_band: BatchBand,
     mut prepare_trace: Option<&mut PrepareTraceTimings>,
+    archive_target_batch_bytes: Option<u64>,
 ) -> Result<Option<PreparedFile>> {
     let path_str = path.to_string_lossy().to_string();
     let file_size = match std::fs::metadata(path) {
@@ -1075,6 +1105,7 @@ pub(crate) fn prepare_path_range_with_parse_tracker_and_trace(
         rewind_hint,
         source_line_mode,
         batch_band,
+        archive_target_batch_bytes,
     )?;
     if let Some(trace) = prepare_trace.as_deref_mut() {
         trace.batch_build_ms = Some(batch_build_started.elapsed().as_millis() as u64);
@@ -1313,6 +1344,7 @@ pub(crate) fn prepare_file_batches_with_source_line_mode_parse_tracker_and_trace
         source_line_mode,
         batch_band,
         prepare_trace,
+        None,
     )
 }
 
@@ -2334,6 +2366,7 @@ async fn prepare_spool_entry_for_replay(
     path: PathBuf,
     algo: CompressionAlgo,
     max_batch_bytes: u64,
+    archive_target_batch_bytes: Option<u64>,
     parse_tracker: Option<&RecentIssueTracker>,
 ) -> Result<Option<PreparedFile>> {
     let parse_tracker = parse_tracker.cloned();
@@ -2354,6 +2387,7 @@ async fn prepare_spool_entry_for_replay(
             None,
             SourceLineMode::Full,
             BatchBand::Archive,
+            archive_target_batch_bytes,
         )
     })
     .await?
@@ -2416,11 +2450,14 @@ async fn replay_spool_entries(
             continue;
         }
 
+        let archive_target_batch_bytes =
+            limiter.map(crate::scheduler::AdaptiveLimiter::archive_target_batch_bytes);
         let prepared = match prepare_spool_entry_for_replay(
             entry.clone(),
             path,
             algo,
             max_batch_bytes,
+            archive_target_batch_bytes,
             parse_tracker,
         )
         .await

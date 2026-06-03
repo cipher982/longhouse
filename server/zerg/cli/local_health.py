@@ -216,8 +216,11 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
         active_scan = int(ship_scheduler.get("in_flight_scan") or 0)
         typer.echo("")
         typer.echo("Scheduler")
-        typer.echo(f"  ready: live {ready_live}, archive {ready_retry + ready_scan} (retry {ready_retry}, scan {ready_scan})")
-        typer.echo("  active: " f"live {active_live}, " f"archive {active_retry + active_scan} (retry {active_retry}, scan {active_scan})")
+        ready_archive = ready_retry + ready_scan
+        active_archive = active_retry + active_scan
+        typer.echo(f"  ready: live {ready_live}, archive {ready_archive} (retry {ready_retry}, scan {ready_scan})")
+        active_summary = f"archive {active_archive} (retry {active_retry}, scan {active_scan})"
+        typer.echo(f"  active: live {active_live}, {active_summary}")
         typer.echo(
             "  limits: "
             f"max {ship_scheduler.get('max_in_flight')}, "
@@ -245,7 +248,8 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
             typer.echo(f"  eligibility: {ready_ranges} ready now, {deferred_ranges} deferred")
         huge_ranges = int(archive_repair.get("huge_pending_ranges") or 0)
         if huge_ranges:
-            typer.echo(f"  huge ranges: {huge_ranges} ranges, {_format_bytes(archive_repair.get('huge_pending_bytes'))}")
+            huge_bytes = _format_bytes(archive_repair.get("huge_pending_bytes"))
+            typer.echo(f"  huge ranges: {huge_ranges} ranges, {huge_bytes}")
             huge_eligible = limiter.get("huge_range_eligible")
             huge_suppressed_reason = limiter.get("huge_range_suppressed_reason")
             if huge_eligible is False:
@@ -260,7 +264,8 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
         next_retry_max = archive_repair.get("next_retry_at_max")
         next_deferred = archive_repair.get("next_deferred_retry_at")
         if next_retry_min or next_retry_max or next_deferred:
-            typer.echo("  retry window: " f"{next_retry_min or '-'} to {next_retry_max or '-'}; " f"next deferred {next_deferred or '-'}")
+            retry_range = f"{next_retry_min or '-'} to {next_retry_max or '-'}"
+            typer.echo(f"  retry window: {retry_range}; next deferred {next_deferred or '-'}")
         providers = _archive_provider_mix(archive_repair.get("providers"))
         if providers != "-":
             typer.echo(f"  providers: {providers}")
@@ -281,10 +286,13 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
             commit_ewma = limiter.get("ewma_commit_ms")
             commit_last = limiter.get("last_observed_commit_ms")
             chunk_size = limiter.get("last_observed_chunk_size")
+            archive_target_batch_bytes = limiter.get("archive_target_batch_bytes")
             store_stages = _store_stage_mix(limiter.get("last_observed_store_stage_ms"))
             ewma_value = _as_float(ewma)
             target_value = _as_float(target)
             typer.echo(f"  archive cap: {current_cap} (floor {floor}, ceiling {ceiling})")
+            if archive_target_batch_bytes is not None:
+                typer.echo(f"  archive batch target: {_format_bytes(archive_target_batch_bytes)}")
             typer.echo(
                 "  host queue wait: "
                 f"ewma {_format_rate(ewma, 'ms')}, "
@@ -292,7 +300,9 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
                 f"target {_format_rate(target, 'ms')}"
             )
             if exec_ewma is not None or exec_last is not None:
-                typer.echo(f"  host write exec: ewma {_format_rate(exec_ewma, 'ms')}, last {_format_rate(exec_last, 'ms')}")
+                exec_ewma_label = _format_rate(exec_ewma, "ms")
+                exec_last_label = _format_rate(exec_last, "ms")
+                typer.echo(f"  host write exec: ewma {exec_ewma_label}, last {exec_last_label}")
             if commit_count is not None or commit_ewma is not None or commit_last is not None or chunk_size is not None:
                 typer.echo(
                     "  host commit shape: "
@@ -313,7 +323,8 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
                     f"retry-after {_format_rate(retry_after, 'ms')}, "
                     f"cooldown {_format_rate(cooldown, 'ms')}"
                 )
-            if current_cap == floor and ewma_value is not None and target_value is not None and ewma_value > target_value:
+            queue_above_target = ewma_value is not None and target_value is not None and ewma_value > target_value
+            if current_cap == floor and queue_above_target:
                 typer.echo("  throttle: host queue pressure is holding archive at the floor")
 
     control_channel = dict(snapshot.get("control_channel") or {})

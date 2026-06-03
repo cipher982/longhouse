@@ -2938,6 +2938,7 @@ def test_local_health_render_prints_archive_backlog_distribution(capsys):
                         "pressure_state": "backpressure_cooldown",
                         "huge_range_eligible": False,
                         "huge_range_suppressed_reason": "backpressure_cooldown",
+                        "archive_target_batch_bytes": 65_536,
                         "total_backpressure": 9,
                         "last_backpressure_retry_after_ms": 5000,
                         "backpressure_cooldown_remaining_ms": 4100,
@@ -2995,6 +2996,7 @@ def test_local_health_render_prints_archive_backlog_distribution(capsys):
     assert "huge eligibility: suppressed (backpressure_cooldown)" in output
     assert "providers: codex 300 ranges/5.6 GB, claude 126 ranges/2.5 GB" in output
     assert "size mix: huge 2/381.5 MB, small 100/47.7 MB" in output
+    assert "archive batch target: 64.0 KB" in output
     assert "backpressure: 9 total, retry-after 5000 ms, cooldown 4100 ms" in output
     assert "host write exec: ewma 92.5 ms, last 110 ms" in output
     assert "host commit shape: commits 3, commit-ms ewma 61.2 ms, last 70.0 ms, chunk 100" in output
