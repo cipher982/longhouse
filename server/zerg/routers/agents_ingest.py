@@ -102,9 +102,18 @@ def _ingest_chunk_for_label(label: str) -> int:
     return _INGEST_CHUNK_BY_LABEL.get(label, 200)
 
 
+def _ingest_lane_for_label(label: str) -> str:
+    if label == "ingest-live":
+        return "live"
+    if label in _ARCHIVE_INGEST_LABELS:
+        return "archive"
+    return "default"
+
+
 def _raise_archive_ingest_backpressure(response: Response) -> None:
     response.headers["Retry-After"] = _ARCHIVE_INGEST_RETRY_AFTER_SECONDS
     response.headers["X-Ingest-Lane"] = "archive"
+    response.headers["X-Ingest-Admission-State"] = "archive_slots_full"
     response.headers["X-Ingest-Backpressure"] = _ARCHIVE_INGEST_BACKPRESSURE_KIND
     response.headers["X-Ingest-Error-Kind"] = _ARCHIVE_INGEST_BACKPRESSURE_KIND
     response.headers["X-Ingest-Queue-Wait-Ms"] = "0.0"
@@ -649,6 +658,8 @@ async def ingest_session(
                     response.headers["X-Ingest-Exec-Ms"] = f"{timing.exec_ms:.1f}"
                     if timing.label:
                         response.headers["X-Ingest-Label"] = timing.label
+                response.headers["X-Ingest-Lane"] = _ingest_lane_for_label(write_label)
+                response.headers["X-Ingest-Admission-State"] = "archive_slot_acquired" if archive_slot_acquired else "not_applicable"
                 response.headers["X-Ingest-Commit-Count"] = str(result.commit_count)
                 response.headers["X-Ingest-Commit-Ms"] = f"{result.commit_ms_total:.1f}"
                 response.headers["X-Ingest-Chunk-Size"] = str(ingest_chunk)

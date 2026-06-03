@@ -36,20 +36,26 @@ pub struct ServerBackpressureDetail {
 
 /// Server-side ingest timing parsed from response headers.
 ///
-/// Phase 1 instrumentation: the Runtime Host emits `X-Ingest-Queue-Wait-Ms`,
-/// `X-Ingest-Exec-Ms`, and `X-Ingest-Label` on every successful ingest so
-/// the engine can adapt concurrency without re-instrumenting in phase 2.
+/// Phase 1 instrumentation: the Runtime Host emits timing, lane, and
+/// admission headers on every successful ingest so the engine can adapt
+/// concurrency without re-instrumenting in phase 2.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ServerIngestTiming {
     pub queue_wait_ms: Option<f64>,
     pub exec_ms: Option<f64>,
     pub label: Option<String>,
+    pub lane: Option<String>,
+    pub admission_state: Option<String>,
 }
 
 impl ServerIngestTiming {
     /// True if the server returned at least one of the phase-1 headers.
     pub fn is_observed(&self) -> bool {
-        self.queue_wait_ms.is_some() || self.exec_ms.is_some() || self.label.is_some()
+        self.queue_wait_ms.is_some()
+            || self.exec_ms.is_some()
+            || self.label.is_some()
+            || self.lane.is_some()
+            || self.admission_state.is_some()
     }
 }
 
@@ -287,6 +293,16 @@ fn parse_server_timing(headers: &reqwest::header::HeaderMap) -> ServerIngestTimi
             .and_then(|v| v.to_str().ok())
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty()),
+        lane: headers
+            .get("X-Ingest-Lane")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
+        admission_state: headers
+            .get("X-Ingest-Admission-State")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty()),
     }
 }
 
@@ -493,11 +509,21 @@ mod tests {
         headers.insert("X-Ingest-Queue-Wait-Ms", HeaderValue::from_static("12.5"));
         headers.insert("X-Ingest-Exec-Ms", HeaderValue::from_static("48.2"));
         headers.insert("X-Ingest-Label", HeaderValue::from_static("ingest-replay"));
+        headers.insert("X-Ingest-Lane", HeaderValue::from_static("archive"));
+        headers.insert(
+            "X-Ingest-Admission-State",
+            HeaderValue::from_static("archive_slot_acquired"),
+        );
 
         let timing = parse_server_timing(&headers);
         assert_eq!(timing.queue_wait_ms, Some(12.5));
         assert_eq!(timing.exec_ms, Some(48.2));
         assert_eq!(timing.label.as_deref(), Some("ingest-replay"));
+        assert_eq!(timing.lane.as_deref(), Some("archive"));
+        assert_eq!(
+            timing.admission_state.as_deref(),
+            Some("archive_slot_acquired")
+        );
         assert!(timing.is_observed());
     }
 
@@ -518,11 +544,15 @@ mod tests {
         );
         headers.insert("X-Ingest-Exec-Ms", HeaderValue::from_static("inf"));
         headers.insert("X-Ingest-Label", HeaderValue::from_static(""));
+        headers.insert("X-Ingest-Lane", HeaderValue::from_static(""));
+        headers.insert("X-Ingest-Admission-State", HeaderValue::from_static(""));
         let timing = parse_server_timing(&headers);
         assert_eq!(timing.queue_wait_ms, None);
         // "inf" parses to f64::INFINITY then is filtered by is_finite
         assert_eq!(timing.exec_ms, None);
         assert_eq!(timing.label, None);
+        assert_eq!(timing.lane, None);
+        assert_eq!(timing.admission_state, None);
         assert!(!timing.is_observed());
     }
 

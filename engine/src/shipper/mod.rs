@@ -1476,6 +1476,8 @@ async fn attempt_ship(
                     queue_wait_ms = ?server_timing.queue_wait_ms,
                     exec_ms = ?server_timing.exec_ms,
                     label = ?server_timing.label,
+                    lane = ?server_timing.lane,
+                    admission_state = ?server_timing.admission_state,
                     "server-side ingest timing"
                 );
             }

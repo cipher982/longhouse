@@ -26,6 +26,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
 from zerg.routers.agents_ingest import _ARCHIVE_INGEST_MAX_IN_FLIGHT
 from zerg.routers.agents_ingest import _acquire_archive_ingest_slot
+from zerg.routers.agents_ingest import _ingest_lane_for_label
 from zerg.routers.agents_ingest import _release_archive_ingest_slot
 from zerg.routers.agents_ingest import _write_serializer_label_for_ship_trace
 
@@ -56,6 +57,10 @@ def test_ship_trace_live_transcript_uses_live_ingest_label():
     assert _write_serializer_label_for_ship_trace({"work_context": "reconciliation_scan"}) == "ingest-scan"
     assert _write_serializer_label_for_ship_trace({"work_context": "spool_replay"}) == "ingest-replay"
     assert _write_serializer_label_for_ship_trace(None) == "ingest"
+    assert _ingest_lane_for_label("ingest-live") == "live"
+    assert _ingest_lane_for_label("ingest-replay") == "archive"
+    assert _ingest_lane_for_label("ingest-scan") == "archive"
+    assert _ingest_lane_for_label("ingest") == "default"
 
 
 @pytest.mark.asyncio
@@ -74,6 +79,7 @@ async def test_archive_ingest_admission_rejects_when_archive_slot_busy():
         assert "Archive ingest backlog is throttled" in exc.value.detail
         assert response.headers["Retry-After"] == "5"
         assert response.headers["X-Ingest-Lane"] == "archive"
+        assert response.headers["X-Ingest-Admission-State"] == "archive_slots_full"
         assert response.headers["X-Ingest-Backpressure"] == "archive_ingest_backpressure"
         assert response.headers["X-Ingest-Error-Kind"] == "archive_ingest_backpressure"
         assert response.headers["X-Ingest-Queue-Wait-Ms"] == "0.0"
@@ -189,8 +195,8 @@ def test_agents_ingest_persists_ship_trace_runtime_event(tmp_path):
 
 def test_agents_ingest_emits_phase1_timing_headers(tmp_path):
     """Phase 1 instrumentation: every successful ingest response carries
-    X-Ingest-Queue-Wait-Ms / X-Ingest-Exec-Ms / X-Ingest-Label so the engine
-    can adapt concurrency in phase 2."""
+    X-Ingest-Queue-Wait-Ms / X-Ingest-Exec-Ms / X-Ingest-Label plus lane and
+    admission state so the engine can adapt concurrency in phase 2."""
     client, _ = _make_client(tmp_path)
     try:
         session_id = "11111111-2222-3333-4444-555555555555"
@@ -233,6 +239,8 @@ def test_agents_ingest_emits_phase1_timing_headers(tmp_path):
         assert "X-Ingest-Queue-Wait-Ms" in response.headers
         assert "X-Ingest-Exec-Ms" in response.headers
         assert response.headers.get("X-Ingest-Label") == "ingest-replay"
+        assert response.headers.get("X-Ingest-Lane") == "archive"
+        assert response.headers.get("X-Ingest-Admission-State") == "archive_slot_acquired"
         float(response.headers["X-Ingest-Queue-Wait-Ms"])
         assert float(response.headers["X-Ingest-Exec-Ms"]) >= 0.0
     finally:
