@@ -2648,8 +2648,15 @@ async fn process_notification(
                 }
             }
             if method == "item/started" {
-                if let Some(item_id) = extract_started_assistant_message_item_id(&params) {
+                if let Some(item_id) = extract_assistant_message_item_id(&params) {
                     context.live_transcript_item_hint = Some(item_id);
+                }
+            }
+            if method == "item/completed" {
+                if let Some(item_id) = extract_assistant_message_item_id(&params) {
+                    if context.live_transcript_item_hint.as_deref() == Some(item_id.as_str()) {
+                        context.live_transcript_item_hint = None;
+                    }
                 }
             }
             let updates = context.runtime_tracker.handle_notification(method, &params);
@@ -3352,12 +3359,10 @@ fn extract_live_transcript_delta<'a>(method: &str, params: &'a Value) -> Option<
 }
 
 fn extract_live_transcript_item_id(params: &Value) -> Option<String> {
-    extract_string(params, &["itemId"])
-        .or_else(|| extract_string(params, &["item", "id"]))
-        .or_else(|| extract_string(params, &["id"]))
+    extract_string(params, &["itemId"]).or_else(|| extract_string(params, &["item", "id"]))
 }
 
-fn extract_started_assistant_message_item_id(params: &Value) -> Option<String> {
+fn extract_assistant_message_item_id(params: &Value) -> Option<String> {
     let item = params.get("item")?;
     let item_type = item.get("type").and_then(Value::as_str)?;
     if item_type != "assistantMessage" {
@@ -5208,14 +5213,14 @@ mod tests {
             Some("item-2")
         );
         assert_eq!(
-            extract_started_assistant_message_item_id(
+            extract_assistant_message_item_id(
                 &json!({"item": {"id": "item-3", "type": "assistantMessage"}})
             )
             .as_deref(),
             Some("item-3")
         );
         assert_eq!(
-            extract_started_assistant_message_item_id(
+            extract_assistant_message_item_id(
                 &json!({"item": {"id": "tool-1", "type": "commandExecution"}})
             ),
             None
@@ -5569,6 +5574,111 @@ mod tests {
         assert_eq!(context.live_transcript_item_seq, 1);
         assert_eq!(context.live_transcript_seq, 2);
         assert_eq!(context.live_transcript_text, "Second.");
+    }
+
+    #[tokio::test]
+    async fn completion_preview_keeps_current_item_boundary_with_rollout_text() {
+        let temp = tempfile::tempdir().unwrap();
+        let rollout_path = temp.path().join("thread.jsonl");
+        fs::write(
+            &rollout_path,
+            r#"{"type":"event_msg","payload":{"type":"agent_message","message":"Second complete."}}"#,
+        )
+        .unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+        context.state.thread_path = Some(rollout_path.display().to_string());
+        context.runtime.thread_id = Some("thread-1".to_string());
+        let (live_tx, mut live_rx) = mpsc::unbounded_channel();
+        context.runtime.live_runtime_tx = Some(live_tx);
+
+        process_notification(
+            &json!({
+                "method": "turn/started",
+                "params": {
+                    "turn": {"id": "turn-1", "status": "inProgress"}
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+        process_notification(
+            &json!({
+                "method": "item/started",
+                "params": {
+                    "item": {"id": "item-1", "type": "assistantMessage"}
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+        process_notification(
+            &json!({
+                "method": "item/agentMessage/delta",
+                "params": {"itemId": "item-1", "delta": "First."}
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+        process_notification(
+            &json!({
+                "method": "item/started",
+                "params": {
+                    "item": {"id": "item-2", "type": "assistantMessage"}
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+        process_notification(
+            &json!({
+                "method": "item/agentMessage/delta",
+                "params": {"itemId": "item-2", "delta": "Second"}
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+        process_notification(
+            &json!({
+                "method": "turn/completed",
+                "params": {
+                    "turn": {"id": "turn-1", "status": "completed"}
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        let mut events = Vec::new();
+        while let Ok(batch) = live_rx.try_recv() {
+            events.extend(batch);
+        }
+        let completed = events
+            .iter()
+            .filter(|event| event["source"] == "codex_bridge_live")
+            .find(|event| event["payload"]["turn_completed"] == true)
+            .expect("completion preview event");
+
+        assert_eq!(completed["payload"]["item_id"], "item-2");
+        assert_eq!(completed["payload"]["item_seq"], 2);
+        assert_eq!(completed["payload"]["seq"], 3);
+        assert_eq!(completed["payload"]["live_text"], "Second complete.");
+        assert!(!completed["payload"]["live_text"]
+            .as_str()
+            .unwrap()
+            .contains("First."));
     }
 
     #[test]
