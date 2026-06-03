@@ -260,6 +260,8 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
             target = limiter.get("target_queue_wait_ms")
             ewma = limiter.get("ewma_queue_wait_ms")
             last = limiter.get("last_observed_queue_wait_ms")
+            exec_ewma = limiter.get("ewma_exec_ms")
+            exec_last = limiter.get("last_observed_exec_ms")
             ewma_value = _as_float(ewma)
             target_value = _as_float(target)
             typer.echo(f"  archive cap: {current_cap} (floor {floor}, ceiling {ceiling})")
@@ -269,6 +271,8 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
                 f"last {_format_rate(last, 'ms')}, "
                 f"target {_format_rate(target, 'ms')}"
             )
+            if exec_ewma is not None or exec_last is not None:
+                typer.echo(f"  host write exec: ewma {_format_rate(exec_ewma, 'ms')}, last {_format_rate(exec_last, 'ms')}")
             total_backpressure = int(limiter.get("total_backpressure") or 0)
             retry_after = limiter.get("last_backpressure_retry_after_ms")
             cooldown = limiter.get("backpressure_cooldown_remaining_ms")

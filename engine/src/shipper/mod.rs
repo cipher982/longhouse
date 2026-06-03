@@ -1483,7 +1483,7 @@ async fn attempt_ship(
             }
             if let Some(limiter) = limiter {
                 match server_timing.queue_wait_ms {
-                    Some(qw) => limiter.observe(qw),
+                    Some(qw) => limiter.observe_ingest_timing(qw, server_timing.exec_ms),
                     None => limiter.note_missing_signal(),
                 }
             }

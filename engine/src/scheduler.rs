@@ -95,6 +95,7 @@ pub struct AdaptiveLimiter {
 #[derive(Debug)]
 struct AdaptiveLimiterState {
     ewma_queue_wait_ms: Option<f64>,
+    ewma_exec_ms: Option<f64>,
     samples_since_adjust: u32,
     last_adjust: Option<Instant>,
     last_direction: LimiterDirection,
@@ -103,6 +104,7 @@ struct AdaptiveLimiterState {
     total_decreases: u64,
     total_backpressure: u64,
     last_observed_queue_wait_ms: Option<f64>,
+    last_observed_exec_ms: Option<f64>,
     last_backpressure_retry_after_ms: Option<u64>,
     backpressure_cooldown_until: Option<Instant>,
     missing_signal_logged: bool,
@@ -117,6 +119,8 @@ pub struct LimiterSnapshot {
     pub target_queue_wait_ms: f64,
     pub ewma_queue_wait_ms: Option<f64>,
     pub last_observed_queue_wait_ms: Option<f64>,
+    pub ewma_exec_ms: Option<f64>,
+    pub last_observed_exec_ms: Option<f64>,
     pub pressure_state: &'static str,
     pub huge_range_eligible: bool,
     pub huge_range_suppressed_reason: Option<&'static str>,
@@ -152,6 +156,7 @@ impl AdaptiveLimiter {
             current_cap: AtomicUsize::new(BACKLOG_CAP_FLOOR),
             state: Mutex::new(AdaptiveLimiterState {
                 ewma_queue_wait_ms: None,
+                ewma_exec_ms: None,
                 samples_since_adjust: 0,
                 last_adjust: None,
                 last_direction: LimiterDirection::Held,
@@ -160,6 +165,7 @@ impl AdaptiveLimiter {
                 total_decreases: 0,
                 total_backpressure: 0,
                 last_observed_queue_wait_ms: None,
+                last_observed_exec_ms: None,
                 last_backpressure_retry_after_ms: None,
                 backpressure_cooldown_until: None,
                 missing_signal_logged: false,
@@ -171,10 +177,19 @@ impl AdaptiveLimiter {
         self.current_cap.load(Ordering::Relaxed)
     }
 
-    /// Feed a successful ship's observed `queue_wait_ms` into the controller.
-    /// Only called for `ShipResult::Ok` with a populated server timing header;
-    /// missing-header successes go through [`Self::note_missing_signal`].
+    /// Test helper for queue-wait-only observations.
+    #[cfg(test)]
     pub fn observe(&self, queue_wait_ms: f64) {
+        self.observe_ingest_timing(queue_wait_ms, None);
+    }
+
+    /// Feed successful ingest timing into the controller.
+    ///
+    /// Queue wait drives the archive concurrency AIMD loop. Exec time is kept
+    /// as first-class telemetry so local health can separate "queued behind
+    /// the writer" from "writer itself is slow" before later controller slices
+    /// tune batch sizing.
+    pub fn observe_ingest_timing(&self, queue_wait_ms: f64, exec_ms: Option<f64>) {
         if !queue_wait_ms.is_finite() || queue_wait_ms < 0.0 {
             return;
         }
@@ -185,6 +200,13 @@ impl AdaptiveLimiter {
             Some(prev) => EWMA_ALPHA * queue_wait_ms + (1.0 - EWMA_ALPHA) * prev,
             None => queue_wait_ms,
         });
+        if let Some(exec_ms) = exec_ms.filter(|value| value.is_finite() && *value >= 0.0) {
+            state.last_observed_exec_ms = Some(exec_ms);
+            state.ewma_exec_ms = Some(match state.ewma_exec_ms {
+                Some(prev) => EWMA_ALPHA * exec_ms + (1.0 - EWMA_ALPHA) * prev,
+                None => exec_ms,
+            });
+        }
         state.samples_since_adjust = state.samples_since_adjust.saturating_add(1);
         state.missing_signal_logged = false;
         self.try_adjust(&mut state);
@@ -359,6 +381,8 @@ impl AdaptiveLimiter {
             target_queue_wait_ms: TARGET_QUEUE_WAIT_MS,
             ewma_queue_wait_ms: state.ewma_queue_wait_ms,
             last_observed_queue_wait_ms: state.last_observed_queue_wait_ms,
+            ewma_exec_ms: state.ewma_exec_ms,
+            last_observed_exec_ms: state.last_observed_exec_ms,
             pressure_state,
             huge_range_eligible,
             huge_range_suppressed_reason,
@@ -1533,5 +1557,19 @@ mod tests {
         assert!(snap.huge_range_eligible);
         assert_eq!(snap.pressure_state, "normal");
         assert_eq!(snap.huge_range_suppressed_reason, None);
+    }
+
+    #[test]
+    fn adaptive_limiter_records_host_exec_timing_without_driving_cap() {
+        let limiter = AdaptiveLimiter::new();
+        limiter.observe_ingest_timing(10.0, Some(500.0));
+        limiter.observe_ingest_timing(10.0, Some(100.0));
+
+        let snap = limiter.snapshot();
+        assert_eq!(snap.last_observed_queue_wait_ms, Some(10.0));
+        assert_eq!(snap.last_observed_exec_ms, Some(100.0));
+        assert!(snap.ewma_exec_ms.is_some());
+        assert_eq!(snap.current_cap, BACKLOG_CAP_FLOOR);
+        assert!(snap.huge_range_eligible);
     }
 }
