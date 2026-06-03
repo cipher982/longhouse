@@ -95,6 +95,7 @@ _ARCHIVE_INGEST_BACKPRESSURE_DETAIL = "Archive ingest backlog is throttled; retr
 _ARCHIVE_INGEST_BACKPRESSURE_KIND = "archive_ingest_backpressure"
 _ARCHIVE_INGEST_RETRY_AFTER_SECONDS = "5"
 _ARCHIVE_INGEST_MAX_IN_FLIGHT = 4
+_ARCHIVE_INGEST_ACTIVE_WRITER_GRACE_MS = 1000.0
 _ARCHIVE_INGEST_SLOTS = asyncio.Semaphore(_ARCHIVE_INGEST_MAX_IN_FLIGHT)
 _INGEST_STAGE_HEADER_LIMIT = 8
 
@@ -159,8 +160,22 @@ async def _acquire_archive_ingest_slot(write_label: str, response: Response) -> 
     from zerg.services.write_serializer import get_write_serializer
 
     ws = get_write_serializer()
-    if ws.is_configured and (ws.writer_active or ws.queue_depth > 0):
-        _raise_archive_ingest_backpressure(response, admission_state="writer_pressure")
+    if ws.is_configured:
+        queue_depth = int(getattr(ws, "queue_depth", 0) or 0)
+        writer_active = bool(getattr(ws, "writer_active", False))
+        active_label = str(getattr(ws, "active_label", "") or "")
+        active_age_ms = float(getattr(ws, "active_age_ms", 0.0) or 0.0)
+        if queue_depth > 0:
+            response.headers["X-Ingest-Writer-Queue-Depth"] = str(queue_depth)
+            _raise_archive_ingest_backpressure(response, admission_state="writer_queue_pressure")
+        if writer_active and active_label in _ARCHIVE_INGEST_LABELS:
+            response.headers["X-Ingest-Writer-Active-Label"] = active_label
+            response.headers["X-Ingest-Writer-Active-Age-Ms"] = f"{active_age_ms:.1f}"
+            _raise_archive_ingest_backpressure(response, admission_state="archive_writer_active")
+        if writer_active and active_age_ms >= _ARCHIVE_INGEST_ACTIVE_WRITER_GRACE_MS:
+            response.headers["X-Ingest-Writer-Active-Label"] = active_label
+            response.headers["X-Ingest-Writer-Active-Age-Ms"] = f"{active_age_ms:.1f}"
+            _raise_archive_ingest_backpressure(response, admission_state="writer_pressure")
 
     if _ARCHIVE_INGEST_SLOTS.locked():
         _raise_archive_ingest_backpressure(response)

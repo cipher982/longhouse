@@ -226,6 +226,9 @@ class WriteSerializer:
         self._queue: list[_QueuedWrite] = []
         self._next_seq = 0
         self._writer_active = False
+        self._active_label: str | None = None
+        self._active_priority: int | None = None
+        self._active_started_at: float | None = None
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._change_event = asyncio.Event()
         self._change_seq = 0
@@ -263,6 +266,20 @@ class WriteSerializer:
     @property
     def writer_active(self) -> bool:
         return self._writer_active
+
+    @property
+    def active_label(self) -> str | None:
+        return self._active_label
+
+    @property
+    def active_priority(self) -> int | None:
+        return self._active_priority
+
+    @property
+    def active_age_ms(self) -> float:
+        if self._active_started_at is None:
+            return 0.0
+        return (time.monotonic() - self._active_started_at) * 1000
 
     async def execute(
         self,
@@ -352,6 +369,9 @@ class WriteSerializer:
                     if not self._writer_active and head.seq == queued.seq:
                         heapq.heappop(self._queue)
                         self._writer_active = True
+                        self._active_label = queued.label
+                        self._active_priority = queued.priority
+                        self._active_started_at = time.monotonic()
                         break
                     await self._wait_cond.wait()
             except BaseException:
@@ -420,6 +440,9 @@ class WriteSerializer:
 
             async with self._wait_cond:
                 self._writer_active = False
+                self._active_label = None
+                self._active_priority = None
+                self._active_started_at = None
                 self._wait_cond.notify_all()
 
         def _schedule_background_finalize(done_task: asyncio.Task[T]) -> None:
@@ -588,6 +611,11 @@ class WriteSerializer:
                 "exec_ms": _percentiles(hist.exec_ms),
             }
         return {
+            "writer_active": self._writer_active,
+            "active_label": self._active_label,
+            "active_priority": self._active_priority,
+            "active_age_ms": round(self.active_age_ms, 1),
+            "queue_depth": len(self._queue),
             "total_writes": s.total_writes,
             "errors": s.errors,
             "avg_queue_wait_ms": round(avg_wait, 1),

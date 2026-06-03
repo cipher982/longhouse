@@ -429,6 +429,46 @@ def test_full_app_ingest_succeeds_in_subprocess_without_testing_flag(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_active_writer_metrics_track_label_and_age(tmp_path):
+    db_path = tmp_path / "write-serializer-active-metrics.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    session_factory = make_sessionmaker(engine)
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)")
+
+    serializer = WriteSerializer()
+    serializer.configure(session_factory)
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def _write(db):
+        started.set()
+        release.wait(1.0)
+        db.execute(sa_text("INSERT INTO writes(label) VALUES ('archive')"))
+
+    task = asyncio.create_task(serializer.execute(_write, label="ingest-replay"))
+    await asyncio.to_thread(started.wait, 1.0)
+
+    assert serializer.writer_active is True
+    assert serializer.active_label == "ingest-replay"
+    assert serializer.active_priority is not None
+    assert serializer.active_age_ms >= 0.0
+    metrics = serializer.get_metrics()
+    assert metrics["writer_active"] is True
+    assert metrics["active_label"] == "ingest-replay"
+    assert metrics["queue_depth"] == 0
+
+    release.set()
+    await task
+
+    assert serializer.writer_active is False
+    assert serializer.active_label is None
+    assert serializer.active_age_ms == 0.0
+
+
+@pytest.mark.asyncio
 async def test_last_write_timing_records_per_call_metrics(tmp_path):
     """Phase 1 instrumentation: each awaited execute() must leave its timing
     on the calling Task's contextvar so the ingest router can emit headers.
