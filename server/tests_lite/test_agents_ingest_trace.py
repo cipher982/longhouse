@@ -21,6 +21,7 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
+from zerg.routers.agents_ingest import _ARCHIVE_INGEST_MAX_IN_FLIGHT
 from zerg.routers.agents_ingest import _acquire_archive_ingest_slot
 from zerg.routers.agents_ingest import _release_archive_ingest_slot
 from zerg.routers.agents_ingest import _write_serializer_label_for_ship_trace
@@ -56,9 +57,13 @@ def test_ship_trace_live_transcript_uses_live_ingest_label():
 
 @pytest.mark.asyncio
 async def test_archive_ingest_admission_rejects_when_archive_slot_busy():
-    acquired = await _acquire_archive_ingest_slot("ingest-replay", Response())
-    assert acquired is True
+    acquired_slots = []
     try:
+        for _ in range(_ARCHIVE_INGEST_MAX_IN_FLIGHT):
+            acquired = await _acquire_archive_ingest_slot("ingest-replay", Response())
+            assert acquired is True
+            acquired_slots.append(acquired)
+
         response = Response()
         with pytest.raises(HTTPException) as exc:
             await _acquire_archive_ingest_slot("ingest-scan", response)
@@ -66,11 +71,12 @@ async def test_archive_ingest_admission_rejects_when_archive_slot_busy():
         assert "Archive ingest backlog is throttled" in exc.value.detail
         assert response.headers["Retry-After"] == "5"
     finally:
-        _release_archive_ingest_slot(acquired)
+        for acquired in acquired_slots:
+            _release_archive_ingest_slot(acquired)
 
 
 @pytest.mark.asyncio
-async def test_archive_ingest_admission_rejects_when_writer_busy(monkeypatch):
+async def test_archive_ingest_admission_allows_writer_queue_to_apply_priority(monkeypatch):
     class BusySerializer:
         writer_active = True
         queue_depth = 0
@@ -81,11 +87,12 @@ async def test_archive_ingest_admission_rejects_when_writer_busy(monkeypatch):
     )
     response = Response()
 
-    with pytest.raises(HTTPException) as exc:
-        await _acquire_archive_ingest_slot("ingest-replay", response)
-
-    assert exc.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
-    assert response.headers["Retry-After"] == "5"
+    acquired = await _acquire_archive_ingest_slot("ingest-replay", response)
+    try:
+        assert acquired is True
+        assert "Retry-After" not in response.headers
+    finally:
+        _release_archive_ingest_slot(acquired)
 
 
 def test_agents_ingest_persists_ship_trace_runtime_event(tmp_path):
