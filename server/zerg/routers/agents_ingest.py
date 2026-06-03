@@ -93,7 +93,10 @@ _INGEST_CHUNK_BY_LABEL: dict[str, int] = {
 _ARCHIVE_INGEST_LABELS = {"ingest-replay", "ingest-scan"}
 _ARCHIVE_INGEST_BACKPRESSURE_DETAIL = "Archive ingest backlog is throttled; retry shortly"
 _ARCHIVE_INGEST_BACKPRESSURE_KIND = "archive_ingest_backpressure"
-_ARCHIVE_INGEST_RETRY_AFTER_SECONDS = "5"
+_ARCHIVE_INGEST_MIN_RETRY_AFTER_SECONDS = 5
+_ARCHIVE_INGEST_MAX_RETRY_AFTER_SECONDS = 60
+_ARCHIVE_INGEST_ACTIVE_WRITER_RETRY_AFTER_SECONDS = 15
+_ARCHIVE_INGEST_WRITE_TIMEOUT_RETRY_AFTER_SECONDS = 30
 _ARCHIVE_INGEST_MAX_IN_FLIGHT = 4
 _ARCHIVE_INGEST_ACTIVE_WRITER_GRACE_MS = 1000.0
 _ARCHIVE_INGEST_WRITE_TIMEOUT_SECONDS = 8.0
@@ -133,9 +136,20 @@ def _stage_timing_header_value(stage_ms: dict[str, float]) -> str:
     return json.dumps(ordered, separators=(",", ":"), sort_keys=True)
 
 
-def _archive_backpressure_headers(*, admission_state: str = "archive_slots_full") -> dict[str, str]:
+def _archive_retry_after_for_queue_depth(queue_depth: int) -> int:
+    return max(
+        _ARCHIVE_INGEST_MIN_RETRY_AFTER_SECONDS,
+        min(_ARCHIVE_INGEST_MAX_RETRY_AFTER_SECONDS, queue_depth * 2),
+    )
+
+
+def _archive_backpressure_headers(
+    *,
+    admission_state: str = "archive_slots_full",
+    retry_after_seconds: int = _ARCHIVE_INGEST_MIN_RETRY_AFTER_SECONDS,
+) -> dict[str, str]:
     return {
-        "Retry-After": _ARCHIVE_INGEST_RETRY_AFTER_SECONDS,
+        "Retry-After": str(retry_after_seconds),
         "X-Ingest-Lane": "archive",
         "X-Ingest-Admission-State": admission_state,
         "X-Ingest-Backpressure": _ARCHIVE_INGEST_BACKPRESSURE_KIND,
@@ -145,9 +159,17 @@ def _archive_backpressure_headers(*, admission_state: str = "archive_slots_full"
     }
 
 
-def _raise_archive_ingest_backpressure(response: Response, *, admission_state: str = "archive_slots_full") -> None:
+def _raise_archive_ingest_backpressure(
+    response: Response,
+    *,
+    admission_state: str = "archive_slots_full",
+    retry_after_seconds: int = _ARCHIVE_INGEST_MIN_RETRY_AFTER_SECONDS,
+) -> None:
     headers = {
-        **_archive_backpressure_headers(admission_state=admission_state),
+        **_archive_backpressure_headers(
+            admission_state=admission_state,
+            retry_after_seconds=retry_after_seconds,
+        ),
         **dict(response.headers),
     }
     response.headers.update(headers)
@@ -181,12 +203,20 @@ async def _acquire_archive_ingest_slot(write_label: str, response: Response) -> 
         active_label_is_archive = active_label in _ARCHIVE_INGEST_LABELS
         if queue_depth > 0:
             response.headers["X-Ingest-Writer-Queue-Depth"] = str(queue_depth)
-            _raise_archive_ingest_backpressure(response, admission_state="writer_queue_pressure")
+            _raise_archive_ingest_backpressure(
+                response,
+                admission_state="writer_queue_pressure",
+                retry_after_seconds=_archive_retry_after_for_queue_depth(queue_depth),
+            )
         active_archive_writer_is_stale = writer_active and active_label_is_archive and active_writer_is_stale
         if active_archive_writer_is_stale:
             response.headers["X-Ingest-Writer-Active-Label"] = active_label
             response.headers["X-Ingest-Writer-Active-Age-Ms"] = f"{active_age_ms:.1f}"
-            _raise_archive_ingest_backpressure(response, admission_state="archive_writer_busy")
+            _raise_archive_ingest_backpressure(
+                response,
+                admission_state="archive_writer_busy",
+                retry_after_seconds=_ARCHIVE_INGEST_ACTIVE_WRITER_RETRY_AFTER_SECONDS,
+            )
         active_non_archive_writer_is_stale = writer_active and not active_label_is_archive and active_writer_is_stale
         if active_non_archive_writer_is_stale:
             response.headers["X-Ingest-Writer-Active-Label"] = active_label
@@ -714,7 +744,10 @@ async def ingest_session(
                     )
                 except asyncio.TimeoutError:
                     request_status_label = "archive_backpressure"
-                    headers = _archive_backpressure_headers(admission_state="archive_write_timeout")
+                    headers = _archive_backpressure_headers(
+                        admission_state="archive_write_timeout",
+                        retry_after_seconds=_ARCHIVE_INGEST_WRITE_TIMEOUT_RETRY_AFTER_SECONDS,
+                    )
                     response.headers.update(headers)
                     raise HTTPException(
                         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

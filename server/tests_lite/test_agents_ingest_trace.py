@@ -27,6 +27,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
 from zerg.routers.agents_ingest import _ARCHIVE_INGEST_MAX_IN_FLIGHT
 from zerg.routers.agents_ingest import _acquire_archive_ingest_slot
+from zerg.routers.agents_ingest import _archive_retry_after_for_queue_depth
 from zerg.routers.agents_ingest import _ingest_lane_for_label
 from zerg.routers.agents_ingest import _release_archive_ingest_slot
 from zerg.routers.agents_ingest import _stage_timing_header_value
@@ -81,6 +82,12 @@ def test_stage_timing_header_value_is_bounded_and_sorted():
         "source_line_observations": 30.1,
         "total": 123.5,
     }
+
+
+def test_archive_retry_after_scales_with_queue_depth():
+    assert _archive_retry_after_for_queue_depth(1) == 5
+    assert _archive_retry_after_for_queue_depth(23) == 46
+    assert _archive_retry_after_for_queue_depth(999) == 60
 
 
 def test_archive_backpressure_headers_survive_http_exception(tmp_path, monkeypatch):
@@ -192,7 +199,7 @@ async def test_archive_ingest_admission_rejects_stale_active_archive_writer(monk
         await _acquire_archive_ingest_slot("ingest-replay", response)
 
     assert exc.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
-    assert response.headers["Retry-After"] == "5"
+    assert response.headers["Retry-After"] == "15"
     assert response.headers["X-Ingest-Admission-State"] == "archive_writer_busy"
     assert response.headers["X-Ingest-Backpressure"] == "archive_ingest_backpressure"
     assert response.headers["X-Ingest-Writer-Active-Label"] == "ingest-replay"
@@ -432,7 +439,7 @@ def test_archive_ingest_write_timeout_returns_typed_backpressure(tmp_path, monke
 
         assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
         assert response.json()["detail"] == "Archive ingest backlog is throttled; retry shortly"
-        assert response.headers["Retry-After"] == "5"
+        assert response.headers["Retry-After"] == "30"
         assert response.headers["X-Ingest-Lane"] == "archive"
         assert response.headers["X-Ingest-Admission-State"] == "archive_write_timeout"
         assert response.headers["X-Ingest-Backpressure"] == "archive_ingest_backpressure"
