@@ -2,16 +2,12 @@ import SwiftUI
 
 @MainActor
 struct LaunchSessionSheet: View {
-    private static let providerOptions = [
-        LaunchProviderOption(id: "codex", label: "Codex", commandSummary: "codex app-server"),
-    ]
-
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
 
     let onLaunched: (String) -> Void
     private let previewMachines: [MachineDirectoryEntry]?
-    private let previewWorkspacePaths: [String]?
+    private let previewWorkspaces: [WorkspaceSuggestion]?
 
     @State private var machines: [MachineDirectoryEntry]
     @State private var loadError: String?
@@ -20,7 +16,9 @@ struct LaunchSessionSheet: View {
     @State private var submitError: String?
 
     @State private var selectedDeviceId: String = ""
-    @State private var workspacePaths: [String]
+    @State private var selectedProvider: String = ""
+    @State private var workspaces: [WorkspaceSuggestion]
+    @State private var workspaceSearch: String = ""
     @State private var loadingWorkspaces = false
     @State private var workspaceError: String?
     @State private var cwd: String = ""
@@ -29,21 +27,22 @@ struct LaunchSessionSheet: View {
 
     init(
         previewMachines: [MachineDirectoryEntry]? = nil,
-        previewWorkspacePaths: [String]? = nil,
+        previewWorkspaces: [WorkspaceSuggestion]? = nil,
         onLaunched: @escaping (String) -> Void
     ) {
         self.previewMachines = previewMachines
-        self.previewWorkspacePaths = previewWorkspacePaths
+        self.previewWorkspaces = previewWorkspaces
         self.onLaunched = onLaunched
         _machines = State(initialValue: previewMachines ?? [])
-        _workspacePaths = State(initialValue: previewWorkspacePaths ?? [])
+        _workspaces = State(initialValue: previewWorkspaces ?? [])
         if let first = previewMachines?.first(where: { $0.isLaunchable }) {
             _selectedDeviceId = State(initialValue: first.deviceId)
+            _selectedProvider = State(initialValue: first.defaultProvider ?? "")
         }
-        if let firstPath = previewWorkspacePaths?.first {
+        if let firstPath = previewWorkspaces?.first?.path {
             _cwd = State(initialValue: firstPath)
         }
-        if previewWorkspacePaths?.isEmpty == true {
+        if previewWorkspaces?.isEmpty == true {
             _showManualPath = State(initialValue: true)
         }
     }
@@ -61,15 +60,17 @@ struct LaunchSessionSheet: View {
     }
 
     private var canSubmit: Bool {
-        !submitting && selectedMachine != nil && normalizedCwd.starts(with: "/")
+        !submitting && selectedMachine != nil && !selectedProvider.isEmpty && normalizedCwd.starts(with: "/")
     }
 
-    private var commonWorkspacePaths: [String] {
-        LonghouseAPI.commonWorkspacePathSuggestions(from: workspacePaths)
+    private var filteredWorkspaces: [WorkspaceSuggestion] {
+        let q = workspaceSearch.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return workspaces }
+        return workspaces.filter { $0.path.lowercased().contains(q) || $0.label.lowercased().contains(q) }
     }
 
     private var hasWorkspaceSuggestions: Bool {
-        !workspacePaths.isEmpty || !commonWorkspacePaths.isEmpty
+        !workspaces.isEmpty
     }
 
     private var pathValidationMessage: String? {
@@ -122,9 +123,27 @@ struct LaunchSessionSheet: View {
                 }
                 .onChange(of: selectedDeviceId) { _, _ in
                     cwd = ""
+                    workspaceSearch = ""
                     workspaceError = nil
                     submitError = nil
                     showManualPath = false
+                    selectedProvider = selectedMachine?.defaultProvider ?? ""
+                }
+            }
+
+            Section("Coding agent") {
+                if let machine = selectedMachine, machine.launchableProviders.count > 1 {
+                    Picker("Provider", selection: $selectedProvider) {
+                        ForEach(machine.launchableProviders, id: \.self) { provider in
+                            Text(provider).tag(provider)
+                        }
+                    }
+                } else {
+                    HStack(spacing: 10) {
+                        Image(systemName: "terminal")
+                            .foregroundStyle(.secondary)
+                        Text(selectedProvider.isEmpty ? "codex" : selectedProvider)
+                    }
                 }
             }
 
@@ -133,8 +152,11 @@ struct LaunchSessionSheet: View {
                     ProgressView("Loading recent workspaces...")
                 }
 
-                if !workspacePaths.isEmpty {
-                    WorkspacePathList(paths: workspacePaths, selectedPath: normalizedCwd) { path in
+                if !workspaces.isEmpty {
+                    TextField("Filter workspaces", text: $workspaceSearch)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled(true)
+                    WorkspaceSuggestionList(workspaces: filteredWorkspaces, selectedPath: normalizedCwd) { path in
                         cwd = path
                         showManualPath = false
                         submitError = nil
@@ -149,16 +171,6 @@ struct LaunchSessionSheet: View {
                     Text(workspaceError)
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                }
-            }
-
-            if !commonWorkspacePaths.isEmpty {
-                Section("Common locations") {
-                    WorkspacePathList(paths: commonWorkspacePaths, selectedPath: normalizedCwd) { path in
-                        cwd = path
-                        showManualPath = false
-                        submitError = nil
-                    }
                 }
             }
 
@@ -188,21 +200,6 @@ struct LaunchSessionSheet: View {
                     Text("Use this when the workspace has not appeared in recent sessions yet.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                }
-            }
-
-            Section("Coding agent") {
-                if let option = Self.providerOptions.first {
-                    HStack(spacing: 10) {
-                        Image(systemName: "terminal")
-                            .foregroundStyle(.secondary)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(option.label)
-                            Text("\(option.commandSummary) on \(selectedMachine?.machineName ?? "selected machine")")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
                 }
             }
 
@@ -297,6 +294,7 @@ struct LaunchSessionSheet: View {
             machines = result
             if selectedDeviceId.isEmpty, let first = result.first(where: { $0.isLaunchable }) {
                 selectedDeviceId = first.deviceId
+                selectedProvider = first.defaultProvider ?? ""
             }
         } catch {
             loadError = (error as? LocalizedError)?.errorDescription ?? "Could not load machines."
@@ -308,23 +306,32 @@ struct LaunchSessionSheet: View {
         guard !usesPreviewData, !deviceId.isEmpty, let api = LonghouseAPI(host: appState.serverURL) else {
             return
         }
+        // Render cached workspaces instantly, then revalidate.
+        if let cached = WorkspaceSuggestionsCacheStore.load(serverURL: appState.serverURL, deviceId: deviceId) {
+            workspaces = cached
+            if normalizedCwd.isEmpty, let first = cached.first?.path {
+                cwd = first
+            }
+        }
         loadingWorkspaces = true
         defer { loadingWorkspaces = false }
         workspaceError = nil
         do {
-            let paths = try await api.recentWorkspacePaths(deviceId: deviceId)
-            workspacePaths = paths
-            if cwd.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, let first = paths.first {
+            let suggestions = try await api.workspaceSuggestions(deviceId: deviceId)
+            workspaces = suggestions
+            if normalizedCwd.isEmpty, let first = suggestions.first?.path {
                 cwd = first
             }
-            showManualPath = paths.isEmpty
+            showManualPath = suggestions.isEmpty
+            WorkspaceSuggestionsCacheStore.save(workspaces: suggestions, serverURL: appState.serverURL, deviceId: deviceId)
         } catch {
             if Task.isCancelled || (error as? URLError)?.code == .cancelled {
                 return
             }
-            workspacePaths = []
-            workspaceError = "Recent workspaces unavailable."
-            showManualPath = true
+            if workspaces.isEmpty {
+                workspaceError = "Recent workspaces unavailable."
+                showManualPath = true
+            }
         }
     }
 
@@ -337,7 +344,7 @@ struct LaunchSessionSheet: View {
         do {
             let response = try await api.launchRemoteSession(
                 deviceId: selectedDeviceId,
-                provider: Self.providerOptions[0].id,
+                provider: selectedProvider,
                 cwd: normalizedCwd,
                 displayName: trimmedDisplayName.isEmpty ? nil : trimmedDisplayName,
                 clientRequestId: "launch-\(UUID().uuidString)"
@@ -390,31 +397,101 @@ struct LaunchSessionSheet: View {
     }
 }
 
-private struct LaunchProviderOption: Identifiable {
-    let id: String
-    let label: String
-    let commandSummary: String
+/// Persists the launch-picker workspace list so the sheet renders instantly
+/// on open, then revalidates from the server. Mirrors ``TimelineCacheStore``
+/// but is keyed per (serverURL, identity, deviceId) so switching machines
+/// never shows another machine's paths.
+enum WorkspaceSuggestionsCacheStore {
+    private static let cacheKey = "longhouse.launch.workspaces.cache.v1"
+    private static let version = 1
+    private static let maxItems = 24
+    private static let defaultMaxAge: TimeInterval = 24 * 60 * 60
+
+    private struct Payload: Codable {
+        let version: Int
+        let serverURL: String
+        let identity: String?
+        let deviceId: String
+        let savedAt: Date
+        let workspaces: [WorkspaceSuggestion]
+    }
+
+    static func save(
+        workspaces: [WorkspaceSuggestion],
+        serverURL: String,
+        deviceId: String,
+        identity: String? = nil,
+        defaults: UserDefaults = .standard,
+        now: Date = Date()
+    ) {
+        let normalizedServer = normalize(serverURL)
+        guard !normalizedServer.isEmpty, !deviceId.isEmpty, !workspaces.isEmpty else { return }
+        let payload = Payload(
+            version: version,
+            serverURL: normalizedServer,
+            identity: normalizedIdentity(identity),
+            deviceId: deviceId,
+            savedAt: now,
+            workspaces: Array(workspaces.prefix(maxItems))
+        )
+        guard let data = try? JSONEncoder().encode(payload) else { return }
+        defaults.set(data, forKey: cacheKey)
+    }
+
+    static func load(
+        serverURL: String,
+        deviceId: String,
+        identity: String? = nil,
+        defaults: UserDefaults = .standard,
+        now: Date = Date(),
+        maxAge: TimeInterval = defaultMaxAge
+    ) -> [WorkspaceSuggestion]? {
+        guard let data = defaults.data(forKey: cacheKey),
+              let payload = try? JSONDecoder().decode(Payload.self, from: data) else {
+            return nil
+        }
+        guard payload.version == version else { return nil }
+        guard payload.serverURL == normalize(serverURL) else { return nil }
+        guard payload.identity == normalizedIdentity(identity) else { return nil }
+        guard payload.deviceId == deviceId else { return nil }
+        guard now.timeIntervalSince(payload.savedAt) <= maxAge else { return nil }
+        guard !payload.workspaces.isEmpty else { return nil }
+        return payload.workspaces
+    }
+
+    private static func normalize(_ serverURL: String) -> String {
+        var value = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        while value.hasSuffix("/") {
+            value.removeLast()
+        }
+        return value
+    }
+
+    private static func normalizedIdentity(_ identity: String?) -> String? {
+        let value = identity?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return value.isEmpty ? nil : value
+    }
 }
 
-private struct WorkspacePathList: View {
-    let paths: [String]
+private struct WorkspaceSuggestionList: View {
+    let workspaces: [WorkspaceSuggestion]
     let selectedPath: String
     let onSelect: (String) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
-            ForEach(paths, id: \.self) { path in
+            ForEach(workspaces) { workspace in
                 Button {
-                    onSelect(path)
+                    onSelect(workspace.path)
                 } label: {
                     HStack(spacing: 10) {
-                        Image(systemName: path == selectedPath ? "checkmark.circle.fill" : "folder")
-                            .foregroundStyle(path == selectedPath ? Color.accentColor : Color.secondary)
+                        Image(systemName: workspace.path == selectedPath ? "checkmark.circle.fill" : iconName(workspace))
+                            .foregroundStyle(workspace.path == selectedPath ? Color.accentColor : Color.secondary)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(LonghouseAPI.compactWorkspacePath(path))
+                            Text(workspace.label)
                                 .font(.body)
                                 .lineLimit(1)
-                            Text(path)
+                            Text(LonghouseAPI.compactWorkspacePath(workspace.path))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
@@ -424,32 +501,54 @@ private struct WorkspacePathList: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityAddTraits(path == selectedPath ? .isSelected : [])
+                .accessibilityAddTraits(workspace.path == selectedPath ? .isSelected : [])
                 .padding(.vertical, 7)
             }
         }
     }
+
+    private func iconName(_ workspace: WorkspaceSuggestion) -> String {
+        workspace.gitRepo != nil ? "arrow.triangle.branch" : "folder"
+    }
+}
+
+private func previewMachine(providers: [String] = ["claude", "codex", "opencode"]) -> MachineDirectoryEntry {
+    MachineDirectoryEntry(
+        deviceId: "cinder",
+        machineName: "cinder",
+        online: true,
+        controlChannelStatus: "connected",
+        supports: ["codex.launch", "codex.send", "claude.launch"],
+        canLaunchCodex: true,
+        launchableProviders: providers,
+        launchBlockedBy: nil,
+        lastSeenAt: "2026-05-24T00:00:00Z",
+        engineBuild: "dev"
+    )
 }
 
 #Preview("Launch session") {
     LaunchSessionSheet(
-        previewMachines: [
-            MachineDirectoryEntry(
-                deviceId: "cinder",
-                machineName: "cinder",
-                online: true,
-                controlChannelStatus: "connected",
-                supports: ["codex.launch", "codex.send"],
-                canLaunchCodex: true,
-                launchBlockedBy: nil,
-                lastSeenAt: "2026-05-24T00:00:00Z",
-                engineBuild: "dev"
+        previewMachines: [previewMachine()],
+        previewWorkspaces: [
+            WorkspaceSuggestion(
+                path: "/Users/example/git/zerg/longhouse",
+                label: "longhouse (main)",
+                gitRepo: "git@github.com:cipher982/longhouse.git",
+                gitBranch: "main",
+                score: 22590,
+                sessionCount: 422
             ),
-        ],
-        previewWorkspacePaths: [
-            "/Users/example/git/zerg/longhouse",
-            "/Users/example/git/zerg",
-            "/Users/example/git/me",
+            WorkspaceSuggestion(path: "/Users/example/git/zerg", label: "zerg", score: 12590, sessionCount: 390),
+            WorkspaceSuggestion(path: "/Users/example", label: "~", score: 5310, sessionCount: 120),
+            WorkspaceSuggestion(
+                path: "/Users/example/git/agent-observatory",
+                label: "agent-observatory (ne-epic)",
+                gitRepo: "git@github.com:cipher982/agent-observatory.git",
+                gitBranch: "ne-epic",
+                score: 2890,
+                sessionCount: 31
+            ),
         ]
     ) { _ in }
     .environmentObject(AppState())
@@ -457,20 +556,8 @@ private struct WorkspacePathList: View {
 
 #Preview("Launch session without recent workspaces") {
     LaunchSessionSheet(
-        previewMachines: [
-            MachineDirectoryEntry(
-                deviceId: "cinder",
-                machineName: "cinder",
-                online: true,
-                controlChannelStatus: "connected",
-                supports: ["codex.launch", "codex.send"],
-                canLaunchCodex: true,
-                launchBlockedBy: nil,
-                lastSeenAt: "2026-05-24T00:00:00Z",
-                engineBuild: "dev"
-            ),
-        ],
-        previewWorkspacePaths: []
+        previewMachines: [previewMachine(providers: ["codex"])],
+        previewWorkspaces: []
     ) { _ in }
     .environmentObject(AppState())
 }

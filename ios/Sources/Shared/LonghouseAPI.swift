@@ -617,19 +617,107 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
     public let controlChannelStatus: String?
     public let supports: [String]
     public let canLaunchCodex: Bool?
+    public let launchableProviders: [String]
     public let launchBlockedBy: String?
     public let lastSeenAt: String?
     public let engineBuild: String?
 
+    public init(
+        deviceId: String,
+        machineName: String,
+        online: Bool,
+        controlChannelStatus: String?,
+        supports: [String],
+        canLaunchCodex: Bool?,
+        launchableProviders: [String] = [],
+        launchBlockedBy: String?,
+        lastSeenAt: String?,
+        engineBuild: String?
+    ) {
+        self.deviceId = deviceId
+        self.machineName = machineName
+        self.online = online
+        self.controlChannelStatus = controlChannelStatus
+        self.supports = supports
+        self.canLaunchCodex = canLaunchCodex
+        self.launchableProviders = launchableProviders
+        self.launchBlockedBy = launchBlockedBy
+        self.lastSeenAt = lastSeenAt
+        self.engineBuild = engineBuild
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case deviceId, machineName, online, controlChannelStatus, supports
+        case canLaunchCodex, launchableProviders, launchBlockedBy, lastSeenAt, engineBuild
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        deviceId = try c.decode(String.self, forKey: .deviceId)
+        machineName = try c.decode(String.self, forKey: .machineName)
+        online = try c.decode(Bool.self, forKey: .online)
+        controlChannelStatus = try c.decodeIfPresent(String.self, forKey: .controlChannelStatus)
+        supports = try c.decodeIfPresent([String].self, forKey: .supports) ?? []
+        canLaunchCodex = try c.decodeIfPresent(Bool.self, forKey: .canLaunchCodex)
+        launchableProviders = try c.decodeIfPresent([String].self, forKey: .launchableProviders) ?? []
+        launchBlockedBy = try c.decodeIfPresent(String.self, forKey: .launchBlockedBy)
+        lastSeenAt = try c.decodeIfPresent(String.self, forKey: .lastSeenAt)
+        engineBuild = try c.decodeIfPresent(String.self, forKey: .engineBuild)
+    }
+
     public var supportsCodexLaunch: Bool { canLaunchCodex ?? supports.contains("codex.launch") }
     public var isLaunchable: Bool {
         let controlConnected = controlChannelStatus.map { $0 == "connected" } ?? online
+        if !launchableProviders.isEmpty {
+            return controlConnected
+        }
         return controlConnected && supportsCodexLaunch
+    }
+
+    /// Provider to default to (codex for continuity, else the first advertised).
+    public var defaultProvider: String? {
+        if launchableProviders.contains("codex") { return "codex" }
+        return launchableProviders.first ?? (supportsCodexLaunch ? "codex" : nil)
     }
 }
 
 public struct MachineDirectoryResponse: Decodable, Sendable {
     public let machines: [MachineDirectoryEntry]
+}
+
+public struct WorkspaceSuggestion: Codable, Sendable, Hashable, Identifiable {
+    public let path: String
+    public let label: String
+    public let gitRepo: String?
+    public let gitBranch: String?
+    public let score: Double
+    public let lastUsedAt: String?
+    public let sessionCount: Int
+
+    public var id: String { path }
+
+    public init(
+        path: String,
+        label: String,
+        gitRepo: String? = nil,
+        gitBranch: String? = nil,
+        score: Double = 0,
+        lastUsedAt: String? = nil,
+        sessionCount: Int = 0
+    ) {
+        self.path = path
+        self.label = label
+        self.gitRepo = gitRepo
+        self.gitBranch = gitBranch
+        self.score = score
+        self.lastUsedAt = lastUsedAt
+        self.sessionCount = sessionCount
+    }
+}
+
+public struct WorkspaceSuggestionsResponse: Decodable, Sendable {
+    public let deviceId: String
+    public let workspaces: [WorkspaceSuggestion]
 }
 
 public enum RemoteLaunchState: String, Decodable, Sendable {
@@ -664,103 +752,24 @@ extension LonghouseAPI {
         return try JSONDecoder.snakeCase.decode(MachineDirectoryResponse.self, from: data).machines
     }
 
-    func recentWorkspacePaths(deviceId: String, limit: Int = 50) async throws -> [String] {
-        var components = URLComponents(url: baseURL.appendingPathComponent("/api/timeline/sessions"), resolvingAgainstBaseURL: false)!
-        components.queryItems = [
-            URLQueryItem(name: "device_id", value: deviceId),
-            URLQueryItem(name: "days_back", value: "30"),
-            URLQueryItem(name: "limit", value: String(limit)),
-            URLQueryItem(name: "hide_autonomous", value: "false"),
-        ]
+    /// Server-owned, frecency-ranked recent workspaces for the launch picker.
+    func workspaceSuggestions(deviceId: String, limit: Int = 12) async throws -> [WorkspaceSuggestion] {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("/api/agents/machines/\(deviceId)/workspaces"),
+            resolvingAgainstBaseURL: false
+        )!
+        components.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
         var request = URLRequest(url: components.url!)
         request.addValue("application/json", forHTTPHeaderField: "Accept")
         let (data, httpResponse) = try await data(for: request)
         guard (200..<300).contains(httpResponse.statusCode) else {
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
-        let decoded = try JSONDecoder.snakeCase.decode(APITimelineSessionsListResponse.self, from: data)
-        return Self.workspacePathSuggestions(from: decoded.sessions)
-    }
-
-    static func workspacePathSuggestions(from cards: [APITimelineSessionCardResponse], limit: Int = 16) -> [String] {
-        var seen = Set<String>()
-        var paths: [String] = []
-
-        func add(_ path: String?) {
-            guard let path, path.starts(with: "/"), !seen.contains(path) else { return }
-            seen.insert(path)
-            paths.append(path)
-        }
-
-        for card in cards {
-            for session in [card.head, card.detail, card.root] {
-                add(session.cwd)
-                add(parentWorkspacePath(session.cwd))
-            }
-            if paths.count >= limit { break }
-        }
-
-        return Array(paths.prefix(limit))
-    }
-
-    static func commonWorkspacePathSuggestions(from recentPaths: [String], limit: Int = 8) -> [String] {
-        guard limit > 0 else { return [] }
-
-        let developmentRootNames: Set<String> = ["git", "code", "src", "dev", "Developer", "Projects", "repos", "work"]
-        var seen = Set(recentPaths.map(normalizedAbsolutePath))
-        var common: [String] = []
-
-        func add(_ path: String?) {
-            guard common.count < limit, let path else { return }
-            let normalized = normalizedAbsolutePath(path)
-            guard normalized.starts(with: "/"), !seen.contains(normalized) else { return }
-            seen.insert(normalized)
-            common.append(normalized)
-        }
-
-        func addKnownDevelopmentRoot(for path: String) {
-            let components = normalizedAbsolutePath(path).split(separator: "/").map(String.init)
-            guard components.count >= 3, components[0] == "Users" else { return }
-            for index in components.indices.dropFirst(2) where developmentRootNames.contains(components[index]) {
-                add("/" + components[...index].joined(separator: "/"))
-                return
-            }
-        }
-
-        for path in recentPaths {
-            let parentPath = parentWorkspacePath(path)
-            if !isUserHomePath(parentPath) {
-                add(parentPath)
-            }
-            addKnownDevelopmentRoot(for: path)
-            if common.count >= limit { break }
-        }
-
-        return common
+        return try JSONDecoder.snakeCase.decode(WorkspaceSuggestionsResponse.self, from: data).workspaces
     }
 
     static func compactWorkspacePath(_ path: String) -> String {
         path.replacingOccurrences(of: #"^/Users/[^/]+"#, with: "~", options: .regularExpression)
-    }
-
-    private static func parentWorkspacePath(_ path: String?) -> String? {
-        guard let path else { return nil }
-        let normalized = normalizedAbsolutePath(path)
-        guard let slash = normalized.lastIndex(of: "/"), slash > normalized.startIndex else { return nil }
-        let parent = String(normalized[..<slash])
-        let parentName = parent.split(separator: "/").last.map(String.init)
-        guard let parentName, !parentName.isEmpty, parentName != "git" else { return nil }
-        return parent
-    }
-
-    private static func normalizedAbsolutePath(_ path: String) -> String {
-        path.replacingOccurrences(of: #"/+$"#, with: "", options: .regularExpression)
-    }
-
-    private static func isUserHomePath(_ path: String?) -> Bool {
-        guard let path else { return false }
-        let components = normalizedAbsolutePath(path).split(separator: "/")
-        return components.count == 2 && components.first == "Users"
     }
 
     func launchRemoteSession(

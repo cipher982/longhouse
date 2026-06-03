@@ -233,55 +233,67 @@ struct LonghouseAPITests {
     }
 
     @Test
-    func commonWorkspacePathSuggestionsUsesRecentParentsAndObservedRoots() {
-        let paths = LonghouseAPI.commonWorkspacePathSuggestions(from: [
-            "/Users/example/git/zerg/longhouse",
-            "/Users/example/Projects/longhouse-ios",
-        ])
-
-        #expect(paths == [
-            "/Users/example/git/zerg",
-            "/Users/example/git",
-            "/Users/example/Projects",
-        ])
+    func workspaceSuggestionsResponseDecodesSnakeCase() throws {
+        let json = """
+        {
+          "device_id": "cinder",
+          "workspaces": [
+            {
+              "path": "/Users/example/git/zerg/longhouse",
+              "label": "longhouse (main)",
+              "git_repo": "git@github.com:cipher982/longhouse.git",
+              "git_branch": "main",
+              "score": 22590.0,
+              "last_used_at": "2026-06-03T00:00:00Z",
+              "session_count": 422
+            },
+            {
+              "path": "/Users/example",
+              "label": "~",
+              "git_repo": null,
+              "git_branch": null,
+              "score": 5310.0,
+              "last_used_at": null,
+              "session_count": 120
+            }
+          ]
+        }
+        """
+        let decoded = try JSONDecoder.snakeCase.decode(
+            WorkspaceSuggestionsResponse.self,
+            from: Data(json.utf8)
+        )
+        #expect(decoded.deviceId == "cinder")
+        #expect(decoded.workspaces.count == 2)
+        let first = decoded.workspaces[0]
+        #expect(first.path == "/Users/example/git/zerg/longhouse")
+        #expect(first.label == "longhouse (main)")
+        #expect(first.gitRepo == "git@github.com:cipher982/longhouse.git")
+        #expect(first.gitBranch == "main")
+        #expect(first.sessionCount == 422)
+        #expect(decoded.workspaces[1].gitRepo == nil)
     }
 
     @Test
-    func commonWorkspacePathSuggestionsDoesNotInventUnseenSiblingRoots() {
-        let paths = LonghouseAPI.commonWorkspacePathSuggestions(from: [
-            "/Users/example/git/zerg/longhouse",
-        ])
-
-        #expect(paths.contains("/Users/example/git"))
-        #expect(!paths.contains("/Users/example/code"))
-        #expect(!paths.contains("/Users/example/src"))
-    }
-
-    @Test
-    func commonWorkspacePathSuggestionsDedupesAgainstRecentAndSkipsHome() {
-        let paths = LonghouseAPI.commonWorkspacePathSuggestions(from: [
-            "/Users/example/git/zerg/longhouse",
-            "/Users/example/git",
-            "/Users/example/git/",
-        ])
-
-        #expect(paths == ["/Users/example/git/zerg"])
-    }
-
-    @Test
-    func commonWorkspacePathSuggestionsKeepsNonUserParentsAndHonorsLimit() {
-        let paths = LonghouseAPI.commonWorkspacePathSuggestions(from: [
-            "/opt/acme/service",
-            "/Users/example/git/zerg/longhouse",
-            "/Users/example/Projects/app/mobile",
-        ], limit: 4)
-
-        #expect(paths == [
-            "/opt/acme",
-            "/Users/example/git/zerg",
-            "/Users/example/git",
-            "/Users/example/Projects/app",
-        ])
+    func machineDirectoryEntryDefaultProviderPrefersCodex() throws {
+        let json = """
+        {
+          "device_id": "cinder",
+          "machine_name": "cinder",
+          "online": true,
+          "control_channel_status": "connected",
+          "supports": ["codex.launch", "claude.launch"],
+          "can_launch_codex": true,
+          "launchable_providers": ["claude", "codex", "opencode"],
+          "launch_blocked_by": null,
+          "last_seen_at": null,
+          "engine_build": "dev"
+        }
+        """
+        let entry = try JSONDecoder.snakeCase.decode(MachineDirectoryEntry.self, from: Data(json.utf8))
+        #expect(entry.launchableProviders == ["claude", "codex", "opencode"])
+        #expect(entry.defaultProvider == "codex")
+        #expect(entry.isLaunchable)
     }
 
     @Test
