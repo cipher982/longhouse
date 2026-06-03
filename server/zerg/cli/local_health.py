@@ -54,17 +54,23 @@ def _format_bytes(value: object) -> str:
 
 
 def _format_rate(value: object, suffix: str) -> str:
-    if value is None:
-        return "-"
-    try:
-        rate = float(value)
-    except (TypeError, ValueError):
+    rate = _as_float(value)
+    if rate is None:
         return "-"
     if rate >= 100:
         return f"{rate:.0f} {suffix}"
     if rate >= 10:
         return f"{rate:.1f} {suffix}"
     return f"{rate:.2f} {suffix}"
+
+
+def _as_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _has_lane_activity(lane: dict[str, object]) -> bool:
@@ -151,6 +157,7 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
     if archive_repair and (
         archive_repair.get("pending_ranges") or archive_repair.get("pending_bytes") or archive_repair.get("dead_ranges")
     ):
+        limiter = dict(payload.get("adaptive_backlog_limiter") or {})
         typer.echo("")
         typer.echo("Archive Repair")
         typer.echo(f"  state: {archive_repair.get('state') or '-'}")
@@ -159,6 +166,24 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
         typer.echo(f"  pending bytes: {_format_bytes(archive_repair.get('pending_bytes'))}")
         typer.echo(f"  pending paths: {archive_repair.get('pending_paths', 0)}")
         typer.echo(f"  dead ranges: {archive_repair.get('dead_ranges', 0)}")
+        if limiter:
+            current_cap = limiter.get("current_cap")
+            floor = limiter.get("floor")
+            ceiling = limiter.get("ceiling")
+            target = limiter.get("target_queue_wait_ms")
+            ewma = limiter.get("ewma_queue_wait_ms")
+            last = limiter.get("last_observed_queue_wait_ms")
+            ewma_value = _as_float(ewma)
+            target_value = _as_float(target)
+            typer.echo(f"  archive cap: {current_cap} (floor {floor}, ceiling {ceiling})")
+            typer.echo(
+                "  host queue wait: "
+                f"ewma {_format_rate(ewma, 'ms')}, "
+                f"last {_format_rate(last, 'ms')}, "
+                f"target {_format_rate(target, 'ms')}"
+            )
+            if current_cap == floor and ewma_value is not None and target_value is not None and ewma_value > target_value:
+                typer.echo("  throttle: host queue pressure is holding archive at the floor")
 
     control_channel = dict(snapshot.get("control_channel") or {})
     if control_channel:
