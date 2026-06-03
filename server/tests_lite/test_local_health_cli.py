@@ -2905,6 +2905,18 @@ def test_local_health_render_prints_archive_backlog_distribution(capsys):
                 "exists": True,
                 "age_seconds": 0,
                 "payload": {
+                    "ship_scheduler": {
+                        "max_in_flight": 32,
+                        "live_reserved": 8,
+                        "live_in_flight_cap": 8,
+                        "backlog_cap": 2,
+                        "ready_live": 1,
+                        "ready_retry": 4,
+                        "ready_scan": 2,
+                        "in_flight_live": 1,
+                        "in_flight_retry": 2,
+                        "in_flight_scan": 0,
+                    },
                     "adaptive_backlog_limiter": {
                         "current_cap": 1,
                         "floor": 1,
@@ -2915,7 +2927,7 @@ def test_local_health_render_prints_archive_backlog_distribution(capsys):
                         "total_backpressure": 9,
                         "last_backpressure_retry_after_ms": 5000,
                         "backpressure_cooldown_remaining_ms": 4100,
-                    }
+                    },
                 },
             },
             "archive_repair": {
@@ -2959,6 +2971,10 @@ def test_local_health_render_prints_archive_backlog_distribution(capsys):
     )
 
     output = capsys.readouterr().out
+    assert "Scheduler" in output
+    assert "ready: live 1, archive 6 (retry 4, scan 2)" in output
+    assert "active: live 1, archive 2 (retry 2, scan 0)" in output
+    assert "limits: max 32, live reserved 8, archive cap 2" in output
     assert "Archive Repair" in output
     assert "eligibility: 400 ready now, 26 deferred" in output
     assert "huge ranges: 2 ranges, 381.5 MB" in output

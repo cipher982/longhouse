@@ -119,6 +119,9 @@ pub struct HeartbeatPayload {
     /// callers).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub adaptive_backlog_limiter: Option<crate::scheduler::LimiterSnapshot>,
+    /// Current path-scheduler ready/in-flight pressure by lane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ship_scheduler: Option<crate::scheduler::SchedulerSnapshot>,
 }
 
 /// One machine-observed binding of an unmanaged provider CLI process to
@@ -326,6 +329,7 @@ impl HeartbeatPayload {
             sessions_digest: None,
             sessions_sequence: None,
             adaptive_backlog_limiter: None,
+            ship_scheduler: None,
         }
     }
 }
@@ -1237,6 +1241,7 @@ mod tests {
             sessions_digest: None,
             sessions_sequence: None,
             adaptive_backlog_limiter: None,
+            ship_scheduler: None,
         };
 
         // Must serialize correctly
@@ -1316,6 +1321,7 @@ mod tests {
             sessions_digest: None,
             sessions_sequence: None,
             adaptive_backlog_limiter: None,
+            ship_scheduler: None,
         };
 
         let json = serde_json::to_string(&payload).unwrap();
@@ -1927,6 +1933,7 @@ mod tests {
             sessions_digest: None,
             sessions_sequence: None,
             adaptive_backlog_limiter: None,
+            ship_scheduler: None,
         };
 
         let json = serde_json::to_string(&payload).unwrap();
@@ -1987,6 +1994,7 @@ mod tests {
             sessions_digest: None,
             sessions_sequence: None,
             adaptive_backlog_limiter: None,
+            ship_scheduler: None,
         };
 
         spool
@@ -2116,6 +2124,7 @@ mod tests {
             sessions_digest: None,
             sessions_sequence: None,
             adaptive_backlog_limiter: None,
+            ship_scheduler: None,
         };
         let stats = HeartbeatStats {
             spool: &spool,
@@ -2200,6 +2209,7 @@ mod tests {
             sessions_digest: None,
             sessions_sequence: None,
             adaptive_backlog_limiter: None,
+            ship_scheduler: None,
         };
         let stats = HeartbeatStats {
             spool: &spool,

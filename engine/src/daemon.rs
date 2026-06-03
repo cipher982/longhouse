@@ -981,6 +981,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             serde_json::to_value(control_channel_status.snapshot()).ok(),
                             Some(unmanaged_binding_override),
                             Some(adaptive_limiter.as_ref()),
+                            Some(&scheduler),
                             &mut session_snapshot_state,
                         );
                         bridge_reaper.tick(&result.codex_observations);
@@ -1277,6 +1278,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     serde_json::to_value(control_channel_status.snapshot()).ok(),
                     Some(unmanaged_binding_override),
                     Some(adaptive_limiter.as_ref()),
+                    Some(&scheduler),
                     &mut session_snapshot_state,
                 );
                 if !offline.is_offline {
@@ -1324,6 +1326,7 @@ fn write_local_status_snapshot(
     control_channel: Option<Value>,
     unmanaged_session_binding_override: Option<&[heartbeat::UnmanagedSessionBinding]>,
     limiter: Option<&crate::scheduler::AdaptiveLimiter>,
+    scheduler: Option<&PathScheduler>,
     session_snapshot_state: &mut SessionSnapshotState,
 ) -> heartbeat::HeartbeatPayload {
     let spool = Spool::new(conn);
@@ -1339,6 +1342,7 @@ fn write_local_status_snapshot(
     let archive_control = read_archive_repair_control();
     apply_archive_repair_control(&mut payload, &archive_control);
     payload.adaptive_backlog_limiter = limiter.map(|l| l.snapshot());
+    payload.ship_scheduler = scheduler.map(PathScheduler::snapshot);
     let now = chrono::Utc::now();
     payload.managed_sessions =
         heartbeat::leases_from_observations(conn, machine_id, observations, now);
@@ -2704,6 +2708,7 @@ mod tests {
             sessions_digest: None,
             sessions_sequence: None,
             adaptive_backlog_limiter: None,
+            ship_scheduler: None,
         }
     }
 
@@ -2827,6 +2832,7 @@ mod tests {
             None,
             Some(&cached),
             None,
+            None,
             &mut session_snapshot_state,
         );
 
@@ -2858,6 +2864,7 @@ mod tests {
             None,
             Some(&cached),
             None,
+            None,
             &mut session_snapshot_state,
         );
         let second = write_local_status_snapshot(
@@ -2873,6 +2880,7 @@ mod tests {
             &[],
             None,
             Some(&cached),
+            None,
             None,
             &mut session_snapshot_state,
         );
@@ -2890,6 +2898,7 @@ mod tests {
             &[],
             None,
             Some(&changed),
+            None,
             None,
             &mut session_snapshot_state,
         );

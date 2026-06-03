@@ -191,6 +191,25 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
                 f"{eps}, {bps}/s"
             )
 
+    ship_scheduler = dict(payload.get("ship_scheduler") or {})
+    if ship_scheduler:
+        ready_live = int(ship_scheduler.get("ready_live") or 0)
+        ready_retry = int(ship_scheduler.get("ready_retry") or 0)
+        ready_scan = int(ship_scheduler.get("ready_scan") or 0)
+        active_live = int(ship_scheduler.get("in_flight_live") or 0)
+        active_retry = int(ship_scheduler.get("in_flight_retry") or 0)
+        active_scan = int(ship_scheduler.get("in_flight_scan") or 0)
+        typer.echo("")
+        typer.echo("Scheduler")
+        typer.echo(f"  ready: live {ready_live}, archive {ready_retry + ready_scan} (retry {ready_retry}, scan {ready_scan})")
+        typer.echo("  active: " f"live {active_live}, " f"archive {active_retry + active_scan} (retry {active_retry}, scan {active_scan})")
+        typer.echo(
+            "  limits: "
+            f"max {ship_scheduler.get('max_in_flight')}, "
+            f"live reserved {ship_scheduler.get('live_reserved')}, "
+            f"archive cap {ship_scheduler.get('backlog_cap')}"
+        )
+
     archive_repair = dict(snapshot.get("archive_repair") or {})
     if archive_repair and (
         archive_repair.get("pending_ranges") or archive_repair.get("pending_bytes") or archive_repair.get("dead_ranges")

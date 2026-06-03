@@ -126,6 +126,23 @@ pub struct LimiterSnapshot {
     pub backpressure_cooldown_remaining_ms: Option<u64>,
 }
 
+/// Snapshot of scheduler pressure for engine status JSON / local health.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SchedulerSnapshot {
+    pub max_in_flight: usize,
+    pub live_reserved: usize,
+    pub live_in_flight_cap: usize,
+    pub backlog_cap: usize,
+    pub ready_live: usize,
+    pub ready_retry: usize,
+    pub ready_scan: usize,
+    pub in_flight_live: usize,
+    pub in_flight_retry: usize,
+    pub in_flight_scan: usize,
+    pub ready_backlog: usize,
+    pub in_flight_backlog: usize,
+}
+
 impl AdaptiveLimiter {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
@@ -560,6 +577,33 @@ impl PathScheduler {
         !self.ready_jobs.is_empty() || !self.in_flight.is_empty()
     }
 
+    pub fn snapshot(&self) -> SchedulerSnapshot {
+        let ready_live = self.ready_count(WorkPriority::Live);
+        let ready_retry = self.ready_count(WorkPriority::Retry);
+        let ready_scan = self.ready_count(WorkPriority::Scan);
+        let in_flight_live = self.in_flight_count(WorkPriority::Live);
+        let in_flight_retry = self.in_flight_count(WorkPriority::Retry);
+        let in_flight_scan = self.in_flight_count(WorkPriority::Scan);
+        SchedulerSnapshot {
+            max_in_flight: self.max_in_flight,
+            live_reserved: LIVE_RESERVED,
+            live_in_flight_cap: LIVE_IN_FLIGHT_CAP,
+            backlog_cap: self
+                .max_in_flight
+                .saturating_sub(LIVE_RESERVED)
+                .max(1)
+                .min(self.limiter.current_cap()),
+            ready_live,
+            ready_retry,
+            ready_scan,
+            in_flight_live,
+            in_flight_retry,
+            in_flight_scan,
+            ready_backlog: ready_retry + ready_scan,
+            in_flight_backlog: in_flight_retry + in_flight_scan,
+        }
+    }
+
     #[cfg(test)]
     fn ready_len(&self) -> usize {
         self.ready_jobs.len()
@@ -635,6 +679,13 @@ impl PathScheduler {
 
     fn in_flight_count(&self, priority: WorkPriority) -> usize {
         self.in_flight
+            .values()
+            .filter(|job| job.priority == priority)
+            .count()
+    }
+
+    fn ready_count(&self, priority: WorkPriority) -> usize {
+        self.ready_jobs
             .values()
             .filter(|job| job.priority == priority)
             .count()
@@ -729,6 +780,55 @@ mod tests {
         );
         let live = scheduler.pop_launchable().unwrap();
         assert_eq!(live.priority, WorkPriority::Live);
+    }
+
+    #[test]
+    fn test_scheduler_snapshot_counts_ready_and_in_flight_by_lane() {
+        let limiter = AdaptiveLimiter::new();
+        limiter.observe(0.0);
+        limiter.observe(0.0);
+        limiter.observe(0.0);
+        limiter.observe(0.0);
+        limiter.clear_adjust_cooldown();
+        limiter.observe(0.0);
+        let mut scheduler = PathScheduler::with_limiter(32, limiter);
+
+        scheduler.enqueue(
+            PathBuf::from("/tmp/live-a.jsonl"),
+            "codex",
+            WorkPriority::Live,
+        );
+        scheduler.enqueue(
+            PathBuf::from("/tmp/retry-a.jsonl"),
+            "codex",
+            WorkPriority::Retry,
+        );
+        scheduler.enqueue(
+            PathBuf::from("/tmp/retry-b.jsonl"),
+            "codex",
+            WorkPriority::Retry,
+        );
+        scheduler.enqueue(
+            PathBuf::from("/tmp/scan-a.jsonl"),
+            "codex",
+            WorkPriority::Scan,
+        );
+
+        let live = scheduler.pop_launchable().unwrap();
+        assert_eq!(live.priority, WorkPriority::Live);
+        let retry = scheduler.pop_launchable().unwrap();
+        assert_eq!(retry.priority, WorkPriority::Retry);
+
+        let snapshot = scheduler.snapshot();
+        assert_eq!(snapshot.ready_live, 0);
+        assert_eq!(snapshot.ready_retry, 1);
+        assert_eq!(snapshot.ready_scan, 1);
+        assert_eq!(snapshot.in_flight_live, 1);
+        assert_eq!(snapshot.in_flight_retry, 1);
+        assert_eq!(snapshot.in_flight_scan, 0);
+        assert_eq!(snapshot.ready_backlog, 2);
+        assert_eq!(snapshot.in_flight_backlog, 1);
+        assert!(snapshot.backlog_cap >= 2);
     }
 
     #[test]
