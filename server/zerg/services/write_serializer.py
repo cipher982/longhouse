@@ -513,6 +513,7 @@ class WriteSerializer:
         label: str = "",
         priority: int | None = None,
         auto_commit: bool = True,
+        timeout_seconds: float | None = None,
     ) -> T:
         """Execute via serializer if configured, otherwise run directly on fallback_db.
 
@@ -525,7 +526,13 @@ class WriteSerializer:
             # hits the wrong database and breaks request-scoped assertions.
             return self._run_inline_with_timing(fn, fallback_db, auto_commit, label)
         if self._configured:
-            return await self.execute(fn, label=label, priority=priority, auto_commit=auto_commit)
+            return await self.execute(
+                fn,
+                label=label,
+                priority=priority,
+                auto_commit=auto_commit,
+                timeout_seconds=timeout_seconds,
+            )
         if fallback_db is None:
             raise RuntimeError("WriteSerializer not configured and no fallback_db provided")
         return self._run_inline_with_timing(fn, fallback_db, auto_commit, label)

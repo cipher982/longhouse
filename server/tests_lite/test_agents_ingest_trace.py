@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from types import SimpleNamespace
@@ -155,7 +156,7 @@ async def test_archive_ingest_admission_allows_active_archive_writer_with_empty_
         is_configured = True
         writer_active = True
         active_label = "ingest-replay"
-        active_age_ms = 5000.0
+        active_age_ms = 50.0
         queue_depth = 0
 
     monkeypatch.setattr(
@@ -170,6 +171,32 @@ async def test_archive_ingest_admission_allows_active_archive_writer_with_empty_
         assert "Retry-After" not in response.headers
     finally:
         _release_archive_ingest_slot(acquired)
+
+
+@pytest.mark.asyncio
+async def test_archive_ingest_admission_rejects_stale_active_archive_writer(monkeypatch):
+    class BusySerializer:
+        is_configured = True
+        writer_active = True
+        active_label = "ingest-replay"
+        active_age_ms = 5000.0
+        queue_depth = 0
+
+    monkeypatch.setattr(
+        "zerg.services.write_serializer.get_write_serializer",
+        lambda: BusySerializer(),
+    )
+    response = Response()
+
+    with pytest.raises(HTTPException) as exc:
+        await _acquire_archive_ingest_slot("ingest-replay", response)
+
+    assert exc.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert response.headers["Retry-After"] == "5"
+    assert response.headers["X-Ingest-Admission-State"] == "archive_writer_busy"
+    assert response.headers["X-Ingest-Backpressure"] == "archive_ingest_backpressure"
+    assert response.headers["X-Ingest-Writer-Active-Label"] == "ingest-replay"
+    assert response.headers["X-Ingest-Writer-Active-Age-Ms"] == "5000.0"
 
 
 @pytest.mark.asyncio
@@ -344,6 +371,72 @@ def test_agents_ingest_persists_ship_trace_runtime_event(tmp_path):
             assert stored_fanout["ship_trace_id"] == trace["trace_id"]
             assert stored_fanout["latest_event_id"] is not None
             assert stored_fanout["server_fanout_at_ms"] is not None
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_archive_ingest_write_timeout_returns_typed_backpressure(tmp_path, monkeypatch):
+    class TimeoutSerializer:
+        is_configured = True
+        writer_active = False
+        active_label = None
+        active_age_ms = 0.0
+        queue_depth = 0
+
+        async def execute_or_direct(self, *args, **kwargs):
+            assert kwargs["label"] == "ingest-replay"
+            assert kwargs["timeout_seconds"] is not None
+            raise asyncio.TimeoutError
+
+    client, _ = _make_client(tmp_path)
+    monkeypatch.setattr(
+        "zerg.services.write_serializer.get_write_serializer",
+        lambda: TimeoutSerializer(),
+    )
+    try:
+        session_id = "21111111-2222-3333-4444-555555555555"
+        payload = {
+            "id": session_id,
+            "provider": "codex",
+            "environment": "test",
+            "project": "zerg",
+            "started_at": "2026-01-01T00:00:00Z",
+            "events": [
+                {
+                    "role": "assistant",
+                    "content_text": "hi",
+                    "timestamp": "2026-01-01T00:00:01Z",
+                    "source_path": "/tmp/write-timeout.jsonl",
+                    "source_offset": 0,
+                    "raw_json": '{"type":"assistant","text":"hi"}',
+                }
+            ],
+        }
+        response = client.post(
+            "/agents/ingest",
+            json=payload,
+            headers={
+                "X-Agents-Token": "dev",
+                "X-Longhouse-Ship-Trace": json.dumps(
+                    {
+                        "schema": "ship_trace.v1",
+                        "trace_id": f"{session_id}:0:64:1778220000000",
+                        "provider": "codex",
+                        "session_id": session_id,
+                        "work_context": "spool_replay",
+                    },
+                    separators=(",", ":"),
+                ),
+            },
+        )
+
+        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        assert response.json()["detail"] == "Archive ingest backlog is throttled; retry shortly"
+        assert response.headers["Retry-After"] == "5"
+        assert response.headers["X-Ingest-Lane"] == "archive"
+        assert response.headers["X-Ingest-Admission-State"] == "archive_write_timeout"
+        assert response.headers["X-Ingest-Backpressure"] == "archive_ingest_backpressure"
+        assert response.headers["X-Ingest-Error-Kind"] == "archive_ingest_backpressure"
     finally:
         api_app.dependency_overrides.clear()
 

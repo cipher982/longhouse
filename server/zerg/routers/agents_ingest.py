@@ -96,6 +96,7 @@ _ARCHIVE_INGEST_BACKPRESSURE_KIND = "archive_ingest_backpressure"
 _ARCHIVE_INGEST_RETRY_AFTER_SECONDS = "5"
 _ARCHIVE_INGEST_MAX_IN_FLIGHT = 4
 _ARCHIVE_INGEST_ACTIVE_WRITER_GRACE_MS = 1000.0
+_ARCHIVE_INGEST_WRITE_TIMEOUT_SECONDS = 8.0
 _ARCHIVE_INGEST_SLOTS = asyncio.Semaphore(_ARCHIVE_INGEST_MAX_IN_FLIGHT)
 _INGEST_STAGE_HEADER_LIMIT = 8
 
@@ -132,8 +133,8 @@ def _stage_timing_header_value(stage_ms: dict[str, float]) -> str:
     return json.dumps(ordered, separators=(",", ":"), sort_keys=True)
 
 
-def _raise_archive_ingest_backpressure(response: Response, *, admission_state: str = "archive_slots_full") -> None:
-    headers = {
+def _archive_backpressure_headers(*, admission_state: str = "archive_slots_full") -> dict[str, str]:
+    return {
         "Retry-After": _ARCHIVE_INGEST_RETRY_AFTER_SECONDS,
         "X-Ingest-Lane": "archive",
         "X-Ingest-Admission-State": admission_state,
@@ -141,6 +142,13 @@ def _raise_archive_ingest_backpressure(response: Response, *, admission_state: s
         "X-Ingest-Error-Kind": _ARCHIVE_INGEST_BACKPRESSURE_KIND,
         "X-Ingest-Queue-Wait-Ms": "0.0",
         "X-Ingest-Exec-Ms": "0.0",
+    }
+
+
+def _raise_archive_ingest_backpressure(response: Response, *, admission_state: str = "archive_slots_full") -> None:
+    headers = {
+        **_archive_backpressure_headers(admission_state=admission_state),
+        **dict(response.headers),
     }
     response.headers.update(headers)
     raise HTTPException(
@@ -169,10 +177,18 @@ async def _acquire_archive_ingest_slot(write_label: str, response: Response) -> 
         writer_active = bool(getattr(ws, "writer_active", False))
         active_label = str(getattr(ws, "active_label", "") or "")
         active_age_ms = float(getattr(ws, "active_age_ms", 0.0) or 0.0)
+        active_writer_is_stale = active_age_ms >= _ARCHIVE_INGEST_ACTIVE_WRITER_GRACE_MS
+        active_label_is_archive = active_label in _ARCHIVE_INGEST_LABELS
         if queue_depth > 0:
             response.headers["X-Ingest-Writer-Queue-Depth"] = str(queue_depth)
             _raise_archive_ingest_backpressure(response, admission_state="writer_queue_pressure")
-        if writer_active and active_label not in _ARCHIVE_INGEST_LABELS and active_age_ms >= _ARCHIVE_INGEST_ACTIVE_WRITER_GRACE_MS:
+        active_archive_writer_is_stale = writer_active and active_label_is_archive and active_writer_is_stale
+        if active_archive_writer_is_stale:
+            response.headers["X-Ingest-Writer-Active-Label"] = active_label
+            response.headers["X-Ingest-Writer-Active-Age-Ms"] = f"{active_age_ms:.1f}"
+            _raise_archive_ingest_backpressure(response, admission_state="archive_writer_busy")
+        active_non_archive_writer_is_stale = writer_active and not active_label_is_archive and active_writer_is_stale
+        if active_non_archive_writer_is_stale:
             response.headers["X-Ingest-Writer-Active-Label"] = active_label
             response.headers["X-Ingest-Writer-Active-Age-Ms"] = f"{active_age_ms:.1f}"
             _raise_archive_ingest_backpressure(response, admission_state="writer_pressure")
@@ -654,6 +670,9 @@ async def ingest_session(
 
             ws = get_write_serializer()
             ingest_chunk = _ingest_chunk_for_label(write_label)
+            write_timeout_seconds = None
+            if write_label in _ARCHIVE_INGEST_LABELS:
+                write_timeout_seconds = _ARCHIVE_INGEST_WRITE_TIMEOUT_SECONDS
 
             def _do_ingest(write_db):
                 write_started_at_ms = _unix_ms()
@@ -686,7 +705,22 @@ async def ingest_session(
 
             with tracer.start_as_current_span("longhouse.ingest.write") as write_span:
                 write_started = time.monotonic()
-                result = await ws.execute_or_direct(_do_ingest, db, label=write_label)
+                try:
+                    result = await ws.execute_or_direct(
+                        _do_ingest,
+                        db,
+                        label=write_label,
+                        timeout_seconds=write_timeout_seconds,
+                    )
+                except asyncio.TimeoutError:
+                    request_status_label = "archive_backpressure"
+                    headers = _archive_backpressure_headers(admission_state="archive_write_timeout")
+                    response.headers.update(headers)
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail=_ARCHIVE_INGEST_BACKPRESSURE_DETAIL,
+                        headers=headers,
+                    )
                 write_ms = round((time.monotonic() - write_started) * 1000, 1)
                 agents_ingest_write_seconds.labels(provider=provider_label).observe(write_ms / 1000.0)
 
