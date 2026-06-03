@@ -115,6 +115,7 @@ _LABEL_PRIORITIES: dict[str, int] = {
     "task-fail": 7,
     "summary-backfill": 60,
     "embeddings": 60,
+    "projection-reconcile": 70,
     # Background queue maintenance is lowest priority.
     "task-resurrect": 85,
     "commis-claim": 85,

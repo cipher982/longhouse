@@ -1710,6 +1710,7 @@ class AgentsStore:
         if session_obj and events_inserted > 0 and transcript_changed:
             session_obj.transcript_revision = int(getattr(session_obj, "transcript_revision", 0) or 0) + 1
             session_obj.needs_embedding = 1
+            session_obj.needs_projection = 0 if synchronous_projections else 1
             if latest_inserted_timestamp is not None:
                 current = _normalize_utc_naive(session_obj.last_activity_at)
                 if current is None or latest_inserted_timestamp > current:
@@ -1815,6 +1816,23 @@ class AgentsStore:
                 "total": round((time.monotonic() - store_started) * 1000, 3),
             },
         )
+
+    def reconcile_derived_projections(self, session_id: UUID) -> bool:
+        """Rebuild derived projections skipped by archive ingest."""
+        session_obj = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
+        if session_obj is None:
+            return False
+
+        head_branch = self._ensure_head_branch(session_id)
+        self._sync_session_counts_to_head(session_id, head_branch.id)
+
+        from zerg.services.session_turns import materialize_managed_transcript_turns
+        from zerg.services.session_turns import maybe_mark_session_turn_durable
+
+        maybe_mark_session_turn_durable(self.db, session_id=session_id)
+        materialize_managed_transcript_turns(self.db, session_id=session_id, incremental=True)
+        session_obj.needs_projection = 0
+        return True
 
     def get_session(self, session_id: UUID) -> Optional[AgentSession]:
         """Get a session by ID."""

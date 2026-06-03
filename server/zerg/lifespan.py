@@ -412,6 +412,17 @@ async def lifespan(app: FastAPI):
                 failed.append(f"summary_reconciler ({e})")
                 logger.exception("Failed to start summary_reconciler")
 
+            # Archive ingest can skip expensive derived projections on the hot
+            # shipping path; this reconciler catches those sessions up later.
+            try:
+                from zerg.services.session_projection_reconciler import run_projection_reconciler
+
+                asyncio.create_task(run_projection_reconciler())
+                started.append("projection_reconciler")
+            except Exception as e:  # noqa: BLE001
+                failed.append(f"projection_reconciler ({e})")
+                logger.exception("Failed to start projection_reconciler")
+
             # Periodic runtime maintenance (runner-health reconcile, etc.)
             if not _settings.testing:
                 try:

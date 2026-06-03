@@ -93,6 +93,11 @@ class AgentSession(AgentsBase):
     # Embedding tracking (1 = needs embedding, 0 = done; SQLite has no bool)
     needs_embedding = Column(Integer, server_default=text("1"))
 
+    # Derived projection tracking (1 = counts/turn projections need async
+    # catch-up, 0 = current enough for read surfaces). Archive ingest sets this
+    # instead of rebuilding expensive projections on the hot shipping path.
+    needs_projection = Column(Integer, nullable=False, server_default=text("0"))
+
     # User-driven bucket classification (set via POST /sessions/{id}/action)
     # active (default) | parked | snoozed | archived
     user_state = Column(String(20), nullable=False, server_default=text("'active'"))
