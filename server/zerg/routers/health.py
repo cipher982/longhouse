@@ -16,6 +16,8 @@ from zerg.config import get_settings
 
 router = APIRouter(tags=["health"])
 
+EVENTS_FTS_EXISTS_SQL = "SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1"
+
 
 def _session_projection_lag_check(session_factory=None) -> dict:
     """Return lag for sessions whose archive ingest skipped derived projections."""
@@ -34,6 +36,38 @@ def _session_projection_lag_check(session_factory=None) -> dict:
                        MAX(last_activity_at) AS newest_last_activity_at
                 FROM sessions
                 WHERE COALESCE(needs_projection, 0) = 1
+                """
+            )
+        ).fetchone()
+    finally:
+        db.close()
+
+    pending_sessions = int(row[0] or 0) if row is not None else 0
+    return {
+        "status": "pass" if pending_sessions == 0 else "warn",
+        "pending_sessions": pending_sessions,
+        "oldest_last_activity_at": row[1] if row is not None else None,
+        "newest_last_activity_at": row[2] if row is not None else None,
+    }
+
+
+def _session_enrichment_lag_check(session_factory=None) -> dict:
+    """Return lag for sessions ingested durably but still waiting on enrichment."""
+    if session_factory is None:
+        from zerg.database import get_session_factory
+
+        session_factory = get_session_factory()
+
+    db = session_factory()
+    try:
+        row = db.execute(
+            text(
+                """
+                SELECT COUNT(*) AS pending_sessions,
+                       MIN(last_activity_at) AS oldest_last_activity_at,
+                       MAX(last_activity_at) AS newest_last_activity_at
+                FROM sessions
+                WHERE COALESCE(needs_embedding, 1) = 1
                 """
             )
         ).fetchone()
@@ -182,7 +216,7 @@ def readyz_check():
             conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
             try:
                 conn.execute("SELECT 1")
-                row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1").fetchone()
+                row = conn.execute(EVENTS_FTS_EXISTS_SQL).fetchone()
                 if not row:
                     return JSONResponse(
                         status_code=503,
@@ -327,7 +361,7 @@ def health_check(request: Request):
 
         if default_engine is not None and default_engine.dialect.name == "sqlite":
             with default_engine.connect() as conn:
-                fts_row = conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")).fetchone()
+                fts_row = conn.execute(text(EVENTS_FTS_EXISTS_SQL)).fetchone()
                 if not fts_row:
                     raise RuntimeError("events_fts table is missing (FTS5 required).")
             checks["fts5"] = {"status": "pass"}
@@ -395,7 +429,14 @@ def health_check(request: Request):
     except Exception as e:
         checks["session_projection_lag"] = {"status": "warn", "error": str(e)}
 
-    # 9. SQLite WAL pressure: phase 1 instrumentation. WAL bytes is the cheapest
+    # 9. Enrichment lag. Embeddings/search enrichment run after durable ingest;
+    # they should be visible, but must not be mistaken for raw shipping health.
+    try:
+        checks["session_enrichment_lag"] = _session_enrichment_lag_check()
+    except Exception as e:
+        checks["session_enrichment_lag"] = {"status": "warn", "error": str(e)}
+
+    # 10. SQLite WAL pressure: phase 1 instrumentation. WAL bytes is the cheapest
     # leading indicator of write-side backpressure; the engine's adaptive
     # controller (phase 2) reads this to back off when pressure climbs.
     try:

@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 
 from zerg.database import initialize_database
 from zerg.database import make_engine
+from zerg.routers.health import _session_enrichment_lag_check
 from zerg.routers.health import _session_projection_lag_check
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
@@ -306,5 +307,48 @@ async def test_archive_ingest_marks_projection_for_async_catchup(tmp_path):
         verify.close()
 
     lag_after = _session_projection_lag_check(factory)
+    assert lag_after["status"] == "pass"
+    assert lag_after["pending_sessions"] == 0
+
+
+def test_session_enrichment_lag_surfaces_embedding_backlog(tmp_path):
+    store, db, factory = _make_store(tmp_path)
+    session_id = str(uuid4())
+    ts = _ts().isoformat().replace("+00:00", "Z")
+
+    result = store.ingest_session(
+        SessionIngest(
+            id=session_id,
+            provider="codex",
+            environment="test",
+            project="test",
+            device_id="dev",
+            cwd="/tmp",
+            started_at=ts,
+            events=[
+                EventIngest(
+                    role="user",
+                    content_text="needs enrichment",
+                    timestamp=ts,
+                    source_path="/archive.jsonl",
+                    source_offset=0,
+                )
+            ],
+        )
+    )
+    assert result.events_inserted == 1
+
+    lag = _session_enrichment_lag_check(factory)
+    assert lag["status"] == "warn"
+    assert lag["pending_sessions"] == 1
+
+    from zerg.models.agents import AgentSession
+
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    assert session is not None
+    session.needs_embedding = 0
+    db.commit()
+
+    lag_after = _session_enrichment_lag_check(factory)
     assert lag_after["status"] == "pass"
     assert lag_after["pending_sessions"] == 0
