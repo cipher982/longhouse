@@ -77,4 +77,4 @@ fi
 cleanup_lock
 trap - EXIT
 
-exec "$ROOT/scripts/ops/ship-monitor.py" --sha "$SHA" "${MONITOR_ARGS[@]}"
+exec "$ROOT/scripts/ops/ship-monitor.py" --sha "$SHA" ${MONITOR_ARGS[@]+"${MONITOR_ARGS[@]}"}
