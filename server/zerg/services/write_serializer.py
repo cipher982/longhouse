@@ -373,6 +373,10 @@ class WriteSerializer:
                         self._active_priority = queued.priority
                         self._active_started_at = time.monotonic()
                         break
+                    if not self._writer_active:
+                        # If a previous cancellation/finalizer left waiters
+                        # asleep while the writer is idle, wake the real head.
+                        self._wait_cond.notify_all()
                     await self._wait_cond.wait()
             except BaseException:
                 if any(item.seq == queued.seq for item in self._queue):
@@ -623,6 +627,8 @@ class WriteSerializer:
             "active_priority": self._active_priority,
             "active_age_ms": round(self.active_age_ms, 1),
             "queue_depth": len(self._queue),
+            "idle_queue_stalled": bool(self._queue and not self._writer_active),
+            "queued_labels": [item.label for item in sorted(self._queue)[:5]],
             "total_writes": s.total_writes,
             "errors": s.errors,
             "avg_queue_wait_ms": round(avg_wait, 1),

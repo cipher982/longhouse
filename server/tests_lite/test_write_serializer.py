@@ -469,6 +469,46 @@ async def test_active_writer_metrics_track_label_and_age(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_enqueue_wakes_sleeping_head_when_writer_is_idle(tmp_path):
+    db_path = tmp_path / "write-serializer-idle-queue.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    session_factory = make_sessionmaker(engine)
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)")
+
+    serializer = WriteSerializer()
+    serializer.configure(session_factory)
+    run_order: list[str] = []
+
+    def _make_write(label: str):
+        def _write(db):
+            run_order.append(label)
+            db.execute(sa_text("INSERT INTO writes(label) VALUES (:label)"), {"label": label})
+
+        return _write
+
+    # Recreate the production invariant violation: an existing caller is asleep
+    # at the head of the queue, but the writer has become idle without a notify.
+    serializer._writer_active = True  # noqa: SLF001 - white-box regression for queue liveness
+    first = asyncio.create_task(serializer.execute(_make_write("first"), label="ingest-replay"))
+
+    for _ in range(50):
+        if serializer.queue_depth == 1:
+            break
+        await asyncio.sleep(0.01)
+    assert serializer.queue_depth == 1
+
+    serializer._writer_active = False  # noqa: SLF001
+    second = asyncio.create_task(serializer.execute(_make_write("second"), label="refresh-session"))
+
+    await asyncio.wait_for(asyncio.gather(first, second), timeout=1.0)
+    assert sorted(run_order) == ["first", "second"]
+    assert serializer.queue_depth == 0
+    assert serializer.get_metrics()["idle_queue_stalled"] is False
+
+
+@pytest.mark.asyncio
 async def test_last_write_timing_records_per_call_metrics(tmp_path):
     """Phase 1 instrumentation: each awaited execute() must leave its timing
     on the calling Task's contextvar so the ingest router can emit headers.
@@ -517,6 +557,7 @@ async def test_last_write_timing_isolated_between_tasks(tmp_path):
     def _write(label: str):
         def _do(db):
             db.execute(sa_text("INSERT INTO writes(label) VALUES (:l)"), {"l": label})
+
         return _do
 
     async def _run(label: str) -> str | None:
@@ -546,6 +587,7 @@ async def test_get_metrics_includes_rolling_per_label_percentiles(tmp_path):
     def _write(label: str):
         def _do(db):
             db.execute(sa_text("INSERT INTO writes(label) VALUES (:l)"), {"l": label})
+
         return _do
 
     for _ in range(5):
