@@ -1,7 +1,12 @@
 # Archive Backlog Repair
 
-Status: Draft
-Last updated: 2026-06-02
+Status: Incident context / partially superseded
+Last updated: 2026-06-03
+
+This document records the June 2026 archive-backlog incident and the first
+repair shape. The current target architecture is
+[`speed-of-light-shipper.md`](speed-of-light-shipper.md). Where the two differ,
+the speed-of-light shipper spec is the product target.
 
 ## Problem
 
