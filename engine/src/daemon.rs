@@ -61,6 +61,7 @@ const PERIODIC_SPOOL_PATH_LIMIT: usize = 128;
 const PATH_SPOOL_REPLAY_LIMIT: usize = 1;
 const ARCHIVE_TRICKLE_TICK_BYTES: u64 = 512 * 1024 * 1024;
 const ARCHIVE_DRAIN_TICK_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const ARCHIVE_BACKPRESSURE_MAX_DEFER: Duration = Duration::from_secs(5);
 const LOCAL_RETRY_DELAY_SECS: u64 = 5;
 const LIVE_LOCAL_RETRY_DELAY: Duration = Duration::from_millis(500);
 const STARTUP_RECONCILIATION_SCAN_DELAY: Duration = Duration::from_secs(120);
@@ -1955,6 +1956,14 @@ fn queue_pending_spool_paths(
     let include_huge = control.includes_huge() && pressure_allows_huge;
     if control.includes_huge() && !pressure_allows_huge {
         tracing::debug!("Skipping huge archive replay paths while host pressure is above target");
+    }
+    let clipped = spool.clip_archive_backpressure_deferrals(ARCHIVE_BACKPRESSURE_MAX_DEFER)?;
+    if clipped > 0 {
+        tracing::info!(
+            clipped,
+            max_defer_ms = ARCHIVE_BACKPRESSURE_MAX_DEFER.as_millis() as u64,
+            "Clipped stale archive backpressure retry clocks"
+        );
     }
 
     let mut queued = 0usize;

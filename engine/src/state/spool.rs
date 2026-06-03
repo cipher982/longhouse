@@ -21,6 +21,8 @@ const BACKOFF_BASE: f64 = 5.0;
 /// Maximum backoff in seconds (1 hour).
 const BACKOFF_MAX: f64 = 3600.0;
 
+const ARCHIVE_BACKPRESSURE_ERROR_MARKER: &str = "Archive ingest backlog is throttled";
+
 /// Default max retries before marking dead.
 const DEFAULT_MAX_RETRIES: u32 = 50;
 
@@ -509,6 +511,47 @@ impl<'a> Spool<'a> {
         Ok(changed)
     }
 
+    /// Bound stale archive-backpressure retry clocks.
+    ///
+    /// Archive backpressure is a host admission signal, not evidence that the
+    /// local pointer is bad. Older builds could leave every range parked behind
+    /// a long retry clock; in drain mode that violates the product contract that
+    /// reconstructable backlog should keep making progress as soon as the host
+    /// is accepting archive work again.
+    pub fn clip_archive_backpressure_deferrals(&self, max_delay: Duration) -> Result<usize> {
+        let now = Utc::now();
+        let cutoff = now + chrono_duration_from_std(max_delay);
+        let mut stmt = self.conn.prepare(
+            "SELECT id
+             FROM spool_queue
+             WHERE status = 'pending'
+               AND last_error LIKE ?1
+               AND next_retry_at > ?2",
+        )?;
+        let ids = stmt
+            .query_map(
+                rusqlite::params![
+                    format!("%{}%", ARCHIVE_BACKPRESSURE_ERROR_MARKER),
+                    cutoff.to_rfc3339(),
+                ],
+                |row| row.get::<_, i64>(0),
+            )?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        drop(stmt);
+
+        let mut changed = 0usize;
+        for id in ids {
+            let next_retry = now + jittered_chrono_delay(max_delay);
+            changed += self.conn.execute(
+                "UPDATE spool_queue
+                 SET next_retry_at = ?1
+                 WHERE status = 'pending' AND id = ?2",
+                rusqlite::params![next_retry.to_rfc3339(), id],
+            )?;
+        }
+        Ok(changed)
+    }
+
     /// Mark failed with custom max retries.
     pub fn mark_failed_with_max(
         &self,
@@ -825,6 +868,11 @@ fn jittered_chrono_delay(delay: Duration) -> chrono::Duration {
     chrono::Duration::milliseconds(jitter_millis)
 }
 
+fn chrono_duration_from_std(delay: Duration) -> chrono::Duration {
+    chrono::Duration::from_std(delay)
+        .unwrap_or_else(|_| chrono::Duration::seconds(BACKOFF_MAX as i64))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -963,6 +1011,43 @@ mod tests {
                 file_path: "/never-failed.jsonl".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn test_clip_archive_backpressure_deferrals_bounds_only_backpressure_rows() {
+        let (_tmp, conn) = setup();
+        conn.execute(
+            "INSERT INTO spool_queue
+                (provider, file_path, start_offset, end_offset, created_at, next_retry_at, retry_count, last_error, status)
+             VALUES
+                ('codex', '/backpressured.jsonl', 0, 1000, '2026-03-12T00:00:00+00:00', '2999-01-01T00:00:00+00:00', 4, '503:{\"detail\":\"Archive ingest backlog is throttled; retry shortly\"}', 'pending'),
+                ('codex', '/generic-503.jsonl', 0, 1000, '2026-03-12T00:00:01+00:00', '2999-01-01T00:00:00+00:00', 4, '503:upstream unavailable', 'pending'),
+                ('codex', '/short-backpressure.jsonl', 0, 1000, '2026-03-12T00:00:02+00:00', '2000-01-01T00:00:00+00:00', 4, '503:{\"detail\":\"Archive ingest backlog is throttled; retry shortly\"}', 'pending')",
+            [],
+        )
+        .unwrap();
+
+        let spool = Spool::new(&conn);
+        let clipped = spool
+            .clip_archive_backpressure_deferrals(Duration::from_secs(5))
+            .unwrap();
+        assert_eq!(clipped, 1);
+
+        let rows: Vec<(String, String)> = {
+            let mut stmt = conn
+                .prepare("SELECT file_path, next_retry_at FROM spool_queue ORDER BY file_path")
+                .unwrap();
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        let backpressured_retry = DateTime::parse_from_rfc3339(&rows[0].1)
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(backpressured_retry <= Utc::now() + chrono::Duration::seconds(5));
+        assert_eq!(rows[1].1, "2999-01-01T00:00:00+00:00");
+        assert_eq!(rows[2].1, "2000-01-01T00:00:00+00:00");
     }
 
     #[test]
