@@ -133,16 +133,20 @@ def _stage_timing_header_value(stage_ms: dict[str, float]) -> str:
 
 
 def _raise_archive_ingest_backpressure(response: Response, *, admission_state: str = "archive_slots_full") -> None:
-    response.headers["Retry-After"] = _ARCHIVE_INGEST_RETRY_AFTER_SECONDS
-    response.headers["X-Ingest-Lane"] = "archive"
-    response.headers["X-Ingest-Admission-State"] = admission_state
-    response.headers["X-Ingest-Backpressure"] = _ARCHIVE_INGEST_BACKPRESSURE_KIND
-    response.headers["X-Ingest-Error-Kind"] = _ARCHIVE_INGEST_BACKPRESSURE_KIND
-    response.headers["X-Ingest-Queue-Wait-Ms"] = "0.0"
-    response.headers["X-Ingest-Exec-Ms"] = "0.0"
+    headers = {
+        "Retry-After": _ARCHIVE_INGEST_RETRY_AFTER_SECONDS,
+        "X-Ingest-Lane": "archive",
+        "X-Ingest-Admission-State": admission_state,
+        "X-Ingest-Backpressure": _ARCHIVE_INGEST_BACKPRESSURE_KIND,
+        "X-Ingest-Error-Kind": _ARCHIVE_INGEST_BACKPRESSURE_KIND,
+        "X-Ingest-Queue-Wait-Ms": "0.0",
+        "X-Ingest-Exec-Ms": "0.0",
+    }
+    response.headers.update(headers)
     raise HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail=_ARCHIVE_INGEST_BACKPRESSURE_DETAIL,
+        headers=headers,
     )
 
 

@@ -82,6 +82,47 @@ def test_stage_timing_header_value_is_bounded_and_sorted():
     }
 
 
+def test_archive_backpressure_headers_survive_http_exception(tmp_path, monkeypatch):
+    class BusySerializer:
+        is_configured = True
+        writer_active = False
+        active_label = None
+        active_age_ms = 0.0
+        queue_depth = 1
+
+    monkeypatch.setattr(
+        "zerg.services.write_serializer.get_write_serializer",
+        lambda: BusySerializer(),
+    )
+    client, _ = _make_client(tmp_path)
+    try:
+        response = client.post(
+            "/agents/ingest",
+            json={},
+            headers={
+                "X-Agents-Token": "dev",
+                "X-Longhouse-Ship-Trace": json.dumps(
+                    {
+                        "schema": "ship_trace.v1",
+                        "work_context": "spool_replay",
+                    },
+                    separators=(",", ":"),
+                ),
+            },
+        )
+
+        assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+        assert response.headers["Retry-After"] == "5"
+        assert response.headers["X-Ingest-Lane"] == "archive"
+        assert response.headers["X-Ingest-Admission-State"] == "writer_queue_pressure"
+        assert response.headers["X-Ingest-Backpressure"] == "archive_ingest_backpressure"
+        assert response.headers["X-Ingest-Error-Kind"] == "archive_ingest_backpressure"
+        assert response.headers["X-Ingest-Queue-Wait-Ms"] == "0.0"
+        assert response.headers["X-Ingest-Exec-Ms"] == "0.0"
+    finally:
+        api_app.dependency_overrides.clear()
+
+
 @pytest.mark.asyncio
 async def test_archive_ingest_admission_rejects_when_archive_slot_busy():
     acquired_slots = []
