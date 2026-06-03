@@ -58,7 +58,9 @@ const WATCHER_FLUSH_INTERVAL: Duration = Duration::from_millis(15);
 
 const INITIAL_SPOOL_PATH_LIMIT: usize = 64;
 const PERIODIC_SPOOL_PATH_LIMIT: usize = 128;
-const PATH_SPOOL_REPLAY_LIMIT: usize = 1;
+const PATH_SPOOL_REPLAY_LIMIT_PRESSURE: usize = 1;
+const PATH_SPOOL_REPLAY_LIMIT_BASE: usize = 2;
+const PATH_SPOOL_REPLAY_LIMIT_FAST: usize = 8;
 const ARCHIVE_TRICKLE_TICK_BYTES: u64 = 512 * 1024 * 1024;
 const ARCHIVE_DRAIN_TICK_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const ARCHIVE_BACKPRESSURE_MAX_DEFER: Duration = Duration::from_secs(5);
@@ -68,6 +70,18 @@ const STARTUP_RECONCILIATION_SCAN_DELAY: Duration = Duration::from_secs(120);
 const LOCAL_STATUS_INTERVAL_SECS: u64 = 1;
 const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 5 * 60;
 const FLIGHT_SAMPLE_INTERVAL_SECS: u64 = 5;
+
+fn path_spool_replay_limit(limiter: &AdaptiveLimiter) -> usize {
+    match limiter.archive_target_batch_bytes() {
+        bytes if bytes >= crate::scheduler::ARCHIVE_BATCH_TARGET_MAX_BYTES => {
+            PATH_SPOOL_REPLAY_LIMIT_FAST
+        }
+        bytes if bytes >= crate::scheduler::ARCHIVE_BATCH_TARGET_BASE_BYTES => {
+            PATH_SPOOL_REPLAY_LIMIT_BASE
+        }
+        _ => PATH_SPOOL_REPLAY_LIMIT_PRESSURE,
+    }
+}
 const LOCAL_WORK_TICK_INTERVAL: Duration = Duration::from_millis(250);
 const OUTBOX_DRAIN_INTERVAL: Duration = Duration::from_millis(100);
 const UNMANAGED_BINDING_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
@@ -2524,7 +2538,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             &task_context.client,
             task_context.algo,
             &result.job.path,
-            PATH_SPOOL_REPLAY_LIMIT,
+            path_spool_replay_limit(task_context.limiter.as_ref()),
             task_context.shipper_config.max_batch_bytes,
             Some(&task_context.parse_tracker),
             Some(&task_context.ship_stats),
@@ -3843,6 +3857,21 @@ mod tests {
         assert_eq!(job.path, PathBuf::from("/tmp/small-ready.jsonl"));
         assert_eq!(job.priority, WorkPriority::Retry);
         assert!(scheduler.pop_launchable().is_none());
+    }
+
+    #[test]
+    fn test_path_spool_replay_limit_tracks_archive_pressure() {
+        let limiter = AdaptiveLimiter::new();
+        assert_eq!(path_spool_replay_limit(limiter.as_ref()), 2);
+
+        limiter.observe_backpressure(Some(Duration::from_secs(5)));
+        assert_eq!(path_spool_replay_limit(limiter.as_ref()), 1);
+
+        let limiter = AdaptiveLimiter::new();
+        for _ in 0..4 {
+            limiter.observe_ingest_timing(10.0, Some(50.0), None, None, None, None);
+        }
+        assert_eq!(path_spool_replay_limit(limiter.as_ref()), 8);
     }
 
     #[test]

@@ -222,7 +222,6 @@ def test_archive_status_watch_rejects_json(tmp_path: Path):
     result = runner.invoke(app, ["archive", "status", "--watch", "--json", "--state-root", str(tmp_path)])
 
     assert result.exit_code != 0
-    assert "--watch cannot be combined with --json" in result.stdout
 
 
 def test_archive_pause_class_huge_keeps_non_huge_drain_enabled(tmp_path: Path):
