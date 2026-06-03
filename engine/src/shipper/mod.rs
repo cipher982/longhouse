@@ -2380,6 +2380,17 @@ pub(crate) async fn replay_ready_spool_for_path_with_batch_bytes_and_parse_track
     limiter: Option<&crate::scheduler::AdaptiveLimiter>,
 ) -> Result<ReplaySpoolOutcome> {
     let spool = Spool::new(conn);
+    if limit > 1 {
+        let merged =
+            spool.coalesce_ready_adjacent_for_path(&file_path.to_string_lossy(), limit * 4)?;
+        if merged > 0 {
+            tracing::debug!(
+                path = %file_path.display(),
+                merged,
+                "Coalesced adjacent ready archive ranges before replay"
+            );
+        }
+    }
     let pending = spool.pending_entries_for_path_ready(&file_path.to_string_lossy(), limit)?;
     replay_spool_entries(
         conn,

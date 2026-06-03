@@ -411,6 +411,75 @@ impl<'a> Spool<'a> {
         Ok(result)
     }
 
+    /// Merge ready adjacent or overlapping pending ranges for one path.
+    ///
+    /// This is a throughput optimization for archive repair: many tiny retry
+    /// pointers can represent contiguous bytes in the same transcript. Keeping
+    /// them as separate rows forces extra parse/build/HTTP loops. Only rows
+    /// with the same provider/session and already-ready retry predicate are
+    /// merged, preserving retry deferrals and cross-session boundaries.
+    pub fn coalesce_ready_adjacent_for_path(
+        &self,
+        file_path: &str,
+        scan_limit: usize,
+    ) -> Result<usize> {
+        let now = Utc::now().to_rfc3339();
+        let mut stmt = self.conn.prepare(
+            "SELECT id, provider, file_path, start_offset, end_offset, session_id
+             FROM spool_queue
+             WHERE status = 'pending'
+               AND file_path = ?2
+               AND (
+                   next_retry_at <= ?1
+                   OR (retry_count = 0 AND (last_error IS NULL OR TRIM(last_error) = ''))
+               )
+             ORDER BY start_offset ASC, end_offset ASC, id ASC
+             LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(
+            rusqlite::params![now, file_path, scan_limit as i64],
+            |row| {
+                Ok(SpoolEntry {
+                    id: row.get(0)?,
+                    provider: row.get(1)?,
+                    file_path: row.get(2)?,
+                    start_offset: row.get::<_, i64>(3)? as u64,
+                    end_offset: row.get::<_, i64>(4)? as u64,
+                    session_id: row.get(5)?,
+                })
+            },
+        )?;
+        let mut entries = Vec::new();
+        for row in rows {
+            entries.push(row?);
+        }
+        drop(stmt);
+
+        let Some(mut current) = entries.first().cloned() else {
+            return Ok(0);
+        };
+        let mut merged = 0usize;
+        for entry in entries.into_iter().skip(1) {
+            let same_partition =
+                entry.provider == current.provider && entry.session_id == current.session_id;
+            let touches_current = entry.start_offset <= current.end_offset;
+            if same_partition && touches_current {
+                let new_end = current.end_offset.max(entry.end_offset);
+                self.conn.execute(
+                    "UPDATE spool_queue SET end_offset = ?1 WHERE id = ?2",
+                    rusqlite::params![new_end as i64, current.id],
+                )?;
+                self.conn
+                    .execute("DELETE FROM spool_queue WHERE id = ?1", [entry.id])?;
+                current.end_offset = new_end;
+                merged += 1;
+            } else {
+                current = entry;
+            }
+        }
+        Ok(merged)
+    }
+
     /// Get pending retry entries for a single file path, ignoring next_retry_at backoff.
     pub fn pending_entries_for_path_now(
         &self,
@@ -1135,6 +1204,67 @@ mod tests {
             snapshot.next_deferred_retry_at.as_deref(),
             Some("2999-01-01T00:00:00+00:00")
         );
+    }
+
+    #[test]
+    fn test_coalesce_ready_adjacent_for_path_merges_same_session_ranges() {
+        let (_tmp, conn) = setup();
+        conn.execute(
+            "INSERT INTO spool_queue
+                (provider, file_path, start_offset, end_offset, session_id, created_at, next_retry_at, retry_count, last_error, status)
+             VALUES
+                ('codex', '/target.jsonl', 0, 100, 'session-a', '2026-03-12T00:00:00+00:00', '2000-01-01T00:00:00+00:00', 1, 'temporary', 'pending'),
+                ('codex', '/target.jsonl', 100, 200, 'session-a', '2026-03-12T00:00:01+00:00', '2000-01-01T00:00:00+00:00', 1, 'temporary', 'pending'),
+                ('codex', '/target.jsonl', 190, 250, 'session-a', '2026-03-12T00:00:02+00:00', '2000-01-01T00:00:00+00:00', 1, 'temporary', 'pending'),
+                ('codex', '/target.jsonl', 300, 350, 'session-a', '2026-03-12T00:00:03+00:00', '2000-01-01T00:00:00+00:00', 1, 'temporary', 'pending')",
+            [],
+        )
+        .unwrap();
+
+        let spool = Spool::new(&conn);
+        let merged = spool
+            .coalesce_ready_adjacent_for_path("/target.jsonl", 10)
+            .unwrap();
+
+        assert_eq!(merged, 2);
+        let entries = spool
+            .pending_entries_for_path_ready("/target.jsonl", 10)
+            .unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!((entries[0].start_offset, entries[0].end_offset), (0, 250));
+        assert_eq!((entries[1].start_offset, entries[1].end_offset), (300, 350));
+    }
+
+    #[test]
+    fn test_coalesce_ready_adjacent_for_path_respects_session_and_deferral() {
+        let (_tmp, conn) = setup();
+        conn.execute(
+            "INSERT INTO spool_queue
+                (provider, file_path, start_offset, end_offset, session_id, created_at, next_retry_at, retry_count, last_error, status)
+             VALUES
+                ('codex', '/target.jsonl', 0, 100, 'session-a', '2026-03-12T00:00:00+00:00', '2000-01-01T00:00:00+00:00', 1, 'temporary', 'pending'),
+                ('codex', '/target.jsonl', 100, 200, 'session-b', '2026-03-12T00:00:01+00:00', '2000-01-01T00:00:00+00:00', 1, 'temporary', 'pending'),
+                ('codex', '/target.jsonl', 200, 300, 'session-b', '2026-03-12T00:00:02+00:00', '2999-01-01T00:00:00+00:00', 1, '503 archive throttled', 'pending')",
+            [],
+        )
+        .unwrap();
+
+        let spool = Spool::new(&conn);
+        let merged = spool
+            .coalesce_ready_adjacent_for_path("/target.jsonl", 10)
+            .unwrap();
+
+        assert_eq!(merged, 0);
+        let ready = spool
+            .pending_entries_for_path_ready("/target.jsonl", 10)
+            .unwrap();
+        assert_eq!(ready.len(), 2);
+        assert_eq!((ready[0].start_offset, ready[0].end_offset), (0, 100));
+        assert_eq!((ready[1].start_offset, ready[1].end_offset), (100, 200));
+        let all = spool
+            .pending_entries_for_path_now("/target.jsonl", 10)
+            .unwrap();
+        assert_eq!(all.len(), 3);
     }
 
     #[test]
