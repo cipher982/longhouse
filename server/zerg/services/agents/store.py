@@ -1324,6 +1324,7 @@ class AgentsStore:
         data: SessionIngest,
         *,
         chunk_size: int | None = None,
+        synchronous_projections: bool = True,
     ) -> IngestResult:
         """Ingest a session with events, handling deduplication.
 
@@ -1334,6 +1335,8 @@ class AgentsStore:
             chunk_size: Override the per-chunk commit interval. ``None`` uses
                 the default (200). Larger values reduce fsync overhead for
                 replay/scan paths; smaller values keep live ingest responsive.
+            synchronous_projections: When false, skip expensive derived
+                projections that can be reconstructed after archive repair.
 
         Returns:
             IngestResult with counts of inserted/skipped events plus commit
@@ -1692,7 +1695,8 @@ class AgentsStore:
 
         stage_started = time.monotonic()
         head_branch_for_counts = self._align_head_branch_from_leaf_uuid(session_id, ingest_branch.id, leaf_uuid_hint)
-        self._sync_session_counts_to_head(session_id, head_branch_for_counts)
+        if synchronous_projections:
+            self._sync_session_counts_to_head(session_id, head_branch_for_counts)
 
         transcript_changed = bool(source_lines_inserted) or not source_lines or rewind_signal is not None
         if events_inserted > 0 and not transcript_changed:
@@ -1710,6 +1714,7 @@ class AgentsStore:
                 current = _normalize_utc_naive(session_obj.last_activity_at)
                 if current is None or latest_inserted_timestamp > current:
                     session_obj.last_activity_at = latest_inserted_timestamp
+            if synchronous_projections:
                 from zerg.services.provisional_events import cleanup_bridge_transcript_preview_observations
 
                 # Projection supersession below owns UI correctness; raw observation
@@ -1774,7 +1779,7 @@ class AgentsStore:
         _commit_with_telemetry()
         _record_stage("commit_after_runtime", stage_started)
 
-        if events_inserted > 0 and transcript_changed:
+        if events_inserted > 0 and transcript_changed and synchronous_projections:
             from zerg.services.session_turns import materialize_managed_transcript_turns
             from zerg.services.session_turns import maybe_mark_session_turn_durable
 

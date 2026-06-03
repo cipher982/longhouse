@@ -711,7 +711,11 @@ async def ingest_session(
             def _do_ingest(write_db):
                 write_started_at_ms = _unix_ms()
                 store = AgentsStore(write_db)
-                result = store.ingest_session(data, chunk_size=ingest_chunk)
+                result = store.ingest_session(
+                    data,
+                    chunk_size=ingest_chunk,
+                    synchronous_projections=write_label not in _ARCHIVE_INGEST_LABELS,
+                )
                 store_returned_at_ms = _unix_ms()
                 _persist_ship_trace_event(
                     write_db,
