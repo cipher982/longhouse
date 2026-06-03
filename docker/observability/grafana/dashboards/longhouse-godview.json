@@ -1,0 +1,195 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "graphTooltip": 1,
+  "title": "Longhouse God View",
+  "uid": "longhouse-godview",
+  "tags": ["longhouse", "godview"],
+  "timezone": "",
+  "schemaVersion": 39,
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "device",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "longhouse-prom" },
+        "query": "label_values(longhouse_device_last_heartbeat_timestamp_seconds, device)",
+        "includeAll": true,
+        "multi": true,
+        "refresh": 2
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Live ship path (instance)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Engine→server event age p95 (event_age_at_ingest)",
+      "description": "Upper bound on the engine→server hop. The live-lane SLA signal.",
+      "datasource": { "type": "prometheus", "uid": "longhouse-prom" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum(rate(event_age_at_ingest_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.5, sum(rate(event_age_at_ingest_seconds_bucket[5m])) by (le))",
+          "legendFormat": "p50"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Ingest throughput (events/sec by provider)",
+      "datasource": { "type": "prometheus", "uid": "longhouse-prom" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(agents_ingest_events_total[5m])) by (provider)",
+          "legendFormat": "{{provider}}"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Server write pressure",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 }
+    },
+    {
+      "type": "timeseries",
+      "title": "WriteSerializer queue wait p95 by label (ms)",
+      "datasource": { "type": "prometheus", "uid": "longhouse-prom" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 10 },
+      "fieldConfig": { "defaults": { "unit": "ms" } },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "longhouse_write_serializer_queue_wait_ms{quantile=\"p95\"}",
+          "legendFormat": "{{label}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "WriteSerializer queue depth + WAL bytes",
+      "datasource": { "type": "prometheus", "uid": "longhouse-prom" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 10 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "longhouse_write_serializer_queue_depth",
+          "legendFormat": "queue depth"
+        },
+        {
+          "refId": "B",
+          "expr": "longhouse_sqlite_wal_bytes",
+          "legendFormat": "WAL bytes"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Per-device shipping",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 18 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Device ship latency p95 (ms)",
+      "datasource": { "type": "prometheus", "uid": "longhouse-prom" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 19 },
+      "fieldConfig": { "defaults": { "unit": "ms" } },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "longhouse_device_ship_latency_ms{device=~\"$device\", quantile=\"p95\"}",
+          "legendFormat": "{{device}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Device spool pending / dead",
+      "datasource": { "type": "prometheus", "uid": "longhouse-prom" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 19 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "longhouse_device_spool_pending{device=~\"$device\"}",
+          "legendFormat": "{{device}} pending"
+        },
+        {
+          "refId": "B",
+          "expr": "longhouse_device_spool_dead{device=~\"$device\"}",
+          "legendFormat": "{{device}} dead"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Device archive backlog pending bytes",
+      "datasource": { "type": "prometheus", "uid": "longhouse-prom" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 27 },
+      "fieldConfig": { "defaults": { "unit": "bytes" } },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "longhouse_device_archive_backlog_pending_bytes{device=~\"$device\"}",
+          "legendFormat": "{{device}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Device heartbeat age (s) — derived",
+      "description": "time() - last heartbeat timestamp. Rising = device gone quiet.",
+      "datasource": { "type": "prometheus", "uid": "longhouse-prom" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 27 },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - longhouse_device_last_heartbeat_timestamp_seconds{device=~\"$device\"}",
+          "legendFormat": "{{device}}"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Devices offline (no heartbeat >15m)",
+      "description": "Derived from heartbeat staleness, not the self-reported flag.",
+      "datasource": { "type": "prometheus", "uid": "longhouse-prom" },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 35 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum((time() - longhouse_device_last_heartbeat_timestamp_seconds) > bool 900)",
+          "legendFormat": "offline"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Device consecutive ship failures",
+      "datasource": { "type": "prometheus", "uid": "longhouse-prom" },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 35 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "longhouse_device_consecutive_ship_failures{device=~\"$device\"}",
+          "legendFormat": "{{device}}"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: longhouse
+    orgId: 1
+    folder: Longhouse
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards

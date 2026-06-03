@@ -1,0 +1,26 @@
+# Prometheus config template. The compose entrypoint substitutes
+# __RUNTIME_METRICS_TARGET__ and __LONGHOUSE_METRICS_TOKEN__ from the
+# environment at launch so the gated /metrics scrape carries a bearer token
+# without committing a secret.
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+
+scrape_configs:
+  - job_name: longhouse-runtime
+    metrics_path: /metrics
+    scheme: http
+    authorization:
+      type: Bearer
+      credentials: "__LONGHOUSE_METRICS_TOKEN__"
+    static_configs:
+      - targets:
+          - "__RUNTIME_METRICS_TARGET__"
+        labels:
+          service: longhouse-runtime
+
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - "localhost:9090"

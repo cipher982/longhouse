@@ -66,6 +66,16 @@ def _refresh_dynamic_gauges() -> None:
     except Exception:
         logger.exception("Failed to refresh dynamic metrics gauges")
 
+    # God-view gauges: WriteSerializer + WAL state and per-device heartbeat
+    # state. The helper guards its own failures so a bad read never blocks the
+    # rest of the scrape.
+    try:
+        from zerg.services.godview_metrics import refresh_godview_gauges
+
+        refresh_godview_gauges()
+    except Exception:
+        logger.exception("Failed to refresh god-view gauges")
+
 
 try:
     from prometheus_client import CONTENT_TYPE_LATEST  # type: ignore

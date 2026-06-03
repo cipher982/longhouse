@@ -1,0 +1,71 @@
+# Longhouse "god view" observability stack (opt-in, separate from the app).
+#
+# Prometheus scrapes the runtime's gated /metrics and retains the gauges the
+# runtime now exports (write-serializer/WAL state + per-device heartbeat
+# state). Grafana renders the unified dashboard.
+#
+# This is intentionally NOT part of docker/docker-compose.dev.yml so `make dev`
+# stays lean. Bring it up with `make observability-up`.
+#
+# The runtime gates /metrics. Set LONGHOUSE_METRICS_TOKEN in the runtime env and
+# in this stack's environment (.env or shell) so Prometheus can authenticate.
+#
+#   make observability-up
+#   open http://localhost:3001   (Grafana; admin / ${GRAFANA_ADMIN_PASSWORD:-admin})
+#
+# RUNTIME_METRICS_TARGET defaults to host.docker.internal:8080 (a local
+# `longhouse serve`). Override for the dev compose backend or a remote host.
+
+services:
+  prometheus:
+    image: prom/prometheus:v3.1.0
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+      - "--web.enable-lifecycle"
+    environment:
+      RUNTIME_METRICS_TARGET: ${RUNTIME_METRICS_TARGET:-host.docker.internal:8080}
+      LONGHOUSE_METRICS_TOKEN: ${LONGHOUSE_METRICS_TOKEN:-}
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.tmpl.yml:ro
+      - prometheus_data:/prometheus
+    # envsubst the target/token into the live config before launch so the
+    # gated /metrics scrape carries the bearer token without committing it.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        sed -e "s|__RUNTIME_METRICS_TARGET__|$${RUNTIME_METRICS_TARGET}|g" \
+            -e "s|__LONGHOUSE_METRICS_TOKEN__|$${LONGHOUSE_METRICS_TOKEN}|g" \
+            /etc/prometheus/prometheus.tmpl.yml > /etc/prometheus/prometheus.yml
+        exec /bin/prometheus \
+          --config.file=/etc/prometheus/prometheus.yml \
+          --storage.tsdb.path=/prometheus \
+          --storage.tsdb.retention.time=30d \
+          --web.enable-lifecycle
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana:11.5.0
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3001}:3000"
+
+volumes:
+  prometheus_data:
+  grafana_data:

@@ -302,6 +302,121 @@ try:
         labelnames=("outcome",),
     )
 
+    # ------------------------------------------------------------------
+    # God-view gauges: current operational state, refreshed at scrape time
+    # (see routers/metrics.py::_refresh_dynamic_gauges). These turn the
+    # point-in-time /health write-serializer view and the latest-per-device
+    # heartbeat snapshots into retained Prometheus time series so a single
+    # dashboard can show where time goes across devices + instance.
+    # ------------------------------------------------------------------
+
+    # Server-side WriteSerializer current state (from get_metrics()).
+    write_serializer_queue_depth = Gauge(
+        "longhouse_write_serializer_queue_depth",
+        "WriteSerializer pending queue depth at scrape time",
+    )
+
+    write_serializer_writer_active = Gauge(
+        "longhouse_write_serializer_writer_active",
+        "Whether a WriteSerializer writer currently holds the slot (1/0)",
+    )
+
+    write_serializer_active_age_ms = Gauge(
+        "longhouse_write_serializer_active_age_ms",
+        "Age of the currently active WriteSerializer write in milliseconds",
+    )
+
+    write_serializer_idle_queue_stalled = Gauge(
+        "longhouse_write_serializer_idle_queue_stalled",
+        "Whether the WriteSerializer queue is nonempty but no writer is active (1/0)",
+    )
+
+    # Rolling per-label queue-wait / exec percentiles (p50/p95/p99).
+    write_serializer_queue_wait_ms = Gauge(
+        "longhouse_write_serializer_queue_wait_ms",
+        "Rolling WriteSerializer queue-wait latency per label and quantile (ms)",
+        labelnames=("label", "quantile"),
+    )
+
+    write_serializer_exec_ms = Gauge(
+        "longhouse_write_serializer_exec_ms",
+        "Rolling WriteSerializer exec latency per label and quantile (ms)",
+        labelnames=("label", "quantile"),
+    )
+
+    # SQLite WAL pressure: cheapest leading indicator of write backpressure.
+    sqlite_wal_bytes = Gauge(
+        "longhouse_sqlite_wal_bytes",
+        "Current SQLite WAL file size in bytes",
+    )
+
+    # Per-device shipping state from the latest heartbeat per device. Device
+    # cardinality is low (a handful of user-owned machines). Age/offline are
+    # derived in PromQL from the last-heartbeat timestamp to avoid emitting
+    # stale gauge children for devices that stop reporting.
+    device_last_heartbeat_timestamp_seconds = Gauge(
+        "longhouse_device_last_heartbeat_timestamp_seconds",
+        "Unix timestamp of the latest heartbeat received per device",
+        labelnames=("device",),
+    )
+
+    device_ship_latency_ms = Gauge(
+        "longhouse_device_ship_latency_ms",
+        "Per-device ship latency from the latest heartbeat (ms)",
+        labelnames=("device", "quantile"),
+    )
+
+    device_spool_pending = Gauge(
+        "longhouse_device_spool_pending",
+        "Per-device spool pending count from the latest heartbeat",
+        labelnames=("device",),
+    )
+
+    device_spool_dead = Gauge(
+        "longhouse_device_spool_dead",
+        "Per-device spool dead-letter count from the latest heartbeat",
+        labelnames=("device",),
+    )
+
+    device_consecutive_ship_failures = Gauge(
+        "longhouse_device_consecutive_ship_failures",
+        "Per-device consecutive ship failures from the latest heartbeat",
+        labelnames=("device",),
+    )
+
+    device_parse_errors_1h = Gauge(
+        "longhouse_device_parse_errors_1h",
+        "Per-device parse errors in the last hour from the latest heartbeat",
+        labelnames=("device",),
+    )
+
+    device_disk_free_bytes = Gauge(
+        "longhouse_device_disk_free_bytes",
+        "Per-device free disk bytes from the latest heartbeat",
+        labelnames=("device",),
+    )
+
+    # The heartbeat's own self-reported offline flag. This is NOT the staleness
+    # overlay — a device that went silent without reporting still shows 0 here.
+    # Derive true offline from device_last_heartbeat_timestamp_seconds in PromQL.
+    device_reported_offline = Gauge(
+        "longhouse_device_reported_offline",
+        "Per-device self-reported offline flag from the latest heartbeat (1/0)",
+        labelnames=("device",),
+    )
+
+    device_archive_backlog_pending_bytes = Gauge(
+        "longhouse_device_archive_backlog_pending_bytes",
+        "Per-device archive backlog pending bytes from the latest heartbeat",
+        labelnames=("device",),
+    )
+
+    device_archive_backlog_pending_ranges = Gauge(
+        "longhouse_device_archive_backlog_pending_ranges",
+        "Per-device archive backlog pending ranges from the latest heartbeat",
+        labelnames=("device",),
+    )
+
 except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib absent
 
     class _NoopCounter:  # noqa: D401 – tiny helper
@@ -383,3 +498,22 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     canary_latency_seconds = _NoopHistogram()  # type: ignore[assignment]
     canary_observations_total = _NoopCounter()  # type: ignore[assignment]
     canary_seq_last_seen = _NoopGauge()  # type: ignore[assignment]
+
+    # God-view gauges (see the configured branch above).
+    write_serializer_queue_depth = _NoopGauge()  # type: ignore[assignment]
+    write_serializer_writer_active = _NoopGauge()  # type: ignore[assignment]
+    write_serializer_active_age_ms = _NoopGauge()  # type: ignore[assignment]
+    write_serializer_idle_queue_stalled = _NoopGauge()  # type: ignore[assignment]
+    write_serializer_queue_wait_ms = _NoopGauge()  # type: ignore[assignment]
+    write_serializer_exec_ms = _NoopGauge()  # type: ignore[assignment]
+    sqlite_wal_bytes = _NoopGauge()  # type: ignore[assignment]
+    device_last_heartbeat_timestamp_seconds = _NoopGauge()  # type: ignore[assignment]
+    device_ship_latency_ms = _NoopGauge()  # type: ignore[assignment]
+    device_spool_pending = _NoopGauge()  # type: ignore[assignment]
+    device_spool_dead = _NoopGauge()  # type: ignore[assignment]
+    device_consecutive_ship_failures = _NoopGauge()  # type: ignore[assignment]
+    device_parse_errors_1h = _NoopGauge()  # type: ignore[assignment]
+    device_disk_free_bytes = _NoopGauge()  # type: ignore[assignment]
+    device_reported_offline = _NoopGauge()  # type: ignore[assignment]
+    device_archive_backlog_pending_bytes = _NoopGauge()  # type: ignore[assignment]
+    device_archive_backlog_pending_ranges = _NoopGauge()  # type: ignore[assignment]
