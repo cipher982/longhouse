@@ -117,6 +117,9 @@ pub struct LimiterSnapshot {
     pub target_queue_wait_ms: f64,
     pub ewma_queue_wait_ms: Option<f64>,
     pub last_observed_queue_wait_ms: Option<f64>,
+    pub pressure_state: &'static str,
+    pub huge_range_eligible: bool,
+    pub huge_range_suppressed_reason: Option<&'static str>,
     pub last_direction: &'static str,
     pub total_observations: u64,
     pub total_increases: u64,
@@ -247,6 +250,35 @@ impl AdaptiveLimiter {
         }
     }
 
+    fn huge_range_policy(
+        state: &AdaptiveLimiterState,
+        now: Instant,
+    ) -> (bool, &'static str, Option<&'static str>) {
+        if state
+            .backpressure_cooldown_until
+            .is_some_and(|until| until > now)
+        {
+            return (
+                false,
+                "backpressure_cooldown",
+                Some("backpressure_cooldown"),
+            );
+        }
+        if state
+            .ewma_queue_wait_ms
+            .is_some_and(|ewma| ewma > TARGET_QUEUE_WAIT_MS)
+        {
+            return (false, "host_queue_pressure", Some("host_queue_pressure"));
+        }
+        (true, "normal", None)
+    }
+
+    pub fn huge_range_eligible(&self) -> bool {
+        let state = self.state.lock().expect("limiter state poisoned");
+        let (eligible, _, _) = Self::huge_range_policy(&state, Instant::now());
+        eligible
+    }
+
     fn try_adjust(&self, state: &mut AdaptiveLimiterState) {
         if state.samples_since_adjust < DAMP_MIN_SAMPLES {
             return;
@@ -318,6 +350,8 @@ impl AdaptiveLimiter {
         let cap = self.current_cap.load(Ordering::Relaxed);
         let state = self.state.lock().expect("limiter state poisoned");
         let now = Instant::now();
+        let (huge_range_eligible, pressure_state, huge_range_suppressed_reason) =
+            Self::huge_range_policy(&state, now);
         LimiterSnapshot {
             current_cap: cap,
             floor: BACKLOG_CAP_FLOOR,
@@ -325,6 +359,9 @@ impl AdaptiveLimiter {
             target_queue_wait_ms: TARGET_QUEUE_WAIT_MS,
             ewma_queue_wait_ms: state.ewma_queue_wait_ms,
             last_observed_queue_wait_ms: state.last_observed_queue_wait_ms,
+            pressure_state,
+            huge_range_eligible,
+            huge_range_suppressed_reason,
             last_direction: state.last_direction.as_str(),
             total_observations: state.total_observations,
             total_increases: state.total_increases,
@@ -1433,6 +1470,12 @@ mod tests {
         assert_eq!(snap.last_backpressure_retry_after_ms, Some(5_000));
         assert!(snap.backpressure_cooldown_remaining_ms.is_some());
         assert_eq!(snap.last_direction, "decreased");
+        assert!(!snap.huge_range_eligible);
+        assert_eq!(snap.pressure_state, "backpressure_cooldown");
+        assert_eq!(
+            snap.huge_range_suppressed_reason,
+            Some("backpressure_cooldown")
+        );
     }
 
     #[test]
@@ -1457,5 +1500,38 @@ mod tests {
         assert_eq!(snap.total_backpressure, 1);
         assert!(snap.backpressure_cooldown_remaining_ms.is_some());
         assert_eq!(snap.last_direction, "held");
+    }
+
+    #[test]
+    fn adaptive_limiter_suppresses_huge_ranges_under_host_queue_pressure() {
+        let limiter = AdaptiveLimiter::new();
+        assert!(limiter.huge_range_eligible());
+
+        for _ in 0..DAMP_MIN_SAMPLES {
+            limiter.observe(1_000.0);
+        }
+
+        let snap = limiter.snapshot();
+        assert!(!limiter.huge_range_eligible());
+        assert!(!snap.huge_range_eligible);
+        assert_eq!(snap.pressure_state, "host_queue_pressure");
+        assert_eq!(
+            snap.huge_range_suppressed_reason,
+            Some("host_queue_pressure")
+        );
+    }
+
+    #[test]
+    fn adaptive_limiter_allows_huge_ranges_when_pressure_is_below_target() {
+        let limiter = AdaptiveLimiter::new();
+        for _ in 0..DAMP_MIN_SAMPLES {
+            limiter.observe(10.0);
+        }
+
+        let snap = limiter.snapshot();
+        assert!(limiter.huge_range_eligible());
+        assert!(snap.huge_range_eligible);
+        assert_eq!(snap.pressure_state, "normal");
+        assert_eq!(snap.huge_range_suppressed_reason, None);
     }
 }

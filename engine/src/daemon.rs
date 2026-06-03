@@ -29,7 +29,7 @@ use crate::managed_claude_scan;
 use crate::managed_reaper::ManagedBridgeReaper;
 use crate::outbox;
 use crate::pipeline::compressor::CompressionAlgo;
-use crate::scheduler::{ObservationTrace, PathJob, PathScheduler, WorkPriority};
+use crate::scheduler::{AdaptiveLimiter, ObservationTrace, PathJob, PathScheduler, WorkPriority};
 use crate::shipper;
 use crate::shipping::client::ShipperClient;
 use crate::shipping_stats::RecentShipStatsTracker;
@@ -395,8 +395,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut managed_observation_scan_tasks: JoinSet<ManagedObservationScanResult> = JoinSet::new();
     let mut deferred_retries = HashMap::new();
 
-    let initial_retry_paths =
-        queue_pending_spool_paths(&mut scheduler, &conn, INITIAL_SPOOL_PATH_LIMIT)?;
+    let initial_retry_paths = queue_pending_spool_paths(
+        &mut scheduler,
+        &conn,
+        INITIAL_SPOOL_PATH_LIMIT,
+        Some(adaptive_limiter.as_ref()),
+    )?;
     maybe_start_managed_observation_scan(&mut managed_observation_scan_tasks, "startup");
     tracing::info!(
         "Queued startup catch-up: {} retry paths; startup reconciliation deferred by {:?} (max {} concurrent)",
@@ -491,6 +495,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             &conn,
             offline.is_offline,
             PERIODIC_SPOOL_PATH_LIMIT,
+            Some(adaptive_limiter.as_ref()),
         ) {
             Ok(queued) if queued > 0 => {
                 tracing::info!(
@@ -1149,7 +1154,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             // Spool replay (retry failed shipments) — skip when offline
             _ = spool_timer.tick(), if !offline.is_offline => {
-                match queue_pending_spool_paths(&mut scheduler, &conn, PERIODIC_SPOOL_PATH_LIMIT) {
+                match queue_pending_spool_paths(
+                    &mut scheduler,
+                    &conn,
+                    PERIODIC_SPOOL_PATH_LIMIT,
+                    Some(adaptive_limiter.as_ref()),
+                ) {
                     Ok(queued) => {
                         if queued > 0 {
                             tracing::debug!("Queued {} retry paths from spool", queued);
@@ -1927,6 +1937,7 @@ fn queue_pending_spool_paths(
     scheduler: &mut PathScheduler,
     conn: &rusqlite::Connection,
     limit: usize,
+    limiter: Option<&AdaptiveLimiter>,
 ) -> Result<usize> {
     let spool = Spool::new(conn);
     let cleaned = spool.cleanup()?;
@@ -1940,10 +1951,14 @@ fn queue_pending_spool_paths(
         return Ok(0);
     }
 
+    let pressure_allows_huge = limiter.map_or(true, AdaptiveLimiter::huge_range_eligible);
+    let include_huge = control.includes_huge() && pressure_allows_huge;
+    if control.includes_huge() && !pressure_allows_huge {
+        tracing::debug!("Skipping huge archive replay paths while host pressure is above target");
+    }
+
     let mut queued = 0usize;
-    for pending in
-        spool.pending_paths_budgeted(limit, control.tick_bytes(), control.includes_huge())?
-    {
+    for pending in spool.pending_paths_budgeted(limit, control.tick_bytes(), include_huge)? {
         let Some(provider) = provider_name_to_static(&pending.provider) else {
             tracing::warn!(
                 "Skipping pending spool path with unknown provider {}: {}",
@@ -1969,11 +1984,12 @@ fn queue_pending_spool_paths_if_idle(
     conn: &rusqlite::Connection,
     offline: bool,
     limit: usize,
+    limiter: Option<&AdaptiveLimiter>,
 ) -> Result<usize> {
     if offline || scheduler.has_pending_work() {
         return Ok(0);
     }
-    queue_pending_spool_paths(scheduler, conn, limit)
+    queue_pending_spool_paths(scheduler, conn, limit, limiter)
 }
 
 fn provider_name_to_static(provider: &str) -> Option<&'static str> {
@@ -3762,13 +3778,60 @@ mod tests {
             .unwrap();
 
         let mut scheduler = PathScheduler::new(4);
-        let queued = queue_pending_spool_paths_if_idle(&mut scheduler, &conn, false, 10).unwrap();
+        let queued =
+            queue_pending_spool_paths_if_idle(&mut scheduler, &conn, false, 10, None).unwrap();
 
         assert_eq!(queued, 1);
         let job = scheduler.pop_launchable().expect("spool job queued");
         assert_eq!(job.path, PathBuf::from(&path));
         assert_eq!(job.priority, WorkPriority::Retry);
         assert_eq!(job.observation.source, "spool_pending");
+    }
+
+    #[test]
+    fn test_queue_pending_spool_paths_suppresses_huge_under_host_pressure() {
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        Spool::new(&conn)
+            .enqueue(
+                "codex",
+                "/tmp/small-ready.jsonl",
+                0,
+                100,
+                Some("small-session"),
+            )
+            .unwrap();
+        Spool::new(&conn)
+            .enqueue(
+                "codex",
+                "/tmp/huge-ready.jsonl",
+                0,
+                200 * 1024 * 1024,
+                Some("huge-session"),
+            )
+            .unwrap();
+
+        let limiter = AdaptiveLimiter::new();
+        for _ in 0..4 {
+            limiter.observe(1_000.0);
+        }
+        assert!(!limiter.huge_range_eligible());
+
+        let mut scheduler = PathScheduler::new(4);
+        let queued = queue_pending_spool_paths_if_idle(
+            &mut scheduler,
+            &conn,
+            false,
+            10,
+            Some(limiter.as_ref()),
+        )
+        .unwrap();
+
+        assert_eq!(queued, 1);
+        let job = scheduler.pop_launchable().expect("small spool job queued");
+        assert_eq!(job.path, PathBuf::from("/tmp/small-ready.jsonl"));
+        assert_eq!(job.priority, WorkPriority::Retry);
+        assert!(scheduler.pop_launchable().is_none());
     }
 
     #[test]

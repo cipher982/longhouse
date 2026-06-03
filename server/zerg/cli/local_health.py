@@ -231,6 +231,12 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
         huge_ranges = int(archive_repair.get("huge_pending_ranges") or 0)
         if huge_ranges:
             typer.echo(f"  huge ranges: {huge_ranges} ranges, {_format_bytes(archive_repair.get('huge_pending_bytes'))}")
+            huge_eligible = limiter.get("huge_range_eligible")
+            huge_suppressed_reason = limiter.get("huge_range_suppressed_reason")
+            if huge_eligible is False:
+                typer.echo(f"  huge eligibility: suppressed ({huge_suppressed_reason or 'host_pressure'})")
+            elif huge_eligible is True:
+                typer.echo("  huge eligibility: allowed")
         oldest = archive_repair.get("oldest_pending_at")
         newest = archive_repair.get("newest_pending_at")
         if oldest or newest:
