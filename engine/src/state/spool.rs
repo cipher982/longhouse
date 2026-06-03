@@ -314,6 +314,7 @@ impl<'a> Spool<'a> {
     }
 
     /// Get pending retry entries for a single file path, oldest-first.
+    #[cfg(test)]
     pub fn pending_entries_for_path(
         &self,
         file_path: &str,
@@ -324,6 +325,47 @@ impl<'a> Spool<'a> {
             "SELECT id, provider, file_path, start_offset, end_offset, session_id
              FROM spool_queue
              WHERE status = 'pending' AND next_retry_at <= ?1 AND file_path = ?2
+             ORDER BY created_at ASC, id ASC
+             LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![now, file_path, limit as i64], |row| {
+            Ok(SpoolEntry {
+                id: row.get(0)?,
+                provider: row.get(1)?,
+                file_path: row.get(2)?,
+                start_offset: row.get::<_, i64>(3)? as u64,
+                end_offset: row.get::<_, i64>(4)? as u64,
+                session_id: row.get(5)?,
+            })
+        })?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
+    /// Get ready pending retry entries for a single file path, oldest-first.
+    ///
+    /// Rows that have never actually failed are ready even if `next_retry_at`
+    /// is in the future. Those future timestamps can be inherited from a
+    /// coarse archive-control deferral; treating them as hard backoff strands
+    /// fresh backlog work behind an unrelated retry clock.
+    pub fn pending_entries_for_path_ready(
+        &self,
+        file_path: &str,
+        limit: usize,
+    ) -> Result<Vec<SpoolEntry>> {
+        let now = Utc::now().to_rfc3339();
+        let mut stmt = self.conn.prepare(
+            "SELECT id, provider, file_path, start_offset, end_offset, session_id
+             FROM spool_queue
+             WHERE status = 'pending'
+               AND file_path = ?2
+               AND (
+                   next_retry_at <= ?1
+                   OR (retry_count = 0 AND (last_error IS NULL OR TRIM(last_error) = ''))
+               )
              ORDER BY created_at ASC, id ASC
              LIMIT ?3",
         )?;
@@ -874,6 +916,31 @@ mod tests {
                 file_path: "/never-failed.jsonl".to_string(),
             }]
         );
+    }
+
+    #[test]
+    fn test_pending_entries_for_path_ready_treats_never_failed_future_retry_as_ready() {
+        let (_tmp, conn) = setup();
+        conn.execute(
+            "INSERT INTO spool_queue
+                (provider, file_path, start_offset, end_offset, created_at, next_retry_at, retry_count, last_error, status)
+             VALUES
+                ('codex', '/target.jsonl', 0, 1000, '2026-03-12T00:00:00+00:00', '2999-01-01T00:00:00+00:00', 0, '', 'pending'),
+                ('codex', '/target.jsonl', 1000, 2000, '2026-03-12T00:00:01+00:00', '2999-01-01T00:00:00+00:00', 1, '503 archive throttled', 'pending'),
+                ('codex', '/other.jsonl', 0, 1000, '2026-03-12T00:00:02+00:00', '2999-01-01T00:00:00+00:00', 0, '', 'pending')",
+            [],
+        )
+        .unwrap();
+
+        let spool = Spool::new(&conn);
+        let strict = spool.pending_entries_for_path("/target.jsonl", 10).unwrap();
+        assert!(strict.is_empty());
+
+        let ready = spool
+            .pending_entries_for_path_ready("/target.jsonl", 10)
+            .unwrap();
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].start_offset, 0);
     }
 
     #[test]

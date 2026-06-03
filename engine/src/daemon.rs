@@ -486,6 +486,21 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     );
 
     loop {
+        match queue_pending_spool_paths_if_idle(
+            &mut scheduler,
+            &conn,
+            offline.is_offline,
+            PERIODIC_SPOOL_PATH_LIMIT,
+        ) {
+            Ok(queued) if queued > 0 => {
+                tracing::info!(
+                    queued,
+                    "Queued archive replay paths after local scheduler drained"
+                );
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!("Spool replay error while refilling idle scheduler: {}", e),
+        }
         pump_ready_local_work(
             &mut scheduler,
             &mut in_flight,
@@ -1945,6 +1960,18 @@ fn queue_pending_spool_paths(
     Ok(queued)
 }
 
+fn queue_pending_spool_paths_if_idle(
+    scheduler: &mut PathScheduler,
+    conn: &rusqlite::Connection,
+    offline: bool,
+    limit: usize,
+) -> Result<usize> {
+    if offline || scheduler.has_pending_work() {
+        return Ok(0);
+    }
+    queue_pending_spool_paths(scheduler, conn, limit)
+}
+
 fn provider_name_to_static(provider: &str) -> Option<&'static str> {
     match provider {
         "claude" => Some("claude"),
@@ -2461,7 +2488,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             wake_reason: result.job.observation.wake_reason.clone(),
             file_len_hint: result.job.observation.file_len_hint,
         };
-        match shipper::replay_spool_for_path_with_batch_bytes_and_parse_tracker(
+        match shipper::replay_ready_spool_for_path_with_batch_bytes_and_parse_tracker(
             &conn,
             &task_context.client,
             task_context.algo,
@@ -2499,7 +2526,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         }
 
         let ready_spool_remaining = Spool::new(&conn)
-            .pending_entries_for_path(&result.job.path.to_string_lossy(), 1)
+            .pending_entries_for_path_ready(&result.job.path.to_string_lossy(), 1)
             .map(|entries| !entries.is_empty())
             .unwrap_or(false);
         if ready_spool_remaining {
@@ -3710,6 +3737,26 @@ mod tests {
         );
         assert_eq!(deferred_retries.len(), 1);
         assert!(deferred_retries.contains_key(&PathBuf::from("/tmp/retry-later.jsonl")));
+    }
+
+    #[test]
+    fn test_queue_pending_spool_paths_if_idle_refills_drained_scheduler() {
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let transcript = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let path = transcript.path().to_string_lossy().to_string();
+        Spool::new(&conn)
+            .enqueue("codex", &path, 0, 100, Some("session-id"))
+            .unwrap();
+
+        let mut scheduler = PathScheduler::new(4);
+        let queued = queue_pending_spool_paths_if_idle(&mut scheduler, &conn, false, 10).unwrap();
+
+        assert_eq!(queued, 1);
+        let job = scheduler.pop_launchable().expect("spool job queued");
+        assert_eq!(job.path, PathBuf::from(&path));
+        assert_eq!(job.priority, WorkPriority::Retry);
+        assert_eq!(job.observation.source, "spool_pending");
     }
 
     #[test]

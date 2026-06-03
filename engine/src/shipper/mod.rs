@@ -2175,6 +2175,7 @@ pub(crate) async fn replay_spool_batch_with_batch_bytes_and_parse_tracker(
     Ok((outcome.resolved, outcome.failed))
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn replay_spool_for_path_with_batch_bytes_and_parse_tracker(
     conn: &Connection,
@@ -2191,6 +2192,37 @@ pub(crate) async fn replay_spool_for_path_with_batch_bytes_and_parse_tracker(
 ) -> Result<ReplaySpoolOutcome> {
     let spool = Spool::new(conn);
     let pending = spool.pending_entries_for_path(&file_path.to_string_lossy(), limit)?;
+    replay_spool_entries(
+        conn,
+        client,
+        algo,
+        &pending,
+        max_batch_bytes,
+        parse_tracker,
+        ship_stats,
+        flight_recorder,
+        ship_trace,
+        limiter,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn replay_ready_spool_for_path_with_batch_bytes_and_parse_tracker(
+    conn: &Connection,
+    client: &ShipperClient,
+    algo: CompressionAlgo,
+    file_path: &Path,
+    limit: usize,
+    max_batch_bytes: u64,
+    parse_tracker: Option<&RecentIssueTracker>,
+    ship_stats: Option<&RecentShipStatsTracker>,
+    flight_recorder: Option<&FlightRecorder>,
+    ship_trace: Option<&ShipTraceContext>,
+    limiter: Option<&crate::scheduler::AdaptiveLimiter>,
+) -> Result<ReplaySpoolOutcome> {
+    let spool = Spool::new(conn);
+    let pending = spool.pending_entries_for_path_ready(&file_path.to_string_lossy(), limit)?;
     replay_spool_entries(
         conn,
         client,
@@ -4548,7 +4580,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_replay_spool_for_path_now_ignores_backoff_for_target_file() {
+    async fn test_replay_ready_spool_for_path_replays_never_failed_future_retry() {
         let (_tmp, conn) = make_db();
         let dir = tempfile::tempdir().unwrap();
         let path = dir
@@ -4579,9 +4611,10 @@ mod tests {
                 Some("cccccccc-1111-2222-3333-444455556666"),
             )
             .unwrap();
+        let future_retry_at = (chrono::Utc::now() + chrono::Duration::minutes(5)).to_rfc3339();
         conn.execute(
-            "UPDATE spool_queue SET next_retry_at = datetime('now', '+5 minutes') WHERE file_path = ?1",
-            [&path_str],
+            "UPDATE spool_queue SET next_retry_at = ?1 WHERE file_path = ?2",
+            rusqlite::params![future_retry_at, path_str],
         )
         .unwrap();
 
@@ -4605,7 +4638,7 @@ mod tests {
 
         let (url, handle) = spawn_http_response_server("200 OK", "{}");
         let client = make_test_client(&url);
-        let immediate = replay_spool_for_path_now_with_batch_bytes_and_parse_tracker(
+        let ready = replay_ready_spool_for_path_with_batch_bytes_and_parse_tracker(
             &conn,
             &client,
             CompressionAlgo::Gzip,
@@ -4614,14 +4647,17 @@ mod tests {
             10_000,
             None,
             None,
+            None,
+            None,
+            None,
         )
         .await
         .unwrap();
         handle.join().unwrap();
 
-        assert_eq!(immediate.resolved, 1);
-        assert_eq!(immediate.failed, 0);
-        assert_eq!(immediate.events_shipped, 2);
+        assert_eq!(ready.resolved, 1);
+        assert_eq!(ready.failed, 0);
+        assert_eq!(ready.events_shipped, 2);
         assert_eq!(file_state.get_offset(&path_str).unwrap(), file_len);
         assert!(spool
             .pending_entries_for_path_now(&path_str, 10)
