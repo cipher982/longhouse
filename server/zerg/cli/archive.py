@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -73,15 +74,34 @@ def _shipper_diagnostics(
 @app.command("status")
 def status_command(
     json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+    watch: bool = typer.Option(False, "--watch", help="Refresh until interrupted."),
+    interval: float = typer.Option(2.0, "--interval", min=0.5, help="Watch refresh interval in seconds."),
     state_root: Path | None = typer.Option(None, "--state-root", help="Longhouse home override for tests/debugging."),
 ) -> None:
     """Show local archive backlog repair state."""
+
+    if watch and json_output:
+        raise typer.BadParameter("--watch cannot be combined with --json")
+
+    if watch:
+        try:
+            while True:
+                typer.echo("\033[2J\033[H", nl=False)
+                _render_status_summary(collect_archive_backlog(state_root))
+                time.sleep(interval)
+        except KeyboardInterrupt:
+            return
+        return
 
     summary = collect_archive_backlog(state_root)
     if json_output:
         typer.echo(json.dumps(summary, indent=2))
         return
 
+    _render_status_summary(summary)
+
+
+def _render_status_summary(summary: dict[str, Any]) -> None:
     typer.echo(f"Archive repair: {summary['state']} ({summary['mode']})")
     typer.echo(f"  pending ranges:   {summary['pending_ranges']}")
     typer.echo(f"  pending paths:    {summary['pending_paths']}")

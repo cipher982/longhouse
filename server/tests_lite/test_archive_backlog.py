@@ -216,6 +216,14 @@ def test_archive_status_prefers_engine_status_and_includes_shipper_diagnostics(t
     assert speed_payload["live"]["limiter_state"] == "healthy"
 
 
+def test_archive_status_watch_rejects_json(tmp_path: Path):
+    runner = CliRunner()
+    result = runner.invoke(app, ["archive", "status", "--watch", "--json", "--state-root", str(tmp_path)])
+
+    assert result.exit_code != 0
+    assert "--watch cannot be combined with --json" in result.stdout
+
+
 def test_ready_archive_backlog_makes_pending_ranges_eligible(tmp_path: Path):
     _create_spool_db(tmp_path)
 
