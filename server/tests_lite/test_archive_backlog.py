@@ -261,3 +261,26 @@ def test_archive_drain_retry_now_cli_resets_pending_clocks(tmp_path: Path):
 
     assert result.exit_code == 0
     assert "Archive retry clocks reset for 2 pending range(s)." in result.stdout
+
+
+def test_archive_drain_max_safe_excludes_huge_ranges(tmp_path: Path):
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["archive", "drain", "--target", "max-safe", "--state-root", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert "Archive repair max-safe drain enabled" in result.stdout
+    payload = json.loads((get_agent_state_dir(tmp_path) / "archive-repair-control.json").read_text())
+    assert payload["mode"] == "drain"
+    assert payload["max_tick_bytes"] == 4 * 1024 * 1024 * 1024
+    assert payload["include_huge"] is False
+
+
+def test_archive_inspect_largest_cli_is_explicit(tmp_path: Path):
+    _create_spool_db(tmp_path)
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["archive", "inspect", "--largest", "--limit", "1", "--state-root", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert "codex 2.0 MB 2 range(s) /tmp/a.jsonl" in result.stdout

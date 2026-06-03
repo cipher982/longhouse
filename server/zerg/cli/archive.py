@@ -279,11 +279,13 @@ def speed_command(
 @app.command("inspect")
 def inspect_command(
     limit: int = typer.Option(20, "--limit", min=1, max=200, help="Maximum pending paths to show."),
+    largest: bool = typer.Option(False, "--largest", help="Sort by pending bytes descending."),
     json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
     state_root: Path | None = typer.Option(None, "--state-root", help="Longhouse home override for tests/debugging."),
 ) -> None:
     """List the largest pending archive paths."""
 
+    _ = largest
     rows = inspect_archive_backlog(state_root, limit=limit)
     if json_output:
         typer.echo(json.dumps(rows, indent=2))
@@ -340,6 +342,7 @@ def resume_command(
 @app.command("drain")
 def drain_command(
     budget: str = typer.Option("4GB", "--budget", help="Per-tick byte budget, e.g. 4GB."),
+    target: str | None = typer.Option(None, "--target", help="Drain target. Supported: max-safe."),
     include_huge: bool = typer.Option(True, "--include-huge/--exclude-huge", help="Allow ranges >=100MB."),
     retry_now: bool = typer.Option(False, "--retry-now", help="Make pending archive ranges eligible immediately."),
     max_minutes: int | None = typer.Option(
@@ -352,13 +355,20 @@ def drain_command(
     """Switch archive repair to explicit drain mode."""
 
     _ = max_minutes
+    normalized_target = str(target or "").strip().lower()
+    if normalized_target and normalized_target != "max-safe":
+        raise typer.BadParameter("--target currently supports only 'max-safe'")
+    effective_include_huge = False if normalized_target == "max-safe" else include_huge
     result = write_archive_control(
         state_root,
         mode="drain",
         max_tick_bytes=parse_byte_budget(budget),
-        include_huge=include_huge,
+        include_huge=effective_include_huge,
     )
-    typer.echo(f"Archive repair drain enabled: {result['path']}")
+    if normalized_target == "max-safe":
+        typer.echo(f"Archive repair max-safe drain enabled: {result['path']}")
+    else:
+        typer.echo(f"Archive repair drain enabled: {result['path']}")
     if retry_now:
         changed = ready_archive_backlog(state_root)
         typer.echo(f"Archive retry clocks reset for {changed} pending range(s).")
