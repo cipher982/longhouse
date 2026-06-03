@@ -29,13 +29,13 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
+from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionRuntimeState
-from zerg.database import Base
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import runtime_key_for_session
@@ -233,6 +233,19 @@ def test_heartbeat_endpoint_persists_transport_summary_fields(tmp_path):
                 "ship_connect_errors_1h": 0,
                 "ship_latency_p50_ms_1h": 140,
                 "ship_latency_p95_ms_1h": 260,
+                "ship_lanes": {
+                    "archive": {
+                        "attempts_1h": 4,
+                        "successes_1h": 3,
+                        "backpressure_1h": 1,
+                        "events_1h": 120,
+                        "bytes_1h": 524288,
+                        "events_per_sec_ewma_10s": 42.5,
+                        "bytes_per_sec_ewma_10s": 131072.0,
+                    }
+                },
+                "events_per_sec_ewma_10s": 12.5,
+                "bytes_per_sec_ewma_10s": 65536.0,
                 "disk_free_bytes": 50_000_000,
                 "is_offline": False,
             },
@@ -271,6 +284,11 @@ def test_heartbeat_endpoint_persists_transport_summary_fields(tmp_path):
             assert raw["ship_rate_limited_1h"] == 3
             assert raw["ship_latency_p50_ms_1h"] == 140
             assert raw["ship_latency_p95_ms_1h"] == 260
+            assert raw["ship_lanes"]["archive"]["attempts_1h"] == 4
+            assert raw["ship_lanes"]["archive"]["backpressure_1h"] == 1
+            assert raw["ship_lanes"]["archive"]["bytes_per_sec_ewma_10s"] == 131072.0
+            assert raw["events_per_sec_ewma_10s"] == 12.5
+            assert raw["bytes_per_sec_ewma_10s"] == 65536.0
     finally:
         api_app_ref.dependency_overrides = {}
 
@@ -662,13 +680,9 @@ def test_heartbeat_empty_resolved_sessions_does_not_detach_other_device_control(
             )
             db.add_all([first_session, other_session])
             db.flush()
-            _thread, _run, first_connection = seed_managed_kernel_rows(
-                db, first_session, control_plane="codex_bridge"
-            )
+            _thread, _run, first_connection = seed_managed_kernel_rows(db, first_session, control_plane="codex_bridge")
             first_connection.device_id = "testclient"
-            _thread, _run, other_connection = seed_managed_kernel_rows(
-                db, other_session, control_plane="codex_bridge"
-            )
+            _thread, _run, other_connection = seed_managed_kernel_rows(db, other_session, control_plane="codex_bridge")
             other_connection.device_id = "other-device"
             db.commit()
 
@@ -738,8 +752,8 @@ def test_heartbeat_empty_resolved_sessions_does_not_detach_unknown_device_contro
 
 
 def test_heartbeat_repeated_sessions_digest_refreshes_health_without_snapshot_work(monkeypatch, tmp_path):
-    from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
     import zerg.routers.heartbeat as heartbeat_router
+    from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 
     SessionLocal = _make_db(tmp_path)
     client, api_app_ref = _make_client(SessionLocal)

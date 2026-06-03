@@ -9,6 +9,8 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use serde::Serialize;
+
 const SHIP_STATS_WINDOW: Duration = Duration::from_secs(60 * 60);
 const SHIP_STATS_ACTIVE_WINDOW: Duration = Duration::from_secs(10 * 60);
 const SHIP_STATS_MAX_RECORDS: usize = 50_000;
@@ -38,15 +40,65 @@ impl ShipAttemptOutcome {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShipLane {
+    Live,
+    Repair,
+    Archive,
+    Unknown,
+}
+
 #[derive(Debug, Clone)]
 struct ShipAttemptRecord {
     at: Instant,
     recorded_at: String,
+    lane: ShipLane,
     outcome: ShipAttemptOutcome,
     latency_ms: u64,
     http_status: Option<u16>,
     error_kind: Option<String>,
     error_message: Option<String>,
+    event_count: u32,
+    byte_count: u64,
+    is_backpressure: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ShipLaneStatsSummary {
+    pub attempts_1h: u32,
+    pub successes_1h: u32,
+    pub server_errors_1h: u32,
+    pub connect_errors_1h: u32,
+    pub backpressure_1h: u32,
+    pub events_1h: u64,
+    pub bytes_1h: u64,
+    pub attempts_10m: u32,
+    pub successes_10m: u32,
+    pub server_errors_10m: u32,
+    pub connect_errors_10m: u32,
+    pub backpressure_10m: u32,
+    pub events_10m: u64,
+    pub bytes_10m: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_p50_ms_1h: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_p95_ms_1h: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_attempt_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_success_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub events_per_sec_ewma_10s: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes_per_sec_ewma_10s: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ShipLaneSummarySet {
+    pub live: ShipLaneStatsSummary,
+    pub repair: ShipLaneStatsSummary,
+    pub archive: ShipLaneStatsSummary,
+    pub unknown: ShipLaneStatsSummary,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -77,6 +129,8 @@ pub struct ShipStatsSummary {
     /// successful ship attempts. Drives the phase 2 adaptive controller
     /// and the bench harness's "events shipped per second" axis.
     pub events_per_sec_ewma_10s: Option<f64>,
+    pub bytes_per_sec_ewma_10s: Option<f64>,
+    pub lanes: ShipLaneSummarySet,
 }
 
 /// EWMA throughput tracker for successful ship events.
@@ -91,6 +145,8 @@ struct EwmaThroughput {
     last_at: Option<Instant>,
     /// Current EWMA estimate of events/sec.
     ewma_eps: f64,
+    /// Current EWMA estimate of uncompressed transcript bytes/sec.
+    ewma_bps: f64,
 }
 
 impl EwmaThroughput {
@@ -98,14 +154,15 @@ impl EwmaThroughput {
     /// elapsed-time fraction so bursty/idle gaps do not double-count.
     const TIME_CONSTANT_SECS: f64 = 10.0;
 
-    fn record(&mut self, now: Instant, events: u32, latency_ms: u64) {
-        if events == 0 {
+    fn record(&mut self, now: Instant, events: u32, bytes: u64, latency_ms: u64) {
+        if events == 0 && bytes == 0 {
             return;
         }
         // Prefer the actual ship duration (latency_ms) for the instantaneous
         // rate, falling back to wall-clock elapsed since the last sample.
         let dt_secs = (latency_ms.max(1) as f64) / 1000.0;
-        let instantaneous = (events as f64) / dt_secs;
+        let instantaneous_eps = (events as f64) / dt_secs;
+        let instantaneous_bps = (bytes as f64) / dt_secs;
 
         let alpha = match self.last_at {
             None => 1.0,
@@ -114,21 +171,25 @@ impl EwmaThroughput {
                 1.0 - (-elapsed / Self::TIME_CONSTANT_SECS).exp()
             }
         };
-        self.ewma_eps = alpha * instantaneous + (1.0 - alpha) * self.ewma_eps;
+        self.ewma_eps = alpha * instantaneous_eps + (1.0 - alpha) * self.ewma_eps;
+        self.ewma_bps = alpha * instantaneous_bps + (1.0 - alpha) * self.ewma_bps;
         self.last_at = Some(now);
     }
 
-    fn current(&self, now: Instant) -> Option<f64> {
-        let last = self.last_at?;
+    fn current(&self, now: Instant) -> (Option<f64>, Option<f64>) {
+        let Some(last) = self.last_at else {
+            return (None, None);
+        };
         // Decay the estimate toward zero if no updates have arrived recently
         // so a long idle period doesn't keep reporting stale throughput.
         let elapsed = now.saturating_duration_since(last).as_secs_f64();
         let decay = (-elapsed / Self::TIME_CONSTANT_SECS).exp();
-        let value = self.ewma_eps * decay;
-        if !value.is_finite() {
-            return None;
-        }
-        Some(value)
+        let eps = self.ewma_eps * decay;
+        let bps = self.ewma_bps * decay;
+        (
+            eps.is_finite().then_some(eps),
+            bps.is_finite().then_some(bps),
+        )
     }
 }
 
@@ -136,6 +197,10 @@ impl EwmaThroughput {
 pub struct RecentShipStatsTracker {
     inner: Arc<Mutex<VecDeque<ShipAttemptRecord>>>,
     throughput: Arc<Mutex<EwmaThroughput>>,
+    live_throughput: Arc<Mutex<EwmaThroughput>>,
+    repair_throughput: Arc<Mutex<EwmaThroughput>>,
+    archive_throughput: Arc<Mutex<EwmaThroughput>>,
+    unknown_throughput: Arc<Mutex<EwmaThroughput>>,
 }
 
 impl RecentShipStatsTracker {
@@ -143,21 +208,48 @@ impl RecentShipStatsTracker {
         Self {
             inner: Arc::new(Mutex::new(VecDeque::new())),
             throughput: Arc::new(Mutex::new(EwmaThroughput::default())),
+            live_throughput: Arc::new(Mutex::new(EwmaThroughput::default())),
+            repair_throughput: Arc::new(Mutex::new(EwmaThroughput::default())),
+            archive_throughput: Arc::new(Mutex::new(EwmaThroughput::default())),
+            unknown_throughput: Arc::new(Mutex::new(EwmaThroughput::default())),
         }
     }
 
+    #[cfg(test)]
     pub fn record(&self, outcome: ShipAttemptOutcome, latency_ms: u64, http_status: Option<u16>) {
         self.record_with_detail(outcome, latency_ms, http_status, None, None);
     }
 
     /// Record events shipped on a successful attempt for EWMA throughput.
     /// Call this AFTER `record(...)` for `ShipAttemptOutcome::Ok` ships.
+    #[cfg(test)]
     pub fn record_events_shipped(&self, events: u32, latency_ms: u64) {
+        self.record_events_and_bytes_shipped(ShipLane::Unknown, events, 0, latency_ms);
+    }
+
+    pub fn record_events_and_bytes_shipped(
+        &self,
+        lane: ShipLane,
+        events: u32,
+        bytes: u64,
+        latency_ms: u64,
+    ) {
+        let now = Instant::now();
         if let Ok(mut t) = self.throughput.lock() {
-            t.record(Instant::now(), events, latency_ms);
+            t.record(now, events, bytes, latency_ms);
+        }
+        let lane_throughput = match lane {
+            ShipLane::Live => &self.live_throughput,
+            ShipLane::Repair => &self.repair_throughput,
+            ShipLane::Archive => &self.archive_throughput,
+            ShipLane::Unknown => &self.unknown_throughput,
+        };
+        if let Ok(mut t) = lane_throughput.lock() {
+            t.record(now, events, bytes, latency_ms);
         }
     }
 
+    #[cfg(test)]
     pub fn record_with_detail(
         &self,
         outcome: ShipAttemptOutcome,
@@ -169,12 +261,47 @@ impl RecentShipStatsTracker {
         self.record_at(
             Instant::now(),
             chrono::Utc::now().to_rfc3339(),
+            ShipLane::Unknown,
             outcome,
             latency_ms,
             http_status,
             error_kind.map(str::to_string),
             error_message.map(truncate_error_message),
+            0,
+            0,
+            false,
         );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_with_lane_and_detail(
+        &self,
+        lane: ShipLane,
+        outcome: ShipAttemptOutcome,
+        latency_ms: u64,
+        http_status: Option<u16>,
+        error_kind: Option<&str>,
+        error_message: Option<&str>,
+        event_count: u32,
+        byte_count: u64,
+        is_backpressure: bool,
+    ) {
+        self.record_at(
+            Instant::now(),
+            chrono::Utc::now().to_rfc3339(),
+            lane,
+            outcome,
+            latency_ms,
+            http_status,
+            error_kind.map(str::to_string),
+            error_message.map(truncate_error_message),
+            event_count,
+            byte_count,
+            is_backpressure,
+        );
+        if matches!(outcome, ShipAttemptOutcome::Ok) {
+            self.record_events_and_bytes_shipped(lane, event_count, byte_count, latency_ms);
+        }
     }
 
     pub fn summary(&self) -> ShipStatsSummary {
@@ -187,44 +314,66 @@ impl RecentShipStatsTracker {
 
             let mut summary = ShipStatsSummary::default();
             let mut latencies = Vec::with_capacity(guard.len());
+            let mut lane_acc = LaneAccumulators::default();
 
             for record in guard.iter() {
-                summary.ship_attempts_1h += 1;
-                latencies.push(record.latency_ms);
+                if !record.is_backpressure {
+                    summary.ship_attempts_1h += 1;
+                    latencies.push(record.latency_ms);
+                }
                 let in_active_window = now.duration_since(record.at) <= SHIP_STATS_ACTIVE_WINDOW;
-                if in_active_window {
+                if in_active_window && !record.is_backpressure {
                     summary.ship_attempts_10m += 1;
                 }
+                lane_acc.record(record, in_active_window);
                 match record.outcome {
                     ShipAttemptOutcome::Ok => {
-                        summary.ship_successes_1h += 1;
-                        if in_active_window {
+                        if !record.is_backpressure {
+                            summary.ship_successes_1h += 1;
+                        }
+                        if in_active_window && !record.is_backpressure {
                             summary.ship_successes_10m += 1;
                         }
                     }
                     ShipAttemptOutcome::RateLimited => {
-                        summary.ship_rate_limited_1h += 1;
-                        if in_active_window {
+                        if !record.is_backpressure {
+                            summary.ship_rate_limited_1h += 1;
+                        }
+                        if in_active_window && !record.is_backpressure {
                             summary.ship_rate_limited_10m += 1;
                         }
                     }
                     ShipAttemptOutcome::ServerError => {
-                        summary.ship_server_errors_1h += 1;
-                        if in_active_window {
+                        if !record.is_backpressure {
+                            summary.ship_server_errors_1h += 1;
+                        }
+                        if in_active_window && !record.is_backpressure {
                             summary.ship_server_errors_10m += 1;
                         }
                     }
-                    ShipAttemptOutcome::PayloadRejected => summary.ship_payload_rejections_1h += 1,
-                    ShipAttemptOutcome::PayloadTooLarge => summary.ship_payload_too_large_1h += 1,
+                    ShipAttemptOutcome::PayloadRejected => {
+                        if !record.is_backpressure {
+                            summary.ship_payload_rejections_1h += 1;
+                        }
+                    }
+                    ShipAttemptOutcome::PayloadTooLarge => {
+                        if !record.is_backpressure {
+                            summary.ship_payload_too_large_1h += 1;
+                        }
+                    }
                     ShipAttemptOutcome::RetryableClientError => {
-                        summary.ship_retryable_client_errors_1h += 1;
-                        if in_active_window {
+                        if !record.is_backpressure {
+                            summary.ship_retryable_client_errors_1h += 1;
+                        }
+                        if in_active_window && !record.is_backpressure {
                             summary.ship_retryable_client_errors_10m += 1;
                         }
                     }
                     ShipAttemptOutcome::ConnectError => {
-                        summary.ship_connect_errors_1h += 1;
-                        if in_active_window {
+                        if !record.is_backpressure {
+                            summary.ship_connect_errors_1h += 1;
+                        }
+                        if in_active_window && !record.is_backpressure {
                             summary.ship_connect_errors_10m += 1;
                         }
                     }
@@ -243,8 +392,13 @@ impl RecentShipStatsTracker {
             latencies.sort_unstable();
             summary.ship_latency_p50_ms_1h = percentile(&latencies, 0.50);
             summary.ship_latency_p95_ms_1h = percentile(&latencies, 0.95);
-            summary.events_per_sec_ewma_10s =
-                self.throughput.lock().ok().and_then(|t| t.current(now));
+            if let Ok(t) = self.throughput.lock() {
+                (
+                    summary.events_per_sec_ewma_10s,
+                    summary.bytes_per_sec_ewma_10s,
+                ) = t.current(now);
+            }
+            summary.lanes = lane_acc.finish(self, now);
             summary
         } else {
             ShipStatsSummary::default()
@@ -255,27 +409,132 @@ impl RecentShipStatsTracker {
         &self,
         at: Instant,
         recorded_at: String,
+        lane: ShipLane,
         outcome: ShipAttemptOutcome,
         latency_ms: u64,
         http_status: Option<u16>,
         error_kind: Option<String>,
         error_message: Option<String>,
+        event_count: u32,
+        byte_count: u64,
+        is_backpressure: bool,
     ) {
         if let Ok(mut guard) = self.inner.lock() {
             guard.push_back(ShipAttemptRecord {
                 at,
                 recorded_at,
+                lane,
                 outcome,
                 latency_ms,
                 http_status,
                 error_kind,
                 error_message,
+                event_count,
+                byte_count,
+                is_backpressure,
             });
             prune_old_records(&mut guard, at);
             while guard.len() > SHIP_STATS_MAX_RECORDS {
                 guard.pop_front();
             }
         }
+    }
+}
+
+#[derive(Default)]
+struct LaneAccumulators {
+    live: LaneAccumulator,
+    repair: LaneAccumulator,
+    archive: LaneAccumulator,
+    unknown: LaneAccumulator,
+}
+
+impl LaneAccumulators {
+    fn record(&mut self, record: &ShipAttemptRecord, in_active_window: bool) {
+        match record.lane {
+            ShipLane::Live => self.live.record(record, in_active_window),
+            ShipLane::Repair => self.repair.record(record, in_active_window),
+            ShipLane::Archive => self.archive.record(record, in_active_window),
+            ShipLane::Unknown => self.unknown.record(record, in_active_window),
+        }
+    }
+
+    fn finish(self, tracker: &RecentShipStatsTracker, now: Instant) -> ShipLaneSummarySet {
+        ShipLaneSummarySet {
+            live: self.live.finish(&tracker.live_throughput, now),
+            repair: self.repair.finish(&tracker.repair_throughput, now),
+            archive: self.archive.finish(&tracker.archive_throughput, now),
+            unknown: self.unknown.finish(&tracker.unknown_throughput, now),
+        }
+    }
+}
+
+#[derive(Default)]
+struct LaneAccumulator {
+    summary: ShipLaneStatsSummary,
+    latencies: Vec<u64>,
+}
+
+impl LaneAccumulator {
+    fn record(&mut self, record: &ShipAttemptRecord, in_active_window: bool) {
+        self.summary.attempts_1h += 1;
+        self.summary.last_attempt_at = Some(record.recorded_at.clone());
+        self.summary.events_1h += u64::from(record.event_count);
+        self.summary.bytes_1h += record.byte_count;
+        self.latencies.push(record.latency_ms);
+        if record.is_backpressure {
+            self.summary.backpressure_1h += 1;
+        }
+        if in_active_window {
+            self.summary.attempts_10m += 1;
+            self.summary.events_10m += u64::from(record.event_count);
+            self.summary.bytes_10m += record.byte_count;
+            if record.is_backpressure {
+                self.summary.backpressure_10m += 1;
+            }
+        }
+        match record.outcome {
+            ShipAttemptOutcome::Ok => {
+                self.summary.successes_1h += 1;
+                self.summary.last_success_at = Some(record.recorded_at.clone());
+                if in_active_window {
+                    self.summary.successes_10m += 1;
+                }
+            }
+            ShipAttemptOutcome::ServerError => {
+                self.summary.server_errors_1h += 1;
+                if in_active_window {
+                    self.summary.server_errors_10m += 1;
+                }
+            }
+            ShipAttemptOutcome::ConnectError => {
+                self.summary.connect_errors_1h += 1;
+                if in_active_window {
+                    self.summary.connect_errors_10m += 1;
+                }
+            }
+            ShipAttemptOutcome::RateLimited
+            | ShipAttemptOutcome::PayloadRejected
+            | ShipAttemptOutcome::PayloadTooLarge
+            | ShipAttemptOutcome::RetryableClientError => {}
+        }
+    }
+
+    fn finish(
+        mut self,
+        throughput: &Arc<Mutex<EwmaThroughput>>,
+        now: Instant,
+    ) -> ShipLaneStatsSummary {
+        self.latencies.sort_unstable();
+        self.summary.latency_p50_ms_1h = percentile(&self.latencies, 0.50);
+        self.summary.latency_p95_ms_1h = percentile(&self.latencies, 0.95);
+        if let Ok(t) = throughput.lock() {
+            (
+                self.summary.events_per_sec_ewma_10s,
+                self.summary.bytes_per_sec_ewma_10s,
+            ) = t.current(now);
+        }
+        self.summary
     }
 }
 
@@ -321,45 +580,75 @@ fn percentile(values: &[u64], quantile: f64) -> Option<u64> {
 mod tests {
     use super::*;
 
+    #[allow(clippy::too_many_arguments)]
+    fn record_test(
+        tracker: &RecentShipStatsTracker,
+        at: Instant,
+        recorded_at: &str,
+        outcome: ShipAttemptOutcome,
+        latency_ms: u64,
+        http_status: Option<u16>,
+        error_kind: Option<&str>,
+        error_message: Option<&str>,
+    ) {
+        tracker.record_at(
+            at,
+            recorded_at.to_string(),
+            ShipLane::Unknown,
+            outcome,
+            latency_ms,
+            http_status,
+            error_kind.map(str::to_string),
+            error_message.map(str::to_string),
+            0,
+            0,
+            false,
+        );
+    }
+
     #[test]
     fn recent_ship_stats_summary_counts_outcomes_and_percentiles() {
         let tracker = RecentShipStatsTracker::new();
         let now = Instant::now();
-        tracker.record_at(
+        record_test(
+            &tracker,
             now - Duration::from_secs(10),
-            "2026-04-23T20:00:00Z".to_string(),
+            "2026-04-23T20:00:00Z",
             ShipAttemptOutcome::Ok,
             40,
             None,
             None,
             None,
         );
-        tracker.record_at(
+        record_test(
+            &tracker,
             now - Duration::from_secs(9),
-            "2026-04-23T20:00:01Z".to_string(),
+            "2026-04-23T20:00:01Z",
             ShipAttemptOutcome::Ok,
             60,
             None,
             None,
             None,
         );
-        tracker.record_at(
+        record_test(
+            &tracker,
             now - Duration::from_secs(8),
-            "2026-04-23T20:00:02Z".to_string(),
+            "2026-04-23T20:00:02Z",
             ShipAttemptOutcome::ServerError,
             120,
             Some(503),
-            Some("server_response".to_string()),
-            Some("503: upstream unavailable".to_string()),
+            Some("server_response"),
+            Some("503: upstream unavailable"),
         );
-        tracker.record_at(
+        record_test(
+            &tracker,
             now - Duration::from_secs(7),
-            "2026-04-23T20:00:03Z".to_string(),
+            "2026-04-23T20:00:03Z",
             ShipAttemptOutcome::ConnectError,
             220,
             None,
-            Some("timeout".to_string()),
-            Some("request timed out after 60s".to_string()),
+            Some("timeout"),
+            Some("request timed out after 60s"),
         );
 
         let summary = tracker.summary();
@@ -392,23 +681,25 @@ mod tests {
     fn recent_ship_stats_prunes_old_records() {
         let tracker = RecentShipStatsTracker::new();
         let now = Instant::now();
-        tracker.record_at(
+        record_test(
+            &tracker,
             now - Duration::from_secs(SHIP_STATS_WINDOW.as_secs() + 60),
-            "2026-04-23T18:00:00Z".to_string(),
+            "2026-04-23T18:00:00Z",
             ShipAttemptOutcome::Ok,
             50,
             None,
             None,
             None,
         );
-        tracker.record_at(
+        record_test(
+            &tracker,
             now - Duration::from_secs(30),
-            "2026-04-23T19:59:30Z".to_string(),
+            "2026-04-23T19:59:30Z",
             ShipAttemptOutcome::RateLimited,
             100,
             Some(429),
-            Some("rate_limited".to_string()),
-            Some("429: rate limited".to_string()),
+            Some("rate_limited"),
+            Some("429: rate limited"),
         );
 
         let summary = tracker.summary();
@@ -453,19 +744,25 @@ mod tests {
     fn ewma_throughput_first_sample_uses_latency_for_instantaneous_rate() {
         let mut tput = EwmaThroughput::default();
         let t0 = Instant::now();
-        tput.record(t0, 100, 100); // 100 events in 100ms => 1000 eps
-        let v = tput.current(t0).unwrap();
+        tput.record(t0, 100, 10_000, 100); // 100 events in 100ms => 1000 eps
+        let (eps, bps) = tput.current(t0);
+        let v = eps.unwrap();
         assert!((v - 1000.0).abs() < 1e-6, "expected 1000 eps, got {v}");
+        let bv = bps.unwrap();
+        assert!(
+            (bv - 100_000.0).abs() < 1e-6,
+            "expected 100000 bps, got {bv}"
+        );
     }
 
     #[test]
     fn ewma_throughput_decays_toward_zero_during_idle() {
         let mut tput = EwmaThroughput::default();
         let t0 = Instant::now();
-        tput.record(t0, 100, 100); // 1000 eps initial
-                                   // 60s later, with TIME_CONSTANT 10s, decay factor ≈ e^-6 ≈ 0.0025
+        tput.record(t0, 100, 10_000, 100); // 1000 eps initial
+                                           // 60s later, with TIME_CONSTANT 10s, decay factor ≈ e^-6 ≈ 0.0025
         let later = t0 + Duration::from_secs(60);
-        let v = tput.current(later).unwrap();
+        let v = tput.current(later).0.unwrap();
         assert!(v < 5.0, "expected near-zero after 60s idle, got {v}");
     }
 
@@ -494,21 +791,64 @@ mod tests {
     }
 
     #[test]
+    fn lane_stats_count_archive_backpressure_without_poisoning_aggregate() {
+        let tracker = RecentShipStatsTracker::new();
+        tracker.record_with_lane_and_detail(
+            ShipLane::Archive,
+            ShipAttemptOutcome::Ok,
+            100,
+            Some(200),
+            None,
+            None,
+            50,
+            5_000,
+            false,
+        );
+        tracker.record_with_lane_and_detail(
+            ShipLane::Archive,
+            ShipAttemptOutcome::ServerError,
+            30,
+            Some(503),
+            Some("runtime_backpressure"),
+            Some("runtime queue full"),
+            0,
+            0,
+            true,
+        );
+
+        let summary = tracker.summary();
+
+        assert_eq!(summary.ship_attempts_1h, 1);
+        assert_eq!(summary.ship_successes_1h, 1);
+        assert_eq!(summary.ship_server_errors_1h, 0);
+        assert_eq!(summary.lanes.archive.attempts_1h, 2);
+        assert_eq!(summary.lanes.archive.successes_1h, 1);
+        assert_eq!(summary.lanes.archive.server_errors_1h, 1);
+        assert_eq!(summary.lanes.archive.backpressure_1h, 1);
+        assert_eq!(summary.lanes.archive.events_1h, 50);
+        assert_eq!(summary.lanes.archive.bytes_1h, 5_000);
+        assert!(summary.lanes.archive.events_per_sec_ewma_10s.is_some());
+        assert!(summary.lanes.archive.bytes_per_sec_ewma_10s.is_some());
+    }
+
+    #[test]
     fn recent_ship_stats_keeps_active_window_separate_from_one_hour_window() {
         let tracker = RecentShipStatsTracker::new();
         let now = Instant::now();
-        tracker.record_at(
+        record_test(
+            &tracker,
             now - Duration::from_secs(20 * 60),
-            "2026-04-23T19:40:00Z".to_string(),
+            "2026-04-23T19:40:00Z",
             ShipAttemptOutcome::ConnectError,
             3_000,
             None,
-            Some("timeout".to_string()),
-            Some("request timed out".to_string()),
+            Some("timeout"),
+            Some("request timed out"),
         );
-        tracker.record_at(
+        record_test(
+            &tracker,
             now - Duration::from_secs(60),
-            "2026-04-23T19:59:00Z".to_string(),
+            "2026-04-23T19:59:00Z",
             ShipAttemptOutcome::Ok,
             200,
             None,

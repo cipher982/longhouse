@@ -29,6 +29,7 @@ use crate::error_tracker::ConsecutiveErrorTracker;
 use crate::error_tracker::RecentIssueTracker;
 use crate::shipping::client::ShipperClient;
 use crate::shipping_stats::RecentShipStatsTracker;
+use crate::shipping_stats::ShipLaneSummarySet;
 use crate::state::session_phase::PhaseLedgerRow;
 use crate::state::spool::ArchiveBacklogSnapshot;
 use crate::state::spool::DeadLetterEntry;
@@ -81,6 +82,12 @@ pub struct HeartbeatPayload {
     pub ship_server_errors_10m: u32,
     pub ship_retryable_client_errors_10m: u32,
     pub ship_connect_errors_10m: u32,
+    #[serde(default)]
+    pub ship_lanes: ShipLaneSummarySet,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub events_per_sec_ewma_10s: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bytes_per_sec_ewma_10s: Option<f64>,
     pub disk_free_bytes: u64,
     pub is_offline: bool,
     #[serde(default)]
@@ -308,6 +315,9 @@ impl HeartbeatPayload {
             ship_server_errors_10m: ship_stats.ship_server_errors_10m,
             ship_retryable_client_errors_10m: ship_stats.ship_retryable_client_errors_10m,
             ship_connect_errors_10m: ship_stats.ship_connect_errors_10m,
+            ship_lanes: ship_stats.lanes,
+            events_per_sec_ewma_10s: ship_stats.events_per_sec_ewma_10s,
+            bytes_per_sec_ewma_10s: ship_stats.bytes_per_sec_ewma_10s,
             disk_free_bytes,
             is_offline: stats.is_offline,
             managed_sessions: Vec::new(),
@@ -1216,6 +1226,9 @@ mod tests {
             ship_server_errors_10m: 1,
             ship_retryable_client_errors_10m: 0,
             ship_connect_errors_10m: 0,
+            ship_lanes: ShipLaneSummarySet::default(),
+            events_per_sec_ewma_10s: None,
+            bytes_per_sec_ewma_10s: None,
             disk_free_bytes: 1_000_000_000,
             is_offline: false,
             managed_sessions: Vec::new(),
@@ -1280,6 +1293,9 @@ mod tests {
             ship_server_errors_10m: 0,
             ship_retryable_client_errors_10m: 0,
             ship_connect_errors_10m: 0,
+            ship_lanes: ShipLaneSummarySet::default(),
+            events_per_sec_ewma_10s: None,
+            bytes_per_sec_ewma_10s: None,
             disk_free_bytes: 0,
             is_offline: false,
             managed_sessions: vec![ManagedSessionLease {
@@ -1900,6 +1916,9 @@ mod tests {
             ship_server_errors_10m: 0,
             ship_retryable_client_errors_10m: 0,
             ship_connect_errors_10m: 0,
+            ship_lanes: ShipLaneSummarySet::default(),
+            events_per_sec_ewma_10s: None,
+            bytes_per_sec_ewma_10s: None,
             disk_free_bytes: 0,
             is_offline: true,
             managed_sessions: Vec::new(),
@@ -1957,6 +1976,9 @@ mod tests {
             ship_server_errors_10m: 0,
             ship_retryable_client_errors_10m: 0,
             ship_connect_errors_10m: 0,
+            ship_lanes: ShipLaneSummarySet::default(),
+            events_per_sec_ewma_10s: None,
+            bytes_per_sec_ewma_10s: None,
             disk_free_bytes: 10,
             is_offline: false,
             managed_sessions: Vec::new(),
@@ -2083,6 +2105,9 @@ mod tests {
             ship_server_errors_10m: 0,
             ship_retryable_client_errors_10m: 0,
             ship_connect_errors_10m: 0,
+            ship_lanes: ShipLaneSummarySet::default(),
+            events_per_sec_ewma_10s: None,
+            bytes_per_sec_ewma_10s: None,
             disk_free_bytes: 0,
             is_offline: false,
             managed_sessions: Vec::new(),
@@ -2164,6 +2189,9 @@ mod tests {
             ship_server_errors_10m: 0,
             ship_retryable_client_errors_10m: 0,
             ship_connect_errors_10m: 0,
+            ship_lanes: ShipLaneSummarySet::default(),
+            events_per_sec_ewma_10s: None,
+            bytes_per_sec_ewma_10s: None,
             disk_free_bytes: 0,
             is_offline: false,
             managed_sessions: Vec::new(),

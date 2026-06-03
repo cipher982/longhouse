@@ -174,6 +174,8 @@ pub fn ship_stats_snapshot(summary: ShipStatsSummary) -> Value {
         "ship_retryable_client_errors_10m": summary.ship_retryable_client_errors_10m,
         "ship_connect_errors_10m": summary.ship_connect_errors_10m,
         "events_per_sec_ewma_10s": summary.events_per_sec_ewma_10s,
+        "bytes_per_sec_ewma_10s": summary.bytes_per_sec_ewma_10s,
+        "lanes": summary.lanes,
     })
 }
 

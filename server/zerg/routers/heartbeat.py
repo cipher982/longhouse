@@ -189,6 +189,9 @@ class HeartbeatIn(BaseModel):
     ship_server_errors_10m: int = 0
     ship_retryable_client_errors_10m: int = 0
     ship_connect_errors_10m: int = 0
+    ship_lanes: dict[str, object] = Field(default_factory=dict)
+    events_per_sec_ewma_10s: Optional[float] = None
+    bytes_per_sec_ewma_10s: Optional[float] = None
     disk_free_bytes: int = 0
     is_offline: bool = False
     managed_sessions: list[ManagedSessionLeaseIn] = Field(default_factory=list)

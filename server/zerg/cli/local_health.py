@@ -53,6 +53,35 @@ def _format_bytes(value: object) -> str:
     return f"{size} B"
 
 
+def _format_rate(value: object, suffix: str) -> str:
+    if value is None:
+        return "-"
+    try:
+        rate = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    if rate >= 100:
+        return f"{rate:.0f} {suffix}"
+    if rate >= 10:
+        return f"{rate:.1f} {suffix}"
+    return f"{rate:.2f} {suffix}"
+
+
+def _has_lane_activity(lane: dict[str, object]) -> bool:
+    keys = (
+        "attempts_1h",
+        "successes_1h",
+        "server_errors_1h",
+        "connect_errors_1h",
+        "backpressure_1h",
+        "events_1h",
+        "bytes_1h",
+    )
+    return any(int(lane.get(key) or 0) > 0 for key in keys) or bool(
+        lane.get("events_per_sec_ewma_10s") or lane.get("bytes_per_sec_ewma_10s")
+    )
+
+
 def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
     if json_output:
         typer.echo(json.dumps(snapshot, indent=2))
@@ -100,6 +129,23 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
     typer.echo(f"  spool dead: {payload.get('spool_dead_count', 0)}")
     typer.echo(f"  ship failures: {payload.get('consecutive_ship_failures', 0)}")
     typer.echo(f"  offline: {'yes' if payload.get('is_offline') else 'no'}")
+
+    ship_lanes = dict(payload.get("ship_lanes") or {})
+    active_lanes = [(name, dict(raw or {})) for name, raw in ship_lanes.items() if _has_lane_activity(dict(raw or {}))]
+    if active_lanes:
+        typer.echo("")
+        typer.echo("Ship Lanes")
+        for lane_name, lane in sorted(active_lanes):
+            bps = _format_bytes(lane.get("bytes_per_sec_ewma_10s"))
+            eps = _format_rate(lane.get("events_per_sec_ewma_10s"), "events/s")
+            p95 = lane.get("latency_p95_ms_1h")
+            typer.echo(
+                "  "
+                f"{lane_name}: {lane.get('successes_1h', 0)}/{lane.get('attempts_1h', 0)} ok, "
+                f"{lane.get('backpressure_1h', 0)} backpressure, "
+                f"p95 {p95 if p95 is not None else '-'}ms, "
+                f"{eps}, {bps}/s"
+            )
 
     archive_repair = dict(snapshot.get("archive_repair") or {})
     if archive_repair and (

@@ -23,7 +23,7 @@ use crate::pipeline::batcher::{self, PlannedRangeAction, ShipRange};
 use crate::pipeline::compressor::{self, CompressionAlgo};
 use crate::pipeline::parser::{self, ParseResult};
 use crate::shipping::client::{ShipResult, ShipperClient};
-use crate::shipping_stats::{RecentShipStatsTracker, ShipAttemptOutcome};
+use crate::shipping_stats::{RecentShipStatsTracker, ShipAttemptOutcome, ShipLane};
 use crate::state::file_identity::identity_from_metadata;
 use crate::state::file_state::FileState;
 use crate::state::live_file_state::LiveFileState;
@@ -156,6 +156,28 @@ fn request_timeout_for_trace(ship_trace: Option<&ShipTraceContext>) -> Option<Du
     match ship_trace.map(|trace| trace.work_context) {
         Some("live_transcript") => Some(LIVE_TRANSCRIPT_INGEST_TIMEOUT),
         _ => Some(ARCHIVE_INGEST_TIMEOUT),
+    }
+}
+
+fn ship_lane_for_trace(ship_trace: Option<&ShipTraceContext>) -> ShipLane {
+    match ship_trace.map(|trace| trace.work_context) {
+        Some("live_transcript") => ShipLane::Live,
+        Some("spool_replay") => ShipLane::Archive,
+        Some("reconciliation_scan") => ShipLane::Repair,
+        _ => ShipLane::Unknown,
+    }
+}
+
+fn ship_lane_for_context(
+    ship_trace: Option<&ShipTraceContext>,
+    cursor_mode: CursorMode,
+) -> ShipLane {
+    match ship_lane_for_trace(ship_trace) {
+        ShipLane::Unknown => match cursor_mode {
+            CursorMode::Archive => ShipLane::Archive,
+            CursorMode::Live => ShipLane::Live,
+        },
+        lane => lane,
     }
 }
 
@@ -1315,6 +1337,7 @@ async fn attempt_ship(
     tracker: Option<&ConsecutiveErrorTracker>,
     ship_stats: Option<&RecentShipStatsTracker>,
     ship_trace: Option<&ShipTraceContext>,
+    ship_lane: ShipLane,
     flight_recorder: Option<&FlightRecorder>,
     limiter: Option<&crate::scheduler::AdaptiveLimiter>,
 ) -> AttemptedShip {
@@ -1380,6 +1403,7 @@ async fn attempt_ship(
     let span = tracing::Span::current();
     let (outcome, http_status) = classify_ship_attempt_result(&result);
     let is_backpressure = ship_result_is_backpressure(&result);
+    let byte_count = item.new_offset.saturating_sub(item.offset);
     span.record(
         "longhouse.ship.outcome",
         tracing::field::display(outcome.as_str()),
@@ -1395,24 +1419,20 @@ async fn attempt_ship(
     if let Some(kind) = error_kind {
         span.record("longhouse.ship.error_kind", tracing::field::display(kind));
     }
-    if let Some(stats) = ship_stats.filter(|_| !is_backpressure) {
-        if error_kind.is_none() && error_message.is_none() {
-            stats.record(outcome, latency_ms, http_status);
-        } else {
-            stats.record_with_detail(
-                outcome,
-                latency_ms,
-                http_status,
-                error_kind,
-                error_message.as_deref(),
-            );
-        }
-        if matches!(result, ShipResult::Ok { .. }) {
-            // Phase 1 instrumentation: feed the EWMA throughput tracker so
-            // the bench harness and phase-2 controller see real eps numbers.
-            stats.record_events_shipped(item.event_count as u32, latency_ms);
-        }
-    } else if is_backpressure {
+    if let Some(stats) = ship_stats {
+        stats.record_with_lane_and_detail(
+            ship_lane,
+            outcome,
+            latency_ms,
+            http_status,
+            error_kind,
+            error_message.as_deref(),
+            item.event_count as u32,
+            byte_count,
+            is_backpressure,
+        );
+    }
+    if is_backpressure {
         tracing::debug!(
             path = %item.path_str,
             provider = %item.provider,
@@ -1909,6 +1929,7 @@ pub async fn ship_prepared_file_with_trace(
                     tracker,
                     ship_stats,
                     ship_trace,
+                    ship_lane_for_context(ship_trace, cursor_mode),
                     flight_recorder,
                     limiter,
                 )
@@ -2422,6 +2443,7 @@ async fn replay_spool_entries(
                         None,
                         ship_stats,
                         ship_trace,
+                        ship_lane_for_context(ship_trace, CursorMode::Archive),
                         flight_recorder,
                         limiter,
                     )
@@ -4499,6 +4521,10 @@ mod tests {
         assert_eq!(summary.ship_successes_1h, 1);
         assert_eq!(summary.last_ship_result.as_deref(), Some("ok"));
         assert_eq!(summary.last_ship_http_status, None);
+        assert_eq!(summary.lanes.archive.attempts_1h, 1);
+        assert_eq!(summary.lanes.archive.successes_1h, 1);
+        assert_eq!(summary.lanes.archive.bytes_1h, file_len);
+        assert!(summary.lanes.archive.events_1h > 0);
     }
 
     #[tokio::test]
