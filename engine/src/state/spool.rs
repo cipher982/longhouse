@@ -21,7 +21,22 @@ const BACKOFF_BASE: f64 = 5.0;
 /// Maximum backoff in seconds (1 hour).
 const BACKOFF_MAX: f64 = 3600.0;
 
-const ARCHIVE_BACKPRESSURE_ERROR_MARKER: &str = "Archive ingest backlog is throttled";
+const RECOVERABLE_ARCHIVE_ERROR_PATTERNS: &[&str] = &[
+    "%Archive ingest backlog is throttled%",
+    "500:%",
+    "502:%",
+    "503:%",
+    "504:%",
+    "520:%",
+    "521:%",
+    "522:%",
+    "523:%",
+    "524:%",
+    "525:%",
+    "526:%",
+    "527:%",
+    "error sending request for url (%",
+];
 
 /// Default max retries before marking dead.
 const DEFAULT_MAX_RETRIES: u32 = 50;
@@ -518,24 +533,31 @@ impl<'a> Spool<'a> {
     /// a long retry clock; in drain mode that violates the product contract that
     /// reconstructable backlog should keep making progress as soon as the host
     /// is accepting archive work again.
-    pub fn clip_archive_backpressure_deferrals(&self, max_delay: Duration) -> Result<usize> {
+    pub fn clip_recoverable_archive_deferrals(&self, max_delay: Duration) -> Result<usize> {
         let now = Utc::now();
         let cutoff = now + chrono_duration_from_std(max_delay);
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare(&format!(
             "SELECT id
              FROM spool_queue
              WHERE status = 'pending'
-               AND last_error LIKE ?1
-               AND next_retry_at > ?2",
-        )?;
+               AND next_retry_at > ?1
+               AND ({})",
+            RECOVERABLE_ARCHIVE_ERROR_PATTERNS
+                .iter()
+                .enumerate()
+                .map(|(idx, _)| format!("last_error LIKE ?{}", idx + 2))
+                .collect::<Vec<_>>()
+                .join(" OR ")
+        ))?;
+        let mut params: Vec<&dyn rusqlite::ToSql> =
+            Vec::with_capacity(1 + RECOVERABLE_ARCHIVE_ERROR_PATTERNS.len());
+        let cutoff_rfc3339 = cutoff.to_rfc3339();
+        params.push(&cutoff_rfc3339);
+        for pattern in RECOVERABLE_ARCHIVE_ERROR_PATTERNS {
+            params.push(pattern);
+        }
         let ids = stmt
-            .query_map(
-                rusqlite::params![
-                    format!("%{}%", ARCHIVE_BACKPRESSURE_ERROR_MARKER),
-                    cutoff.to_rfc3339(),
-                ],
-                |row| row.get::<_, i64>(0),
-            )?
+            .query_map(params.as_slice(), |row| row.get::<_, i64>(0))?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         drop(stmt);
 
@@ -1014,24 +1036,27 @@ mod tests {
     }
 
     #[test]
-    fn test_clip_archive_backpressure_deferrals_bounds_only_backpressure_rows() {
+    fn test_clip_recoverable_archive_deferrals_bounds_only_recoverable_rows() {
         let (_tmp, conn) = setup();
         conn.execute(
             "INSERT INTO spool_queue
                 (provider, file_path, start_offset, end_offset, created_at, next_retry_at, retry_count, last_error, status)
              VALUES
                 ('codex', '/backpressured.jsonl', 0, 1000, '2026-03-12T00:00:00+00:00', '2999-01-01T00:00:00+00:00', 4, '503:{\"detail\":\"Archive ingest backlog is throttled; retry shortly\"}', 'pending'),
-                ('codex', '/generic-503.jsonl', 0, 1000, '2026-03-12T00:00:01+00:00', '2999-01-01T00:00:00+00:00', 4, '503:upstream unavailable', 'pending'),
-                ('codex', '/short-backpressure.jsonl', 0, 1000, '2026-03-12T00:00:02+00:00', '2000-01-01T00:00:00+00:00', 4, '503:{\"detail\":\"Archive ingest backlog is throttled; retry shortly\"}', 'pending')",
+                ('codex', '/cloudflare-502.jsonl', 0, 1000, '2026-03-12T00:00:01+00:00', '2999-01-01T00:00:00+00:00', 4, '502:<!DOCTYPE html>', 'pending'),
+                ('codex', '/cloudflare-525.jsonl', 0, 1000, '2026-03-12T00:00:02+00:00', '2999-01-01T00:00:00+00:00', 4, '525:<!DOCTYPE html>', 'pending'),
+                ('codex', '/connect-error.jsonl', 0, 1000, '2026-03-12T00:00:03+00:00', '2999-01-01T00:00:00+00:00', 4, 'error sending request for url (https://david010.longhouse.ai/api/agents/ingest)', 'pending'),
+                ('codex', '/bad-pointer.jsonl', 0, 1000, '2026-03-12T00:00:04+00:00', '2999-01-01T00:00:00+00:00', 4, 'parse error: invalid json', 'pending'),
+                ('codex', '/short-backpressure.jsonl', 0, 1000, '2026-03-12T00:00:05+00:00', '2000-01-01T00:00:00+00:00', 4, '503:{\"detail\":\"Archive ingest backlog is throttled; retry shortly\"}', 'pending')",
             [],
         )
         .unwrap();
 
         let spool = Spool::new(&conn);
         let clipped = spool
-            .clip_archive_backpressure_deferrals(Duration::from_secs(5))
+            .clip_recoverable_archive_deferrals(Duration::from_secs(5))
             .unwrap();
-        assert_eq!(clipped, 1);
+        assert_eq!(clipped, 4);
 
         let rows: Vec<(String, String)> = {
             let mut stmt = conn
@@ -1047,7 +1072,13 @@ mod tests {
             .with_timezone(&Utc);
         assert!(backpressured_retry <= Utc::now() + chrono::Duration::seconds(5));
         assert_eq!(rows[1].1, "2999-01-01T00:00:00+00:00");
-        assert_eq!(rows[2].1, "2000-01-01T00:00:00+00:00");
+        for (_, next_retry_at) in rows.iter().take(5).skip(2) {
+            let retry = DateTime::parse_from_rfc3339(next_retry_at)
+                .unwrap()
+                .with_timezone(&Utc);
+            assert!(retry <= Utc::now() + chrono::Duration::seconds(5));
+        }
+        assert_eq!(rows[5].1, "2000-01-01T00:00:00+00:00");
     }
 
     #[test]
