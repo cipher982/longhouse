@@ -12,6 +12,7 @@ from zerg.services.archive_backlog import inspect_archive_backlog
 from zerg.services.archive_backlog import ready_archive_backlog
 from zerg.services.archive_backlog import write_archive_control
 from zerg.services.longhouse_paths import get_agent_db_path
+from zerg.services.longhouse_paths import get_agent_status_path
 
 
 def _create_spool_db(state_root: Path) -> None:
@@ -100,6 +101,72 @@ def test_archive_status_cli_reads_state_root(tmp_path: Path):
     assert payload["mode"] == "drain"
     assert payload["pending_ranges"] == 2
     assert payload["pending_bytes"] == 2 * 1024 * 1024
+
+
+def test_archive_status_prefers_engine_status_and_includes_shipper_diagnostics(tmp_path: Path):
+    status_path = get_agent_status_path(tmp_path)
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    status_path.write_text(
+        json.dumps(
+            {
+                "archive_backlog": {
+                    "state": "pending",
+                    "mode": "drain",
+                    "pending_ranges": 3,
+                    "ready_ranges": 2,
+                    "deferred_ranges": 1,
+                    "pending_paths": 2,
+                    "pending_sessions": 2,
+                    "pending_bytes": 4096,
+                    "dead_ranges": 0,
+                    "dead_bytes": 0,
+                    "huge_pending_ranges": 0,
+                    "huge_pending_bytes": 0,
+                },
+                "adaptive_backlog_limiter": {
+                    "current_cap": 2,
+                    "ceiling": 16,
+                    "pressure_state": "normal",
+                    "archive_target_batch_bytes": 262144,
+                    "ewma_queue_wait_ms": 10.0,
+                    "ewma_exec_ms": 20.0,
+                    "total_backpressure": 4,
+                },
+                "ship_scheduler": {
+                    "ready_live": 1,
+                    "ready_retry": 2,
+                    "ready_scan": 3,
+                    "in_flight_retry": 1,
+                    "in_flight_scan": 0,
+                    "backlog_cap": 2,
+                },
+                "ship_lanes": {
+                    "archive": {
+                        "attempts_1h": 8,
+                        "successes_1h": 6,
+                        "backpressure_1h": 2,
+                        "bytes_1h": 1024,
+                        "events_1h": 12,
+                    }
+                },
+            }
+        )
+    )
+
+    summary = collect_archive_backlog(tmp_path)
+
+    assert summary["source"] == "engine_status"
+    assert summary["pending_ranges"] == 3
+    assert summary["shipper"]["adaptive_backlog_limiter"]["current_cap"] == 2
+    assert summary["shipper"]["ship_scheduler"]["ready_scan"] == 3
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["archive", "status", "--state-root", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert "Shipper controller:" in result.stdout
+    assert "ready archive 5" in result.stdout
+    assert "cap 2/16" in result.stdout
 
 
 def test_ready_archive_backlog_makes_pending_ranges_eligible(tmp_path: Path):

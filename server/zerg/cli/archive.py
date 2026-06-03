@@ -31,6 +31,16 @@ def _format_bytes(value: Any) -> str:
     return f"{size} B"
 
 
+def _format_rate(value: Any, suffix: str) -> str:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    if abs(number) < 0.0001:
+        number = 0.0
+    return f"{number:.1f}{suffix}"
+
+
 @app.command("status")
 def status_command(
     json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
@@ -54,6 +64,47 @@ def status_command(
         typer.echo(f"  oldest pending:   {summary['oldest_pending_at']}")
     if summary.get("next_retry_at_min"):
         typer.echo(f"  next retry:       {summary['next_retry_at_min']}")
+
+    shipper = dict(summary.get("shipper") or {})
+    scheduler = dict(shipper.get("ship_scheduler") or {})
+    limiter = dict(shipper.get("adaptive_backlog_limiter") or {})
+    lanes = dict(shipper.get("ship_lanes") or {})
+    archive_lane = dict(lanes.get("archive") or {})
+
+    if scheduler or limiter or archive_lane:
+        typer.echo("")
+        typer.echo("Shipper controller:")
+    if scheduler:
+        ready_archive = int(scheduler.get("ready_retry") or 0) + int(scheduler.get("ready_scan") or 0)
+        active_archive = int(scheduler.get("in_flight_retry") or 0) + int(scheduler.get("in_flight_scan") or 0)
+        typer.echo(
+            "  scheduler: "
+            f"ready live {scheduler.get('ready_live', 0)}, "
+            f"ready archive {ready_archive}, "
+            f"active archive {active_archive}, "
+            f"archive cap {scheduler.get('backlog_cap', '-')}"
+        )
+    if limiter:
+        typer.echo(
+            "  limiter: "
+            f"cap {limiter.get('current_cap', '-')}/{limiter.get('ceiling', '-')}, "
+            f"pressure {limiter.get('pressure_state', '-')}, "
+            f"batch {_format_bytes(limiter.get('archive_target_batch_bytes'))}"
+        )
+        typer.echo(
+            "  host: "
+            f"queue ewma {_format_rate(limiter.get('ewma_queue_wait_ms'), 'ms')}, "
+            f"exec ewma {_format_rate(limiter.get('ewma_exec_ms'), 'ms')}, "
+            f"backpressure {limiter.get('total_backpressure', 0)}"
+        )
+    if archive_lane:
+        typer.echo(
+            "  archive 1h: "
+            f"{archive_lane.get('successes_1h', 0)}/{archive_lane.get('attempts_1h', 0)} ok, "
+            f"{archive_lane.get('backpressure_1h', 0)} backpressure, "
+            f"{_format_bytes(archive_lane.get('bytes_1h'))}, "
+            f"{archive_lane.get('events_1h', 0)} events"
+        )
 
 
 @app.command("inspect")

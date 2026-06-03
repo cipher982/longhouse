@@ -12,6 +12,7 @@ from typing import Any
 
 from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_state_dir
+from zerg.services.longhouse_paths import get_agent_status_path
 
 HUGE_RANGE_BYTES = 100 * 1024 * 1024
 DEFAULT_TRICKLE_TICK_BYTES = 512 * 1024 * 1024
@@ -48,11 +49,17 @@ def default_archive_backlog(*, source: str = "missing") -> dict[str, Any]:
         "next_deferred_retry_at": None,
         "providers": [],
         "size_buckets": {},
+        "shipper": {},
         "db_exists": False,
     }
 
 
-def normalize_archive_backlog(raw: Mapping[str, Any] | None, *, source: str) -> dict[str, Any]:
+def normalize_archive_backlog(
+    raw: Mapping[str, Any] | None,
+    *,
+    source: str,
+    engine_status_payload: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     if not isinstance(raw, Mapping):
         return default_archive_backlog(source=source)
     result = default_archive_backlog(source=source)
@@ -80,6 +87,7 @@ def normalize_archive_backlog(raw: Mapping[str, Any] | None, *, source: str) -> 
             "db_exists": bool(raw.get("db_exists", True)),
         }
     )
+    _attach_shipper_diagnostics(result, engine_status_payload)
     return result
 
 
@@ -88,19 +96,31 @@ def collect_archive_backlog(
     *,
     engine_status_payload: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    if engine_status_payload is None:
+        engine_status_payload = _read_engine_status_payload(base_dir)
+
     raw_from_status = engine_status_payload.get("archive_backlog") if isinstance(engine_status_payload, Mapping) else None
     if isinstance(raw_from_status, Mapping):
-        return normalize_archive_backlog(raw_from_status, source="engine_status")
+        return normalize_archive_backlog(
+            raw_from_status,
+            source="engine_status",
+            engine_status_payload=engine_status_payload,
+        )
 
     db_path = get_agent_db_path(base_dir)
     if not db_path.exists():
-        return default_archive_backlog(source="sqlite")
+        result = default_archive_backlog(source="sqlite")
+        _attach_shipper_diagnostics(result, engine_status_payload)
+        return result
 
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         if not _has_spool_queue(conn):
-            return default_archive_backlog(source="sqlite")
-        return _collect_archive_backlog_from_conn(conn, source="sqlite")
+            result = default_archive_backlog(source="sqlite")
+        else:
+            result = _collect_archive_backlog_from_conn(conn, source="sqlite")
+        _attach_shipper_diagnostics(result, engine_status_payload)
+        return result
 
 
 def inspect_archive_backlog(base_dir: Path | None = None, *, limit: int = 20) -> list[dict[str, Any]]:
@@ -210,6 +230,40 @@ def ready_archive_backlog(base_dir: Path | None = None) -> int:
 def _has_spool_queue(conn: sqlite3.Connection) -> bool:
     row = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'spool_queue' LIMIT 1").fetchone()
     return row is not None
+
+
+def _read_engine_status_payload(base_dir: Path | None = None) -> dict[str, Any] | None:
+    path = get_agent_status_path(base_dir)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _attach_shipper_diagnostics(result: dict[str, Any], engine_status_payload: Mapping[str, Any] | None) -> None:
+    """Attach live scheduler/limiter evidence to an archive backlog summary."""
+    if not isinstance(engine_status_payload, Mapping):
+        return
+    shipper: dict[str, Any] = {}
+    for key in (
+        "adaptive_backlog_limiter",
+        "ship_scheduler",
+        "ship_lanes",
+        "events_per_sec_ewma_10s",
+        "bytes_per_sec_ewma_10s",
+        "last_ship_at",
+        "last_ship_attempt_at",
+        "last_ship_result",
+        "last_ship_latency_ms",
+    ):
+        value = engine_status_payload.get(key)
+        if value is not None:
+            shipper[key] = value
+    if shipper:
+        result["shipper"] = shipper
 
 
 def parse_byte_budget(value: str | None) -> int | None:
