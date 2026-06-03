@@ -109,8 +109,9 @@ async def test_archive_ingest_admission_rejects_when_archive_slot_busy():
 
 
 @pytest.mark.asyncio
-async def test_archive_ingest_admission_allows_writer_queue_to_apply_priority(monkeypatch):
+async def test_archive_ingest_admission_rejects_when_writer_is_busy(monkeypatch):
     class BusySerializer:
+        is_configured = True
         writer_active = True
         queue_depth = 0
 
@@ -120,12 +121,31 @@ async def test_archive_ingest_admission_allows_writer_queue_to_apply_priority(mo
     )
     response = Response()
 
-    acquired = await _acquire_archive_ingest_slot("ingest-replay", response)
-    try:
-        assert acquired is True
-        assert "Retry-After" not in response.headers
-    finally:
-        _release_archive_ingest_slot(acquired)
+    with pytest.raises(HTTPException) as exc:
+        await _acquire_archive_ingest_slot("ingest-replay", response)
+
+    assert exc.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert response.headers["Retry-After"] == "5"
+    assert response.headers["X-Ingest-Admission-State"] == "writer_pressure"
+    assert response.headers["X-Ingest-Backpressure"] == "archive_ingest_backpressure"
+
+
+@pytest.mark.asyncio
+async def test_live_ingest_admission_ignores_archive_writer_pressure(monkeypatch):
+    class BusySerializer:
+        is_configured = True
+        writer_active = True
+        queue_depth = 10
+
+    monkeypatch.setattr(
+        "zerg.services.write_serializer.get_write_serializer",
+        lambda: BusySerializer(),
+    )
+    response = Response()
+
+    acquired = await _acquire_archive_ingest_slot("ingest-live", response)
+    assert acquired is False
+    assert "Retry-After" not in response.headers
 
 
 def test_agents_ingest_persists_ship_trace_runtime_event(tmp_path):

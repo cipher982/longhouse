@@ -131,10 +131,10 @@ def _stage_timing_header_value(stage_ms: dict[str, float]) -> str:
     return json.dumps(ordered, separators=(",", ":"), sort_keys=True)
 
 
-def _raise_archive_ingest_backpressure(response: Response) -> None:
+def _raise_archive_ingest_backpressure(response: Response, *, admission_state: str = "archive_slots_full") -> None:
     response.headers["Retry-After"] = _ARCHIVE_INGEST_RETRY_AFTER_SECONDS
     response.headers["X-Ingest-Lane"] = "archive"
-    response.headers["X-Ingest-Admission-State"] = "archive_slots_full"
+    response.headers["X-Ingest-Admission-State"] = admission_state
     response.headers["X-Ingest-Backpressure"] = _ARCHIVE_INGEST_BACKPRESSURE_KIND
     response.headers["X-Ingest-Error-Kind"] = _ARCHIVE_INGEST_BACKPRESSURE_KIND
     response.headers["X-Ingest-Queue-Wait-Ms"] = "0.0"
@@ -155,6 +155,12 @@ async def _acquire_archive_ingest_slot(write_label: str, response: Response) -> 
     """
     if write_label not in _ARCHIVE_INGEST_LABELS:
         return False
+
+    from zerg.services.write_serializer import get_write_serializer
+
+    ws = get_write_serializer()
+    if ws.is_configured and (ws.writer_active or ws.queue_depth > 0):
+        _raise_archive_ingest_backpressure(response, admission_state="writer_pressure")
 
     if _ARCHIVE_INGEST_SLOTS.locked():
         _raise_archive_ingest_backpressure(response)
@@ -680,7 +686,8 @@ async def ingest_session(
                     if timing.label:
                         response.headers["X-Ingest-Label"] = timing.label
                 response.headers["X-Ingest-Lane"] = _ingest_lane_for_label(write_label)
-                response.headers["X-Ingest-Admission-State"] = "archive_slot_acquired" if archive_slot_acquired else "not_applicable"
+                admission_state = "archive_slot_acquired" if archive_slot_acquired else "not_applicable"
+                response.headers["X-Ingest-Admission-State"] = admission_state
                 response.headers["X-Ingest-Commit-Count"] = str(result.commit_count)
                 response.headers["X-Ingest-Commit-Ms"] = f"{result.commit_ms_total:.1f}"
                 response.headers["X-Ingest-Chunk-Size"] = str(ingest_chunk)
