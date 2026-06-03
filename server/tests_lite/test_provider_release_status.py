@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from zerg import provider_release_status as prs
+
+
+def _fresh_generated_at() -> str:
+    return (datetime.now(UTC) - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
 
 
 @pytest.fixture(autouse=True)
@@ -35,7 +42,7 @@ def test_red_matching_local_version_blocks(monkeypatch, tmp_path: Path) -> None:
         "verdict": "red",
         "failure_code": "managed_tui_attach_active_thread_error",
         "recommendation": "block_upgrade_recommendation",
-        "generated_at": "2026-05-27T00:00:00Z",
+        "generated_at": _fresh_generated_at(),
         "evidence_root": "/data/provider-release-status/codex",
     }
     status_file = tmp_path / "codex.json"
@@ -67,7 +74,7 @@ def test_red_nonmatching_local_version_warns_for_untested_current_version(monkey
                 "schema_version": prs.PROVIDER_STATUS_SCHEMA_VERSION,
                 "codex_version": "0.133.0",
                 "verdict": "red",
-                "generated_at": "2026-05-27T00:00:00Z",
+                "generated_at": _fresh_generated_at(),
             }
         ),
         encoding="utf-8",
@@ -97,7 +104,7 @@ def test_newer_candidate_artifact_does_not_warn_for_older_local_version(monkeypa
                 "codex_version": "rust-v0.135.0-alpha.1",
                 "verdict": "yellow",
                 "failure_code": "insufficient_coverage",
-                "generated_at": "2026-05-27T00:00:00Z",
+                "generated_at": _fresh_generated_at(),
             }
         ),
         encoding="utf-8",
@@ -127,7 +134,7 @@ def test_matching_insufficient_coverage_remains_release_warning(monkeypatch, tmp
                 "provider_version": "2.1.153",
                 "verdict": "yellow",
                 "failure_code": "insufficient_coverage",
-                "generated_at": "2026-05-27T00:00:00Z",
+                "generated_at": _fresh_generated_at(),
                 "operation_evidence": {
                     "launch_remote": {
                         "status": "not_run",
@@ -166,7 +173,7 @@ def test_local_version_probe_failure_is_not_release_warning(monkeypatch, tmp_pat
                 "schema_version": prs.PROVIDER_STATUS_SCHEMA_VERSION,
                 "codex_version": "0.133.0",
                 "verdict": "green",
-                "generated_at": "2026-05-27T00:00:00Z",
+                "generated_at": _fresh_generated_at(),
             }
         ),
         encoding="utf-8",
@@ -223,7 +230,7 @@ def test_schema_mismatch_warns(monkeypatch, tmp_path: Path) -> None:
                 "provider": "codex",
                 "codex_version": "0.133.0",
                 "verdict": "green",
-                "generated_at": "2026-05-27T00:00:00Z",
+                "generated_at": _fresh_generated_at(),
             }
         ),
         encoding="utf-8",
@@ -266,7 +273,7 @@ def test_collects_provider_status_artifacts_for_all_managed_providers(monkeypatc
                     "schema_version": prs.PROVIDER_STATUS_SCHEMA_VERSION,
                     "provider_version": version,
                     "verdict": "green",
-                    "generated_at": "2026-05-27T00:00:00Z",
+                    "generated_at": _fresh_generated_at(),
                 }
             ),
             encoding="utf-8",
@@ -303,7 +310,7 @@ def test_collects_operation_evidence_from_provider_status_artifact(monkeypatch, 
                 "schema_version": prs.PROVIDER_STATUS_SCHEMA_VERSION,
                 "provider_version": "2.1.153",
                 "verdict": "green",
-                "generated_at": "2026-05-27T00:00:00Z",
+                "generated_at": _fresh_generated_at(),
                 "operation_evidence": {
                     "steer_active_turn": {
                         "status": "pass",
@@ -344,7 +351,7 @@ def test_reads_provider_status_user_config_file_when_env_absent(monkeypatch, tmp
                 "schema_version": prs.PROVIDER_STATUS_SCHEMA_VERSION,
                 "provider_version": "codex-cli 0.134.0",
                 "verdict": "green",
-                "generated_at": "2026-05-27T00:00:00Z",
+                "generated_at": _fresh_generated_at(),
             }
         ),
         encoding="utf-8",
@@ -377,7 +384,7 @@ def test_accepts_external_provider_status_url_envelope(monkeypatch) -> None:
                     "schema_version": prs.PROVIDER_STATUS_SCHEMA_VERSION,
                     "provider_version": "1.2.3",
                     "verdict": "green",
-                    "generated_at": "2026-05-27T00:00:00Z",
+                    "generated_at": _fresh_generated_at(),
                 },
             },
             None,
@@ -409,7 +416,7 @@ def test_generic_status_dir_missing_provider_artifacts_are_not_configured(monkey
                 "schema_version": prs.PROVIDER_STATUS_SCHEMA_VERSION,
                 "provider_version": "codex-cli 0.134.0",
                 "verdict": "green",
-                "generated_at": "2026-05-27T00:00:00Z",
+                "generated_at": _fresh_generated_at(),
             }
         ),
         encoding="utf-8",
