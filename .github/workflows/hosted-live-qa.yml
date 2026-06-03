@@ -92,6 +92,14 @@ jobs:
             sleep 5
           done
 
+      - name: Run hosted mixed live/archive shipper bench
+        id: hosted_shipper_bench
+        if: always() && steps.qa_live.outcome == 'success'
+        env:
+          HOME: ${{ env.QA_HOME }}
+          CARGO_PROFILE: ci
+        run: make hosted-shipper-mixed-bench
+
       - name: Run render-canary SLA check
         id: render_canary
         if: always() && steps.qa_live.outcome == 'success'
@@ -116,6 +124,7 @@ jobs:
             echo "- Commit: \`${{ github.sha }}\`"
             echo "- Source SHA: \`${{ github.event.inputs.source_sha || github.sha }}\`"
             echo "- qa-live: \`${{ steps.qa_live.outcome || 'skipped' }}\`"
+            echo "- hosted shipper mixed bench: \`${{ steps.hosted_shipper_bench.outcome || 'skipped' }}\`"
             echo "- render-canary: \`${{ steps.render_canary.outcome || 'skipped' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
