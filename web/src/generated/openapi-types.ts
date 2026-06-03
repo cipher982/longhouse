@@ -6192,6 +6192,14 @@ export interface components {
              * @default 0
              */
             ship_connect_errors_10m: number;
+            /** Ship Lanes */
+            ship_lanes?: {
+                [key: string]: unknown;
+            };
+            /** Events Per Sec Ewma 10S */
+            events_per_sec_ewma_10s?: number | null;
+            /** Bytes Per Sec Ewma 10S */
+            bytes_per_sec_ewma_10s?: number | null;
             /**
              * Disk Free Bytes
              * @default 0
