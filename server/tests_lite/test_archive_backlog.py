@@ -59,6 +59,7 @@ def test_collect_archive_backlog_summarizes_sqlite_spool(tmp_path: Path):
     assert summary["pending_sessions"] == 1
     assert summary["pending_bytes"] == 2 * 1024 * 1024
     assert summary["dead_ranges"] == 1
+    assert summary["mode"] == "drain"
     assert summary["providers"][0]["provider"] == "codex"
 
 
@@ -95,5 +96,6 @@ def test_archive_status_cli_reads_state_root(tmp_path: Path):
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
+    assert payload["mode"] == "drain"
     assert payload["pending_ranges"] == 2
     assert payload["pending_bytes"] == 2 * 1024 * 1024

@@ -14,8 +14,8 @@ from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_state_dir
 
 HUGE_RANGE_BYTES = 100 * 1024 * 1024
-DEFAULT_TRICKLE_TICK_BYTES = 25 * 1024 * 1024
-DEFAULT_DRAIN_TICK_BYTES = 250 * 1024 * 1024
+DEFAULT_TRICKLE_TICK_BYTES = 512 * 1024 * 1024
+DEFAULT_DRAIN_TICK_BYTES = 4 * 1024 * 1024 * 1024
 
 
 def _utc_now_iso() -> str:
@@ -244,7 +244,7 @@ def _collect_archive_backlog_from_conn(conn: sqlite3.Connection, *, source: str)
     return {
         "source": source,
         "state": state,
-        "mode": "trickle" if pending_ranges else "idle",
+        "mode": "drain" if pending_ranges else "idle",
         "pending_ranges": pending_ranges,
         "pending_paths": _int(aggregate["pending_paths"]),
         "pending_sessions": _int(aggregate["pending_sessions"]),
