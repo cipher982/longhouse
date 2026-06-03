@@ -267,6 +267,17 @@ pub struct ShipBenchResult {
 }
 
 impl ShipBenchResult {
+    pub fn live_sla_passes(&self, max_p95_ms: f64) -> bool {
+        if self.mixed_live_count == 0 {
+            return true;
+        }
+        if self.live_failures > 0 {
+            return false;
+        }
+        self.live_latency_p95_ms
+            .is_some_and(|p95| p95 <= max_p95_ms)
+    }
+
     pub fn print_summary(&self) {
         let mb_decoded = self.bytes_decoded as f64 / 1_048_576.0;
         let mb_compressed = self.bytes_compressed as f64 / 1_048_576.0;
@@ -599,5 +610,48 @@ fn get_rss_mb() -> f64 {
     #[cfg(not(target_os = "macos"))]
     {
         0.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ship_bench_result(
+        mixed_live_count: usize,
+        live_latency_p95_ms: Option<f64>,
+        live_failures: usize,
+    ) -> ShipBenchResult {
+        ShipBenchResult {
+            files_processed: 0,
+            bytes_decoded: 0,
+            bytes_compressed: 0,
+            events_shipped: 0,
+            total_seconds: 0.0,
+            ship_concurrency: 1,
+            ship_latency_p50_ms: 0.0,
+            ship_latency_p95_ms: 0.0,
+            server_queue_wait_p50_ms: None,
+            server_queue_wait_p95_ms: None,
+            server_exec_p50_ms: None,
+            server_exec_p95_ms: None,
+            mixed_live_count,
+            live_latency_p50_ms: live_latency_p95_ms,
+            live_latency_p95_ms,
+            live_failures,
+            failures: 0,
+        }
+    }
+
+    #[test]
+    fn live_sla_passes_when_no_mixed_probe_requested() {
+        assert!(ship_bench_result(0, None, 0).live_sla_passes(10_000.0));
+    }
+
+    #[test]
+    fn live_sla_fails_on_probe_failure_or_high_p95() {
+        assert!(!ship_bench_result(5, Some(100.0), 1).live_sla_passes(10_000.0));
+        assert!(!ship_bench_result(5, Some(12_000.0), 0).live_sla_passes(10_000.0));
+        assert!(ship_bench_result(5, Some(500.0), 0).live_sla_passes(10_000.0));
     }
 }

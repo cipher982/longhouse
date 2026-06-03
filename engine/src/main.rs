@@ -193,6 +193,10 @@ enum Commands {
         /// Mode B: inject this many live-lane probe POSTs while archive uploads run.
         #[arg(long, default_value = "0")]
         mixed_live_count: usize,
+
+        /// Mode B: fail when mixed live probe p95 exceeds this threshold.
+        #[arg(long, default_value = "10000")]
+        mixed_live_max_p95_ms: f64,
     },
 
     /// Daemon mode: watch for file changes and ship incrementally
@@ -871,6 +875,7 @@ fn main() -> anyhow::Result<()> {
             ship_token,
             ship_concurrency,
             mixed_live_count,
+            mixed_live_max_p95_ms,
         } => {
             let algo = parse_compression_algo(&compression)?;
             commands::cmd_bench::cmd_bench(
@@ -883,6 +888,7 @@ fn main() -> anyhow::Result<()> {
                 ship_token.as_deref(),
                 ship_concurrency.max(1),
                 mixed_live_count,
+                mixed_live_max_p95_ms,
             )?;
         }
         Commands::Ship {

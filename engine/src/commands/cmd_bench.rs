@@ -15,6 +15,7 @@ pub fn cmd_bench(
     ship_token: Option<&str>,
     ship_concurrency: usize,
     mixed_live_count: usize,
+    mixed_live_max_p95_ms: f64,
 ) -> anyhow::Result<()> {
     eprintln!("Discovering session files...");
     let all_files = crate::bench::discover_session_files();
@@ -88,6 +89,11 @@ pub fn cmd_bench(
             algo,
         )?;
         result.print_summary();
+        if mixed_live_count > 0 && !result.live_sla_passes(mixed_live_max_p95_ms) {
+            anyhow::bail!(
+                "mixed live/archive bench failed: live p95 or failures exceeded threshold"
+            );
+        }
     } else if parallel {
         let result = crate::bench::run_benchmark_parallel_with(&files, compress, num_workers, algo);
         result.print_summary();
