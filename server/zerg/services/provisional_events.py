@@ -267,7 +267,10 @@ def _preview_candidate_from_bridge_observation(row: SessionObservation) -> _Prev
         source=row.source or "codex_bridge_live",
         session_id=row.session_id,
         thread_id=_optional_str(bridge_payload.get("thread_id")),
-        turn_id=_optional_str(bridge_payload.get("turn_id")),
+        turn_id=_item_scoped_turn_id(
+            _optional_str(bridge_payload.get("turn_id")),
+            _optional_str(bridge_payload.get("item_id")),
+        ),
     )
     seq = _coerce_seq(bridge_payload.get("seq"))
     cursor = build_provisional_cursor(key=turn_key, seq=seq)
@@ -307,6 +310,12 @@ def _clean_identity_part(value: str | None, *, fallback: str) -> str:
 def _optional_str(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
+
+
+def _item_scoped_turn_id(turn_id: str | None, item_id: str | None) -> str | None:
+    if not item_id:
+        return turn_id
+    return f"{turn_id or 'unknown-turn'}#{item_id}"
 
 
 def _coerce_seq(value: Any) -> int | None:

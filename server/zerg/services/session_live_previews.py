@@ -57,11 +57,12 @@ def live_preview_candidate_from_runtime_event(
 
     thread_id = _optional_str(payload.get("thread_id"))
     turn_id = _optional_str(payload.get("turn_id"))
+    item_id = _optional_str(payload.get("item_id"))
     turn_key = build_provisional_key(
         source=source,
         session_id=event.session_id,
         thread_id=thread_id,
-        turn_id=turn_id,
+        turn_id=_item_scoped_turn_id(turn_id, item_id),
     )
     seq = _coerce_seq(payload.get("seq"))
     observed_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
@@ -200,6 +201,12 @@ def _candidate_should_replace(candidate: LivePreviewCandidate, existing: Session
 def _optional_str(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
+
+
+def _item_scoped_turn_id(turn_id: str | None, item_id: str | None) -> str | None:
+    if not item_id:
+        return turn_id
+    return f"{turn_id or 'unknown-turn'}#{item_id}"
 
 
 def _coerce_seq(value: Any) -> int | None:

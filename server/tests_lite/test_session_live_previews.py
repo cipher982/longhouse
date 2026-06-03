@@ -45,10 +45,24 @@ def _bridge_event(
     occurred_at: datetime,
     seq: int,
     live_text: str,
+    item_id: str | None = None,
+    item_seq: int | None = None,
     thread_id: str = "thread-1",
     turn_id: str = "turn-1",
     turn_completed: bool = False,
 ) -> RuntimeEventIngest:
+    payload = {
+        "progress_kind": "bridge_live_transcript_delta",
+        "thread_id": thread_id,
+        "turn_id": turn_id,
+        "seq": seq,
+        "live_text": live_text,
+        "turn_completed": turn_completed,
+    }
+    if item_id is not None:
+        payload["item_id"] = item_id
+    if item_seq is not None:
+        payload["item_seq"] = item_seq
     return RuntimeEventIngest(
         runtime_key=f"codex:{session_id}",
         session_id=session_id,
@@ -57,15 +71,8 @@ def _bridge_event(
         source="codex_bridge_live",
         kind="progress_signal",
         occurred_at=occurred_at,
-        dedupe_key=f"bridge:live:{session_id}:{thread_id}:{turn_id}:{seq}:{live_text}",
-        payload={
-            "progress_kind": "bridge_live_transcript_delta",
-            "thread_id": thread_id,
-            "turn_id": turn_id,
-            "seq": seq,
-            "live_text": live_text,
-            "turn_completed": turn_completed,
-        },
+        dedupe_key=f"bridge:live:{session_id}:{thread_id}:{turn_id}:{item_id or 'legacy'}:{seq}:{live_text}",
+        payload=payload,
     )
 
 
@@ -107,7 +114,7 @@ def test_runtime_ingest_materializes_latest_live_preview_projection(tmp_path):
     assert row.turn_key == f"codex_bridge_live:{session.id}:thread-1:turn-1"
     assert row.provisional_cursor == f"codex_bridge_live:{session.id}:thread-1:turn-1:2"
     assert row.provisional_complete == 0
-    assert row.last_observation_id.endswith(f"bridge:live:{session.id}:thread-1:turn-1:2:hello")
+    assert row.last_observation_id.endswith(f"bridge:live:{session.id}:thread-1:turn-1:legacy:2:hello")
     assert preview.text == "hello"
     assert preview.provisional_complete is False
 
@@ -171,6 +178,48 @@ def test_projection_resets_seq_on_new_turn_when_observed_later(tmp_path):
     assert row.turn_key == f"codex_bridge_live:{session.id}:thread-1:turn-2"
     assert row.preview_text == "new turn"
     assert preview.provisional_complete is True
+
+
+def test_projection_treats_new_item_as_new_preview_even_with_same_turn(tmp_path):
+    SessionLocal = _make_sessionmaker(tmp_path, "same_turn_new_item.db")
+    now = datetime(2026, 5, 27, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=1))
+
+        ingest_runtime_events(
+            db,
+            [
+                _bridge_event(
+                    session_id=session.id,
+                    occurred_at=now,
+                    seq=1,
+                    item_id="item-1",
+                    item_seq=1,
+                    live_text="first assistant message",
+                ),
+                _bridge_event(
+                    session_id=session.id,
+                    occurred_at=now + timedelta(milliseconds=20),
+                    seq=2,
+                    item_id="item-2",
+                    item_seq=1,
+                    live_text="second assistant message",
+                ),
+            ],
+        )
+        db.commit()
+
+        row = db.get(SessionLivePreview, session.id)
+        preview = load_session_live_preview_map(db, [session.id])[str(session.id)]
+
+    assert row is not None
+    assert row.seq == 2
+    assert row.turn_key == f"codex_bridge_live:{session.id}:thread-1:turn-1#item-2"
+    assert row.provisional_cursor == f"codex_bridge_live:{session.id}:thread-1:turn-1#item-2:2"
+    assert row.preview_text == "second assistant message"
+    assert "first assistant message" not in row.preview_text
+    assert preview.text == "second assistant message"
 
 
 def test_projection_ignores_empty_live_text(tmp_path):

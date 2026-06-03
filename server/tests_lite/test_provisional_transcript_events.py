@@ -102,12 +102,26 @@ def _insert_legacy_bridge_preview_observation(
     occurred_at: datetime,
     seq: int,
     live_text: str,
+    item_id: str | None = None,
     turn_id: str = "turn-1",
     turn_completed: bool = False,
 ):
+    bridge_payload = {
+        "progress_kind": "bridge_live_transcript_delta",
+        "managed_transport": "codex_app_server",
+        "thread_id": "thread-1",
+        "turn_id": turn_id,
+        "seq": seq,
+        "method": "item/agentMessage/delta",
+        "delta": live_text[-1:],
+        "live_text": live_text,
+        "turn_completed": turn_completed,
+    }
+    if item_id is not None:
+        bridge_payload["item_id"] = item_id
     record_session_observation(
         db,
-        observation_id=f"runtime:codex_bridge_live:legacy:{session_id}:thread-1:{turn_id}:{seq}",
+        observation_id=f"runtime:codex_bridge_live:legacy:{session_id}:thread-1:{turn_id}:{item_id or 'legacy'}:{seq}",
         session_id=session_id,
         runtime_key=f"codex:{session_id}",
         provider="codex",
@@ -123,18 +137,8 @@ def _insert_legacy_bridge_preview_observation(
             "phase": None,
             "tool_name": None,
             "freshness_ms": None,
-            "dedupe_key": f"bridge:live:{session_id}:thread-1:{turn_id}:{seq}",
-            "payload": {
-                "progress_kind": "bridge_live_transcript_delta",
-                "managed_transport": "codex_app_server",
-                "thread_id": "thread-1",
-                "turn_id": turn_id,
-                "seq": seq,
-                "method": "item/agentMessage/delta",
-                "delta": live_text[-1:],
-                "live_text": live_text,
-                "turn_completed": turn_completed,
-            },
+            "dedupe_key": f"bridge:live:{session_id}:thread-1:{turn_id}:{item_id or 'legacy'}:{seq}",
+            "payload": bridge_payload,
         },
         load_observation=False,
     )
@@ -427,6 +431,37 @@ def test_live_preview_cleanup_keeps_bounded_latest_window(monkeypatch, tmp_path)
     assert removed == 5
     assert [json.loads(row.payload_json or "{}")["payload"]["seq"] for row in remaining] == [6, 7, 8]
     assert preview.text == "preview 8"
+
+
+def test_observation_fallback_treats_new_item_as_new_preview_even_with_same_turn(monkeypatch, tmp_path):
+    monkeypatch.setenv("LONGHOUSE_DISABLE_LIVE_PREVIEW_PROJECTION", "1")
+    SessionLocal = _make_sessionmaker(tmp_path, "live_overlay_same_turn_items.db")
+    now = datetime(2026, 5, 11, 12, 0, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_managed_codex_session(db, started_at=now - timedelta(minutes=1))
+        _insert_legacy_bridge_preview_observation(
+            db,
+            session_id=session.id,
+            occurred_at=now,
+            seq=1,
+            item_id="item-1",
+            live_text="first assistant message",
+        )
+        _insert_legacy_bridge_preview_observation(
+            db,
+            session_id=session.id,
+            occurred_at=now + timedelta(milliseconds=20),
+            seq=2,
+            item_id="item-2",
+            live_text="second assistant message",
+        )
+        db.commit()
+
+        preview = load_active_provisional_preview_map(db, [session.id])[str(session.id)]
+
+    assert preview.text == "second assistant message"
+    assert preview.provisional_cursor == f"codex_bridge_live:{session.id}:thread-1:turn-1#item-2:2"
 
 
 def test_live_preview_cleanup_removes_rows_covered_by_durable_activity(monkeypatch, tmp_path):

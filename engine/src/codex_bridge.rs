@@ -301,6 +301,9 @@ struct BridgeContext {
     runtime: BridgeRuntimeSink,
     last_progress_emit: Option<Instant>,
     live_transcript_seq: u64,
+    live_transcript_item_seq: u64,
+    live_transcript_item_id: Option<String>,
+    live_transcript_item_hint: Option<String>,
     live_transcript_text: String,
     runtime_tracker: CodexRuntimeTracker,
     subscribed_thread_id: Option<String>,
@@ -1047,6 +1050,9 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         },
         last_progress_emit: None,
         live_transcript_seq: 0,
+        live_transcript_item_seq: 0,
+        live_transcript_item_id: None,
+        live_transcript_item_hint: None,
         live_transcript_text: String::new(),
         runtime_tracker: CodexRuntimeTracker::default(),
         subscribed_thread_id: startup_subscribed_thread_id,
@@ -2629,8 +2635,7 @@ async fn process_notification(
             if method == "turn/started" {
                 context.state.active_turn_id = extract_string(&params, &["turn", "id"]);
                 context.state.last_turn_status = extract_string(&params, &["turn", "status"]);
-                context.live_transcript_seq = 0;
-                context.live_transcript_text.clear();
+                reset_live_transcript_turn(context);
                 write_state_file(&context.state_file, &context.state)?;
                 if let Some(path) = context.state.thread_path.as_deref() {
                     wake_daemon_for_transcript(
@@ -2640,6 +2645,11 @@ async fn process_notification(
                         "turn_started",
                         context.state.active_turn_id.as_deref(),
                     );
+                }
+            }
+            if method == "item/started" {
+                if let Some(item_id) = extract_started_assistant_message_item_id(&params) {
+                    context.live_transcript_item_hint = Some(item_id);
                 }
             }
             let updates = context.runtime_tracker.handle_notification(method, &params);
@@ -2677,7 +2687,14 @@ async fn process_notification(
                 return Ok(None);
             }
             if let Some(delta) = extract_live_transcript_delta(method, &params) {
+                let item_id = resolve_live_transcript_item_id(context, &params);
+                if context.live_transcript_item_id.as_deref() != Some(item_id.as_str()) {
+                    context.live_transcript_item_id = Some(item_id.clone());
+                    context.live_transcript_item_seq = 0;
+                    context.live_transcript_text.clear();
+                }
                 context.live_transcript_seq += 1;
+                context.live_transcript_item_seq += 1;
                 context.live_transcript_text.push_str(delta);
                 context
                     .runtime
@@ -2685,7 +2702,9 @@ async fn process_notification(
                         method,
                         delta,
                         context.state.active_turn_id.as_deref(),
+                        &item_id,
                         context.live_transcript_seq,
+                        context.live_transcript_item_seq,
                         &context.live_transcript_text,
                     )
                     .await;
@@ -2722,19 +2741,27 @@ async fn process_notification(
                 }
             }
             if !context.live_transcript_text.is_empty() {
+                let item_id = context
+                    .live_transcript_item_id
+                    .clone()
+                    .or_else(|| context.live_transcript_item_hint.clone())
+                    .unwrap_or_else(|| fallback_live_transcript_item_id(context));
                 context.live_transcript_seq += 1;
+                context.live_transcript_item_seq += 1;
                 context
                     .runtime
                     .post_live_transcript_completed(
                         completed_turn_id.as_deref(),
+                        &item_id,
                         context.live_transcript_seq,
+                        context.live_transcript_item_seq,
                         &context.live_transcript_text,
                     )
                     .await;
             }
             context.state.last_turn_status = extract_string(&params, &["turn", "status"]);
             context.state.active_turn_id = None;
-            context.live_transcript_text.clear();
+            reset_live_transcript_turn(context);
             write_state_file(&context.state_file, &context.state)?;
             if let Some(path) = context.state.thread_path.as_deref() {
                 wake_daemon_for_transcript(
@@ -3037,8 +3064,7 @@ fn mark_provider_thread_switched(
     );
     context.state.thread_subscription_last_error = Some(message);
     context.runtime_tracker.active_turn_id = None;
-    context.live_transcript_text.clear();
-    context.live_transcript_seq = 0;
+    reset_live_transcript_turn(context);
     if let Some(path) = next_path.as_deref() {
         clear_binding_if_points_to_session(config, path, &context.state.session_id);
     }
@@ -3310,11 +3336,50 @@ impl CodexRuntimeTracker {
     }
 }
 
+fn reset_live_transcript_turn(context: &mut BridgeContext) {
+    context.live_transcript_seq = 0;
+    context.live_transcript_item_seq = 0;
+    context.live_transcript_item_id = None;
+    context.live_transcript_item_hint = None;
+    context.live_transcript_text.clear();
+}
+
 fn extract_live_transcript_delta<'a>(method: &str, params: &'a Value) -> Option<&'a str> {
     match method {
         "item/agentMessage/delta" => params.get("delta").and_then(Value::as_str),
         _ => None,
     }
+}
+
+fn extract_live_transcript_item_id(params: &Value) -> Option<String> {
+    extract_string(params, &["itemId"])
+        .or_else(|| extract_string(params, &["item", "id"]))
+        .or_else(|| extract_string(params, &["id"]))
+}
+
+fn extract_started_assistant_message_item_id(params: &Value) -> Option<String> {
+    let item = params.get("item")?;
+    let item_type = item.get("type").and_then(Value::as_str)?;
+    if item_type != "assistantMessage" {
+        return None;
+    }
+    extract_string(item, &["id"])
+}
+
+fn resolve_live_transcript_item_id(context: &BridgeContext, params: &Value) -> String {
+    extract_live_transcript_item_id(params)
+        .or_else(|| context.live_transcript_item_hint.clone())
+        .or_else(|| context.live_transcript_item_id.clone())
+        .unwrap_or_else(|| fallback_live_transcript_item_id(context))
+}
+
+fn fallback_live_transcript_item_id(context: &BridgeContext) -> String {
+    let turn_id = context
+        .state
+        .active_turn_id
+        .as_deref()
+        .unwrap_or("unknown-turn");
+    format!("{turn_id}:assistant")
 }
 
 fn latest_assistant_text_from_rollout(path: &Path) -> Option<String> {
@@ -3555,7 +3620,11 @@ fn live_transcript_event_key(event: &Value) -> Option<String> {
         .get("turn_id")
         .and_then(Value::as_str)
         .unwrap_or("unknown-turn");
-    Some(format!("{runtime_key}:{thread_id}:{turn_id}"))
+    let item_id = payload
+        .get("item_id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown-item");
+    Some(format!("{runtime_key}:{thread_id}:{turn_id}:{item_id}"))
 }
 
 fn live_transcript_event_seq(event: &Value) -> u64 {
@@ -3665,13 +3734,17 @@ impl BridgeRuntimeSink {
         method: &str,
         delta: &str,
         turn_id: Option<&str>,
+        item_id: &str,
         seq: u64,
+        item_seq: u64,
         live_text: &str,
     ) {
         info!(
             target: "codex_bridge::live_transcript",
             session_id = %self.session_id,
             seq,
+            item_seq,
+            item_id,
             method,
             delta_len = delta.len(),
             text_len = live_text.len(),
@@ -3681,7 +3754,9 @@ impl BridgeRuntimeSink {
             method,
             delta,
             turn_id,
+            item_id,
             seq,
+            item_seq,
             live_text,
             false,
             Utc::now(),
@@ -3691,13 +3766,17 @@ impl BridgeRuntimeSink {
     async fn post_live_transcript_completed(
         &self,
         turn_id: Option<&str>,
+        item_id: &str,
         seq: u64,
+        item_seq: u64,
         live_text: &str,
     ) {
         info!(
             target: "codex_bridge::live_transcript",
             session_id = %self.session_id,
             seq,
+            item_seq,
+            item_id,
             text_len = live_text.len(),
             "live_transcript completed"
         );
@@ -3705,7 +3784,9 @@ impl BridgeRuntimeSink {
             "turn/completed",
             "",
             turn_id,
+            item_id,
             seq,
+            item_seq,
             live_text,
             true,
             Utc::now(),
@@ -3717,7 +3798,9 @@ impl BridgeRuntimeSink {
         method: &str,
         delta: &str,
         turn_id: Option<&str>,
+        item_id: &str,
         seq: u64,
+        item_seq: u64,
         live_text: &str,
         turn_completed: bool,
         observed_at: chrono::DateTime<Utc>,
@@ -3735,10 +3818,11 @@ impl BridgeRuntimeSink {
             "tool_name": Value::Null,
             "occurred_at": observed_at.to_rfc3339(),
             "dedupe_key": format!(
-                "bridge:live:{}:{}:{}:{}",
+                "bridge:live:{}:{}:{}:{}:{}",
                 self.session_id,
                 thread_id,
                 turn_id,
+                item_id,
                 seq
             ),
             "payload": {
@@ -3746,7 +3830,9 @@ impl BridgeRuntimeSink {
                 "managed_transport": "codex_app_server",
                 "thread_id": self.thread_id,
                 "turn_id": turn_id,
+                "item_id": item_id,
                 "seq": seq,
+                "item_seq": item_seq,
                 "method": method,
                 "delta": delta,
                 "live_text": live_text,
@@ -4333,6 +4419,9 @@ mod tests {
             },
             last_progress_emit: None,
             live_transcript_seq: 0,
+            live_transcript_item_seq: 0,
+            live_transcript_item_id: None,
+            live_transcript_item_hint: None,
             live_transcript_text: String::new(),
             runtime_tracker: CodexRuntimeTracker::default(),
             subscribed_thread_id: None,
@@ -5109,6 +5198,31 @@ mod tests {
     }
 
     #[test]
+    fn extract_live_transcript_item_id_reads_codex_item_id_shapes() {
+        assert_eq!(
+            extract_live_transcript_item_id(&json!({"itemId": "item-1"})).as_deref(),
+            Some("item-1")
+        );
+        assert_eq!(
+            extract_live_transcript_item_id(&json!({"item": {"id": "item-2"}})).as_deref(),
+            Some("item-2")
+        );
+        assert_eq!(
+            extract_started_assistant_message_item_id(
+                &json!({"item": {"id": "item-3", "type": "assistantMessage"}})
+            )
+            .as_deref(),
+            Some("item-3")
+        );
+        assert_eq!(
+            extract_started_assistant_message_item_id(
+                &json!({"item": {"id": "tool-1", "type": "commandExecution"}})
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn latest_assistant_text_from_rollout_reads_recent_agent_message() {
         let temp = tempfile::tempdir().unwrap();
         let rollout_path = temp.path().join("thread.jsonl");
@@ -5204,6 +5318,8 @@ mod tests {
             "item/agentMessage/delta",
             "lo",
             Some("turn-1"),
+            "item-1",
+            2,
             2,
             "hello",
             false,
@@ -5212,10 +5328,12 @@ mod tests {
 
         assert_eq!(
             event["dedupe_key"],
-            "bridge:live:session-123:thread-abc:turn-1:2"
+            "bridge:live:session-123:thread-abc:turn-1:item-1:2"
         );
         assert_eq!(event["source"], "codex_bridge_live");
         assert_eq!(event["payload"]["seq"], 2);
+        assert_eq!(event["payload"]["item_id"], "item-1");
+        assert_eq!(event["payload"]["item_seq"], 2);
         assert_eq!(event["payload"]["delta"], "lo");
         assert_eq!(event["payload"]["live_text"], "hello");
         assert_eq!(event["payload"]["turn_completed"], false);
@@ -5244,6 +5362,8 @@ mod tests {
             "turn/completed",
             "",
             Some("turn-1"),
+            "item-1",
+            3,
             3,
             "hello",
             true,
@@ -5252,8 +5372,10 @@ mod tests {
 
         assert_eq!(
             event["dedupe_key"],
-            "bridge:live:session-123:thread-abc:turn-1:3"
+            "bridge:live:session-123:thread-abc:turn-1:item-1:3"
         );
+        assert_eq!(event["payload"]["item_id"], "item-1");
+        assert_eq!(event["payload"]["item_seq"], 3);
         assert_eq!(event["payload"]["live_text"], "hello");
         assert_eq!(event["payload"]["turn_completed"], true);
     }
@@ -5279,6 +5401,8 @@ mod tests {
             "item/agentMessage/delta",
             "L",
             Some("turn-1"),
+            "item-1",
+            1,
             1,
             "L",
             false,
@@ -5288,6 +5412,8 @@ mod tests {
             "item/agentMessage/delta",
             "H",
             Some("turn-1"),
+            "item-1",
+            2,
             2,
             "LH",
             false,
@@ -5320,6 +5446,129 @@ mod tests {
         assert_eq!(live_events.len(), 1);
         assert_eq!(live_events[0]["payload"]["seq"], 2);
         assert_eq!(live_events[0]["payload"]["live_text"], "LH");
+    }
+
+    #[test]
+    fn coalesce_runtime_event_batches_keeps_distinct_live_items_for_same_turn() {
+        let sink = BridgeRuntimeSink {
+            http: reqwest::Client::new(),
+            api_url: "http://127.0.0.1:9".to_string(),
+            api_token: "token".to_string(),
+            session_id: "session-123".to_string(),
+            cwd: "/Users/test/git/zerg".to_string(),
+            machine_name: Some("test-box".to_string()),
+            thread_id: Some("thread-abc".to_string()),
+            local_db_path: None,
+            runtime_tx: None,
+            live_runtime_tx: None,
+        };
+        let observed_at = DateTime::parse_from_rfc3339("2026-05-08T08:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let first_item = sink.live_transcript_delta_event(
+            "item/agentMessage/delta",
+            "First.",
+            Some("turn-1"),
+            "item-1",
+            1,
+            1,
+            "First.",
+            false,
+            observed_at,
+        );
+        let second_item = sink.live_transcript_delta_event(
+            "item/agentMessage/delta",
+            "Second.",
+            Some("turn-1"),
+            "item-2",
+            2,
+            1,
+            "Second.",
+            false,
+            observed_at,
+        );
+
+        let events = coalesce_runtime_event_batches(vec![vec![first_item], vec![second_item]]);
+        let live_texts: Vec<&str> = events
+            .iter()
+            .filter(|event| event["source"] == "codex_bridge_live")
+            .filter_map(|event| event["payload"]["live_text"].as_str())
+            .collect();
+
+        assert_eq!(events.len(), 2);
+        assert!(live_texts.contains(&"First."));
+        assert!(live_texts.contains(&"Second."));
+        assert!(!live_texts.contains(&"First.Second."));
+    }
+
+    #[tokio::test]
+    async fn process_notification_resets_live_buffer_for_new_assistant_item() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+
+        process_notification(
+            &json!({
+                "method": "turn/started",
+                "params": {
+                    "turn": {"id": "turn-1", "status": "inProgress"}
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+        process_notification(
+            &json!({
+                "method": "item/started",
+                "params": {
+                    "item": {"id": "item-1", "type": "assistantMessage"}
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+        process_notification(
+            &json!({
+                "method": "item/agentMessage/delta",
+                "params": {"itemId": "item-1", "delta": "First."}
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        process_notification(
+            &json!({
+                "method": "item/started",
+                "params": {
+                    "item": {"id": "item-2", "type": "assistantMessage"}
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+        process_notification(
+            &json!({
+                "method": "item/agentMessage/delta",
+                "params": {"itemId": "item-2", "delta": "Second."}
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(context.live_transcript_item_id.as_deref(), Some("item-2"));
+        assert_eq!(context.live_transcript_item_seq, 1);
+        assert_eq!(context.live_transcript_seq, 2);
+        assert_eq!(context.live_transcript_text, "Second.");
     }
 
     #[test]
