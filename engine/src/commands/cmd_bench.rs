@@ -14,6 +14,7 @@ pub fn cmd_bench(
     ship_url: Option<&str>,
     ship_token: Option<&str>,
     ship_concurrency: usize,
+    mixed_live_count: usize,
 ) -> anyhow::Result<()> {
     eprintln!("Discovering session files...");
     let all_files = crate::bench::discover_session_files();
@@ -54,6 +55,10 @@ pub fn cmd_bench(
     };
 
     let mode_label = match (parallel, ship_url) {
+        (_, Some(url)) if mixed_live_count > 0 => format!(
+            "ship -> {} (archive concurrency {}, live probes {})",
+            url, ship_concurrency, mixed_live_count
+        ),
         (_, Some(url)) => format!("ship -> {} (concurrency {})", url, ship_concurrency),
         (true, None) => format!("parallel ({} workers)", num_workers),
         (false, None) => "sequential".to_string(),
@@ -74,7 +79,14 @@ pub fn cmd_bench(
     if let Some(url) = ship_url {
         let token = ship_token
             .ok_or_else(|| anyhow::anyhow!("--ship-token is required when --ship-url is set"))?;
-        let result = crate::bench::run_benchmark_ship(&files, url, token, ship_concurrency, algo)?;
+        let result = crate::bench::run_benchmark_ship(
+            &files,
+            url,
+            token,
+            ship_concurrency,
+            mixed_live_count,
+            algo,
+        )?;
         result.print_summary();
     } else if parallel {
         let result = crate::bench::run_benchmark_parallel_with(&files, compress, num_workers, algo);

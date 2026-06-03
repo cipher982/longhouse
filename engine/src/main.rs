@@ -189,6 +189,10 @@ enum Commands {
         /// Number of concurrent in-flight POSTs in Mode B.
         #[arg(long, default_value = "1")]
         ship_concurrency: usize,
+
+        /// Mode B: inject this many live-lane probe POSTs while archive uploads run.
+        #[arg(long, default_value = "0")]
+        mixed_live_count: usize,
     },
 
     /// Daemon mode: watch for file changes and ship incrementally
@@ -866,6 +870,7 @@ fn main() -> anyhow::Result<()> {
             ship_url,
             ship_token,
             ship_concurrency,
+            mixed_live_count,
         } => {
             let algo = parse_compression_algo(&compression)?;
             commands::cmd_bench::cmd_bench(
@@ -877,6 +882,7 @@ fn main() -> anyhow::Result<()> {
                 ship_url.as_deref(),
                 ship_token.as_deref(),
                 ship_concurrency.max(1),
+                mixed_live_count,
             )?;
         }
         Commands::Ship {

@@ -259,6 +259,10 @@ pub struct ShipBenchResult {
     pub server_queue_wait_p95_ms: Option<f64>,
     pub server_exec_p50_ms: Option<f64>,
     pub server_exec_p95_ms: Option<f64>,
+    pub mixed_live_count: usize,
+    pub live_latency_p50_ms: Option<f64>,
+    pub live_latency_p95_ms: Option<f64>,
+    pub live_failures: usize,
     pub failures: usize,
 }
 
@@ -301,6 +305,26 @@ impl ShipBenchResult {
         if self.failures > 0 {
             eprintln!("Failures:       {}", self.failures);
         }
+        if self.mixed_live_count > 0 {
+            eprintln!("\n=== Mixed Live Probes ===");
+            eprintln!("Live probes:    {}", self.mixed_live_count);
+            match (self.live_latency_p50_ms, self.live_latency_p95_ms) {
+                (Some(p50), Some(p95)) => {
+                    eprintln!("Live latency:   p50 {:.1}ms / p95 {:.1}ms", p50, p95)
+                }
+                _ => eprintln!("Live latency:   (no successful live probes)"),
+            }
+            if self.live_failures > 0 {
+                eprintln!("Live failures:  {}", self.live_failures);
+            }
+            if self.live_latency_p95_ms.is_some_and(|p95| p95 > 10_000.0) {
+                eprintln!("Live SLA:       FAIL (p95 > 10s)");
+            } else if self.live_failures > 0 {
+                eprintln!("Live SLA:       FAIL (probe failures)");
+            } else {
+                eprintln!("Live SLA:       PASS");
+            }
+        }
     }
 }
 
@@ -316,6 +340,7 @@ pub fn run_benchmark_ship(
     api_url: &str,
     token: &str,
     concurrency: usize,
+    mixed_live_count: usize,
     algo: CompressionAlgo,
 ) -> anyhow::Result<ShipBenchResult> {
     use crate::config::ShipperConfig;
@@ -370,14 +395,22 @@ pub fn run_benchmark_ship(
     let runtime = tokio::runtime::Runtime::new()?;
     let result = runtime.block_on(async move {
         use tokio::sync::Semaphore;
+        use tokio::time::{sleep, Duration};
 
         let sem = Arc::new(Semaphore::new(concurrency.max(1)));
         let ship_latencies: Arc<Mutex<Vec<f64>>> =
             Arc::new(Mutex::new(Vec::with_capacity(prepared.len())));
+        let live_latencies: Arc<Mutex<Vec<f64>>> =
+            Arc::new(Mutex::new(Vec::with_capacity(mixed_live_count)));
         let server_queue: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::new()));
         let server_exec: Arc<Mutex<Vec<f64>>> = Arc::new(Mutex::new(Vec::new()));
         let failures = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let live_failures = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let events_shipped = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let live_payload = prepared
+            .iter()
+            .min_by_key(|(_, bytes, compressed)| (*bytes, compressed.len()))
+            .map(|(_, _, compressed)| compressed.clone());
 
         let overall_start = Instant::now();
         let mut handles = Vec::with_capacity(prepared.len());
@@ -393,7 +426,10 @@ pub fn run_benchmark_ship(
             handles.push(tokio::spawn(async move {
                 let _permit = permit;
                 let started = Instant::now();
-                let result = client.ship(payload).await;
+                let trace_header = bench_ship_trace("spool_replay");
+                let result = client
+                    .ship_with_trace_and_timeout(payload, Some(&trace_header), None)
+                    .await;
                 let latency_ms = started.elapsed().as_secs_f64() * 1000.0;
                 ship_latencies.lock().unwrap().push(latency_ms);
                 match result {
@@ -418,6 +454,32 @@ pub fn run_benchmark_ship(
                 }
             }));
         }
+        if let Some(live_payload) = live_payload {
+            for i in 0..mixed_live_count {
+                let client = client.clone();
+                let payload = live_payload.clone();
+                let live_latencies = live_latencies.clone();
+                let live_failures = live_failures.clone();
+                handles.push(tokio::spawn(async move {
+                    sleep(Duration::from_millis((i as u64).saturating_mul(100))).await;
+                    let started = Instant::now();
+                    let trace_header = bench_ship_trace("live_transcript");
+                    let result = client
+                        .ship_with_trace_and_timeout(payload, Some(&trace_header), None)
+                        .await;
+                    let latency_ms = started.elapsed().as_secs_f64() * 1000.0;
+                    match result {
+                        ShipResult::Ok { .. } => live_latencies.lock().unwrap().push(latency_ms),
+                        other => {
+                            live_failures.fetch_add(1, Ordering::Relaxed);
+                            eprintln!("  live probe #{i} failed: {other:?}");
+                        }
+                    }
+                }));
+            }
+        } else if mixed_live_count > 0 {
+            live_failures.fetch_add(mixed_live_count, Ordering::Relaxed);
+        }
         for h in handles {
             let _ = h.await;
         }
@@ -432,6 +494,8 @@ pub fn run_benchmark_ship(
         sq.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let mut se = server_exec.lock().unwrap().clone();
         se.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let mut live_lat = live_latencies.lock().unwrap().clone();
+        live_lat.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
         ShipBenchResult {
             files_processed: ship_lat.len(),
@@ -446,11 +510,26 @@ pub fn run_benchmark_ship(
             server_queue_wait_p95_ms: pct(&sq, 0.95),
             server_exec_p50_ms: pct(&se, 0.50),
             server_exec_p95_ms: pct(&se, 0.95),
+            mixed_live_count,
+            live_latency_p50_ms: pct(&live_lat, 0.50),
+            live_latency_p95_ms: pct(&live_lat, 0.95),
+            live_failures: live_failures.load(Ordering::Relaxed),
             failures: failures.load(Ordering::Relaxed),
         }
     });
 
     Ok(result)
+}
+
+fn bench_ship_trace(work_context: &str) -> String {
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    serde_json::json!({
+        "work_context": work_context,
+        "observation_source": "bench",
+        "observed_at_ms": now_ms,
+        "enqueued_at_ms": now_ms,
+    })
+    .to_string()
 }
 
 fn pct(sorted: &[f64], q: f64) -> Option<f64> {
