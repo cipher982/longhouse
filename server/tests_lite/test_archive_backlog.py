@@ -165,6 +165,8 @@ def test_archive_status_prefers_engine_status_and_includes_shipper_diagnostics(t
                         "backpressure_1h": 2,
                         "bytes_1h": 1024,
                         "events_1h": 12,
+                        "bytes_per_sec_ewma_10s": 512.0,
+                        "events_per_sec_ewma_10s": 7.5,
                     },
                 },
             }
@@ -190,6 +192,21 @@ def test_archive_status_prefers_engine_status_and_includes_shipper_diagnostics(t
     assert (
         "last live: observed 2026-05-17T06:40:00Z, send 2026-05-17T06:40:00.100000Z, ack 2026-05-17T06:40:00.140000Z"
     ) in result.stdout
+
+    speed_result = runner.invoke(app, ["archive", "speed", "--state-root", str(tmp_path)])
+
+    assert speed_result.exit_code == 0
+    assert "Archive speed" in speed_result.stdout
+    assert "archive: 7.5 events/s, 512 B/s, 6/8 ok, 2 backpressure" in speed_result.stdout
+    assert "live guardrail: p95 80ms, observed->ack p95 140ms" in speed_result.stdout
+    assert "scheduler: ready 5 (4.0 KB), active 1 (2.0 KB), cap 2" in speed_result.stdout
+
+    speed_json_result = runner.invoke(app, ["archive", "speed", "--state-root", str(tmp_path), "--json"])
+
+    assert speed_json_result.exit_code == 0
+    speed_payload = json.loads(speed_json_result.stdout)
+    assert speed_payload["archive"]["bytes_per_sec_ewma_10s"] == 512.0
+    assert speed_payload["live"]["observed_to_ack_p95_ms_1h"] == 140
 
 
 def test_ready_archive_backlog_makes_pending_ranges_eligible(tmp_path: Path):

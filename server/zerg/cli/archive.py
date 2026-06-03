@@ -58,6 +58,18 @@ def _format_epoch_ms(value: Any) -> str:
     return datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC).isoformat().replace("+00:00", "Z")
 
 
+def _shipper_diagnostics(
+    summary: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+    shipper = dict(summary.get("shipper") or {})
+    scheduler = dict(shipper.get("ship_scheduler") or {})
+    limiter = dict(shipper.get("adaptive_backlog_limiter") or {})
+    lanes = dict(shipper.get("ship_lanes") or {})
+    live_lane = dict(lanes.get("live") or {})
+    archive_lane = dict(lanes.get("archive") or {})
+    return shipper, scheduler, limiter, live_lane, archive_lane
+
+
 @app.command("status")
 def status_command(
     json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
@@ -82,12 +94,7 @@ def status_command(
     if summary.get("next_retry_at_min"):
         typer.echo(f"  next retry:       {summary['next_retry_at_min']}")
 
-    shipper = dict(summary.get("shipper") or {})
-    scheduler = dict(shipper.get("ship_scheduler") or {})
-    limiter = dict(shipper.get("adaptive_backlog_limiter") or {})
-    lanes = dict(shipper.get("ship_lanes") or {})
-    live_lane = dict(lanes.get("live") or {})
-    archive_lane = dict(lanes.get("archive") or {})
+    _, scheduler, limiter, live_lane, archive_lane = _shipper_diagnostics(summary)
 
     if scheduler or limiter or live_lane or archive_lane:
         typer.echo("")
@@ -154,6 +161,89 @@ def status_command(
             f"{_format_bytes(archive_lane.get('bytes_1h'))}, "
             f"{archive_lane.get('events_1h', 0)} events"
         )
+
+
+@app.command("speed")
+def speed_command(
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+    state_root: Path | None = typer.Option(None, "--state-root", help="Longhouse home override for tests/debugging."),
+) -> None:
+    """Show archive drain speed and live-lane guardrail signals."""
+
+    summary = collect_archive_backlog(state_root)
+    _, scheduler, limiter, live_lane, archive_lane = _shipper_diagnostics(summary)
+    ready_backlog = int(
+        scheduler.get("ready_backlog")
+        if scheduler.get("ready_backlog") is not None
+        else int(scheduler.get("ready_retry") or 0) + int(scheduler.get("ready_scan") or 0)
+    )
+    in_flight_backlog = int(
+        scheduler.get("in_flight_backlog")
+        if scheduler.get("in_flight_backlog") is not None
+        else int(scheduler.get("in_flight_retry") or 0) + int(scheduler.get("in_flight_scan") or 0)
+    )
+    speed = {
+        "archive": {
+            "bytes_per_sec_ewma_10s": archive_lane.get("bytes_per_sec_ewma_10s"),
+            "events_per_sec_ewma_10s": archive_lane.get("events_per_sec_ewma_10s"),
+            "attempts_1h": archive_lane.get("attempts_1h", 0),
+            "successes_1h": archive_lane.get("successes_1h", 0),
+            "backpressure_1h": archive_lane.get("backpressure_1h", 0),
+            "bytes_1h": archive_lane.get("bytes_1h", 0),
+            "events_1h": archive_lane.get("events_1h", 0),
+        },
+        "live": {
+            "latency_p95_ms_1h": live_lane.get("latency_p95_ms_1h"),
+            "observed_to_ack_p95_ms_1h": dict(live_lane.get("stage_latency_p95_ms_1h") or {}).get("observed_to_ack_ms"),
+        },
+        "scheduler": {
+            "ready_backlog": ready_backlog,
+            "ready_backlog_bytes": scheduler.get("ready_backlog_bytes", 0),
+            "in_flight_backlog": in_flight_backlog,
+            "in_flight_backlog_bytes": scheduler.get("in_flight_backlog_bytes", 0),
+            "backlog_cap": scheduler.get("backlog_cap"),
+        },
+        "host": {
+            "pressure_state": limiter.get("pressure_state"),
+            "queue_wait_ewma_ms": limiter.get("ewma_queue_wait_ms"),
+            "exec_ewma_ms": limiter.get("ewma_exec_ms"),
+            "archive_target_batch_bytes": limiter.get("archive_target_batch_bytes"),
+            "total_backpressure": limiter.get("total_backpressure", 0),
+        },
+    }
+    if json_output:
+        typer.echo(json.dumps(speed, indent=2))
+        return
+
+    typer.echo("Archive speed")
+    typer.echo(
+        "  archive: "
+        f"{_format_rate(speed['archive']['events_per_sec_ewma_10s'], ' events/s')}, "
+        f"{_format_bytes(speed['archive']['bytes_per_sec_ewma_10s'])}/s, "
+        f"{speed['archive']['successes_1h']}/{speed['archive']['attempts_1h']} ok, "
+        f"{speed['archive']['backpressure_1h']} backpressure"
+    )
+    typer.echo(f"  totals 1h: {_format_bytes(speed['archive']['bytes_1h'])}, {speed['archive']['events_1h']} events")
+    typer.echo(
+        "  live guardrail: "
+        f"p95 {_format_ms(speed['live']['latency_p95_ms_1h'])}, "
+        f"observed->ack p95 {_format_ms(speed['live']['observed_to_ack_p95_ms_1h'])}"
+    )
+    typer.echo(
+        "  scheduler: "
+        f"ready {speed['scheduler']['ready_backlog']} ({_format_bytes(speed['scheduler']['ready_backlog_bytes'])}), "
+        f"active {speed['scheduler']['in_flight_backlog']} "
+        f"({_format_bytes(speed['scheduler']['in_flight_backlog_bytes'])}), "
+        f"cap {speed['scheduler']['backlog_cap']}"
+    )
+    typer.echo(
+        "  host: "
+        f"{speed['host']['pressure_state'] or '-'}, "
+        f"queue {_format_rate(speed['host']['queue_wait_ewma_ms'], 'ms')}, "
+        f"exec {_format_rate(speed['host']['exec_ewma_ms'], 'ms')}, "
+        f"batch {_format_bytes(speed['host']['archive_target_batch_bytes'])}, "
+        f"backpressure {speed['host']['total_backpressure']}"
+    )
 
 
 @app.command("inspect")
