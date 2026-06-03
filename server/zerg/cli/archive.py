@@ -298,9 +298,18 @@ def inspect_command(
 
 @app.command("pause")
 def pause_command(
+    archive_class: str | None = typer.Option(None, "--class", help="Archive class to pause. Supported: huge."),
     state_root: Path | None = typer.Option(None, "--state-root", help="Longhouse home override for tests/debugging."),
 ) -> None:
     """Pause local archive repair replay."""
+
+    if archive_class:
+        normalized_class = archive_class.strip().lower()
+        if normalized_class != "huge":
+            raise typer.BadParameter("--class currently supports only 'huge'")
+        result = write_archive_control(state_root, mode="drain", include_huge=False)
+        typer.echo(f"Archive repair huge-range replay paused; non-huge drain remains enabled: {result['path']}")
+        return
 
     result = write_archive_control(state_root, mode="paused")
     typer.echo(f"Archive repair paused: {result['path']}")

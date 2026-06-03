@@ -12,6 +12,7 @@ from zerg.services.archive_backlog import inspect_archive_backlog
 from zerg.services.archive_backlog import ready_archive_backlog
 from zerg.services.archive_backlog import write_archive_control
 from zerg.services.longhouse_paths import get_agent_db_path
+from zerg.services.longhouse_paths import get_agent_state_dir
 from zerg.services.longhouse_paths import get_agent_status_path
 
 
@@ -222,6 +223,17 @@ def test_archive_status_watch_rejects_json(tmp_path: Path):
 
     assert result.exit_code != 0
     assert "--watch cannot be combined with --json" in result.stdout
+
+
+def test_archive_pause_class_huge_keeps_non_huge_drain_enabled(tmp_path: Path):
+    runner = CliRunner()
+    result = runner.invoke(app, ["archive", "pause", "--class", "huge", "--state-root", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert "huge-range replay paused" in result.stdout
+    payload = json.loads((get_agent_state_dir(tmp_path) / "archive-repair-control.json").read_text())
+    assert payload["mode"] == "drain"
+    assert payload["include_huge"] is False
 
 
 def test_ready_archive_backlog_makes_pending_ranges_eligible(tmp_path: Path):
