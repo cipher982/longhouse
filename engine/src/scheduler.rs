@@ -8,7 +8,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Ready-work priority, ordered from highest urgency to lowest.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
@@ -55,6 +55,8 @@ const EWMA_ALPHA: f64 = 0.3;
 /// ramp-up (each successful ship is one observation).
 const DAMP_MIN_SAMPLES: u32 = 4;
 const DAMP_MIN_INTERVAL_MS: u64 = 500;
+const BACKPRESSURE_DEFAULT_COOLDOWN: Duration = Duration::from_secs(5);
+const BACKPRESSURE_MAX_COOLDOWN: Duration = Duration::from_secs(60);
 
 /// Last direction the limiter moved the cap.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -99,7 +101,10 @@ struct AdaptiveLimiterState {
     total_observations: u64,
     total_increases: u64,
     total_decreases: u64,
+    total_backpressure: u64,
     last_observed_queue_wait_ms: Option<f64>,
+    last_backpressure_retry_after_ms: Option<u64>,
+    backpressure_cooldown_until: Option<Instant>,
     missing_signal_logged: bool,
 }
 
@@ -116,6 +121,9 @@ pub struct LimiterSnapshot {
     pub total_observations: u64,
     pub total_increases: u64,
     pub total_decreases: u64,
+    pub total_backpressure: u64,
+    pub last_backpressure_retry_after_ms: Option<u64>,
+    pub backpressure_cooldown_remaining_ms: Option<u64>,
 }
 
 impl AdaptiveLimiter {
@@ -130,7 +138,10 @@ impl AdaptiveLimiter {
                 total_observations: 0,
                 total_increases: 0,
                 total_decreases: 0,
+                total_backpressure: 0,
                 last_observed_queue_wait_ms: None,
+                last_backpressure_retry_after_ms: None,
+                backpressure_cooldown_until: None,
                 missing_signal_logged: false,
             }),
         })
@@ -157,6 +168,49 @@ impl AdaptiveLimiter {
         state.samples_since_adjust = state.samples_since_adjust.saturating_add(1);
         state.missing_signal_logged = false;
         self.try_adjust(&mut state);
+    }
+
+    /// Feed an explicit Runtime Host archive-admission backpressure signal.
+    ///
+    /// This is stronger than a high queue-wait sample: the host rejected
+    /// reconstructable backlog work before write execution. Cut the backlog
+    /// cap immediately, remember the retry-after window, and suppress cap
+    /// increases until the cooldown expires.
+    pub fn observe_backpressure(&self, retry_after: Option<Duration>) {
+        let now = Instant::now();
+        let retry_after = retry_after
+            .unwrap_or(BACKPRESSURE_DEFAULT_COOLDOWN)
+            .min(BACKPRESSURE_MAX_COOLDOWN);
+        let retry_after_ms = retry_after.as_millis().min(u128::from(u64::MAX)) as u64;
+        let mut state = self.state.lock().expect("limiter state poisoned");
+        state.total_observations = state.total_observations.saturating_add(1);
+        state.total_backpressure = state.total_backpressure.saturating_add(1);
+        state.last_backpressure_retry_after_ms = Some(retry_after_ms);
+        state.backpressure_cooldown_until = now.checked_add(retry_after);
+        state.ewma_queue_wait_ms = Some(match state.ewma_queue_wait_ms {
+            Some(prev) => prev.max(TARGET_QUEUE_WAIT_MS * 2.0),
+            None => TARGET_QUEUE_WAIT_MS * 2.0,
+        });
+        state.samples_since_adjust = 0;
+        state.last_adjust = Some(now);
+        state.missing_signal_logged = false;
+
+        let cap = self.current_cap.load(Ordering::Relaxed);
+        let new_cap = (cap / 2).max(BACKLOG_CAP_FLOOR);
+        if new_cap < cap {
+            state.total_decreases = state.total_decreases.saturating_add(1);
+            state.last_direction = LimiterDirection::Decreased;
+            self.current_cap.store(new_cap, Ordering::Relaxed);
+        } else {
+            state.last_direction = LimiterDirection::Held;
+        }
+        tracing::info!(
+            target: "longhouse_engine::adaptive_limiter",
+            from_cap = cap,
+            to_cap = self.current_cap.load(Ordering::Relaxed),
+            retry_after_ms,
+            "archive backpressure observed; backlog limiter cooled down"
+        );
     }
 
     /// Successful ship but no server timing header (older / bridged Runtime
@@ -188,6 +242,15 @@ impl AdaptiveLimiter {
         let Some(ewma) = state.ewma_queue_wait_ms else {
             return;
         };
+        let now = Instant::now();
+        if ewma <= TARGET_QUEUE_WAIT_MS
+            && state
+                .backpressure_cooldown_until
+                .is_some_and(|until| until > now)
+        {
+            state.last_direction = LimiterDirection::Held;
+            return;
+        }
         let cap = self.current_cap.load(Ordering::Relaxed);
         let new_cap = if ewma > TARGET_QUEUE_WAIT_MS {
             (cap / 2).max(BACKLOG_CAP_FLOOR)
@@ -237,6 +300,7 @@ impl AdaptiveLimiter {
     pub fn snapshot(&self) -> LimiterSnapshot {
         let cap = self.current_cap.load(Ordering::Relaxed);
         let state = self.state.lock().expect("limiter state poisoned");
+        let now = Instant::now();
         LimiterSnapshot {
             current_cap: cap,
             floor: BACKLOG_CAP_FLOOR,
@@ -248,6 +312,15 @@ impl AdaptiveLimiter {
             total_observations: state.total_observations,
             total_increases: state.total_increases,
             total_decreases: state.total_decreases,
+            total_backpressure: state.total_backpressure,
+            last_backpressure_retry_after_ms: state.last_backpressure_retry_after_ms,
+            backpressure_cooldown_remaining_ms: state.backpressure_cooldown_until.and_then(
+                |until| {
+                    until
+                        .checked_duration_since(now)
+                        .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+                },
+            ),
         }
     }
 }
@@ -1237,5 +1310,52 @@ mod tests {
         assert_eq!(limiter.current_cap(), frozen_cap);
         let snap = limiter.snapshot();
         assert!(snap.total_observations >= 50);
+    }
+
+    #[test]
+    fn adaptive_limiter_cuts_cap_on_backpressure_and_records_cooldown() {
+        let limiter = AdaptiveLimiter::new();
+        for _ in 0..6 {
+            for _ in 0..DAMP_MIN_SAMPLES {
+                limiter.observe(10.0);
+            }
+            limiter.clear_adjust_cooldown();
+        }
+        let pre_backpressure = limiter.current_cap();
+        assert!(pre_backpressure > BACKLOG_CAP_FLOOR);
+
+        limiter.observe_backpressure(Some(Duration::from_secs(5)));
+
+        let post_backpressure = limiter.current_cap();
+        assert!(post_backpressure < pre_backpressure);
+        let snap = limiter.snapshot();
+        assert_eq!(snap.total_backpressure, 1);
+        assert_eq!(snap.last_backpressure_retry_after_ms, Some(5_000));
+        assert!(snap.backpressure_cooldown_remaining_ms.is_some());
+        assert_eq!(snap.last_direction, "decreased");
+    }
+
+    #[test]
+    fn adaptive_limiter_holds_increase_during_backpressure_cooldown() {
+        let limiter = AdaptiveLimiter::new();
+        limiter.observe_backpressure(Some(Duration::from_secs(5)));
+        let cooled_cap = limiter.current_cap();
+
+        for _ in 0..16 {
+            for _ in 0..DAMP_MIN_SAMPLES {
+                limiter.observe(1.0);
+            }
+            limiter.clear_adjust_cooldown();
+        }
+
+        assert_eq!(
+            limiter.current_cap(),
+            cooled_cap,
+            "low queue waits must not ramp archive while host retry-after cooldown is active"
+        );
+        let snap = limiter.snapshot();
+        assert_eq!(snap.total_backpressure, 1);
+        assert!(snap.backpressure_cooldown_remaining_ms.is_some());
+        assert_eq!(snap.last_direction, "held");
     }
 }

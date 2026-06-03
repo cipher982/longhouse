@@ -1420,6 +1420,11 @@ async fn attempt_ship(
     if let Some(kind) = error_kind {
         span.record("longhouse.ship.error_kind", tracing::field::display(kind));
     }
+    if is_backpressure {
+        if let Some(limiter) = limiter {
+            limiter.observe_backpressure(ship_result_retry_after(&result));
+        }
+    }
     if let Some(stats) = ship_stats {
         stats.record_with_lane_and_detail(
             ship_lane,
