@@ -66,6 +66,7 @@ async function ingestSession(
     provider: string;
     project: string;
     environment: string;
+    device_id: string;
     provider_session_id: string;
     thread_root_session_id: string;
     continued_from_session_id: string;
@@ -92,7 +93,7 @@ async function ingestSession(
       provider: overrides.provider || "claude",
       environment: overrides.environment || "e2e-machine",
       project: overrides.project || "sessions-e2e",
-      device_id: "e2e-device",
+      device_id: overrides.device_id || "e2e-device",
       cwd: "/tmp",
       git_repo: null,
       git_branch: null,
@@ -119,6 +120,16 @@ async function ingestSession(
 
   expect(ingest.ok()).toBe(true);
   return sessionId;
+}
+
+async function enrollTestMachine(
+  request: APIRequestContext,
+  deviceId: string,
+): Promise<void> {
+  const response = await request.post("/api/devices/tokens", {
+    data: { device_id: deviceId },
+  });
+  expect(response.ok()).toBe(true);
 }
 
 async function ingestRuntimeEvents(
@@ -769,8 +780,10 @@ test.describe("Filter Chips and Popover", () => {
     request,
   }) => {
     const machineName = `e2e-multichip-${randomUUID().slice(0, 8)}`;
+    await enrollTestMachine(request, machineName);
     await ingestSession(request, {
       environment: machineName,
+      device_id: machineName,
       project: "multichip-e2e",
       provider: "claude",
     });
@@ -1249,13 +1262,17 @@ test.describe("Machine Filter", () => {
     // Ingest sessions with distinct machine names
     const machineA = `e2e-machine-a-${randomUUID().slice(0, 8)}`;
     const machineB = `e2e-machine-b-${randomUUID().slice(0, 8)}`;
+    await enrollTestMachine(request, machineA);
+    await enrollTestMachine(request, machineB);
 
     await ingestSession(request, {
       environment: machineA,
+      device_id: machineA,
       project: "machine-filter-e2e",
     });
     await ingestSession(request, {
       environment: machineB,
+      device_id: machineB,
       project: "machine-filter-e2e",
     });
 
@@ -1274,8 +1291,10 @@ test.describe("Machine Filter", () => {
     request,
   }) => {
     const machineName = `e2e-machine-${randomUUID().slice(0, 8)}`;
+    await enrollTestMachine(request, machineName);
     await ingestSession(request, {
       environment: machineName,
+      device_id: machineName,
       project: "machine-ui-e2e",
     });
 
@@ -1293,8 +1312,10 @@ test.describe("Machine Filter", () => {
 
   test("selecting a machine updates the URL", async ({ page, request }) => {
     const machineName = `e2e-select-${randomUUID().slice(0, 8)}`;
+    await enrollTestMachine(request, machineName);
     await ingestSession(request, {
       environment: machineName,
+      device_id: machineName,
       project: "machine-url-e2e",
     });
 
@@ -1320,13 +1341,17 @@ test.describe("Machine Filter", () => {
   }) => {
     const machineToken = `filter-machine-${randomUUID().slice(0, 8)}`;
     const otherToken = `other-machine-${randomUUID().slice(0, 8)}`;
+    await enrollTestMachine(request, machineToken);
+    await enrollTestMachine(request, otherToken);
 
     await ingestSession(request, {
       environment: machineToken,
+      device_id: machineToken,
       project: "machine-filter-sessions",
     });
     await ingestSession(request, {
       environment: otherToken,
+      device_id: otherToken,
       project: "machine-filter-other",
     });
 
