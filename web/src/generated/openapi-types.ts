@@ -3154,6 +3154,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/timeline/machines/{device_id}/workspaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Browser Machine Workspaces
+         * @description Browser launch-picker workspaces. Same body shape as ``/api/agents/machines/{id}/workspaces``.
+         */
+        get: operations["list_browser_machine_workspaces_timeline_machines__device_id__workspaces_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/timeline/sessions/semantic": {
         parameters: {
             query?: never;
@@ -3543,6 +3563,26 @@ export interface paths {
         };
         /** List Machine Health */
         get: operations["list_machine_health_agents_machines_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/machines/{device_id}/workspaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Machine Workspaces
+         * @description Frecency-ranked recent workspaces for the launch picker, scoped to one machine.
+         */
+        get: operations["list_machine_workspaces_agents_machines__device_id__workspaces_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -10857,6 +10897,54 @@ export interface components {
              */
             tool_calls: number;
         };
+        /** WorkspaceSuggestion */
+        WorkspaceSuggestion: {
+            /**
+             * Path
+             * @description Absolute working directory on the target machine.
+             */
+            path: string;
+            /**
+             * Label
+             * @description Display label: git repo+branch when known, else compact path.
+             */
+            label: string;
+            /**
+             * Git Repo
+             * @description Git remote URL of the most-recent session in this cwd.
+             */
+            git_repo?: string | null;
+            /**
+             * Git Branch
+             * @description Git branch of the most-recent session in this cwd.
+             */
+            git_branch?: string | null;
+            /**
+             * Score
+             * @description Frecency score (frequency weighted by recency); higher ranks first.
+             */
+            score: number;
+            /**
+             * Last Used At
+             * @description Most recent activity in this cwd on this machine.
+             */
+            last_used_at?: string | null;
+            /**
+             * Session Count
+             * @description Sessions launched in this cwd within the lookback window.
+             */
+            session_count: number;
+        };
+        /** WorkspaceSuggestionsResponse */
+        WorkspaceSuggestionsResponse: {
+            /**
+             * Device Id
+             * @description Machine the suggestions are scoped to.
+             */
+            device_id: string;
+            /** Workspaces */
+            workspaces?: components["schemas"]["WorkspaceSuggestion"][];
+        };
     };
     responses: never;
     parameters: never;
@@ -16270,6 +16358,42 @@ export interface operations {
             };
         };
     };
+    list_browser_machine_workspaces_timeline_machines__device_id__workspaces_get: {
+        parameters: {
+            query?: {
+                /** @description Max ranked workspaces to return */
+                limit?: number;
+                /** @description Lookback window for recent sessions */
+                days_back?: number;
+            };
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSuggestionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     semantic_search_timeline_sessions_timeline_sessions_semantic_get: {
         parameters: {
             query: {
@@ -17062,6 +17186,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MachineHealthListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_machine_workspaces_agents_machines__device_id__workspaces_get: {
+        parameters: {
+            query?: {
+                /** @description Max ranked workspaces to return */
+                limit?: number;
+                /** @description Lookback window for recent sessions */
+                days_back?: number;
+            };
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkspaceSuggestionsResponse"];
                 };
             };
             /** @description Validation Error */
