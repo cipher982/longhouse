@@ -126,6 +126,21 @@ def _archive_size_mix(size_buckets: object) -> str:
     return ", ".join(rendered) or "-"
 
 
+def _store_stage_mix(stage_ms: object) -> str:
+    if not isinstance(stage_ms, dict) or not stage_ms:
+        return "-"
+    rendered: list[tuple[str, object]] = []
+    if "total" in stage_ms:
+        rendered.append(("total", stage_ms.get("total")))
+    others = sorted(
+        ((str(name), value) for name, value in stage_ms.items() if name != "total"),
+        key=lambda item: float(item[1]) if isinstance(item[1], int | float) else -1.0,
+        reverse=True,
+    )
+    rendered.extend(others[:4])
+    return ", ".join(f"{name} {_format_rate(value, 'ms')}" for name, value in rendered)
+
+
 def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
     if json_output:
         typer.echo(json.dumps(snapshot, indent=2))
@@ -266,6 +281,7 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
             commit_ewma = limiter.get("ewma_commit_ms")
             commit_last = limiter.get("last_observed_commit_ms")
             chunk_size = limiter.get("last_observed_chunk_size")
+            store_stages = _store_stage_mix(limiter.get("last_observed_store_stage_ms"))
             ewma_value = _as_float(ewma)
             target_value = _as_float(target)
             typer.echo(f"  archive cap: {current_cap} (floor {floor}, ceiling {ceiling})")
@@ -285,6 +301,8 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
                     f"last {_format_rate(commit_last, 'ms')}, "
                     f"chunk {chunk_size if chunk_size is not None else '-'}"
                 )
+            if store_stages != "-":
+                typer.echo(f"  host store stages: {store_stages}")
             total_backpressure = int(limiter.get("total_backpressure") or 0)
             retry_after = limiter.get("last_backpressure_retry_after_ms")
             cooldown = limiter.get("backpressure_cooldown_remaining_ms")

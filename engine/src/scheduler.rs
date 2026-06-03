@@ -4,7 +4,7 @@
 //! bounded concurrency across unrelated files. Ready work is weighted so live
 //! watcher events get more slots without starving retry/scan work.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -109,6 +109,7 @@ struct AdaptiveLimiterState {
     last_observed_commit_count: Option<u64>,
     last_observed_commit_ms: Option<f64>,
     last_observed_chunk_size: Option<u64>,
+    last_observed_store_stage_ms: Option<BTreeMap<String, f64>>,
     last_backpressure_retry_after_ms: Option<u64>,
     backpressure_cooldown_until: Option<Instant>,
     missing_signal_logged: bool,
@@ -129,6 +130,7 @@ pub struct LimiterSnapshot {
     pub last_observed_commit_count: Option<u64>,
     pub last_observed_commit_ms: Option<f64>,
     pub last_observed_chunk_size: Option<u64>,
+    pub last_observed_store_stage_ms: Option<BTreeMap<String, f64>>,
     pub pressure_state: &'static str,
     pub huge_range_eligible: bool,
     pub huge_range_suppressed_reason: Option<&'static str>,
@@ -178,6 +180,7 @@ impl AdaptiveLimiter {
                 last_observed_commit_count: None,
                 last_observed_commit_ms: None,
                 last_observed_chunk_size: None,
+                last_observed_store_stage_ms: None,
                 last_backpressure_retry_after_ms: None,
                 backpressure_cooldown_until: None,
                 missing_signal_logged: false,
@@ -192,7 +195,7 @@ impl AdaptiveLimiter {
     /// Test helper for queue-wait-only observations.
     #[cfg(test)]
     pub fn observe(&self, queue_wait_ms: f64) {
-        self.observe_ingest_timing(queue_wait_ms, None, None, None, None);
+        self.observe_ingest_timing(queue_wait_ms, None, None, None, None, None);
     }
 
     /// Feed successful ingest timing into the controller.
@@ -208,6 +211,7 @@ impl AdaptiveLimiter {
         commit_count: Option<u64>,
         commit_ms: Option<f64>,
         chunk_size: Option<u64>,
+        store_stage_ms: Option<BTreeMap<String, f64>>,
     ) {
         if !queue_wait_ms.is_finite() || queue_wait_ms < 0.0 {
             return;
@@ -238,6 +242,9 @@ impl AdaptiveLimiter {
         }
         if let Some(chunk_size) = chunk_size {
             state.last_observed_chunk_size = Some(chunk_size);
+        }
+        if let Some(store_stage_ms) = store_stage_ms.filter(|stages| !stages.is_empty()) {
+            state.last_observed_store_stage_ms = Some(store_stage_ms);
         }
         state.samples_since_adjust = state.samples_since_adjust.saturating_add(1);
         state.missing_signal_logged = false;
@@ -419,6 +426,7 @@ impl AdaptiveLimiter {
             last_observed_commit_count: state.last_observed_commit_count,
             last_observed_commit_ms: state.last_observed_commit_ms,
             last_observed_chunk_size: state.last_observed_chunk_size,
+            last_observed_store_stage_ms: state.last_observed_store_stage_ms.clone(),
             pressure_state,
             huge_range_eligible,
             huge_range_suppressed_reason,
@@ -1598,8 +1606,19 @@ mod tests {
     #[test]
     fn adaptive_limiter_records_host_exec_timing_without_driving_cap() {
         let limiter = AdaptiveLimiter::new();
-        limiter.observe_ingest_timing(10.0, Some(500.0), Some(3), Some(450.0), Some(100));
-        limiter.observe_ingest_timing(10.0, Some(100.0), Some(1), Some(80.0), Some(100));
+        let stages = BTreeMap::from([
+            ("provider_event_observations".to_string(), 40.0),
+            ("total".to_string(), 120.0),
+        ]);
+        limiter.observe_ingest_timing(
+            10.0,
+            Some(500.0),
+            Some(3),
+            Some(450.0),
+            Some(100),
+            Some(stages),
+        );
+        limiter.observe_ingest_timing(10.0, Some(100.0), Some(1), Some(80.0), Some(100), None);
 
         let snap = limiter.snapshot();
         assert_eq!(snap.last_observed_queue_wait_ms, Some(10.0));
@@ -1607,6 +1626,10 @@ mod tests {
         assert_eq!(snap.last_observed_commit_count, Some(1));
         assert_eq!(snap.last_observed_commit_ms, Some(80.0));
         assert_eq!(snap.last_observed_chunk_size, Some(100));
+        assert!(snap
+            .last_observed_store_stage_ms
+            .as_ref()
+            .is_some_and(|stages| stages.get("total") == Some(&120.0)));
         assert!(snap.ewma_exec_ms.is_some());
         assert!(snap.ewma_commit_ms.is_some());
         assert_eq!(snap.current_cap, BACKLOG_CAP_FLOOR);

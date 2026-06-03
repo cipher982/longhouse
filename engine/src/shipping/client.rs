@@ -3,6 +3,7 @@
 //! POST `{api_url}/api/agents/ingest` with gzip-compressed JSON body.
 //! Handles 429 rate limiting with exponential backoff + Retry-After.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -46,6 +47,7 @@ pub struct ServerIngestTiming {
     pub commit_count: Option<u64>,
     pub commit_ms: Option<f64>,
     pub chunk_size: Option<u64>,
+    pub store_stage_ms: Option<BTreeMap<String, f64>>,
     pub label: Option<String>,
     pub lane: Option<String>,
     pub admission_state: Option<String>,
@@ -59,6 +61,7 @@ impl ServerIngestTiming {
             || self.commit_count.is_some()
             || self.commit_ms.is_some()
             || self.chunk_size.is_some()
+            || self.store_stage_ms.is_some()
             || self.label.is_some()
             || self.lane.is_some()
             || self.admission_state.is_some()
@@ -297,12 +300,25 @@ fn parse_server_timing(headers: &reqwest::header::HeaderMap) -> ServerIngestTimi
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.trim().parse::<u64>().ok())
     }
+    fn parse_stage_map(
+        headers: &reqwest::header::HeaderMap,
+        name: &str,
+    ) -> Option<BTreeMap<String, f64>> {
+        let raw = headers.get(name).and_then(|v| v.to_str().ok())?;
+        let parsed: BTreeMap<String, f64> = serde_json::from_str(raw).ok()?;
+        let filtered: BTreeMap<String, f64> = parsed
+            .into_iter()
+            .filter(|(key, value)| !key.trim().is_empty() && value.is_finite() && *value >= 0.0)
+            .collect();
+        (!filtered.is_empty()).then_some(filtered)
+    }
     ServerIngestTiming {
         queue_wait_ms: parse_f64(headers, "X-Ingest-Queue-Wait-Ms"),
         exec_ms: parse_f64(headers, "X-Ingest-Exec-Ms"),
         commit_count: parse_u64(headers, "X-Ingest-Commit-Count"),
         commit_ms: parse_f64(headers, "X-Ingest-Commit-Ms"),
         chunk_size: parse_u64(headers, "X-Ingest-Chunk-Size"),
+        store_stage_ms: parse_stage_map(headers, "X-Ingest-Store-Stage-Ms"),
         label: headers
             .get("X-Ingest-Label")
             .and_then(|v| v.to_str().ok())
@@ -526,6 +542,10 @@ mod tests {
         headers.insert("X-Ingest-Commit-Count", HeaderValue::from_static("3"));
         headers.insert("X-Ingest-Commit-Ms", HeaderValue::from_static("24.5"));
         headers.insert("X-Ingest-Chunk-Size", HeaderValue::from_static("100"));
+        headers.insert(
+            "X-Ingest-Store-Stage-Ms",
+            HeaderValue::from_static("{\"provider_event_observations\":42.5,\"total\":123.0}"),
+        );
         headers.insert("X-Ingest-Label", HeaderValue::from_static("ingest-replay"));
         headers.insert("X-Ingest-Lane", HeaderValue::from_static("archive"));
         headers.insert(
@@ -539,6 +559,13 @@ mod tests {
         assert_eq!(timing.commit_count, Some(3));
         assert_eq!(timing.commit_ms, Some(24.5));
         assert_eq!(timing.chunk_size, Some(100));
+        assert_eq!(
+            timing
+                .store_stage_ms
+                .as_ref()
+                .and_then(|map| map.get("total")),
+            Some(&123.0)
+        );
         assert_eq!(timing.label.as_deref(), Some("ingest-replay"));
         assert_eq!(timing.lane.as_deref(), Some("archive"));
         assert_eq!(
@@ -570,6 +597,10 @@ mod tests {
             "X-Ingest-Chunk-Size",
             HeaderValue::from_static("one hundred"),
         );
+        headers.insert(
+            "X-Ingest-Store-Stage-Ms",
+            HeaderValue::from_static("{\"bad\":-1,\"nan\":NaN}"),
+        );
         headers.insert("X-Ingest-Label", HeaderValue::from_static(""));
         headers.insert("X-Ingest-Lane", HeaderValue::from_static(""));
         headers.insert("X-Ingest-Admission-State", HeaderValue::from_static(""));
@@ -580,6 +611,7 @@ mod tests {
         assert_eq!(timing.commit_count, None);
         assert_eq!(timing.commit_ms, None);
         assert_eq!(timing.chunk_size, None);
+        assert_eq!(timing.store_stage_ms, None);
         assert_eq!(timing.label, None);
         assert_eq!(timing.lane, None);
         assert_eq!(timing.admission_state, None);

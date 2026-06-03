@@ -1489,6 +1489,7 @@ async fn attempt_ship(
                         server_timing.commit_count,
                         server_timing.commit_ms,
                         server_timing.chunk_size,
+                        server_timing.store_stage_ms.clone(),
                     ),
                     None => limiter.note_missing_signal(),
                 }

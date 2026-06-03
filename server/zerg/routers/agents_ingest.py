@@ -96,6 +96,7 @@ _ARCHIVE_INGEST_BACKPRESSURE_KIND = "archive_ingest_backpressure"
 _ARCHIVE_INGEST_RETRY_AFTER_SECONDS = "5"
 _ARCHIVE_INGEST_MAX_IN_FLIGHT = 4
 _ARCHIVE_INGEST_SLOTS = asyncio.Semaphore(_ARCHIVE_INGEST_MAX_IN_FLIGHT)
+_INGEST_STAGE_HEADER_LIMIT = 8
 
 
 def _ingest_chunk_for_label(label: str) -> int:
@@ -108,6 +109,26 @@ def _ingest_lane_for_label(label: str) -> str:
     if label in _ARCHIVE_INGEST_LABELS:
         return "archive"
     return "default"
+
+
+def _stage_timing_header_value(stage_ms: dict[str, float]) -> str:
+    """Compact, bounded store-stage timing header for engine feedback."""
+    cleaned: dict[str, float] = {}
+    for name, value in stage_ms.items():
+        if not name or not isinstance(value, int | float):
+            continue
+        value_f = float(value)
+        if value_f < 0:
+            continue
+        cleaned[name] = round(value_f, 1)
+
+    ordered = dict(
+        sorted(
+            cleaned.items(),
+            key=lambda item: (item[0] != "total", -item[1], item[0]),
+        )[:_INGEST_STAGE_HEADER_LIMIT]
+    )
+    return json.dumps(ordered, separators=(",", ":"), sort_keys=True)
 
 
 def _raise_archive_ingest_backpressure(response: Response) -> None:
@@ -663,6 +684,7 @@ async def ingest_session(
                 response.headers["X-Ingest-Commit-Count"] = str(result.commit_count)
                 response.headers["X-Ingest-Commit-Ms"] = f"{result.commit_ms_total:.1f}"
                 response.headers["X-Ingest-Chunk-Size"] = str(ingest_chunk)
+                response.headers["X-Ingest-Store-Stage-Ms"] = _stage_timing_header_value(result.store_stage_ms)
                 set_span_attributes(
                     write_span,
                     {

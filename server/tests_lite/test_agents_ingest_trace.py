@@ -28,6 +28,7 @@ from zerg.routers.agents_ingest import _ARCHIVE_INGEST_MAX_IN_FLIGHT
 from zerg.routers.agents_ingest import _acquire_archive_ingest_slot
 from zerg.routers.agents_ingest import _ingest_lane_for_label
 from zerg.routers.agents_ingest import _release_archive_ingest_slot
+from zerg.routers.agents_ingest import _stage_timing_header_value
 from zerg.routers.agents_ingest import _write_serializer_label_for_ship_trace
 
 
@@ -61,6 +62,24 @@ def test_ship_trace_live_transcript_uses_live_ingest_label():
     assert _ingest_lane_for_label("ingest-replay") == "archive"
     assert _ingest_lane_for_label("ingest-scan") == "archive"
     assert _ingest_lane_for_label("ingest") == "default"
+
+
+def test_stage_timing_header_value_is_bounded_and_sorted():
+    value = _stage_timing_header_value(
+        {
+            "total": 123.456,
+            "provider_event_observations": 45.55,
+            "source_line_observations": 30.1,
+            "commit_after_turns": 1.2,
+            "bad": -1,
+        }
+    )
+    assert json.loads(value) == {
+        "commit_after_turns": 1.2,
+        "provider_event_observations": 45.5,
+        "source_line_observations": 30.1,
+        "total": 123.5,
+    }
 
 
 @pytest.mark.asyncio
@@ -241,6 +260,9 @@ def test_agents_ingest_emits_phase1_timing_headers(tmp_path):
         assert response.headers.get("X-Ingest-Label") == "ingest-replay"
         assert response.headers.get("X-Ingest-Lane") == "archive"
         assert response.headers.get("X-Ingest-Admission-State") == "archive_slot_acquired"
+        stage_ms = json.loads(response.headers["X-Ingest-Store-Stage-Ms"])
+        assert stage_ms["total"] >= 0.0
+        assert "provider_event_observations" in stage_ms
         float(response.headers["X-Ingest-Queue-Wait-Ms"])
         assert float(response.headers["X-Ingest-Exec-Ms"]) >= 0.0
     finally:
