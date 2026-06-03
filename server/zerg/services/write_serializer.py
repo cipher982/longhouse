@@ -135,6 +135,7 @@ class _QueuedWrite:
     priority: int
     seq: int
     label: str = field(compare=False, default="")
+    ready: asyncio.Future[None] = field(compare=False, repr=False, default=None)
 
 
 _HISTOGRAM_WINDOW = 256
@@ -281,6 +282,21 @@ class WriteSerializer:
             return 0.0
         return (time.monotonic() - self._active_started_at) * 1000
 
+    def _promote_next_locked(self) -> None:
+        if self._writer_active:
+            return
+        while self._queue:
+            queued = heapq.heappop(self._queue)
+            if queued.ready.cancelled():
+                continue
+            self._writer_active = True
+            self._active_label = queued.label
+            self._active_priority = queued.priority
+            self._active_started_at = time.monotonic()
+            if not queued.ready.done():
+                queued.ready.set_result(None)
+            return
+
     async def execute(
         self,
         fn: Callable[[Session], T],
@@ -358,32 +374,24 @@ class WriteSerializer:
             priority=_priority_for_label(label) if priority is None else priority,
             seq=self._next_seq,
             label=label,
+            ready=asyncio.get_running_loop().create_future(),
         )
         self._next_seq += 1
 
         async with self._wait_cond:
             heapq.heappush(self._queue, queued)
-            try:
-                while True:
-                    head = self._queue[0]
-                    if not self._writer_active and head.seq == queued.seq:
-                        heapq.heappop(self._queue)
-                        self._writer_active = True
-                        self._active_label = queued.label
-                        self._active_priority = queued.priority
-                        self._active_started_at = time.monotonic()
-                        break
-                    if not self._writer_active:
-                        # If a previous cancellation/finalizer left waiters
-                        # asleep while the writer is idle, wake the real head.
-                        self._wait_cond.notify_all()
-                    await self._wait_cond.wait()
-            except BaseException:
+            self._promote_next_locked()
+
+        try:
+            await queued.ready
+        except BaseException:
+            async with self._wait_cond:
                 if any(item.seq == queued.seq for item in self._queue):
                     self._queue = [item for item in self._queue if item.seq != queued.seq]
                     heapq.heapify(self._queue)
+                    self._promote_next_locked()
                     self._wait_cond.notify_all()
-                raise
+            raise
 
         t1 = time.monotonic()
         queue_wait_ms = (t1 - t0) * 1000
@@ -447,6 +455,7 @@ class WriteSerializer:
                 self._active_label = None
                 self._active_priority = None
                 self._active_started_at = None
+                self._promote_next_locked()
                 self._wait_cond.notify_all()
 
         def _schedule_background_finalize(done_task: asyncio.Task[T]) -> None:
