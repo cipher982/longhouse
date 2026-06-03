@@ -98,8 +98,9 @@ _ARCHIVE_INGEST_MAX_RETRY_AFTER_SECONDS = 60
 _ARCHIVE_INGEST_ACTIVE_WRITER_RETRY_AFTER_SECONDS = 15
 _ARCHIVE_INGEST_WRITE_TIMEOUT_RETRY_AFTER_SECONDS = 30
 _ARCHIVE_INGEST_MAX_IN_FLIGHT = 4
+_ARCHIVE_INGEST_WRITER_QUEUE_HARD_LIMIT = 50
 _ARCHIVE_INGEST_ACTIVE_WRITER_GRACE_MS = 1000.0
-_ARCHIVE_INGEST_WRITE_TIMEOUT_SECONDS = 8.0
+_ARCHIVE_INGEST_WRITE_TIMEOUT_SECONDS = 60.0
 _ARCHIVE_INGEST_SLOTS = asyncio.Semaphore(_ARCHIVE_INGEST_MAX_IN_FLIGHT)
 _INGEST_STAGE_HEADER_LIMIT = 8
 
@@ -206,6 +207,7 @@ async def _acquire_archive_ingest_slot(write_label: str, response: Response) -> 
         active_label_is_archive = active_label in _ARCHIVE_INGEST_LABELS
         if queue_depth > 0:
             response.headers["X-Ingest-Writer-Queue-Depth"] = str(queue_depth)
+        if queue_depth >= _ARCHIVE_INGEST_WRITER_QUEUE_HARD_LIMIT:
             _raise_archive_ingest_backpressure(
                 response,
                 admission_state="writer_queue_pressure",
