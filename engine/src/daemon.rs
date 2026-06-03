@@ -1977,12 +1977,13 @@ fn queue_pending_spool_paths(
             );
             continue;
         };
-        scheduler.enqueue_observed(
+        scheduler.enqueue_observed_with_estimated_bytes(
             PathBuf::from(pending.file_path),
             provider,
             WorkPriority::Retry,
             "spool_pending",
             now_ms(),
+            Some(pending.pending_bytes),
         );
         queued += 1;
     }

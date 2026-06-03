@@ -59,6 +59,7 @@ pub struct SpoolEntry {
 pub struct PendingPath {
     pub provider: String,
     pub file_path: String,
+    pub pending_bytes: u64,
 }
 
 /// A retained dead-lettered range for local inspection.
@@ -312,6 +313,7 @@ impl<'a> Spool<'a> {
                     PendingPath {
                         provider: row.get(0)?,
                         file_path: row.get(1)?,
+                        pending_bytes: row.get::<_, i64>(2)?.max(0) as u64,
                     },
                     row.get::<_, i64>(2)?.max(0) as u64,
                 ))
@@ -999,10 +1001,12 @@ mod tests {
                 PendingPath {
                     provider: "codex".to_string(),
                     file_path: "/new-small.jsonl".to_string(),
+                    pending_bytes: 1000,
                 },
                 PendingPath {
                     provider: "codex".to_string(),
                     file_path: "/old-small.jsonl".to_string(),
+                    pending_bytes: 1000,
                 },
             ]
         );
@@ -1031,6 +1035,7 @@ mod tests {
             vec![PendingPath {
                 provider: "codex".to_string(),
                 file_path: "/never-failed.jsonl".to_string(),
+                pending_bytes: 1000,
             }]
         );
     }

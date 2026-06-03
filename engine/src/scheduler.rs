@@ -166,6 +166,12 @@ pub struct SchedulerSnapshot {
     pub in_flight_scan: usize,
     pub ready_backlog: usize,
     pub in_flight_backlog: usize,
+    pub ready_retry_bytes: u64,
+    pub ready_scan_bytes: u64,
+    pub in_flight_retry_bytes: u64,
+    pub in_flight_scan_bytes: u64,
+    pub ready_backlog_bytes: u64,
+    pub in_flight_backlog_bytes: u64,
 }
 
 impl AdaptiveLimiter {
@@ -517,6 +523,7 @@ struct ReadyJob {
     provider: &'static str,
     priority: WorkPriority,
     observation: ObservationTrace,
+    estimated_bytes: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -524,8 +531,10 @@ struct InFlightJob {
     provider: &'static str,
     priority: WorkPriority,
     observation: ObservationTrace,
+    estimated_bytes: Option<u64>,
     rerun_priority: Option<WorkPriority>,
     rerun_observation: Option<ObservationTrace>,
+    rerun_estimated_bytes: Option<u64>,
 }
 
 /// Bounded scheduler that dedupes work by file path.
@@ -577,6 +586,25 @@ impl PathScheduler {
         observation_source: &'static str,
         observed_at_ms: i64,
     ) {
+        self.enqueue_observed_with_estimated_bytes(
+            path,
+            provider,
+            priority,
+            observation_source,
+            observed_at_ms,
+            None,
+        );
+    }
+
+    pub fn enqueue_observed_with_estimated_bytes(
+        &mut self,
+        path: PathBuf,
+        provider: &'static str,
+        priority: WorkPriority,
+        observation_source: &'static str,
+        observed_at_ms: i64,
+        estimated_bytes: Option<u64>,
+    ) {
         let observation = ObservationTrace {
             source: observation_source,
             observed_at_ms,
@@ -588,7 +616,13 @@ impl PathScheduler {
             wake_reason: None,
             file_len_hint: None,
         };
-        self.enqueue_observation(path, provider, priority, observation);
+        self.enqueue_observation_with_estimated_bytes(
+            path,
+            provider,
+            priority,
+            observation,
+            estimated_bytes,
+        );
     }
 
     /// Enqueue work observed through a coalesced filesystem watcher batch.
@@ -620,24 +654,44 @@ impl PathScheduler {
         path: PathBuf,
         provider: &'static str,
         priority: WorkPriority,
+        observation: ObservationTrace,
+    ) {
+        self.enqueue_observation_with_estimated_bytes(path, provider, priority, observation, None);
+    }
+
+    pub fn enqueue_observation_with_estimated_bytes(
+        &mut self,
+        path: PathBuf,
+        provider: &'static str,
+        priority: WorkPriority,
         mut observation: ObservationTrace,
+        estimated_bytes: Option<u64>,
     ) {
         observation.enqueued_at_ms = now_ms();
         if let Some(ready) = self.ready_jobs.get_mut(&path) {
             if priority < ready.priority {
                 ready.priority = priority;
                 ready.observation = observation;
+                ready.estimated_bytes = estimated_bytes;
                 self.push_ready_path(path, priority);
             } else if priority == ready.priority
                 && should_replace_observation(&ready.observation, &observation)
             {
                 ready.observation = observation;
+                if estimated_bytes.is_some() {
+                    ready.estimated_bytes = estimated_bytes;
+                }
+            } else if estimated_bytes.is_some() {
+                ready.estimated_bytes = estimated_bytes;
             }
             return;
         }
 
         if let Some(in_flight) = self.in_flight.get_mut(&path) {
             in_flight.rerun_priority = merge_priority(in_flight.rerun_priority, Some(priority));
+            if estimated_bytes.is_some() {
+                in_flight.rerun_estimated_bytes = estimated_bytes;
+            }
             match in_flight.rerun_observation.as_mut() {
                 Some(current) if should_replace_observation(current, &observation) => {
                     *current = observation;
@@ -656,6 +710,7 @@ impl PathScheduler {
                 provider,
                 priority,
                 observation,
+                estimated_bytes,
             },
         );
         self.push_ready_path(path, priority);
@@ -707,11 +762,15 @@ impl PathScheduler {
 
         if let Some(priority) = merge_priority(in_flight.rerun_priority, task_rerun) {
             let observation = in_flight.rerun_observation.unwrap_or(in_flight.observation);
-            self.enqueue_observation(
+            let estimated_bytes = in_flight
+                .rerun_estimated_bytes
+                .or(in_flight.estimated_bytes);
+            self.enqueue_observation_with_estimated_bytes(
                 path.to_path_buf(),
                 in_flight.provider,
                 priority,
                 observation,
+                estimated_bytes,
             );
         }
     }
@@ -731,6 +790,10 @@ impl PathScheduler {
         let in_flight_live = self.in_flight_count(WorkPriority::Live);
         let in_flight_retry = self.in_flight_count(WorkPriority::Retry);
         let in_flight_scan = self.in_flight_count(WorkPriority::Scan);
+        let ready_retry_bytes = self.ready_bytes(WorkPriority::Retry);
+        let ready_scan_bytes = self.ready_bytes(WorkPriority::Scan);
+        let in_flight_retry_bytes = self.in_flight_bytes(WorkPriority::Retry);
+        let in_flight_scan_bytes = self.in_flight_bytes(WorkPriority::Scan);
         SchedulerSnapshot {
             max_in_flight: self.max_in_flight,
             live_reserved: LIVE_RESERVED,
@@ -748,6 +811,12 @@ impl PathScheduler {
             in_flight_scan,
             ready_backlog: ready_retry + ready_scan,
             in_flight_backlog: in_flight_retry + in_flight_scan,
+            ready_retry_bytes,
+            ready_scan_bytes,
+            in_flight_retry_bytes,
+            in_flight_scan_bytes,
+            ready_backlog_bytes: ready_retry_bytes.saturating_add(ready_scan_bytes),
+            in_flight_backlog_bytes: in_flight_retry_bytes.saturating_add(in_flight_scan_bytes),
         }
     }
 
@@ -784,8 +853,10 @@ impl PathScheduler {
                     provider: ready.provider,
                     priority: ready.priority,
                     observation: ready.observation.clone(),
+                    estimated_bytes: ready.estimated_bytes,
                     rerun_priority: None,
                     rerun_observation: None,
+                    rerun_estimated_bytes: None,
                 },
             );
 
@@ -829,6 +900,22 @@ impl PathScheduler {
             .values()
             .filter(|job| job.priority == priority)
             .count()
+    }
+
+    fn ready_bytes(&self, priority: WorkPriority) -> u64 {
+        self.ready_jobs
+            .values()
+            .filter(|job| job.priority == priority)
+            .filter_map(|job| job.estimated_bytes)
+            .fold(0u64, u64::saturating_add)
+    }
+
+    fn in_flight_bytes(&self, priority: WorkPriority) -> u64 {
+        self.in_flight
+            .values()
+            .filter(|job| job.priority == priority)
+            .filter_map(|job| job.estimated_bytes)
+            .fold(0u64, u64::saturating_add)
     }
 
     fn ready_count(&self, priority: WorkPriority) -> usize {
@@ -945,20 +1032,29 @@ mod tests {
             "codex",
             WorkPriority::Live,
         );
-        scheduler.enqueue(
+        scheduler.enqueue_observed_with_estimated_bytes(
             PathBuf::from("/tmp/retry-a.jsonl"),
             "codex",
             WorkPriority::Retry,
+            "spool_pending",
+            now_ms(),
+            Some(1_000),
         );
-        scheduler.enqueue(
+        scheduler.enqueue_observed_with_estimated_bytes(
             PathBuf::from("/tmp/retry-b.jsonl"),
             "codex",
             WorkPriority::Retry,
+            "spool_pending",
+            now_ms(),
+            Some(2_000),
         );
-        scheduler.enqueue(
+        scheduler.enqueue_observed_with_estimated_bytes(
             PathBuf::from("/tmp/scan-a.jsonl"),
             "codex",
             WorkPriority::Scan,
+            "reconciliation_scan",
+            now_ms(),
+            Some(4_000),
         );
 
         let live = scheduler.pop_launchable().unwrap();
@@ -975,6 +1071,12 @@ mod tests {
         assert_eq!(snapshot.in_flight_scan, 0);
         assert_eq!(snapshot.ready_backlog, 2);
         assert_eq!(snapshot.in_flight_backlog, 1);
+        assert_eq!(snapshot.ready_retry_bytes, 2_000);
+        assert_eq!(snapshot.ready_scan_bytes, 4_000);
+        assert_eq!(snapshot.in_flight_retry_bytes, 1_000);
+        assert_eq!(snapshot.in_flight_scan_bytes, 0);
+        assert_eq!(snapshot.ready_backlog_bytes, 6_000);
+        assert_eq!(snapshot.in_flight_backlog_bytes, 1_000);
         assert!(snapshot.backlog_cap >= 2);
     }
 

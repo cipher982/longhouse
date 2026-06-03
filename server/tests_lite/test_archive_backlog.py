@@ -139,6 +139,8 @@ def test_archive_status_prefers_engine_status_and_includes_shipper_diagnostics(t
                     "in_flight_retry": 1,
                     "in_flight_scan": 0,
                     "backlog_cap": 2,
+                    "ready_backlog_bytes": 4096,
+                    "in_flight_backlog_bytes": 2048,
                 },
                 "ship_lanes": {
                     "live": {
@@ -181,7 +183,7 @@ def test_archive_status_prefers_engine_status_and_includes_shipper_diagnostics(t
 
     assert result.exit_code == 0
     assert "Shipper controller:" in result.stdout
-    assert "ready archive 5" in result.stdout
+    assert "ready archive 5 (4.0 KB), active archive 1 (2.0 KB)" in result.stdout
     assert "cap 2/16" in result.stdout
     assert "live 1h: 3/3 ok, 0 connect errors, latency p50/p95 40ms/80ms" in result.stdout
     assert "live stages p95: observed->send 100ms, observed->ack 140ms, enqueue->job 20ms, http 40ms" in result.stdout

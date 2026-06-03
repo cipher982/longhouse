@@ -95,11 +95,13 @@ def status_command(
     if scheduler:
         ready_archive = int(scheduler.get("ready_retry") or 0) + int(scheduler.get("ready_scan") or 0)
         active_archive = int(scheduler.get("in_flight_retry") or 0) + int(scheduler.get("in_flight_scan") or 0)
+        ready_archive_bytes = _format_bytes(scheduler.get("ready_backlog_bytes"))
+        active_archive_bytes = _format_bytes(scheduler.get("in_flight_backlog_bytes"))
         typer.echo(
             "  scheduler: "
             f"ready live {scheduler.get('ready_live', 0)}, "
-            f"ready archive {ready_archive}, "
-            f"active archive {active_archive}, "
+            f"ready archive {ready_archive} ({ready_archive_bytes}), "
+            f"active archive {active_archive} ({active_archive_bytes}), "
             f"archive cap {scheduler.get('backlog_cap', '-')}"
         )
     if limiter:
