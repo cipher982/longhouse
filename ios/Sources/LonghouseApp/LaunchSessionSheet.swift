@@ -162,13 +162,7 @@ struct LaunchSessionSheet: View {
                         submitError = nil
                     }
                 } else if !loadingWorkspaces {
-                    Text("No recent workspaces found for this machine.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                if let workspaceError {
-                    Text(workspaceError)
+                    Text(workspaceError ?? "No recent workspaces found for this machine.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
