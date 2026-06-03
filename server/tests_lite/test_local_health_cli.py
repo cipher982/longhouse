@@ -2957,6 +2957,10 @@ def test_local_health_render_prints_archive_backlog_distribution(capsys):
                         "huge_range_eligible": False,
                         "huge_range_suppressed_reason": "backpressure_cooldown",
                         "archive_target_batch_bytes": 65_536,
+                        "live_latency_guard_state": "pressure",
+                        "last_live_latency_p95_ms": 6_000,
+                        "last_live_enqueue_to_job_p95_ms": 1_200,
+                        "live_pressure_cooldown_remaining_ms": 30_000,
                         "total_backpressure": 9,
                         "last_backpressure_retry_after_ms": 5000,
                         "backpressure_cooldown_remaining_ms": 4100,
@@ -3021,6 +3025,7 @@ def test_local_health_render_prints_archive_backlog_distribution(capsys):
     assert "providers: codex 300 ranges/5.6 GB, claude 126 ranges/2.5 GB" in output
     assert "size mix: huge 2/381.5 MB, small 100/47.7 MB" in output
     assert "archive batch target: 64.0 KB" in output
+    assert "live latency guard: pressure, p95 6000 ms, enqueue->job 1200 ms, cooldown 30000 ms" in output
     assert "backpressure: 9 total, retry-after 5000 ms, cooldown 4100 ms" in output
     assert "host write exec: ewma 92.5 ms, last 110 ms" in output
     assert "host commit shape: commits 3, commit-ms ewma 61.2 ms, last 70.0 ms, chunk 100" in output
@@ -3029,6 +3034,7 @@ def test_local_health_render_prints_archive_backlog_distribution(capsys):
         in output
     )
     assert "throttle: host queue pressure is holding archive at the floor" in output
+    assert "throttle: live latency guard is holding archive at the floor" in output
 
 
 def test_collect_local_health_includes_activity_summary(monkeypatch, tmp_path: Path):

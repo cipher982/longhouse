@@ -1478,6 +1478,17 @@ async fn attempt_ship(
             is_backpressure,
             stage_timings,
         );
+        if ship_lane == ShipLane::Live {
+            if let Some(limiter) = limiter {
+                let live = stats.summary().lanes.live;
+                limiter.observe_live_latency(
+                    live.latency_p95_ms_1h,
+                    live.stage_latency_p95_ms_1h
+                        .get("enqueue_to_job_ms")
+                        .copied(),
+                );
+            }
+        }
     }
     if is_backpressure {
         tracing::debug!(

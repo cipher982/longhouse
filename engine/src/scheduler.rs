@@ -43,6 +43,12 @@ const BACKLOG_CAP_CEILING: usize = 16;
 /// Target SLO for server-side ingest queue wait. AIMD increases the cap when
 /// the EWMA stays below this and halves it when the EWMA crosses above.
 const TARGET_QUEUE_WAIT_MS: f64 = 200.0;
+const LIVE_LATENCY_WARN_MS: u64 = 5_000;
+const LIVE_LATENCY_SLA_MS: u64 = 10_000;
+const LIVE_ENQUEUE_WARN_MS: u64 = 1_000;
+const LIVE_ENQUEUE_CRITICAL_MS: u64 = 2_000;
+const LIVE_PRESSURE_COOLDOWN: Duration = Duration::from_secs(30);
+const LIVE_PRESSURE_CRITICAL_COOLDOWN: Duration = Duration::from_secs(60);
 
 /// Archive replay request size controller. The lane starts conservatively,
 /// shrinks hard under host pressure, and expands only when the direct Runtime
@@ -119,6 +125,9 @@ struct AdaptiveLimiterState {
     last_observed_store_stage_ms: Option<BTreeMap<String, f64>>,
     last_backpressure_retry_after_ms: Option<u64>,
     backpressure_cooldown_until: Option<Instant>,
+    last_live_latency_p95_ms: Option<u64>,
+    last_live_enqueue_to_job_p95_ms: Option<u64>,
+    live_pressure_cooldown_until: Option<Instant>,
     missing_signal_logged: bool,
 }
 
@@ -142,6 +151,10 @@ pub struct LimiterSnapshot {
     pub huge_range_eligible: bool,
     pub huge_range_suppressed_reason: Option<&'static str>,
     pub archive_target_batch_bytes: u64,
+    pub live_latency_guard_state: &'static str,
+    pub last_live_latency_p95_ms: Option<u64>,
+    pub last_live_enqueue_to_job_p95_ms: Option<u64>,
+    pub live_pressure_cooldown_remaining_ms: Option<u64>,
     pub last_direction: &'static str,
     pub total_observations: u64,
     pub total_increases: u64,
@@ -197,6 +210,9 @@ impl AdaptiveLimiter {
                 last_observed_store_stage_ms: None,
                 last_backpressure_retry_after_ms: None,
                 backpressure_cooldown_until: None,
+                last_live_latency_p95_ms: None,
+                last_live_enqueue_to_job_p95_ms: None,
+                live_pressure_cooldown_until: None,
                 missing_signal_logged: false,
             }),
         })
@@ -308,6 +324,68 @@ impl AdaptiveLimiter {
         );
     }
 
+    /// Feed the live-lane SLA guard. Archive work should consume only leftover
+    /// capacity; when live p95 degrades, cut archive pressure before waiting
+    /// for host backpressure.
+    pub fn observe_live_latency(
+        &self,
+        latency_p95_ms: Option<u64>,
+        enqueue_to_job_p95_ms: Option<u64>,
+    ) {
+        if latency_p95_ms.is_none() && enqueue_to_job_p95_ms.is_none() {
+            return;
+        }
+
+        let now = Instant::now();
+        let mut state = self.state.lock().expect("limiter state poisoned");
+        state.last_live_latency_p95_ms = latency_p95_ms;
+        state.last_live_enqueue_to_job_p95_ms = enqueue_to_job_p95_ms;
+
+        let latency_warn = latency_p95_ms.is_some_and(|value| value >= LIVE_LATENCY_WARN_MS);
+        let latency_critical = latency_p95_ms.is_some_and(|value| value >= LIVE_LATENCY_SLA_MS);
+        let enqueue_warn = enqueue_to_job_p95_ms.is_some_and(|value| value >= LIVE_ENQUEUE_WARN_MS);
+        let enqueue_critical =
+            enqueue_to_job_p95_ms.is_some_and(|value| value >= LIVE_ENQUEUE_CRITICAL_MS);
+
+        if !(latency_warn || enqueue_warn) {
+            return;
+        }
+
+        let critical = latency_critical || enqueue_critical;
+        let cooldown = if critical {
+            LIVE_PRESSURE_CRITICAL_COOLDOWN
+        } else {
+            LIVE_PRESSURE_COOLDOWN
+        };
+        state.live_pressure_cooldown_until = now.checked_add(cooldown);
+        state.samples_since_adjust = 0;
+        state.last_adjust = Some(now);
+
+        let cap = self.current_cap.load(Ordering::Relaxed);
+        let new_cap = if critical {
+            BACKLOG_CAP_FLOOR
+        } else {
+            (cap / 2).max(BACKLOG_CAP_FLOOR)
+        };
+        if new_cap < cap {
+            state.total_decreases = state.total_decreases.saturating_add(1);
+            state.last_direction = LimiterDirection::Decreased;
+            self.current_cap.store(new_cap, Ordering::Relaxed);
+        } else {
+            state.last_direction = LimiterDirection::Held;
+        }
+
+        tracing::info!(
+            target: "longhouse_engine::adaptive_limiter",
+            from_cap = cap,
+            to_cap = self.current_cap.load(Ordering::Relaxed),
+            live_latency_p95_ms = ?latency_p95_ms,
+            live_enqueue_to_job_p95_ms = ?enqueue_to_job_p95_ms,
+            critical,
+            "live lane latency guard reduced archive pressure"
+        );
+    }
+
     /// Successful ship but no server timing header (older / bridged Runtime
     /// Host). Per phase-2 review: freeze the cap at its current value and log
     /// once. We still bump observation counters so debugging telemetry shows
@@ -329,6 +407,16 @@ impl AdaptiveLimiter {
         state: &AdaptiveLimiterState,
         now: Instant,
     ) -> (bool, &'static str, Option<&'static str>) {
+        if state
+            .live_pressure_cooldown_until
+            .is_some_and(|until| until > now)
+        {
+            return (
+                false,
+                "live_latency_pressure",
+                Some("live_latency_pressure"),
+            );
+        }
         if state
             .backpressure_cooldown_until
             .is_some_and(|until| until > now)
@@ -355,6 +443,13 @@ impl AdaptiveLimiter {
     }
 
     fn archive_target_batch_bytes_for_state(state: &AdaptiveLimiterState, now: Instant) -> u64 {
+        if state
+            .live_pressure_cooldown_until
+            .is_some_and(|until| until > now)
+        {
+            return ARCHIVE_BATCH_TARGET_MIN_BYTES;
+        }
+
         if state
             .backpressure_cooldown_until
             .is_some_and(|until| until > now)
@@ -402,6 +497,14 @@ impl AdaptiveLimiter {
         if ewma <= TARGET_QUEUE_WAIT_MS
             && state
                 .backpressure_cooldown_until
+                .is_some_and(|until| until > now)
+        {
+            state.last_direction = LimiterDirection::Held;
+            return;
+        }
+        if ewma <= TARGET_QUEUE_WAIT_MS
+            && state
+                .live_pressure_cooldown_until
                 .is_some_and(|until| until > now)
         {
             state.last_direction = LimiterDirection::Held;
@@ -460,6 +563,12 @@ impl AdaptiveLimiter {
         let (huge_range_eligible, pressure_state, huge_range_suppressed_reason) =
             Self::huge_range_policy(&state, now);
         let archive_target_batch_bytes = Self::archive_target_batch_bytes_for_state(&state, now);
+        let live_pressure_cooldown_remaining_ms =
+            state.live_pressure_cooldown_until.and_then(|until| {
+                until
+                    .checked_duration_since(now)
+                    .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+            });
         LimiterSnapshot {
             current_cap: cap,
             floor: BACKLOG_CAP_FLOOR,
@@ -478,6 +587,14 @@ impl AdaptiveLimiter {
             huge_range_eligible,
             huge_range_suppressed_reason,
             archive_target_batch_bytes,
+            live_latency_guard_state: if live_pressure_cooldown_remaining_ms.is_some() {
+                "pressure"
+            } else {
+                "healthy"
+            },
+            last_live_latency_p95_ms: state.last_live_latency_p95_ms,
+            last_live_enqueue_to_job_p95_ms: state.last_live_enqueue_to_job_p95_ms,
+            live_pressure_cooldown_remaining_ms,
             last_direction: state.last_direction.as_str(),
             total_observations: state.total_observations,
             total_increases: state.total_increases,
@@ -1688,6 +1805,66 @@ mod tests {
             snap.huge_range_suppressed_reason,
             Some("backpressure_cooldown")
         );
+    }
+
+    #[test]
+    fn adaptive_limiter_cuts_archive_cap_on_live_latency_pressure() {
+        let limiter = AdaptiveLimiter::new();
+        for _ in 0..6 {
+            for _ in 0..DAMP_MIN_SAMPLES {
+                limiter.observe(10.0);
+            }
+            limiter.clear_adjust_cooldown();
+        }
+        let pre_pressure = limiter.current_cap();
+        assert!(pre_pressure > BACKLOG_CAP_FLOOR);
+
+        limiter.observe_live_latency(Some(LIVE_LATENCY_WARN_MS), Some(100));
+
+        let post_pressure = limiter.current_cap();
+        assert!(
+            post_pressure < pre_pressure,
+            "live p95 pressure should reduce archive cap: {pre_pressure} -> {post_pressure}"
+        );
+        let snap = limiter.snapshot();
+        assert_eq!(snap.live_latency_guard_state, "pressure");
+        assert_eq!(snap.last_live_latency_p95_ms, Some(LIVE_LATENCY_WARN_MS));
+        assert_eq!(snap.last_live_enqueue_to_job_p95_ms, Some(100));
+        assert!(snap.live_pressure_cooldown_remaining_ms.is_some());
+        assert_eq!(snap.pressure_state, "live_latency_pressure");
+        assert_eq!(
+            snap.huge_range_suppressed_reason,
+            Some("live_latency_pressure")
+        );
+        assert_eq!(
+            snap.archive_target_batch_bytes,
+            ARCHIVE_BATCH_TARGET_MIN_BYTES
+        );
+    }
+
+    #[test]
+    fn adaptive_limiter_floors_archive_cap_on_critical_live_pressure() {
+        let limiter = AdaptiveLimiter::new();
+        for _ in 0..6 {
+            for _ in 0..DAMP_MIN_SAMPLES {
+                limiter.observe(10.0);
+            }
+            limiter.clear_adjust_cooldown();
+        }
+        assert!(limiter.current_cap() > BACKLOG_CAP_FLOOR);
+
+        limiter.observe_live_latency(Some(500), Some(LIVE_ENQUEUE_CRITICAL_MS));
+
+        let snap = limiter.snapshot();
+        assert_eq!(limiter.current_cap(), BACKLOG_CAP_FLOOR);
+        assert_eq!(snap.live_latency_guard_state, "pressure");
+        assert_eq!(snap.last_live_latency_p95_ms, Some(500));
+        assert_eq!(
+            snap.last_live_enqueue_to_job_p95_ms,
+            Some(LIVE_ENQUEUE_CRITICAL_MS)
+        );
+        assert!(!snap.huge_range_eligible);
+        assert_eq!(snap.pressure_state, "live_latency_pressure");
     }
 
     #[test]

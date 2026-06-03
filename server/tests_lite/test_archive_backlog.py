@@ -127,6 +127,9 @@ def test_archive_status_prefers_engine_status_and_includes_shipper_diagnostics(t
                     "current_cap": 2,
                     "ceiling": 16,
                     "pressure_state": "normal",
+                    "live_latency_guard_state": "healthy",
+                    "last_live_latency_p95_ms": 80,
+                    "last_live_enqueue_to_job_p95_ms": 20,
                     "archive_target_batch_bytes": 262144,
                     "ewma_queue_wait_ms": 10.0,
                     "ewma_exec_ms": 20.0,
@@ -187,6 +190,7 @@ def test_archive_status_prefers_engine_status_and_includes_shipper_diagnostics(t
     assert "Shipper controller:" in result.stdout
     assert "ready archive 5 (4.0 KB), active archive 1 (2.0 KB)" in result.stdout
     assert "cap 2/16" in result.stdout
+    assert "live guard healthy" in result.stdout
     assert "live 1h: 3/3 ok, 0 connect errors, latency p50/p95 40ms/80ms" in result.stdout
     assert "live stages p95: observed->send 100ms, observed->ack 140ms, enqueue->job 20ms, http 40ms" in result.stdout
     assert (
@@ -198,7 +202,9 @@ def test_archive_status_prefers_engine_status_and_includes_shipper_diagnostics(t
     assert speed_result.exit_code == 0
     assert "Archive speed" in speed_result.stdout
     assert "archive: 7.5 events/s, 512 B/s, 6/8 ok, 2 backpressure" in speed_result.stdout
-    assert "live guardrail: p95 80ms, observed->ack p95 140ms" in speed_result.stdout
+    assert (
+        "live guardrail: p95 80ms, observed->ack p95 140ms, state healthy, limiter p95 80ms, enqueue->job 20ms"
+    ) in speed_result.stdout
     assert "scheduler: ready 5 (4.0 KB), active 1 (2.0 KB), cap 2" in speed_result.stdout
 
     speed_json_result = runner.invoke(app, ["archive", "speed", "--state-root", str(tmp_path), "--json"])
@@ -207,6 +213,7 @@ def test_archive_status_prefers_engine_status_and_includes_shipper_diagnostics(t
     speed_payload = json.loads(speed_json_result.stdout)
     assert speed_payload["archive"]["bytes_per_sec_ewma_10s"] == 512.0
     assert speed_payload["live"]["observed_to_ack_p95_ms_1h"] == 140
+    assert speed_payload["live"]["limiter_state"] == "healthy"
 
 
 def test_ready_archive_backlog_makes_pending_ranges_eligible(tmp_path: Path):

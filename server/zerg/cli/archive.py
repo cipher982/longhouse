@@ -116,6 +116,7 @@ def status_command(
             "  limiter: "
             f"cap {limiter.get('current_cap', '-')}/{limiter.get('ceiling', '-')}, "
             f"pressure {limiter.get('pressure_state', '-')}, "
+            f"live guard {limiter.get('live_latency_guard_state', '-')}, "
             f"batch {_format_bytes(limiter.get('archive_target_batch_bytes'))}"
         )
         typer.echo(
@@ -195,6 +196,10 @@ def speed_command(
         "live": {
             "latency_p95_ms_1h": live_lane.get("latency_p95_ms_1h"),
             "observed_to_ack_p95_ms_1h": dict(live_lane.get("stage_latency_p95_ms_1h") or {}).get("observed_to_ack_ms"),
+            "limiter_state": limiter.get("live_latency_guard_state"),
+            "limiter_latency_p95_ms": limiter.get("last_live_latency_p95_ms"),
+            "limiter_enqueue_to_job_p95_ms": limiter.get("last_live_enqueue_to_job_p95_ms"),
+            "limiter_cooldown_remaining_ms": limiter.get("live_pressure_cooldown_remaining_ms"),
         },
         "scheduler": {
             "ready_backlog": ready_backlog,
@@ -227,8 +232,13 @@ def speed_command(
     typer.echo(
         "  live guardrail: "
         f"p95 {_format_ms(speed['live']['latency_p95_ms_1h'])}, "
-        f"observed->ack p95 {_format_ms(speed['live']['observed_to_ack_p95_ms_1h'])}"
+        f"observed->ack p95 {_format_ms(speed['live']['observed_to_ack_p95_ms_1h'])}, "
+        f"state {speed['live']['limiter_state'] or '-'}, "
+        f"limiter p95 {_format_ms(speed['live']['limiter_latency_p95_ms'])}, "
+        f"enqueue->job {_format_ms(speed['live']['limiter_enqueue_to_job_p95_ms'])}"
     )
+    if speed["live"]["limiter_cooldown_remaining_ms"] is not None:
+        typer.echo(f"  live cooldown: {_format_ms(speed['live']['limiter_cooldown_remaining_ms'])}")
     typer.echo(
         "  scheduler: "
         f"ready {speed['scheduler']['ready_backlog']} ({_format_bytes(speed['scheduler']['ready_backlog_bytes'])}), "

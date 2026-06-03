@@ -329,12 +329,33 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
             commit_last = limiter.get("last_observed_commit_ms")
             chunk_size = limiter.get("last_observed_chunk_size")
             archive_target_batch_bytes = limiter.get("archive_target_batch_bytes")
+            live_guard = limiter.get("live_latency_guard_state")
+            live_guard_p95 = limiter.get("last_live_latency_p95_ms")
+            live_guard_enqueue = limiter.get("last_live_enqueue_to_job_p95_ms")
+            live_guard_cooldown = limiter.get("live_pressure_cooldown_remaining_ms")
             store_stages = _store_stage_mix(limiter.get("last_observed_store_stage_ms"))
             ewma_value = _as_float(ewma)
             target_value = _as_float(target)
             typer.echo(f"  archive cap: {current_cap} (floor {floor}, ceiling {ceiling})")
             if archive_target_batch_bytes is not None:
                 typer.echo(f"  archive batch target: {_format_bytes(archive_target_batch_bytes)}")
+            has_live_guard = any(
+                value is not None
+                for value in (
+                    live_guard,
+                    live_guard_p95,
+                    live_guard_enqueue,
+                    live_guard_cooldown,
+                )
+            )
+            if has_live_guard:
+                typer.echo(
+                    "  live latency guard: "
+                    f"{live_guard or '-'}, "
+                    f"p95 {_format_ms(live_guard_p95)}, "
+                    f"enqueue->job {_format_ms(live_guard_enqueue)}, "
+                    f"cooldown {_format_ms(live_guard_cooldown)}"
+                )
             typer.echo(
                 "  host queue wait: "
                 f"ewma {_format_rate(ewma, 'ms')}, "
@@ -366,8 +387,11 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
                     f"cooldown {_format_rate(cooldown, 'ms')}"
                 )
             queue_above_target = ewma_value is not None and target_value is not None and ewma_value > target_value
+            live_pressure = live_guard == "pressure" or live_guard_cooldown is not None
             if current_cap == floor and queue_above_target:
                 typer.echo("  throttle: host queue pressure is holding archive at the floor")
+            if current_cap == floor and live_pressure:
+                typer.echo("  throttle: live latency guard is holding archive at the floor")
 
     control_channel = dict(snapshot.get("control_channel") or {})
     if control_channel:
