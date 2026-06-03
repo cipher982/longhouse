@@ -2926,6 +2926,10 @@ def test_local_health_render_prints_archive_backlog_distribution(capsys):
                         "last_observed_queue_wait_ms": 510.0,
                         "ewma_exec_ms": 92.5,
                         "last_observed_exec_ms": 110.0,
+                        "ewma_commit_ms": 61.2,
+                        "last_observed_commit_count": 3,
+                        "last_observed_commit_ms": 70.0,
+                        "last_observed_chunk_size": 100,
                         "pressure_state": "backpressure_cooldown",
                         "huge_range_eligible": False,
                         "huge_range_suppressed_reason": "backpressure_cooldown",
@@ -2988,6 +2992,7 @@ def test_local_health_render_prints_archive_backlog_distribution(capsys):
     assert "size mix: huge 2/381.5 MB, small 100/47.7 MB" in output
     assert "backpressure: 9 total, retry-after 5000 ms, cooldown 4100 ms" in output
     assert "host write exec: ewma 92.5 ms, last 110 ms" in output
+    assert "host commit shape: commits 3, commit-ms ewma 61.2 ms, last 70.0 ms, chunk 100" in output
     assert "throttle: host queue pressure is holding archive at the floor" in output
 
 

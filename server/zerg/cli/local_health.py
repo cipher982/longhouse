@@ -262,6 +262,10 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
             last = limiter.get("last_observed_queue_wait_ms")
             exec_ewma = limiter.get("ewma_exec_ms")
             exec_last = limiter.get("last_observed_exec_ms")
+            commit_count = limiter.get("last_observed_commit_count")
+            commit_ewma = limiter.get("ewma_commit_ms")
+            commit_last = limiter.get("last_observed_commit_ms")
+            chunk_size = limiter.get("last_observed_chunk_size")
             ewma_value = _as_float(ewma)
             target_value = _as_float(target)
             typer.echo(f"  archive cap: {current_cap} (floor {floor}, ceiling {ceiling})")
@@ -273,6 +277,14 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
             )
             if exec_ewma is not None or exec_last is not None:
                 typer.echo(f"  host write exec: ewma {_format_rate(exec_ewma, 'ms')}, last {_format_rate(exec_last, 'ms')}")
+            if commit_count is not None or commit_ewma is not None or commit_last is not None or chunk_size is not None:
+                typer.echo(
+                    "  host commit shape: "
+                    f"commits {commit_count if commit_count is not None else '-'}, "
+                    f"commit-ms ewma {_format_rate(commit_ewma, 'ms')}, "
+                    f"last {_format_rate(commit_last, 'ms')}, "
+                    f"chunk {chunk_size if chunk_size is not None else '-'}"
+                )
             total_backpressure = int(limiter.get("total_backpressure") or 0)
             retry_after = limiter.get("last_backpressure_retry_after_ms")
             cooldown = limiter.get("backpressure_cooldown_remaining_ms")
