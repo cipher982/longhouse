@@ -2921,8 +2921,9 @@ def test_local_health_render_prints_archive_backlog_distribution(capsys):
                     },
                     "ship_lanes": {
                         "live": {
-                            "attempts_1h": 4,
+                            "attempts_1h": 5,
                             "successes_1h": 4,
+                            "retryable_client_errors_1h": 1,
                             "latency_p95_ms_1h": 140,
                             "events_per_sec_ewma_10s": 18.5,
                             "bytes_per_sec_ewma_10s": 4096,
@@ -3004,7 +3005,8 @@ def test_local_health_render_prints_archive_backlog_distribution(capsys):
 
     output = capsys.readouterr().out
     assert "Ship Lanes" in output
-    assert "live: 4/4 ok, 0 backpressure, p95 140ms, 18.5 events/s, 4.0 KB/s" in output
+    assert "live: 4/5 ok, 0 backpressure, p95 140ms, 18.5 events/s, 4.0 KB/s" in output
+    assert "failures: retryable client 1" in output
     assert "stages p95: observed->send 90 ms, observed->ack 140 ms, enqueue->job 25 ms, http 50 ms" in output
     assert "Scheduler" in output
     assert "ready: live 1, archive 6 (retry 4, scan 2)" in output

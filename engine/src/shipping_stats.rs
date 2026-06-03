@@ -107,14 +107,22 @@ struct ShipAttemptRecord {
 pub struct ShipLaneStatsSummary {
     pub attempts_1h: u32,
     pub successes_1h: u32,
+    pub rate_limited_1h: u32,
     pub server_errors_1h: u32,
+    pub payload_rejections_1h: u32,
+    pub payload_too_large_1h: u32,
+    pub retryable_client_errors_1h: u32,
     pub connect_errors_1h: u32,
     pub backpressure_1h: u32,
     pub events_1h: u64,
     pub bytes_1h: u64,
     pub attempts_10m: u32,
     pub successes_10m: u32,
+    pub rate_limited_10m: u32,
     pub server_errors_10m: u32,
+    pub payload_rejections_10m: u32,
+    pub payload_too_large_10m: u32,
+    pub retryable_client_errors_10m: u32,
     pub connect_errors_10m: u32,
     pub backpressure_10m: u32,
     pub events_10m: u64,
@@ -607,16 +615,36 @@ impl LaneAccumulator {
                     self.summary.server_errors_10m += 1;
                 }
             }
+            ShipAttemptOutcome::RateLimited => {
+                self.summary.rate_limited_1h += 1;
+                if in_active_window {
+                    self.summary.rate_limited_10m += 1;
+                }
+            }
+            ShipAttemptOutcome::PayloadRejected => {
+                self.summary.payload_rejections_1h += 1;
+                if in_active_window {
+                    self.summary.payload_rejections_10m += 1;
+                }
+            }
+            ShipAttemptOutcome::PayloadTooLarge => {
+                self.summary.payload_too_large_1h += 1;
+                if in_active_window {
+                    self.summary.payload_too_large_10m += 1;
+                }
+            }
+            ShipAttemptOutcome::RetryableClientError => {
+                self.summary.retryable_client_errors_1h += 1;
+                if in_active_window {
+                    self.summary.retryable_client_errors_10m += 1;
+                }
+            }
             ShipAttemptOutcome::ConnectError => {
                 self.summary.connect_errors_1h += 1;
                 if in_active_window {
                     self.summary.connect_errors_10m += 1;
                 }
             }
-            ShipAttemptOutcome::RateLimited
-            | ShipAttemptOutcome::PayloadRejected
-            | ShipAttemptOutcome::PayloadTooLarge
-            | ShipAttemptOutcome::RetryableClientError => {}
         }
     }
 
@@ -1001,6 +1029,45 @@ mod tests {
                 .copied(),
             Some(20)
         );
+    }
+
+    #[test]
+    fn lane_stats_surface_live_failures_by_class() {
+        let tracker = RecentShipStatsTracker::new();
+        for outcome in [
+            ShipAttemptOutcome::RateLimited,
+            ShipAttemptOutcome::PayloadRejected,
+            ShipAttemptOutcome::PayloadTooLarge,
+            ShipAttemptOutcome::RetryableClientError,
+            ShipAttemptOutcome::ConnectError,
+            ShipAttemptOutcome::ServerError,
+        ] {
+            tracker.record_with_lane_detail_and_stages(
+                ShipLane::Live,
+                outcome,
+                100,
+                None,
+                None,
+                None,
+                0,
+                0,
+                false,
+                None,
+            );
+        }
+
+        let live = tracker.summary().lanes.live;
+
+        assert_eq!(live.rate_limited_1h, 1);
+        assert_eq!(live.payload_rejections_1h, 1);
+        assert_eq!(live.payload_too_large_1h, 1);
+        assert_eq!(live.retryable_client_errors_1h, 1);
+        assert_eq!(live.connect_errors_1h, 1);
+        assert_eq!(live.server_errors_1h, 1);
+        assert_eq!(live.rate_limited_10m, 1);
+        assert_eq!(live.payload_rejections_10m, 1);
+        assert_eq!(live.payload_too_large_10m, 1);
+        assert_eq!(live.retryable_client_errors_10m, 1);
     }
 
     #[test]

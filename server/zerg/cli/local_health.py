@@ -93,7 +93,11 @@ def _has_lane_activity(lane: dict[str, object]) -> bool:
     keys = (
         "attempts_1h",
         "successes_1h",
+        "rate_limited_1h",
         "server_errors_1h",
+        "payload_rejections_1h",
+        "payload_too_large_1h",
+        "retryable_client_errors_1h",
         "connect_errors_1h",
         "backpressure_1h",
         "events_1h",
@@ -102,6 +106,22 @@ def _has_lane_activity(lane: dict[str, object]) -> bool:
     return any(int(lane.get(key) or 0) > 0 for key in keys) or bool(
         lane.get("events_per_sec_ewma_10s") or lane.get("bytes_per_sec_ewma_10s")
     )
+
+
+def _lane_failure_summary(lane: dict[str, object]) -> str:
+    parts: list[str] = []
+    for key, label in (
+        ("rate_limited_1h", "rate limited"),
+        ("server_errors_1h", "server"),
+        ("payload_rejections_1h", "payload rejected"),
+        ("payload_too_large_1h", "payload too large"),
+        ("retryable_client_errors_1h", "retryable client"),
+        ("connect_errors_1h", "connect"),
+    ):
+        count = int(lane.get(key) or 0)
+        if count > 0:
+            parts.append(f"{label} {count}")
+    return ", ".join(parts)
 
 
 def _archive_provider_mix(providers: object, *, limit: int = 3) -> str:
@@ -212,6 +232,9 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
                 f"p95 {p95 if p95 is not None else '-'}ms, "
                 f"{eps}, {bps}/s"
             )
+            failures = _lane_failure_summary(lane)
+            if failures:
+                typer.echo(f"    failures: {failures}")
             stage_p95 = dict(lane.get("stage_latency_p95_ms_1h") or {})
             if lane_name == "live" and stage_p95:
                 typer.echo(
