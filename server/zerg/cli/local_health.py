@@ -64,6 +64,15 @@ def _format_rate(value: object, suffix: str) -> str:
     return f"{rate:.2f} {suffix}"
 
 
+_ARCHIVE_SIZE_BUCKET_LABELS = {
+    "tiny_lt_1kb": "tiny",
+    "small_lt_1mb": "small",
+    "medium_lt_10mb": "medium",
+    "large_lt_100mb": "large",
+    "huge_gte_100mb": "huge",
+}
+
+
 def _as_float(value: object) -> float | None:
     if value is None:
         return None
@@ -86,6 +95,35 @@ def _has_lane_activity(lane: dict[str, object]) -> bool:
     return any(int(lane.get(key) or 0) > 0 for key in keys) or bool(
         lane.get("events_per_sec_ewma_10s") or lane.get("bytes_per_sec_ewma_10s")
     )
+
+
+def _archive_provider_mix(providers: object, *, limit: int = 3) -> str:
+    if not isinstance(providers, list):
+        return "-"
+    rendered: list[str] = []
+    for raw in providers[:limit]:
+        provider = dict(raw or {})
+        name = str(provider.get("provider") or "-")
+        ranges = int(provider.get("pending_ranges") or 0)
+        size = _format_bytes(provider.get("pending_bytes"))
+        rendered.append(f"{name} {ranges} ranges/{size}")
+    if len(providers) > limit:
+        rendered.append(f"+{len(providers) - limit} more")
+    return ", ".join(rendered) or "-"
+
+
+def _archive_size_mix(size_buckets: object) -> str:
+    if not isinstance(size_buckets, dict):
+        return "-"
+    rendered: list[str] = []
+    for bucket, raw_summary in sorted(size_buckets.items()):
+        summary = dict(raw_summary or {})
+        ranges = int(summary.get("pending_ranges") or 0)
+        if ranges <= 0:
+            continue
+        label = _ARCHIVE_SIZE_BUCKET_LABELS.get(str(bucket), str(bucket))
+        rendered.append(f"{label} {ranges}/{_format_bytes(summary.get('pending_bytes'))}")
+    return ", ".join(rendered) or "-"
 
 
 def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
@@ -165,6 +203,30 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
         typer.echo(f"  pending ranges: {archive_repair.get('pending_ranges', 0)}")
         typer.echo(f"  pending bytes: {_format_bytes(archive_repair.get('pending_bytes'))}")
         typer.echo(f"  pending paths: {archive_repair.get('pending_paths', 0)}")
+        if archive_repair.get("pending_sessions"):
+            typer.echo(f"  pending sessions: {archive_repair.get('pending_sessions', 0)}")
+        ready_ranges = int(archive_repair.get("ready_ranges") or 0)
+        deferred_ranges = int(archive_repair.get("deferred_ranges") or 0)
+        if ready_ranges or deferred_ranges:
+            typer.echo(f"  eligibility: {ready_ranges} ready now, {deferred_ranges} deferred")
+        huge_ranges = int(archive_repair.get("huge_pending_ranges") or 0)
+        if huge_ranges:
+            typer.echo(f"  huge ranges: {huge_ranges} ranges, {_format_bytes(archive_repair.get('huge_pending_bytes'))}")
+        oldest = archive_repair.get("oldest_pending_at")
+        newest = archive_repair.get("newest_pending_at")
+        if oldest or newest:
+            typer.echo(f"  pending age: oldest {oldest or '-'}, newest {newest or '-'}")
+        next_retry_min = archive_repair.get("next_retry_at_min")
+        next_retry_max = archive_repair.get("next_retry_at_max")
+        next_deferred = archive_repair.get("next_deferred_retry_at")
+        if next_retry_min or next_retry_max or next_deferred:
+            typer.echo("  retry window: " f"{next_retry_min or '-'} to {next_retry_max or '-'}; " f"next deferred {next_deferred or '-'}")
+        providers = _archive_provider_mix(archive_repair.get("providers"))
+        if providers != "-":
+            typer.echo(f"  providers: {providers}")
+        size_mix = _archive_size_mix(archive_repair.get("size_buckets"))
+        if size_mix != "-":
+            typer.echo(f"  size mix: {size_mix}")
         typer.echo(f"  dead ranges: {archive_repair.get('dead_ranges', 0)}")
         if limiter:
             current_cap = limiter.get("current_cap")
@@ -182,6 +244,16 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
                 f"last {_format_rate(last, 'ms')}, "
                 f"target {_format_rate(target, 'ms')}"
             )
+            total_backpressure = int(limiter.get("total_backpressure") or 0)
+            retry_after = limiter.get("last_backpressure_retry_after_ms")
+            cooldown = limiter.get("backpressure_cooldown_remaining_ms")
+            if total_backpressure or retry_after or cooldown:
+                typer.echo(
+                    "  backpressure: "
+                    f"{total_backpressure} total, "
+                    f"retry-after {_format_rate(retry_after, 'ms')}, "
+                    f"cooldown {_format_rate(cooldown, 'ms')}"
+                )
             if current_cap == floor and ewma_value is not None and target_value is not None and ewma_value > target_value:
                 typer.echo("  throttle: host queue pressure is holding archive at the floor")
 

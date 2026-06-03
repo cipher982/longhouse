@@ -61,6 +61,8 @@ pub struct ArchiveBacklogSnapshot {
     pub state: String,
     pub mode: String,
     pub pending_ranges: usize,
+    pub ready_ranges: usize,
+    pub deferred_ranges: usize,
     pub pending_paths: usize,
     pub pending_sessions: usize,
     pub pending_bytes: u64,
@@ -72,6 +74,7 @@ pub struct ArchiveBacklogSnapshot {
     pub newest_pending_at: Option<String>,
     pub next_retry_at_min: Option<String>,
     pub next_retry_at_max: Option<String>,
+    pub next_deferred_retry_at: Option<String>,
     pub providers: Vec<ArchiveProviderSummary>,
     pub size_buckets: BTreeMap<String, ArchiveSizeBucketSummary>,
 }
@@ -82,6 +85,8 @@ impl Default for ArchiveBacklogSnapshot {
             state: "idle".to_string(),
             mode: "idle".to_string(),
             pending_ranges: 0,
+            ready_ranges: 0,
+            deferred_ranges: 0,
             pending_paths: 0,
             pending_sessions: 0,
             pending_bytes: 0,
@@ -93,6 +98,7 @@ impl Default for ArchiveBacklogSnapshot {
             newest_pending_at: None,
             next_retry_at_min: None,
             next_retry_at_max: None,
+            next_deferred_retry_at: None,
             providers: Vec::new(),
             size_buckets: BTreeMap::new(),
         }
@@ -566,6 +572,28 @@ impl<'a> Spool<'a> {
         let aggregate = self.conn.query_row(
             "SELECT
                 COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(
+                    CASE
+                        WHEN status = 'pending'
+                         AND (
+                             next_retry_at <= ?2
+                             OR (retry_count = 0 AND (last_error IS NULL OR TRIM(last_error) = ''))
+                         )
+                        THEN 1
+                        ELSE 0
+                    END
+                ), 0),
+                COALESCE(SUM(
+                    CASE
+                        WHEN status = 'pending'
+                         AND NOT (
+                             next_retry_at <= ?2
+                             OR (retry_count = 0 AND (last_error IS NULL OR TRIM(last_error) = ''))
+                         )
+                        THEN 1
+                        ELSE 0
+                    END
+                ), 0),
                 COUNT(DISTINCT CASE WHEN status = 'pending' THEN provider || char(31) || file_path END),
                 COUNT(DISTINCT CASE WHEN status = 'pending' THEN session_id END),
                 COALESCE(SUM(CASE WHEN status = 'pending' AND end_offset > start_offset THEN end_offset - start_offset ELSE 0 END), 0),
@@ -576,28 +604,43 @@ impl<'a> Spool<'a> {
                 MIN(CASE WHEN status = 'pending' THEN created_at END),
                 MAX(CASE WHEN status = 'pending' THEN created_at END),
                 MIN(CASE WHEN status = 'pending' THEN next_retry_at END),
-                MAX(CASE WHEN status = 'pending' THEN next_retry_at END)
+                MAX(CASE WHEN status = 'pending' THEN next_retry_at END),
+                MIN(
+                    CASE
+                        WHEN status = 'pending'
+                         AND NOT (
+                             next_retry_at <= ?2
+                             OR (retry_count = 0 AND (last_error IS NULL OR TRIM(last_error) = ''))
+                         )
+                        THEN next_retry_at
+                    END
+                )
              FROM spool_queue",
-            [HUGE_RANGE_BYTES as i64],
+            rusqlite::params![HUGE_RANGE_BYTES as i64, Utc::now().to_rfc3339()],
             |row| {
                 Ok((
                     row.get::<_, i64>(0)?.max(0) as usize,
                     row.get::<_, i64>(1)?.max(0) as usize,
                     row.get::<_, i64>(2)?.max(0) as usize,
-                    row.get::<_, i64>(3)?.max(0) as u64,
+                    row.get::<_, i64>(3)?.max(0) as usize,
                     row.get::<_, i64>(4)?.max(0) as usize,
                     row.get::<_, i64>(5)?.max(0) as u64,
                     row.get::<_, i64>(6)?.max(0) as usize,
                     row.get::<_, i64>(7)?.max(0) as u64,
-                    row.get::<_, Option<String>>(8)?,
-                    row.get::<_, Option<String>>(9)?,
+                    row.get::<_, i64>(8)?.max(0) as usize,
+                    row.get::<_, i64>(9)?.max(0) as u64,
                     row.get::<_, Option<String>>(10)?,
                     row.get::<_, Option<String>>(11)?,
+                    row.get::<_, Option<String>>(12)?,
+                    row.get::<_, Option<String>>(13)?,
+                    row.get::<_, Option<String>>(14)?,
                 ))
             },
         )?;
         let (
             pending_ranges,
+            ready_ranges,
+            deferred_ranges,
             pending_paths,
             pending_sessions,
             pending_bytes,
@@ -609,6 +652,7 @@ impl<'a> Spool<'a> {
             newest_pending_at,
             next_retry_at_min,
             next_retry_at_max,
+            next_deferred_retry_at,
         ) = aggregate;
 
         let state = if dead_ranges > 0 {
@@ -629,6 +673,8 @@ impl<'a> Spool<'a> {
             }
             .to_string(),
             pending_ranges,
+            ready_ranges,
+            deferred_ranges,
             pending_paths,
             pending_sessions,
             pending_bytes,
@@ -640,6 +686,7 @@ impl<'a> Spool<'a> {
             newest_pending_at,
             next_retry_at_min,
             next_retry_at_max,
+            next_deferred_retry_at,
             providers: self.archive_provider_summaries()?,
             size_buckets: self.archive_size_buckets()?,
         })
@@ -941,6 +988,32 @@ mod tests {
             .unwrap();
         assert_eq!(ready.len(), 1);
         assert_eq!(ready[0].start_offset, 0);
+    }
+
+    #[test]
+    fn test_archive_backlog_snapshot_splits_ready_and_deferred_ranges() {
+        let (_tmp, conn) = setup();
+        conn.execute(
+            "INSERT INTO spool_queue
+                (provider, file_path, start_offset, end_offset, created_at, next_retry_at, retry_count, last_error, status)
+             VALUES
+                ('codex', '/ready.jsonl', 0, 1000, '2026-03-12T00:00:00+00:00', '2000-01-01T00:00:00+00:00', 1, 'temporary failure', 'pending'),
+                ('codex', '/never-failed.jsonl', 0, 2000, '2026-03-12T00:00:01+00:00', '2999-01-01T00:00:00+00:00', 0, '', 'pending'),
+                ('codex', '/deferred.jsonl', 0, 3000, '2026-03-12T00:00:02+00:00', '2999-01-01T00:00:00+00:00', 1, '503 archive throttled', 'pending')",
+            [],
+        )
+        .unwrap();
+
+        let spool = Spool::new(&conn);
+        let snapshot = spool.archive_backlog_snapshot().unwrap();
+
+        assert_eq!(snapshot.pending_ranges, 3);
+        assert_eq!(snapshot.ready_ranges, 2);
+        assert_eq!(snapshot.deferred_ranges, 1);
+        assert_eq!(
+            snapshot.next_deferred_retry_at.as_deref(),
+            Some("2999-01-01T00:00:00+00:00")
+        );
     }
 
     #[test]

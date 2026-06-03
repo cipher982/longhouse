@@ -32,6 +32,8 @@ def default_archive_backlog(*, source: str = "missing") -> dict[str, Any]:
         "state": "idle",
         "mode": "idle",
         "pending_ranges": 0,
+        "ready_ranges": 0,
+        "deferred_ranges": 0,
         "pending_paths": 0,
         "pending_sessions": 0,
         "pending_bytes": 0,
@@ -43,6 +45,7 @@ def default_archive_backlog(*, source: str = "missing") -> dict[str, Any]:
         "newest_pending_at": None,
         "next_retry_at_min": None,
         "next_retry_at_max": None,
+        "next_deferred_retry_at": None,
         "providers": [],
         "size_buckets": {},
         "db_exists": False,
@@ -58,6 +61,8 @@ def normalize_archive_backlog(raw: Mapping[str, Any] | None, *, source: str) -> 
             "state": str(raw.get("state") or result["state"]),
             "mode": str(raw.get("mode") or result["mode"]),
             "pending_ranges": _int(raw.get("pending_ranges")),
+            "ready_ranges": _int(raw.get("ready_ranges")),
+            "deferred_ranges": _int(raw.get("deferred_ranges")),
             "pending_paths": _int(raw.get("pending_paths")),
             "pending_sessions": _int(raw.get("pending_sessions")),
             "pending_bytes": _int(raw.get("pending_bytes")),
@@ -69,6 +74,7 @@ def normalize_archive_backlog(raw: Mapping[str, Any] | None, *, source: str) -> 
             "newest_pending_at": _optional_str(raw.get("newest_pending_at")),
             "next_retry_at_min": _optional_str(raw.get("next_retry_at_min")),
             "next_retry_at_max": _optional_str(raw.get("next_retry_at_max")),
+            "next_deferred_retry_at": _optional_str(raw.get("next_deferred_retry_at")),
             "providers": list(raw.get("providers") or []),
             "size_buckets": dict(raw.get("size_buckets") or {}),
             "db_exists": bool(raw.get("db_exists", True)),
@@ -205,10 +211,33 @@ def parse_byte_budget(value: str | None) -> int | None:
 
 
 def _collect_archive_backlog_from_conn(conn: sqlite3.Connection, *, source: str) -> dict[str, Any]:
+    now = datetime.now(timezone.utc).isoformat()
     aggregate = conn.execute(
         """
         SELECT
             COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending_ranges,
+            COALESCE(SUM(
+                CASE
+                    WHEN status = 'pending'
+                     AND (
+                         next_retry_at <= ?
+                         OR (retry_count = 0 AND (last_error IS NULL OR TRIM(last_error) = ''))
+                     )
+                    THEN 1
+                    ELSE 0
+                END
+            ), 0) AS ready_ranges,
+            COALESCE(SUM(
+                CASE
+                    WHEN status = 'pending'
+                     AND NOT (
+                         next_retry_at <= ?
+                         OR (retry_count = 0 AND (last_error IS NULL OR TRIM(last_error) = ''))
+                     )
+                    THEN 1
+                    ELSE 0
+                END
+            ), 0) AS deferred_ranges,
             COUNT(DISTINCT CASE WHEN status = 'pending' THEN provider || char(31) || file_path END) AS pending_paths,
             COUNT(DISTINCT CASE WHEN status = 'pending' THEN session_id END) AS pending_sessions,
             COALESCE(SUM(
@@ -233,10 +262,20 @@ def _collect_archive_backlog_from_conn(conn: sqlite3.Connection, *, source: str)
             MIN(CASE WHEN status = 'pending' THEN created_at END) AS oldest_pending_at,
             MAX(CASE WHEN status = 'pending' THEN created_at END) AS newest_pending_at,
             MIN(CASE WHEN status = 'pending' THEN next_retry_at END) AS next_retry_at_min,
-            MAX(CASE WHEN status = 'pending' THEN next_retry_at END) AS next_retry_at_max
+            MAX(CASE WHEN status = 'pending' THEN next_retry_at END) AS next_retry_at_max,
+            MIN(
+                CASE
+                    WHEN status = 'pending'
+                     AND NOT (
+                         next_retry_at <= ?
+                         OR (retry_count = 0 AND (last_error IS NULL OR TRIM(last_error) = ''))
+                     )
+                    THEN next_retry_at
+                END
+            ) AS next_deferred_retry_at
         FROM spool_queue
         """,
-        (HUGE_RANGE_BYTES, HUGE_RANGE_BYTES),
+        (now, now, HUGE_RANGE_BYTES, HUGE_RANGE_BYTES, now),
     ).fetchone()
     pending_ranges = _int(aggregate["pending_ranges"])
     dead_ranges = _int(aggregate["dead_ranges"])
@@ -246,6 +285,8 @@ def _collect_archive_backlog_from_conn(conn: sqlite3.Connection, *, source: str)
         "state": state,
         "mode": "drain" if pending_ranges else "idle",
         "pending_ranges": pending_ranges,
+        "ready_ranges": _int(aggregate["ready_ranges"]),
+        "deferred_ranges": _int(aggregate["deferred_ranges"]),
         "pending_paths": _int(aggregate["pending_paths"]),
         "pending_sessions": _int(aggregate["pending_sessions"]),
         "pending_bytes": _int(aggregate["pending_bytes"]),
@@ -257,6 +298,7 @@ def _collect_archive_backlog_from_conn(conn: sqlite3.Connection, *, source: str)
         "newest_pending_at": aggregate["newest_pending_at"],
         "next_retry_at_min": aggregate["next_retry_at_min"],
         "next_retry_at_max": aggregate["next_retry_at_max"],
+        "next_deferred_retry_at": aggregate["next_deferred_retry_at"],
         "providers": _provider_rows(conn),
         "size_buckets": _size_buckets(conn),
         "db_exists": True,

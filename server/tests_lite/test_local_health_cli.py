@@ -2893,6 +2893,81 @@ def test_local_health_render_prints_missing_provider_live_control(capsys):
     assert "    unsupported: launch_remote, reattach" in output
 
 
+def test_local_health_render_prints_archive_backlog_distribution(capsys):
+    local_health_cli._render_snapshot(
+        {
+            "severity": "yellow",
+            "headline": "Longhouse archive repair pending",
+            "health_state": "degraded",
+            "service": {"status": "running", "platform": "macos"},
+            "engine_status": {
+                "path": "/tmp/engine-status.json",
+                "exists": True,
+                "age_seconds": 0,
+                "payload": {
+                    "adaptive_backlog_limiter": {
+                        "current_cap": 1,
+                        "floor": 1,
+                        "ceiling": 16,
+                        "target_queue_wait_ms": 200.0,
+                        "ewma_queue_wait_ms": 480.0,
+                        "last_observed_queue_wait_ms": 510.0,
+                        "total_backpressure": 9,
+                        "last_backpressure_retry_after_ms": 5000,
+                        "backpressure_cooldown_remaining_ms": 4100,
+                    }
+                },
+            },
+            "archive_repair": {
+                "state": "draining",
+                "mode": "drain",
+                "pending_ranges": 426,
+                "ready_ranges": 400,
+                "deferred_ranges": 26,
+                "pending_paths": 24,
+                "pending_sessions": 20,
+                "pending_bytes": 8_646_305_476,
+                "huge_pending_ranges": 2,
+                "huge_pending_bytes": 400_000_000,
+                "oldest_pending_at": "2026-05-01T00:00:00Z",
+                "newest_pending_at": "2026-06-03T00:00:00Z",
+                "next_retry_at_min": "2026-06-03T00:00:05Z",
+                "next_retry_at_max": "2026-06-03T00:01:00Z",
+                "next_deferred_retry_at": "2026-06-03T00:00:05Z",
+                "providers": [
+                    {
+                        "provider": "codex",
+                        "pending_ranges": 300,
+                        "pending_bytes": 6_000_000_000,
+                    },
+                    {
+                        "provider": "claude",
+                        "pending_ranges": 126,
+                        "pending_bytes": 2_646_305_476,
+                    },
+                ],
+                "size_buckets": {
+                    "small_lt_1mb": {"pending_ranges": 100, "pending_bytes": 50_000_000},
+                    "huge_gte_100mb": {"pending_ranges": 2, "pending_bytes": 400_000_000},
+                },
+                "dead_ranges": 0,
+            },
+            "outbox": {"path": "/tmp/outbox", "file_count": 0, "oldest_age_seconds": None},
+            "launch_readiness": {"state": "ready", "runner": {}},
+        },
+        json_output=False,
+    )
+
+    output = capsys.readouterr().out
+    assert "Archive Repair" in output
+    assert "eligibility: 400 ready now, 26 deferred" in output
+    assert "huge ranges: 2 ranges, 381.5 MB" in output
+    assert "providers: codex 300 ranges/5.6 GB, claude 126 ranges/2.5 GB" in output
+    assert "size mix: huge 2/381.5 MB, small 100/47.7 MB" in output
+    assert "backpressure: 9 total, retry-after 5000 ms, cooldown 4100 ms" in output
+    assert "throttle: host queue pressure is holding archive at the floor" in output
+
+
 def test_collect_local_health_includes_activity_summary(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
