@@ -13,6 +13,7 @@ from sqlalchemy.orm import sessionmaker
 
 from zerg.database import initialize_database
 from zerg.database import make_engine
+from zerg.routers.health import _session_projection_lag_check
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
@@ -284,6 +285,10 @@ async def test_archive_ingest_marks_projection_for_async_catchup(tmp_path):
     assert session.user_messages == 0
     assert session.assistant_messages == 0
 
+    lag = _session_projection_lag_check(factory)
+    assert lag["status"] == "warn"
+    assert lag["pending_sessions"] == 1
+
     db.close()
     catchup = await reconcile_projection_lag_once(session_factory=factory, limit=10)
     assert catchup.selected == 1
@@ -299,3 +304,7 @@ async def test_archive_ingest_marks_projection_for_async_catchup(tmp_path):
         assert refreshed.assistant_messages == 1
     finally:
         verify.close()
+
+    lag_after = _session_projection_lag_check(factory)
+    assert lag_after["status"] == "pass"
+    assert lag_after["pending_sessions"] == 0

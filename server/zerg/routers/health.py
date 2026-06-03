@@ -17,6 +17,38 @@ from zerg.config import get_settings
 router = APIRouter(tags=["health"])
 
 
+def _session_projection_lag_check(session_factory=None) -> dict:
+    """Return lag for sessions whose archive ingest skipped derived projections."""
+    if session_factory is None:
+        from zerg.database import get_session_factory
+
+        session_factory = get_session_factory()
+
+    db = session_factory()
+    try:
+        row = db.execute(
+            text(
+                """
+                SELECT COUNT(*) AS pending_sessions,
+                       MIN(last_activity_at) AS oldest_last_activity_at,
+                       MAX(last_activity_at) AS newest_last_activity_at
+                FROM sessions
+                WHERE COALESCE(needs_projection, 0) = 1
+                """
+            )
+        ).fetchone()
+    finally:
+        db.close()
+
+    pending_sessions = int(row[0] or 0) if row is not None else 0
+    return {
+        "status": "pass" if pending_sessions == 0 else "warn",
+        "pending_sessions": pending_sessions,
+        "oldest_last_activity_at": row[1] if row is not None else None,
+        "newest_last_activity_at": row[2] if row is not None else None,
+    }
+
+
 def _request_is_trusted(request: Request) -> bool:
     """Return True when the caller may see verbose, infra-revealing health detail.
 
@@ -355,7 +387,15 @@ def health_check(request: Request):
     except Exception as e:
         checks["write_serializer"] = {"status": "warn", "error": str(e)}
 
-    # 8. SQLite WAL pressure: phase 1 instrumentation. WAL bytes is the cheapest
+    # 8. Projection catch-up lag. Archive ingest may skip expensive derived
+    # projections on the hot path; this should normally drain quickly in the
+    # background and should be visible separately from raw ingest health.
+    try:
+        checks["session_projection_lag"] = _session_projection_lag_check()
+    except Exception as e:
+        checks["session_projection_lag"] = {"status": "warn", "error": str(e)}
+
+    # 9. SQLite WAL pressure: phase 1 instrumentation. WAL bytes is the cheapest
     # leading indicator of write-side backpressure; the engine's adaptive
     # controller (phase 2) reads this to back off when pressure climbs.
     try:
