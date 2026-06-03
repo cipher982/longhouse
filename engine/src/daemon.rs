@@ -1501,10 +1501,11 @@ fn spool_retry_delay_for_path(conn: &rusqlite::Connection, path: &Path) -> Optio
             return None;
         }
     };
-    match (retry_at - chrono::Utc::now()).to_std() {
-        Ok(delay) => Some(delay),
-        Err(_) => Some(Duration::ZERO),
-    }
+    let min_delay = Duration::from_secs(LOCAL_RETRY_DELAY_SECS);
+    let delay = (retry_at - chrono::Utc::now())
+        .to_std()
+        .unwrap_or(Duration::ZERO);
+    Some(delay.max(min_delay))
 }
 
 fn enqueue_discovered_files(
@@ -2558,11 +2559,11 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             .pending_entries_for_path_ready(&result.job.path.to_string_lossy(), 1)
             .map(|entries| !entries.is_empty())
             .unwrap_or(false);
-        if ready_spool_remaining {
-            result.rerun_priority = Some(WorkPriority::Retry);
-        } else if result.failed_spool > 0 {
+        if result.failed_spool > 0 {
             result.local_retry_after = spool_retry_delay_for_path(&conn, &result.job.path);
             result.local_retry_priority = Some(WorkPriority::Retry);
+        } else if ready_spool_remaining {
+            result.rerun_priority = Some(WorkPriority::Retry);
         }
     }
 
