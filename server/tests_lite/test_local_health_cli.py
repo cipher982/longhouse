@@ -1593,9 +1593,51 @@ def test_collect_local_health_surfaces_archive_backlog_without_breaking_live_shi
     assert snapshot["severity"] == "yellow"
     assert snapshot["headline"] == "Longhouse archive repair pending"
     assert "archive_backlog_pending" in snapshot["reasons"]
+    assert snapshot["attention"]["state"] == "needs_attention"
     assert snapshot["transport_health"]["status"] == "healthy"
     assert snapshot["transport_health"]["status_reason"] == "healthy"
     assert snapshot["archive_repair"]["pending_bytes"] == 16_699_227_012
+
+
+def test_collect_local_health_watches_active_archive_drain_with_live_healthy_copy(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(
+        tmp_path,
+        age_seconds=5,
+        payload={
+            "ship_attempts_1h": 14,
+            "ship_successes_1h": 14,
+            "spool_pending_count": 6375,
+            "spool_dead_count": 0,
+            "archive_backlog": {
+                "state": "draining",
+                "mode": "drain",
+                "pending_ranges": 6375,
+                "pending_paths": 6374,
+                "pending_sessions": 6306,
+                "pending_bytes": 16_699_227_012,
+                "dead_ranges": 0,
+                "dead_bytes": 0,
+            },
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "degraded"
+    assert snapshot["severity"] == "yellow"
+    assert snapshot["headline"] == "Live shipping healthy; archive repair draining"
+    assert "archive_repair_draining" in snapshot["reasons"]
+    assert snapshot["attention"] == {
+        "state": "watching",
+        "headline": "Live shipping healthy; archive repair draining",
+        "summary": "Live shipping is healthy. Archive repair is draining 15.6 GB across 6375 range(s).",
+        "reasons": snapshot["reasons"],
+        "suggested_actions": [],
+    }
+    assert snapshot["transport_health"]["status"] == "healthy"
+    assert snapshot["transport_health"]["status_reason"] == "healthy"
 
 
 def test_collect_local_health_watches_offline_without_backlog(monkeypatch, tmp_path: Path):

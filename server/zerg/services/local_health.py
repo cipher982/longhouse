@@ -3199,6 +3199,18 @@ def _broken_health_headline(reasons: list[str]) -> str:
     return headline
 
 
+def _format_compact_bytes(value: int) -> str:
+    units = ("B", "KB", "MB", "GB", "TB")
+    scaled = float(max(0, int(value)))
+    for unit in units:
+        if scaled < 1024 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(scaled)} B"
+            return f"{scaled:.1f} {unit}"
+        scaled /= 1024
+    return f"{max(0, int(value))} B"
+
+
 def _degraded_health_headline(
     reasons: list[str],
     *,
@@ -3229,7 +3241,7 @@ def _degraded_health_headline(
     elif "archive_repair_paused" in reasons:
         headline = "Longhouse archive repair is paused"
     elif "archive_repair_draining" in reasons:
-        headline = "Longhouse archive repair is draining"
+        headline = "Live shipping healthy; archive repair draining"
     elif "archive_backlog_pending" in reasons:
         headline = "Longhouse archive repair pending"
     elif "managed_session_detached" in reasons:
@@ -3413,6 +3425,42 @@ def _degraded_state_is_watching(
     return all(reason in _WATCHING_REASONS for reason in reasons)
 
 
+def _archive_draining_state_is_watching(
+    *,
+    context: _HealthClassificationContext,
+    reasons: list[str],
+) -> bool:
+    if context.archive_state != "draining":
+        return False
+    if context.archive_pending_ranges <= 0 and context.archive_pending_bytes <= 0:
+        return False
+    if context.service_status != "running":
+        return False
+    if context.engine_error:
+        return False
+    if context.launch_state == "degraded":
+        return False
+    if context.canonical_sessions_missing or context.canonical_sessions_invalid:
+        return False
+    if context.orphan_bridge_count > 0 or context.managed_degraded > 0 or context.managed_detached > 0:
+        return False
+    if context.unknown_managed_phase_count > 0:
+        return False
+    if _outbox_is_actionable(context):
+        return False
+    allowed_reasons = set(_WATCHING_REASONS)
+    allowed_reasons.add("archive_repair_draining")
+    return all(reason in allowed_reasons for reason in reasons)
+
+
+def _archive_draining_attention_summary(context: _HealthClassificationContext) -> str:
+    return (
+        "Live shipping is healthy. Archive repair is draining "
+        f"{_format_compact_bytes(context.archive_pending_bytes)} across "
+        f"{context.archive_pending_ranges} range(s)."
+    )
+
+
 def _derive_attention(
     *,
     health_state: str,
@@ -3431,6 +3479,14 @@ def _derive_attention(
             "suggested_actions": suggested_actions,
         }
     if normalized_state == "degraded":
+        if _archive_draining_state_is_watching(context=context, reasons=reasons):
+            return {
+                "state": "watching",
+                "headline": "Live shipping healthy; archive repair draining",
+                "summary": _archive_draining_attention_summary(context),
+                "reasons": reasons,
+                "suggested_actions": [],
+            }
         if _degraded_state_is_watching(context=context, reasons=reasons):
             return {
                 "state": "watching",
