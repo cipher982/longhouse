@@ -49,7 +49,7 @@ const TARGET_QUEUE_WAIT_MS: f64 = 200.0;
 /// Host timing signals are comfortably below the interactive-write target.
 pub const ARCHIVE_BATCH_TARGET_MIN_BYTES: u64 = 64 * 1024;
 pub const ARCHIVE_BATCH_TARGET_BASE_BYTES: u64 = 256 * 1024;
-pub const ARCHIVE_BATCH_TARGET_MAX_BYTES: u64 = 1024 * 1024;
+pub const ARCHIVE_BATCH_TARGET_MAX_BYTES: u64 = 4 * 1024 * 1024;
 
 /// EWMA smoothing factor for `queue_wait_ms`. Hand-picked to give a roughly
 /// 4-sample memory: a single spike does not flip the cap, but a sustained
