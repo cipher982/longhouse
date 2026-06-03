@@ -168,11 +168,7 @@ async def _acquire_archive_ingest_slot(write_label: str, response: Response) -> 
         if queue_depth > 0:
             response.headers["X-Ingest-Writer-Queue-Depth"] = str(queue_depth)
             _raise_archive_ingest_backpressure(response, admission_state="writer_queue_pressure")
-        if writer_active and active_label in _ARCHIVE_INGEST_LABELS:
-            response.headers["X-Ingest-Writer-Active-Label"] = active_label
-            response.headers["X-Ingest-Writer-Active-Age-Ms"] = f"{active_age_ms:.1f}"
-            _raise_archive_ingest_backpressure(response, admission_state="archive_writer_active")
-        if writer_active and active_age_ms >= _ARCHIVE_INGEST_ACTIVE_WRITER_GRACE_MS:
+        if writer_active and active_label not in _ARCHIVE_INGEST_LABELS and active_age_ms >= _ARCHIVE_INGEST_ACTIVE_WRITER_GRACE_MS:
             response.headers["X-Ingest-Writer-Active-Label"] = active_label
             response.headers["X-Ingest-Writer-Active-Age-Ms"] = f"{active_age_ms:.1f}"
             _raise_archive_ingest_backpressure(response, admission_state="writer_pressure")
