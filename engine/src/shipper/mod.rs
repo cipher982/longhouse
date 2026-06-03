@@ -339,6 +339,7 @@ pub async fn ship_and_record(
         }
         ShipResult::RateLimited
         | ShipResult::ServerError(_, _)
+        | ShipResult::ServerBackpressure(_)
         | ShipResult::ConnectError(_)
         | ShipResult::RetryableClientError(_, _) => {
             let err_msg = transient_error_message(&result);
@@ -1489,6 +1490,7 @@ async fn attempt_ship(
         }
         ShipResult::RateLimited
         | ShipResult::ServerError(_, _)
+        | ShipResult::ServerBackpressure(_)
         | ShipResult::ConnectError(_)
         | ShipResult::RetryableClientError(_, _) => {
             record_flight_attempt(
@@ -1515,7 +1517,9 @@ async fn attempt_ship(
                         provider = %item.provider,
                         error_kind = error_kind.unwrap_or("backpressure"),
                         error = %error,
-                        retry_after_ms = ARCHIVE_BACKPRESSURE_RETRY_DELAY.as_millis() as u64,
+                        retry_after_ms = ship_result_retry_after(&result)
+                            .unwrap_or(ARCHIVE_BACKPRESSURE_RETRY_DELAY)
+                            .as_millis() as u64,
                         latency_ms,
                         "Archive replay deferred by runtime backpressure"
                     );
@@ -1550,6 +1554,7 @@ async fn attempt_ship(
                 error,
                 is_connect_error: matches!(result, ShipResult::ConnectError(_)),
                 is_backpressure,
+                retry_after: ship_result_retry_after(&result),
             }
         }
         ShipResult::PayloadTooLarge(body) => {
@@ -1789,6 +1794,9 @@ fn classify_ship_attempt_result(result: &ShipResult) -> (ShipAttemptOutcome, Opt
         ShipResult::Ok { .. } => (ShipAttemptOutcome::Ok, None),
         ShipResult::RateLimited => (ShipAttemptOutcome::RateLimited, Some(429)),
         ShipResult::ServerError(code, _) => (ShipAttemptOutcome::ServerError, Some(*code)),
+        ShipResult::ServerBackpressure(detail) => {
+            (ShipAttemptOutcome::ServerError, Some(detail.status_code))
+        }
         ShipResult::PayloadRejected(code, _) => (ShipAttemptOutcome::PayloadRejected, Some(*code)),
         ShipResult::PayloadTooLarge(_) => (ShipAttemptOutcome::PayloadTooLarge, Some(413)),
         ShipResult::RetryableClientError(code, _) => {
@@ -1803,6 +1811,7 @@ fn transient_error_kind(result: &ShipResult) -> Option<&'static str> {
         ShipResult::Ok { .. } => None,
         ShipResult::RateLimited => Some("rate_limited"),
         ShipResult::ServerError(_, _) => Some("server_response"),
+        ShipResult::ServerBackpressure(detail) => Some(detail.kind),
         ShipResult::PayloadRejected(_, _) => Some("payload_rejected"),
         ShipResult::PayloadTooLarge(_) => Some("payload_too_large"),
         ShipResult::RetryableClientError(401 | 403, _) => Some("auth"),
@@ -1816,6 +1825,14 @@ fn transient_error_message(result: &ShipResult) -> String {
         ShipResult::Ok { .. } => "ok".to_string(),
         ShipResult::RateLimited => "rate limited".to_string(),
         ShipResult::ServerError(code, body) => format!("{}:{}", code, truncate_http_body(body)),
+        ShipResult::ServerBackpressure(detail) => {
+            format!(
+                "{}:{}:{}",
+                detail.status_code,
+                detail.kind,
+                truncate_http_body(&detail.body)
+            )
+        }
         ShipResult::PayloadRejected(code, body) => format!("{}:{}", code, truncate_http_body(body)),
         ShipResult::PayloadTooLarge(body) => format!("413:{}", truncate_http_body(body)),
         ShipResult::RetryableClientError(code, body) => {
@@ -1828,8 +1845,19 @@ fn transient_error_message(result: &ShipResult) -> String {
 fn ship_result_is_backpressure(result: &ShipResult) -> bool {
     match result {
         ShipResult::RateLimited => true,
+        ShipResult::ServerBackpressure(_) => true,
         ShipResult::ServerError(503, body) => body.contains("Archive ingest backlog is throttled"),
         _ => false,
+    }
+}
+
+fn ship_result_retry_after(result: &ShipResult) -> Option<Duration> {
+    match result {
+        ShipResult::ServerBackpressure(detail) => detail
+            .retry_after_seconds
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .map(Duration::from_secs_f64),
+        _ => None,
     }
 }
 
@@ -1959,6 +1987,7 @@ pub async fn ship_prepared_file_with_trace(
                         error: _,
                         is_connect_error,
                         is_backpressure: _,
+                        retry_after: _,
                     } => {
                         if cursor_mode == CursorMode::Live {
                             outcome.fully_processed = false;
@@ -2464,17 +2493,20 @@ async fn replay_spool_entries(
                             error,
                             is_connect_error,
                             is_backpressure,
+                            retry_after,
                         } => {
                             if is_backpressure {
+                                let retry_delay =
+                                    retry_after.unwrap_or(ARCHIVE_BACKPRESSURE_RETRY_DELAY);
                                 let deferred = spool.defer_pending_for_path(
                                     &entry.file_path,
                                     &error,
-                                    ARCHIVE_BACKPRESSURE_RETRY_DELAY,
+                                    retry_delay,
                                 )?;
                                 tracing::info!(
                                     path = %entry.file_path,
                                     deferred,
-                                    retry_after_ms = ARCHIVE_BACKPRESSURE_RETRY_DELAY.as_millis() as u64,
+                                    retry_after_ms = retry_delay.as_millis() as u64,
                                     "Deferred spool path after runtime backpressure"
                                 );
                                 outcome.failed += 1;
@@ -4525,6 +4557,28 @@ mod tests {
         assert_eq!(summary.lanes.archive.successes_1h, 1);
         assert_eq!(summary.lanes.archive.bytes_1h, file_len);
         assert!(summary.lanes.archive.events_1h > 0);
+    }
+
+    #[test]
+    fn test_typed_server_backpressure_uses_retry_after() {
+        let result =
+            ShipResult::ServerBackpressure(crate::shipping::client::ServerBackpressureDetail {
+                status_code: 503,
+                kind: "archive_ingest_backpressure",
+                body: "{\"detail\":\"Archive ingest backlog is throttled\"}".to_string(),
+                lane: Some("archive".to_string()),
+                retry_after_seconds: Some(5.0),
+            });
+
+        assert!(ship_result_is_backpressure(&result));
+        assert_eq!(
+            transient_error_kind(&result),
+            Some("archive_ingest_backpressure")
+        );
+        assert_eq!(
+            ship_result_retry_after(&result),
+            Some(Duration::from_secs(5))
+        );
     }
 
     #[tokio::test]

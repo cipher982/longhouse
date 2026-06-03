@@ -92,6 +92,7 @@ _INGEST_CHUNK_BY_LABEL: dict[str, int] = {
 
 _ARCHIVE_INGEST_LABELS = {"ingest-replay", "ingest-scan"}
 _ARCHIVE_INGEST_BACKPRESSURE_DETAIL = "Archive ingest backlog is throttled; retry shortly"
+_ARCHIVE_INGEST_BACKPRESSURE_KIND = "archive_ingest_backpressure"
 _ARCHIVE_INGEST_RETRY_AFTER_SECONDS = "5"
 _ARCHIVE_INGEST_MAX_IN_FLIGHT = 4
 _ARCHIVE_INGEST_SLOTS = asyncio.Semaphore(_ARCHIVE_INGEST_MAX_IN_FLIGHT)
@@ -103,6 +104,11 @@ def _ingest_chunk_for_label(label: str) -> int:
 
 def _raise_archive_ingest_backpressure(response: Response) -> None:
     response.headers["Retry-After"] = _ARCHIVE_INGEST_RETRY_AFTER_SECONDS
+    response.headers["X-Ingest-Lane"] = "archive"
+    response.headers["X-Ingest-Backpressure"] = _ARCHIVE_INGEST_BACKPRESSURE_KIND
+    response.headers["X-Ingest-Error-Kind"] = _ARCHIVE_INGEST_BACKPRESSURE_KIND
+    response.headers["X-Ingest-Queue-Wait-Ms"] = "0.0"
+    response.headers["X-Ingest-Exec-Ms"] = "0.0"
     raise HTTPException(
         status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         detail=_ARCHIVE_INGEST_BACKPRESSURE_DETAIL,
@@ -393,7 +399,7 @@ def _decompress_bounded_gzip(body: bytes) -> bytes:
             if len(out) + len(chunk) > MAX_DECOMPRESSED_BODY_BYTES:
                 raise HTTPException(
                     status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                    detail=(f"Decompressed gzip body exceeds " f"{MAX_DECOMPRESSED_BODY_BYTES} bytes"),
+                    detail=(f"Decompressed gzip body exceeds {MAX_DECOMPRESSED_BODY_BYTES} bytes"),
                 )
             out.extend(chunk)
     return bytes(out)
@@ -411,7 +417,7 @@ def _decompress_bounded_zstd(body: bytes) -> bytes:
             if len(out) + len(chunk) > MAX_DECOMPRESSED_BODY_BYTES:
                 raise HTTPException(
                     status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                    detail=(f"Decompressed zstd body exceeds " f"{MAX_DECOMPRESSED_BODY_BYTES} bytes"),
+                    detail=(f"Decompressed zstd body exceeds {MAX_DECOMPRESSED_BODY_BYTES} bytes"),
                 )
             out.extend(chunk)
     return bytes(out)

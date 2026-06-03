@@ -4,8 +4,11 @@ import json
 import os
 from types import SimpleNamespace
 
+from cryptography.fernet import Fernet
+
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
+os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 import pytest
 from fastapi import HTTPException
@@ -70,6 +73,11 @@ async def test_archive_ingest_admission_rejects_when_archive_slot_busy():
         assert exc.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
         assert "Archive ingest backlog is throttled" in exc.value.detail
         assert response.headers["Retry-After"] == "5"
+        assert response.headers["X-Ingest-Lane"] == "archive"
+        assert response.headers["X-Ingest-Backpressure"] == "archive_ingest_backpressure"
+        assert response.headers["X-Ingest-Error-Kind"] == "archive_ingest_backpressure"
+        assert response.headers["X-Ingest-Queue-Wait-Ms"] == "0.0"
+        assert response.headers["X-Ingest-Exec-Ms"] == "0.0"
     finally:
         for acquired in acquired_slots:
             _release_archive_ingest_slot(acquired)

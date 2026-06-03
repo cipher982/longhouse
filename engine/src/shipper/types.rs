@@ -211,6 +211,7 @@ pub(crate) enum AttemptedShip {
         error: String,
         is_connect_error: bool,
         is_backpressure: bool,
+        retry_after: Option<Duration>,
     },
     PayloadTooLarge {
         item: ShipItem,

@@ -13,12 +13,25 @@ use crate::config::ShipperConfig;
 use crate::pipeline::compressor::{content_encoding, CompressionAlgo};
 
 const SHIP_TRACE_HEADER: &str = "X-Longhouse-Ship-Trace";
+const INGEST_BACKPRESSURE_HEADER: &str = "X-Ingest-Backpressure";
+const INGEST_ERROR_KIND_HEADER: &str = "X-Ingest-Error-Kind";
+const INGEST_LANE_HEADER: &str = "X-Ingest-Lane";
 
 /// Structured details for a network-layer ingest failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectErrorDetail {
     pub kind: &'static str,
     pub message: String,
+}
+
+/// Structured details for server-declared ingest backpressure.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ServerBackpressureDetail {
+    pub status_code: u16,
+    pub kind: &'static str,
+    pub body: String,
+    pub lane: Option<String>,
+    pub retry_after_seconds: Option<f64>,
 }
 
 /// Server-side ingest timing parsed from response headers.
@@ -51,6 +64,8 @@ pub enum ShipResult {
     RateLimited,
     /// Server error (5xx). Should spool for later.
     ServerError(u16, String),
+    /// Server explicitly rejected reconstructable archive work due to pressure.
+    ServerBackpressure(ServerBackpressureDetail),
     /// Request was rejected because the payload itself is invalid.
     PayloadRejected(u16, String),
     /// Payload is valid but too large for the current server/proxy limits.
@@ -199,7 +214,13 @@ impl ShipperClient {
                             return ShipResult::RetryableClientError(status, body);
                         }
                         500..=599 => {
+                            let headers = response.headers().clone();
                             let body = response.text().await.unwrap_or_default();
+                            if let Some(detail) =
+                                parse_server_backpressure(status, &headers, body.clone())
+                            {
+                                return ShipResult::ServerBackpressure(detail);
+                            }
                             return ShipResult::ServerError(status, body);
                         }
                         _ => {
@@ -269,6 +290,45 @@ fn parse_server_timing(headers: &reqwest::header::HeaderMap) -> ServerIngestTimi
     }
 }
 
+fn parse_header_string(headers: &reqwest::header::HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn parse_retry_after_seconds(headers: &reqwest::header::HeaderMap) -> Option<f64> {
+    headers
+        .get("Retry-After")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<f64>().ok())
+        .filter(|v| v.is_finite() && *v > 0.0)
+}
+
+fn parse_server_backpressure(
+    status_code: u16,
+    headers: &reqwest::header::HeaderMap,
+    body: String,
+) -> Option<ServerBackpressureDetail> {
+    if status_code != 503 {
+        return None;
+    }
+    let header_kind = parse_header_string(headers, INGEST_BACKPRESSURE_HEADER)
+        .or_else(|| parse_header_string(headers, INGEST_ERROR_KIND_HEADER));
+    let legacy_body_match = body.contains("Archive ingest backlog is throttled");
+    if header_kind.as_deref() != Some("archive_ingest_backpressure") && !legacy_body_match {
+        return None;
+    }
+    Some(ServerBackpressureDetail {
+        status_code,
+        kind: "archive_ingest_backpressure",
+        body,
+        lane: parse_header_string(headers, INGEST_LANE_HEADER),
+        retry_after_seconds: parse_retry_after_seconds(headers),
+    })
+}
+
 fn classify_connect_error(error: &reqwest::Error) -> ConnectErrorDetail {
     ConnectErrorDetail {
         kind: classify_connect_error_kind(
@@ -329,7 +389,9 @@ mod tests {
 
     use reqwest::header::{HeaderMap, HeaderValue};
 
-    use super::{classify_connect_error_kind, parse_server_timing, ShipResult};
+    use super::{
+        classify_connect_error_kind, parse_server_backpressure, parse_server_timing, ShipResult,
+    };
 
     fn classify_status(status: u16, body: &str) -> ShipResult {
         match status {
@@ -462,5 +524,47 @@ mod tests {
         assert_eq!(timing.exec_ms, None);
         assert_eq!(timing.label, None);
         assert!(!timing.is_observed());
+    }
+
+    #[test]
+    fn test_parse_server_backpressure_from_typed_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Ingest-Backpressure",
+            HeaderValue::from_static("archive_ingest_backpressure"),
+        );
+        headers.insert("X-Ingest-Lane", HeaderValue::from_static("archive"));
+        headers.insert("Retry-After", HeaderValue::from_static("5"));
+
+        let detail =
+            parse_server_backpressure(503, &headers, "{\"detail\":\"throttled\"}".to_string())
+                .expect("typed backpressure should parse");
+
+        assert_eq!(detail.status_code, 503);
+        assert_eq!(detail.kind, "archive_ingest_backpressure");
+        assert_eq!(detail.lane.as_deref(), Some("archive"));
+        assert_eq!(detail.retry_after_seconds, Some(5.0));
+    }
+
+    #[test]
+    fn test_parse_server_backpressure_keeps_legacy_body_match() {
+        let headers = HeaderMap::new();
+        let detail = parse_server_backpressure(
+            503,
+            &headers,
+            "{\"detail\":\"Archive ingest backlog is throttled; retry shortly\"}".to_string(),
+        )
+        .expect("legacy archive backpressure body should parse");
+
+        assert_eq!(detail.kind, "archive_ingest_backpressure");
+        assert_eq!(detail.retry_after_seconds, None);
+    }
+
+    #[test]
+    fn test_parse_server_backpressure_ignores_generic_503() {
+        let headers = HeaderMap::new();
+        assert!(
+            parse_server_backpressure(503, &headers, "upstream unavailable".to_string()).is_none()
+        );
     }
 }
