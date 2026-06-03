@@ -208,8 +208,7 @@ async def _acquire_archive_ingest_slot(write_label: str, response: Response) -> 
                 admission_state="writer_queue_pressure",
                 retry_after_seconds=_archive_retry_after_for_queue_depth(queue_depth),
             )
-        active_archive_writer_is_stale = writer_active and active_label_is_archive and active_writer_is_stale
-        if active_archive_writer_is_stale:
+        if writer_active and active_label_is_archive:
             response.headers["X-Ingest-Writer-Active-Label"] = active_label
             response.headers["X-Ingest-Writer-Active-Age-Ms"] = f"{active_age_ms:.1f}"
             _raise_archive_ingest_backpressure(

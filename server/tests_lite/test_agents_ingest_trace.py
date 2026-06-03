@@ -158,7 +158,7 @@ async def test_archive_ingest_admission_rejects_when_archive_slot_busy():
 
 
 @pytest.mark.asyncio
-async def test_archive_ingest_admission_allows_active_archive_writer_with_empty_queue(monkeypatch):
+async def test_archive_ingest_admission_rejects_active_archive_writer(monkeypatch):
     class BusySerializer:
         is_configured = True
         writer_active = True
@@ -172,12 +172,15 @@ async def test_archive_ingest_admission_allows_active_archive_writer_with_empty_
     )
     response = Response()
 
-    acquired = await _acquire_archive_ingest_slot("ingest-replay", response)
-    try:
-        assert acquired is True
-        assert "Retry-After" not in response.headers
-    finally:
-        _release_archive_ingest_slot(acquired)
+    with pytest.raises(HTTPException) as exc:
+        await _acquire_archive_ingest_slot("ingest-replay", response)
+
+    assert exc.value.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
+    assert response.headers["Retry-After"] == "15"
+    assert response.headers["X-Ingest-Admission-State"] == "archive_writer_busy"
+    assert response.headers["X-Ingest-Backpressure"] == "archive_ingest_backpressure"
+    assert response.headers["X-Ingest-Writer-Active-Label"] == "ingest-replay"
+    assert response.headers["X-Ingest-Writer-Active-Age-Ms"] == "50.0"
 
 
 @pytest.mark.asyncio
