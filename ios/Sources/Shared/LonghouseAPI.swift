@@ -753,15 +753,20 @@ extension LonghouseAPI {
     }
 
     /// Server-owned, frecency-ranked recent workspaces for the launch picker.
-    func workspaceSuggestions(deviceId: String, limit: Int = 12) async throws -> [WorkspaceSuggestion] {
-        // Browser-cookie auth (same as listMachines); the /api/agents/* sibling
-        // requires a device token the iOS client does not hold.
+    /// Browser-cookie auth (same surface as ``listMachines``); the
+    /// ``/api/agents/*`` sibling requires a device token the iOS client never
+    /// holds, so this MUST stay on the ``/api/timeline/*`` path.
+    static func workspaceSuggestionsURL(baseURL: URL, deviceId: String, limit: Int = 12) -> URL {
         var components = URLComponents(
             url: baseURL.appendingPathComponent("/api/timeline/machines/\(deviceId)/workspaces"),
             resolvingAgainstBaseURL: false
         )!
         components.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
-        var request = URLRequest(url: components.url!)
+        return components.url!
+    }
+
+    func workspaceSuggestions(deviceId: String, limit: Int = 12) async throws -> [WorkspaceSuggestion] {
+        var request = URLRequest(url: Self.workspaceSuggestionsURL(baseURL: baseURL, deviceId: deviceId, limit: limit))
         request.addValue("application/json", forHTTPHeaderField: "Accept")
         let (data, httpResponse) = try await data(for: request)
         guard (200..<300).contains(httpResponse.statusCode) else {

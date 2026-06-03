@@ -1003,6 +1003,89 @@ def test_timeline_session_detail_includes_attach_command_for_native_managed_loca
         api_app.dependency_overrides.clear()
 
 
+def test_timeline_machine_workspaces_accept_browser_session_cookie(tmp_path):
+    """The launch picker reads workspaces through the cookie surface.
+
+    Regression guard for the iOS/web launch sheet: this endpoint MUST be
+    reachable with only a browser session cookie. The /api/agents sibling is
+    device-token-only; if the clients (or this route) drift onto that auth
+    surface they 401 and the picker silently shows an empty list.
+    """
+    from zerg.models.device_token import DeviceToken
+
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db)
+        db.add(DeviceToken(owner_id=1, device_id="dev-machine", token_hash="hash-dev-machine"))
+        db.flush()
+        # Two sessions in the same cwd outrank a single-session cwd via frecency.
+        for _ in range(2):
+            _seed_session(db)
+        solo = AgentSession(
+            id=uuid4(),
+            provider="claude",
+            environment="development",
+            project="timeline-auth",
+            device_id="dev-machine",
+            cwd="/tmp/solo-workspace",
+            git_repo="git@github.com:example/solo.git",
+            git_branch="main",
+            started_at=datetime.now(timezone.utc),
+            ended_at=datetime.now(timezone.utc),
+            user_messages=1,
+            assistant_messages=1,
+            tool_calls=0,
+        )
+        db.add(solo)
+        db.commit()
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            response = client.get("/timeline/machines/dev-machine/workspaces?limit=12")
+
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["device_id"] == "dev-machine"
+        paths = [w["path"] for w in payload["workspaces"]]
+        assert "/tmp/timeline-auth" in paths
+        assert "/tmp/solo-workspace" in paths
+        # Frecency: the 2-session cwd outranks the 1-session cwd.
+        scores = [w["score"] for w in payload["workspaces"]]
+        assert scores == sorted(scores, reverse=True)
+        busy = next(w for w in payload["workspaces"] if w["path"] == "/tmp/timeline-auth")
+        assert busy["session_count"] == 2
+        # Git-aware label for the repo-backed cwd.
+        solo_ws = next(w for w in payload["workspaces"] if w["path"] == "/tmp/solo-workspace")
+        assert solo_ws["label"] == "solo (main)"
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
+
+
+def test_timeline_machine_workspaces_reject_agents_header_without_browser_session(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db)
+        _seed_session(db)
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            response = client.get(
+                "/timeline/machines/dev-machine/workspaces",
+                headers={"X-Agents-Token": "dev"},
+            )
+
+        assert response.status_code == 401
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
+
+
 def test_timeline_sessions_reject_agents_header_without_browser_session(tmp_path):
     session_local = _make_db(tmp_path)
     with session_local() as db:

@@ -4,6 +4,22 @@ import Testing
 
 struct LonghouseAPITests {
     @Test
+    func workspaceSuggestionsURLUsesCookieAuthTimelinePath() throws {
+        // Regression guard: the launch sheet authenticates with the browser
+        // cookie, so this MUST hit /api/timeline/*, NOT the device-token-gated
+        // /api/agents/* sibling. Pointing it at /api/agents/* 401s on device.
+        let baseURL = try #require(URL(string: "https://demo.longhouse.ai"))
+
+        let url = LonghouseAPI.workspaceSuggestionsURL(baseURL: baseURL, deviceId: "cinder", limit: 12)
+        let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+
+        #expect(components.host == "demo.longhouse.ai")
+        #expect(components.path == "/api/timeline/machines/cinder/workspaces")
+        #expect(!components.path.contains("/agents/"))
+        #expect(components.queryItems == [URLQueryItem(name: "limit", value: "12")])
+    }
+
+    @Test
     func sessionWorkspaceURLIncludesLimitAndBranchMode() throws {
         let baseURL = try #require(URL(string: "https://demo.longhouse.ai"))
 

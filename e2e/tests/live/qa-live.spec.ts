@@ -599,6 +599,62 @@ test("closed session workspace projection never exposes live composer", async ({
 });
 
 // ---------------------------------------------------------------------------
+// Launch picker: workspace suggestions via the browser-cookie surface
+//
+// The iOS launch sheet and web LaunchSessionModal both read workspace
+// suggestions through the cookie-authed /api/timeline/machines/{id}/workspaces
+// endpoint. The /api/agents/* sibling is device-token-only and 401s for those
+// clients. This test exercises the SAME auth path the apps use, so an endpoint
+// or auth-surface regression fails the deploy instead of landing on a human.
+// ---------------------------------------------------------------------------
+
+test("launch picker: workspaces load via browser-cookie surface", async ({ context }) => {
+  test.setTimeout(20_000);
+
+  // Discover an enrolled machine through the same cookie-authed directory the
+  // launch sheet uses.
+  const machinesResponse = await context.request.get("/api/timeline/machines");
+  expect(
+    machinesResponse.ok(),
+    `GET /api/timeline/machines returned ${machinesResponse.status()} — browser auth may be broken`,
+  ).toBe(true);
+  const machines = (await machinesResponse.json())?.machines ?? [];
+  expect(Array.isArray(machines), "machines should be an array").toBe(true);
+
+  if (machines.length === 0) {
+    test.skip(true, "No enrolled machines on this instance");
+    return;
+  }
+
+  const deviceId: string = machines[0].device_id;
+  const workspacesResponse = await context.request.get(
+    `/api/timeline/machines/${encodeURIComponent(deviceId)}/workspaces?limit=12`,
+  );
+  expect(
+    workspacesResponse.ok(),
+    `GET /api/timeline/machines/${deviceId}/workspaces returned ${workspacesResponse.status()} ` +
+      `— launch picker is broken for the browser/iOS auth surface`,
+  ).toBe(true);
+
+  const body = await workspacesResponse.json();
+  expect(body.device_id, "response echoes the requested device_id").toBe(deviceId);
+  expect(Array.isArray(body.workspaces), "workspaces should be an array").toBe(true);
+
+  // Shape + frecency contract: scores are present and descending, paths are
+  // absolute, and suggestions are scoped to the requested device (no env leak).
+  let previousScore = Infinity;
+  for (const workspace of body.workspaces) {
+    expect(typeof workspace.path).toBe("string");
+    expect(workspace.path.startsWith("/"), `workspace path should be absolute: ${workspace.path}`).toBe(true);
+    expect(typeof workspace.label).toBe("string");
+    expect(typeof workspace.score).toBe("number");
+    expect(typeof workspace.session_count).toBe("number");
+    expect(workspace.score <= previousScore, "workspaces must be ranked by descending score").toBe(true);
+    previousScore = workspace.score;
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Test 6: AI search toggle — off by default, toggles on
 // ---------------------------------------------------------------------------
 
