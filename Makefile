@@ -8,7 +8,7 @@ COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/dock
 E2E_BACKEND_PORT ?=
 E2E_FRONTEND_PORT ?=
 
-.PHONY: help dev dev-demo stop test test-ios test-ios-session-open test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-runner test-e2e test-e2e-core test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-ios-api validate-makefile validate-build-identity validate-managed-codex-contract validate-managed-session-contract validate-provider-cli-canaries validate-ship-monitor regen-ws generate-sdk generate-ios-api qa-live qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e reprovision deploy-status launch-readiness ship-watch ship release ui-capture qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-synthetic-bench test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check
+.PHONY: help dev dev-demo stop test test-ios test-ios-session-open test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-runner test-e2e test-e2e-core test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-ios-api validate-makefile validate-build-identity validate-managed-codex-contract validate-managed-session-contract validate-provider-cli-canaries validate-ship-monitor regen-ws generate-sdk generate-ios-api qa-live qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e reprovision deploy-status launch-readiness ship-watch ship release ui-capture qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-synthetic-bench test-shipper-synthetic-live-bench test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check
 
 # ---------------------------------------------------------------------------
 # Help
@@ -161,10 +161,22 @@ test-shipper-synthetic-bench: ## Synthetic shipper bench fixture gate
 	@python3 scripts/build/generate_build_identity.py
 	cd engine && cargo run --profile $(or $(CARGO_PROFILE),release) -- bench --synthetic-files 8 --synthetic-events-per-file 100 --synthetic-bytes-per-event 1024 --level L3 --compress --parallel --workers 2
 
+test-shipper-synthetic-live-bench: ## Synthetic mixed live/archive shipper bench
+	@python3 scripts/build/generate_build_identity.py
+	@port_file="$$(mktemp)"; \
+	python3 scripts/qa/shipper_synthetic_echo.py --port-file "$$port_file" & server_pid="$$!"; \
+	cleanup() { kill "$$server_pid" >/dev/null 2>&1 || true; rm -f "$$port_file"; }; \
+	trap cleanup EXIT INT TERM; \
+	for _ in 1 2 3 4 5 6 7 8 9 10; do test -s "$$port_file" && break; sleep 0.2; done; \
+	test -s "$$port_file"; \
+	port="$$(cat "$$port_file")"; \
+	cd engine && cargo run --profile $(or $(CARGO_PROFILE),release) -- bench --synthetic-files 6 --synthetic-events-per-file 50 --synthetic-bytes-per-event 1024 --level L3 --ship-url "http://127.0.0.1:$$port" --ship-token synthetic --ship-concurrency 4 --mixed-live-count 8 --mixed-live-max-p95-ms 10000
+
 test-shipper-premerge: ## Engine + shipper E2E (run before merging engine changes)
 	$(MAKE) test-engine
 	$(MAKE) test-shipper-e2e
 	$(MAKE) test-shipper-synthetic-bench
+	$(MAKE) test-shipper-synthetic-live-bench
 
 test-codex-bridge-e2e: ## Codex bridge E2E
 	@bash scripts/qa/test-codex-bridge-e2e.sh

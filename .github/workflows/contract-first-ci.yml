@@ -210,6 +210,9 @@ jobs:
     - name: Run Synthetic Shipper Bench
       run: make test-shipper-synthetic-bench
 
+    - name: Run Synthetic Mixed Live/Archive Bench
+      run: make test-shipper-synthetic-live-bench
+
   frontend-tests:
     needs: changes
     if: ${{ (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.runner == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
