@@ -186,6 +186,27 @@ def dead_letter_archive_path(base_dir: Path | None = None, *, file_path: str, re
     return int(changed)
 
 
+def ready_archive_backlog(base_dir: Path | None = None) -> int:
+    """Make pending archive ranges eligible for immediate retry."""
+    db_path = get_agent_db_path(base_dir)
+    if not db_path.exists():
+        return 0
+    now = _utc_now_iso()
+    with sqlite3.connect(db_path) as conn:
+        if not _has_spool_queue(conn):
+            return 0
+        changed = conn.execute(
+            """
+            UPDATE spool_queue
+            SET next_retry_at = ?
+            WHERE status = 'pending'
+            """,
+            (now,),
+        ).rowcount
+        conn.commit()
+    return int(changed)
+
+
 def _has_spool_queue(conn: sqlite3.Connection) -> bool:
     row = conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'spool_queue' LIMIT 1").fetchone()
     return row is not None

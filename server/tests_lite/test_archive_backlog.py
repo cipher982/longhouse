@@ -9,6 +9,7 @@ from typer.testing import CliRunner
 from zerg.cli.main import app
 from zerg.services.archive_backlog import collect_archive_backlog
 from zerg.services.archive_backlog import inspect_archive_backlog
+from zerg.services.archive_backlog import ready_archive_backlog
 from zerg.services.archive_backlog import write_archive_control
 from zerg.services.longhouse_paths import get_agent_db_path
 
@@ -99,3 +100,31 @@ def test_archive_status_cli_reads_state_root(tmp_path: Path):
     assert payload["mode"] == "drain"
     assert payload["pending_ranges"] == 2
     assert payload["pending_bytes"] == 2 * 1024 * 1024
+
+
+def test_ready_archive_backlog_makes_pending_ranges_eligible(tmp_path: Path):
+    _create_spool_db(tmp_path)
+
+    changed = ready_archive_backlog(tmp_path)
+
+    assert changed == 2
+    db_path = get_agent_db_path(tmp_path)
+    with sqlite3.connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT status, next_retry_at FROM spool_queue ORDER BY id",
+        ).fetchall()
+
+    assert rows[0][0] == "pending"
+    assert rows[1][0] == "pending"
+    assert rows[0][1] == rows[1][1]
+    assert rows[2][0] == "dead"
+
+
+def test_archive_drain_retry_now_cli_resets_pending_clocks(tmp_path: Path):
+    _create_spool_db(tmp_path)
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["archive", "drain", "--state-root", str(tmp_path), "--retry-now"])
+
+    assert result.exit_code == 0
+    assert "Archive retry clocks reset for 2 pending range(s)." in result.stdout

@@ -12,6 +12,7 @@ from zerg.services.archive_backlog import collect_archive_backlog
 from zerg.services.archive_backlog import dead_letter_archive_path
 from zerg.services.archive_backlog import inspect_archive_backlog
 from zerg.services.archive_backlog import parse_byte_budget
+from zerg.services.archive_backlog import ready_archive_backlog
 from zerg.services.archive_backlog import write_archive_control
 
 app = typer.Typer(help="Inspect and control local archive backlog repair")
@@ -86,6 +87,7 @@ def resume_command(
     mode: str = typer.Option("drain", "--mode", help="Resume mode: trickle or drain."),
     budget: str | None = typer.Option(None, "--budget", help="Per-tick byte budget, e.g. 512MB or 4GB."),
     include_huge: bool = typer.Option(True, "--include-huge/--exclude-huge", help="Allow ranges >=100MB."),
+    retry_now: bool = typer.Option(False, "--retry-now", help="Make pending archive ranges eligible immediately."),
     state_root: Path | None = typer.Option(None, "--state-root", help="Longhouse home override for tests/debugging."),
 ) -> None:
     """Resume local archive repair replay."""
@@ -97,12 +99,16 @@ def resume_command(
         include_huge=include_huge,
     )
     typer.echo(f"Archive repair resumed in {result['mode']} mode: {result['path']}")
+    if retry_now:
+        changed = ready_archive_backlog(state_root)
+        typer.echo(f"Archive retry clocks reset for {changed} pending range(s).")
 
 
 @app.command("drain")
 def drain_command(
     budget: str = typer.Option("4GB", "--budget", help="Per-tick byte budget, e.g. 4GB."),
     include_huge: bool = typer.Option(True, "--include-huge/--exclude-huge", help="Allow ranges >=100MB."),
+    retry_now: bool = typer.Option(False, "--retry-now", help="Make pending archive ranges eligible immediately."),
     max_minutes: int | None = typer.Option(
         None,
         "--max-minutes",
@@ -120,6 +126,9 @@ def drain_command(
         include_huge=include_huge,
     )
     typer.echo(f"Archive repair drain enabled: {result['path']}")
+    if retry_now:
+        changed = ready_archive_backlog(state_root)
+        typer.echo(f"Archive retry clocks reset for {changed} pending range(s).")
 
 
 @app.command("dead-letter")

@@ -509,6 +509,44 @@ async def test_enqueue_wakes_sleeping_head_when_writer_is_idle(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_repair_idle_queue_promotes_existing_head_without_new_enqueue(tmp_path):
+    db_path = tmp_path / "write-serializer-idle-queue-repair.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    session_factory = make_sessionmaker(engine)
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)")
+
+    serializer = WriteSerializer()
+    serializer.configure(session_factory)
+    run_order: list[str] = []
+
+    def _write(db):
+        run_order.append("first")
+        db.execute(sa_text("INSERT INTO writes(label) VALUES ('first')"))
+
+    # Recreate an idle writer with work already queued. Archive admission reads
+    # this state before any later enqueue can incidentally promote the head.
+    serializer._writer_active = True  # noqa: SLF001 - white-box regression for queue liveness
+    first = asyncio.create_task(serializer.execute(_write, label="ingest-replay"))
+
+    for _ in range(50):
+        if serializer.queue_depth == 1:
+            break
+        await asyncio.sleep(0.01)
+    assert serializer.queue_depth == 1
+
+    serializer._writer_active = False  # noqa: SLF001
+    repaired = await serializer.repair_idle_queue()
+
+    assert repaired is True
+    await asyncio.wait_for(first, timeout=1.0)
+    assert run_order == ["first"]
+    assert serializer.queue_depth == 0
+    assert serializer.get_metrics()["idle_queue_stalled"] is False
+
+
+@pytest.mark.asyncio
 async def test_last_write_timing_records_per_call_metrics(tmp_path):
     """Phase 1 instrumentation: each awaited execute() must leave its timing
     on the calling Task's contextvar so the ingest router can emit headers.

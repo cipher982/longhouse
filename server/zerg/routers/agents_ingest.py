@@ -195,6 +195,9 @@ async def _acquire_archive_ingest_slot(write_label: str, response: Response) -> 
 
     ws = get_write_serializer()
     if ws.is_configured:
+        repair_idle_queue = getattr(ws, "repair_idle_queue", None)
+        if callable(repair_idle_queue):
+            await repair_idle_queue()
         queue_depth = int(getattr(ws, "queue_depth", 0) or 0)
         writer_active = bool(getattr(ws, "writer_active", False))
         active_label = str(getattr(ws, "active_label", "") or "")

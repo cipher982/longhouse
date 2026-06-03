@@ -282,6 +282,21 @@ class WriteSerializer:
             return 0.0
         return (time.monotonic() - self._active_started_at) * 1000
 
+    async def repair_idle_queue(self) -> bool:
+        """Promote a queued writer if the queue is nonempty but no writer owns the slot.
+
+        Admission-control callers use this before treating queue depth as
+        pressure. It closes the invariant gap where a cancelled or timed-out
+        request can leave queued work visible even though the writer slot is
+        idle.
+        """
+        async with self._wait_cond:
+            if not self._queue or self._writer_active:
+                return False
+            self._promote_next_locked()
+            self._wait_cond.notify_all()
+            return self._writer_active
+
     def _promote_next_locked(self) -> None:
         if self._writer_active:
             return
