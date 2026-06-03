@@ -43,6 +43,8 @@ from zerg.routers import agents_search as _search_router
 from zerg.routers import agents_sessions as _sessions_router
 from zerg.schemas.machines import MachineDirectoryEntry
 from zerg.schemas.machines import MachineDirectoryResponse
+from zerg.schemas.machines import WorkspaceSuggestion
+from zerg.schemas.machines import WorkspaceSuggestionsResponse
 from zerg.services.machines_directory import build_machines_directory
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_views import DemoSeedResponse
@@ -70,6 +72,7 @@ from zerg.services.timeline_session_listing import TimelineSessionsListResponse
 from zerg.services.timeline_session_listing import list_timeline_sessions_for_browser
 from zerg.services.timeline_session_stream import stream_timeline_sessions_for_browser
 from zerg.services.timeline_session_stream import validate_timeline_stream_contract
+from zerg.services.workspace_suggestions import build_workspace_suggestions
 from zerg.utils.server_timing import ServerTimingRecorder
 
 logger = logging.getLogger(__name__)
@@ -125,6 +128,22 @@ def list_browser_machines(
     """Browser machines directory. Same body shape as ``/api/agents/machines``."""
     entries = build_machines_directory(db, owner_id=int(current_user.id))
     return MachineDirectoryResponse(machines=[MachineDirectoryEntry(**entry.to_response()) for entry in entries])
+
+
+@router.get("/machines/{device_id}/workspaces", response_model=WorkspaceSuggestionsResponse)
+def list_browser_machine_workspaces(
+    device_id: str,
+    limit: int = Query(12, ge=1, le=50, description="Max ranked workspaces to return"),
+    days_back: int = Query(45, ge=1, le=180, description="Lookback window for recent sessions"),
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_browser_user),
+) -> WorkspaceSuggestionsResponse:
+    """Browser launch-picker workspaces. Same body shape as ``/api/agents/machines/{id}/workspaces``."""
+    entries = build_workspace_suggestions(db, owner_id=int(current_user.id), device_id=device_id, limit=limit, days_back=days_back)
+    return WorkspaceSuggestionsResponse(
+        device_id=device_id,
+        workspaces=[WorkspaceSuggestion(**entry.to_response()) for entry in entries],
+    )
 
 
 @router.get("/sessions/semantic", response_model=SemanticSearchResponse)

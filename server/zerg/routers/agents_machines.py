@@ -27,6 +27,8 @@ from zerg.schemas.machines import MachineDirectoryEntry
 from zerg.schemas.machines import MachineDirectoryResponse
 from zerg.schemas.machines import ProviderLiveProofRequest
 from zerg.schemas.machines import ProviderLiveProofResponse
+from zerg.schemas.machines import WorkspaceSuggestion
+from zerg.schemas.machines import WorkspaceSuggestionsResponse
 from zerg.schemas.observability import MachineHealthListResponse
 from zerg.schemas.observability import MachineHealthStatus
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
@@ -35,6 +37,7 @@ from zerg.services.machine_control_channel import get_machine_control_channel_re
 from zerg.services.machines_directory import build_machines_directory
 from zerg.services.observability_views import build_machine_health_list_response
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
+from zerg.services.workspace_suggestions import build_workspace_suggestions
 
 router = APIRouter(prefix="/agents/machines", tags=["agents"])
 
@@ -80,6 +83,24 @@ def list_machine_health(
         limit=limit,
     )
     return build_machine_health_list_response(summaries, total=total)
+
+
+@router.get("/{device_id}/workspaces", response_model=WorkspaceSuggestionsResponse)
+def list_machine_workspaces(
+    device_id: str,
+    limit: int = Query(12, ge=1, le=50, description="Max ranked workspaces to return"),
+    days_back: int = Query(45, ge=1, le=180, description="Lookback window for recent sessions"),
+    db: Session = Depends(get_db),
+    device_token: DeviceToken | None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> WorkspaceSuggestionsResponse:
+    """Frecency-ranked recent workspaces for the launch picker, scoped to one machine."""
+    owner_id = _resolve_agents_owner_id(db, device_token)
+    entries = build_workspace_suggestions(db, owner_id=owner_id, device_id=device_id, limit=limit, days_back=days_back)
+    return WorkspaceSuggestionsResponse(
+        device_id=device_id,
+        workspaces=[WorkspaceSuggestion(**entry.to_response()) for entry in entries],
+    )
 
 
 @router.get("/{device_id}/archive-backlog", response_model=ArchiveBacklogResponse)

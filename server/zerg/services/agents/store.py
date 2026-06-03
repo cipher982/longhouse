@@ -2263,11 +2263,14 @@ class AgentsStore:
         if not is_internal_canary_provider_filter(provider):
             stmt = stmt.where(~internal_canary_session_clause(AgentSession))
         if device_id:
-            # The browser now writes `device_id=` for machine filters, but the
-            # timeline filter API still returns legacy machine labels sourced
-            # from `environment`. Accept either shape while old links and
-            # imported sessions are still in circulation.
-            stmt = stmt.where(or_(AgentSession.device_id == device_id, AgentSession.environment == device_id))
+            # Strictly scope to device_id. Do NOT fall back to matching
+            # `environment`: a renamed machine leaves ghost rows whose dead
+            # device_id != the new name but whose `environment` still does,
+            # and an OR fallback fuses that stale history into the wrong
+            # machine. The startup backfill in `_migrate_agents_columns`
+            # rewrites those ghost device_ids to the enrolled device, so the
+            # device_id match alone is correct and complete.
+            stmt = stmt.where(AgentSession.device_id == device_id)
         if since:
             stmt = stmt.where(time_anchor >= since)
         if until:
@@ -2850,10 +2853,13 @@ class AgentsStore:
         Returns dict with:
           - projects: List of distinct project names
           - providers: List of distinct provider names
-          - machines: List of distinct machine names (from environment field)
+          - machines: List of distinct enrolled device ids (the canonical
+            machine axis; the session listing filter scopes by device_id).
         """
         from datetime import timedelta
         from datetime import timezone
+
+        from zerg.models.device_token import DeviceToken
 
         since = datetime.now(timezone.utc) - timedelta(days=days_back)
 
@@ -2873,13 +2879,18 @@ class AgentsStore:
         providers_stmt = providers_stmt.distinct().order_by(AgentSession.provider)
         providers = [p for (p,) in self.db.execute(providers_stmt).fetchall() if p]
 
-        # Get distinct machine names (stored in environment column)
+        # Machine filter = distinct device_ids with recent sessions, restricted
+        # to enrolled (non-revoked) devices so the chips match the device_id the
+        # session listing filter scopes by and don't surface ghost/renamed ids.
+        # Test/e2e sessions are excluded the same way the listing default does.
         machines_stmt = (
-            select(AgentSession.environment)
-            .where(AgentSession.environment.isnot(None))
+            select(AgentSession.device_id)
+            .where(AgentSession.device_id.isnot(None))
             .where(AgentSession.started_at >= since)
+            .where(AgentSession.environment.notin_(["test", "e2e"]))
+            .where(AgentSession.device_id.in_(select(DeviceToken.device_id).where(DeviceToken.revoked_at.is_(None))))
             .distinct()
-            .order_by(AgentSession.environment)
+            .order_by(AgentSession.device_id)
         )
         machines = [m for (m,) in self.db.execute(machines_stmt).fetchall() if m]
 

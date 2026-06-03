@@ -127,6 +127,16 @@
     outline: none;
   }
 
+  .launch-path-chip.is-selected {
+    border-color: var(--color-brand-primary);
+    color: var(--color-text-primary);
+    background: var(--color-surface-tertiary, var(--color-surface-secondary));
+  }
+
+  .launch-workspace-search {
+    margin-top: var(--space-2);
+  }
+
   .modal-loading,
   .modal-error {
     display: flex;

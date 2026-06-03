@@ -67,6 +67,21 @@ class MachineDirectoryResponse(UTCBaseModel):
     machines: list[MachineDirectoryEntry] = Field(default_factory=list)
 
 
+class WorkspaceSuggestion(UTCBaseModel):
+    path: str = Field(..., description="Absolute working directory on the target machine.")
+    label: str = Field(..., description="Display label: git repo+branch when known, else compact path.")
+    git_repo: str | None = Field(default=None, description="Git remote URL of the most-recent session in this cwd.")
+    git_branch: str | None = Field(default=None, description="Git branch of the most-recent session in this cwd.")
+    score: float = Field(..., description="Frecency score (frequency weighted by recency); higher ranks first.")
+    last_used_at: datetime | None = Field(default=None, description="Most recent activity in this cwd on this machine.")
+    session_count: int = Field(..., description="Sessions launched in this cwd within the lookback window.")
+
+
+class WorkspaceSuggestionsResponse(UTCBaseModel):
+    device_id: str = Field(..., description="Machine the suggestions are scoped to.")
+    workspaces: list[WorkspaceSuggestion] = Field(default_factory=list)
+
+
 class ProviderLiveProofRequest(UTCBaseModel):
     model_config = ConfigDict(extra="forbid")
 

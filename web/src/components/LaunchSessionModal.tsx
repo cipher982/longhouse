@@ -3,11 +3,10 @@ import { useQuery } from "@tanstack/react-query";
 
 import {
   ApiError,
-  fetchAgentSessions,
+  fetchWorkspaceSuggestions,
   launchRemoteSession,
   listMachines,
   type MachineDirectoryEntry,
-  type TimelineSessionCard,
 } from "../services/api";
 import { Button, Spinner } from "./ui";
 
@@ -17,11 +16,16 @@ interface LaunchSessionModalProps {
   onLaunched: (sessionId: string) => void;
 }
 
-const PROVIDER = "codex"; // v1
-const RECENT_CWD_LIMIT = 8;
+const WORKSPACE_LIMIT = 12;
 
 function machineCanLaunch(m: MachineDirectoryEntry): boolean {
-  return m.can_launch_codex;
+  return m.launchable_providers.length > 0;
+}
+
+// Prefer codex for launch-default continuity, else the first advertised provider.
+function defaultProvider(m: MachineDirectoryEntry | undefined): string {
+  if (!m || m.launchable_providers.length === 0) return "";
+  return m.launchable_providers.includes("codex") ? "codex" : m.launchable_providers[0];
 }
 
 export default function LaunchSessionModal({
@@ -39,7 +43,9 @@ export default function LaunchSessionModal({
 
   const cwdInputRef = useRef<HTMLInputElement | null>(null);
   const [deviceId, setDeviceId] = useState<string>("");
+  const [provider, setProvider] = useState<string>("");
   const [cwd, setCwd] = useState<string>("");
+  const [workspaceSearch, setWorkspaceSearch] = useState<string>("");
   const [displayName, setDisplayName] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,18 +55,28 @@ export default function LaunchSessionModal({
     [machinesQuery.data],
   );
 
-  const recentSessionsQuery = useQuery({
-    queryKey: ["launch-recent-cwds", deviceId],
-    queryFn: () => fetchAgentSessions({ device_id: deviceId, limit: 50, hide_autonomous: false }),
+  const selectedMachine = launchable.find((m) => m.device_id === deviceId);
+
+  const workspacesQuery = useQuery({
+    queryKey: ["launch-workspaces", deviceId],
+    queryFn: () => fetchWorkspaceSuggestions(deviceId, { limit: WORKSPACE_LIMIT }),
     enabled: isOpen && !!deviceId,
     refetchOnMount: "always",
     staleTime: 15_000,
   });
 
-  const cwdSuggestions = useMemo(
-    () => buildCwdSuggestions(recentSessionsQuery.data?.sessions ?? []),
-    [recentSessionsQuery.data],
+  const workspaces = useMemo(
+    () => workspacesQuery.data?.workspaces ?? [],
+    [workspacesQuery.data],
   );
+
+  const filteredWorkspaces = useMemo(() => {
+    const q = workspaceSearch.trim().toLowerCase();
+    if (!q) return workspaces;
+    return workspaces.filter(
+      (w) => w.path.toLowerCase().includes(q) || w.label.toLowerCase().includes(q),
+    );
+  }, [workspaces, workspaceSearch]);
 
   // Auto-select the first launchable machine.
   useEffect(() => {
@@ -68,17 +84,27 @@ export default function LaunchSessionModal({
     setDeviceId(launchable[0].device_id);
   }, [isOpen, launchable, deviceId]);
 
-  // Start with a path the user has actually used on this machine.
+  // Keep the provider valid for the selected machine.
   useEffect(() => {
-    if (!isOpen || cwd.trim() || cwdSuggestions.length === 0) return;
-    setCwd(cwdSuggestions[0]);
-  }, [isOpen, cwd, cwdSuggestions]);
+    if (!isOpen || !selectedMachine) return;
+    if (!provider || !selectedMachine.launchable_providers.includes(provider)) {
+      setProvider(defaultProvider(selectedMachine));
+    }
+  }, [isOpen, selectedMachine, provider]);
+
+  // Start with the top-ranked workspace the user has actually used on this machine.
+  useEffect(() => {
+    if (!isOpen || cwd.trim() || workspaces.length === 0) return;
+    setCwd(workspaces[0].path);
+  }, [isOpen, cwd, workspaces]);
 
   // Clear state on close.
   useEffect(() => {
     if (isOpen) return;
     setDeviceId("");
+    setProvider("");
     setCwd("");
+    setWorkspaceSearch("");
     setDisplayName("");
     setSubmitting(false);
     setError(null);
@@ -104,13 +130,13 @@ export default function LaunchSessionModal({
   }, [isOpen, deviceId]);
 
   const handleSubmit = useCallback(async () => {
-    if (!deviceId || !cwd.trim()) return;
+    if (!deviceId || !provider || !cwd.trim()) return;
     setSubmitting(true);
     setError(null);
     try {
       const result = await launchRemoteSession({
         device_id: deviceId,
-        provider: PROVIDER,
+        provider,
         cwd: cwd.trim(),
         display_name: displayName.trim() || null,
         client_request_id: `launch-${crypto.randomUUID()}`,
@@ -129,11 +155,9 @@ export default function LaunchSessionModal({
     } finally {
       setSubmitting(false);
     }
-  }, [deviceId, cwd, displayName, onLaunched]);
+  }, [deviceId, provider, cwd, displayName, onLaunched]);
 
   if (!isOpen) return null;
-
-  const selectedMachine = launchable.find((m) => m.device_id === deviceId);
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -177,7 +201,9 @@ export default function LaunchSessionModal({
                   value={deviceId}
                   onChange={(e) => {
                     setDeviceId(e.target.value);
+                    setProvider("");
                     setCwd("");
+                    setWorkspaceSearch("");
                     setError(null);
                   }}
                   data-testid="launch-machine-select"
@@ -190,6 +216,26 @@ export default function LaunchSessionModal({
                 </select>
               </label>
 
+              {selectedMachine && selectedMachine.launchable_providers.length > 1 && (
+                <label className="form-field">
+                  <span>Coding agent</span>
+                  <select
+                    value={provider}
+                    onChange={(e) => {
+                      setProvider(e.target.value);
+                      setError(null);
+                    }}
+                    data-testid="launch-provider-select"
+                  >
+                    {selectedMachine.launchable_providers.map((p) => (
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
               <label className="form-field">
                 <span>Working directory on {selectedMachine?.machine_name ?? deviceId}</span>
                 <input
@@ -201,27 +247,34 @@ export default function LaunchSessionModal({
                   autoComplete="off"
                   spellCheck={false}
                   data-testid="launch-cwd-input"
-                  list="launch-cwd-suggestions"
                 />
-                <datalist id="launch-cwd-suggestions">
-                  {cwdSuggestions.map((path) => (
-                    <option key={path} value={path} />
-                  ))}
-                </datalist>
-                {cwdSuggestions.length > 0 && (
+                {workspaces.length > 0 && (
+                  <input
+                    type="text"
+                    value={workspaceSearch}
+                    onChange={(e) => setWorkspaceSearch(e.target.value)}
+                    placeholder="Filter recent workspaces…"
+                    autoComplete="off"
+                    spellCheck={false}
+                    className="launch-workspace-search"
+                    data-testid="launch-workspace-search"
+                  />
+                )}
+                {filteredWorkspaces.length > 0 && (
                   <div className="launch-path-suggestions" data-testid="launch-path-suggestions">
-                    {cwdSuggestions.slice(0, RECENT_CWD_LIMIT).map((path) => (
+                    {filteredWorkspaces.map((w) => (
                       <button
-                        key={path}
+                        key={w.path}
                         type="button"
-                        className="launch-path-chip"
+                        className={`launch-path-chip${w.path === cwd ? " is-selected" : ""}`}
+                        title={w.path}
                         onClick={() => {
-                          setCwd(path);
+                          setCwd(w.path);
                           setError(null);
                           cwdInputRef.current?.focus();
                         }}
                       >
-                        {compactPath(path)}
+                        {w.label}
                       </button>
                     ))}
                   </div>
@@ -253,7 +306,7 @@ export default function LaunchSessionModal({
                 <Button
                   variant="primary"
                   type="submit"
-                  disabled={submitting || !deviceId || !cwd.trim()}
+                  disabled={submitting || !deviceId || !provider || !cwd.trim()}
                   data-testid="launch-submit"
                 >
                   {submitting ? "Starting…" : "Start"}
@@ -279,7 +332,7 @@ function EmptyState({ machines }: { machines: MachineDirectoryEntry[] }) {
       </div>
     );
   }
-  const blocked = machines.filter((m) => !m.can_launch_codex);
+  const blocked = machines.filter((m) => m.launchable_providers.length === 0);
   const offline = blocked.filter((m) => m.launch_blocked_by === "control_down");
   const visibleBlocked = blocked.filter((m) => m.launch_blocked_by !== "control_down").slice(0, 5);
   const hiddenBlockedCount = Math.max(
@@ -289,7 +342,7 @@ function EmptyState({ machines }: { machines: MachineDirectoryEntry[] }) {
 
   return (
     <div className="modal-empty-state" data-testid="launch-no-launchable">
-      <p>No machine can start Codex right now.</p>
+      <p>No machine can start a session right now.</p>
       {visibleBlocked.length > 0 && (
         <ul>
           {visibleBlocked.map((m) => (
@@ -333,42 +386,6 @@ function machineSummary(machines: MachineDirectoryEntry[], reason: string): stri
   const names = preview.map((m) => m.machine_name).join(", ");
   const prefix = machines.length === 1 ? "1 enrolled machine" : `${machines.length} enrolled machines`;
   return `${prefix} ${reason}${names ? `: ${names}` : ""}${hidden > 0 ? `, plus ${hidden} more` : ""}.`;
-}
-
-function buildCwdSuggestions(cards: TimelineSessionCard[]): string[] {
-  const seen = new Set<string>();
-  const paths: string[] = [];
-
-  const add = (path: string | null | undefined) => {
-    if (!path || !path.startsWith("/") || seen.has(path)) return;
-    seen.add(path);
-    paths.push(path);
-  };
-
-  for (const card of cards) {
-    for (const session of [card.head, card.detail, card.root]) {
-      add(session.cwd);
-      add(parentPath(session.cwd));
-    }
-    if (paths.length >= RECENT_CWD_LIMIT * 2) break;
-  }
-
-  return paths.slice(0, RECENT_CWD_LIMIT * 2);
-}
-
-function parentPath(path: string | null | undefined): string | null {
-  if (!path) return null;
-  const normalized = path.replace(/\/+$/, "");
-  const index = normalized.lastIndexOf("/");
-  if (index <= 0) return null;
-  const parent = normalized.slice(0, index);
-  const parentName = parent.slice(parent.lastIndexOf("/") + 1);
-  if (!parentName || parentName === "git") return null;
-  return parent;
-}
-
-function compactPath(path: string): string {
-  return path.replace(/^\/Users\/[^/]+/, "~");
 }
 
 function formatLaunchFailure(result: {

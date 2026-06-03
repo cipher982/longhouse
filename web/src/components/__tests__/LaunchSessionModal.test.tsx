@@ -6,7 +6,7 @@ import LaunchSessionModal from "../LaunchSessionModal";
 import type { MachineDirectoryEntry } from "../../services/api";
 
 const apiMocks = vi.hoisted(() => ({
-  fetchAgentSessions: vi.fn(),
+  fetchWorkspaceSuggestions: vi.fn(),
   listMachines: vi.fn(),
   launchRemoteSession: vi.fn(),
 }));
@@ -64,10 +64,9 @@ function machine(overrides: Partial<MachineDirectoryEntry> = {}): MachineDirecto
 describe("LaunchSessionModal", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    apiMocks.fetchAgentSessions.mockResolvedValue({
-      sessions: [],
-      total: 0,
-      has_real_sessions: false,
+    apiMocks.fetchWorkspaceSuggestions.mockResolvedValue({
+      device_id: "cinder",
+      workspaces: [],
     });
   });
 
@@ -224,30 +223,42 @@ describe("LaunchSessionModal", () => {
     );
   });
 
-  it("prefills recent machine paths and offers a parent directory shortcut", async () => {
+  it("prefills the top-ranked workspace and lets you pick another by label", async () => {
     apiMocks.listMachines.mockResolvedValue({
       machines: [machine({ device_id: "cinder", machine_name: "cinder", online: true })],
     });
-    apiMocks.fetchAgentSessions.mockResolvedValue({
-      sessions: [
+    apiMocks.fetchWorkspaceSuggestions.mockResolvedValue({
+      device_id: "cinder",
+      workspaces: [
         {
-          head: { cwd: "/Users/example/git/zerg/longhouse" },
-          detail: { cwd: "/Users/example/git/zerg/longhouse" },
-          root: { cwd: "/Users/example/git/zerg/longhouse" },
+          path: "/Users/example/git/zerg",
+          label: "zerg (main)",
+          git_repo: "git@github.com:cipher982/zerg.git",
+          git_branch: "main",
+          score: 320,
+          last_used_at: "2026-06-03T00:00:00Z",
+          session_count: 33,
+        },
+        {
+          path: "/Users/example",
+          label: "~",
+          git_repo: null,
+          git_branch: null,
+          score: 90,
+          last_used_at: "2026-06-02T00:00:00Z",
+          session_count: 4,
         },
       ],
-      total: 1,
-      has_real_sessions: true,
-    } as any);
+    });
 
     const user = userEvent.setup();
     renderModal();
 
     const cwdInput = await screen.findByTestId("launch-cwd-input");
-    await waitFor(() => expect(cwdInput).toHaveValue("/Users/example/git/zerg/longhouse"));
+    await waitFor(() => expect(cwdInput).toHaveValue("/Users/example/git/zerg"));
 
-    await user.click(screen.getByRole("button", { name: "~/git/zerg" }));
-    expect(cwdInput).toHaveValue("/Users/example/git/zerg");
+    await user.click(screen.getByRole("button", { name: "~" }));
+    expect(cwdInput).toHaveValue("/Users/example");
   });
 
   it("keeps immediate launch failures in the modal instead of navigating", async () => {

@@ -758,6 +758,41 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception:
         logger.debug("sessions table migration skipped (table may not exist yet)", exc_info=True)
 
+    # Always-run normalization: repair ghost device_id labels left by a machine
+    # rename. When a machine is renamed (e.g. shipper-laptop → cinder) old
+    # sessions keep the dead device_id but carry the new name in `environment`.
+    # The launch picker and timeline filter scope strictly by device_id, so
+    # adopt the enrolled name. Generic and tenant-safe: only rewrites rows whose
+    # device_id is NOT an enrolled device while their environment IS one — never
+    # hardcoded names. Isolated in its own transaction so unrelated session
+    # normalization failures above cannot skip it.
+    try:
+        with engine.begin() as conn:
+            tables = {
+                row[0]
+                for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('sessions', 'device_tokens')"))
+            }
+            if {"sessions", "device_tokens"}.issubset(tables):
+                conn.execute(
+                    text(
+                        """
+                        UPDATE sessions
+                        SET device_id = environment
+                        WHERE device_id IS NOT NULL
+                          AND environment IS NOT NULL
+                          AND device_id <> environment
+                          AND environment IN (
+                                SELECT device_id FROM device_tokens WHERE revoked_at IS NULL
+                          )
+                          AND device_id NOT IN (
+                                SELECT device_id FROM device_tokens WHERE revoked_at IS NULL
+                          )
+                        """
+                    )
+                )
+    except Exception:
+        logger.debug("device_id ghost-rename backfill skipped", exc_info=True)
+
     try:
         with engine.begin() as conn:
             launch_attempts_exists = conn.execute(

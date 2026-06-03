@@ -29,6 +29,33 @@ export async function listMachines(): Promise<MachineDirectoryResponse> {
   return request<MachineDirectoryResponse>("/timeline/machines");
 }
 
+export type WorkspaceSuggestion = {
+  path: string;
+  label: string;
+  git_repo: string | null;
+  git_branch: string | null;
+  score: number;
+  last_used_at: string | null;
+  session_count: number;
+};
+
+export type WorkspaceSuggestionsResponse = {
+  device_id: string;
+  workspaces: WorkspaceSuggestion[];
+};
+
+export async function fetchWorkspaceSuggestions(
+  deviceId: string,
+  opts: { limit?: number } = {},
+): Promise<WorkspaceSuggestionsResponse> {
+  const params = new URLSearchParams();
+  if (opts.limit) params.set("limit", String(opts.limit));
+  const qs = params.toString();
+  return request<WorkspaceSuggestionsResponse>(
+    `/timeline/machines/${encodeURIComponent(deviceId)}/workspaces${qs ? `?${qs}` : ""}`,
+  );
+}
+
 export type LaunchState =
   | "launching"
   | "live"
