@@ -39,6 +39,32 @@ _STATE_PRIORITY = {
 
 _STEER_CONTROL_PLANES = steer_control_planes()
 
+_CONTROL_ACQUISITION_KINDS = ("spawned_control", "adopted_control")
+
+
+def thread_ever_had_managed_control(db: Session, *, thread_id) -> bool:
+    """True if any run on this thread ever held a Longhouse-owned control path.
+
+    Managed launches record a connection with ``acquisition_kind`` in
+    (spawned_control, adopted_control); imported/unmanaged ingest records at most
+    ``observe_only`` (or no connection). State is ignored on purpose — a closed
+    managed session's connection is ``released``/``ended`` but it was still
+    managed, which is exactly what makes it resumable.
+
+    This is the sound managed fingerprint: it cannot be spoofed by thread-alias
+    backfill the way ``provider_session_id == session.id`` can, because backfill
+    only ever writes ``observe_only`` connections.
+    """
+
+    return (
+        db.query(SessionConnection.id)
+        .join(SessionRun, SessionConnection.run_id == SessionRun.id)
+        .filter(SessionRun.thread_id == thread_id)
+        .filter(SessionConnection.acquisition_kind.in_(_CONTROL_ACQUISITION_KINDS))
+        .limit(1)
+        .first()
+    ) is not None
+
 
 @dataclass(frozen=True)
 class KernelSessionCapabilities:

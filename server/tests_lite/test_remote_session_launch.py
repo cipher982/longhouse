@@ -223,6 +223,23 @@ def _seed_continuable_claude_session(
         alias_kind="provider_session_id",
         alias_value=str(sid),
     )
+    # ...and a control-acquisition connection — the sound managed fingerprint.
+    # The session is closed, so the connection is released (as it would be after
+    # the user exits the claude TUI).
+    run = record_run(db, thread=thread, provider="claude", host_id=device_id or "cinder", cwd="/Users/me/repo")
+    upsert_connection_for_run(
+        db,
+        run=run,
+        control_plane="claude_channel_bridge",
+        acquisition_kind="spawned_control",
+        state="released",
+        external_name=device_id or "cinder",
+        can_send_input=0,
+        can_interrupt=0,
+        can_terminate=0,
+        can_tail_output=0,
+        can_resume=1,
+    )
     db.commit()
     return session.id
 
@@ -233,12 +250,17 @@ def _seed_imported_claude_session(
     session_id=None,
     device_id: str | None = "cinder",
     provider_session_alias: str | None = None,
+    observe_only_connection: bool = False,
 ):
     """Seed an imported/unmanaged bare-CLI claude session.
 
     Unmanaged claude was NOT launched with `claude --session-id <our-uuid>`, so
     its provider session id alias is either absent or a different provider uuid
     (its transcript lives under that other id). It must NOT be continuable.
+
+    ``observe_only_connection`` simulates kernel backfill having attached an
+    observe_only connection (and an alias == session.id) — the spoof path that
+    the alias-equality heuristic would have wrongly accepted.
     """
 
     now = datetime.now(timezone.utc)
@@ -274,6 +296,21 @@ def _seed_imported_claude_session(
             provider="claude",
             alias_kind="provider_session_id",
             alias_value=provider_session_alias,
+        )
+    if observe_only_connection:
+        run = record_run(db, thread=thread, provider="claude", host_id=device_id or "cinder", cwd="/Users/me/repo")
+        upsert_connection_for_run(
+            db,
+            run=run,
+            control_plane="claude_channel_bridge",
+            acquisition_kind="observe_only",
+            state="released",
+            external_name=device_id or "cinder",
+            can_send_input=0,
+            can_interrupt=0,
+            can_terminate=0,
+            can_tail_output=1,
+            can_resume=0,
         )
     db.commit()
     return session.id
@@ -1062,6 +1099,21 @@ def test_imported_unmanaged_claude_session_is_not_continuable(tmp_path):
         assert workspace.session.capabilities.can_continue is False
         assert workspace.session.capabilities.continue_targets == []
 
+    with SessionLocal() as db:
+        # Case C: backfill spoof — alias == session.id AND an observe_only
+        # connection. The old alias-equality heuristic would have wrongly
+        # accepted this; the managed-control fingerprint must still reject it.
+        spoof_id = uuid4()
+        _seed_imported_claude_session(
+            db,
+            session_id=spoof_id,
+            provider_session_alias=str(spoof_id),
+            observe_only_connection=True,
+        )
+        workspace = build_session_workspace(db=db, session_id=spoof_id, owner_id=OWNER_ID)
+        assert workspace.session.capabilities.can_continue is False
+        assert workspace.session.capabilities.continue_targets == []
+
 
 def test_continue_rejects_unmanaged_claude_with_foreign_provider_id(tmp_path):
     """The execution gate must reject continuing an unmanaged claude session."""
@@ -1088,6 +1140,61 @@ def test_continue_rejects_unmanaged_claude_with_foreign_provider_id(tmp_path):
 
     assert excinfo.value.code == "invalid_request"
     assert excinfo.value.status_code == 409
+    assert registry.sent == []
+
+
+def test_continue_rejects_unmanaged_claude_without_managed_connection(tmp_path):
+    """Execution gate rejects claude sessions that never held a control path.
+
+    Covers the no-alias import and the backfill spoof (alias == session.id but
+    only an observe_only connection).
+    """
+
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("claude.continue",))
+
+    with SessionLocal() as db:
+        no_alias_id = _seed_imported_claude_session(db, provider_session_alias=None)
+        with pytest.raises(RemoteLaunchError) as excinfo:
+            asyncio.run(
+                continue_remote_session(
+                    db,
+                    RemoteContinueParams(
+                        owner_id=OWNER_ID,
+                        session_id=no_alias_id,
+                        client_request_id="unmanaged-no-alias",
+                    ),
+                    registry=registry,
+                )
+            )
+        assert excinfo.value.code == "invalid_request"
+        assert excinfo.value.status_code == 409
+
+    with SessionLocal() as db:
+        spoof_id = uuid4()
+        _seed_imported_claude_session(
+            db,
+            session_id=spoof_id,
+            provider_session_alias=str(spoof_id),
+            observe_only_connection=True,
+        )
+        with pytest.raises(RemoteLaunchError) as excinfo:
+            asyncio.run(
+                continue_remote_session(
+                    db,
+                    RemoteContinueParams(
+                        owner_id=OWNER_ID,
+                        session_id=spoof_id,
+                        client_request_id="unmanaged-spoof",
+                    ),
+                    registry=registry,
+                )
+            )
+        assert excinfo.value.code == "invalid_request"
+        assert excinfo.value.status_code == 409
+
     assert registry.sent == []
 
 
@@ -1169,8 +1276,15 @@ def test_late_continue_claude_reconciliation_attaches_new_run(tmp_path):
         assert attempt.state == "adopted"
         assert attempt.run_id is not None
         assert db.query(AgentSession).count() == 1
-        assert db.query(SessionRun).count() == 1
-        assert db.query(SessionConnection).count() == 1
+        # Original managed run/connection (now released) + the new continued run.
+        assert db.query(SessionRun).count() == 2
+        assert db.query(SessionConnection).count() == 2
+        new_connection = (
+            db.query(SessionConnection)
+            .filter(SessionConnection.run_id == attempt.run_id)
+            .one()
+        )
+        assert new_connection.state == "attached"
 
 
 def test_continue_session_is_idempotent_by_client_request_id(tmp_path):

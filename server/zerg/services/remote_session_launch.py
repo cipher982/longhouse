@@ -35,6 +35,7 @@ from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
 from zerg.models.device_token import DeviceToken
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
+from zerg.services.agents.kernel_capabilities import thread_ever_had_managed_control
 from zerg.services.agents.kernel_writes import ensure_open_run_for_session
 from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import record_launch_attempt
@@ -316,12 +317,13 @@ def _resolve_continue_target(db: Session, *, session: AgentSession) -> tuple[Ses
 
     if provider == "claude":
         # Claude pins `claude --session-id <longhouse-uuid>` at launch, so a
-        # managed session's provider id EQUALS the longhouse id and
-        # `claude --resume <id>` re-opens the local transcript (no path needed).
-        # An imported/unmanaged claude session either has no alias or a different
-        # provider uuid; resuming by our id would target a non-existent
-        # transcript, so reject it rather than launch a broken resume.
-        if provider_thread_id and provider_thread_id != str(session.id):
+        # managed session resumes by the longhouse id (`claude --resume <id>`,
+        # no transcript path). Only continue if this session was actually managed
+        # by Longhouse — proven by a control-acquisition connection, not an alias
+        # backfill can synthesize. Imported/unmanaged claude has no such
+        # connection and its transcript lives under a different provider uuid, so
+        # reject rather than launch a broken resume.
+        if not thread_ever_had_managed_control(db, thread_id=thread.id):
             raise RemoteLaunchError(
                 "Session is not a managed Claude session; only managed sessions can be continued",
                 code="invalid_request",

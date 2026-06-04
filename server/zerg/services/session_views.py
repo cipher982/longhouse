@@ -32,6 +32,7 @@ from zerg.models.agents import SessionThreadAlias
 from zerg.models.agents import SessionTurn
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
+from zerg.services.agents.kernel_capabilities import thread_ever_had_managed_control
 from zerg.services.agents_store import AgentsStore
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.managed_control_state import CONTROL_SOURCE_LEGACY_RUNNER
@@ -247,14 +248,13 @@ def _native_continue_target(db, session: AgentSession) -> SessionContinueTarget 
     provider_thread_id = str(provider_thread_id).strip() if provider_thread_id else ""
 
     if provider == "claude":
-        # Claude resumes by id alone (`claude --resume <id>`). A managed claude
-        # launch pins `claude --session-id <longhouse-uuid>`, so its provider
-        # session id alias EQUALS the longhouse session id — that equality is the
-        # fingerprint of a managed session. An imported/unmanaged bare claude
-        # session has no alias or a different provider uuid (its transcript lives
-        # under that other id), so resuming by our id would fail. Require the
-        # managed fingerprint so we don't show a dead Continue button.
-        if provider_thread_id != str(session.id):
+        # Claude resumes by id alone (`claude --resume <id>`), and a managed
+        # launch pins that id to the longhouse session id. Only offer continue
+        # if this session was actually managed by Longhouse — proven by a
+        # control-acquisition connection, not by an alias that backfill can
+        # synthesize. Imported/unmanaged bare-CLI claude has no such connection,
+        # and `claude --resume <our-id>` would target a non-existent transcript.
+        if not thread_ever_had_managed_control(db, thread_id=thread.id):
             return None
         return SessionContinueTarget(
             provider=session.provider,
