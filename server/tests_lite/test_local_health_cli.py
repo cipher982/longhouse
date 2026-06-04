@@ -1277,6 +1277,7 @@ def test_collect_local_health_keeps_release_coverage_gap_visible_when_live_proof
                     "claude.interrupt",
                     "claude.steer",
                     "claude.launch",
+                    "claude.continue",
                 ],
             }
         },

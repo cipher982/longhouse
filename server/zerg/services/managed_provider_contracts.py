@@ -160,6 +160,16 @@ def remote_launch_supported_providers() -> frozenset[str]:
     return frozenset(contract.provider for contract in _CONTRACTS if contract.launch_remote)
 
 
+def continue_supported_providers() -> frozenset[str]:
+    """Providers whose closed/detached sessions can be resumed (continued).
+
+    Driven by the manifest ``can_resume`` flag so adding a provider is data,
+    not a new branch in the continue resolvers.
+    """
+
+    return frozenset(contract.provider for contract in _CONTRACTS if contract.can_resume)
+
+
 def machine_control_launch_capability_by_provider() -> dict[str, str]:
     return {
         contract.provider: f"{contract.provider}.launch"

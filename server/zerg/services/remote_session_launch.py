@@ -45,6 +45,7 @@ from zerg.services.agents.kernel_writes import upsert_connection_for_run
 from zerg.services.machine_control_channel import MachineControlChannelRegistry
 from zerg.services.machine_control_channel import MachineControlCommandResponse
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
+from zerg.services.managed_provider_contracts import continue_supported_providers
 from zerg.services.managed_provider_contracts import control_plane_for_provider
 from zerg.services.managed_provider_contracts import remote_launch_supported_providers
 from zerg.services.managed_provider_contracts import require_contract_for_provider
@@ -294,8 +295,16 @@ def _latest_source_path(db: Session, *, session: AgentSession, thread: SessionTh
     return source_path
 
 
-def _resolve_continue_target(db: Session, *, session: AgentSession) -> tuple[SessionThread, str, str]:
-    if session.provider != "codex":
+def _resolve_continue_target(db: Session, *, session: AgentSession) -> tuple[SessionThread, str, str | None]:
+    """Resolve the provider resume target for a continuable session.
+
+    Returns ``(thread, provider_thread_id, thread_path)``. ``thread_path`` is the
+    provider transcript path for providers that resume by file (codex) and
+    ``None`` for providers that resume by id alone (claude).
+    """
+
+    provider = (session.provider or "").strip().lower()
+    if provider not in continue_supported_providers():
         raise RemoteLaunchError(
             f"provider {session.provider!r} is not supported for session continuation in v1",
             code="provider_unsupported",
@@ -304,6 +313,16 @@ def _resolve_continue_target(db: Session, *, session: AgentSession) -> tuple[Ses
 
     thread = ensure_primary_thread(db, session)
     provider_thread_id = _latest_thread_alias(db, thread=thread, alias_kind="provider_session_id")
+
+    if provider == "claude":
+        # Claude pins `claude --session-id <longhouse-uuid>` at launch, so the
+        # provider session id IS the longhouse id and `claude --resume <id>`
+        # re-opens the local transcript. No transcript path is needed.
+        resume_id = provider_thread_id or str(session.id)
+        return thread, resume_id, None
+
+    # codex: resumes by provider thread id + transcript path. The id must be a
+    # real provider thread distinct from the longhouse session id.
     if provider_thread_id == str(session.id):
         provider_thread_id = None
     thread_path = _latest_source_path(db, session=session, thread=thread)
@@ -573,7 +592,7 @@ async def continue_remote_session(
         )
 
     provider = (session.provider or "").strip().lower()
-    if provider not in SUPPORTED_PROVIDERS:
+    if provider not in continue_supported_providers():
         raise RemoteLaunchError(
             f"provider {provider!r} is not supported for session continuation in v1",
             code="provider_unsupported",

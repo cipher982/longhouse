@@ -173,6 +173,60 @@ def _seed_continuable_codex_session(
     return session.id
 
 
+def _seed_continuable_claude_session(
+    db,
+    *,
+    session_id=None,
+    device_id: str | None = "cinder",
+    ended: bool = True,
+):
+    """Seed a closed managed claude session.
+
+    Claude pins ``claude --session-id <longhouse-uuid>`` at launch, so the
+    provider session id alias equals the session id and there is NO transcript
+    source_path alias — the resume target is the id alone.
+    """
+
+    now = datetime.now(timezone.utc)
+    sid = session_id or uuid4()
+    session = AgentSession(
+        id=sid,
+        provider="claude",
+        environment="development",
+        project="repo",
+        device_id=device_id,
+        device_name=device_id,
+        cwd="/Users/me/repo",
+        git_repo="git@example.test/repo.git",
+        git_branch="main",
+        started_at=now,
+        ended_at=now if ended else None,
+        last_activity_at=now,
+        thread_root_session_id=sid,
+        continued_from_session_id=None,
+        continuation_kind="local",
+        origin_label=device_id,
+        user_messages=1,
+        assistant_messages=1,
+        tool_calls=0,
+        is_writable_head=1,
+        is_sidechain=0,
+    )
+    db.add(session)
+    db.flush()
+    thread = ensure_primary_thread(db, session)
+    # Managed claude records its provider session id == the longhouse id.
+    record_thread_alias(
+        db,
+        thread=thread,
+        provider="claude",
+        alias_kind="provider_session_id",
+        alias_value=str(sid),
+    )
+    db.commit()
+    return session.id
+
+
 class _StubRegistry(MachineControlChannelRegistry):
     """Registry with scripted ``send_command`` responses per session_id."""
 
@@ -269,7 +323,8 @@ def test_happy_path_inserts_live_claude_channel_session(tmp_path):
         assert connection.control_plane == "claude_channel_bridge"
         assert connection.can_send_input == 1
         assert connection.can_interrupt == 1
-        assert connection.can_resume == 0
+        # Managed claude is now resumable (manifest can_resume=true).
+        assert connection.can_resume == 1
 
     assert len(registry.sent) == 1
     sent = registry.sent[0]
@@ -875,6 +930,142 @@ def test_continue_session_dispatches_resume_payload_and_attaches_new_run(tmp_pat
         workspace = build_session_workspace(db=db, session_id=session_id, owner_id=OWNER_ID)
         assert workspace.session.capabilities.can_continue is True
         assert workspace.session.capabilities.continue_targets[0].carry_context == "native"
+
+
+def test_continue_claude_session_resumes_by_id_with_null_thread_path(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(
+        registry,
+        owner_id=OWNER_ID,
+        device_id="cinder",
+        supports=("claude.launch", "claude.continue"),
+    )
+
+    with SessionLocal() as db:
+        session_id = _seed_continuable_claude_session(db)
+
+    with SessionLocal() as db:
+        result = asyncio.run(
+            continue_remote_session(
+                db,
+                RemoteContinueParams(
+                    owner_id=OWNER_ID,
+                    session_id=session_id,
+                    client_request_id="claude-continue-1",
+                ),
+                registry=registry,
+            )
+        )
+
+    assert result.session_id == session_id
+    assert result.launch_state == "live"
+    assert len(registry.sent) == 1
+    sent = registry.sent[0]
+    assert sent["command_type"] == "session.launch"
+    assert sent["payload"]["provider"] == "claude"
+    assert sent["payload"]["mode"] == "continue"
+    # Claude resumes by id; the id IS the longhouse session id and there is no
+    # transcript path.
+    assert sent["payload"]["resume"] == {
+        "thread_id": str(session_id),
+        "thread_path": None,
+    }
+
+    with SessionLocal() as db:
+        session = db.get(AgentSession, session_id)
+        assert session.ended_at is None
+        assert db.query(AgentSession).count() == 1
+        attempt = _latest_attempt(db, session_id)
+        assert attempt.state == "adopted"
+        assert attempt.run_id is not None
+        assert db.get(SessionRun, attempt.run_id).launch_origin == "longhouse_continued"
+        workspace = build_session_workspace(db=db, session_id=session_id, owner_id=OWNER_ID)
+        assert workspace.session.capabilities.can_continue is True
+        assert workspace.session.capabilities.continue_targets[0].carry_context == "native"
+
+
+def test_continue_claude_capability_required(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    # Machine online but only advertises claude.launch, not claude.continue.
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("claude.launch",))
+
+    with SessionLocal() as db:
+        session_id = _seed_continuable_claude_session(db)
+        with pytest.raises(RemoteLaunchError) as excinfo:
+            asyncio.run(
+                continue_remote_session(
+                    db,
+                    RemoteContinueParams(
+                        owner_id=OWNER_ID,
+                        session_id=session_id,
+                        client_request_id="claude-continue-cap",
+                    ),
+                    registry=registry,
+                )
+            )
+
+    assert excinfo.value.code == "provider_unsupported"
+    assert excinfo.value.status_code == 409
+    assert registry.sent == []
+
+
+def test_late_continue_claude_reconciliation_attaches_new_run(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+
+    class _TimeoutRegistry(_StubRegistry):
+        async def send_command(self, **kwargs):
+            self.sent.append(kwargs)
+            return MachineControlCommandResponse(transport_ok=False, error="timed out")
+
+    registry = _TimeoutRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("claude.continue",))
+    with SessionLocal() as db:
+        session_id = _seed_continuable_claude_session(db)
+        result = asyncio.run(
+            continue_remote_session(
+                db,
+                RemoteContinueParams(
+                    owner_id=OWNER_ID,
+                    session_id=session_id,
+                    client_request_id="claude-continue-timeout",
+                ),
+                registry=registry,
+            )
+        )
+    assert result.launch_state == "launching_unknown"
+    command_id = registry.sent[-1]["command_id"]
+    assert command_id.startswith("continue-")
+
+    # Late success: the engine echoes thread_id == the claude session id.
+    with SessionLocal() as db:
+        reconciled = reconcile_launch_from_command_result(
+            db,
+            {
+                "type": "command_result",
+                "command_id": command_id,
+                "ok": True,
+                "result": {
+                    "session_id": str(session_id),
+                    "thread_id": str(session_id),
+                },
+            },
+        )
+
+    assert reconciled is True
+    with SessionLocal() as db:
+        session = db.get(AgentSession, session_id)
+        attempt = _latest_attempt(db, session_id)
+        assert session.ended_at is None
+        assert attempt.state == "adopted"
+        assert attempt.run_id is not None
+        assert db.query(AgentSession).count() == 1
+        assert db.query(SessionRun).count() == 1
+        assert db.query(SessionConnection).count() == 1
 
 
 def test_continue_session_is_idempotent_by_client_request_id(tmp_path):

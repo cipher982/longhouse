@@ -38,6 +38,7 @@ from zerg.services.managed_control_state import CONTROL_SOURCE_LEGACY_RUNNER
 from zerg.services.managed_control_state import engine_channel_control_overlay
 from zerg.services.managed_control_state import live_transport_control_overlay
 from zerg.services.managed_local_transport import build_managed_local_attach_command
+from zerg.services.managed_provider_contracts import continue_supported_providers
 from zerg.services.managed_provider_contracts import trusted_non_runner_control_planes
 from zerg.services.provisional_events import TranscriptPreview
 from zerg.services.send_affordance import OFFLINE_HOST_STATES
@@ -222,7 +223,8 @@ def _attach_images_capability(capability_flags, *, live_control_available: bool 
 
 
 def _native_continue_target(db, session: AgentSession) -> SessionContinueTarget | None:
-    if (session.provider or "").strip().lower() != "codex":
+    provider = (session.provider or "").strip().lower()
+    if provider not in continue_supported_providers():
         return None
     thread = (
         db.query(SessionThread)
@@ -232,6 +234,22 @@ def _native_continue_target(db, session: AgentSession) -> SessionContinueTarget 
     )
     if thread is None:
         return None
+
+    if provider == "claude":
+        # Claude resumes by id alone (`claude --resume <id>`), and that id IS the
+        # longhouse session id (pinned at launch via --session-id). A primary
+        # thread is sufficient evidence; we do NOT require a distinct provider
+        # thread id or a transcript source_path the way codex does.
+        return SessionContinueTarget(
+            provider=session.provider,
+            device_id=session.device_id,
+            cwd=session.cwd,
+            carry_context="native",
+            native_resume_available=True,
+        )
+
+    # codex: requires a real provider thread id (distinct from the longhouse id)
+    # plus a local transcript path to resume against.
     provider_thread_id = (
         db.query(SessionThreadAlias.alias_value)
         .filter(SessionThreadAlias.thread_id == thread.id)
