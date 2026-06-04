@@ -916,7 +916,8 @@ def test_presence_long_run_waiting_sends_once_and_resolves(tmp_path):
                 ("thinking", 0),
                 ("running", 60),
                 ("needs_user", 31 * 60),
-                ("running", 32 * 60),
+                ("needs_user", 33 * 60),
+                ("running", 34 * 60),
             ]:
                 response = client.post(
                     "/agents/presence",

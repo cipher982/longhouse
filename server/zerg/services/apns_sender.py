@@ -572,7 +572,7 @@ def prepare_long_run_waiting_push(
 
     previous_stamp_state = str(session.last_attention_push_state or "").strip() or None
     previous_stamp_at = _as_aware_utc(session.last_attention_push_at)
-    if previous_stamp_state == "needs_user":
+    if _base_attention_state(previous_stamp_state) == "needs_user":
         return None
     if _base_attention_state(previous_stamp_state) == "blocked" and previous_stamp_state != _resolved_attention_state("blocked"):
         return None
