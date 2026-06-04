@@ -2140,6 +2140,10 @@ mod tests {
         assert!(supports.contains(&"codex.launch".to_string()));
         assert!(supports.contains(&"codex.continue".to_string()));
         assert!(supports.contains(&"claude.launch".to_string()));
+        // claude.continue must survive the installed-binary gating path, not
+        // just exist in the raw manifest — this is the surface the server's
+        // `claude.continue in info.supports` check actually reads.
+        assert!(supports.contains(&"claude.continue".to_string()));
         assert!(supports.contains(&"opencode.launch".to_string()));
         assert!(supports.contains(&"antigravity.send".to_string()));
         assert!(supports.contains(&"claude.live_proof".to_string()));
