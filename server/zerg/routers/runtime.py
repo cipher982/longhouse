@@ -22,6 +22,7 @@ from zerg.services.apns_sender import WIDGET_PUSH_PLATFORM
 from zerg.services.apns_sender import active_ios_targets_for_owner
 from zerg.services.apns_sender import prepare_session_attention_push
 from zerg.services.apns_sender import prepare_session_attention_resolution_push
+from zerg.services.apns_sender import prepare_session_blocked_reminder_push
 from zerg.services.apns_sender import prepare_session_live_activity_pushes
 from zerg.services.apns_sender import prepare_widget_timeline_push
 from zerg.services.apns_sender import send_presence_pushes
@@ -98,11 +99,7 @@ async def ingest_runtime_observation_batch(
                 return ingest_result, []
 
             updated_session_ids = sorted(
-                {
-                    ev.session_id
-                    for ev in events
-                    if ev.session_id is not None and ev.runtime_key in updated_runtime_keys
-                },
+                {ev.session_id for ev in events if ev.session_id is not None and ev.runtime_key in updated_runtime_keys},
                 key=str,
             )
             if not updated_session_ids:
@@ -164,9 +161,7 @@ async def ingest_runtime_observation_batch(
                 # rather than per-session × per-prep-fn. The widget timeline push is
                 # owner-scoped (not session-scoped), so prepare it ONCE per changed batch.
                 ios_targets = (
-                    active_ios_targets_for_owner(wdb, owner_id=owner_id, log_context="runtime batch")
-                    if owner_id is not None
-                    else None
+                    active_ios_targets_for_owner(wdb, owner_id=owner_id, log_context="runtime batch") if owner_id is not None else None
                 )
                 widget_targets = (
                     active_ios_targets_for_owner(
@@ -198,20 +193,31 @@ async def ingest_runtime_observation_batch(
                     sid = session_row.id
                     context = push_context_by_session.get(sid, {})
                     previous_attention_state = _previous_attention_state_from_session(session_row)
+                    attention_push = prepare_session_attention_push(
+                        wdb,
+                        owner_id=owner_id,
+                        session_id=sid,
+                        previous_state=previous_attention_state,
+                        current_state=canonical_state,
+                        occurred_at=now_utc,
+                        current_tool_name=context.get("tool"),
+                        targets=ios_targets,
+                    )
+                    if attention_push is None:
+                        attention_push = prepare_session_blocked_reminder_push(
+                            wdb,
+                            owner_id=owner_id,
+                            session_id=sid,
+                            current_state=canonical_state,
+                            occurred_at=now_utc,
+                            current_tool_name=context.get("tool"),
+                            targets=ios_targets,
+                        )
                     prepared.append(
                         {
                             "session_id": sid,
                             "canonical_state": canonical_state,
-                            "attention_push": prepare_session_attention_push(
-                                wdb,
-                                owner_id=owner_id,
-                                session_id=sid,
-                                previous_state=previous_attention_state,
-                                current_state=canonical_state,
-                                occurred_at=now_utc,
-                                current_tool_name=context.get("tool"),
-                                targets=ios_targets,
-                            ),
+                            "attention_push": attention_push,
                             "attention_resolution_push": prepare_session_attention_resolution_push(
                                 wdb,
                                 owner_id=owner_id,
@@ -390,6 +396,7 @@ def _preview_seq(preview: dict) -> int:
 
 def _previous_attention_state_from_session(session: AgentSession) -> str | None:
     value = str(session.last_attention_push_state or "").strip()
-    if value in {"blocked", "needs_user"}:
-        return value
+    base = value.split(":", 1)[0]
+    if base in {"blocked", "needs_user"}:
+        return base
     return None

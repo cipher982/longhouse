@@ -28,6 +28,7 @@ from .models import RunnerEnrollToken
 from .models import RunnerJob
 from .models import UserSkill
 from .models import UserTask
+from .notification_event import NotificationEvent
 
 # Re-export remaining models from models.py
 from .refresh_session import RefreshSession
@@ -87,4 +88,5 @@ __all__ = [
     "CommisTask",
     "SurfaceIngressClaim",
     "Insight",
+    "NotificationEvent",
 ]

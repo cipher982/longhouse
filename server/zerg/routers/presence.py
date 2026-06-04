@@ -45,14 +45,17 @@ from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
+from zerg.services.apns_sender import NOTIFICATION_CHANNEL_APNS_IOS
 from zerg.services.apns_sender import clear_live_activity_push_stamp
-from zerg.services.apns_sender import clear_session_attention_push_stamp
 from zerg.services.apns_sender import clear_session_attention_resolution_stamp
 from zerg.services.apns_sender import clear_widget_timeline_push_stamp
 from zerg.services.apns_sender import prepare_session_attention_push
 from zerg.services.apns_sender import prepare_session_attention_resolution_push
+from zerg.services.apns_sender import prepare_session_blocked_reminder_push
 from zerg.services.apns_sender import prepare_session_live_activity_pushes
 from zerg.services.apns_sender import prepare_widget_timeline_push
+from zerg.services.apns_sender import record_notification_delivery_result
+from zerg.services.apns_sender import rollback_session_attention_push_stamp
 from zerg.services.apns_sender import send_session_attention_push
 from zerg.services.apns_sender import send_session_attention_resolution_push
 from zerg.services.apns_sender import send_session_live_activity_push
@@ -186,6 +189,15 @@ async def upsert_presence(
             occurred_at=_now,
             current_tool_name=runtime_tool_name,
         )
+        if attention_push is None:
+            attention_push = prepare_session_blocked_reminder_push(
+                write_db,
+                owner_id=owner_id,
+                session_id=session_uuid,
+                current_state=canonical_presence_state,
+                occurred_at=_now,
+                current_tool_name=runtime_tool_name,
+            )
         attention_resolution_push = prepare_session_attention_resolution_push(
             write_db,
             owner_id=owner_id,
@@ -253,15 +265,21 @@ async def upsert_presence(
             push_sent = await send_session_attention_push(attention_push)
         except Exception:  # pragma: no cover - push send should never fail the hook path
             logger.exception("Failed to send APNs attention push for session %s", attention_push.session_id)
+
+        def _record_attention_result(write_db: Session) -> bool:
+            return record_notification_delivery_result(
+                write_db,
+                event_id=attention_push.notification_event_id,
+                channel=NOTIFICATION_CHANNEL_APNS_IOS,
+                accepted=push_sent,
+                occurred_at=datetime.now(timezone.utc),
+            )
+
+        await ws.execute_or_direct(_record_attention_result, db, label="presence-attention-record")
         if not push_sent:
 
             def _clear_attention_push_stamp(write_db: Session):
-                clear_session_attention_push_stamp(
-                    write_db,
-                    session_id=attention_push.session_id,
-                    state=attention_push.state,
-                    occurred_at=attention_push.occurred_at,
-                )
+                rollback_session_attention_push_stamp(write_db, notification=attention_push)
 
             await ws.execute_or_direct(_clear_attention_push_stamp, db, label="presence-attention-push-clear")
     if attention_resolution_push is not None:

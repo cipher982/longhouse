@@ -21,6 +21,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.apns_device_registration import APNSDeviceRegistration
 from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration
 from zerg.models.apns_widget_push_state import APNSWidgetPushState
+from zerg.models.notification_event import NotificationEvent
 from zerg.models.user import User
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.session_runtime import load_runtime_state_map
@@ -32,11 +33,15 @@ logger = logging.getLogger(__name__)
 ATTENTION_PUSH_STATES = {"blocked"}
 RESOLVABLE_ATTENTION_PUSH_STATES = ATTENTION_PUSH_STATES | {"needs_user"}
 ATTENTION_PUSH_DEBOUNCE = timedelta(seconds=30)
+BLOCKED_REMINDER_DELAY = timedelta(minutes=15)
 WIDGET_PUSH_DEBOUNCE = timedelta(seconds=30)
 WIDGET_PUSH_PLATFORM = "ios_widget"
 LIVE_ACTIVITY_PUSH_DEBOUNCE = timedelta(seconds=15)
 ATTENTION_NOTIFICATION_CATEGORY = "LONGHOUSE_SESSION_ATTENTION"
 ATTENTION_NOTIFICATION_THREAD_PREFIX = "longhouse-session"
+NOTIFICATION_EVENT_SESSION_BLOCKED = "session_blocked"
+NOTIFICATION_EVENT_SESSION_BLOCKED_REMINDER = "session_blocked_reminder"
+NOTIFICATION_CHANNEL_APNS_IOS = "apns_ios"
 PROVIDER_DISPLAY_NAMES = {
     "claude": "Claude",
     "codex": "Codex",
@@ -78,6 +83,11 @@ class SessionAttentionPush:
     alert_body: str
     collapse_id: str
     targets: tuple[APNSDeviceTarget, ...]
+    event_type: str = NOTIFICATION_EVENT_SESSION_BLOCKED
+    notification_event_id: str | None = None
+    previous_stamp_state: str | None = None
+    previous_stamp_at: datetime | None = None
+    stamp_state: str = "blocked"
 
 
 @dataclass(frozen=True)
@@ -140,6 +150,76 @@ def set_user_apns_enabled(user: User, enabled: bool) -> dict:
     return prefs
 
 
+def record_notification_delivery_result(
+    db: Session,
+    *,
+    event_id: str | None,
+    channel: str,
+    accepted: bool,
+    occurred_at: datetime,
+) -> bool:
+    """Record the result of one notification channel delivery attempt."""
+
+    if not event_id:
+        return False
+    event = db.query(NotificationEvent).filter(NotificationEvent.id == event_id).first()
+    if event is None:
+        return False
+
+    channel_results = dict(getattr(event, "channel_results", None) or {})
+    channel_results[channel] = {
+        "accepted": bool(accepted),
+        "attempted_at": _as_aware_utc(occurred_at).isoformat() if _as_aware_utc(occurred_at) else None,
+    }
+    event.channel_results = channel_results
+    if accepted:
+        event.delivered_at = occurred_at
+    return True
+
+
+def rollback_session_attention_push_stamp(db: Session, *, notification: SessionAttentionPush) -> bool:
+    """Rollback a pre-send attention stamp after no APNs target accepted it."""
+
+    if notification.event_type == NOTIFICATION_EVENT_SESSION_BLOCKED_REMINDER:
+        return restore_session_attention_push_stamp(
+            db,
+            session_id=notification.session_id,
+            expected_state=notification.stamp_state,
+            expected_at=notification.occurred_at,
+            previous_state=notification.previous_stamp_state,
+            previous_at=notification.previous_stamp_at,
+        )
+    return clear_session_attention_push_stamp(
+        db,
+        session_id=notification.session_id,
+        state=notification.state,
+        occurred_at=notification.occurred_at,
+    )
+
+
+def restore_session_attention_push_stamp(
+    db: Session,
+    *,
+    session_id: str,
+    expected_state: str,
+    expected_at: datetime,
+    previous_state: str | None,
+    previous_at: datetime | None,
+) -> bool:
+    """Restore a previous debounce stamp after a reminder send failure."""
+
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if session is None:
+        return False
+    if str(session.last_attention_push_state or "").strip() != expected_state:
+        return False
+    if not _same_instant(session.last_attention_push_at, expected_at):
+        return False
+    session.last_attention_push_state = previous_state
+    session.last_attention_push_at = previous_at
+    return True
+
+
 def clear_session_attention_push_stamp(
     db: Session,
     *,
@@ -179,6 +259,58 @@ def clear_session_attention_resolution_stamp(
         return False
     session.last_attention_push_state = state
     return True
+
+
+def _create_notification_event(
+    db: Session,
+    *,
+    owner_id: int,
+    session_id: str,
+    event_type: str,
+    state_key: str,
+    collapse_key: str,
+    occurred_at: datetime,
+    channel_results: dict | None = None,
+) -> NotificationEvent:
+    event = NotificationEvent(
+        owner_id=owner_id,
+        session_id=session_id,
+        event_type=event_type,
+        state_key=state_key,
+        collapse_key=collapse_key,
+        event_started_at=occurred_at,
+        eligible_at=occurred_at,
+        channel_results=channel_results or {},
+    )
+    db.add(event)
+    db.flush()
+    return event
+
+
+def _mark_attention_events_resolved(
+    db: Session,
+    *,
+    owner_id: int,
+    session_id: str,
+    occurred_at: datetime,
+) -> None:
+    events = (
+        db.query(NotificationEvent)
+        .filter(
+            NotificationEvent.owner_id == owner_id,
+            NotificationEvent.session_id == session_id,
+            NotificationEvent.event_type.in_(
+                [
+                    NOTIFICATION_EVENT_SESSION_BLOCKED,
+                    NOTIFICATION_EVENT_SESSION_BLOCKED_REMINDER,
+                ]
+            ),
+            NotificationEvent.resolved_at.is_(None),
+        )
+        .all()
+    )
+    for event in events:
+        event.resolved_at = occurred_at
 
 
 def clear_widget_timeline_push_stamp(
@@ -250,8 +382,18 @@ def prepare_session_attention_push(
     if not targets:
         return None
 
+    collapse_id = _attention_collapse_id(str(session.id))
     session.last_attention_push_at = occurred_at
     session.last_attention_push_state = current_state
+    notification_event = _create_notification_event(
+        db,
+        owner_id=owner_id,
+        session_id=str(session.id),
+        event_type=NOTIFICATION_EVENT_SESSION_BLOCKED,
+        state_key=current_state,
+        collapse_key=collapse_id,
+        occurred_at=occurred_at,
+    )
 
     provider = _clean_label(getattr(session, "provider", None))
     project = _clean_label(getattr(session, "project", None))
@@ -272,8 +414,87 @@ def prepare_session_attention_push(
         tool_name=tool_name,
         alert_title=alert_title,
         alert_body=alert_body,
-        collapse_id=_attention_collapse_id(str(session.id)),
+        collapse_id=collapse_id,
         targets=targets,
+        event_type=NOTIFICATION_EVENT_SESSION_BLOCKED,
+        notification_event_id=str(notification_event.id),
+        previous_stamp_state=last_attention_push_state,
+        previous_stamp_at=last_attention_push_at,
+        stamp_state=current_state,
+    )
+
+
+def prepare_session_blocked_reminder_push(
+    db: Session,
+    *,
+    owner_id: int | None,
+    session_id,
+    current_state: str | None,
+    occurred_at: datetime,
+    current_tool_name: str | None = None,
+    targets: tuple[APNSDeviceTarget, ...] | None | object = _TARGETS_SENTINEL,
+) -> SessionAttentionPush | None:
+    if owner_id is None or session_id is None or current_state != "blocked":
+        return None
+
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if session is None:
+        return None
+
+    previous_stamp_state = str(session.last_attention_push_state or "").strip() or None
+    previous_stamp_at = _as_aware_utc(session.last_attention_push_at)
+    if _base_attention_state(previous_stamp_state) != "blocked" or previous_stamp_at is None:
+        return None
+    if previous_stamp_state and previous_stamp_state.endswith(":resolved"):
+        return None
+    if previous_stamp_state and previous_stamp_state.endswith(":reminded"):
+        return None
+    if (occurred_at - previous_stamp_at) < BLOCKED_REMINDER_DELAY:
+        return None
+
+    if targets is _TARGETS_SENTINEL:
+        targets = _active_ios_targets_for_owner(db, owner_id=owner_id, log_context="blocked reminder push")
+    if not targets:
+        return None
+
+    provider = _clean_label(getattr(session, "provider", None))
+    project = _clean_label(getattr(session, "project", None))
+    tool_name = _clean_label(current_tool_name)
+    title = _session_title(session)
+    summary = str(getattr(session, "summary", "") or "").strip() or title
+    collapse_id = _collapse_id("lh-attn-reminder", str(session.id))
+    stamp_state = "blocked:reminded"
+    state_key = f"blocked:{previous_stamp_at.isoformat()}"
+    notification_event = _create_notification_event(
+        db,
+        owner_id=owner_id,
+        session_id=str(session.id),
+        event_type=NOTIFICATION_EVENT_SESSION_BLOCKED_REMINDER,
+        state_key=state_key,
+        collapse_key=collapse_id,
+        occurred_at=occurred_at,
+    )
+    session.last_attention_push_at = occurred_at
+    session.last_attention_push_state = stamp_state
+
+    return SessionAttentionPush(
+        session_id=str(session.id),
+        state="blocked",
+        occurred_at=occurred_at,
+        title=title,
+        summary=summary,
+        project=project,
+        provider=provider,
+        tool_name=tool_name,
+        alert_title="Still needs permission",
+        alert_body=_attention_alert_body(state="blocked", project=project, title=title, tool_name=tool_name),
+        collapse_id=collapse_id,
+        targets=targets,
+        event_type=NOTIFICATION_EVENT_SESSION_BLOCKED_REMINDER,
+        notification_event_id=str(notification_event.id),
+        previous_stamp_state=previous_stamp_state,
+        previous_stamp_at=previous_stamp_at,
+        stamp_state=stamp_state,
     )
 
 
@@ -303,7 +524,11 @@ def prepare_session_attention_resolution_push(
     last_attention_push_state = str(session.last_attention_push_state or "").strip() or None
     # The raw marker must match the unresolved state. A ":resolved" suffix means
     # this visible alert has already had one cleanup push scheduled.
-    if last_attention_push_state != previous_state or last_attention_push_at is None:
+    if (
+        _base_attention_state(last_attention_push_state) != previous_state
+        or last_attention_push_state == _resolved_attention_state(previous_state)
+        or last_attention_push_at is None
+    ):
         return None
 
     if targets is _TARGETS_SENTINEL:
@@ -312,6 +537,12 @@ def prepare_session_attention_resolution_push(
         return None
 
     session.last_attention_push_state = _resolved_attention_state(previous_state)
+    _mark_attention_events_resolved(
+        db,
+        owner_id=owner_id,
+        session_id=str(session.id),
+        occurred_at=occurred_at,
+    )
 
     return SessionAttentionResolutionPush(
         session_id=str(session.id),
@@ -512,15 +743,21 @@ async def send_presence_pushes(
             push_sent = await send_session_attention_push(attention_push)
         except Exception:
             logger.exception("Failed to send APNs attention push for session %s", attention_push.session_id)
+
+        def _record_attention_result(write_db: Session) -> bool:
+            return record_notification_delivery_result(
+                write_db,
+                event_id=attention_push.notification_event_id,
+                channel=NOTIFICATION_CHANNEL_APNS_IOS,
+                accepted=push_sent,
+                occurred_at=datetime.now(timezone.utc),
+            )
+
+        await ws.execute_or_direct(_record_attention_result, db, label=f"{dispatch_label_prefix}-attention-record")
         if not push_sent:
 
             def _clear_attention(write_db: Session):
-                clear_session_attention_push_stamp(
-                    write_db,
-                    session_id=attention_push.session_id,
-                    state=attention_push.state,
-                    occurred_at=attention_push.occurred_at,
-                )
+                rollback_session_attention_push_stamp(write_db, notification=attention_push)
 
             await ws.execute_or_direct(_clear_attention, db, label=f"{dispatch_label_prefix}-attention-clear")
 
@@ -997,9 +1234,9 @@ def _resolved_attention_state(state: str) -> str:
 
 def _base_attention_state(state: str | None) -> str | None:
     value = str(state or "").strip()
-    if value.endswith(":resolved"):
-        value = value[: -len(":resolved")]
-    return value if value in ATTENTION_PUSH_STATES else None
+    if ":" in value:
+        value = value.split(":", 1)[0]
+    return value if value in RESOLVABLE_ATTENTION_PUSH_STATES else None
 
 
 def _same_instant(left: datetime | None, right: datetime) -> bool:
