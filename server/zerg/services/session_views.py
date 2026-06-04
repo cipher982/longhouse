@@ -161,7 +161,13 @@ def build_session_capabilities_response(
         can_terminate=(bool(kernel_capabilities.can_terminate) and control_available if kernel_capabilities is not None else False),
         can_tail_output=(kernel_capabilities.can_tail_output if kernel_capabilities is not None else False),
         can_resume=(bool(kernel_capabilities.can_resume) and not lifecycle_closed if kernel_capabilities is not None else False),
-        can_continue=bool(can_continue) and not lifecycle_closed,
+        # can_continue means "launch a fresh managed process from this
+        # transcript" — a CLOSED-session operation by definition. Do NOT gate it
+        # on lifecycle_closed; that defeated the whole resume feature (the button
+        # vanished the moment the session closed). It is already self-gated:
+        # can_continue is only true when a native continue target exists, which
+        # requires proven managed-control history (thread_ever_had_managed_control).
+        can_continue=bool(can_continue),
         continue_targets=continue_targets or [],
         attach_images=_attach_images_capability(capability_flags, live_control_available=effective_live_control),
     )
