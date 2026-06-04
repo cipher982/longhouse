@@ -359,6 +359,11 @@ def launch(
     ),
     claude_dir: Path | None = typer.Option(None, "--claude-dir", file_okay=False, dir_okay=True, resolve_path=True),
     wait_ready_secs: float = typer.Option(20.0, "--wait-ready-secs", min=0.1),
+    resume: bool = typer.Option(
+        False,
+        "--resume",
+        help="Resume an existing Claude session by id instead of creating a new one.",
+    ),
 ) -> None:
     """Launch a detached Claude channel session for the Machine Agent control path."""
 
@@ -374,6 +379,7 @@ def launch(
             token=api_token,
             config_dir=claude_dir,
             wait_ready_secs=wait_ready_secs,
+            resume=resume,
         )
     except Exception as exc:
         typer.echo(

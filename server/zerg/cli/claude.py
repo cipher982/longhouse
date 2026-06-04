@@ -381,6 +381,7 @@ def _launch_detached_native_claude_channel(
     token: str,
     config_dir: Path | None = None,
     wait_ready_secs: float = 20.0,
+    resume: bool = False,
 ) -> dict:
     _ensure_native_claude_prereqs(
         base_url=base_url,
@@ -392,7 +393,7 @@ def _launch_detached_native_claude_channel(
         provider_session_id=provider_session_id,
         longhouse_session_id=session_id,
         cwd=str(cwd),
-        resume=False,
+        resume=resume,
         hook_url=base_url,
     )
     log_path = _remote_launch_log_path(session_id=session_id, config_dir=config_dir)

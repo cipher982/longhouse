@@ -98,6 +98,34 @@ def test_build_claude_channel_exec_command_uses_development_channel_flag():
     assert "LONGHOUSE_CHANNEL_CWD=/tmp/demo" in command
 
 
+def test_build_claude_channel_exec_command_fresh_uses_session_id_flag():
+    command = build_claude_channel_exec_command(
+        provider_session_id="11111111-1111-1111-1111-111111111111",
+        longhouse_session_id="11111111-1111-1111-1111-111111111111",
+        cwd="/tmp/demo",
+        resume=False,
+        claude_command="claude",
+    )
+
+    # Fresh launch pins the session id; it must NOT resume.
+    assert "--session-id 11111111-1111-1111-1111-111111111111" in command
+    assert "--resume" not in command
+
+
+def test_build_claude_channel_exec_command_resume_uses_resume_flag():
+    command = build_claude_channel_exec_command(
+        provider_session_id="11111111-1111-1111-1111-111111111111",
+        longhouse_session_id="11111111-1111-1111-1111-111111111111",
+        cwd="/tmp/demo",
+        resume=True,
+        claude_command="claude",
+    )
+
+    # Resume re-opens the existing provider session by id.
+    assert "--resume 11111111-1111-1111-1111-111111111111" in command
+    assert "--session-id 11111111-1111-1111-1111-111111111111" not in command
+
+
 def test_claude_channel_bridge_emits_channel_notification_after_init(tmp_path):
     session_id = "11111111-1111-1111-1111-111111111111"
     provider_session_id = "provider-123"

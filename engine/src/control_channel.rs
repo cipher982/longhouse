@@ -768,8 +768,20 @@ async fn execute_command(
             let resume_target = payload_resume_target(&payload)?;
 
             if provider == "claude" {
-                return launch_claude_channel_session(session_id.clone(), cwd, api_url, api_token)
-                    .await;
+                // Claude resumes by id: the managed launch pinned
+                // `claude --session-id <longhouse-uuid>`, so the resume target's
+                // thread_id is that same id. No transcript path is needed
+                // (unlike codex) — `claude --resume <id>` reads the local store.
+                let resume_provider_session_id =
+                    resume_target.as_ref().map(|target| target.thread_id.clone());
+                return launch_claude_channel_session(
+                    session_id.clone(),
+                    cwd,
+                    api_url,
+                    api_token,
+                    resume_provider_session_id,
+                )
+                .await;
             }
             if provider == "opencode" {
                 return launch_opencode_server_session(
@@ -1386,27 +1398,56 @@ fn normalize_provider_version(raw: &str) -> Option<String> {
     Some(value.trim_start_matches('v').to_ascii_lowercase())
 }
 
+/// Build the `longhouse claude-channel launch` argv for a fresh or resumed
+/// session. Pure + side-effect free so the resume wiring is unit-testable.
+///
+/// On resume the provider session id is the id claude should re-open
+/// (`claude --resume <id>`); on a fresh launch it mirrors the longhouse id.
+fn claude_channel_launch_args(
+    session_id: &str,
+    cwd: &Path,
+    api_url: &str,
+    resume_provider_session_id: Option<&str>,
+) -> Vec<String> {
+    let provider_session_id = resume_provider_session_id.unwrap_or(session_id);
+    let mut args = vec![
+        "claude-channel".to_string(),
+        "launch".to_string(),
+        "--session-id".to_string(),
+        session_id.to_string(),
+        "--provider-session-id".to_string(),
+        provider_session_id.to_string(),
+        "--cwd".to_string(),
+        cwd.display().to_string(),
+        "--api-url".to_string(),
+        api_url.to_string(),
+        "--wait-ready-secs".to_string(),
+        LAUNCH_START_TIMEOUT_SECS.to_string(),
+    ];
+    if resume_provider_session_id.is_some() {
+        args.push("--resume".to_string());
+    }
+    args
+}
+
 async fn launch_claude_channel_session(
     session_id: String,
     cwd: PathBuf,
     api_url: String,
     api_token: String,
+    resume_provider_session_id: Option<String>,
 ) -> std::result::Result<Value, CommandError> {
+    let provider_session_id = resume_provider_session_id
+        .clone()
+        .unwrap_or_else(|| session_id.clone());
+    let args = claude_channel_launch_args(
+        &session_id,
+        &cwd,
+        &api_url,
+        resume_provider_session_id.as_deref(),
+    );
     let output = run_longhouse_command(
-        vec![
-            "claude-channel".to_string(),
-            "launch".to_string(),
-            "--session-id".to_string(),
-            session_id.clone(),
-            "--provider-session-id".to_string(),
-            session_id.clone(),
-            "--cwd".to_string(),
-            cwd.display().to_string(),
-            "--api-url".to_string(),
-            api_url,
-            "--wait-ready-secs".to_string(),
-            LAUNCH_START_TIMEOUT_SECS.to_string(),
-        ],
+        args,
         LAUNCH_START_TIMEOUT_SECS * 2,
         vec![("LONGHOUSE_CLAUDE_REMOTE_LAUNCH_TOKEN", api_token)],
     )
@@ -1425,14 +1466,20 @@ async fn launch_claude_channel_session(
                 output.stderr.trim()
             ),
         })?;
+    let resolved_provider_session_id = payload
+        .get("provider_session_id")
+        .and_then(Value::as_str)
+        .unwrap_or(&provider_session_id)
+        .to_string();
     Ok(json!({
         "session_id": payload.get("session_id").and_then(Value::as_str).unwrap_or(&session_id),
         "provider": "claude",
         "transport": "claude_channel_bridge",
-        "provider_session_id": payload
-            .get("provider_session_id")
-            .and_then(Value::as_str)
-            .unwrap_or(&session_id),
+        "provider_session_id": resolved_provider_session_id,
+        // Echo thread_id so server-side late reconciliation can attach the new
+        // run even when the synchronous response is lost. For claude the thread
+        // id is the provider session id.
+        "thread_id": resolved_provider_session_id,
         "pid": payload.get("pid").cloned().unwrap_or(Value::Null),
         "log_path": payload.get("log_path").cloned().unwrap_or(Value::Null),
     }))
@@ -1872,6 +1919,40 @@ mod tests {
         assert!(supports
             .iter()
             .any(|item| item.as_str() == Some("codex.continue")));
+    }
+
+    #[test]
+    fn claude_channel_launch_args_fresh_has_no_resume() {
+        let args = claude_channel_launch_args(
+            "sess-123",
+            Path::new("/Users/me/git/zeta"),
+            "https://example.test",
+            None,
+        );
+        // Fresh launch pins the provider session id to the longhouse id and
+        // does NOT pass --resume.
+        assert!(!args.iter().any(|a| a == "--resume"));
+        let provider_idx = args.iter().position(|a| a == "--provider-session-id").unwrap();
+        assert_eq!(args[provider_idx + 1], "sess-123");
+    }
+
+    #[test]
+    fn claude_channel_launch_args_resume_threads_id_and_flag() {
+        // Claude resumes by id; for managed sessions that id == the longhouse
+        // session id, but the resolver is the source of truth so we pass it
+        // through explicitly rather than assuming equality here.
+        let args = claude_channel_launch_args(
+            "sess-123",
+            Path::new("/Users/me/git/zeta"),
+            "https://example.test",
+            Some("sess-123"),
+        );
+        assert!(args.iter().any(|a| a == "--resume"));
+        let provider_idx = args.iter().position(|a| a == "--provider-session-id").unwrap();
+        assert_eq!(args[provider_idx + 1], "sess-123");
+        // --session-id is always the longhouse id.
+        let session_idx = args.iter().position(|a| a == "--session-id").unwrap();
+        assert_eq!(args[session_idx + 1], "sess-123");
     }
 
     #[test]
