@@ -85,6 +85,7 @@ _LABEL_PRIORITIES: dict[str, int] = {
     "session-turn-terminal": 15,
     "presence": 20,
     "presence-flush": 20,
+    "client-presence": 30,
     "runner-output": 20,
     "runner-job-complete": 20,
     "runner-job-error": 20,

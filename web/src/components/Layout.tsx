@@ -10,6 +10,7 @@ import { useBodyScrollLock } from "../hooks/useBodyScrollLock";
 import { useClickOutside } from "../hooks/useClickOutside";
 import { useDocumentVisible } from "../hooks/useDocumentVisible";
 import { useEscapeKey } from "../hooks/useEscapeKey";
+import { useWebClientPresence } from "../hooks/useWebClientPresence";
 import { useConfirm } from "./confirm";
 import { fetchRunnerStatus } from "../services/api";
 import { SwarmLogo } from "./SwarmLogo";
@@ -440,6 +441,8 @@ function StatusFooter() {
 }
 
 export default function Layout({ children }: PropsWithChildren) {
+  useWebClientPresence();
+
   return (
     <>
       <WelcomeHeader />

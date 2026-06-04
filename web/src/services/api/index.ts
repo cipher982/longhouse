@@ -10,3 +10,4 @@ export * from "./system";
 export * from "./sessionChat";
 export * from "./launch";
 export * from "./telemetry";
+export * from "./clientPresence";

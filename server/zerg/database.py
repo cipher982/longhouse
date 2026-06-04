@@ -158,6 +158,7 @@ try:
     from zerg.models.models import User  # noqa: F401
     from zerg.models.models import UserSkill  # noqa: F401
     from zerg.models.models import UserTask  # noqa: F401
+    from zerg.models.notification_client_presence import NotificationClientPresence  # noqa: F401
     from zerg.models.notification_event import NotificationEvent  # noqa: F401
     from zerg.models.work import Insight  # noqa: F401
 except ImportError:
@@ -518,6 +519,7 @@ def initialize_database(engine: Engine = None) -> None:
     from zerg.models.models import ThreadMessage  # noqa: F401
     from zerg.models.models import User  # noqa: F401
     from zerg.models.models import UserTask  # noqa: F401
+    from zerg.models.notification_client_presence import NotificationClientPresence  # noqa: F401
     from zerg.models.notification_event import NotificationEvent  # noqa: F401
     from zerg.models.work import Insight  # noqa: F401
 

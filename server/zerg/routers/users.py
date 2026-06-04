@@ -5,6 +5,8 @@ routes require authentication so we rely on the existing `get_current_user`
 dependency to supply the active user.
 """
 
+from datetime import datetime
+from datetime import timezone
 from typing import Literal
 
 from fastapi import APIRouter
@@ -15,6 +17,7 @@ from fastapi import Query
 from fastapi import UploadFile
 from fastapi import status
 from pydantic import BaseModel
+from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.crud import update_user
@@ -24,6 +27,7 @@ from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
 from zerg.events import EventType
 from zerg.events.decorators import publish_event
+from zerg.models.notification_client_presence import NotificationClientPresence
 from zerg.models.user import User
 from zerg.schemas.schemas import UserOut
 from zerg.schemas.schemas import UserUpdate
@@ -36,6 +40,8 @@ from zerg.services.avatar_service import store_avatar_for_user
 
 # Usage service
 from zerg.services.usage_service import get_user_usage
+from zerg.services.write_serializer import get_write_serializer
+from zerg.utils.time import UTCBaseModel
 
 router = APIRouter(tags=["users"], dependencies=[Depends(get_current_user)])
 
@@ -46,6 +52,23 @@ class UserNotificationSettingsResponse(BaseModel):
 
 class UserNotificationSettingsUpdate(BaseModel):
     apns_enabled: bool
+
+
+class UserClientPresenceHeartbeat(BaseModel):
+    client_id: str = Field(min_length=8, max_length=128)
+    client_type: Literal["web"] = "web"
+    visible: bool
+    route: str | None = Field(default=None, max_length=512)
+    session_id: str | None = Field(default=None, max_length=80)
+
+
+class UserClientPresenceResponse(UTCBaseModel):
+    client_id: str
+    client_type: Literal["web"]
+    visible: bool
+    route: str | None
+    session_id: str | None
+    last_seen_at: datetime
 
 
 # ---------------------------------------------------------------------------
@@ -133,6 +156,60 @@ async def update_current_user_notification_settings(
     db.commit()
     db.refresh(user)
     return UserNotificationSettingsResponse(apns_enabled=user_apns_enabled(user))
+
+
+@router.post("/users/me/client-presence", response_model=UserClientPresenceResponse)
+async def update_current_user_client_presence(
+    heartbeat: UserClientPresenceHeartbeat,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+) -> UserClientPresenceResponse:
+    """Record whether a browser client is actively watching Longhouse."""
+
+    owner_id = int(current_user.id)
+    now = datetime.now(timezone.utc)
+
+    def _upsert_client_presence(write_db: Session) -> UserClientPresenceResponse:
+        row = (
+            write_db.query(NotificationClientPresence)
+            .filter(
+                NotificationClientPresence.owner_id == owner_id,
+                NotificationClientPresence.client_id == heartbeat.client_id,
+            )
+            .first()
+        )
+        if row is None:
+            row = NotificationClientPresence(
+                owner_id=owner_id,
+                client_id=heartbeat.client_id,
+                client_type=heartbeat.client_type,
+                visible=heartbeat.visible,
+                route=heartbeat.route,
+                session_id=heartbeat.session_id,
+                last_seen_at=now,
+            )
+            write_db.add(row)
+        else:
+            row.client_type = heartbeat.client_type
+            row.visible = heartbeat.visible
+            row.route = heartbeat.route
+            row.session_id = heartbeat.session_id
+            row.last_seen_at = now
+        write_db.flush()
+        return UserClientPresenceResponse(
+            client_id=row.client_id,
+            client_type="web",
+            visible=bool(row.visible),
+            route=row.route,
+            session_id=row.session_id,
+            last_seen_at=row.last_seen_at,
+        )
+
+    return await get_write_serializer().execute_or_direct(
+        _upsert_client_presence,
+        db,
+        label="client-presence",
+    )
 
 
 # ---------------------------------------------------------------------------

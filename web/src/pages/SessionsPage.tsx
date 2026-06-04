@@ -17,6 +17,7 @@ import { toast } from "react-hot-toast";
 import { config } from "../lib/config";
 import { useAgentSessions, useAgentFilters } from "../hooks/useAgentSessions";
 import { useDocumentVisible } from "../hooks/useDocumentVisible";
+import { useAmbientSessionAttentionCue } from "../hooks/useAmbientSessionAttentionCue";
 import { useTimelineSessionStream } from "../hooks/useTimelineSessionStream";
 import { useReadinessFlag } from "../lib/readiness-contract";
 import {
@@ -277,6 +278,7 @@ export default function SessionsPage() {
   });
 
   const threadCards = sessions;
+  useAmbientSessionAttentionCue(threadCards);
 
   // PageShell owns scroll detection and CSS class toggling; we only track the
   // timestamp here to gate hover-prefetch intent.
