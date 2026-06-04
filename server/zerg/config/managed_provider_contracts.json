@@ -90,7 +90,7 @@
       "tail_output": true,
       "runtime_phase": true,
       "transcript_binding": true,
-      "can_resume": false,
+      "can_resume": true,
       "operation_evidence": {
         "launch_local": {
           "level": "live_no_token",
@@ -140,7 +140,7 @@
           "next": "promote when Claude release-canary live transcript assertion exists"
         }
       },
-      "machine_control_supports": ["claude.send", "claude.interrupt", "claude.steer", "claude.launch"]
+      "machine_control_supports": ["claude.send", "claude.interrupt", "claude.steer", "claude.launch", "claude.continue"]
     },
     {
       "provider": "opencode",

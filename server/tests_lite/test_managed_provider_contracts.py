@@ -151,7 +151,14 @@ def test_claude_contract_is_first_class_channel_control_provider():
     assert claude.steer_active_turn is True
     assert claude.operation_evidence_for("steer_active_turn")["level"] == "live_token"
     assert "scheduled live token canary" in claude.operation_evidence_for("steer_active_turn")["next"]
-    assert claude.machine_control_supports == ("claude.send", "claude.interrupt", "claude.steer", "claude.launch")
+    assert claude.can_resume is True
+    assert claude.machine_control_supports == (
+        "claude.send",
+        "claude.interrupt",
+        "claude.steer",
+        "claude.launch",
+        "claude.continue",
+    )
 
 
 def test_opencode_contract_is_server_bridge_control_provider_without_active_turn_steer():

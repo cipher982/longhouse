@@ -1956,6 +1956,25 @@ mod tests {
     }
 
     #[test]
+    fn control_channel_advertises_claude_continue() {
+        let claude_contract = managed_provider_contract_items()
+            .iter()
+            .find(|item| item.get("provider").and_then(Value::as_str) == Some("claude"))
+            .expect("claude contract exists");
+        let supports = claude_contract
+            .get("machine_control_supports")
+            .and_then(Value::as_array)
+            .expect("claude contract has machine_control_supports");
+        assert!(supports
+            .iter()
+            .any(|item| item.as_str() == Some("claude.continue")));
+        assert_eq!(
+            claude_contract.get("can_resume").and_then(Value::as_bool),
+            Some(true)
+        );
+    }
+
+    #[test]
     fn remote_codex_launch_uses_interactive_managed_defaults() {
         let (approval_policy, sandbox) = remote_codex_bridge_defaults();
 
