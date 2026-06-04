@@ -1198,6 +1198,63 @@ def test_continue_rejects_unmanaged_claude_without_managed_connection(tmp_path):
     assert registry.sent == []
 
 
+def test_adopted_control_claude_session_is_continuable(tmp_path):
+    """A claude session Longhouse ADOPTED (adopted_control) is managed and
+    continuable — adopted sessions are keyed by the provider's own id which
+    becomes session.id, so `claude --resume <session.id>` is correct."""
+
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        sid = uuid4()
+        session = AgentSession(
+            id=sid,
+            provider="claude",
+            environment="development",
+            project="repo",
+            device_id="cinder",
+            device_name="cinder",
+            cwd="/Users/me/repo",
+            started_at=now,
+            ended_at=now,
+            last_activity_at=now,
+            thread_root_session_id=sid,
+            continuation_kind="local",
+            origin_label="cinder",
+            user_messages=1,
+            assistant_messages=1,
+            tool_calls=0,
+            is_writable_head=1,
+            is_sidechain=0,
+        )
+        db.add(session)
+        db.flush()
+        thread = ensure_primary_thread(db, session)
+        record_thread_alias(
+            db, thread=thread, provider="claude", alias_kind="provider_session_id", alias_value=str(sid)
+        )
+        run = record_run(db, thread=thread, provider="claude", host_id="cinder", cwd="/Users/me/repo")
+        upsert_connection_for_run(
+            db,
+            run=run,
+            control_plane="claude_channel_bridge",
+            acquisition_kind="adopted_control",
+            state="released",
+            external_name="cinder",
+            can_send_input=0,
+            can_interrupt=0,
+            can_terminate=0,
+            can_tail_output=0,
+            can_resume=1,
+        )
+        db.commit()
+        workspace = build_session_workspace(db=db, session_id=sid, owner_id=OWNER_ID)
+        assert workspace.session.capabilities.can_continue is True
+        assert workspace.session.capabilities.continue_targets[0].carry_context == "native"
+
+
 def test_continue_claude_capability_required(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)
