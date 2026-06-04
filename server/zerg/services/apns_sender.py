@@ -166,14 +166,20 @@ def record_notification_delivery_result(
     if event is None:
         return False
 
+    occurred_at_utc = _as_aware_utc(occurred_at)
     channel_results = dict(getattr(event, "channel_results", None) or {})
     channel_results[channel] = {
         "accepted": bool(accepted),
-        "attempted_at": _as_aware_utc(occurred_at).isoformat() if _as_aware_utc(occurred_at) else None,
+        "attempted_at": occurred_at_utc.isoformat() if occurred_at_utc else None,
     }
     event.channel_results = channel_results
     if accepted:
         event.delivered_at = occurred_at
+    else:
+        event.failed_at = occurred_at
+        # No delivered alert exists to resolve. Close the audit row so future
+        # unresolved-attention queries do not accumulate failed attempts.
+        event.resolved_at = occurred_at
     return True
 
 
@@ -390,7 +396,7 @@ def prepare_session_attention_push(
         owner_id=owner_id,
         session_id=str(session.id),
         event_type=NOTIFICATION_EVENT_SESSION_BLOCKED,
-        state_key=current_state,
+        state_key=f"{current_state}:{occurred_at.isoformat()}",
         collapse_key=collapse_id,
         occurred_at=occurred_at,
     )
@@ -750,7 +756,7 @@ async def send_presence_pushes(
                 event_id=attention_push.notification_event_id,
                 channel=NOTIFICATION_CHANNEL_APNS_IOS,
                 accepted=push_sent,
-                occurred_at=datetime.now(timezone.utc),
+                occurred_at=attention_push.occurred_at,
             )
 
         await ws.execute_or_direct(_record_attention_result, db, label=f"{dispatch_label_prefix}-attention-record")

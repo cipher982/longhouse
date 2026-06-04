@@ -29,6 +29,7 @@ class NotificationEvent(Base):
     event_started_at = Column(DateTime(timezone=True), nullable=False)
     eligible_at = Column(DateTime(timezone=True), nullable=False)
     delivered_at = Column(DateTime(timezone=True), nullable=True)
+    failed_at = Column(DateTime(timezone=True), nullable=True)
     resolved_at = Column(DateTime(timezone=True), nullable=True)
     dismissed_at = Column(DateTime(timezone=True), nullable=True)
     channel_results = Column(JSON, nullable=True)

@@ -51,6 +51,14 @@ def _cleanup_overrides():
     api_app.dependency_overrides.pop(verify_agents_token, None)
 
 
+def _db_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def _seed_user(SessionLocal, *, user_id: int = 1, prefs: dict | None = None):
     with SessionLocal() as db:
         user = User(id=user_id, email=f"user-{user_id}@example.com", role="ADMIN", prefs=prefs or {})
@@ -390,9 +398,10 @@ def test_presence_attention_transition_sends_and_debounces_push(tmp_path):
         event = events[0]
         assert event.owner_id == 1
         assert event.event_type == "session_blocked"
-        assert event.state_key == "blocked"
+        assert event.state_key == f"blocked:{(t0 + timedelta(seconds=20)).isoformat()}"
         assert event.collapse_key == f"lh-attn-{session_id}"
-        assert event.delivered_at is not None
+        assert _db_utc(event.delivered_at) == t0 + timedelta(seconds=20)
+        assert event.failed_at is None
         assert event.resolved_at is not None
         assert event.channel_results["apns_ios"]["accepted"] is True
 
@@ -635,6 +644,216 @@ def test_presence_blocked_reminder_sends_once_and_resolves_events(tmp_path):
         assert all(event.delivered_at is not None for event in events)
         assert all(event.resolved_at is not None for event in events)
         assert all(event.channel_results["apns_ios"]["accepted"] is True for event in events)
+
+    _cleanup_overrides()
+    engine.dispose()
+
+
+def test_presence_blocked_reminder_failure_restores_original_stamp(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+
+    with SessionLocal() as db:
+        db.add(User(id=1, email="user@example.com", role="ADMIN"))
+        db.commit()
+        db.add(
+            APNSDeviceRegistration(
+                owner_id=1,
+                platform="ios",
+                device_token="d" * 64,
+                push_environment="sandbox",
+                app_build_id="0.1.0-dev+aaaa1111",
+            )
+        )
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="test",
+                project="zerg",
+                started_at=datetime.now(timezone.utc),
+                loop_mode="assist",
+                summary_title="Approve migration",
+            )
+        )
+        db.commit()
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="devbox", id="token-1", owner_id=1)
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+    send_mock = AsyncMock(side_effect=[True, False])
+    resolution_send_mock = AsyncMock(return_value=True)
+
+    with (
+        patch("zerg.routers.presence.send_session_attention_push", send_mock),
+        patch("zerg.routers.presence.send_session_attention_resolution_push", resolution_send_mock),
+    ):
+        with TestClient(api_app) as client:
+            for state, seconds in [
+                ("blocked", 0),
+                ("blocked", 16 * 60),
+                ("idle", 17 * 60),
+            ]:
+                response = client.post(
+                    "/agents/presence",
+                    json={
+                        "session_id": session_id,
+                        "state": state,
+                        "tool_name": "Bash" if state == "blocked" else None,
+                        "occurred_at": (t0 + timedelta(seconds=seconds)).isoformat(),
+                    },
+                    headers={"X-Agents-Token": "device-token"},
+                )
+                assert response.status_code == 204, response.text
+
+    assert send_mock.await_count == 2
+    resolution_send_mock.assert_awaited_once()
+
+    with SessionLocal() as db:
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+        assert session is not None
+        assert session.last_attention_push_state == "blocked:resolved"
+        events = (
+            db.query(NotificationEvent)
+            .filter(NotificationEvent.session_id == session_id)
+            .order_by(NotificationEvent.event_started_at.asc())
+            .all()
+        )
+        assert [event.event_type for event in events] == ["session_blocked", "session_blocked_reminder"]
+        assert _db_utc(events[0].delivered_at) == t0
+        assert events[0].failed_at is None
+        assert events[0].resolved_at is not None
+        assert events[1].delivered_at is None
+        assert _db_utc(events[1].failed_at) == t0 + timedelta(minutes=16)
+        assert _db_utc(events[1].resolved_at) == t0 + timedelta(minutes=16)
+        assert events[1].channel_results["apns_ios"]["accepted"] is False
+
+    _cleanup_overrides()
+    engine.dispose()
+
+
+def test_runtime_blocked_events_record_notification_event_and_reminder(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+
+    with SessionLocal() as db:
+        db.add(User(id=1, email="user@example.com", role="ADMIN"))
+        db.commit()
+        db.add(
+            APNSDeviceRegistration(
+                owner_id=1,
+                platform="ios",
+                device_token="d" * 64,
+                push_environment="sandbox",
+                app_build_id="0.1.0-dev+aaaa1111",
+            )
+        )
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="test",
+                project="zerg",
+                started_at=datetime.now(timezone.utc),
+                loop_mode="assist",
+                summary_title="Runtime blocked session",
+            )
+        )
+        db.commit()
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="devbox", id="token-1", owner_id=1)
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+    send_mock = AsyncMock(return_value=True)
+    resolution_send_mock = AsyncMock(return_value=True)
+
+    class FrozenDateTime(datetime):
+        current = t0
+
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return cls.current.replace(tzinfo=None)
+            return cls.current.astimezone(tz)
+
+    def runtime_payload(phase: str, seconds: int, *, tool_name: str | None = None) -> dict:
+        occurred_at = t0 + timedelta(seconds=seconds)
+        return {
+            "events": [
+                {
+                    "runtime_key": f"codex:{session_id}",
+                    "session_id": session_id,
+                    "provider": "codex",
+                    "device_id": "devbox",
+                    "source": "codex_bridge",
+                    "kind": "phase_signal",
+                    "phase": phase,
+                    "tool_name": tool_name,
+                    "occurred_at": occurred_at.isoformat(),
+                    "freshness_ms": 24 * 60 * 60 * 1000 if phase == "blocked" else 10 * 60 * 1000,
+                    "dedupe_key": f"runtime:{phase}:{seconds}",
+                    "payload": {},
+                }
+            ]
+        }
+
+    with (
+        patch("zerg.routers.runtime.datetime", FrozenDateTime),
+        patch("zerg.services.apns_sender.send_session_attention_push", send_mock),
+        patch("zerg.services.apns_sender.send_session_attention_resolution_push", resolution_send_mock),
+    ):
+        with TestClient(api_app) as client:
+            for phase, seconds in [
+                ("blocked", 0),
+                ("blocked", 16 * 60),
+                ("idle", 17 * 60),
+            ]:
+                FrozenDateTime.current = t0 + timedelta(seconds=seconds)
+                response = client.post(
+                    "/agents/runtime/events/batch",
+                    json=runtime_payload(phase, seconds, tool_name="Bash" if phase == "blocked" else None),
+                    headers={"X-Agents-Token": "device-token"},
+                )
+                assert response.status_code == 200, response.text
+
+    assert send_mock.await_count == 2
+    resolution_send_mock.assert_awaited_once()
+
+    with SessionLocal() as db:
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+        assert session is not None
+        assert session.last_attention_push_state == "blocked:resolved"
+        events = (
+            db.query(NotificationEvent)
+            .filter(NotificationEvent.session_id == session_id)
+            .order_by(NotificationEvent.event_started_at.asc())
+            .all()
+        )
+        assert [event.event_type for event in events] == ["session_blocked", "session_blocked_reminder"]
+        assert all(event.delivered_at is not None for event in events)
+        assert all(event.resolved_at is not None for event in events)
 
     _cleanup_overrides()
     engine.dispose()
@@ -1290,7 +1509,8 @@ def test_presence_attention_send_failure_clears_debounce_stamp(tmp_path):
         )
         assert [event.event_type for event in events] == ["session_blocked", "session_blocked"]
         assert all(event.delivered_at is None for event in events)
-        assert all(event.resolved_at is None for event in events)
+        assert all(event.failed_at is not None for event in events)
+        assert all(event.resolved_at is not None for event in events)
         assert all(event.channel_results["apns_ios"]["accepted"] is False for event in events)
 
     _cleanup_overrides()

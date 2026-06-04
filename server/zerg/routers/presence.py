@@ -272,7 +272,7 @@ async def upsert_presence(
                 event_id=attention_push.notification_event_id,
                 channel=NOTIFICATION_CHANNEL_APNS_IOS,
                 accepted=push_sent,
-                occurred_at=datetime.now(timezone.utc),
+                occurred_at=attention_push.occurred_at,
             )
 
         await ws.execute_or_direct(_record_attention_result, db, label="presence-attention-record")
