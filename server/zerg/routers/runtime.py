@@ -20,6 +20,7 @@ from zerg.metrics import event_age_at_ingest_seconds
 from zerg.models.agents import AgentSession
 from zerg.services.apns_sender import WIDGET_PUSH_PLATFORM
 from zerg.services.apns_sender import active_ios_targets_for_owner
+from zerg.services.apns_sender import prepare_long_run_waiting_push
 from zerg.services.apns_sender import prepare_session_attention_push
 from zerg.services.apns_sender import prepare_session_attention_resolution_push
 from zerg.services.apns_sender import prepare_session_blocked_reminder_push
@@ -211,6 +212,15 @@ async def ingest_runtime_observation_batch(
                             current_state=canonical_state,
                             occurred_at=now_utc,
                             current_tool_name=context.get("tool"),
+                            targets=ios_targets,
+                        )
+                    if attention_push is None:
+                        attention_push = prepare_long_run_waiting_push(
+                            wdb,
+                            owner_id=owner_id,
+                            session_id=sid,
+                            current_state=canonical_state,
+                            occurred_at=now_utc,
                             targets=ios_targets,
                         )
                     prepared.append(

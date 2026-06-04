@@ -18,9 +18,11 @@ from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionRuntimeState
 from zerg.models.apns_device_registration import APNSDeviceRegistration
 from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration
 from zerg.models.apns_widget_push_state import APNSWidgetPushState
+from zerg.models.notification_client_presence import NotificationClientPresence
 from zerg.models.notification_event import NotificationEvent
 from zerg.models.user import User
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
@@ -34,6 +36,8 @@ ATTENTION_PUSH_STATES = {"blocked"}
 RESOLVABLE_ATTENTION_PUSH_STATES = ATTENTION_PUSH_STATES | {"needs_user"}
 ATTENTION_PUSH_DEBOUNCE = timedelta(seconds=30)
 BLOCKED_REMINDER_DELAY = timedelta(minutes=15)
+LONG_RUN_WAITING_THRESHOLD = timedelta(minutes=30)
+WEB_CLIENT_PRESENCE_SUPPRESSION_WINDOW = timedelta(seconds=90)
 WIDGET_PUSH_DEBOUNCE = timedelta(seconds=30)
 WIDGET_PUSH_PLATFORM = "ios_widget"
 LIVE_ACTIVITY_PUSH_DEBOUNCE = timedelta(seconds=15)
@@ -41,6 +45,7 @@ ATTENTION_NOTIFICATION_CATEGORY = "LONGHOUSE_SESSION_ATTENTION"
 ATTENTION_NOTIFICATION_THREAD_PREFIX = "longhouse-session"
 NOTIFICATION_EVENT_SESSION_BLOCKED = "session_blocked"
 NOTIFICATION_EVENT_SESSION_BLOCKED_REMINDER = "session_blocked_reminder"
+NOTIFICATION_EVENT_LONG_RUN_WAITING = "long_run_waiting"
 NOTIFICATION_CHANNEL_APNS_IOS = "apns_ios"
 PROVIDER_DISPLAY_NAMES = {
     "claude": "Claude",
@@ -72,7 +77,7 @@ class APNSDeviceTarget:
 @dataclass(frozen=True)
 class SessionAttentionPush:
     session_id: str
-    state: Literal["blocked"]
+    state: Literal["blocked", "needs_user"]
     occurred_at: datetime
     title: str
     summary: str
@@ -309,6 +314,7 @@ def _mark_attention_events_resolved(
                 [
                     NOTIFICATION_EVENT_SESSION_BLOCKED,
                     NOTIFICATION_EVENT_SESSION_BLOCKED_REMINDER,
+                    NOTIFICATION_EVENT_LONG_RUN_WAITING,
                 ]
             ),
             NotificationEvent.resolved_at.is_(None),
@@ -504,6 +510,117 @@ def prepare_session_blocked_reminder_push(
     )
 
 
+def _recent_visible_web_client_exists(db: Session, *, owner_id: int, occurred_at: datetime) -> bool:
+    threshold = occurred_at - WEB_CLIENT_PRESENCE_SUPPRESSION_WINDOW
+    return (
+        db.query(NotificationClientPresence.id)
+        .filter(
+            NotificationClientPresence.owner_id == owner_id,
+            NotificationClientPresence.client_type == "web",
+            NotificationClientPresence.visible.is_(True),
+            NotificationClientPresence.last_seen_at >= threshold,
+        )
+        .first()
+        is not None
+    )
+
+
+def _session_execution_started_at(db: Session, *, session_id) -> datetime | None:
+    runtime_state = (
+        db.query(SessionRuntimeState)
+        .filter(SessionRuntimeState.session_id == session_id)
+        .order_by(SessionRuntimeState.updated_at.desc(), SessionRuntimeState.runtime_version.desc())
+        .first()
+    )
+    if runtime_state is None:
+        return None
+    return _as_aware_utc(runtime_state.execution_started_at)
+
+
+def _long_run_alert_body(*, project: str | None, title: str, elapsed: timedelta) -> str:
+    elapsed_minutes = max(1, int(elapsed.total_seconds() // 60))
+    parts: list[str] = []
+    if project:
+        parts.append(project)
+    parts.append(f"Ran {elapsed_minutes}m")
+    parts.append(title)
+    return _trim_alert_text(" · ".join(parts))
+
+
+def prepare_long_run_waiting_push(
+    db: Session,
+    *,
+    owner_id: int | None,
+    session_id,
+    current_state: str | None,
+    occurred_at: datetime,
+    targets: tuple[APNSDeviceTarget, ...] | None | object = _TARGETS_SENTINEL,
+) -> SessionAttentionPush | None:
+    if owner_id is None or session_id is None or current_state != "needs_user":
+        return None
+
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if session is None:
+        return None
+
+    execution_started_at = _session_execution_started_at(db, session_id=session_id)
+    if execution_started_at is None:
+        return None
+    elapsed = occurred_at - execution_started_at
+    if elapsed < LONG_RUN_WAITING_THRESHOLD:
+        return None
+
+    previous_stamp_state = str(session.last_attention_push_state or "").strip() or None
+    previous_stamp_at = _as_aware_utc(session.last_attention_push_at)
+    if previous_stamp_state == "needs_user":
+        return None
+    if _recent_visible_web_client_exists(db, owner_id=owner_id, occurred_at=occurred_at):
+        return None
+
+    if targets is _TARGETS_SENTINEL:
+        targets = _active_ios_targets_for_owner(db, owner_id=owner_id, log_context="long-run waiting push")
+    if not targets:
+        return None
+
+    provider = _clean_label(getattr(session, "provider", None))
+    project = _clean_label(getattr(session, "project", None))
+    title = _session_title(session)
+    summary = str(getattr(session, "summary", "") or "").strip() or title
+    collapse_id = _attention_collapse_id(str(session.id))
+    state_key = f"needs_user:{execution_started_at.isoformat()}"
+    notification_event = _create_notification_event(
+        db,
+        owner_id=owner_id,
+        session_id=str(session.id),
+        event_type=NOTIFICATION_EVENT_LONG_RUN_WAITING,
+        state_key=state_key,
+        collapse_key=collapse_id,
+        occurred_at=occurred_at,
+    )
+    session.last_attention_push_at = occurred_at
+    session.last_attention_push_state = "needs_user"
+
+    return SessionAttentionPush(
+        session_id=str(session.id),
+        state="needs_user",
+        occurred_at=occurred_at,
+        title=title,
+        summary=summary,
+        project=project,
+        provider=provider,
+        tool_name=None,
+        alert_title="Ready for you",
+        alert_body=_long_run_alert_body(project=project, title=title, elapsed=elapsed),
+        collapse_id=collapse_id,
+        targets=targets,
+        event_type=NOTIFICATION_EVENT_LONG_RUN_WAITING,
+        notification_event_id=str(notification_event.id),
+        previous_stamp_state=previous_stamp_state,
+        previous_stamp_at=previous_stamp_at,
+        stamp_state="needs_user",
+    )
+
+
 def prepare_session_attention_resolution_push(
     db: Session,
     *,
@@ -519,6 +636,7 @@ def prepare_session_attention_resolution_push(
         or session_id is None
         or previous_state not in RESOLVABLE_ATTENTION_PUSH_STATES
         or current_state in ATTENTION_PUSH_STATES
+        or current_state == previous_state
     ):
         return None
 

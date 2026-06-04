@@ -729,6 +729,7 @@ def _state_snapshot(state: SessionRuntimeState | None) -> tuple[Any, ...] | None
         state.phase_source,
         state.active_tool,
         normalize_utc(state.phase_started_at),
+        normalize_utc(state.execution_started_at),
         normalize_utc(state.last_runtime_signal_at),
         normalize_utc(state.last_progress_at),
         normalize_utc(state.last_live_at),
@@ -760,6 +761,7 @@ def _ensure_state(db: Session, event: RuntimeEventIngest) -> SessionRuntimeState
         phase_source="fallback",
         active_tool=None,
         phase_started_at=occurred_at,
+        execution_started_at=occurred_at if (event.phase or "").strip() in LIVE_EXECUTION_PHASES else None,
         last_runtime_signal_at=None,
         last_progress_at=None,
         last_live_at=None,
@@ -856,6 +858,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
             if phase_changed and _phase_reanchors(state.phase, next_phase):
                 state.timeline_anchor_at = occurred_at
             state.phase_started_at = occurred_at
+        previous_phase = (state.phase or "idle").strip() or "idle"
         state.phase = next_phase
         event_source = str(event.source or "").strip()
         state.phase_source = event_source if event_source in MANAGED_CODEX_RUNTIME_SOURCES else "semantic"
@@ -863,6 +866,11 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
             state.active_tool = next_active_tool
         else:
             state.active_tool = None
+        if next_phase in LIVE_EXECUTION_PHASES:
+            if previous_phase not in LIVE_EXECUTION_PHASES or state.execution_started_at is None:
+                state.execution_started_at = occurred_at
+        elif next_phase != "needs_user":
+            state.execution_started_at = None
         state.last_runtime_signal_at = occurred_at
         freshness_base_at = _managed_lease_refresh_at(event, occurred_at)
         state.last_live_at = _latest_timestamp(occurred_at, freshness_base_at)
@@ -892,6 +900,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
             state.freshness_expires_at = None
             state.phase_started_at = occurred_at
             state.phase_source = "progress"
+            state.execution_started_at = None
         if state.terminal_state is not None and (
             normalize_utc(state.terminal_at) is None or occurred_at >= normalize_utc(state.terminal_at)
         ):
@@ -904,6 +913,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
             state.freshness_expires_at = None
             state.phase_started_at = occurred_at
             state.phase_source = "progress"
+            state.execution_started_at = None
         if state.phase_source in {"fallback", "progress"}:
             state.phase_source = "progress"
 
@@ -928,6 +938,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         state.phase = "finished"
         state.phase_source = "semantic"
         state.active_tool = None
+        state.execution_started_at = None
         state.last_runtime_signal_at = occurred_at
         state.last_live_at = occurred_at
         state.freshness_expires_at = occurred_at

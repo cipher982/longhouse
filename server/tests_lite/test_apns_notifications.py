@@ -25,6 +25,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.apns_device_registration import APNSDeviceRegistration
 from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration
 from zerg.models.apns_widget_push_state import APNSWidgetPushState
+from zerg.models.notification_client_presence import NotificationClientPresence
 from zerg.models.notification_event import NotificationEvent
 from zerg.models.user import User
 from zerg.services.apns_sender import ATTENTION_NOTIFICATION_CATEGORY
@@ -854,6 +855,289 @@ def test_runtime_blocked_events_record_notification_event_and_reminder(tmp_path)
         assert [event.event_type for event in events] == ["session_blocked", "session_blocked_reminder"]
         assert all(event.delivered_at is not None for event in events)
         assert all(event.resolved_at is not None for event in events)
+
+    _cleanup_overrides()
+    engine.dispose()
+
+
+def test_presence_long_run_waiting_sends_once_and_resolves(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+
+    with SessionLocal() as db:
+        db.add(User(id=1, email="user@example.com", role="ADMIN"))
+        db.commit()
+        db.add(
+            APNSDeviceRegistration(
+                owner_id=1,
+                platform="ios",
+                device_token="d" * 64,
+                push_environment="sandbox",
+                app_build_id="0.1.0-dev+aaaa1111",
+            )
+        )
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="test",
+                project="zerg",
+                started_at=datetime.now(timezone.utc),
+                loop_mode="assist",
+                summary_title="Refactor checkout flow",
+            )
+        )
+        db.commit()
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="devbox", id="token-1", owner_id=1)
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+    send_mock = AsyncMock(return_value=True)
+    resolution_send_mock = AsyncMock(return_value=True)
+
+    with (
+        patch("zerg.routers.presence.send_session_attention_push", send_mock),
+        patch("zerg.routers.presence.send_session_attention_resolution_push", resolution_send_mock),
+    ):
+        with TestClient(api_app) as client:
+            for state, seconds in [
+                ("thinking", 0),
+                ("running", 60),
+                ("needs_user", 31 * 60),
+                ("running", 32 * 60),
+            ]:
+                response = client.post(
+                    "/agents/presence",
+                    json={
+                        "session_id": session_id,
+                        "state": state,
+                        "tool_name": "Bash" if state == "running" else None,
+                        "occurred_at": (t0 + timedelta(seconds=seconds)).isoformat(),
+                    },
+                    headers={"X-Agents-Token": "device-token"},
+                )
+                assert response.status_code == 204, response.text
+
+    send_mock.assert_awaited_once()
+    resolution_send_mock.assert_awaited_once()
+    notification = send_mock.await_args_list[0].args[0]
+    assert notification.state == "needs_user"
+    assert notification.event_type == "long_run_waiting"
+    assert notification.alert_title == "Ready for you"
+    assert notification.alert_body == "zerg · Ran 31m · Refactor checkout flow"
+
+    with SessionLocal() as db:
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+        assert session is not None
+        assert session.last_attention_push_state == "needs_user:resolved"
+        events = db.query(NotificationEvent).filter(NotificationEvent.session_id == session_id).all()
+        assert len(events) == 1
+        event = events[0]
+        assert event.event_type == "long_run_waiting"
+        assert event.state_key == f"needs_user:{t0.isoformat()}"
+        assert _db_utc(event.delivered_at) == t0 + timedelta(minutes=31)
+        assert event.failed_at is None
+        assert event.resolved_at is not None
+        assert event.channel_results["apns_ios"]["accepted"] is True
+
+    _cleanup_overrides()
+    engine.dispose()
+
+
+def test_presence_long_run_waiting_suppresses_when_web_visible(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+
+    with SessionLocal() as db:
+        db.add(User(id=1, email="user@example.com", role="ADMIN"))
+        db.commit()
+        db.add(
+            APNSDeviceRegistration(
+                owner_id=1,
+                platform="ios",
+                device_token="d" * 64,
+                push_environment="sandbox",
+                app_build_id="0.1.0-dev+aaaa1111",
+            )
+        )
+        db.add(
+            NotificationClientPresence(
+                owner_id=1,
+                client_id="web-client-1",
+                client_type="web",
+                visible=True,
+                route="/timeline",
+                last_seen_at=t0 + timedelta(minutes=31) - timedelta(seconds=10),
+            )
+        )
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="test",
+                project="zerg",
+                started_at=datetime.now(timezone.utc),
+                loop_mode="assist",
+                summary_title="Refactor checkout flow",
+            )
+        )
+        db.commit()
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="devbox", id="token-1", owner_id=1)
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+
+    send_mock = AsyncMock(return_value=True)
+
+    with patch("zerg.routers.presence.send_session_attention_push", send_mock):
+        with TestClient(api_app) as client:
+            for state, seconds in [
+                ("thinking", 0),
+                ("needs_user", 31 * 60),
+            ]:
+                response = client.post(
+                    "/agents/presence",
+                    json={
+                        "session_id": session_id,
+                        "state": state,
+                        "occurred_at": (t0 + timedelta(seconds=seconds)).isoformat(),
+                    },
+                    headers={"X-Agents-Token": "device-token"},
+                )
+                assert response.status_code == 204, response.text
+
+    send_mock.assert_not_awaited()
+    with SessionLocal() as db:
+        events = db.query(NotificationEvent).filter(NotificationEvent.session_id == session_id).all()
+        assert events == []
+
+    _cleanup_overrides()
+    engine.dispose()
+
+
+def test_runtime_long_run_waiting_records_notification_event(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+
+    with SessionLocal() as db:
+        db.add(User(id=1, email="user@example.com", role="ADMIN"))
+        db.commit()
+        db.add(
+            APNSDeviceRegistration(
+                owner_id=1,
+                platform="ios",
+                device_token="d" * 64,
+                push_environment="sandbox",
+                app_build_id="0.1.0-dev+aaaa1111",
+            )
+        )
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="test",
+                project="zerg",
+                started_at=datetime.now(timezone.utc),
+                loop_mode="assist",
+                summary_title="Runtime long run",
+            )
+        )
+        db.commit()
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="devbox", id="token-1", owner_id=1)
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+    send_mock = AsyncMock(return_value=True)
+
+    class FrozenDateTime(datetime):
+        current = t0
+
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return cls.current.replace(tzinfo=None)
+            return cls.current.astimezone(tz)
+
+    def runtime_payload(phase: str, seconds: int, *, tool_name: str | None = None) -> dict:
+        occurred_at = t0 + timedelta(seconds=seconds)
+        return {
+            "events": [
+                {
+                    "runtime_key": f"codex:{session_id}",
+                    "session_id": session_id,
+                    "provider": "codex",
+                    "device_id": "devbox",
+                    "source": "codex_bridge",
+                    "kind": "phase_signal",
+                    "phase": phase,
+                    "tool_name": tool_name,
+                    "occurred_at": occurred_at.isoformat(),
+                    "freshness_ms": 10 * 60 * 1000,
+                    "dedupe_key": f"runtime-long:{phase}:{seconds}",
+                    "payload": {},
+                }
+            ]
+        }
+
+    with (
+        patch("zerg.routers.runtime.datetime", FrozenDateTime),
+        patch("zerg.services.apns_sender.send_session_attention_push", send_mock),
+    ):
+        with TestClient(api_app) as client:
+            for phase, seconds in [
+                ("thinking", 0),
+                ("running", 60),
+                ("needs_user", 31 * 60),
+            ]:
+                FrozenDateTime.current = t0 + timedelta(seconds=seconds)
+                response = client.post(
+                    "/agents/runtime/events/batch",
+                    json=runtime_payload(phase, seconds, tool_name="Bash" if phase == "running" else None),
+                    headers={"X-Agents-Token": "device-token"},
+                )
+                assert response.status_code == 200, response.text
+
+    send_mock.assert_awaited_once()
+    notification = send_mock.await_args_list[0].args[0]
+    assert notification.event_type == "long_run_waiting"
+
+    with SessionLocal() as db:
+        events = db.query(NotificationEvent).filter(NotificationEvent.session_id == session_id).all()
+        assert len(events) == 1
+        assert events[0].event_type == "long_run_waiting"
+        assert _db_utc(events[0].delivered_at) == t0 + timedelta(minutes=31)
 
     _cleanup_overrides()
     engine.dispose()

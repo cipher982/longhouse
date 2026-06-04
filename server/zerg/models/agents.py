@@ -907,6 +907,7 @@ class SessionRuntimeState(AgentsBase):
     phase_source = Column(String(32), nullable=False)
     active_tool = Column(String(128), nullable=True)
     phase_started_at = Column(DateTime(timezone=True), nullable=True)
+    execution_started_at = Column(DateTime(timezone=True), nullable=True)
     last_runtime_signal_at = Column(DateTime(timezone=True), nullable=True)
     last_progress_at = Column(DateTime(timezone=True), nullable=True)
     last_live_at = Column(DateTime(timezone=True), nullable=True)
