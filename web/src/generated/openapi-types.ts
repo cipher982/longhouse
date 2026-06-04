@@ -1724,6 +1724,26 @@ export interface paths {
         patch: operations["update_current_user_notification_settings_users_me_notifications_patch"];
         trace?: never;
     };
+    "/api/users/me/client-presence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Update Current User Client Presence
+         * @description Record whether a browser client is actively watching Longhouse.
+         */
+        post: operations["update_current_user_client_presence_users_me_client_presence_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/users/me/avatar": {
         parameters: {
             query?: never;
@@ -10728,6 +10748,44 @@ export interface components {
             /** By Provider */
             by_provider: components["schemas"]["UsageStatsByProvider"][];
         };
+        /** UserClientPresenceHeartbeat */
+        UserClientPresenceHeartbeat: {
+            /** Client Id */
+            client_id: string;
+            /**
+             * Client Type
+             * @default web
+             * @constant
+             */
+            client_type: "web";
+            /** Visible */
+            visible: boolean;
+            /** Route */
+            route?: string | null;
+            /** Session Id */
+            session_id?: string | null;
+        };
+        /** UserClientPresenceResponse */
+        UserClientPresenceResponse: {
+            /** Client Id */
+            client_id: string;
+            /**
+             * Client Type
+             * @constant
+             */
+            client_type: "web";
+            /** Visible */
+            visible: boolean;
+            /** Route */
+            route: string | null;
+            /** Session Id */
+            session_id: string | null;
+            /**
+             * Last Seen At
+             * Format: date-time
+             */
+            last_seen_at: string;
+        };
         /** UserNotificationSettingsResponse */
         UserNotificationSettingsResponse: {
             /** Apns Enabled */
@@ -13907,6 +13965,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UserNotificationSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_current_user_client_presence_users_me_client_presence_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UserClientPresenceHeartbeat"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserClientPresenceResponse"];
                 };
             };
             /** @description Validation Error */
