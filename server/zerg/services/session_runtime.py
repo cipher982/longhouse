@@ -869,7 +869,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         if next_phase in LIVE_EXECUTION_PHASES:
             if previous_phase not in LIVE_EXECUTION_PHASES or state.execution_started_at is None:
                 state.execution_started_at = occurred_at
-        elif next_phase != "needs_user":
+        elif next_phase not in {"idle", "needs_user"}:
             state.execution_started_at = None
         state.last_runtime_signal_at = occurred_at
         freshness_base_at = _managed_lease_refresh_at(event, occurred_at)

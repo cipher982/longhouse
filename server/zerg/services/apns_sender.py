@@ -191,7 +191,7 @@ def record_notification_delivery_result(
 def rollback_session_attention_push_stamp(db: Session, *, notification: SessionAttentionPush) -> bool:
     """Rollback a pre-send attention stamp after no APNs target accepted it."""
 
-    if notification.event_type == NOTIFICATION_EVENT_SESSION_BLOCKED_REMINDER:
+    if notification.event_type in {NOTIFICATION_EVENT_SESSION_BLOCKED_REMINDER, NOTIFICATION_EVENT_LONG_RUN_WAITING}:
         return restore_session_attention_push_stamp(
             db,
             session_id=notification.session_id,
@@ -574,6 +574,8 @@ def prepare_long_run_waiting_push(
     previous_stamp_at = _as_aware_utc(session.last_attention_push_at)
     if previous_stamp_state == "needs_user":
         return None
+    if _base_attention_state(previous_stamp_state) == "blocked" and previous_stamp_state != _resolved_attention_state("blocked"):
+        return None
     if _recent_visible_web_client_exists(db, owner_id=owner_id, occurred_at=occurred_at):
         return None
 
@@ -586,7 +588,7 @@ def prepare_long_run_waiting_push(
     project = _clean_label(getattr(session, "project", None))
     title = _session_title(session)
     summary = str(getattr(session, "summary", "") or "").strip() or title
-    collapse_id = _attention_collapse_id(str(session.id))
+    collapse_id = _collapse_id("lh-attn-longrun", str(session.id))
     state_key = f"needs_user:{execution_started_at.isoformat()}"
     notification_event = _create_notification_event(
         db,
@@ -598,7 +600,8 @@ def prepare_long_run_waiting_push(
         occurred_at=occurred_at,
     )
     session.last_attention_push_at = occurred_at
-    session.last_attention_push_state = "needs_user"
+    stamp_state = "needs_user:long_run"
+    session.last_attention_push_state = stamp_state
 
     return SessionAttentionPush(
         session_id=str(session.id),
@@ -617,7 +620,7 @@ def prepare_long_run_waiting_push(
         notification_event_id=str(notification_event.id),
         previous_stamp_state=previous_stamp_state,
         previous_stamp_at=previous_stamp_at,
-        stamp_state="needs_user",
+        stamp_state=stamp_state,
     )
 
 
