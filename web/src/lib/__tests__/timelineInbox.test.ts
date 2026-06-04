@@ -62,10 +62,14 @@ function makeCard(args: {
   repo: string;
   startedAt: string;
   closed?: boolean;
+  endedAt?: string;
+  lastActivityAt?: string;
 }): TimelineSessionCard {
   const session = makeSession({
     id: args.id,
     started_at: args.startedAt,
+    ended_at: args.endedAt ?? null,
+    last_activity_at: args.lastActivityAt ?? null,
     project: args.repo,
     runtime_display: makeRuntimeDisplay(args.closed ? { lifecycle: "closed" } : {}),
   });
@@ -113,6 +117,101 @@ describe("buildInboxLayout", () => {
       "new",
       "mid",
       "old",
+    ]);
+  });
+
+  it("sorts closed sessions by close time descending, not start time", () => {
+    // The just-closed session started EARLIER than a long-running one that
+    // closed hours ago. It must still land on top — this is the bug David hit.
+    const cards = [
+      makeCard({
+        id: "long-runner",
+        repo: "zerg",
+        startedAt: "2026-05-18T01:00:00Z",
+        endedAt: "2026-05-18T02:00:00Z",
+        closed: true,
+      }),
+      makeCard({
+        id: "just-closed",
+        repo: "zerg",
+        startedAt: "2026-05-18T09:00:00Z",
+        endedAt: "2026-05-18T12:00:00Z",
+        closed: true,
+      }),
+      makeCard({
+        id: "mid-closed",
+        repo: "zerg",
+        startedAt: "2026-05-18T08:00:00Z",
+        endedAt: "2026-05-18T10:00:00Z",
+        closed: true,
+      }),
+    ];
+
+    const layout = buildInboxLayout(cards);
+
+    expect(layout.closed[0].sessions.map((s) => s.thread_id)).toEqual([
+      "just-closed",
+      "mid-closed",
+      "long-runner",
+    ]);
+  });
+
+  it("orders closed repo groups by their most-recently-closed session", () => {
+    const cards = [
+      makeCard({
+        id: "z",
+        repo: "zerg",
+        startedAt: "2026-05-18T01:00:00Z",
+        endedAt: "2026-05-18T02:00:00Z",
+        closed: true,
+      }),
+      makeCard({
+        id: "f",
+        repo: "floodmap",
+        startedAt: "2026-05-18T00:00:00Z",
+        endedAt: "2026-05-18T11:00:00Z",
+        closed: true,
+      }),
+    ];
+
+    // floodmap started earlier but closed later — it should lead.
+    expect(buildInboxLayout(cards).closed.map((g) => g.repo)).toEqual([
+      "floodmap",
+      "zerg",
+    ]);
+  });
+
+  it("falls back to last_activity_at then start time when ended_at is null", () => {
+    const cards = [
+      // No ended_at, no last_activity_at: falls back to start time (09:00).
+      makeCard({
+        id: "start-only",
+        repo: "zerg",
+        startedAt: "2026-05-18T09:00:00Z",
+        closed: true,
+      }),
+      // No ended_at but has last_activity_at (11:00) — beats start-only's 09:00.
+      makeCard({
+        id: "activity-fallback",
+        repo: "zerg",
+        startedAt: "2026-05-18T07:00:00Z",
+        lastActivityAt: "2026-05-18T11:00:00Z",
+        closed: true,
+      }),
+      // ended_at (13:00) wins outright over any fallback.
+      makeCard({
+        id: "ended",
+        repo: "zerg",
+        startedAt: "2026-05-18T06:00:00Z",
+        endedAt: "2026-05-18T13:00:00Z",
+        closed: true,
+      }),
+    ];
+
+    expect(buildInboxLayout(cards).closed[0].sessions.map((s) => s.thread_id)).toEqual([
+      "ended",
+      "activity-fallback",
+      "start-only",
     ]);
   });
 

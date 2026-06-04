@@ -14,11 +14,25 @@ export interface InboxLayout {
   closedCount: number;
 }
 
-function startedAtMs(card: TimelineSessionCard): number {
-  const started = card.root?.started_at || card.head?.started_at;
-  if (!started) return 0;
-  const ms = Date.parse(started);
+function parseMs(value: string | null | undefined): number {
+  if (!value) return 0;
+  const ms = Date.parse(value);
   return Number.isFinite(ms) ? ms : 0;
+}
+
+function startedAtMs(card: TimelineSessionCard): number {
+  return parseMs(card.root?.started_at || card.head?.started_at);
+}
+
+/**
+ * When a closed session last exited. Uses the head (latest run) close time so
+ * a just-closed continuation floats up, falling back through last activity to
+ * start time when `ended_at` is absent (e.g. inferred process_gone). This is
+ * the same timestamp the card renders as "Closed Xh ago", so sort matches label.
+ */
+function closedAtMs(card: TimelineSessionCard): number {
+  const head = card.head;
+  return parseMs(head?.ended_at || head?.last_activity_at || head?.started_at) || startedAtMs(card);
 }
 
 function isCardClosed(card: TimelineSessionCard): boolean {
@@ -31,13 +45,15 @@ function isCardClosed(card: TimelineSessionCard): boolean {
 /**
  * Build the two-tier inbox layout:
  *   - Active repos at the top, ordered by their newest session start (desc)
- *   - Closed repos below, same ordering rule
- *   - Sessions inside each repo always sort by start time desc (frozen).
+ *   - Closed repos below, ordered by their most-recently-closed session (desc)
+ *   - Active sessions inside a repo sort by start time desc (frozen).
+ *   - Closed sessions inside a repo sort by close time desc.
  *
- * This is intentionally pure and stable: re-running it on the same input
- * produces the same output, regardless of in-flight runtime updates. That's
- * what kills the timeline jitter — order is anchored to start time, not to
- * "most-recently-touched".
+ * Active ordering is intentionally anchored to start time so in-flight runtime
+ * updates never reflow the page — that's what kills the timeline jitter when
+ * several agents are churning. Closed sessions are terminal (no churn risk), so
+ * we sort them by exit time instead: the thing you just stepped away from lands
+ * on top, which is the whole point of the resume loop.
  *
  * Optional `order` override applies user-driven reordering on top of the
  * default sort. Repo names / session ids absent from the override keep
@@ -60,10 +76,13 @@ export function buildInboxLayout(
     else bucket.set(repo, [card]);
   }
 
-  const toGroups = (byRepo: Map<string, TimelineSessionCard[]>): InboxRepoGroup[] => {
+  const toGroups = (
+    byRepo: Map<string, TimelineSessionCard[]>,
+    sortKey: (card: TimelineSessionCard) => number,
+  ): InboxRepoGroup[] => {
     const groups: InboxRepoGroup[] = [];
     for (const [repo, sessions] of byRepo) {
-      sessions.sort((a, b) => startedAtMs(b) - startedAtMs(a));
+      sessions.sort((a, b) => sortKey(b) - sortKey(a));
       if (order?.sessionOrder?.[repo]?.length) {
         const defaultIds = sessions.map((s) => s.thread_id);
         const orderedIds = applyOrder(defaultIds, order.sessionOrder[repo]);
@@ -77,8 +96,8 @@ export function buildInboxLayout(
       }
     }
     groups.sort((a, b) => {
-      const aTop = startedAtMs(a.sessions[0]);
-      const bTop = startedAtMs(b.sessions[0]);
+      const aTop = sortKey(a.sessions[0]);
+      const bTop = sortKey(b.sessions[0]);
       if (aTop !== bTop) return bTop - aTop;
       return a.repo.localeCompare(b.repo);
     });
@@ -93,8 +112,8 @@ export function buildInboxLayout(
     return groups;
   };
 
-  const active = toGroups(activeByRepo);
-  const closed = toGroups(closedByRepo);
+  const active = toGroups(activeByRepo, startedAtMs);
+  const closed = toGroups(closedByRepo, closedAtMs);
   const closedCount = closed.reduce((n, g) => n + g.sessions.length, 0);
 
   return { active, closed, closedCount };
