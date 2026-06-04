@@ -227,6 +227,58 @@ def _seed_continuable_claude_session(
     return session.id
 
 
+def _seed_imported_claude_session(
+    db,
+    *,
+    session_id=None,
+    device_id: str | None = "cinder",
+    provider_session_alias: str | None = None,
+):
+    """Seed an imported/unmanaged bare-CLI claude session.
+
+    Unmanaged claude was NOT launched with `claude --session-id <our-uuid>`, so
+    its provider session id alias is either absent or a different provider uuid
+    (its transcript lives under that other id). It must NOT be continuable.
+    """
+
+    now = datetime.now(timezone.utc)
+    sid = session_id or uuid4()
+    session = AgentSession(
+        id=sid,
+        provider="claude",
+        environment="development",
+        project="repo",
+        device_id=device_id,
+        device_name=device_id,
+        cwd="/Users/me/repo",
+        started_at=now,
+        ended_at=now,
+        last_activity_at=now,
+        thread_root_session_id=sid,
+        continued_from_session_id=None,
+        continuation_kind="local",
+        origin_label=device_id,
+        user_messages=1,
+        assistant_messages=1,
+        tool_calls=0,
+        is_writable_head=1,
+        is_sidechain=0,
+    )
+    db.add(session)
+    db.flush()
+    thread = ensure_primary_thread(db, session)
+    if provider_session_alias is not None:
+        record_thread_alias(
+            db,
+            thread=thread,
+            provider="claude",
+            alias_kind="provider_session_id",
+            alias_value=provider_session_alias,
+        )
+    db.commit()
+    return session.id
+
+
 class _StubRegistry(MachineControlChannelRegistry):
     """Registry with scripted ``send_command`` responses per session_id."""
 
@@ -984,6 +1036,59 @@ def test_continue_claude_session_resumes_by_id_with_null_thread_path(tmp_path):
         workspace = build_session_workspace(db=db, session_id=session_id, owner_id=OWNER_ID)
         assert workspace.session.capabilities.can_continue is True
         assert workspace.session.capabilities.continue_targets[0].carry_context == "native"
+
+
+def test_imported_unmanaged_claude_session_is_not_continuable(tmp_path):
+    """An imported bare-CLI claude session must not expose can_continue.
+
+    Its provider session id (if any) differs from the longhouse id, so we have
+    no transcript we could `claude --resume <our-id>` against.
+    """
+
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+
+    with SessionLocal() as db:
+        # Case A: a foreign provider uuid alias (real bare-CLI ingest shape).
+        foreign_id = _seed_imported_claude_session(db, provider_session_alias=str(uuid4()))
+        workspace = build_session_workspace(db=db, session_id=foreign_id, owner_id=OWNER_ID)
+        assert workspace.session.capabilities.can_continue is False
+        assert workspace.session.capabilities.continue_targets == []
+
+    with SessionLocal() as db:
+        # Case B: no provider session id alias at all.
+        no_alias_id = _seed_imported_claude_session(db, provider_session_alias=None)
+        workspace = build_session_workspace(db=db, session_id=no_alias_id, owner_id=OWNER_ID)
+        assert workspace.session.capabilities.can_continue is False
+        assert workspace.session.capabilities.continue_targets == []
+
+
+def test_continue_rejects_unmanaged_claude_with_foreign_provider_id(tmp_path):
+    """The execution gate must reject continuing an unmanaged claude session."""
+
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("claude.continue",))
+
+    with SessionLocal() as db:
+        session_id = _seed_imported_claude_session(db, provider_session_alias=str(uuid4()))
+        with pytest.raises(RemoteLaunchError) as excinfo:
+            asyncio.run(
+                continue_remote_session(
+                    db,
+                    RemoteContinueParams(
+                        owner_id=OWNER_ID,
+                        session_id=session_id,
+                        client_request_id="unmanaged-claude",
+                    ),
+                    registry=registry,
+                )
+            )
+
+    assert excinfo.value.code == "invalid_request"
+    assert excinfo.value.status_code == 409
+    assert registry.sent == []
 
 
 def test_continue_claude_capability_required(tmp_path):

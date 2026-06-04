@@ -235,21 +235,6 @@ def _native_continue_target(db, session: AgentSession) -> SessionContinueTarget 
     if thread is None:
         return None
 
-    if provider == "claude":
-        # Claude resumes by id alone (`claude --resume <id>`), and that id IS the
-        # longhouse session id (pinned at launch via --session-id). A primary
-        # thread is sufficient evidence; we do NOT require a distinct provider
-        # thread id or a transcript source_path the way codex does.
-        return SessionContinueTarget(
-            provider=session.provider,
-            device_id=session.device_id,
-            cwd=session.cwd,
-            carry_context="native",
-            native_resume_available=True,
-        )
-
-    # codex: requires a real provider thread id (distinct from the longhouse id)
-    # plus a local transcript path to resume against.
     provider_thread_id = (
         db.query(SessionThreadAlias.alias_value)
         .filter(SessionThreadAlias.thread_id == thread.id)
@@ -260,6 +245,27 @@ def _native_continue_target(db, session: AgentSession) -> SessionContinueTarget 
         .scalar()
     )
     provider_thread_id = str(provider_thread_id).strip() if provider_thread_id else ""
+
+    if provider == "claude":
+        # Claude resumes by id alone (`claude --resume <id>`). A managed claude
+        # launch pins `claude --session-id <longhouse-uuid>`, so its provider
+        # session id alias EQUALS the longhouse session id — that equality is the
+        # fingerprint of a managed session. An imported/unmanaged bare claude
+        # session has no alias or a different provider uuid (its transcript lives
+        # under that other id), so resuming by our id would fail. Require the
+        # managed fingerprint so we don't show a dead Continue button.
+        if provider_thread_id != str(session.id):
+            return None
+        return SessionContinueTarget(
+            provider=session.provider,
+            device_id=session.device_id,
+            cwd=session.cwd,
+            carry_context="native",
+            native_resume_available=True,
+        )
+
+    # codex: requires a real provider thread id (distinct from the longhouse id)
+    # plus a local transcript path to resume against.
     if not provider_thread_id or provider_thread_id == str(session.id):
         return None
     source_path = (

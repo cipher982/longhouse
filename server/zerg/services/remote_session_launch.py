@@ -315,11 +315,19 @@ def _resolve_continue_target(db: Session, *, session: AgentSession) -> tuple[Ses
     provider_thread_id = _latest_thread_alias(db, thread=thread, alias_kind="provider_session_id")
 
     if provider == "claude":
-        # Claude pins `claude --session-id <longhouse-uuid>` at launch, so the
-        # provider session id IS the longhouse id and `claude --resume <id>`
-        # re-opens the local transcript. No transcript path is needed.
-        resume_id = provider_thread_id or str(session.id)
-        return thread, resume_id, None
+        # Claude pins `claude --session-id <longhouse-uuid>` at launch, so a
+        # managed session's provider id EQUALS the longhouse id and
+        # `claude --resume <id>` re-opens the local transcript (no path needed).
+        # An imported/unmanaged claude session either has no alias or a different
+        # provider uuid; resuming by our id would target a non-existent
+        # transcript, so reject it rather than launch a broken resume.
+        if provider_thread_id and provider_thread_id != str(session.id):
+            raise RemoteLaunchError(
+                "Session is not a managed Claude session; only managed sessions can be continued",
+                code="invalid_request",
+                status_code=409,
+            )
+        return thread, str(session.id), None
 
     # codex: resumes by provider thread id + transcript path. The id must be a
     # real provider thread distinct from the longhouse session id.

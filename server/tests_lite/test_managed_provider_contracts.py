@@ -6,6 +6,7 @@ from zerg.managed_provider_contract_manifest import _validate_operation_evidence
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
 from zerg.services.managed_provider_contracts import all_managed_provider_contracts
+from zerg.services.managed_provider_contracts import continue_supported_providers
 from zerg.services.managed_provider_contracts import contract_for_control_plane
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import control_plane_for_provider
@@ -138,6 +139,11 @@ def test_codex_contract_is_current_remote_launch_engine_channel_provider():
         "codex.continue",
     )
     assert remote_launch_supported_providers() == frozenset({"codex", "claude", "opencode"})
+
+
+def test_continue_supported_providers_is_codex_and_claude_only():
+    # Driven by manifest can_resume=true. opencode/antigravity must stay out.
+    assert continue_supported_providers() == frozenset({"codex", "claude"})
 
 
 def test_claude_contract_is_first_class_channel_control_provider():
