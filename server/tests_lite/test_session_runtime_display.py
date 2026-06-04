@@ -176,15 +176,15 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
                 "signal_tier": "phase_signal",
                 "lifecycle": "open",
                 "state": None,
-                "tone": "inactive",
-                "headline": "Not connected",
-                "phase_label": "Inactive",
+                "tone": "idle",
+                "headline": "Ready",
+                "phase_label": "Ready",
                 "activity_recency": "stale",
                 "needs_attention": False,
             },
         },
         {
-            "id": "managed-disconnected",
+            "id": "managed-live-no-phase",
             "managed": True,
             "view": {"signal_tier": "none", "runtime_source": "fallback", "display_phase": "Recent"},
             "expect": {
@@ -192,9 +192,9 @@ def _runtime_view(**overrides) -> SessionRuntimeView:
                 "signal_tier": "none",
                 "lifecycle": "open",
                 "state": None,
-                "tone": "inactive",
-                "headline": "Not connected",
-                "phase_label": "Recent",
+                "tone": "idle",
+                "headline": "Ready",
+                "phase_label": "Ready",
                 "activity_recency": "none",
                 "needs_attention": False,
             },
@@ -654,10 +654,10 @@ def test_managed_stale_thinking_without_active_tool_is_not_current_state():
     assert display.control_path == "managed"
     assert display.is_stalled is False
     assert display.state is None
-    assert display.tone == "inactive"
-    assert display.headline == "Not connected"
-    assert display.detail is None
-    assert display.phase_label == "Inactive"
+    assert display.tone == "idle"
+    assert display.headline == "Ready"
+    assert display.detail == "Waiting for next prompt"
+    assert display.phase_label == "Ready"
     assert display.is_executing is False
     assert display.needs_attention is False
     assert display.activity_recency == "stale"
@@ -700,8 +700,33 @@ def test_real_stale_runtime_view_without_presence_is_stalled():
 
     assert display.is_stalled is False
     assert display.state is None
-    assert display.headline == "Not connected"
+    assert display.headline == "Ready"
     assert display.needs_attention is False
+
+
+def test_managed_live_control_with_offline_host_is_not_ready():
+    display = build_session_runtime_display(
+        runtime_view=_runtime_view(
+            signal_tier="phase_signal",
+            runtime_phase="running",
+            runtime_source="managed_local_transport",
+            status="idle",
+            presence_state=None,
+            confidence="stale",
+            display_phase="Running",
+            last_live_at=datetime(2026, 4, 26, 11, 0, tzinfo=timezone.utc),
+        ),
+        capabilities=_capabilities(managed=True),
+        ended_at=None,
+        binding_host_state="offline",
+    )
+
+    assert display.control_path == "managed"
+    assert display.host_state == "offline"
+    assert display.state is None
+    assert display.headline == "Not connected"
+    assert display.phase_label == "Inactive"
+    assert display.tone == "inactive"
 
 
 def test_managed_stale_running_with_active_tool_is_not_stalled():
@@ -811,10 +836,10 @@ def test_managed_stale_needs_user_without_presence_is_not_actionable():
 
     assert display.control_path == "managed"
     assert display.state is None
-    assert display.phase_label == "Inactive"
-    assert display.headline == "Not connected"
+    assert display.phase_label == "Ready"
+    assert display.headline == "Ready"
     assert display.needs_attention is False
-    assert display.tone == "inactive"
+    assert display.tone == "idle"
 
 
 def test_unmanaged_stale_needs_user_phase_without_presence_uses_process_truth():

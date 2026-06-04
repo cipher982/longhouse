@@ -279,6 +279,7 @@ def _managed_copy(
     *,
     presence_state: str | None,
     compact_tool: str | None,
+    live_control_ready: bool = False,
 ) -> tuple[str, str | None]:
     if presence_state == "thinking":
         return "Working", "Thinking"
@@ -289,6 +290,8 @@ def _managed_copy(
     if presence_state == "blocked":
         return "Needs permission", f"Approval needed • {compact_tool}" if compact_tool else "Approval needed"
     if presence_state is None:
+        if live_control_ready:
+            return "Ready", "Waiting for next prompt"
         return "Not connected", None
     return "Idle", "Waiting for next prompt"
 
@@ -363,10 +366,15 @@ def build_session_runtime_display(
     is_managed_session = (
         capabilities.live_control_available or capabilities.host_reattach_available or capabilities.reply_to_live_session_available
     )
+    explicit_host_unavailable = host_state in {"offline", "stale", "lost"}
+    live_control_ready = bool(capabilities.live_control_available and capabilities.can_send_input and not explicit_host_unavailable)
+    if live_control_ready and presence_state is None:
+        phase_label = "Ready"
     if is_managed_session:
         headline, detail = _managed_copy(
             presence_state=presence_state,
             compact_tool=compact_tool,
+            live_control_ready=live_control_ready,
         )
     else:
         headline = _outcome_label(
@@ -449,12 +457,14 @@ def build_session_runtime_display(
         is_idle = False
         process_observed = False
         is_stalled = False
-    no_runtime_signal = signal_tier == "none" and presence_state is None and not process_observed
+    no_runtime_signal = signal_tier == "none" and presence_state is None and not process_observed and not live_control_ready
     tone = (
         "active"
         if transcript_sync_pending
         else "closed"
         if lifecycle == "closed"
+        else "idle"
+        if live_control_ready and presence_state is None
         else "inactive"
         if unmanaged_attention_unverified or no_runtime_signal or (presence_state is None and confidence == "stale")
         else _tone(

@@ -707,7 +707,7 @@ struct SessionModelsTests {
     }
 
     @Test
-    func sessionDetailRuntimeDisplayNilStateSuppressesStalePresenceState() throws {
+    func sessionDetailRuntimeDisplayNilStateKeepsLiveControlReady() throws {
         let json = """
         {
           "id": "session-stale-detail",
@@ -725,15 +725,15 @@ struct SessionModelsTests {
             "truth_tier": "managed-local",
             "signal_tier": "phase_signal",
             "state": null,
-            "tone": "inactive",
-            "headline": "Not connected",
-            "detail": null,
-            "phase_label": "Recent",
+            "tone": "idle",
+            "headline": "Ready",
+            "detail": "Waiting for next prompt",
+            "phase_label": "Ready",
             "compact_tool_label": null,
             "is_live": false,
             "is_executing": false,
             "needs_attention": false,
-            "is_idle": false,
+            "is_idle": true,
             "is_stalled": false,
             "is_managed_local_truth": true,
             "has_signal": true,
@@ -749,8 +749,10 @@ struct SessionModelsTests {
         let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
 
         #expect(detail.runtimePhaseState == "idle")
-        #expect(detail.runtimeHeadline == "Not connected")
-        #expect(detail.runtimeTone == "inactive")
+        #expect(detail.runtimeHeadline == "Ready")
+        #expect(detail.runtimeDetail == "Waiting for next prompt")
+        #expect(detail.runtimeTone == "idle")
+        #expect(detail.canSendLive)
         #expect(!detail.isSessionExecuting)
     }
 
