@@ -234,11 +234,13 @@ def _initialize_derived_events_fts(conn) -> None:
             """
         )
     ).scalar()
+    needs_repopulate = existing_sql is None
     if existing_sql:
         columns = {row[1] for row in conn.execute(text("PRAGMA table_info(derived_events_fts)")).fetchall()}
         normalized_sql = str(existing_sql).lower()
         if "parser_revision" not in columns or "parser_revision unindexed" not in normalized_sql:
             conn.execute(text("DROP TABLE derived_events_fts"))
+            needs_repopulate = True
     conn.execute(
         text(
             """
@@ -247,3 +249,28 @@ def _initialize_derived_events_fts(conn) -> None:
             """
         )
     )
+    if needs_repopulate:
+        conn.execute(
+            text(
+                """
+                INSERT OR REPLACE INTO derived_events_fts (
+                    rowid,
+                    content_text,
+                    tool_output_text,
+                    tool_name,
+                    role,
+                    session_id,
+                    parser_revision
+                )
+                SELECT
+                    id,
+                    content_text,
+                    tool_output_text,
+                    tool_name,
+                    role,
+                    session_id,
+                    parser_revision
+                FROM derived_events
+                """
+            )
+        )

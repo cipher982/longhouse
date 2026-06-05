@@ -10,9 +10,11 @@ from datetime import timezone
 from typing import Iterable
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import case
+from sqlalchemy import or_
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import aliased
 
 from zerg.models.agents import AgentSession
 from zerg.models.agents import ArchiveChunk
@@ -124,6 +126,7 @@ def project_archive_chunks_to_hot_cards(
         chunks_to_checkpoint = selected_for_session
         apply_full_projection = False
         apply_incremental_projection = False
+        checkpoint_status = "current"
         existing_card: TimelineCard | None = None
         try:
             selected_records = _read_records_for_chunks(archive_store, selected_for_session)
@@ -138,14 +141,17 @@ def project_archive_chunks_to_hot_cards(
                     projection = build_hot_card_projection(records)
                 apply_full_projection = True
             elif projection.events_projected > 0:
-                existing_card = _incremental_card_target(
+                incremental_target = _build_incremental_projection(
                     db,
                     session_id=session_id,
                     parser_revision=parser_revision,
-                    projection=projection,
+                    records=selected_records,
                 )
-                if existing_card is not None:
-                    apply_incremental_projection = True
+                if incremental_target is None:
+                    checkpoint_status = "deferred"
+                else:
+                    existing_card, projection = incremental_target
+                    apply_incremental_projection = projection.events_projected > 0
         except Exception as exc:
             logger.warning("Hot-card archive projection failed for session %s: %s", session_id, exc, exc_info=True)
             for chunk in selected_for_session:
@@ -167,7 +173,7 @@ def project_archive_chunks_to_hot_cards(
             status = "unsupported"
             unsupported_chunks += len(selected_for_session)
         else:
-            status = "current"
+            status = checkpoint_status
 
         if apply_full_projection and projection.events_projected > 0 and not unsupported_status:
             _apply_hot_projection(
@@ -219,20 +225,23 @@ def select_pending_archive_chunks(
 ) -> list[ArchiveChunk]:
     if limit <= 0:
         return []
-    terminal_chunk_ids = (
-        select(ProjectorCheckpoint.chunk_id)
-        .where(ProjectorCheckpoint.projector_name == HOT_CARD_PROJECTOR_NAME)
-        .where(ProjectorCheckpoint.parser_revision == parser_revision)
-        .where(ProjectorCheckpoint.status.in_(_TERMINAL_CHECKPOINT_STATUSES))
-        .where(ProjectorCheckpoint.chunk_id == ArchiveChunk.id)
-        .where(ProjectorCheckpoint.chunk_payload_sha256 == ArchiveChunk.payload_sha256)
-    )
+    checkpoint = aliased(ProjectorCheckpoint)
     return (
         db.query(ArchiveChunk)
+        .outerjoin(
+            checkpoint,
+            (checkpoint.projector_name == HOT_CARD_PROJECTOR_NAME)
+            & (checkpoint.parser_revision == parser_revision)
+            & (checkpoint.chunk_id == ArchiveChunk.id)
+            & (checkpoint.chunk_payload_sha256 == ArchiveChunk.payload_sha256),
+        )
         .filter(ArchiveChunk.stream == "source_lines")
         .filter(ArchiveChunk.state == "sealed")
-        .filter(~ArchiveChunk.id.in_(terminal_chunk_ids))
-        .order_by(ArchiveChunk.id.asc())
+        .filter(or_(checkpoint.id.is_(None), checkpoint.status.notin_(_TERMINAL_CHECKPOINT_STATUSES)))
+        .order_by(
+            case((checkpoint.status == "deferred", 1), else_=0).asc(),
+            ArchiveChunk.id.asc(),
+        )
         .limit(limit)
         .all()
     )
@@ -309,21 +318,23 @@ def _load_session_archive_chunks(db: Session, *, session_id: UUID) -> list[Archi
     )
 
 
-def _incremental_card_target(
+def _build_incremental_projection(
     db: Session,
     *,
     session_id: UUID,
     parser_revision: str,
-    projection: HotCardProjection,
-) -> TimelineCard | None:
+    records: list[ArchiveRecord],
+) -> tuple[TimelineCard, HotCardProjection] | None:
     card = db.query(TimelineCard).filter(TimelineCard.session_id == session_id).first()
     if card is None or card.parser_revision != parser_revision or card.archive_state != "current":
         return None
-    if card.archive_last_source_offset is None or projection.min_source_offset is None:
+    if card.archive_last_source_offset is None:
         return None
-    if projection.min_source_offset <= int(card.archive_last_source_offset):
+    watermark = int(card.archive_last_source_offset)
+    if any(record.source_offset is None for record in records):
         return None
-    return card
+    new_records = [record for record in records if int(record.source_offset) > watermark]
+    return card, build_hot_card_projection(new_records)
 
 
 def _read_records_for_chunks(archive_store: ArchiveStore, chunks: Iterable[ArchiveChunk]) -> list[ArchiveRecord]:

@@ -222,7 +222,7 @@ def test_archive_hot_projector_does_not_overwrite_from_partial_archive(tmp_path)
         session = _add_session(db, session_id=session_id, provider="claude")
         session.user_messages = 7
         session.first_user_message_preview = "existing full card"
-        _add_archive_chunk(
+        chunk = _add_archive_chunk(
             db,
             archive_store,
             session_id=session_id,
@@ -247,7 +247,66 @@ def test_archive_hot_projector_does_not_overwrite_from_partial_archive(tmp_path)
         assert session.user_messages == 7
         assert session.first_user_message_preview == "existing full card"
         assert db.query(TimelineCard).filter(TimelineCard.session_id == session_id).first() is None
-        assert checkpoint.status == "current"
+        assert checkpoint.status == "deferred"
+        assert [row.id for row in select_pending_archive_chunks(db)] == [chunk.id]
+
+
+def test_archive_hot_projector_deferred_partial_chunk_does_not_starve_full_rebuild(tmp_path):
+    SessionLocal = _session_factory(tmp_path)
+    archive_store = FilesystemArchiveStore(tmp_path / "archive")
+    session_id = uuid4()
+
+    with SessionLocal() as db:
+        _add_session(db, session_id=session_id, provider="claude")
+        partial_chunk = _add_archive_chunk(
+            db,
+            archive_store,
+            session_id=session_id,
+            records=[
+                _record(
+                    session_id,
+                    source_seq=2,
+                    source_offset=100,
+                    raw='{"type":"assistant","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"text","text":"second"}]}}',
+                )
+            ],
+        )
+        db.commit()
+
+        first = project_archive_chunks_to_hot_cards(db, archive_store=archive_store, limit=1)
+        db.commit()
+
+        full_chunk = _add_archive_chunk(
+            db,
+            archive_store,
+            session_id=session_id,
+            records=[
+                _record(
+                    session_id,
+                    source_seq=1,
+                    source_offset=0,
+                    raw='{"type":"user","timestamp":"2026-01-01T00:00:01Z","message":{"content":"first"}}',
+                )
+            ],
+        )
+        db.commit()
+
+        pending = select_pending_archive_chunks(db, limit=1)
+        second = project_archive_chunks_to_hot_cards(db, archive_store=archive_store, limit=1)
+        db.commit()
+
+        card = db.query(TimelineCard).filter(TimelineCard.session_id == session_id).one()
+        statuses = {
+            row.chunk_id: row.status
+            for row in db.query(ProjectorCheckpoint).filter(ProjectorCheckpoint.session_id == session_id).all()
+        }
+        assert first.sessions_partial == 1
+        assert statuses[partial_chunk.id] == "current"
+        assert statuses[full_chunk.id] == "current"
+        assert pending == [full_chunk]
+        assert second.sessions_projected == 1
+        assert card.first_user_message_preview == "first"
+        assert card.last_visible_text_preview == "second"
 
 
 def test_archive_hot_projector_rebuilds_from_out_of_order_chunk_arrival(tmp_path):
@@ -427,6 +486,81 @@ def test_archive_hot_projector_incrementally_updates_after_checkpointed_append(t
         assert card.user_messages == 2
         assert card.assistant_messages == 1
         assert card.first_user_message_preview == "first"
+        assert card.last_visible_text_preview == "third"
+        assert card.archive_last_source_offset == 200
+        assert db.query(ProjectorCheckpoint).filter(ProjectorCheckpoint.status == "current").count() == 2
+
+
+def test_archive_hot_projector_incremental_append_filters_partial_overlap(tmp_path):
+    SessionLocal = _session_factory(tmp_path)
+    archive_store = FilesystemArchiveStore(tmp_path / "archive")
+    session_id = uuid4()
+
+    with SessionLocal() as db:
+        _add_session(db, session_id=session_id, provider="claude")
+        _add_archive_chunk(
+            db,
+            archive_store,
+            session_id=session_id,
+            records=[
+                _record(
+                    session_id,
+                    source_seq=1,
+                    source_offset=0,
+                    raw='{"type":"user","timestamp":"2026-01-01T00:00:00Z","message":{"content":"first"}}',
+                ),
+                _record(
+                    session_id,
+                    source_seq=2,
+                    source_offset=100,
+                    raw=(
+                        '{"type":"assistant","timestamp":"2026-01-01T00:00:01Z",'
+                        '"message":{"content":[{"type":"text","text":"second"}]}}'
+                    ),
+                ),
+            ],
+        )
+        db.commit()
+
+        first = project_archive_chunks_to_hot_cards(db, archive_store=archive_store)
+        db.commit()
+
+        _add_archive_chunk(
+            db,
+            archive_store,
+            session_id=session_id,
+            records=[
+                _record(
+                    session_id,
+                    source_seq=3,
+                    source_offset=100,
+                    raw=(
+                        '{"type":"assistant","timestamp":"2026-01-01T00:00:01Z",'
+                        '"message":{"content":[{"type":"text","text":"duplicate second"}]}}'
+                    ),
+                ),
+                _record(
+                    session_id,
+                    source_seq=4,
+                    source_offset=200,
+                    raw='{"type":"user","timestamp":"2026-01-01T00:00:04Z","message":{"content":"third"}}',
+                ),
+            ],
+        )
+        db.commit()
+
+        second = project_archive_chunks_to_hot_cards(db, archive_store=archive_store)
+        db.commit()
+
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        card = db.query(TimelineCard).filter(TimelineCard.session_id == session_id).one()
+        assert first.sessions_projected == 1
+        assert second.sessions_projected == 1
+        assert second.events_projected == 1
+        assert session.user_messages == 2
+        assert session.assistant_messages == 1
+        assert card.user_messages == 2
+        assert card.assistant_messages == 1
         assert card.last_visible_text_preview == "third"
         assert card.archive_last_source_offset == 200
         assert db.query(ProjectorCheckpoint).filter(ProjectorCheckpoint.status == "current").count() == 2

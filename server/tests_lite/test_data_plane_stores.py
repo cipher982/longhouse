@@ -176,7 +176,36 @@ def test_derived_store_initialization_rebuilds_legacy_fts_shape(tmp_path, monkey
     settings = _configure_store_env(tmp_path, monkeypatch)
     derived = create_derived_store(settings)
     try:
+        initialize_derived_database(derived.engine)
         with derived.engine.begin() as conn:
+            conn.execute(sa_text("DROP TABLE derived_events_fts"))
+            conn.execute(
+                sa_text(
+                    """
+                    INSERT INTO derived_events (
+                        event_key,
+                        session_id,
+                        parser_revision,
+                        archive_chunk_id,
+                        archive_record_ordinal,
+                        role,
+                        content_text,
+                        event_hash,
+                        raw_json
+                    ) VALUES (
+                        'event-1',
+                        'session-1',
+                        'parser-v1',
+                        1,
+                        1,
+                        'user',
+                        'legacy searchable text',
+                        'hash-1',
+                        '{}'
+                    )
+                    """
+                )
+            )
             conn.execute(
                 sa_text(
                     """
@@ -191,9 +220,18 @@ def test_derived_store_initialization_rebuilds_legacy_fts_shape(tmp_path, monkey
         with derived.session_factory() as db:
             columns = {row[1] for row in db.execute(sa_text("PRAGMA table_info(derived_events_fts)")).fetchall()}
             fts_sql = db.execute(sa_text("SELECT sql FROM sqlite_master WHERE name = 'derived_events_fts'")).scalar()
+            fts_rows = db.execute(
+                sa_text(
+                    """
+                    SELECT session_id, parser_revision FROM derived_events_fts
+                    WHERE derived_events_fts MATCH 'searchable'
+                    """
+                )
+            ).fetchall()
 
         assert "parser_revision" in columns
         assert "parser_revision UNINDEXED" in fts_sql
+        assert fts_rows == [("session-1", "parser-v1")]
     finally:
         derived.dispose()
 
