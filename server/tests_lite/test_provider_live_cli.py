@@ -349,6 +349,29 @@ def test_provider_live_canary_uses_packaged_contracts_from_package(tmp_path: Pat
     assert json.loads(artifact_path.read_text(encoding="utf-8")) == payload
 
 
+def test_opencode_session_classification_sidecar_uses_provider_live_proof_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    longhouse_home = tmp_path / "longhouse-home"
+    artifact_path = tmp_path / "evidence" / "provider-live-canary.json"
+    monkeypatch.setenv("LONGHOUSE_HOME", str(longhouse_home))
+
+    sidecar_path = plc._write_opencode_session_classification_sidecar(
+        provider_session_id="ses_test",
+        evidence_root=artifact_path.parent,
+        artifact_path=artifact_path,
+    )
+
+    assert sidecar_path == longhouse_home / "provider-live-proof" / "sessions" / "opencode" / "ses_test.json"
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    assert sidecar["artifact_kind"] == "provider_live_session_classification"
+    assert sidecar["provider"] == "opencode"
+    assert sidecar["provider_session_id"] == "ses_test"
+    assert sidecar["environment"] == "test"
+    assert sidecar["artifact_path"] == str(artifact_path)
+
+
 def test_claude_live_canary_fails_when_channels_contract_is_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

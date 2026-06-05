@@ -232,11 +232,15 @@ pub fn build_payload_with_source_lines<'a>(
             })
             .collect()
     };
+    let environment = match metadata.environment.as_deref() {
+        Some(value) => value,
+        None => get_machine_name(),
+    };
 
     IngestPayload {
         id: session_id,
         provider,
-        environment: get_machine_name(),
+        environment,
         project: metadata.project.as_deref(),
         device_id: format!("shipper-{}", hostname),
         cwd: metadata.cwd.as_deref(),
@@ -493,6 +497,20 @@ mod tests {
             !payload.environment.is_empty(),
             "environment field must not be empty"
         );
+    }
+
+    #[test]
+    fn test_payload_environment_allows_parser_override() {
+        let events = make_test_events();
+        let meta = SessionMetadata {
+            session_id: "s1".to_string(),
+            environment: Some("test".to_string()),
+            ..Default::default()
+        };
+
+        let payload = build_payload("test-id", &events, &meta, "/path", "opencode");
+
+        assert_eq!(payload.environment, "test");
     }
 
     #[test]

@@ -12,10 +12,12 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use chrono::{DateTime, TimeZone, Utc};
 use rusqlite::{params, Connection, OpenFlags};
+use serde::Deserialize;
 use serde_json::value::RawValue;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::config::get_longhouse_home;
 use crate::pipeline::parser::{ParseResult, ParsedEvent, ParsedSourceLine, Role, SessionMetadata};
 
 const SOURCE_OFFSET_SCALE: u64 = 1_000_000;
@@ -53,6 +55,13 @@ struct OpenCodePartRow {
     time_created: i64,
     time_updated: i64,
     data: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenCodeSessionClassificationSidecar {
+    provider: Option<String>,
+    provider_session_id: Option<String>,
+    environment: Option<String>,
 }
 
 pub fn is_opencode_database_path(path: &Path) -> bool {
@@ -273,6 +282,7 @@ pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Resu
             forked_from_session_id: session.parent_id.clone(),
             cwd: session.directory.clone(),
             project: project_label(&session),
+            environment: opencode_session_environment_override(provider_session_id),
             version: session.version.clone(),
             started_at: Some(timestamp_from_ms(session.time_created)),
             ..Default::default()
@@ -616,6 +626,57 @@ fn project_label(session: &OpenCodeSessionRow) -> Option<String> {
         .or_else(|| session.title.clone())
 }
 
+fn opencode_session_environment_override(provider_session_id: &str) -> Option<String> {
+    opencode_session_environment_override_from_roots(
+        provider_session_id,
+        &opencode_session_classification_roots(),
+    )
+}
+
+fn opencode_session_classification_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(root) = std::env::var_os("LONGHOUSE_OPENCODE_SESSION_METADATA_ROOT") {
+        roots.push(PathBuf::from(root));
+    }
+    if let Ok(home) = get_longhouse_home() {
+        roots.push(
+            home.join("provider-live-proof")
+                .join("sessions")
+                .join("opencode"),
+        );
+    }
+    roots
+}
+
+fn opencode_session_environment_override_from_roots(
+    provider_session_id: &str,
+    roots: &[PathBuf],
+) -> Option<String> {
+    for root in roots {
+        let path = root.join(format!("{provider_session_id}.json"));
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(sidecar) = serde_json::from_str::<OpenCodeSessionClassificationSidecar>(&text)
+        else {
+            continue;
+        };
+        if sidecar.provider.as_deref() != Some("opencode") {
+            continue;
+        }
+        if sidecar.provider_session_id.as_deref() != Some(provider_session_id) {
+            continue;
+        }
+        let Some(environment) = sidecar.environment.as_deref().map(str::trim) else {
+            continue;
+        };
+        if matches!(environment, "test" | "e2e") {
+            return Some(environment.to_string());
+        }
+    }
+    None
+}
+
 fn tool_output_text(state: &Value) -> Option<String> {
     for key in ["output", "error"] {
         if let Some(value) = state.get(key) {
@@ -927,6 +988,51 @@ mod tests {
         assert_eq!(result.events[3].content_text.as_deref(), Some("done"));
         assert_eq!(result.source_lines.len(), 3);
         assert!(result.last_good_offset > result.events[3].source_offset);
+    }
+
+    #[test]
+    fn opencode_session_environment_override_uses_provider_live_sidecar() {
+        let temp = tempfile::tempdir().unwrap();
+        let sidecar_root = temp.path().join("sidecars");
+        fs::create_dir_all(&sidecar_root).unwrap();
+        fs::write(
+            sidecar_root.join("ses_test.json"),
+            json!({
+                "artifact_kind": "provider_live_session_classification",
+                "provider": "opencode",
+                "provider_session_id": "ses_test",
+                "environment": "test"
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let environment =
+            opencode_session_environment_override_from_roots("ses_test", &[sidecar_root]);
+
+        assert_eq!(environment.as_deref(), Some("test"));
+    }
+
+    #[test]
+    fn opencode_session_environment_override_rejects_mismatched_sidecar() {
+        let temp = tempfile::tempdir().unwrap();
+        let sidecar_root = temp.path().join("sidecars");
+        fs::create_dir_all(&sidecar_root).unwrap();
+        fs::write(
+            sidecar_root.join("ses_test.json"),
+            json!({
+                "provider": "opencode",
+                "provider_session_id": "other_session",
+                "environment": "test"
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let environment =
+            opencode_session_environment_override_from_roots("ses_test", &[sidecar_root]);
+
+        assert_eq!(environment, None);
     }
 
     #[test]

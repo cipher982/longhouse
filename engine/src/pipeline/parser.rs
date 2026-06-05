@@ -91,6 +91,7 @@ pub struct SessionMetadata {
     pub git_branch: Option<String>,
     pub git_repo: Option<String>,
     pub project: Option<String>,
+    pub environment: Option<String>,
     pub version: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub ended_at: Option<DateTime<Utc>>,
