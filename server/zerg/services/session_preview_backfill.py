@@ -119,7 +119,7 @@ def backfill_missing_session_previews(
 
         if session_changed:
             updated_sessions += 1
-        if session_changed or card is None or session.id in updated_cards:
+        if session_changed or card is None:
             upsert_timeline_card_from_session(db, session)
             updated_cards.add(session.id)
 

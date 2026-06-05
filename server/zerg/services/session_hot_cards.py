@@ -26,6 +26,10 @@ def upsert_timeline_card_from_session(
 ) -> None:
     """Mirror small AgentSession fields into TimelineCard.
 
+    Call this after mutating mirrored AgentSession fields outside archive
+    projectors: provider/environment/project/device/cwd, activity, previews,
+    counts, transcript revision, summary title, or projection state.
+
     The generic session mirror owns only hot-card display fields.  Archive
     projectors own archive metadata and parser revisions, so conflict updates
     intentionally preserve those columns.
