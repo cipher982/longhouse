@@ -110,7 +110,6 @@ class Settings:  # noqa: D401 – simple data container
 
     # Feature flags ----------------------------------------------------
     _llm_token_stream_default: bool  # internal default
-    machine_presence_enabled: bool
 
     # Misc
     dev_admin: bool
@@ -218,6 +217,7 @@ class Settings:  # noqa: D401 – simple data container
     memory_files_enabled: bool = False
     memory_files_context_enabled: bool = False
     memory_files_auto_summary_enabled: bool = False
+    machine_presence_enabled: bool = True
 
     # Dynamic guards (evaluated at runtime) -----------------------------
     @property
