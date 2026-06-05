@@ -83,6 +83,16 @@ Those fixes restored service, but the root pattern is broader:
   rows;
 - diagnostics lack cheap precomputed byte/shape telemetry.
 
+Known current hot-path dependencies to eliminate:
+
+- no-query session list currently reads bounded first-user text from
+  `events.content_text` through `get_first_message_map`; `timeline_cards` must
+  carry `first_user_message_preview` and `last_visible_text_preview` so list
+  endpoints do not need `events` or `derived.db`;
+- `/api/agents/presence` still needs audit/migration off request-session-held
+  `WriteSerializer` execution. Heartbeat and machine-presence were fixed in
+  `e7edb946`, but presence remains a Phase 1 target.
+
 ## Design Principles
 
 ### Hot Paths Stay Small
@@ -460,6 +470,8 @@ Acceptance:
   saturation;
 - session list remains bounded on a fixture shaped like the hosted tenant;
 - diagnostics do not require full DB scans in normal health/debug commands.
+- `/api/agents/presence` no longer holds a request DB session while awaiting a
+  queued serialized write.
 
 Tests:
 
@@ -467,6 +479,8 @@ Tests:
 - integration test with saturated write queue and concurrent health/list/launch;
 - query-shape regression tests for `source_lines` access;
 - smoke test for hosted-debug diagnostics against fixture DB.
+- regression test proving no-query session list does not read `events` for
+  card previews once hot cards are active.
 
 Review gate: Hatch Opus review.
 

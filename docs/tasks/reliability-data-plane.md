@@ -15,9 +15,9 @@ Spec: `docs/specs/reliability-data-plane.md`
 - [x] Create worktree `epic/reliability-data-plane`.
 - [x] Consult Hatch Expert for architecture refinement.
 - [x] Write persistent spec.
-- [ ] Commit Phase 0 spec.
-- [ ] Run Hatch Opus review of spec.
-- [ ] Incorporate review feedback or record why not.
+- [x] Commit Phase 0 spec.
+- [x] Run Hatch Opus review of spec.
+- [x] Incorporate review feedback or record why not.
 - [ ] Pause for maintainer review.
 
 ## Phase 1: Hot-Path Guardrails
@@ -25,7 +25,9 @@ Spec: `docs/specs/reliability-data-plane.md`
 - [ ] Add or verify DB-session release before queued writes across hot routes.
 - [ ] Add pool checkout/write timing visibility where missing.
 - [ ] Add tests for writer saturation with health/list/launch/heartbeat.
+- [ ] Migrate `/api/agents/presence` away from request-session-held serialized writes.
 - [ ] Gate hot endpoint access to raw archive/search/large event tables.
+- [ ] Remove no-query session-list dependency on `events.content_text` by using hot card previews.
 - [ ] Add cheap diagnostics that avoid full DB scans.
 
 ## Phase 2: Filesystem Archive Store
