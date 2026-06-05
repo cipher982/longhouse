@@ -444,10 +444,11 @@ def materialize_pending_managed_transcript_turn(
                 user_submitted_at=user_observed_at,
                 expected_user_text=normalized_user_text or None,
             )
-            turn.user_event_id = latest_user_id_int
-            turn.send_accepted_at = user_observed_at
-            turn.active_phase_observed_at = active_at
-            turn.state = SESSION_TURN_STATE_ACTIVE
+            if turn.durable_at is None:
+                turn.user_event_id = latest_user_id_int
+                turn.send_accepted_at = user_observed_at
+                turn.active_phase_observed_at = active_at
+                turn.state = SESSION_TURN_STATE_ACTIVE
     except IntegrityError:
         return False
     return True
