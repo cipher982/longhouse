@@ -94,6 +94,8 @@ def test_tool_call_events_count_as_tools_not_turns(tmp_path):
     assert session.user_messages == 1, f"expected 1 user turn, got {session.user_messages}"
     assert session.assistant_messages == 1, f"expected 1 assistant turn, got {session.assistant_messages}"
     assert session.tool_calls == 1, f"expected 1 tool call, got {session.tool_calls}"
+    assert session.first_user_message_preview == "hi"
+    assert session.last_visible_text_preview == "Done."
 
 
 def test_multiple_tool_calls_per_turn(tmp_path):

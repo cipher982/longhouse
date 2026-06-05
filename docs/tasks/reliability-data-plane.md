@@ -27,7 +27,7 @@ Spec: `docs/specs/reliability-data-plane.md`
 - [ ] Add tests for writer saturation with health/list/launch/heartbeat.
 - [x] Migrate `/api/agents/presence` away from request-session-held serialized writes.
 - [ ] Gate hot endpoint access to raw archive/search/large event tables.
-- [ ] Remove no-query session-list dependency on `events.content_text` by using hot card previews.
+- [x] Remove no-query session-list dependency on `events.content_text` by using hot card previews.
 - [ ] Add cheap diagnostics that avoid full DB scans.
 
 ## Phase 2: Filesystem Archive Store

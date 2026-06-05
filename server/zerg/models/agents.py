@@ -78,6 +78,8 @@ class AgentSession(AgentsBase):
 
     summary = Column(Text, nullable=True)
     summary_title = Column(String(255), nullable=True)
+    first_user_message_preview = Column(Text, nullable=True)
+    last_visible_text_preview = Column(Text, nullable=True)
     summary_event_count = Column(Integer, server_default=text("0"))
     last_summarized_event_id = Column(Integer, nullable=True)
 

@@ -74,6 +74,18 @@ from .models import SourceRewindHintIngest
 
 logger = logging.getLogger(__name__)
 
+_SESSION_FIRST_USER_PREVIEW_CHARS = 300
+_SESSION_LAST_VISIBLE_PREVIEW_CHARS = 500
+
+
+def _bounded_session_preview(value: str | None, *, max_len: int) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    return stripped[:max_len]
+
 
 def _is_managed_codex_ingest(
     db: Session,
@@ -1234,13 +1246,14 @@ class AgentsStore:
         if session_obj is None:
             return
         primary_thread_id = session_obj.primary_thread_id
+        thread_filter = AgentEvent.thread_id == primary_thread_id if primary_thread_id is not None else text("1=1")
 
         user_count = (
             self.db.query(func.count())
             .select_from(AgentEvent)
             .filter(AgentEvent.session_id == session_id)
             .filter(AgentEvent.branch_id == head_branch_id)
-            .filter(AgentEvent.thread_id == primary_thread_id if primary_thread_id is not None else text("1=1"))
+            .filter(thread_filter)
             .filter(durable_transcript_event_predicate())
             .filter(AgentEvent.role == "user")
             .filter(
@@ -1257,7 +1270,7 @@ class AgentsStore:
             .select_from(AgentEvent)
             .filter(AgentEvent.session_id == session_id)
             .filter(AgentEvent.branch_id == head_branch_id)
-            .filter(AgentEvent.thread_id == primary_thread_id if primary_thread_id is not None else text("1=1"))
+            .filter(thread_filter)
             .filter(durable_transcript_event_predicate())
             .filter(AgentEvent.role == "assistant")
             .filter(AgentEvent.tool_name.is_(None))
@@ -1269,7 +1282,7 @@ class AgentsStore:
             .select_from(AgentEvent)
             .filter(AgentEvent.session_id == session_id)
             .filter(AgentEvent.branch_id == head_branch_id)
-            .filter(AgentEvent.thread_id == primary_thread_id if primary_thread_id is not None else text("1=1"))
+            .filter(thread_filter)
             .filter(durable_transcript_event_predicate())
             .filter(AgentEvent.role == "assistant")
             .filter(AgentEvent.tool_name.isnot(None))
@@ -1280,6 +1293,40 @@ class AgentsStore:
         session_obj.user_messages = int(user_count)
         session_obj.assistant_messages = int(assistant_count)
         session_obj.tool_calls = int(tool_count)
+        first_user_preview = (
+            self.db.query(AgentEvent.content_text)
+            .filter(AgentEvent.session_id == session_id)
+            .filter(AgentEvent.branch_id == head_branch_id)
+            .filter(thread_filter)
+            .filter(durable_transcript_event_predicate())
+            .filter(AgentEvent.role == "user")
+            .filter(AgentEvent.content_text.isnot(None))
+            .filter(func.lower(func.trim(AgentEvent.content_text)) != "warmup")
+            .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
+            .limit(1)
+            .scalar()
+        )
+        last_visible_preview = (
+            self.db.query(AgentEvent.content_text)
+            .filter(AgentEvent.session_id == session_id)
+            .filter(AgentEvent.branch_id == head_branch_id)
+            .filter(thread_filter)
+            .filter(visible_transcript_event_predicate())
+            .filter(AgentEvent.role.in_(("user", "assistant")))
+            .filter(or_(AgentEvent.role != "assistant", AgentEvent.tool_name.is_(None)))
+            .filter(AgentEvent.content_text.isnot(None))
+            .order_by(AgentEvent.timestamp.desc(), AgentEvent.id.desc())
+            .limit(1)
+            .scalar()
+        )
+        session_obj.first_user_message_preview = _bounded_session_preview(
+            first_user_preview,
+            max_len=_SESSION_FIRST_USER_PREVIEW_CHARS,
+        )
+        session_obj.last_visible_text_preview = _bounded_session_preview(
+            last_visible_preview,
+            max_len=_SESSION_LAST_VISIBLE_PREVIEW_CHARS,
+        )
 
     def _align_head_branch_from_leaf_uuid(
         self,

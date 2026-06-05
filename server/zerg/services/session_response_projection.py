@@ -30,6 +30,16 @@ from zerg.services.unmanaged_bindings import load_binding_overlay
 # messages means the summarizer waits instead of attempting; treat as
 # "unavailable" rather than "pending".
 SUMMARY_MIN_MEANINGFUL_MESSAGES = 2
+FIRST_USER_MESSAGE_RESPONSE_CHARS = 80
+
+
+def _bounded_text(value: str | None, *, max_len: int) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    return stripped[:max_len]
 
 
 def derive_summary_status(
@@ -80,7 +90,17 @@ def build_session_response_list(
     control_state_map = load_managed_control_state_map(db, session_ids)
     transcript_preview_map = load_active_provisional_preview_map(db, session_ids)
     pending_response_turn_map = load_pending_response_turn_map(db, session_ids)
-    first_user_map = store.get_first_message_map(session_ids, role="user", max_len=80)
+    first_user_map = {
+        session.id: preview
+        for session in sessions
+        if (
+            preview := _bounded_text(
+                getattr(session, "first_user_message_preview", None),
+                max_len=FIRST_USER_MESSAGE_RESPONSE_CHARS,
+            )
+        )
+        is not None
+    }
     thread_cache: dict[str, tuple[str, int]] = store.batch_thread_meta(sessions)
     binding_overlay_map = load_binding_overlay(db, session_ids, now=now)
     kernel_capabilities_map = project_capabilities_bulk(db, session_ids=session_ids)

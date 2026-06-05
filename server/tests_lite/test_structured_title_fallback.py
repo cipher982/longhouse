@@ -13,9 +13,11 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from cryptography.fernet import Fernet
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
+os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg.database import Base, make_engine, make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
@@ -34,7 +36,14 @@ def _make_db(tmp_path, name="test.db"):
     return make_sessionmaker(engine)
 
 
-def _seed_session(factory, *, summary_title=None, project=None, git_branch=None):
+def _seed_session(
+    factory,
+    *,
+    summary_title=None,
+    project=None,
+    git_branch=None,
+    first_user_message_preview=None,
+):
     db = factory()
     s = AgentSession(
         provider="claude",
@@ -47,6 +56,7 @@ def _seed_session(factory, *, summary_title=None, project=None, git_branch=None)
         assistant_messages=1,
         tool_calls=0,
         summary_title=summary_title,
+        first_user_message_preview=first_user_message_preview,
     )
     db.add(s)
     db.commit()
@@ -195,7 +205,12 @@ def test_sessions_list_includes_first_user_message(tmp_path):
     Base.metadata.create_all(bind=engine)
     factory = make_sessionmaker(engine)
 
-    session = _seed_session(factory, project="proj", git_branch="feat")
+    session = _seed_session(
+        factory,
+        project="proj",
+        git_branch="feat",
+        first_user_message_preview="First question here",
+    )
     _seed_event(factory, session.id, role="user", content="First question here")
     _seed_event(factory, session.id, role="assistant", content="Answer")
     _seed_event(factory, session.id, role="user", content="Second question")
@@ -214,7 +229,11 @@ def test_sessions_list_includes_first_user_message(tmp_path):
     api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
     try:
         client = TestClient(api_app)
-        resp = client.get("/agents/sessions", headers={"X-Agents-Token": "dev"})
+        with patch(
+            "zerg.services.agents.store.AgentsStore.get_first_message_map",
+            side_effect=AssertionError("session list must use hot preview columns"),
+        ):
+            resp = client.get("/agents/sessions", headers={"X-Agents-Token": "dev"})
         assert resp.status_code == 200
         sessions = resp.json()["sessions"]
         assert len(sessions) == 1
