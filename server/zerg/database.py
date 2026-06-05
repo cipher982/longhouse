@@ -142,6 +142,7 @@ try:
     from zerg.models.apns_device_registration import APNSDeviceRegistration  # noqa: F401
     from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration  # noqa: F401
     from zerg.models.apns_widget_push_state import APNSWidgetPushState  # noqa: F401
+    from zerg.models.machine_presence import MachinePresence  # noqa: F401
     from zerg.models.models import Connector  # noqa: F401
     from zerg.models.models import Conversation  # noqa: F401
     from zerg.models.models import ConversationBinding  # noqa: F401
@@ -505,6 +506,7 @@ def initialize_database(engine: Engine = None) -> None:
     from zerg.models.apns_device_registration import APNSDeviceRegistration  # noqa: F401
     from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration  # noqa: F401
     from zerg.models.apns_widget_push_state import APNSWidgetPushState  # noqa: F401
+    from zerg.models.machine_presence import MachinePresence  # noqa: F401
     from zerg.models.models import Connector  # noqa: F401
     from zerg.models.models import Conversation  # noqa: F401
     from zerg.models.models import ConversationBinding  # noqa: F401

@@ -14,6 +14,7 @@ from .conversation import ConversationMessage
 from .device_token import DeviceToken
 from .fiche import Fiche
 from .fiche import FicheMessage
+from .machine_presence import MachinePresence
 
 # Re-export remaining models from models.py
 from .models import AccountConnectorCredential
@@ -89,6 +90,7 @@ __all__ = [
     "CommisTask",
     "SurfaceIngressClaim",
     "Insight",
+    "MachinePresence",
     "NotificationClientPresence",
     "NotificationEvent",
 ]
