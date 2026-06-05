@@ -8894,6 +8894,13 @@ export interface components {
              * @default true
              */
             native_resume_available: boolean;
+            /**
+             * Adoption Mode
+             * @description managed_resume: re-launch an already-managed session. adopt_unmanaged: explicitly bring an imported/raw transcript under Longhouse management by launching a fresh managed process.
+             * @default managed_resume
+             * @enum {string}
+             */
+            adoption_mode: "managed_resume" | "adopt_unmanaged";
         };
         /** SessionControlResponse */
         SessionControlResponse: {

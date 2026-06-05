@@ -556,6 +556,38 @@ describe("SessionDetailPage", () => {
     expect(launchApiMocks.continueRemoteSession).toHaveBeenCalledTimes(1);
   });
 
+  it("labels an adopt_unmanaged continue target as 'Continue in Longhouse'", async () => {
+    const session = makeSession({
+      capabilities: makeCapabilities({
+        live_control_available: false,
+        host_reattach_available: false,
+        reply_to_live_session_available: false,
+        can_send_input: false,
+        can_continue: true,
+        continue_targets: [
+          {
+            provider: "claude",
+            device_id: "cinder",
+            cwd: "/Users/example/git/me",
+            carry_context: "native",
+            native_resume_available: true,
+            adoption_mode: "adopt_unmanaged",
+          },
+        ],
+      }),
+    });
+    mockWorkspaceState({ session, model: buildTimelineModel([]) });
+
+    renderSessionDetailPage();
+    const continueButton = screen.getByTestId("session-continue-button");
+    // Honest copy: adopting an unmanaged transcript starts a fresh managed process.
+    expect(continueButton).toHaveTextContent("Continue in Longhouse");
+    expect(continueButton).toHaveAttribute(
+      "title",
+      "Starts a fresh managed Longhouse process from this transcript",
+    );
+  });
+
   it("keeps unresolved live tool calls pending from the row into the inspector", () => {
     vi.useFakeTimers();
     try {

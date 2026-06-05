@@ -130,6 +130,10 @@ export interface SessionContinueTarget {
   cwd?: string | null;
   carry_context: "native";
   native_resume_available: boolean;
+  // managed_resume: re-launch an already-managed session.
+  // adopt_unmanaged: explicitly bring an imported/raw transcript under
+  // Longhouse management by launching a fresh managed process.
+  adoption_mode?: "managed_resume" | "adopt_unmanaged";
 }
 
 export interface SessionCapabilities {
