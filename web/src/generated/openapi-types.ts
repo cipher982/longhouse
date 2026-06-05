@@ -3554,6 +3554,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/machine-presence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Update Machine Presence */
+        post: operations["update_machine_presence_agents_machine_presence_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/machines": {
         parameters: {
             query?: never;
@@ -6763,6 +6780,49 @@ export interface components {
              * @default 0
              */
             broken: number;
+        };
+        /** MachinePresenceIn */
+        MachinePresenceIn: {
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "active" | "idle_5m" | "idle_10m" | "locked" | "unknown";
+            /**
+             * Source
+             * @default unknown
+             */
+            source: string;
+            /** Idle Seconds */
+            idle_seconds?: number | null;
+            /** Measured At */
+            measured_at?: string | null;
+        };
+        /** MachinePresenceResponse */
+        MachinePresenceResponse: {
+            /** Owner Id */
+            owner_id: number;
+            /** Device Id */
+            device_id: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "active" | "idle_5m" | "idle_10m" | "locked" | "unknown";
+            /** Source */
+            source: string;
+            /** Idle Seconds */
+            idle_seconds: number | null;
+            /**
+             * Measured At
+             * Format: date-time
+             */
+            measured_at: string;
+            /**
+             * Received At
+             * Format: date-time
+             */
+            received_at: string;
         };
         /**
          * ManagedLocalSessionLaunchResponse
@@ -17228,6 +17288,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IngestResponse"];
+                };
+            };
+        };
+    };
+    update_machine_presence_agents_machine_presence_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MachinePresenceIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachinePresenceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
