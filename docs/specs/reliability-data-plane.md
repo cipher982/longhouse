@@ -1,6 +1,6 @@
 # Reliability Data Plane
 
-**Status:** Phase 0 draft for maintainer review
+**Status:** Phase 3 skeleton implemented locally; production backup seed in progress
 **Owner:** Longhouse core
 **Created:** 2026-06-05
 **Branch:** `epic/reliability-data-plane`
@@ -65,7 +65,8 @@ down.
   dogfood DB without a separate explicit operator approval.
 - No cutover to new reads until the old and new paths run side by side with
   verification.
-- No implementation before this Phase 0 spec is reviewed by the maintainer.
+- No production data export, cutover, compaction, or deletion before the backup
+  gate is satisfied and explicitly reviewed.
 
 ## Current Evidence
 
@@ -747,6 +748,25 @@ decoupled from raw archive/search/detail availability.
 **Revisit if:** Materialization drift becomes harder to manage than bounded
 request-time reads, which this incident suggests is unlikely.
 
+### Decision: Data-Plane Paths Are Explicitly Activated
+
+**Context:** Existing deployments still use `DATABASE_URL` as the active runtime
+database. Phase 3 adds future hot/derived/archive wiring but must not silently
+move production traffic.
+
+**Choice:** With no new environment variables, `hot_database_url` resolves to
+the current `DATABASE_URL`, while `derived.db` and `archive/` derive from the
+same directory. Setting `LONGHOUSE_DATA_ROOT` opts into the future
+`hot.db`/`derived.db`/`archive` layout; explicit
+`LONGHOUSE_HOT_DATABASE_URL`, `LONGHOUSE_DERIVED_DATABASE_URL`, and
+`LONGHOUSE_ARCHIVE_ROOT` override both.
+
+**Rationale:** This gives tests and future projectors separate store handles
+without changing active read/write paths during the skeleton phase.
+
+**Revisit if:** The Runtime Host starts with `DATABASE_URL=hot.db` everywhere
+and the compatibility default is no longer needed.
+
 ## Review Plan
 
 - Phase 0: Hatch Expert refinement complete; Hatch Opus review required before
@@ -758,6 +778,7 @@ request-time reads, which this incident suggests is unlikely.
 
 ## Current Pause Point
 
-This branch intentionally stops after Phase 0. No implementation, migration,
-export, backup operation, or production data change should start until the
-maintainer reviews and approves this spec.
+Local implementation may continue through shadow-safe phases, but production
+legacy export and any raw-data cutover remain blocked on the backup gate:
+validated off-volume copy, restored DB validation, count checks, and explicit
+review.

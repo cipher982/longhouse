@@ -44,10 +44,10 @@ Spec: `docs/specs/reliability-data-plane.md`
 
 ## Phase 3: Hot and Derived Store Skeletons
 
-- [ ] Add configurable `hot.db`, `derived.db`, and archive root paths.
-- [ ] Add separate factories/pools/serializers.
-- [ ] Add empty DB migrations.
-- [ ] Add derived-unavailable tests.
+- [x] Add configurable `hot.db`, `derived.db`, and archive root paths.
+- [x] Add separate factories/pools/serializers.
+- [x] Add empty DB migrations.
+- [x] Add derived-unavailable tests.
 
 ## Phase 4: Shadow Ingest and Projectors
 

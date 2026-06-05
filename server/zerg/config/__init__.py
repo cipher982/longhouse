@@ -56,6 +56,72 @@ def _env_or_fallback(primary: str, fallback: str) -> str | None:
     return os.getenv(fallback)
 
 
+def _strip_env_quotes(value: str) -> str:
+    value = value.strip()
+    if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+        return value[1:-1].strip()
+    return value
+
+
+def _sqlite_file_path(database_url: str) -> Path | None:
+    """Return a SQLite file path for file-backed URLs, otherwise None."""
+    database_url = _strip_env_quotes(database_url)
+    if not database_url:
+        return None
+    parsed = urlparse(database_url)
+    if not parsed.scheme.startswith("sqlite"):
+        return None
+    raw_path = parsed.path or ""
+    if not raw_path or raw_path in {":memory:", "/:memory:"}:
+        return None
+    # sqlite:///relative.db parses as /relative.db. SQLAlchemy treats that as a
+    # relative database path, so remove one leading slash for the three-slash
+    # form while preserving sqlite:////absolute.db.
+    if database_url.startswith("sqlite:////"):
+        return Path("/" + raw_path.lstrip("/"))
+    if database_url.startswith("sqlite:///"):
+        return Path(raw_path.lstrip("/"))
+    return None
+
+
+def _sqlite_url_for_path(path: Path) -> str:
+    if path.is_absolute():
+        return f"sqlite:///{path.as_posix()}"
+    return f"sqlite:///{path.as_posix()}"
+
+
+def _default_data_plane_root(database_url: str, explicit_root: str | None) -> Path:
+    if explicit_root:
+        return Path(explicit_root).expanduser()
+    db_path = _sqlite_file_path(database_url)
+    if db_path is not None:
+        return db_path.expanduser().parent
+    return _REPO_ROOT / "data" / "longhouse"
+
+
+def _resolve_data_plane_settings(database_url: str) -> tuple[str | None, str, str, str]:
+    """Resolve hot/derived/archive locations without changing active DB use."""
+
+    data_root_env = os.getenv("LONGHOUSE_DATA_ROOT")
+    root = _default_data_plane_root(database_url, data_root_env)
+
+    hot_database_url = os.getenv("LONGHOUSE_HOT_DATABASE_URL")
+    if not hot_database_url and data_root_env:
+        hot_database_url = _sqlite_url_for_path(root / "hot.db")
+    if not hot_database_url:
+        hot_database_url = database_url or "sqlite://"
+
+    derived_database_url = os.getenv("LONGHOUSE_DERIVED_DATABASE_URL")
+    if not derived_database_url:
+        if data_root_env or _sqlite_file_path(database_url) is not None:
+            derived_database_url = _sqlite_url_for_path(root / "derived.db")
+        else:
+            derived_database_url = "sqlite://"
+
+    archive_root = os.getenv("LONGHOUSE_ARCHIVE_ROOT") or str(root / "archive")
+    return data_root_env, hot_database_url, derived_database_url, archive_root
+
+
 def resolve_app_mode() -> AppMode:
     """Resolve the application mode from environment variables.
 
@@ -104,6 +170,10 @@ class Settings:  # noqa: D401 – simple data container
 
     # Database ---------------------------------------------------------
     database_url: str
+    longhouse_data_root: str | None
+    hot_database_url: str
+    derived_database_url: str
+    archive_root: str
 
     # Cryptography -----------------------------------------------------
     fernet_secret: str | None
@@ -449,6 +519,9 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
     # real (or vice versa).
     demo_mode = _truthy(os.getenv("DEMO_MODE")) or app_mode is AppMode.DEMO
 
+    database_url = os.getenv("DATABASE_URL", "")
+    longhouse_data_root, hot_database_url, derived_database_url, archive_root = _resolve_data_plane_settings(database_url)
+
     return Settings(
         app_mode=app_mode,
         testing=testing,
@@ -465,7 +538,11 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         github_client_id=os.getenv("GITHUB_CLIENT_ID"),
         github_client_secret=os.getenv("GITHUB_CLIENT_SECRET"),
         trigger_signing_secret=os.getenv("TRIGGER_SIGNING_SECRET"),
-        database_url=os.getenv("DATABASE_URL", ""),
+        database_url=database_url,
+        longhouse_data_root=longhouse_data_root,
+        hot_database_url=hot_database_url,
+        derived_database_url=derived_database_url,
+        archive_root=archive_root,
         fernet_secret=os.getenv("FERNET_SECRET"),
         _llm_token_stream_default=_truthy(os.getenv("LLM_TOKEN_STREAM")),
         dev_admin=_truthy(os.getenv("DEV_ADMIN")),
