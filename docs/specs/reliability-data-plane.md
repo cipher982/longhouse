@@ -320,6 +320,13 @@ updated_at
 Parser revision is required. Parser changes must trigger explicit reproject
 instead of silently mixing old and new derived semantics.
 
+Initial hot-card projection is conservative. A sealed chunk batch is only
+allowed to overwrite session/card hot fields when the visible archive coverage
+appears complete for that session, currently anchored by source offset `0`.
+Partial shadow chunks for old sessions are checkpointed, but they do not regress
+existing hot counts or previews. When later legacy export inserts older chunks,
+the same parser revision can rebuild from the full sealed session archive.
+
 ## Migration Strategy
 
 The migration is additive and reversible until explicit decommission approval.
@@ -347,6 +354,9 @@ Initial shadow archive writes are gated by
 `LONGHOUSE_ARCHIVE_SHADOW_WRITE_ENABLED`. Source-line archive chunks are
 retry-idempotent: dynamic ingest timing is not included in the chunk payload,
 so replaying the same source lines writes the same chunk path and manifest row.
+The first hot-card projector supports generic normalized event JSON plus the
+existing Claude JSONL shape. Unsupported raw formats get terminal
+`unsupported` checkpoints for that parser revision instead of retrying forever.
 
 ### Step 4: Legacy Raw Exporter
 
@@ -559,9 +569,10 @@ cutting over reads.
 Scope:
 
 - archive shadow-write for new ingest;
-- live lane updates hot session/card state;
-- projectors from archive to hot cards and derived event/search state;
+- live lane keeps existing hot session state unchanged by default;
+- projector from archive to hot cards;
 - projector checkpoints with parser revision;
+- remaining projector from archive to derived event/search state;
 - comparison tooling between legacy and projected views.
 
 Acceptance:

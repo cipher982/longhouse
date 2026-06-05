@@ -691,6 +691,39 @@ class ArchiveChunk(AgentsBase):
     )
 
 
+class TimelineCard(AgentsBase):
+    """Small session-card read model for hot list/timeline paths."""
+
+    __tablename__ = "timeline_cards"
+
+    session_id = Column(GUID(), primary_key=True)
+    provider = Column(String(50), nullable=False, index=True)
+    environment = Column(String(20), nullable=False, index=True)
+    project = Column(String(255), nullable=True, index=True)
+    device_id = Column(String(255), nullable=True, index=True)
+    cwd = Column(Text, nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    last_activity_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    summary_title = Column(String(255), nullable=True)
+    first_user_message_preview = Column(Text, nullable=True)
+    last_visible_text_preview = Column(Text, nullable=True)
+    user_messages = Column(Integer, nullable=False, server_default=text("0"))
+    assistant_messages = Column(Integer, nullable=False, server_default=text("0"))
+    tool_calls = Column(Integer, nullable=False, server_default=text("0"))
+    transcript_revision = Column(Integer, nullable=False, server_default=text("0"))
+    archive_state = Column(String(32), nullable=False, server_default=text("'current'"))
+    archive_lag_records = Column(Integer, nullable=False, server_default=text("0"))
+    derived_state = Column(String(32), nullable=False, server_default=text("'unknown'"))
+    derived_revision = Column(String(128), nullable=True)
+    parser_revision = Column(String(128), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_timeline_cards_activity", "last_activity_at", "started_at"),
+        Index("ix_timeline_cards_project_provider", "project", "provider"),
+    )
+
+
 class ArchiveExportCheckpoint(AgentsBase):
     """Resumable legacy-export checkpoint for raw archive migration."""
 

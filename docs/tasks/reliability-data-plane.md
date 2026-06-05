@@ -52,9 +52,9 @@ Spec: `docs/specs/reliability-data-plane.md`
 ## Phase 4: Shadow Ingest and Projectors
 
 - [x] Shadow-write new raw ingest to archive behind a flag.
-- [ ] Project archive chunks to hot cards.
+- [x] Project archive chunks to hot cards.
 - [ ] Project archive chunks to derived events/search.
-- [ ] Add parser-revision checkpoints.
+- [x] Add parser-revision checkpoints.
 - [ ] Add projector restart, duplicate, out-of-order, and large-session tests.
 
 ## Phase 5: Backup Gate and Legacy Exporter
