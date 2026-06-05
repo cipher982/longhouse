@@ -585,6 +585,13 @@
   word-break: break-word;
 }
 
+.session-chat-pending-message__status {
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: rgba(181, 148, 83, 0.9);
+}
+
 .session-chat-pending-message__spinner {
   flex-shrink: 0;
   width: 12px;

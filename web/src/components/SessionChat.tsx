@@ -79,7 +79,8 @@ interface PendingManagedLocalInput {
   text: string;
   clientRequestId: string;
   serverInputId: number | null;
-  phase: "submitting" | "sent";
+  intent: "auto" | "queue" | "steer";
+  phase: "submitting";
 }
 
 interface SessionChatProps {
@@ -116,6 +117,8 @@ interface SessionChatProps {
   canSteerActiveTurn?: boolean;
   /** True when backend detected stale managed execution with no active tool. */
   isStalled?: boolean;
+  /** True when runtime truth says the provider is currently executing. */
+  isSessionExecuting?: boolean;
   /**
    * Durable timeline rows visible in the parent workspace. When present,
    * managed-local optimistic inputs stay visible until the backend-authored
@@ -187,6 +190,7 @@ export function SessionChat({
   canQueueNextInput = false,
   canSteerActiveTurn = false,
   isStalled = false,
+  isSessionExecuting = false,
   timelineItems,
 }: SessionChatProps) {
   const isDock = layout === "dock";
@@ -255,8 +259,6 @@ export function SessionChat({
       queryClient.invalidateQueries({ queryKey: ["agent-sessions"] }),
     ]);
   }, [queryClient, session.id]);
-
-  const reconcilePendingInputWithTimeline = timelineItems !== undefined;
 
   useEffect(() => {
     if (!pendingManagedLocalInput || !timelineItems) return;
@@ -379,7 +381,7 @@ export function SessionChat({
         : null,
     [lockStatusQuery.data],
   );
-  const isSendLocked = Boolean(lockInfo?.locked);
+  const isSendLocked = Boolean(lockInfo?.locked) || isSessionExecuting;
 
   const queuedInputsQuery = useQuery<QueuedInputSummary[]>({
     queryKey: ["session-inputs", session.id],
@@ -439,6 +441,7 @@ export function SessionChat({
         text: message,
         clientRequestId,
         serverInputId: null,
+        intent,
         phase: "submitting",
       });
       setIsSubmitting(true);
@@ -476,15 +479,8 @@ export function SessionChat({
           setSentConfirmation(true);
           sentConfirmationTimerRef.current = setTimeout(() => setSentConfirmation(false), 2000);
 
-          setPendingManagedLocalInput((pending) =>
-            pending?.clientRequestId === clientRequestId
-              ? { ...pending, serverInputId: result.input_id, phase: "sent" }
-              : pending,
-          );
-          const refreshPromise = refreshCurrentSessionWorkspace();
-          if (!reconcilePendingInputWithTimeline) {
-            void refreshPromise.finally(() => setPendingManagedLocalInput(null));
-          }
+          void refreshCurrentSessionWorkspace();
+          setPendingManagedLocalInput(null);
         } else {
           setPendingManagedLocalInput(null);
         }
@@ -506,7 +502,7 @@ export function SessionChat({
         setIsSubmitting(false);
       }
     },
-    [queryClient, reconcilePendingInputWithTimeline, session.id, refreshCurrentSessionWorkspace],
+    [queryClient, session.id, refreshCurrentSessionWorkspace],
   );
 
   const handleCancelQueuedInput = useCallback(
@@ -1076,9 +1072,12 @@ export function SessionChat({
             {isManagedLocal && pendingManagedLocalInput ? (
               <div className="session-chat-pending-message">
                 <span className="session-chat-pending-message__text">{pendingManagedLocalInput.text}</span>
+                <span className="session-chat-pending-message__status">
+                  Delivering...
+                </span>
                 <span
                   className="session-chat-pending-message__spinner"
-                  aria-label={pendingManagedLocalInput.phase === "submitting" ? "Sending" : "Syncing transcript"}
+                  aria-label="Sending"
                 />
               </div>
             ) : null}

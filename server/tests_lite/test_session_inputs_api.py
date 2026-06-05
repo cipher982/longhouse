@@ -336,6 +336,26 @@ def test_session_input_api_schema_exposes_typed_lifecycle_contract():
     ]
 
 
+def test_json_input_rejects_empty_text_by_contract(tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        resp = client.post(
+            f"/api/sessions/{session_id}/input",
+            json={"text": "", "intent": "auto", "client_request_id": "empty-json-1"},
+        )
+        assert resp.status_code == 422, resp.text
+        detail = resp.json()["detail"]
+        assert any(item["loc"] == ["body", "text"] for item in detail)
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
 def test_intent_auto_not_locked_returns_sent(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_live_session(session_local)
