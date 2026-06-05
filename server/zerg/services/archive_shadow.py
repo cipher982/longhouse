@@ -28,9 +28,7 @@ from zerg.services.archive_store import ArchiveRecord
 from zerg.services.archive_store import FilesystemArchiveStore
 
 logger = logging.getLogger(__name__)
-_SOURCE_SEQ_HASH_BITS = 20
-_SOURCE_SEQ_HASH_MASK = (1 << _SOURCE_SEQ_HASH_BITS) - 1
-_SOURCE_SEQ_MAX_OFFSET = ((1 << 63) - 1) >> _SOURCE_SEQ_HASH_BITS
+_SOURCE_SEQ_MAX = (1 << 63) - 1
 
 
 @dataclass(frozen=True)
@@ -166,18 +164,18 @@ def build_source_line_archive_records(
     source_lines: Iterable[SourceLineIngest],
     tenant_id: str,
 ) -> list[ArchiveRecord]:
-    sorted_lines = sorted(
-        _unique_source_lines(source_lines),
-        key=lambda line: (_stable_source_seq(line), line.source_path, int(line.source_offset), line.raw_json),
+    sequenced_lines = sorted(
+        _assign_source_sequences(_unique_source_lines(source_lines)),
+        key=lambda item: (item[0], item[1].source_path, int(item[1].source_offset), item[1].raw_json),
     )
     records: list[ArchiveRecord] = []
-    for line in sorted_lines:
+    for source_seq, line in sequenced_lines:
         records.append(
             ArchiveRecord(
                 tenant_id=tenant_id,
                 session_id=str(result.session_id),
                 stream="source_lines",
-                source_seq=_stable_source_seq(line),
+                source_seq=source_seq,
                 raw_bytes=line.raw_json.encode("utf-8"),
                 legacy_ref={
                     "source": "agents_ingest",
@@ -266,13 +264,28 @@ def _unique_source_lines(source_lines: Iterable[SourceLineIngest]) -> list[Sourc
     return unique
 
 
-def _stable_source_seq(line: SourceLineIngest) -> int:
-    tie_hash = int.from_bytes(
-        hashlib.blake2b(f"{line.source_path}\0{line.raw_json}".encode("utf-8"), digest_size=8).digest(),
-        "big",
-    )
-    offset = min(max(0, int(line.source_offset)), _SOURCE_SEQ_MAX_OFFSET)
-    return (offset << _SOURCE_SEQ_HASH_BITS) | (tie_hash & _SOURCE_SEQ_HASH_MASK)
+def _assign_source_sequences(source_lines: Iterable[SourceLineIngest]) -> list[tuple[int, SourceLineIngest]]:
+    used: dict[int, tuple[str, int, str]] = {}
+    sequenced: list[tuple[int, SourceLineIngest]] = []
+    for line in sorted(source_lines, key=lambda item: (item.source_path, int(item.source_offset), item.raw_json)):
+        key = (line.source_path, int(line.source_offset), line.raw_json)
+        salt = 0
+        source_seq = _stable_source_seq(key, salt=salt)
+        while source_seq in used and used[source_seq] != key:
+            salt += 1
+            source_seq = _stable_source_seq(key, salt=salt)
+        used[source_seq] = key
+        sequenced.append((source_seq, line))
+    return sequenced
+
+
+def _stable_source_seq(key: tuple[str, int, str], *, salt: int) -> int:
+    source_path, source_offset, raw_json = key
+    digest = hashlib.blake2b(
+        f"{source_path}\0{source_offset}\0{raw_json}\0{salt}".encode("utf-8"),
+        digest_size=8,
+    ).digest()
+    return int.from_bytes(digest, "big") & _SOURCE_SEQ_MAX
 
 
 def _record_key(record: ArchiveRecord) -> tuple[str, int, str] | None:

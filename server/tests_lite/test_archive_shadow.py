@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import os
+import threading
+import time
 from datetime import datetime
 from datetime import timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
@@ -25,6 +29,7 @@ from zerg.services.agents.models import IngestResult
 from zerg.services.agents.models import SessionIngest
 from zerg.services.agents.models import SourceLineIngest
 from zerg.services.archive_shadow import PreparedArchiveShadow
+from zerg.services.archive_shadow import build_source_line_archive_records
 from zerg.services.archive_shadow import source_lines_from_ingest
 from zerg.services.archive_shadow import write_ingest_shadow_archive
 from zerg.services.archive_store import FilesystemArchiveStore
@@ -188,6 +193,34 @@ def test_shadow_archive_skips_source_lines_already_present_in_sealed_chunks(tmp_
     ]
 
 
+def test_shadow_archive_source_sequences_do_not_collide_for_many_same_offset_records(tmp_path):
+    result = _ingest_result()
+    source_lines = [
+        SourceLineIngest(
+            source_path=f"/tmp/session-{index}.jsonl",
+            source_offset=0,
+            raw_json=f'{{"type":"message","index":{index}}}',
+        )
+        for index in range(2048)
+    ]
+
+    records = build_source_line_archive_records(
+        data=_session_ingest(source_lines=source_lines),
+        result=result,
+        source_lines=source_lines,
+        tenant_id="tenant-test",
+    )
+    source_seqs = [record.source_seq for record in records]
+
+    assert len(source_seqs) == len(set(source_seqs))
+    assert all(0 <= source_seq < (1 << 63) for source_seq in source_seqs)
+
+    archive_store = FilesystemArchiveStore(tmp_path / "archive")
+    chunk = archive_store.write_chunk(records)
+
+    assert chunk.record_count == len(source_lines)
+
+
 def test_shadow_archive_falls_back_to_event_raw_json(tmp_path):
     data = _session_ingest(
         source_lines=[],
@@ -319,6 +352,64 @@ def test_ingest_route_prepares_shadow_archive_after_main_writer(tmp_path, monkey
         assert observations == {"prepare_inside_writer": False}
     finally:
         api_app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_shadow_archive_after_ingest_serializes_prepare_for_same_session(monkeypatch):
+    from zerg.routers import agents_ingest
+
+    class DummySession:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, *_args):
+            return None
+
+    class DummySessionFactory:
+        def __call__(self):
+            return DummySession()
+
+    active_prepare_count = 0
+    max_active_prepare_count = 0
+    counter_lock = threading.Lock()
+
+    def fake_prepare_ingest_shadow_archive(**_kwargs):
+        nonlocal active_prepare_count
+        nonlocal max_active_prepare_count
+
+        with counter_lock:
+            active_prepare_count += 1
+            max_active_prepare_count = max(max_active_prepare_count, active_prepare_count)
+        time.sleep(0.05)
+        with counter_lock:
+            active_prepare_count -= 1
+        return PreparedArchiveShadow(enabled=True)
+
+    session_id = uuid4()
+    monkeypatch.setattr(agents_ingest, "_is_testing_env", lambda: False)
+    monkeypatch.setattr(
+        "zerg.database.get_session_factory",
+        lambda: DummySessionFactory(),
+    )
+    monkeypatch.setattr(
+        "zerg.services.archive_shadow.prepare_ingest_shadow_archive",
+        fake_prepare_ingest_shadow_archive,
+    )
+
+    await asyncio.gather(
+        agents_ingest._write_shadow_archive_after_ingest(
+            data=_session_ingest(),
+            result=SimpleNamespace(session_id=session_id),
+            fallback_db=object(),
+        ),
+        agents_ingest._write_shadow_archive_after_ingest(
+            data=_session_ingest(),
+            result=SimpleNamespace(session_id=session_id),
+            fallback_db=object(),
+        ),
+    )
+
+    assert max_active_prepare_count == 1
 
 
 def _session_factory(tmp_path):

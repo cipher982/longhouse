@@ -103,6 +103,8 @@ _ARCHIVE_INGEST_ACTIVE_WRITER_GRACE_MS = 1000.0
 _ARCHIVE_INGEST_WRITE_TIMEOUT_SECONDS = 60.0
 _ARCHIVE_INGEST_SLOTS = asyncio.Semaphore(_ARCHIVE_INGEST_MAX_IN_FLIGHT)
 _INGEST_STAGE_HEADER_LIMIT = 8
+_ARCHIVE_SHADOW_SESSION_LOCKS: dict[str, asyncio.Lock] = {}
+_ARCHIVE_SHADOW_SESSION_LOCKS_GUARD = asyncio.Lock()
 
 
 def _ingest_chunk_for_label(label: str) -> int:
@@ -426,6 +428,11 @@ def _background_server_fanout_observation(
     )
 
 
+async def _archive_shadow_session_lock(session_id: UUID | str) -> asyncio.Lock:
+    async with _ARCHIVE_SHADOW_SESSION_LOCKS_GUARD:
+        return _ARCHIVE_SHADOW_SESSION_LOCKS.setdefault(str(session_id), asyncio.Lock())
+
+
 async def _write_shadow_archive_after_ingest(
     *,
     data: SessionIngest,
@@ -437,34 +444,63 @@ async def _write_shadow_archive_after_ingest(
     from zerg.services.archive_shadow import prepare_ingest_shadow_archive
     from zerg.services.write_serializer import get_write_serializer
 
-    def _prepare_with_manifest_read():
-        if _is_testing_env():
-            return prepare_ingest_shadow_archive(data=data, result=result, manifest_db=fallback_db)
-
-        from zerg.database import get_session_factory
-
-        SessionLocal = get_session_factory()
-        with SessionLocal() as read_db:
-            return prepare_ingest_shadow_archive(data=data, result=result, manifest_db=read_db)
-
+    lock = await _archive_shadow_session_lock(result.session_id)
     try:
-        if _is_testing_env():
-            prepared = _prepare_with_manifest_read()
-        else:
-            prepared = await asyncio.to_thread(_prepare_with_manifest_read)
-        if not prepared.enabled or prepared.error or not prepared.chunks:
-            return
-
-        def _insert_manifests(write_db: Session) -> None:
-            insert_archive_chunk_manifests(write_db, prepared.chunks)
-
-        ws = get_write_serializer()
-        if ws.is_configured and not _is_testing_env():
-            await ws.execute(_insert_manifests, label="archive-shadow-manifest")
-        else:
-            await ws.execute_or_direct(_insert_manifests, fallback_db, label="archive-shadow-manifest")
+        async with lock:
+            await _write_shadow_archive_after_ingest_locked(
+                data=data,
+                result=result,
+                fallback_db=fallback_db,
+                prepare_ingest_shadow_archive=prepare_ingest_shadow_archive,
+                insert_archive_chunk_manifests=insert_archive_chunk_manifests,
+                get_write_serializer=get_write_serializer,
+            )
     except Exception:
         logger.warning("Shadow archive write failed after ingest for session %s", result.session_id, exc_info=True)
+
+
+async def _write_shadow_archive_after_ingest_locked(
+    *,
+    data: SessionIngest,
+    result,
+    fallback_db: Session,
+    prepare_ingest_shadow_archive,
+    insert_archive_chunk_manifests,
+    get_write_serializer,
+) -> None:
+    if _is_testing_env():
+        prepared = prepare_ingest_shadow_archive(data=data, result=result, manifest_db=fallback_db)
+    else:
+        prepared = await asyncio.to_thread(
+            _prepare_shadow_archive_with_fresh_manifest_db,
+            data=data,
+            result=result,
+            prepare_ingest_shadow_archive=prepare_ingest_shadow_archive,
+        )
+    if not prepared.enabled or prepared.error or not prepared.chunks:
+        return
+
+    def _insert_manifests(write_db: Session) -> None:
+        insert_archive_chunk_manifests(write_db, prepared.chunks)
+
+    ws = get_write_serializer()
+    if ws.is_configured and not _is_testing_env():
+        await ws.execute(_insert_manifests, label="archive-shadow-manifest")
+    else:
+        await ws.execute_or_direct(_insert_manifests, fallback_db, label="archive-shadow-manifest")
+
+
+def _prepare_shadow_archive_with_fresh_manifest_db(
+    *,
+    data: SessionIngest,
+    result,
+    prepare_ingest_shadow_archive,
+):
+    from zerg.database import get_session_factory
+
+    SessionLocal = get_session_factory()
+    with SessionLocal() as read_db:
+        return prepare_ingest_shadow_archive(data=data, result=result, manifest_db=read_db)
 
 
 # Hard cap on decompressed ingest bodies. Engine splits batches at
