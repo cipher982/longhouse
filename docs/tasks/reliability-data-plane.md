@@ -25,7 +25,7 @@ Spec: `docs/specs/reliability-data-plane.md`
 - [ ] Add or verify DB-session release before queued writes across hot routes.
 - [ ] Add pool checkout/write timing visibility where missing.
 - [ ] Add tests for writer saturation with health/list/launch/heartbeat.
-- [ ] Migrate `/api/agents/presence` away from request-session-held serialized writes.
+- [x] Migrate `/api/agents/presence` away from request-session-held serialized writes.
 - [ ] Gate hot endpoint access to raw archive/search/large event tables.
 - [ ] Remove no-query session-list dependency on `events.content_text` by using hot card previews.
 - [ ] Add cheap diagnostics that avoid full DB scans.

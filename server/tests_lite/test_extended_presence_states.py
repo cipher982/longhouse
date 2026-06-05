@@ -35,10 +35,12 @@ from uuid import UUID
 from uuid import uuid4
 
 import pytest
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
+os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg.database import Base
 from zerg.database import get_db
@@ -177,6 +179,63 @@ def test_unknown_state_still_ignored(client):
         headers=_auth_headers(),
     )
     assert resp.status_code == 204
+
+
+def test_presence_releases_request_db_before_serialized_write(tmp_path, monkeypatch):
+    engine = make_engine(f"sqlite:///{tmp_path}/presence_release.db", pool_size=1, max_overflow=0)
+    Base.metadata.create_all(bind=engine)
+    SessionLocal = make_sessionmaker(engine)
+
+    observations: dict[str, int] = {}
+
+    class _Serializer:
+        is_configured = True
+
+        async def execute_after_closing_request_session(self, fn, fallback_db, **_kwargs):
+            observations["before_close"] = engine.pool.checkedout()
+            fallback_db.close()
+            observations["after_close"] = engine.pool.checkedout()
+            with SessionLocal() as write_db:
+                result = fn(write_db)
+                write_db.commit()
+                return result
+
+        async def execute_or_direct(self, *_args, **_kwargs):  # pragma: no cover - regression guard
+            raise AssertionError("presence must release the request DB before waiting on serialized writes")
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="presence-release", id="token-1")
+
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.setattr("zerg.routers.presence.get_write_serializer", lambda: _Serializer())
+    monkeypatch.setattr("zerg.routers.presence.get_session_factory", lambda: SessionLocal)
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+    try:
+        with TestClient(api_app) as c:
+            response = c.post(
+                "/agents/presence",
+                json={
+                    "session_id": str(uuid4()),
+                    "state": "idle",
+                    "provider": "claude",
+                    "dedupe_key": "presence-release-1",
+                },
+                headers=_auth_headers(),
+            )
+        assert response.status_code == 204, response.text
+    finally:
+        api_app.dependency_overrides.clear()
+        engine.dispose()
+
+    assert observations == {"before_close": 1, "after_close": 0}
 
 
 # ---------------------------------------------------------------------------

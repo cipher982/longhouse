@@ -27,6 +27,7 @@ Authentication: same X-Agents-Token / device token as ingest.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from datetime import datetime
 from datetime import timezone
@@ -43,6 +44,7 @@ from sqlalchemy.orm import Session
 
 from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
 from zerg.database import get_db
+from zerg.database import get_session_factory
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.services.apns_sender import NOTIFICATION_CHANNEL_APNS_IOS
@@ -79,6 +81,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/agents", tags=["agents"])
 
 VALID_STATES = {"thinking", "running", "idle", "needs_user", "blocked"}
+_TRUTHY_ENV = {"1", "true", "yes", "on"}
 
 # States that trigger auto-resume of snoozed sessions (genuine work restart)
 _AUTO_RESUME_STATES = {"thinking", "running"}
@@ -89,6 +92,10 @@ def _source_for_provider_hook(provider: str | None) -> str:
     if not normalized:
         normalized = "claude"
     return f"{normalized[:58]}_hook"
+
+
+def _request_session_released_by_serializer(ws: object) -> bool:
+    return bool(getattr(ws, "is_configured", False)) and os.getenv("TESTING", "").strip().lower() not in _TRUTHY_ENV
 
 
 class PresenceIn(UTCBaseModel):
@@ -246,11 +253,12 @@ async def upsert_presence(
         attention_resolution_push,
         widget_push,
         live_activity_pushes,
-    ) = await ws.execute_or_direct(
+    ) = await ws.execute_after_closing_request_session(
         _do_presence_writes,
         db,
         label="presence",
     )
+    request_session_released = _request_session_released_by_serializer(ws)
 
     if session_uuid is not None and should_publish_runtime_update:
         from zerg.services.session_pubsub import publish_session_runtime_update
@@ -262,12 +270,22 @@ async def upsert_presence(
         )
 
     if session_uuid is not None and is_session_message_deliverable_state(canonical_presence_state):
-        await deliver_queued_session_messages(
-            db=db,
-            owner_id=owner_id,
-            target_session_id=session_uuid,
-            target_presence_state=canonical_presence_state,
-        )
+        if request_session_released:
+            session_factory = get_session_factory()
+            with session_factory() as delivery_db:
+                await deliver_queued_session_messages(
+                    db=delivery_db,
+                    owner_id=owner_id,
+                    target_session_id=session_uuid,
+                    target_presence_state=canonical_presence_state,
+                )
+        else:
+            await deliver_queued_session_messages(
+                db=db,
+                owner_id=owner_id,
+                target_session_id=session_uuid,
+                target_presence_state=canonical_presence_state,
+            )
     if attention_push is not None:
         push_sent = False
         try:
