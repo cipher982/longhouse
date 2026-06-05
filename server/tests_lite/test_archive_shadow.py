@@ -250,11 +250,53 @@ def test_shadow_archive_falls_back_to_event_raw_json(tmp_path):
     assert lines[0].raw_json == '{"type":"message","role":"user"}'
 
 
+def test_shadow_archive_writes_event_stream_for_raw_events_without_source_path(tmp_path):
+    SessionLocal = _session_factory(tmp_path)
+    archive_store = FilesystemArchiveStore(tmp_path / "archive")
+    settings = _shadow_settings(tmp_path, target_bytes=4096)
+    data = _session_ingest(
+        source_lines=[],
+        events=[
+            EventIngest(
+                role="system",
+                content_text="server synthetic",
+                timestamp=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                source_path=None,
+                source_offset=None,
+                raw_json='{"type":"server","role":"system"}',
+            )
+        ],
+    )
+    result = _ingest_result()
+
+    with SessionLocal() as db:
+        shadow = write_ingest_shadow_archive(
+            db,
+            data=data,
+            result=result,
+            settings=settings,
+            archive_store=archive_store,
+        )
+        db.commit()
+
+        rows = db.query(ArchiveChunk).all()
+
+    assert shadow.error is None
+    assert shadow.records_written == 1
+    assert len(rows) == 1
+    assert rows[0].stream == "events"
+
+    records = archive_store.read_chunk(rows[0].relative_path)
+    assert [record.raw_bytes for record in records] == [b'{"type":"server","role":"system"}']
+    assert records[0].source_path is None
+    assert records[0].source_offset is None
+
+
 def test_ingest_route_shadow_writes_archive_when_enabled(tmp_path, monkeypatch):
     monkeypatch.setenv("LONGHOUSE_ARCHIVE_SHADOW_WRITE_ENABLED", "1")
     monkeypatch.setenv("LONGHOUSE_ARCHIVE_SHADOW_TENANT_ID", "tenant-route")
     monkeypatch.setenv("LONGHOUSE_ARCHIVE_ROOT", str(tmp_path / "route-archive"))
-    monkeypatch.setenv("LONGHOUSE_ARCHIVE_SHADOW_CHUNK_TARGET_BYTES", "128")
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_SHADOW_CHUNK_TARGET_BYTES", "4096")
 
     client, SessionLocal = _make_client(tmp_path)
     session_id = uuid4()
@@ -329,6 +371,12 @@ def test_ingest_route_archive_primary_can_disable_legacy_raw_writes(tmp_path, mo
                         "source_path": "/tmp/primary-session.jsonl",
                         "source_offset": 0,
                         "raw_json": '{"type":"message","role":"user"}',
+                    },
+                    {
+                        "role": "system",
+                        "content_text": "server synthetic event",
+                        "timestamp": "2026-01-01T00:00:02Z",
+                        "raw_json": '{"type":"server","role":"system"}',
                     }
                 ],
             },
@@ -340,32 +388,44 @@ def test_ingest_route_archive_primary_can_disable_legacy_raw_writes(tmp_path, mo
         assert response.headers["X-Ingest-Legacy-Raw"] == "disabled"
         with SessionLocal() as db:
             chunks = db.query(ArchiveChunk).all()
-            events = db.query(AgentEvent).all()
+            events = db.query(AgentEvent).order_by(AgentEvent.timestamp).all()
             source_lines = db.query(AgentSourceLine).all()
             source_observation = (
                 db.query(SessionObservation)
                 .filter(SessionObservation.kind == OBS_KIND_PROVIDER_SOURCE_LINE)
                 .one()
             )
-            event_observation = (
+            event_observations = (
                 db.query(SessionObservation)
                 .filter(SessionObservation.kind == OBS_KIND_PROVIDER_EVENT)
-                .one()
+                .order_by(SessionObservation.observed_at)
+                .all()
             )
 
-        assert len(chunks) == 1
-        assert chunks[0].tenant_id == "tenant-primary"
+        assert {chunk.stream for chunk in chunks} == {"events", "source_lines"}
+        assert all(chunk.tenant_id == "tenant-primary" for chunk in chunks)
         assert len(source_lines) == 0
-        assert len(events) == 1
+        assert len(events) == 2
         assert events[0].content_text == "hello from archive primary"
-        assert events[0].raw_json is None
-        assert events[0].raw_json_z is None
+        assert events[1].content_text == "server synthetic event"
+        assert all(event.raw_json is None for event in events)
+        assert all(event.raw_json_z is None for event in events)
         assert "raw_json" not in json.loads(source_observation.payload_json or "{}")
-        assert "raw_json" not in json.loads(event_observation.payload_json or "{}")
+        assert len(event_observations) == 2
+        assert all("raw_json" not in json.loads(observation.payload_json or "{}") for observation in event_observations)
 
         archive_store = FilesystemArchiveStore(tmp_path / "primary-archive")
-        records = archive_store.read_chunk(chunks[0].relative_path)
-        assert [record.raw_bytes for record in records] == [b'{"type":"message","role":"user"}']
+        records_by_stream: dict[str, list[bytes]] = {}
+        for chunk in chunks:
+            records_by_stream.setdefault(chunk.stream, [])
+            records_by_stream[chunk.stream].extend(record.raw_bytes for record in archive_store.read_chunk(chunk.relative_path))
+        assert records_by_stream["source_lines"] == [b'{"type":"message","role":"user"}']
+        assert sorted(records_by_stream["events"]) == sorted(
+            [
+            b'{"type":"message","role":"user"}',
+            b'{"type":"server","role":"system"}',
+            ]
+        )
     finally:
         api_app.dependency_overrides.clear()
 

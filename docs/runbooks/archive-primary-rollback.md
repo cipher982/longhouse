@@ -19,7 +19,11 @@ LONGHOUSE_LEGACY_RAW_WRITE_ENABLED=1
 ```
 
 Disable legacy raw writes only after archive manifests, chunk verification, and
-projector comparison are healthy:
+projector comparison are healthy for both raw archive streams:
+
+- `source_lines`: raw provider transcript/source lines;
+- `events`: raw provider event payloads that may not be reconstructable from
+  source lines.
 
 ```text
 LONGHOUSE_LEGACY_RAW_WRITE_ENABLED=0
@@ -40,7 +44,9 @@ unless archive-primary writes are also enabled and verified.
 5. Send a small ingest and confirm response headers:
    `X-Ingest-Archive-Primary: written` and
    `X-Ingest-Legacy-Raw: enabled`.
-6. Verify new `archive_chunks` manifest rows and readable archive chunk files.
+6. Verify new `archive_chunks` manifest rows and readable archive chunk files
+   for both `source_lines` and `events` streams when the ingest includes both
+   payload types.
 7. Only then test legacy raw disable on a low-risk tenant or local fixture.
 
 ## Fallback Behavior
@@ -48,16 +54,20 @@ unless archive-primary writes are also enabled and verified.
 When archive-primary is enabled and legacy raw writes are also enabled:
 
 - archive prepare/write success stores raw source bytes in the archive and keeps
-  legacy raw writes on;
+  legacy raw writes on. The expected response headers are
+  `X-Ingest-Archive-Primary: written` and `X-Ingest-Legacy-Raw: enabled`;
 - archive prepare/write failure falls back to legacy raw writes;
-- the response exposes `X-Ingest-Archive-Primary: fallback`;
+- fallback responses expose `X-Ingest-Archive-Primary: fallback` and
+  `X-Ingest-Legacy-Raw: enabled`;
 - no request should depend on derived/archive availability for hot list,
   launch, health, heartbeat, or control paths.
 
 When archive-primary is enabled and legacy raw writes are disabled:
 
 - archive prepare/write success stores raw source bytes in the archive and skips
-  legacy `source_lines` / raw event blob persistence;
+  legacy `source_lines` / raw event blob persistence. The expected response
+  headers are `X-Ingest-Archive-Primary: written` and
+  `X-Ingest-Legacy-Raw: disabled`;
 - archive prepare/write failure fails closed with HTTP 503;
 - the response exposes `X-Ingest-Archive-Primary: failed`;
 - re-enable legacy raw writes or disable archive-primary before retrying ingest.

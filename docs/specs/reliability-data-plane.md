@@ -397,8 +397,10 @@ Cut over in order:
 
 ### Step 7: Archive-Primary Writes
 
-New raw data writes archive-primary. Legacy raw writes stay behind a fallback
-flag until confidence is high.
+New raw data writes archive-primary. Source-line raw bytes go to the
+`source_lines` archive stream; provider event raw bytes go to the `events`
+archive stream unless redundancy is explicitly proven later. Legacy raw writes
+stay behind a fallback flag until confidence is high.
 
 ### Step 8: Decommission Legacy Raw Storage
 
@@ -702,6 +704,7 @@ Scope:
 
 - archive-primary flag;
 - legacy raw-write disable flag;
+- source-line and event raw archive streams;
 - rollback/fallback runbook;
 - continued comparison samples.
 
