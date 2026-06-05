@@ -17,6 +17,8 @@ import {
   getSessionCardText,
   renderHighlightedText,
 } from "../../lib/sessionUtils";
+import { ProviderGlyph } from "../ProviderGlyph";
+import { getProviderLabel } from "../../lib/providers";
 
 const HOVER_PREFETCH_DELAY_MS = 180;
 
@@ -147,7 +149,10 @@ export function SessionRow({
         <span className="inbox-row-status-label">{statusLabel}</span>
       </span>
       <span className="inbox-row-source">
-        <span className="inbox-row-provider">{provider}</span>
+        <span className="inbox-row-provider" title={getProviderLabel(provider)}>
+          <ProviderGlyph provider={provider} size={18} />
+          <span className="inbox-row-provider-name">{getProviderLabel(provider)}</span>
+        </span>
         {branch ? <span className="inbox-row-branch">{branch}</span> : null}
       </span>
       <span className="inbox-row-time">

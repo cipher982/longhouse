@@ -9,12 +9,12 @@ import {
   formatProviderLabel,
   formatFullDate,
   getSessionInteractionCapabilities,
-  getProviderColor,
   getSessionOriginLabel,
   truncatePath,
 } from "../../lib/sessionWorkspace";
 import { ContinuationsList } from "./ContinuationsList";
 import { ManagedLaunchHintCard } from "./ManagedLaunchHintCard";
+import { ProviderGlyph } from "../ProviderGlyph";
 
 interface SessionContextPaneProps {
   session: AgentSession;
@@ -96,10 +96,7 @@ export function SessionContextPane({
           <div className="session-context-title">{title}</div>
           <div className="session-context-subtitle">
             <span className="session-context-provider">
-              <span
-                className="session-context-provider-dot"
-                style={{ backgroundColor: getProviderColor(session.provider) }}
-              />
+              <ProviderGlyph provider={session.provider} size={18} />
               {formatProviderLabel(session.provider)}
             </span>
             {homeLabel ? (
@@ -119,10 +116,7 @@ export function SessionContextPane({
       {hideHero ? (
         <div className="session-context-stats session-context-stats--drawer" data-testid="session-stats-line">
           <span className="session-context-provider">
-            <span
-              className="session-context-provider-dot"
-              style={{ backgroundColor: getProviderColor(session.provider) }}
-            />
+            <ProviderGlyph provider={session.provider} size={18} />
             {formatProviderLabel(session.provider)}
           </span>
           {homeLabel ? <span className="session-context-subtitle__sep">{homeLabel}</span> : null}

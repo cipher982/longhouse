@@ -1,28 +1,18 @@
-import {
-  CodeIcon,
-  SparklesIcon,
-} from "../icons";
 import { getLaunchProviderSupportList } from "../../lib/providers";
+import { ProviderGlyph } from "../ProviderGlyph";
 
 interface Provider {
+  id: string;
   name: string;
-  icon: React.ReactNode;
   status: "live" | "coming";
   description: string;
   statusLabel: string;
 }
 
 export function IntegrationsSection() {
-  const providerIcons: Record<string, React.ReactNode> = {
-    claude: <SparklesIcon width={40} height={40} />,
-    codex: <CodeIcon width={40} height={40} />,
-    antigravity: <SparklesIcon width={40} height={40} />,
-    opencode: <CodeIcon width={40} height={40} />,
-  };
-
   const providers: Provider[] = getLaunchProviderSupportList().map((provider) => ({
+    id: provider.id,
     name: provider.marketingName,
-    icon: providerIcons[provider.id],
     status: "live" as const,
     description: provider.cardDescription,
     statusLabel: provider.statusLabel,
@@ -45,7 +35,9 @@ export function IntegrationsSection() {
               className={`landing-provider-card ${provider.status === "coming" ? "coming-soon" : ""}`}
               style={{ animationDelay: `${index * 100}ms` }}
             >
-              <span className="landing-provider-icon">{provider.icon}</span>
+              <span className="landing-provider-icon">
+                <ProviderGlyph provider={provider.id} size={44} />
+              </span>
               <div className="landing-provider-info">
                 <span className="landing-provider-name">{provider.name}</span>
                 <span className="landing-provider-desc">{provider.description}</span>

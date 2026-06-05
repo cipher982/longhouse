@@ -29,6 +29,8 @@ import { useComposerAttachments } from "../lib/useComposerAttachments";
 import { Badge, Button, Spinner } from "./ui";
 import { AttachmentTray } from "./AttachmentTray";
 import { ManagedLaunchHintCard } from "./session-workspace/ManagedLaunchHintCard";
+import { ProviderGlyph } from "./ProviderGlyph";
+import { getProviderLabel } from "../lib/providers";
 import "../styles/session-chat.css";
 
 interface SSEAssistantDelta {
@@ -871,7 +873,10 @@ export function SessionChat({
             )}
             <div className="session-chat-titles">
               <span className="session-chat-title">{session.project || "Session"}</span>
-              <span className="session-chat-provider">{session.provider}</span>
+              <span className="session-chat-provider">
+                <ProviderGlyph provider={session.provider} size={16} />
+                {getProviderLabel(session.provider)}
+              </span>
             </div>
           </div>
           <div className="session-chat-status">

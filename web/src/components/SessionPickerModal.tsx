@@ -9,7 +9,7 @@
  */
 
 import React, { useCallback, useMemo, useRef, useState } from "react";
-import { getProviderIcon } from "../lib/providers";
+import { ProviderGlyph } from "./ProviderGlyph";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { Button } from "./ui";
 import {
@@ -89,9 +89,7 @@ function SessionItem({ session, isSelected, onClick }: SessionItemProps) {
       aria-selected={isSelected}
     >
       <div className="session-item-header">
-        <span className={`provider-badge provider-${session.provider}`}>
-          {getProviderIcon(session.provider)}
-        </span>
+        <ProviderGlyph provider={session.provider} size={20} />
         <span className="session-title">{title}</span>
       </div>
       <div className="session-item-meta">
