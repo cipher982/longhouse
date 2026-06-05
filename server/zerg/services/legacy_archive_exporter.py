@@ -20,6 +20,7 @@ from zerg.models.agents import ArchiveExportQuarantine
 from zerg.services.archive_shadow import insert_archive_chunk_manifests
 from zerg.services.archive_store import ArchiveRecord
 from zerg.services.archive_store import FilesystemArchiveStore
+from zerg.services.raw_json_compression import CODEC_PLAIN
 from zerg.services.raw_json_compression import decode_raw_json
 
 LegacyRawTable = Literal["source_lines", "events"]
@@ -40,6 +41,7 @@ class LegacyArchiveExportResult:
     rows_quarantined: int
     chunks_written: int
     checkpoints_written: int
+    rows_skipped_no_raw: int = 0
     paused: bool = False
     pause_reason: str | None = None
     dry_run: bool = False
@@ -64,7 +66,9 @@ def export_legacy_raw_archive_batch(
 
     The function only reads legacy raw rows. It writes archive files, archive
     manifests, export checkpoints, and quarantine rows in the new archive
-    control tables.
+    control tables. Callers should keep ``batch_size`` and
+    ``chunk_target_uncompressed_bytes`` stable for a session so crash/retry
+    chunk boundaries remain deterministic.
     """
     normalized_session_id = UUID(str(session_id))
     if batch_size <= 0:
@@ -117,6 +121,7 @@ def export_legacy_raw_archive_batch(
         session_id=normalized_session_id,
     )
     last_rowid = int(checkpoint.last_rowid) if checkpoint is not None else 0
+    last_source_seq = int(checkpoint.last_source_seq) if checkpoint is not None else 0
     model = LEGACY_RAW_TABLES[source_table]
     rows = (
         db.query(model)
@@ -142,6 +147,7 @@ def export_legacy_raw_archive_batch(
     provider = _session_provider(db, normalized_session_id)
     records: list[ArchiveRecord] = []
     quarantined = 0
+    skipped_no_raw = 0
     max_processed_rowid = last_rowid
     for row in rows:
         rowid = int(row.id)
@@ -149,6 +155,9 @@ def export_legacy_raw_archive_batch(
         try:
             raw_json = decode_raw_json(row)
             if raw_json is None:
+                if _is_clean_no_raw_payload(source_table, row):
+                    skipped_no_raw += 1
+                    continue
                 raise ValueError("raw_json is missing")
         except Exception as exc:
             quarantined += 1
@@ -196,7 +205,7 @@ def export_legacy_raw_archive_batch(
             source_table=source_table,
             session_id=normalized_session_id,
             last_rowid=max_processed_rowid,
-            last_source_seq=max((record.source_seq for record in records), default=max_processed_rowid),
+            last_source_seq=max((record.source_seq for record in records), default=last_source_seq),
             status=status,
             error=None,
         )
@@ -209,6 +218,7 @@ def export_legacy_raw_archive_batch(
         selected_rows=len(rows),
         rows_exported=len(records),
         rows_quarantined=quarantined,
+        rows_skipped_no_raw=skipped_no_raw,
         chunks_written=chunks_written,
         checkpoints_written=checkpoints_written,
         dry_run=dry_run,
@@ -335,6 +345,15 @@ def _legacy_ref(source_table: LegacyRawTable, row: AgentSourceLine | AgentEvent)
     if event_uuid:
         ref["event_uuid"] = str(event_uuid)
     return ref
+
+
+def _is_clean_no_raw_payload(source_table: LegacyRawTable, row: AgentSourceLine | AgentEvent) -> bool:
+    return (
+        source_table == "events"
+        and getattr(row, "raw_json", None) is None
+        and getattr(row, "raw_json_z", None) is None
+        and int(getattr(row, "raw_json_codec", CODEC_PLAIN) or CODEC_PLAIN) == CODEC_PLAIN
+    )
 
 
 def _session_provider(db: Session, session_id: UUID) -> str | None:

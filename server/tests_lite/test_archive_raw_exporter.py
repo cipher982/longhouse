@@ -15,6 +15,7 @@ from zerg.models.agents import ArchiveExportCheckpoint
 from zerg.models.agents import ArchiveExportQuarantine
 from zerg.services.archive_store import FilesystemArchiveStore
 from zerg.services.legacy_archive_exporter import export_legacy_raw_archive_batch
+from zerg.services.raw_json_compression import CODEC_PLAIN
 from zerg.services.raw_json_compression import CODEC_ZSTD
 from zerg.services.raw_json_compression import compress_raw_json
 
@@ -242,6 +243,48 @@ def test_legacy_exporter_exports_raw_events(tmp_path):
             "event_hash": "event-hash",
             "event_uuid": "event-1",
         }
+
+
+def test_legacy_exporter_skips_rawless_events_without_quarantine(tmp_path):
+    SessionLocal = _session_factory(tmp_path)
+    archive_store = FilesystemArchiveStore(tmp_path / "archive")
+    session_id = uuid4()
+
+    with SessionLocal() as db:
+        _add_session(db, session_id=session_id, provider="codex")
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                role="system",
+                content_text="synthetic",
+                timestamp=_ts(),
+                event_hash="event-hash",
+                raw_json=None,
+                raw_json_z=None,
+                raw_json_codec=CODEC_PLAIN,
+            )
+        )
+        db.commit()
+
+        result = export_legacy_raw_archive_batch(
+            db,
+            archive_store=archive_store,
+            tenant_id="tenant-a",
+            source_table="events",
+            session_id=session_id,
+        )
+        db.commit()
+
+        checkpoint = db.query(ArchiveExportCheckpoint).filter(ArchiveExportCheckpoint.session_id == session_id).one()
+        assert result.selected_rows == 1
+        assert result.rows_exported == 0
+        assert result.rows_quarantined == 0
+        assert result.rows_skipped_no_raw == 1
+        assert checkpoint.status == "current"
+        assert checkpoint.last_rowid == 1
+        assert checkpoint.last_source_seq == 0
+        assert db.query(ArchiveExportQuarantine).count() == 0
+        assert db.query(ArchiveChunk).count() == 0
 
 
 def test_legacy_exporter_dry_run_writes_nothing(tmp_path):
