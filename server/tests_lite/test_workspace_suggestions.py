@@ -30,6 +30,7 @@ from zerg.dependencies.agents_auth import verify_agents_token  # noqa: E402
 from zerg.models import User  # noqa: E402
 from zerg.models.agents import AgentSession  # noqa: E402
 from zerg.models.device_token import DeviceToken  # noqa: E402
+from zerg.services.session_hot_cards import upsert_timeline_card_from_session  # noqa: E402
 from zerg.services.workspace_suggestions import build_workspace_suggestions  # noqa: E402
 
 OWNER_ID = 42
@@ -68,20 +69,21 @@ def _seed_session(
     now = datetime.now(timezone.utc)
     ts = now - timedelta(days=days_ago)
     with SessionLocal() as db:
-        db.add(
-            AgentSession(
-                provider="codex",
-                environment=environment,
-                device_id=device_id,
-                cwd=cwd,
-                git_repo=git_repo,
-                git_branch=git_branch,
-                started_at=ts,
-                last_activity_at=ts,
-                user_messages=1,
-                needs_embedding=0,
-            )
+        session = AgentSession(
+            provider="codex",
+            environment=environment,
+            device_id=device_id,
+            cwd=cwd,
+            git_repo=git_repo,
+            git_branch=git_branch,
+            started_at=ts,
+            last_activity_at=ts,
+            user_messages=1,
+            needs_embedding=0,
         )
+        db.add(session)
+        db.flush()
+        upsert_timeline_card_from_session(db, session)
         db.commit()
 
 

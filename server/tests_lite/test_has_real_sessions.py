@@ -18,6 +18,7 @@ os.environ.setdefault("TESTING", "1")
 from zerg.database import Base, get_db, make_engine, make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
+from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 
 
 def _make_db(tmp_path, name="test_real.db"):
@@ -40,6 +41,8 @@ def _seed(factory, *, device_id):
         tool_calls=0,
     )
     db.add(s)
+    db.flush()
+    upsert_timeline_card_from_session(db, s)
     db.commit()
     db.close()
 

@@ -21,7 +21,8 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg.database import Base, make_engine, make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.models.agents import AgentEvent, AgentSession
+from zerg.models.agents import AgentEvent, AgentSession, TimelineCard
+from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +60,8 @@ def _seed_session(
         first_user_message_preview=first_user_message_preview,
     )
     db.add(s)
+    db.flush()
+    upsert_timeline_card_from_session(db, s)
     db.commit()
     db.refresh(s)
     db.close()
@@ -311,3 +314,35 @@ def test_sessions_list_uses_preview_backfill_for_existing_rows(tmp_path):
         assert sessions[0]["first_user_message"] == "Legacy first question"
     finally:
         api_app.dependency_overrides.clear()
+
+
+def test_preview_backfill_creates_missing_timeline_card_for_hot_legacy_row(tmp_path):
+    from zerg.services.session_preview_backfill import backfill_missing_session_previews
+
+    factory = _make_db(tmp_path, "legacy_hot_row_missing_card.db")
+    session = _seed_session(
+        factory,
+        project="proj",
+        git_branch="feat",
+        first_user_message_preview="Already hot",
+    )
+
+    db = factory()
+    try:
+        existing = db.query(AgentSession).filter(AgentSession.id == session.id).one()
+        existing.last_visible_text_preview = "Already latest"
+        db.query(TimelineCard).filter(TimelineCard.session_id == session.id).delete()
+        db.commit()
+
+        result = backfill_missing_session_previews(db, limit=10)
+        db.commit()
+
+        card = db.query(TimelineCard).filter(TimelineCard.session_id == session.id).one()
+    finally:
+        db.close()
+
+    assert result.selected_sessions == 1
+    assert result.updated_sessions == 0
+    assert result.updated_timeline_cards == 1
+    assert card.first_user_message_preview == "Already hot"
+    assert card.last_visible_text_preview == "Already latest"

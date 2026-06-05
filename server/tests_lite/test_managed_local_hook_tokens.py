@@ -22,6 +22,7 @@ from zerg.main import api_app
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.user import User
+from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 
 
 def _make_db(tmp_path):
@@ -64,6 +65,8 @@ def _seed_session(
         tool_calls=0,
     )
     db.add(session)
+    db.flush()
+    upsert_timeline_card_from_session(db, session)
     db.commit()
     db.refresh(session)
     return session

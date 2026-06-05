@@ -24,6 +24,7 @@ from zerg.database import Base
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionMessage
 from zerg.models.agents import SessionRuntimeState
+from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 
 # ---------------------------------------------------------------------------
 # DB / client helpers
@@ -73,6 +74,8 @@ def _seed_session(db, **kwargs):
     defaults.update(kwargs)
     s = AgentSession(**defaults)
     db.add(s)
+    db.flush()
+    upsert_timeline_card_from_session(db, s)
     db.commit()
     db.refresh(s)
     return s

@@ -24,6 +24,7 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
 from zerg.services.session_listing import SessionListParams
 from zerg.services.session_listing import list_agent_sessions
+from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 from zerg.services.session_pubsub import TOPIC_TIMELINE
 from zerg.services.session_pubsub import get_pubsub
 from zerg.services.session_pubsub import reset_pubsub_for_test
@@ -84,6 +85,8 @@ def _seed_session(
         summary_title="Timeline stream test",
     )
     db.add(session)
+    db.flush()
+    upsert_timeline_card_from_session(db, session)
     db.commit()
     db.refresh(session)
     return session

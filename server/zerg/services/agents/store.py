@@ -36,6 +36,7 @@ from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionThread
+from zerg.models.agents import TimelineCard
 from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import ensure_subagent_thread
 from zerg.services.agents.kernel_writes import record_thread_alias
@@ -48,6 +49,7 @@ from zerg.services.raw_json_compression import CODEC_PLAIN
 from zerg.services.raw_json_compression import CODEC_ZSTD
 from zerg.services.raw_json_compression import compress_raw_json
 from zerg.services.raw_json_compression import decode_raw_json
+from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 from zerg.services.session_observation_reducers import ProviderEventReduction
 from zerg.services.session_observation_reducers import reduce_provider_event_observation
 from zerg.services.session_observations import record_provider_event_observation
@@ -1781,6 +1783,8 @@ class AgentsStore:
                     durable_at=latest_inserted_timestamp,
                     durable_event_id=latest_inserted_event_id,
                 )
+        if session_obj is not None:
+            upsert_timeline_card_from_session(self.db, session_obj)
         _record_stage("session_projection", stage_started)
 
         stage_started = time.monotonic()
@@ -1883,6 +1887,7 @@ class AgentsStore:
         materialize_managed_transcript_turns(self.db, session_id=session_id, incremental=True)
         materialize_pending_managed_transcript_turn(self.db, session_id=session_id)
         session_obj.needs_projection = 0
+        upsert_timeline_card_from_session(self.db, session_obj)
         return True
 
     def get_session(self, session_id: UUID) -> Optional[AgentSession]:
@@ -1917,6 +1922,22 @@ class AgentsStore:
         Returns:
             Tuple of (sessions, total_count)
         """
+        if query is None:
+            return self._list_sessions_from_timeline_cards(
+                project=project,
+                provider=provider,
+                environment=environment,
+                include_test=include_test,
+                device_id=device_id,
+                since=since,
+                until=until,
+                limit=limit,
+                offset=offset,
+                exclude_user_states=exclude_user_states,
+                hide_autonomous=hide_autonomous,
+                anchor_on_activity=anchor_on_activity,
+            )
+
         stmt = select(AgentSession)
         activity_anchor = AgentSession.started_at
         if anchor_on_activity:
@@ -1958,6 +1979,64 @@ class AgentsStore:
         sessions = list(self.db.execute(stmt).scalars().all())
         return sessions, total
 
+    def _list_sessions_from_timeline_cards(
+        self,
+        *,
+        project: Optional[str],
+        provider: Optional[str],
+        environment: Optional[str],
+        include_test: bool,
+        device_id: Optional[str],
+        since: Optional[datetime],
+        until: Optional[datetime],
+        limit: int,
+        offset: int,
+        exclude_user_states: Optional[list[str]],
+        hide_autonomous: bool,
+        anchor_on_activity: bool,
+    ) -> tuple[List[AgentSession], int]:
+        runtime_signal_subq = self._runtime_signal_subquery()
+        activity_anchor = self._recent_activity_anchor_expr(
+            TimelineCard.last_activity_at,
+            runtime_signal_subq.c.runtime_timeline_anchor_at,
+            fallback_expr=TimelineCard.started_at,
+        )
+        time_anchor = activity_anchor if anchor_on_activity else TimelineCard.started_at
+        stmt = (
+            select(
+                TimelineCard.session_id.label("session_id"),
+                TimelineCard.started_at.label("started_at"),
+                activity_anchor.label("activity_anchor"),
+            )
+            .select_from(TimelineCard)
+            .join(AgentSession, AgentSession.id == TimelineCard.session_id)
+            .outerjoin(runtime_signal_subq, runtime_signal_subq.c.session_id == TimelineCard.session_id)
+        )
+        stmt = self._apply_timeline_card_listing_filters(
+            stmt,
+            project=project,
+            provider=provider,
+            environment=environment,
+            include_test=include_test,
+            device_id=device_id,
+            since=since,
+            until=until,
+            exclude_user_states=exclude_user_states,
+            hide_autonomous=hide_autonomous,
+            time_anchor=time_anchor,
+        )
+        if stmt is None:
+            return [], 0
+
+        total = self.db.execute(select(func.count()).select_from(stmt.subquery())).scalar() or 0
+        if anchor_on_activity:
+            stmt = stmt.order_by(activity_anchor.desc(), TimelineCard.started_at.desc(), TimelineCard.session_id.desc())
+        else:
+            stmt = stmt.order_by(TimelineCard.started_at.desc(), TimelineCard.session_id.desc())
+        rows = self.db.execute(stmt.limit(limit).offset(offset)).all()
+        session_ids = [row.session_id for row in rows]
+        return self._load_sessions_preserving_order(session_ids), total
+
     def list_session_window_signature(
         self,
         *,
@@ -1981,6 +2060,21 @@ class AgentsStore:
         tuple[tuple[str, datetime | None, datetime | None, datetime | None, int, datetime | None], ...],
     ]:
         """Return a lightweight recency window signature for timeline SSE preflight."""
+        if query is None:
+            return self._list_session_window_signature_from_timeline_cards(
+                project=project,
+                provider=provider,
+                environment=environment,
+                include_test=include_test,
+                device_id=device_id,
+                since=since,
+                until=until,
+                limit=limit,
+                offset=offset,
+                exclude_user_states=exclude_user_states,
+                hide_autonomous=hide_autonomous,
+                include_total=include_total,
+            )
 
         runtime_signal_subq = self._runtime_signal_subquery()
         activity_anchor = self._recent_activity_anchor_expr(
@@ -2027,6 +2121,82 @@ class AgentsStore:
 
         stmt = stmt.order_by(activity_anchor.desc(), AgentSession.started_at.desc()).limit(limit).offset(offset)
         rows = self.db.execute(stmt).all()
+        signature_rows = tuple(
+            (
+                str(row.session_id),
+                row.session_updated_at,
+                row.last_activity_at,
+                row.runtime_updated_at,
+                int(row.runtime_version or 0),
+                row.runtime_timeline_anchor_at,
+            )
+            for row in rows
+        )
+        return total, signature_rows
+
+    def _list_session_window_signature_from_timeline_cards(
+        self,
+        *,
+        project: Optional[str],
+        provider: Optional[str],
+        environment: Optional[str],
+        include_test: bool,
+        device_id: Optional[str],
+        since: Optional[datetime],
+        until: Optional[datetime],
+        limit: int,
+        offset: int,
+        exclude_user_states: Optional[list[str]],
+        hide_autonomous: bool,
+        include_total: bool,
+    ) -> tuple[
+        int | None,
+        tuple[tuple[str, datetime | None, datetime | None, datetime | None, int, datetime | None], ...],
+    ]:
+        runtime_signal_subq = self._runtime_signal_subquery()
+        activity_anchor = self._recent_activity_anchor_expr(
+            TimelineCard.last_activity_at,
+            runtime_signal_subq.c.runtime_timeline_anchor_at,
+            fallback_expr=TimelineCard.started_at,
+        )
+        stmt = (
+            select(
+                TimelineCard.session_id.label("session_id"),
+                AgentSession.updated_at.label("session_updated_at"),
+                TimelineCard.last_activity_at.label("last_activity_at"),
+                runtime_signal_subq.c.runtime_updated_at.label("runtime_updated_at"),
+                runtime_signal_subq.c.runtime_version.label("runtime_version"),
+                runtime_signal_subq.c.runtime_timeline_anchor_at.label("runtime_timeline_anchor_at"),
+            )
+            .select_from(TimelineCard)
+            .join(AgentSession, AgentSession.id == TimelineCard.session_id)
+            .outerjoin(runtime_signal_subq, runtime_signal_subq.c.session_id == TimelineCard.session_id)
+        )
+        stmt = self._apply_timeline_card_listing_filters(
+            stmt,
+            project=project,
+            provider=provider,
+            environment=environment,
+            include_test=include_test,
+            device_id=device_id,
+            since=since,
+            until=until,
+            exclude_user_states=exclude_user_states,
+            hide_autonomous=hide_autonomous,
+            time_anchor=activity_anchor,
+        )
+        if stmt is None:
+            return (0 if include_total else None), ()
+
+        total: int | None = None
+        if include_total:
+            total = self.db.execute(select(func.count()).select_from(stmt.subquery())).scalar() or 0
+
+        rows = self.db.execute(
+            stmt.order_by(activity_anchor.desc(), TimelineCard.started_at.desc(), TimelineCard.session_id.desc())
+            .limit(limit)
+            .offset(offset)
+        ).all()
         signature_rows = tuple(
             (
                 str(row.session_id),
@@ -2144,6 +2314,21 @@ class AgentsStore:
         context_mode: str = "forensic",
         branch_mode: str = "head",
     ) -> tuple[int, tuple[tuple[str, str, datetime | None], ...]]:
+        if query is None:
+            return self._list_timeline_thread_page_from_timeline_cards(
+                project=project,
+                provider=provider,
+                environment=environment,
+                include_test=include_test,
+                device_id=device_id,
+                since=since,
+                until=until,
+                limit=limit,
+                offset=offset,
+                exclude_user_states=exclude_user_states,
+                hide_autonomous=hide_autonomous,
+            )
+
         ranked_subq = self._timeline_thread_ranked_subquery(
             project=project,
             provider=provider,
@@ -2164,6 +2349,52 @@ class AgentsStore:
         thread_ids_stmt = select(ranked_subq.c.thread_id).where(ranked_subq.c.rn == 1)
         total_stmt = select(func.count()).select_from(thread_ids_stmt.subquery())
         total = self.db.execute(total_stmt).scalar() or 0
+        rows = tuple(
+            self.db.execute(
+                select(
+                    ranked_subq.c.thread_id,
+                    ranked_subq.c.session_id,
+                    ranked_subq.c.thread_anchor,
+                )
+                .where(ranked_subq.c.rn == 1)
+                .order_by(ranked_subq.c.thread_anchor.desc(), ranked_subq.c.session_id.desc())
+                .limit(limit)
+                .offset(offset)
+            ).all()
+        )
+        return total, tuple((str(row.thread_id), str(row.session_id), row.thread_anchor) for row in rows)
+
+    def _list_timeline_thread_page_from_timeline_cards(
+        self,
+        *,
+        project: Optional[str],
+        provider: Optional[str],
+        environment: Optional[str],
+        include_test: bool,
+        device_id: Optional[str],
+        since: Optional[datetime],
+        until: Optional[datetime],
+        limit: int,
+        offset: int,
+        exclude_user_states: Optional[list[str]],
+        hide_autonomous: bool,
+    ) -> tuple[int, tuple[tuple[str, str, datetime | None], ...]]:
+        ranked_subq = self._timeline_card_thread_ranked_subquery(
+            project=project,
+            provider=provider,
+            environment=environment,
+            include_test=include_test,
+            device_id=device_id,
+            since=since,
+            until=until,
+            exclude_user_states=exclude_user_states,
+            hide_autonomous=hide_autonomous,
+        )
+        if ranked_subq is None:
+            return 0, ()
+
+        thread_ids_stmt = select(ranked_subq.c.thread_id).where(ranked_subq.c.rn == 1)
+        total = self.db.execute(select(func.count()).select_from(thread_ids_stmt.subquery())).scalar() or 0
         rows = tuple(
             self.db.execute(
                 select(
@@ -2201,6 +2432,22 @@ class AgentsStore:
         int | None,
         tuple[tuple[str, str, datetime | None, datetime | None, datetime | None, int], ...],
     ]:
+        if query is None:
+            return self._list_timeline_thread_window_signature_from_timeline_cards(
+                project=project,
+                provider=provider,
+                environment=environment,
+                include_test=include_test,
+                device_id=device_id,
+                since=since,
+                until=until,
+                limit=limit,
+                offset=offset,
+                exclude_user_states=exclude_user_states,
+                hide_autonomous=hide_autonomous,
+                include_total=include_total,
+            )
+
         ranked_subq = self._timeline_thread_ranked_subquery(
             project=project,
             provider=provider,
@@ -2252,6 +2499,72 @@ class AgentsStore:
             for row in rows
         )
 
+    def _list_timeline_thread_window_signature_from_timeline_cards(
+        self,
+        *,
+        project: Optional[str],
+        provider: Optional[str],
+        environment: Optional[str],
+        include_test: bool,
+        device_id: Optional[str],
+        since: Optional[datetime],
+        until: Optional[datetime],
+        limit: int,
+        offset: int,
+        exclude_user_states: Optional[list[str]],
+        hide_autonomous: bool,
+        include_total: bool,
+    ) -> tuple[
+        int | None,
+        tuple[tuple[str, str, datetime | None, datetime | None, datetime | None, int], ...],
+    ]:
+        ranked_subq = self._timeline_card_thread_ranked_subquery(
+            project=project,
+            provider=provider,
+            environment=environment,
+            include_test=include_test,
+            device_id=device_id,
+            since=since,
+            until=until,
+            exclude_user_states=exclude_user_states,
+            hide_autonomous=hide_autonomous,
+        )
+        if ranked_subq is None:
+            return (0 if include_total else None), ()
+
+        total: int | None = None
+        if include_total:
+            thread_ids_stmt = select(ranked_subq.c.thread_id).where(ranked_subq.c.rn == 1)
+            total = self.db.execute(select(func.count()).select_from(thread_ids_stmt.subquery())).scalar() or 0
+
+        rows = tuple(
+            self.db.execute(
+                select(
+                    ranked_subq.c.thread_id,
+                    ranked_subq.c.session_id,
+                    ranked_subq.c.thread_anchor,
+                    ranked_subq.c.session_updated_at,
+                    ranked_subq.c.last_activity_at,
+                    ranked_subq.c.runtime_version,
+                )
+                .where(ranked_subq.c.rn == 1)
+                .order_by(ranked_subq.c.thread_anchor.desc(), ranked_subq.c.session_id.desc())
+                .limit(limit)
+                .offset(offset)
+            ).all()
+        )
+        return total, tuple(
+            (
+                str(row.thread_id),
+                str(row.session_id),
+                row.thread_anchor,
+                row.session_updated_at,
+                row.last_activity_at,
+                int(row.runtime_version or 0),
+            )
+            for row in rows
+        )
+
     @staticmethod
     def _latest_non_null_expr(lhs, rhs):
         return case(
@@ -2262,11 +2575,87 @@ class AgentsStore:
         )
 
     @classmethod
-    def _recent_activity_anchor_expr(cls, last_activity_expr, runtime_anchor_expr=None):
+    def _recent_activity_anchor_expr(cls, last_activity_expr, runtime_anchor_expr=None, fallback_expr=None):
         latest_signal = last_activity_expr
         if runtime_anchor_expr is not None:
             latest_signal = cls._latest_non_null_expr(last_activity_expr, runtime_anchor_expr)
-        return func.coalesce(latest_signal, AgentSession.started_at)
+        return func.coalesce(latest_signal, fallback_expr if fallback_expr is not None else AgentSession.started_at)
+
+    def _timeline_card_thread_ranked_subquery(
+        self,
+        *,
+        project: Optional[str],
+        provider: Optional[str],
+        environment: Optional[str],
+        include_test: bool,
+        device_id: Optional[str],
+        since: Optional[datetime],
+        until: Optional[datetime],
+        exclude_user_states: Optional[list[str]],
+        hide_autonomous: bool,
+    ):
+        runtime_signal_subq = self._runtime_signal_subquery()
+        activity_anchor = self._recent_activity_anchor_expr(
+            TimelineCard.last_activity_at,
+            runtime_signal_subq.c.runtime_timeline_anchor_at,
+            fallback_expr=TimelineCard.started_at,
+        )
+        thread_id = func.coalesce(AgentSession.primary_thread_id, AgentSession.id).label("thread_id")
+        stmt = (
+            select(
+                TimelineCard.session_id.label("session_id"),
+                thread_id,
+                TimelineCard.started_at.label("started_at"),
+                AgentSession.updated_at.label("session_updated_at"),
+                activity_anchor.label("thread_anchor"),
+                TimelineCard.last_activity_at.label("last_activity_at"),
+                runtime_signal_subq.c.runtime_updated_at.label("runtime_updated_at"),
+                runtime_signal_subq.c.runtime_version.label("runtime_version"),
+            )
+            .select_from(TimelineCard)
+            .join(AgentSession, AgentSession.id == TimelineCard.session_id)
+            .outerjoin(runtime_signal_subq, runtime_signal_subq.c.session_id == TimelineCard.session_id)
+        )
+        stmt = self._apply_timeline_card_listing_filters(
+            stmt,
+            project=project,
+            provider=provider,
+            environment=environment,
+            include_test=include_test,
+            device_id=device_id,
+            since=since,
+            until=until,
+            exclude_user_states=exclude_user_states,
+            hide_autonomous=hide_autonomous,
+            time_anchor=activity_anchor,
+        )
+        if stmt is None:
+            return None
+
+        base_subq = stmt.subquery()
+        row_number = (
+            func.row_number()
+            .over(
+                partition_by=base_subq.c.thread_id,
+                order_by=(
+                    base_subq.c.thread_anchor.desc(),
+                    base_subq.c.started_at.desc(),
+                    base_subq.c.session_id.desc(),
+                ),
+            )
+            .label("rn")
+        )
+        return select(
+            base_subq.c.thread_id,
+            base_subq.c.session_id,
+            base_subq.c.started_at,
+            base_subq.c.session_updated_at,
+            base_subq.c.thread_anchor,
+            base_subq.c.last_activity_at,
+            base_subq.c.runtime_updated_at,
+            base_subq.c.runtime_version,
+            row_number,
+        ).subquery()
 
     @staticmethod
     def _runtime_signal_subquery():
@@ -2356,6 +2745,65 @@ class AgentsStore:
                 stmt = stmt.where(AgentSession.id.in_(session_ids))
 
         return stmt
+
+    def _apply_timeline_card_listing_filters(
+        self,
+        stmt,
+        *,
+        project: Optional[str],
+        provider: Optional[str],
+        environment: Optional[str],
+        include_test: bool,
+        device_id: Optional[str],
+        since: Optional[datetime],
+        until: Optional[datetime],
+        exclude_user_states: Optional[list[str]],
+        hide_autonomous: bool,
+        time_anchor,
+    ):
+        if environment:
+            stmt = stmt.where(TimelineCard.environment == environment)
+        elif not include_test:
+            stmt = stmt.where(TimelineCard.environment.notin_(["test", "e2e"]))
+
+        if project:
+            stmt = stmt.where(TimelineCard.project.ilike(f"%{project}%"))
+        if provider:
+            stmt = stmt.where(TimelineCard.provider == provider)
+        if not is_internal_canary_provider_filter(provider):
+            stmt = stmt.where(~internal_canary_session_clause(TimelineCard))
+        if device_id:
+            stmt = stmt.where(TimelineCard.device_id == device_id)
+        if since:
+            stmt = stmt.where(time_anchor >= since)
+        if until:
+            stmt = stmt.where(time_anchor <= until)
+
+        if hide_autonomous:
+            stmt = stmt.where(or_(TimelineCard.user_messages > 0, AgentSession.ended_at.is_(None)))
+            unresolved_child_primary = (
+                select(SessionThread.id)
+                .where(SessionThread.session_id == AgentSession.id)
+                .where(SessionThread.is_primary == 1)
+                .where(SessionThread.branch_kind == "subagent")
+                .where(SessionThread.parent_thread_id.is_(None))
+                .exists()
+            )
+            stmt = stmt.where(~unresolved_child_primary)
+
+        if exclude_user_states:
+            excluded_state = AgentSession.user_state.notin_(exclude_user_states)
+            missing_state = AgentSession.user_state.is_(None)
+            stmt = stmt.where(excluded_state | missing_state)
+
+        return stmt
+
+    def _load_sessions_preserving_order(self, session_ids: list[UUID]) -> list[AgentSession]:
+        if not session_ids:
+            return []
+        rows = self.db.execute(select(AgentSession).where(AgentSession.id.in_(session_ids))).scalars().all()
+        by_id = {row.id: row for row in rows}
+        return [by_id[session_id] for session_id in session_ids if session_id in by_id]
 
     def get_first_message_map(
         self,

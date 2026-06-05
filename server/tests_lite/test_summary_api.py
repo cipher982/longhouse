@@ -23,6 +23,7 @@ from zerg.models.agents import AgentEvent
 from zerg.database import Base
 from zerg.models.agents import AgentSession
 from zerg.services.agents_store import AgentsStore
+from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -53,6 +54,8 @@ def _seed_session(db, *, summary=None, summary_title=None, project="test-project
         summary_event_count=10 if summary else 0,
     )
     db.add(session)
+    db.flush()
+    upsert_timeline_card_from_session(db, session)
     db.commit()
     db.refresh(session)
     return session

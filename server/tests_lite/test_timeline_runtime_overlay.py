@@ -36,9 +36,11 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
+from zerg.models.agents import TimelineCard
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
+from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 from zerg.services.session_observations import OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
 from zerg.services.session_listing import SessionListParams
 from zerg.services.session_listing import list_agent_sessions
@@ -113,6 +115,7 @@ def _seed_session(
         else:
             kernel_plane = "claude_channel_bridge"
         seed_managed_kernel_rows(db, session, control_plane=kernel_plane)
+    upsert_timeline_card_from_session(db, session)
     db.commit()
     db.refresh(session)
     return session
@@ -786,10 +789,122 @@ def test_no_query_session_lists_do_not_touch_cold_archive_tables(tmp_path, monke
     assert agent_first_user_by_id[str(missing_preview_session.id)] is None
     assert len(timeline_result.response.sessions) == 2
     rendered_sql = re.sub(r"\s+", " ", " ".join(statement.lower() for statement in statements))
+    assert "timeline_cards" in rendered_sql
     assert "source_lines" not in rendered_sql
     assert "events_fts" not in rendered_sql
     assert " from events" not in rendered_sql
     assert " join events" not in rendered_sql
+
+
+def test_no_query_session_list_orders_by_timeline_card_activity(tmp_path):
+    factory = _make_db(tmp_path, "timeline_card_session_list_order.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session_recent_in_session = _seed_session(
+            db,
+            provider="codex",
+            project="card-order",
+            started_at=now - timedelta(minutes=5),
+            user_messages=1,
+            assistant_messages=1,
+        )
+        session_recent_in_session.last_activity_at = now - timedelta(seconds=5)
+        session_recent_in_card = _seed_session(
+            db,
+            provider="codex",
+            project="card-order",
+            started_at=now - timedelta(minutes=10),
+            user_messages=1,
+            assistant_messages=1,
+        )
+        session_recent_in_card.last_activity_at = now - timedelta(days=1)
+        db.query(TimelineCard).filter(TimelineCard.session_id == session_recent_in_session.id).update(
+            {"last_activity_at": now - timedelta(days=2)}
+        )
+        db.query(TimelineCard).filter(TimelineCard.session_id == session_recent_in_card.id).update(
+            {"last_activity_at": now}
+        )
+        db.commit()
+
+        result = asyncio.run(
+            list_agent_sessions(
+                db=db,
+                auth=SimpleNamespace(device_id="timeline-runtime", id="token-1", owner_id=1),
+                params=SessionListParams(
+                    project="card-order",
+                    provider="codex",
+                    environment=None,
+                    include_test=False,
+                    hide_autonomous=False,
+                    device_id=None,
+                    days_back=90,
+                    query=None,
+                    limit=5,
+                    offset=0,
+                    sort=None,
+                    mode="lexical",
+                    context_mode="forensic",
+                ),
+                owner_id=1,
+            )
+        )
+    finally:
+        db.close()
+
+    assert [row.id for row in result.response.sessions] == [
+        str(session_recent_in_card.id),
+        str(session_recent_in_session.id),
+    ]
+
+
+def test_no_query_timeline_thread_page_orders_by_timeline_card_activity(tmp_path):
+    factory = _make_db(tmp_path, "timeline_card_thread_order.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session_recent_in_session = _seed_session(
+            db,
+            provider="codex",
+            project="card-thread-order",
+            started_at=now - timedelta(minutes=5),
+            user_messages=1,
+            assistant_messages=1,
+        )
+        session_recent_in_session.last_activity_at = now - timedelta(seconds=5)
+        session_recent_in_card = _seed_session(
+            db,
+            provider="codex",
+            project="card-thread-order",
+            started_at=now - timedelta(minutes=10),
+            user_messages=1,
+            assistant_messages=1,
+        )
+        session_recent_in_card.last_activity_at = now - timedelta(days=1)
+        db.query(TimelineCard).filter(TimelineCard.session_id == session_recent_in_session.id).update(
+            {"last_activity_at": now - timedelta(days=2)}
+        )
+        db.query(TimelineCard).filter(TimelineCard.session_id == session_recent_in_card.id).update(
+            {"last_activity_at": now}
+        )
+        db.commit()
+
+        total, rows = AgentsStore(db).list_timeline_thread_page(
+            project="card-thread-order",
+            provider="codex",
+            hide_autonomous=False,
+            since=now - timedelta(days=90),
+        )
+    finally:
+        db.close()
+
+    assert total == 2
+    assert [session_id for _thread_id, session_id, _anchor in rows] == [
+        str(session_recent_in_card.id),
+        str(session_recent_in_session.id),
+    ]
 
 
 def test_sessions_list_hides_bridge_transcript_preview_after_durable_activity_catches_up(tmp_path):

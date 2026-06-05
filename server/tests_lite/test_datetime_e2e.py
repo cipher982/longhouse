@@ -15,6 +15,7 @@ from zerg.database import Base, get_db, make_engine, make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.models import User
 from zerg.models.agents import AgentSession, AgentEvent
+from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 
 
 # ---------------------------------------------------------------------------
@@ -54,6 +55,8 @@ def _seed_session(db):
         tool_calls=1,
     )
     db.add(session)
+    db.flush()
+    upsert_timeline_card_from_session(db, session)
 
     # Add an event with naive datetime
     event = AgentEvent(

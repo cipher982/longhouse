@@ -17,6 +17,7 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.routers.agents_search import recall_sessions
 from zerg.services.agents_store import AgentsStore
+from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 from zerg.services.session_response_projection import has_real_sessions
 
 
@@ -49,6 +50,8 @@ def _seed_session(
         tool_calls=0,
     )
     db.add(session)
+    db.flush()
+    upsert_timeline_card_from_session(db, session)
     db.commit()
     db.refresh(session)
     return session

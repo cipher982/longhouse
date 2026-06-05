@@ -38,6 +38,7 @@ from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTurn
 from zerg.services.agents.store import AgentsStore
+from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 
 
@@ -95,6 +96,8 @@ def _seed_session(db) -> str:
         tool_calls=0,
     )
     db.add(session)
+    db.flush()
+    upsert_timeline_card_from_session(db, session)
     db.commit()
     return str(session.id)
 

@@ -147,12 +147,6 @@ def _list_lexical_sessions(
         owner_id=owner_id,
     )
 
-    if effective_sort == "recency":
-        response_sessions.sort(
-            key=lambda r: r.timeline_anchor_at or r.last_activity_at or r.started_at,
-            reverse=True,
-        )
-
     return SessionListResult(
         response=SessionsListResponse(
             sessions=response_sessions,

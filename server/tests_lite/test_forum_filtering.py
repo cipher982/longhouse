@@ -22,6 +22,7 @@ os.environ.setdefault("TESTING", "1")
 from zerg.database import Base, get_db, make_engine, make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession, SessionRuntimeState
+from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 
 
 def _make_db(tmp_path, name="forum.db"):
@@ -45,6 +46,8 @@ def _seed(factory, user_state="active", provider_session_id=None):
         provider_session_id=provider_session_id,
     )
     db.add(s)
+    db.flush()
+    upsert_timeline_card_from_session(db, s)
     db.commit()
     db.refresh(s)
     sid = str(s.id)
@@ -164,6 +167,8 @@ def test_active_sessions_default_user_state_is_active(tmp_path):
         tool_calls=0,
     )
     factory_db.add(s)
+    factory_db.flush()
+    upsert_timeline_card_from_session(factory_db, s)
     factory_db.commit()
     sid = str(s.id)
     factory_db.close()
@@ -221,6 +226,8 @@ def test_active_sessions_handles_ended_session_datetime(tmp_path):
         tool_calls=1,
     )
     db.add(s)
+    db.flush()
+    upsert_timeline_card_from_session(db, s)
     db.commit()
     db.close()
 

@@ -33,6 +33,7 @@ from zerg.services.machine_control_channel import MachineControlChannelRegistry
 from zerg.services.machine_control_channel import MachineControlCommandResponse
 from zerg.services.remote_session_launch import RemoteLaunchParams
 from zerg.services.remote_session_launch import launch_remote_session
+from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 from zerg.services.write_serializer import WriteSerializer
 
 OWNER_ID = 77
@@ -103,24 +104,25 @@ def _seed_hot_path_rows(session_factory) -> None:
             )
         )
         db.commit()
-        db.add(
-            AgentSession(
-                provider="codex",
-                environment="development",
-                project="repo",
-                device_id="cinder",
-                device_name="cinder",
-                cwd="/Users/me/repo",
-                git_branch="main",
-                started_at=now,
-                last_activity_at=now,
-                user_messages=1,
-                assistant_messages=1,
-                tool_calls=0,
-                first_user_message_preview="Seeded hot-path question",
-                last_visible_text_preview="Seeded hot-path answer",
-            )
+        session = AgentSession(
+            provider="codex",
+            environment="development",
+            project="repo",
+            device_id="cinder",
+            device_name="cinder",
+            cwd="/Users/me/repo",
+            git_branch="main",
+            started_at=now,
+            last_activity_at=now,
+            user_messages=1,
+            assistant_messages=1,
+            tool_calls=0,
+            first_user_message_preview="Seeded hot-path question",
+            last_visible_text_preview="Seeded hot-path answer",
         )
+        db.add(session)
+        db.flush()
+        upsert_timeline_card_from_session(db, session)
         db.commit()
 
 

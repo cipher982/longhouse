@@ -16,6 +16,7 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
+from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 
 
 def _make_db(tmp_path, name="loop_mode.db"):
@@ -38,6 +39,8 @@ def _seed_session(factory, *, loop_mode="assist"):
         loop_mode=loop_mode,
     )
     db.add(session)
+    db.flush()
+    upsert_timeline_card_from_session(db, session)
     db.commit()
     db.refresh(session)
     session_id = str(session.id)

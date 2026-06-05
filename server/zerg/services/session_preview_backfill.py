@@ -20,6 +20,7 @@ from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import TimelineCard
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.provisional_events import visible_transcript_event_predicate
+from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 
 SESSION_FIRST_USER_PREVIEW_CHARS = 300
 SESSION_LAST_VISIBLE_PREVIEW_CHARS = 500
@@ -51,10 +52,12 @@ def backfill_missing_session_previews(
 
     sessions = (
         db.query(AgentSession)
+        .outerjoin(TimelineCard, TimelineCard.session_id == AgentSession.id)
         .filter(
             or_(
                 AgentSession.first_user_message_preview.is_(None),
                 AgentSession.last_visible_text_preview.is_(None),
+                TimelineCard.session_id.is_(None),
             )
         )
         .order_by(AgentSession.last_activity_at.desc().nullslast(), AgentSession.started_at.desc(), AgentSession.id.asc())
@@ -116,6 +119,9 @@ def backfill_missing_session_previews(
 
         if session_changed:
             updated_sessions += 1
+        if session_changed or card is None or session.id in updated_cards:
+            upsert_timeline_card_from_session(db, session)
+            updated_cards.add(session.id)
 
     return SessionPreviewBackfillResult(
         selected_sessions=len(sessions),
