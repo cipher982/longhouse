@@ -160,9 +160,11 @@ def build_session_capabilities_response(
         # can_continue means "launch a fresh managed process from this
         # transcript" — a CLOSED-session operation by definition. Do NOT gate it
         # on lifecycle_closed; that defeated the whole resume feature (the button
-        # vanished the moment the session closed). It is already self-gated:
-        # can_continue is only true when a native continue target exists, which
-        # requires proven managed-control history (thread_ever_had_managed_control).
+        # vanished the moment the session closed). It is already self-gated by
+        # requiring a native continue target (resolve_native_continue_target):
+        # managed sessions need proven managed-control history, and unmanaged
+        # sessions need a provider alias + transcript + closed state to be
+        # explicitly adoptable.
         can_continue=bool(can_continue),
         continue_targets=continue_targets or [],
         attach_images=_attach_images_capability(capability_flags, live_control_available=effective_live_control),

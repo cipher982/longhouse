@@ -772,9 +772,11 @@ async fn execute_command(
                 // `claude --session-id <longhouse-uuid>`, so the resume target's
                 // thread_id is that same id. No transcript path is needed
                 // (unlike codex) — `claude --resume <id>` reads the local store.
-                // Preflight: if the server passed a transcript path (e.g. an
-                // adopt-unmanaged continue), fail honestly with transcript_not_found
-                // when it's gone, instead of a generic provider_launch_failed.
+                // Preflight (claude-scoped on purpose): if the server passed a
+                // transcript path (the adopt-unmanaged continue case), fail
+                // honestly with transcript_not_found when it's gone, instead of a
+                // generic provider_launch_failed. Codex resume has its own bridge
+                // path and is intentionally not changed here.
                 if let Some(target) = resume_target.as_ref() {
                     if let Some(path) = target.thread_path.as_ref() {
                         if !path.trim().is_empty() && !std::path::Path::new(path).exists() {
