@@ -343,6 +343,11 @@ For new source data:
 - project cards/events in shadow;
 - compare old/new visible projections.
 
+Initial shadow archive writes are gated by
+`LONGHOUSE_ARCHIVE_SHADOW_WRITE_ENABLED`. Source-line archive chunks are
+retry-idempotent: dynamic ingest timing is not included in the chunk payload,
+so replaying the same source lines writes the same chunk path and manifest row.
+
 ### Step 4: Legacy Raw Exporter
 
 Build a resumable, read-only exporter from legacy monolith to archive.

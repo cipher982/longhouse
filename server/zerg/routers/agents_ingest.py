@@ -716,6 +716,9 @@ async def ingest_session(
                     chunk_size=ingest_chunk,
                     synchronous_projections=write_label not in _ARCHIVE_INGEST_LABELS,
                 )
+                from zerg.services.archive_shadow import write_ingest_shadow_archive
+
+                write_ingest_shadow_archive(write_db, data=data, result=result)
                 store_returned_at_ms = _unix_ms()
                 _persist_ship_trace_event(
                     write_db,

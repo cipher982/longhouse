@@ -174,6 +174,9 @@ class Settings:  # noqa: D401 – simple data container
     hot_database_url: str
     derived_database_url: str
     archive_root: str
+    archive_shadow_write_enabled: bool
+    archive_shadow_tenant_id: str
+    archive_shadow_chunk_target_bytes: int
 
     # Cryptography -----------------------------------------------------
     fernet_secret: str | None
@@ -521,6 +524,12 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
 
     database_url = os.getenv("DATABASE_URL", "")
     longhouse_data_root, hot_database_url, derived_database_url, archive_root = _resolve_data_plane_settings(database_url)
+    archive_shadow_tenant_id = (
+        os.getenv("LONGHOUSE_ARCHIVE_SHADOW_TENANT_ID")
+        or os.getenv("LONGHOUSE_ARCHIVE_TENANT_ID")
+        or os.getenv("LONGHOUSE_TENANT_ID")
+        or "default"
+    )
 
     return Settings(
         app_mode=app_mode,
@@ -543,6 +552,9 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         hot_database_url=hot_database_url,
         derived_database_url=derived_database_url,
         archive_root=archive_root,
+        archive_shadow_write_enabled=_truthy(os.getenv("LONGHOUSE_ARCHIVE_SHADOW_WRITE_ENABLED")),
+        archive_shadow_tenant_id=archive_shadow_tenant_id,
+        archive_shadow_chunk_target_bytes=int(os.getenv("LONGHOUSE_ARCHIVE_SHADOW_CHUNK_TARGET_BYTES", str(32 * 1024 * 1024))),
         fernet_secret=os.getenv("FERNET_SECRET"),
         _llm_token_stream_default=_truthy(os.getenv("LLM_TOKEN_STREAM")),
         dev_admin=_truthy(os.getenv("DEV_ADMIN")),
