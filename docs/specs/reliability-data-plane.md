@@ -1,6 +1,6 @@
 # Reliability Data Plane
 
-**Status:** Phase 3 skeleton implemented locally; production backup seed in progress
+**Status:** Phase 5 legacy exporter implementation in progress; backup gate satisfied for additive read-only export
 **Owner:** Longhouse core
 **Created:** 2026-06-05
 **Branch:** `epic/reliability-data-plane`
@@ -438,6 +438,36 @@ Validation:
   - archive manifest/checkpoint rows if present;
 - restored health/doctor command works without using live tenant.
 
+### Backup Gate Evidence
+
+On 2026-06-05, the hosted dogfood tenant was quiesced, checkpointed, and copied
+off-volume to the NAS:
+
+```text
+/volume1/homes/drose/longhouse-backups/reliability-data-plane-20260605/david010/20260605T192032Z-consistent/
+```
+
+Validation performed:
+
+- tenant service was stopped before copy;
+- `PRAGMA wal_checkpoint(TRUNCATE);` returned `0|0|0`;
+- restored NAS copy opened read-only with SQLite;
+- restored counts matched the live tenant after restart for:
+  - `sessions=16261`,
+  - `events=9138514`,
+  - `source_lines=12844177`,
+  - `session_messages=0`,
+  - `session_live_previews=63`;
+- restored `page_count=30309079`, `freelist_count=0`;
+- live tenant returned `{"status":"ok"}` from `/api/readyz` after restart;
+- full `PRAGMA quick_check` on the NAS copy emitted no errors while running but
+  was interrupted after more than one hour because the scan was trending
+  multi-hour on NAS storage.
+
+This is accepted as equivalent validation for Phase 5's additive read-only
+exporter work. It is not approval for destructive raw deletion, compaction, or
+read cutover; those still require a fresh review gate.
+
 ### Export Disk Floor
 
 Exporter must check disk before each chunk and pause below a configured floor.
@@ -801,7 +831,7 @@ and the compatibility default is no longer needed.
 
 ## Current Pause Point
 
-Local implementation may continue through shadow-safe phases, but production
-legacy export and any raw-data cutover remain blocked on the backup gate:
-validated off-volume copy, restored DB validation, count checks, and explicit
-review.
+Local implementation may continue through the Phase 5 exporter. The hosted
+production exporter still requires Hatch Opus review before it runs. Any
+raw-data cutover, compaction, or deletion remains blocked on explicit
+maintainer approval after replay/comparison evidence.

@@ -3,7 +3,7 @@
 Due: none
 Area: longhouse
 Workspace: /Users/davidrose/git/_wt/longhouse-reliability-data-plane
-Status: Phase 0 draft
+Status: Phase 5 legacy exporter in progress
 
 This task file tracks the SDP-1 epic for separating hot product/control state
 from raw archive and derived search/detail state.
@@ -18,7 +18,7 @@ Spec: `docs/specs/reliability-data-plane.md`
 - [x] Commit Phase 0 spec.
 - [x] Run Hatch Opus review of spec.
 - [x] Incorporate review feedback or record why not.
-- [ ] Pause for maintainer review.
+- [x] Pause for maintainer review.
 
 ## Phase 1: Hot-Path Guardrails
 
@@ -59,7 +59,7 @@ Spec: `docs/specs/reliability-data-plane.md`
 
 ## Phase 5: Backup Gate and Legacy Exporter
 
-- [ ] Satisfy backup gate and record validation evidence in the spec.
+- [x] Satisfy backup gate and record validation evidence in the spec.
 - [ ] Add read-only resumable legacy exporter.
 - [ ] Add export ledger.
 - [ ] Add low-disk pause.
