@@ -357,6 +357,9 @@ so replaying the same source lines writes the same chunk path and manifest row.
 The first hot-card projector supports generic normalized event JSON plus the
 existing Claude JSONL shape. Unsupported raw formats get terminal
 `unsupported` checkpoints for that parser revision instead of retrying forever.
+The first derived projector writes a narrow `derived_events` table and
+`derived_events_fts` index in `derived.db`; it is still an offline/shadow
+projector and is not wired into request-time detail/search reads.
 
 ### Step 4: Legacy Raw Exporter
 
@@ -572,7 +575,7 @@ Scope:
 - live lane keeps existing hot session state unchanged by default;
 - projector from archive to hot cards;
 - projector checkpoints with parser revision;
-- remaining projector from archive to derived event/search state;
+- projector from archive to derived event/search state;
 - comparison tooling between legacy and projected views.
 
 Acceptance:

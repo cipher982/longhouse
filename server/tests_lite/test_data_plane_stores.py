@@ -152,6 +152,26 @@ def test_empty_hot_and_derived_store_migrations_are_independent(tmp_path, monkey
         derived.dispose()
 
 
+def test_derived_store_initialization_creates_event_search_tables(tmp_path, monkeypatch):
+    settings = _configure_store_env(tmp_path, monkeypatch)
+    derived = create_derived_store(settings)
+    try:
+        initialize_derived_database(derived.engine)
+
+        with derived.session_factory() as db:
+            tables = {
+                row[0]
+                for row in db.execute(
+                    sa_text("SELECT name FROM sqlite_master WHERE type IN ('table', 'virtual table')")
+                ).fetchall()
+            }
+
+        assert "derived_events" in tables
+        assert "derived_events_fts" in tables
+    finally:
+        derived.dispose()
+
+
 def test_empty_store_initialization_is_idempotent(tmp_path, monkeypatch):
     settings = _configure_store_env(tmp_path, monkeypatch)
     hot = create_hot_store(settings)

@@ -53,7 +53,7 @@ Spec: `docs/specs/reliability-data-plane.md`
 
 - [x] Shadow-write new raw ingest to archive behind a flag.
 - [x] Project archive chunks to hot cards.
-- [ ] Project archive chunks to derived events/search.
+- [x] Project archive chunks to derived events/search.
 - [x] Add parser-revision checkpoints.
 - [ ] Add projector restart, duplicate, out-of-order, and large-session tests.
 

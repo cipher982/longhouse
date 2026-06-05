@@ -116,6 +116,8 @@ def initialize_data_plane_database(engine: Engine, *, role: StoreRole) -> None:
         )
         _upsert_store_meta(conn, "role", role)
         _upsert_store_meta(conn, "schema_version", str(DATA_PLANE_SCHEMA_VERSION))
+        if role == "derived":
+            _initialize_derived_schema(conn)
         conn.execute(
             text(
                 """
@@ -187,4 +189,43 @@ def _upsert_store_meta(conn, key: str, value: str) -> None:
             """
         ),
         {"key": key, "value": value},
+    )
+
+
+def _initialize_derived_schema(conn) -> None:
+    conn.execute(
+        text(
+            """
+            CREATE TABLE IF NOT EXISTS derived_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_key TEXT NOT NULL UNIQUE,
+                session_id TEXT NOT NULL,
+                parser_revision TEXT NOT NULL,
+                archive_chunk_id INTEGER NOT NULL,
+                archive_record_ordinal INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                content_text TEXT,
+                tool_name TEXT,
+                tool_input_json TEXT,
+                tool_output_text TEXT,
+                tool_call_id TEXT,
+                timestamp DATETIME,
+                source_path TEXT,
+                source_offset INTEGER,
+                event_hash TEXT NOT NULL,
+                raw_json TEXT,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+    )
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_derived_events_session_timestamp ON derived_events(session_id, timestamp)"))
+    conn.execute(text("CREATE INDEX IF NOT EXISTS ix_derived_events_chunk ON derived_events(archive_chunk_id)"))
+    conn.execute(
+        text(
+            """
+            CREATE VIRTUAL TABLE IF NOT EXISTS derived_events_fts
+            USING fts5(content_text, tool_output_text, tool_name, role, session_id)
+            """
+        )
     )
