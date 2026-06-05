@@ -69,6 +69,12 @@ def project_archive_chunks_to_derived_events(
     parser_revision: str = DERIVED_EVENTS_PARSER_REVISION,
     limit: int = 100,
 ) -> ArchiveDerivedProjectorResult:
+    """Project sealed chunks into derived.db, then checkpoint manifest progress.
+
+    This function commits successful per-chunk derived writes before it flushes
+    the manifest checkpoint. The caller must still commit ``manifest_db``; if
+    that commit is lost, a rerun replaces the already-committed derived rows.
+    """
     pending_chunks = select_pending_archive_chunks(manifest_db, parser_revision=parser_revision, limit=limit)
     if not pending_chunks:
         return ArchiveDerivedProjectorResult(

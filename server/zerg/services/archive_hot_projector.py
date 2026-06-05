@@ -120,6 +120,9 @@ def project_archive_chunks_to_hot_cards(
             continue
 
         chunks_to_checkpoint = selected_for_session
+        apply_full_projection = False
+        apply_incremental_projection = False
+        existing_card: TimelineCard | None = None
         try:
             selected_records = _read_records_for_chunks(archive_store, selected_for_session)
             projection = build_hot_card_projection(selected_records)
@@ -131,6 +134,16 @@ def project_archive_chunks_to_hot_cards(
                 if selected_chunk_ids != all_chunk_ids:
                     records = _read_records_for_chunks(archive_store, all_session_chunks)
                     projection = build_hot_card_projection(records)
+                apply_full_projection = True
+            elif projection.events_projected > 0:
+                existing_card = _incremental_card_target(
+                    db,
+                    session_id=session_id,
+                    parser_revision=parser_revision,
+                    selected_chunks=selected_for_session,
+                )
+                if existing_card is not None:
+                    apply_incremental_projection = True
         except Exception as exc:
             logger.warning("Hot-card archive projection failed for session %s: %s", session_id, exc, exc_info=True)
             for chunk in selected_for_session:
@@ -154,10 +167,18 @@ def project_archive_chunks_to_hot_cards(
         else:
             status = "current"
 
-        if projection.has_full_coverage and projection.events_projected > 0 and not unsupported_status:
+        if apply_full_projection and projection.events_projected > 0 and not unsupported_status:
             _apply_hot_projection(
                 db,
                 session=session,
+                projection=projection,
+                parser_revision=parser_revision,
+            )
+            sessions_projected += 1
+        elif apply_incremental_projection and existing_card is not None and not unsupported_status:
+            _apply_incremental_hot_projection(
+                session=session,
+                card=existing_card,
                 projection=projection,
                 parser_revision=parser_revision,
             )
@@ -283,6 +304,43 @@ def _load_session_archive_chunks(db: Session, *, session_id: UUID) -> list[Archi
     )
 
 
+def _incremental_card_target(
+    db: Session,
+    *,
+    session_id: UUID,
+    parser_revision: str,
+    selected_chunks: list[ArchiveChunk],
+) -> TimelineCard | None:
+    card = db.query(TimelineCard).filter(TimelineCard.session_id == session_id).first()
+    if card is None or card.parser_revision != parser_revision or card.archive_state != "current":
+        return None
+    max_terminal_seq = _max_terminal_source_seq(db, session_id=session_id, parser_revision=parser_revision)
+    if max_terminal_seq is None:
+        return None
+    if any(int(chunk.first_source_seq) <= max_terminal_seq for chunk in selected_chunks):
+        return None
+    return card
+
+
+def _max_terminal_source_seq(db: Session, *, session_id: UUID, parser_revision: str) -> int | None:
+    rows = (
+        db.query(ArchiveChunk.last_source_seq)
+        .join(ProjectorCheckpoint, ProjectorCheckpoint.chunk_id == ArchiveChunk.id)
+        .filter(ProjectorCheckpoint.projector_name == HOT_CARD_PROJECTOR_NAME)
+        .filter(ProjectorCheckpoint.parser_revision == parser_revision)
+        .filter(ProjectorCheckpoint.session_id == session_id)
+        .filter(ProjectorCheckpoint.status.in_(_TERMINAL_CHECKPOINT_STATUSES))
+        .filter(ProjectorCheckpoint.chunk_payload_sha256 == ArchiveChunk.payload_sha256)
+        .filter(ArchiveChunk.session_id == session_id)
+        .filter(ArchiveChunk.stream == "source_lines")
+        .filter(ArchiveChunk.state == "sealed")
+        .all()
+    )
+    if not rows:
+        return None
+    return max(int(row[0]) for row in rows)
+
+
 def _read_records_for_chunks(archive_store: ArchiveStore, chunks: Iterable[ArchiveChunk]) -> list[ArchiveRecord]:
     records: list[ArchiveRecord] = []
     for chunk in chunks:
@@ -340,6 +398,39 @@ def _apply_hot_projection(
     update_values = {key: value for key, value in values.items() if key != "session_id"}
     update_values["updated_at"] = datetime.now(timezone.utc)
     db.execute(stmt.on_conflict_do_update(index_elements=["session_id"], set_=update_values))
+
+
+def _apply_incremental_hot_projection(
+    *,
+    session: AgentSession,
+    card: TimelineCard,
+    projection: HotCardProjection,
+    parser_revision: str,
+) -> None:
+    session.user_messages = int(session.user_messages or 0) + projection.user_messages
+    session.assistant_messages = int(session.assistant_messages or 0) + projection.assistant_messages
+    session.tool_calls = int(session.tool_calls or 0) + projection.tool_calls
+    if not session.first_user_message_preview and projection.first_user_message_preview:
+        session.first_user_message_preview = projection.first_user_message_preview
+    if projection.last_visible_text_preview:
+        session.last_visible_text_preview = projection.last_visible_text_preview
+    projected_activity = _naive_utc(projection.last_activity_at) if projection.last_activity_at is not None else None
+    current_activity = _naive_utc(session.last_activity_at) if session.last_activity_at is not None else None
+    if projected_activity is not None and (current_activity is None or projected_activity > current_activity):
+        session.last_activity_at = projected_activity
+
+    card.user_messages = int(card.user_messages or 0) + projection.user_messages
+    card.assistant_messages = int(card.assistant_messages or 0) + projection.assistant_messages
+    card.tool_calls = int(card.tool_calls or 0) + projection.tool_calls
+    if not card.first_user_message_preview and projection.first_user_message_preview:
+        card.first_user_message_preview = projection.first_user_message_preview
+    if projection.last_visible_text_preview:
+        card.last_visible_text_preview = projection.last_visible_text_preview
+    card.last_activity_at = session.last_activity_at
+    card.archive_state = "current"
+    card.archive_lag_records = 0
+    card.parser_revision = parser_revision
+    card.updated_at = datetime.now(timezone.utc)
 
 
 def _upsert_projector_checkpoint(

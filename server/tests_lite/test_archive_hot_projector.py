@@ -364,6 +364,73 @@ def test_archive_hot_projector_full_rebuild_checkpoints_whole_session_once(tmp_p
         assert select_pending_archive_chunks(db, limit=10) == []
 
 
+def test_archive_hot_projector_incrementally_updates_after_checkpointed_append(tmp_path):
+    SessionLocal = _session_factory(tmp_path)
+    archive_store = FilesystemArchiveStore(tmp_path / "archive")
+    session_id = uuid4()
+
+    with SessionLocal() as db:
+        _add_session(db, session_id=session_id, provider="claude")
+        _add_archive_chunk(
+            db,
+            archive_store,
+            session_id=session_id,
+            records=[
+                _record(
+                    session_id,
+                    source_seq=1,
+                    source_offset=0,
+                    raw='{"type":"user","timestamp":"2026-01-01T00:00:00Z","message":{"content":"first"}}',
+                )
+            ],
+        )
+        db.commit()
+
+        first = project_archive_chunks_to_hot_cards(db, archive_store=archive_store)
+        db.commit()
+
+        _add_archive_chunk(
+            db,
+            archive_store,
+            session_id=session_id,
+            records=[
+                _record(
+                    session_id,
+                    source_seq=2,
+                    source_offset=100,
+                    raw=(
+                        '{"type":"assistant","timestamp":"2026-01-01T00:00:03Z",'
+                        '"message":{"content":[{"type":"text","text":"second"}]}}'
+                    ),
+                ),
+                _record(
+                    session_id,
+                    source_seq=3,
+                    source_offset=200,
+                    raw='{"type":"user","timestamp":"2026-01-01T00:00:04Z","message":{"content":"third"}}',
+                ),
+            ],
+        )
+        db.commit()
+
+        second = project_archive_chunks_to_hot_cards(db, archive_store=archive_store)
+        db.commit()
+
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        card = db.query(TimelineCard).filter(TimelineCard.session_id == session_id).one()
+        assert first.sessions_projected == 1
+        assert second.selected_chunks == 1
+        assert second.sessions_projected == 1
+        assert second.events_projected == 2
+        assert session.user_messages == 2
+        assert session.assistant_messages == 1
+        assert card.user_messages == 2
+        assert card.assistant_messages == 1
+        assert card.first_user_message_preview == "first"
+        assert card.last_visible_text_preview == "third"
+        assert db.query(ProjectorCheckpoint).filter(ProjectorCheckpoint.status == "current").count() == 2
+
+
 def test_archive_hot_projector_tracks_parser_revision_replay(tmp_path):
     SessionLocal = _session_factory(tmp_path)
     archive_store = FilesystemArchiveStore(tmp_path / "archive")
