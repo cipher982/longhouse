@@ -270,7 +270,7 @@ enum Commands {
         #[arg(long)]
         file: Option<PathBuf>,
 
-        /// Provider name override when using --file (claude, codex, antigravity, gemini)
+        /// Provider name override when using --file (claude, codex, antigravity, gemini, opencode)
         #[arg(long)]
         provider: Option<String>,
 

@@ -206,7 +206,7 @@ fn ship_lane_for_context(
     }
 }
 
-async fn ship_opencode_database(
+pub(crate) async fn ship_opencode_database(
     path: &Path,
     conn: &Connection,
     client: &ShipperClient,

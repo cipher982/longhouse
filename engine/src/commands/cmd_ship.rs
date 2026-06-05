@@ -8,6 +8,7 @@ use rayon::prelude::*;
 
 use crate::config::ShipperConfig;
 use crate::discovery;
+use crate::opencode_db;
 use crate::pipeline::compressor::CompressionAlgo;
 use crate::shipper;
 use crate::shipping::client::ShipperClient;
@@ -155,8 +156,14 @@ pub async fn cmd_ship(
     // Filter to files with new content
     let file_state = FileState::new(&conn);
     let mut files_to_ship: Vec<(PathBuf, &'static str, u64)> = Vec::new(); // (path, provider, offset_to_start_from)
+    let mut opencode_databases: Vec<PathBuf> = Vec::new();
 
     for (path, provider) in &all_files {
+        if *provider == "opencode" && opencode_db::is_opencode_database_path(path) {
+            opencode_databases.push(path.clone());
+            continue;
+        }
+
         let path_str = path.to_string_lossy();
         let current_offset = file_state.get_offset(&path_str)?;
         let metadata = match std::fs::metadata(path) {
@@ -215,7 +222,7 @@ pub async fn cmd_ship(
         eprintln!("{} files with new content to ship", files_to_ship.len());
     }
 
-    if files_to_ship.is_empty() {
+    if files_to_ship.is_empty() && opencode_databases.is_empty() {
         let spool = Spool::new(&conn);
         let mut spool_pending = spool.pending_count()?;
         let mut spool_dead = spool.dead_count()?;
@@ -401,6 +408,24 @@ pub async fn cmd_ship(
                 files_failed += 1;
             }
         }
+
+        for path in &opencode_databases {
+            let client = client.as_ref().unwrap();
+            let (sessions, events) = shipper::ship_opencode_database(
+                path,
+                &conn,
+                client,
+                algo,
+                config.max_batch_bytes,
+                None,
+                None,
+            )
+            .await?;
+            if sessions > 0 {
+                files_shipped += sessions;
+                events_shipped += events;
+            }
+        }
     } // end if !dry_run
 
     // Replay spool (if not dry run)
@@ -508,6 +533,54 @@ pub async fn cmd_ship_file(
     }
 
     let conn = open_db(config.db_path.as_deref())?;
+
+    if provider == "opencode" && opencode_db::is_opencode_database_path(path) {
+        let (sessions_shipped, events_shipped) = if dry_run {
+            let sessions = opencode_db::list_opencode_sessions(path)?;
+            let events = sessions
+                .iter()
+                .filter_map(|session| {
+                    opencode_db::parse_opencode_session(path, &session.provider_session_id).ok()
+                })
+                .map(|parsed| parsed.events.len())
+                .sum();
+            (sessions.len(), events)
+        } else {
+            let client = ShipperClient::with_compression(&config, algo)?;
+            shipper::ship_opencode_database(
+                path,
+                &conn,
+                &client,
+                algo,
+                config.max_batch_bytes,
+                None,
+                None,
+            )
+            .await?
+        };
+        if json_output {
+            let summary = serde_json::json!({
+                "status": "ok",
+                "file": path.display().to_string(),
+                "provider": "opencode",
+                "files_shipped": sessions_shipped,
+                "events_shipped": events_shipped,
+                "dry_run": dry_run,
+            });
+            println!("{}", serde_json::to_string_pretty(&summary)?);
+        } else if dry_run {
+            println!(
+                "Would ship {} OpenCode session(s), {} events",
+                sessions_shipped, events_shipped
+            );
+        } else {
+            println!(
+                "Shipped {} OpenCode session(s), {} events",
+                sessions_shipped, events_shipped
+            );
+        }
+        return Ok(());
+    }
 
     let mut prepared = shipper::prepare_file_batches(
         path,

@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::pipeline::parser::{ParseResult, ParsedEvent, ParsedSourceLine, Role, SessionMetadata};
 
 const SOURCE_OFFSET_SCALE: u64 = 1_000_000;
+const MAX_SOURCE_FILE_URL_CHARS: usize = 512;
 
 #[derive(Debug, Clone)]
 pub struct OpenCodeSessionCandidate {
@@ -219,6 +220,7 @@ pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Resu
             .with_context(|| format!("parsing OpenCode message {}", message.id))?;
         let part_data: Value = serde_json::from_str(&part.data)
             .with_context(|| format!("parsing OpenCode part {}", part.id))?;
+        let source_part_data = source_line_part_data(&part_data);
         let source_offset = source_offset_for_part(part, part_index);
         last_source_offset = last_source_offset.max(source_offset);
         source_lines.push(ParsedSourceLine {
@@ -229,7 +231,7 @@ pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Resu
                 "message_id": message.id,
                 "part_id": part.id,
                 "message": message_data,
-                "part": part_data,
+                "part": source_part_data,
             }))?,
         });
 
@@ -373,16 +375,11 @@ fn extract_events_from_part(
             if text.trim().is_empty() {
                 return Ok(());
             }
-            let role = if role == "user" {
-                Role::User
-            } else {
-                Role::Assistant
-            };
             events.push(ParsedEvent {
                 uuid: stable_event_uuid(provider_session_id, &part.id, "text"),
                 session_id: longhouse_session_id.to_string(),
                 timestamp: timestamp_from_ms(part.time_created.max(message.time_created)),
-                role,
+                role: event_role(role),
                 content_text: Some(text.to_string()),
                 tool_name: None,
                 tool_input_json: None,
@@ -436,10 +433,147 @@ fn extract_events_from_part(
                 });
             }
         }
+        "file" => {
+            if let Some(text) = file_part_text(part_data) {
+                events.push(ParsedEvent {
+                    uuid: stable_event_uuid(provider_session_id, &part.id, "file"),
+                    session_id: longhouse_session_id.to_string(),
+                    timestamp: timestamp_from_ms(part.time_created.max(message.time_created)),
+                    role: event_role(role),
+                    content_text: Some(text),
+                    tool_name: None,
+                    tool_input_json: None,
+                    tool_output_text: None,
+                    tool_call_id: None,
+                    source_offset,
+                    raw_type: "opencode_file".to_string(),
+                    raw_line: None,
+                });
+            }
+        }
+        "patch" => {
+            if let Some(text) = patch_part_text(part_data) {
+                events.push(ParsedEvent {
+                    uuid: stable_event_uuid(provider_session_id, &part.id, "patch"),
+                    session_id: longhouse_session_id.to_string(),
+                    timestamp: timestamp_from_ms(part.time_created.max(message.time_created)),
+                    role: event_role(role),
+                    content_text: Some(text),
+                    tool_name: None,
+                    tool_input_json: None,
+                    tool_output_text: None,
+                    tool_call_id: None,
+                    source_offset,
+                    raw_type: "opencode_patch".to_string(),
+                    raw_line: None,
+                });
+            }
+        }
         "reasoning" | "step-start" | "step-finish" => {}
         _ => {}
     }
     Ok(())
+}
+
+fn event_role(role: &str) -> Role {
+    if role == "user" {
+        Role::User
+    } else {
+        Role::Assistant
+    }
+}
+
+fn file_part_text(part_data: &Value) -> Option<String> {
+    let label = part_data
+        .pointer("/source/text/value")
+        .and_then(Value::as_str)
+        .or_else(|| part_data.get("filename").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("file");
+    let filename = part_data
+        .get("filename")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let mime = part_data
+        .get("mime")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+
+    let mut details = Vec::new();
+    if let Some(filename) = filename {
+        if filename != label {
+            details.push(filename.to_string());
+        }
+    }
+    if let Some(mime) = mime {
+        details.push(mime.to_string());
+    }
+
+    if details.is_empty() {
+        Some(format!("Attached file: {label}"))
+    } else {
+        Some(format!("Attached file: {label} ({})", details.join(", ")))
+    }
+}
+
+fn patch_part_text(part_data: &Value) -> Option<String> {
+    let files: Vec<String> = part_data
+        .get("files")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .collect();
+    if files.is_empty() {
+        return None;
+    }
+    let shown: Vec<String> = files.iter().take(8).cloned().collect();
+    let suffix = files
+        .len()
+        .checked_sub(shown.len())
+        .filter(|remaining| *remaining > 0)
+        .map(|remaining| format!(", and {remaining} more"))
+        .unwrap_or_default();
+    Some(format!("Patch: {}{}", shown.join(", "), suffix))
+}
+
+fn source_line_part_data(part_data: &Value) -> Value {
+    let mut value = part_data.clone();
+    if value.get("type").and_then(Value::as_str) != Some("file") {
+        return value;
+    }
+    let Some(object) = value.as_object_mut() else {
+        return value;
+    };
+    let Some(url) = object
+        .get("url")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return value;
+    };
+    if url.len() <= MAX_SOURCE_FILE_URL_CHARS && !url.starts_with("data:") {
+        return value;
+    }
+
+    let mut preview = url
+        .chars()
+        .take(MAX_SOURCE_FILE_URL_CHARS)
+        .collect::<String>();
+    preview.push_str("...[truncated]");
+    object.insert("url".to_string(), Value::String(preview));
+    object.insert("url_truncated".to_string(), Value::Bool(true));
+    object.insert(
+        "url_original_chars".to_string(),
+        Value::Number(serde_json::Number::from(url.len() as u64)),
+    );
+    value
 }
 
 fn project_label(session: &OpenCodeSessionRow) -> Option<String> {
@@ -772,6 +906,88 @@ mod tests {
         assert_eq!(result.events[3].content_text.as_deref(), Some("done"));
         assert_eq!(result.source_lines.len(), 3);
         assert!(result.last_good_offset > result.events[3].source_offset);
+    }
+
+    #[test]
+    fn parse_opencode_session_projects_file_and_patch_parts() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        create_fixture_db(&db_path);
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute(
+            "INSERT INTO message (id, session_id, time_created, time_updated, data)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                "msg_file",
+                "ses_test",
+                1_779_000_000_400_i64,
+                1_779_000_000_400_i64,
+                r#"{"role":"user"}"#,
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                "prt_file",
+                "msg_file",
+                "ses_test",
+                1_779_000_000_401_i64,
+                1_779_000_000_401_i64,
+                json!({
+                    "type": "file",
+                    "mime": "image/png",
+                    "filename": "clipboard",
+                    "url": format!("data:image/png;base64,{}", "A".repeat(900)),
+                    "source": {
+                        "type": "file",
+                        "path": "clipboard",
+                        "text": {"value": "[Image 1]", "start": 0, "end": 9}
+                    }
+                })
+                .to_string(),
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                "prt_patch",
+                "msg_assistant",
+                "ses_test",
+                1_779_000_000_500_i64,
+                1_779_000_000_500_i64,
+                json!({
+                    "type": "patch",
+                    "hash": "abc123",
+                    "files": ["/tmp/a.txt", "/tmp/b.txt"]
+                })
+                .to_string(),
+            ],
+        )
+        .unwrap();
+
+        let result = parse_opencode_session(&db_path, "ses_test").unwrap();
+        let visible_text: Vec<&str> = result
+            .events
+            .iter()
+            .filter_map(|event| event.content_text.as_deref())
+            .collect();
+
+        assert!(visible_text.contains(&"Attached file: [Image 1] (clipboard, image/png)"));
+        assert!(visible_text.contains(&"Patch: /tmp/a.txt, /tmp/b.txt"));
+        let file_source_line = result
+            .source_lines
+            .iter()
+            .find(|line| line.raw_line.contains("\"part_id\":\"prt_file\""))
+            .unwrap();
+        assert!(file_source_line.raw_line.contains("\"url_truncated\":true"));
+        assert!(file_source_line
+            .raw_line
+            .contains("\"url_original_chars\":922"));
+        assert!(!file_source_line.raw_line.contains(&"A".repeat(900)));
     }
 
     #[test]
