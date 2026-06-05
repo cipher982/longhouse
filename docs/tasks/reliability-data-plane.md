@@ -3,7 +3,7 @@
 Due: none
 Area: longhouse
 Workspace: /Users/davidrose/git/_wt/longhouse-reliability-data-plane
-Status: Phase 5 legacy exporter in progress
+Status: Phase 6 read cutover in progress
 
 This task file tracks the SDP-1 epic for separating hot product/control state
 from raw archive and derived search/detail state.
@@ -28,8 +28,8 @@ Spec: `docs/specs/reliability-data-plane.md`
 - [x] Add route-level writer saturation guard tests for health/list/launch/heartbeat.
 - [x] Migrate `/api/agents/presence` away from request-session-held serialized writes.
 - [x] Gate hot endpoint access to raw archive/search/large event tables.
-- [ ] Remove no-query session-list dependency on `events.content_text` after legacy preview backfill.
-- [x] Use hot card previews for new/backfilled list rows; keep bounded legacy fallback for NULL previews.
+- [x] Remove no-query session-list dependency on `events.content_text` after legacy preview backfill.
+- [x] Use hot card previews for new/backfilled list rows; NULL previews stay empty until explicit backfill.
 - [x] Verify cheap diagnostics avoid full DB scans; fix `zerg-ops report` empty-archive handling.
 - [ ] Centralize request-session-release/post-write helper and stop passing closed request DB handles to dispatch helpers.
 
@@ -72,7 +72,7 @@ Spec: `docs/specs/reliability-data-plane.md`
 - [ ] Move timeline list to hot cards.
 - [ ] Keep control/health/launch independent of derived/archive.
 - [ ] Add tests proving hot endpoints work with derived DB locked/missing.
-- [ ] Add tests proving hot endpoints do not query legacy cold tables.
+- [x] Add tests proving hot endpoints do not query legacy cold tables.
 
 ## Phase 7: Archive-Primary Writes
 

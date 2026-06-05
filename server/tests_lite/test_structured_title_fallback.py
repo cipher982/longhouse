@@ -242,12 +242,13 @@ def test_sessions_list_includes_first_user_message(tmp_path):
         api_app.dependency_overrides.clear()
 
 
-def test_sessions_list_falls_back_for_existing_rows_without_hot_preview(tmp_path):
-    """Existing sessions created before preview columns are backfilled still render."""
+def test_sessions_list_uses_preview_backfill_for_existing_rows(tmp_path):
+    """Legacy rows need an explicit backfill; request-time lists stay hot-only."""
     from fastapi.testclient import TestClient
 
     from zerg.database import Base, get_db, make_engine, make_sessionmaker
     from zerg.main import api_app
+    from zerg.services.session_preview_backfill import backfill_missing_session_previews
 
     db_path = tmp_path / "test_first_msg_legacy.db"
     engine = make_engine(f"sqlite:///{db_path}")
@@ -277,7 +278,33 @@ def test_sessions_list_falls_back_for_existing_rows_without_hot_preview(tmp_path
     api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
     try:
         client = TestClient(api_app)
-        resp = client.get("/agents/sessions", headers={"X-Agents-Token": "dev"})
+        with patch(
+            "zerg.services.agents.store.AgentsStore.get_first_message_map",
+            side_effect=AssertionError("session list must not query legacy events for missing previews"),
+        ):
+            resp = client.get("/agents/sessions", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200
+        sessions = resp.json()["sessions"]
+        assert len(sessions) == 1
+        assert sessions[0]["first_user_message"] is None
+
+        db = factory()
+        try:
+            result = backfill_missing_session_previews(db, limit=10)
+            db.commit()
+        finally:
+            db.close()
+
+        assert result.selected_sessions == 1
+        assert result.updated_sessions == 1
+        assert result.first_user_filled == 1
+        assert result.last_visible_filled == 1
+
+        with patch(
+            "zerg.services.agents.store.AgentsStore.get_first_message_map",
+            side_effect=AssertionError("session list must use backfilled hot preview columns"),
+        ):
+            resp = client.get("/agents/sessions", headers={"X-Agents-Token": "dev"})
         assert resp.status_code == 200
         sessions = resp.json()["sessions"]
         assert len(sessions) == 1

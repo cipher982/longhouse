@@ -29,6 +29,7 @@ from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
@@ -687,6 +688,14 @@ def test_no_query_session_lists_do_not_touch_cold_archive_tables(tmp_path):
         )
         session.first_user_message_preview = "hot preview"
         session.last_visible_text_preview = "hot latest"
+        missing_preview_session = _seed_session(
+            db,
+            provider="codex",
+            project="hot-list-cold-guard",
+            started_at=now - timedelta(minutes=4),
+            user_messages=1,
+            assistant_messages=1,
+        )
         db.add(
             AgentSourceLine(
                 session_id=session.id,
@@ -696,6 +705,14 @@ def test_no_query_session_lists_do_not_touch_cold_archive_tables(tmp_path):
                 branch_id=0,
                 raw_json='{"type":"cold"}',
                 line_hash="hot-list-cold-guard",
+            )
+        )
+        db.add(
+            AgentEvent(
+                session_id=missing_preview_session.id,
+                role="user",
+                content_text="cold event fallback should not be queried",
+                timestamp=now - timedelta(minutes=3),
             )
         )
         db.commit()
@@ -756,8 +773,10 @@ def test_no_query_session_lists_do_not_touch_cold_archive_tables(tmp_path):
     finally:
         db.close()
 
-    assert [item.first_user_message for item in agent_result.response.sessions] == ["hot preview"]
-    assert len(timeline_result.response.sessions) == 1
+    agent_first_user_by_id = {item.id: item.first_user_message for item in agent_result.response.sessions}
+    assert agent_first_user_by_id[str(session.id)] == "hot preview"
+    assert agent_first_user_by_id[str(missing_preview_session.id)] is None
+    assert len(timeline_result.response.sessions) == 2
     rendered_sql = " ".join(statement.lower() for statement in statements)
     assert "source_lines" not in rendered_sql
     assert "events_fts" not in rendered_sql

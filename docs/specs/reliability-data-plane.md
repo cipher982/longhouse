@@ -1,6 +1,6 @@
 # Reliability Data Plane
 
-**Status:** Phase 5 legacy exporter implementation in progress; backup gate satisfied for additive read-only export
+**Status:** Phase 6 read cutover in progress; backup gate satisfied for additive read-only export
 **Owner:** Longhouse core
 **Created:** 2026-06-05
 **Branch:** `epic/reliability-data-plane`
@@ -84,15 +84,13 @@ Those fixes restored service, but the root pattern is broader:
   rows;
 - diagnostics lack cheap precomputed byte/shape telemetry.
 
-Known current hot-path dependencies to eliminate:
+Hot-path dependency changes landed during the epic:
 
-- no-query session list currently reads bounded first-user text from
-  `events.content_text` through `get_first_message_map`; `timeline_cards` must
-  carry `first_user_message_preview` and `last_visible_text_preview` so list
-  endpoints do not need `events` or `derived.db`;
-- `/api/agents/presence` still needs audit/migration off request-session-held
-  `WriteSerializer` execution. Heartbeat and machine-presence were fixed in
-  `e7edb946`, but presence remains a Phase 1 target.
+- no-query session and timeline lists now use bounded hot preview columns
+  only. Legacy rows with NULL previews stay empty at request time until
+  `longhouse archive backfill-previews` fills them from legacy `events`;
+- `/api/agents/presence`, heartbeat, and machine-presence were migrated away
+  from request-session-held serialized writes.
 
 ## Design Principles
 
@@ -678,7 +676,8 @@ Acceptance:
 
 - lock or remove derived DB and verify session list/control/health still work;
 - block archive reads and verify timeline cards still work;
-- session list does not query `source_lines`, FTS, or raw event bodies;
+- session/timeline list does not query `source_lines`, FTS, or raw event bodies,
+  even for legacy rows missing hot previews;
 - hosted-sized fixture meets latency budget.
 
 Tests:
@@ -831,7 +830,7 @@ and the compatibility default is no longer needed.
 
 ## Current Pause Point
 
-Local implementation may continue through the Phase 5 exporter. The hosted
-production exporter still requires Hatch Opus review before it runs. Any
-raw-data cutover, compaction, or deletion remains blocked on explicit
+Local implementation may continue through Phase 6 read cutover. The hosted
+production exporter/backfill still requires Hatch Opus review before it runs.
+Any raw-data cutover, compaction, or deletion remains blocked on explicit
 maintainer approval after replay/comparison evidence.

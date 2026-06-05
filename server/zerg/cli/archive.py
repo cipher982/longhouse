@@ -501,3 +501,45 @@ def export_legacy_command(
         f"skipped_no_raw={result.rows_skipped_no_raw} quarantined={result.rows_quarantined} "
         f"chunks={result.chunks_written} last_rowid={result.last_rowid}"
     )
+
+
+@app.command("backfill-previews")
+def backfill_previews_command(
+    database_url: str | None = typer.Option(None, "--database-url", help="SQLite DATABASE_URL override."),
+    limit: int = typer.Option(500, "--limit", min=1, help="Maximum sessions to backfill."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Rollback after computing the batch."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """Backfill hot session preview columns from legacy events."""
+
+    settings = get_settings()
+    effective_database_url = database_url or settings.database_url
+
+    from zerg.database import make_engine
+    from zerg.database import make_sessionmaker
+    from zerg.services.session_preview_backfill import backfill_missing_session_previews
+
+    engine = make_engine(effective_database_url)
+    SessionLocal = make_sessionmaker(engine)
+    try:
+        with SessionLocal() as db:
+            result = backfill_missing_session_previews(db, limit=limit)
+            if dry_run:
+                db.rollback()
+            else:
+                db.commit()
+    finally:
+        engine.dispose()
+
+    payload = asdict(result)
+    payload["dry_run"] = dry_run
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    status = "dry-run" if dry_run else "ok"
+    typer.echo(
+        f"{status}: selected={result.selected_sessions} updated={result.updated_sessions} "
+        f"cards={result.updated_timeline_cards} first_user={result.first_user_filled} "
+        f"last_visible={result.last_visible_filled}"
+    )
