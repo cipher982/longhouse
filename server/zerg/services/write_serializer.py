@@ -568,6 +568,41 @@ class WriteSerializer:
             raise RuntimeError("WriteSerializer not configured and no fallback_db provided")
         return self._run_inline_with_timing(fn, fallback_db, auto_commit, label)
 
+    async def execute_after_closing_request_session(
+        self,
+        fn: Callable[[Session], T],
+        fallback_db: Session,
+        *,
+        label: str = "",
+        priority: int | None = None,
+        auto_commit: bool = True,
+        timeout_seconds: float | None = None,
+    ) -> T:
+        """Execute a serialized write without holding a request DB checkout.
+
+        Use this only after the caller has copied all values it needs from the
+        request-scoped Session and will not touch that Session again. In tests,
+        request DB overrides still run inline through ``fallback_db`` so focused
+        route tests keep using their per-test SQLite database.
+        """
+        if self._configured and os.getenv("TESTING", "").strip().lower() not in _TRUTHY_ENV:
+            fallback_db.close()
+            return await self.execute(
+                fn,
+                label=label,
+                priority=priority,
+                auto_commit=auto_commit,
+                timeout_seconds=timeout_seconds,
+            )
+        return await self.execute_or_direct(
+            fn,
+            fallback_db,
+            label=label,
+            priority=priority,
+            auto_commit=auto_commit,
+            timeout_seconds=timeout_seconds,
+        )
+
     def _run_inline_with_timing(
         self,
         fn: Callable[[Session], T],

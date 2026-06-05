@@ -167,4 +167,4 @@ async def update_machine_presence(
         )
 
     ws = get_write_serializer()
-    return await ws.execute_or_direct(_write, db, label="machine-presence")
+    return await ws.execute_after_closing_request_session(_write, db, label="machine-presence")

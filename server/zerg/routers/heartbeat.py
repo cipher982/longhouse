@@ -993,7 +993,7 @@ async def ingest_heartbeat(
             ws = get_write_serializer()
             with tracer.start_as_current_span("longhouse.heartbeat.write") as write_span:
                 write_started = time.monotonic()
-                publish_sessions = await ws.execute_or_direct(_do_heartbeat, db, label="heartbeat")
+                publish_sessions = await ws.execute_after_closing_request_session(_do_heartbeat, db, label="heartbeat")
                 write_ms = round((time.monotonic() - write_started) * 1000, 1)
                 agents_heartbeat_write_seconds.observe(write_ms / 1000.0)
                 set_span_attributes(
