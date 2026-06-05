@@ -68,9 +68,9 @@ Spec: `docs/specs/reliability-data-plane.md`
 
 ## Phase 6: Read Cutover
 
-- [ ] Move session list to hot cards.
-- [ ] Move timeline list to hot cards.
-- [ ] Keep control/health/launch independent of derived/archive.
+- [x] Move session list to hot cards.
+- [x] Move timeline list to hot cards.
+- [x] Keep control/health/launch independent of derived/archive.
 - [x] Materialize native/imported pending-response turn state off request paths before relying on syncing labels.
 - [x] Add tests proving hot endpoints work with derived DB locked/missing.
 - [x] Add tests proving hot endpoints do not query legacy cold tables.

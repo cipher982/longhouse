@@ -142,12 +142,18 @@ async def test_hot_routes_keep_request_pool_free_while_real_writer_is_saturated(
     serializer.configure(write_factory)
 
     import zerg.database as database_module
+    import zerg.data_plane as data_plane_module
     import zerg.services.write_serializer as write_serializer_module
+
+    def _cold_store_unavailable(*_args, **_kwargs):
+        raise AssertionError("hot health/list/launch paths must not open derived/archive stores")
 
     monkeypatch.delenv("TESTING", raising=False)
     monkeypatch.setattr(database_module, "default_engine", request_engine)
     monkeypatch.setattr(database_module, "default_session_factory", request_factory)
     monkeypatch.setattr(database_module, "get_wal_bytes", lambda: 0)
+    monkeypatch.setattr(data_plane_module, "create_derived_store", _cold_store_unavailable)
+    monkeypatch.setattr(data_plane_module, "create_archive_store", _cold_store_unavailable)
     monkeypatch.setattr(heartbeat_router, "get_write_serializer", lambda: serializer)
     monkeypatch.setattr(write_serializer_module, "get_write_serializer", lambda: serializer)
 

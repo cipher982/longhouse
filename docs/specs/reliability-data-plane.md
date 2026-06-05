@@ -86,9 +86,13 @@ Those fixes restored service, but the root pattern is broader:
 
 Hot-path dependency changes landed during the epic:
 
-- no-query session and timeline lists now use bounded hot preview columns
-  only. Legacy rows with NULL previews stay empty at request time until
-  `longhouse archive backfill-previews` fills them from legacy `events`;
+- no-query session and timeline lists now select and rank from `timeline_cards`,
+  then hydrate bounded session response fields from `sessions` for compatibility.
+  Legacy rows without cards or previews stay absent/empty at request time until
+  `longhouse archive backfill-previews` fills previews from legacy `events` and
+  creates missing `timeline_cards`;
+- health, session list, and launch integration tests now fail if those hot paths
+  try to open derived/archive stores;
 - `/api/agents/presence`, heartbeat, and machine-presence were migrated away
   from request-session-held serialized writes.
 
