@@ -14,6 +14,10 @@ from sqlalchemy import text
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
+os.environ.setdefault("JWT_SECRET", Fernet.generate_key().decode())
+os.environ.setdefault("INTERNAL_API_SECRET", Fernet.generate_key().decode())
+os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id")
+os.environ.setdefault("GOOGLE_CLIENT_SECRET", Fernet.generate_key().decode())
 
 from zerg.database import Base
 from zerg.database import get_pool_status
