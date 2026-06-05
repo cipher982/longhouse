@@ -42,6 +42,15 @@ vi.mock("../../services/api/base", () => {
   };
 });
 
+vi.mock("../../lib/imageCompression", () => ({
+  ImageCompressionError: class ImageCompressionError extends Error {},
+  compressImageForUpload: vi.fn(async (file: File) => ({
+    blob: file,
+    byteSize: file.size,
+    mimeType: file.type,
+  })),
+}));
+
 function makeSession(overrides: Partial<SessionChatTarget> = {}): SessionChatTarget {
   return {
     id: "sess-1",
@@ -180,6 +189,8 @@ describe("SessionChat", () => {
       configurable: true,
       value: vi.fn(),
     });
+    URL.createObjectURL = vi.fn(() => "blob:test-preview");
+    URL.revokeObjectURL = vi.fn();
   });
 
   it("renders a divider seam for the inline continuation dock", () => {
@@ -504,7 +515,7 @@ describe("SessionChat", () => {
     await waitFor(() => {
       expect(screen.getByRole("textbox")).toBeDisabled();
       expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
-      expect(screen.getByText("Sending")).toBeInTheDocument();
+      expect(screen.getByText("Delivering...")).toBeInTheDocument();
       expect(screen.getByText("Continue locally")).toBeInTheDocument();
     });
 
@@ -534,7 +545,7 @@ describe("SessionChat", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["agent-session-workspace", "sess-1"] });
   });
 
-  it("keeps managed-local optimistic input until a durable identity appears", async () => {
+  it("clears managed-local pending input after a sent response without waiting for durable identity", async () => {
     const user = userEvent.setup();
     const queryClient = new QueryClient({
       defaultOptions: {
@@ -558,45 +569,64 @@ describe("SessionChat", () => {
       return Promise.reject(new Error(`Unexpected request: ${path}`));
     });
 
-    const { rerenderSessionChat } = renderSessionChat(
-      { chatMode: "managed_local", timelineItems: [] },
-      { queryClient },
-    );
+    renderSessionChat({ chatMode: "managed_local", timelineItems: [] }, { queryClient });
 
     await user.type(screen.getByRole("textbox"), "Continue locally");
     await user.click(screen.getByRole("button", { name: /send/i }));
 
-    const inputCall = requestMock.mock.calls.find(([path, init]) =>
-      String(path).endsWith("/input") && (init as RequestInit | undefined)?.method === "POST",
-    );
-    const inputPayload = JSON.parse(String((inputCall?.[1] as RequestInit).body ?? "{}"));
-
     await waitFor(() => expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["agent-session-workspace", "sess-1"] }));
-    expect(screen.getByText("Continue locally")).toBeInTheDocument();
-    expect(screen.getByLabelText("Syncing transcript")).toBeInTheDocument();
-
-    rerenderSessionChat({
-      chatMode: "managed_local",
-      timelineItems: [
-        makeLonghouseUserItem({
-          text: "Continue locally",
-          authoredVia: null,
-        }),
-      ],
+    await waitFor(() => {
+      expect(screen.queryByText("Continue locally")).not.toBeInTheDocument();
+      expect(screen.queryByText("Delivering...")).not.toBeInTheDocument();
     });
-    expect(screen.getByText("Continue locally")).toBeInTheDocument();
+    expect(screen.getByText("Sent")).toBeInTheDocument();
+  });
 
-    rerenderSessionChat({
-      chatMode: "managed_local",
-      timelineItems: [
-        makeLonghouseUserItem({
-          sessionInputId: 7,
-          clientRequestId: inputPayload.client_request_id,
-        }),
-      ],
+  it("routes attachment-only sends through multipart with empty text", async () => {
+    const user = userEvent.setup();
+    let jsonCalls = 0;
+    let multipartBody: FormData | null = null;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/inputs-multipart") && init?.method === "POST") {
+        multipartBody = init.body as FormData;
+        return Promise.resolve({
+          outcome: "sent",
+          input_id: 9,
+          intent: "auto",
+          queued: [],
+        });
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        jsonCalls += 1;
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
     });
 
-    await waitFor(() => expect(screen.queryByText("Continue locally")).not.toBeInTheDocument());
+    const { container } = renderSessionChat({
+      chatMode: "managed_local",
+      session: makeSession({
+        provider: "codex",
+        capabilities: { attach_images: true },
+      }),
+    });
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement | null;
+    expect(input).toBeTruthy();
+    const file = new File([new Uint8Array([1, 2, 3])], "shot.png", { type: "image/png" });
+    await user.upload(input!, file);
+
+    expect(await screen.findByAltText("shot.png")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => expect(multipartBody).not.toBeNull());
+    expect(jsonCalls).toBe(0);
+    expect(multipartBody?.get("text")).toBe("");
+    expect(multipartBody?.get("intent")).toBe("auto");
+    expect(multipartBody?.get("attachments")).toBeInstanceOf(File);
+    await waitFor(() => expect(screen.getByText("Sent")).toBeInTheDocument());
   });
 
   it("requires an explicit click for the first message when configured", async () => {
@@ -872,7 +902,7 @@ describe("SessionChat", () => {
 
     await waitFor(() => {
       expect(screen.queryByText("redirect now")).not.toBeInTheDocument();
-      expect(screen.queryByLabelText("Syncing transcript")).not.toBeInTheDocument();
+      expect(screen.queryByText("Delivering...")).not.toBeInTheDocument();
     });
     expect(screen.getByText("Sent")).toBeInTheDocument();
   });

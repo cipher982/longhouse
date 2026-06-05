@@ -80,7 +80,7 @@ interface PendingManagedLocalInput {
   clientRequestId: string;
   serverInputId: number | null;
   intent: "auto" | "queue" | "steer";
-  phase: "submitting" | "sent";
+  phase: "submitting";
 }
 
 interface SessionChatProps {
@@ -259,8 +259,6 @@ export function SessionChat({
       queryClient.invalidateQueries({ queryKey: ["agent-sessions"] }),
     ]);
   }, [queryClient, session.id]);
-
-  const reconcilePendingInputWithTimeline = timelineItems !== undefined;
 
   useEffect(() => {
     if (!pendingManagedLocalInput || !timelineItems) return;
@@ -481,17 +479,8 @@ export function SessionChat({
           setSentConfirmation(true);
           sentConfirmationTimerRef.current = setTimeout(() => setSentConfirmation(false), 2000);
 
-          setPendingManagedLocalInput((pending) =>
-            pending?.clientRequestId === clientRequestId
-              ? { ...pending, serverInputId: result.input_id, intent: result.intent, phase: "sent" }
-              : pending,
-          );
-          const refreshPromise = refreshCurrentSessionWorkspace();
-          if (result.intent === "steer") {
-            setPendingManagedLocalInput(null);
-          } else if (!reconcilePendingInputWithTimeline) {
-            void refreshPromise.finally(() => setPendingManagedLocalInput(null));
-          }
+          void refreshCurrentSessionWorkspace();
+          setPendingManagedLocalInput(null);
         } else {
           setPendingManagedLocalInput(null);
         }
@@ -513,7 +502,7 @@ export function SessionChat({
         setIsSubmitting(false);
       }
     },
-    [queryClient, reconcilePendingInputWithTimeline, session.id, refreshCurrentSessionWorkspace],
+    [queryClient, session.id, refreshCurrentSessionWorkspace],
   );
 
   const handleCancelQueuedInput = useCallback(
@@ -1083,9 +1072,12 @@ export function SessionChat({
             {isManagedLocal && pendingManagedLocalInput ? (
               <div className="session-chat-pending-message">
                 <span className="session-chat-pending-message__text">{pendingManagedLocalInput.text}</span>
+                <span className="session-chat-pending-message__status">
+                  Delivering...
+                </span>
                 <span
                   className="session-chat-pending-message__spinner"
-                  aria-label={pendingManagedLocalInput.phase === "submitting" ? "Sending" : "Syncing transcript"}
+                  aria-label="Sending"
                 />
               </div>
             ) : null}

@@ -5,7 +5,13 @@ vi.mock('../../../lib/config', () => ({
   config: { apiBaseUrl: '/api' },
 }));
 
-import { buildUrl } from '../base';
+vi.mock('../../../lib/logger', () => ({
+  logger: {
+    error: vi.fn(),
+  },
+}));
+
+import { ApiError, buildUrl } from '../base';
 
 describe('buildUrl', () => {
   it('prepends /api to a path without prefix', () => {
@@ -24,5 +30,25 @@ describe('buildUrl', () => {
 
   it('handles nested paths correctly', () => {
     expect(buildUrl('/sessions/abc/events')).toBe('/api/sessions/abc/events');
+  });
+});
+
+describe('ApiError', () => {
+  it('formats FastAPI array-shaped validation detail instead of a bare 422', () => {
+    const error = new ApiError({
+      url: '/api/sessions/sess-1/input',
+      status: 422,
+      body: {
+        detail: [
+          {
+            type: 'string_too_short',
+            loc: ['body', 'text'],
+            msg: 'String should have at least 1 character',
+          },
+        ],
+      },
+    });
+
+    expect(error.message).toBe('text: String should have at least 1 character');
   });
 });

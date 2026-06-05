@@ -329,6 +329,44 @@ def test_multipart_upload_succeeds_on_codex(monkeypatch, tmp_path):
         api_app_ref.dependency_overrides = {}
 
 
+def test_multipart_accepts_attachment_only_input(monkeypatch, tmp_path):
+    _set_blob_root(monkeypatch, tmp_path)
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_codex_session(session_local)
+    calls = _stub_dispatch(monkeypatch)
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        resp = client.post(
+            f"/api/sessions/{session_id}/inputs-multipart",
+            data={"text": "", "intent": "auto", "client_request_id": "attachment-only-1"},
+            files=[("attachments", ("a.png", io.BytesIO(_PNG_BYTES), "image/png"))],
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["outcome"] == "sent"
+        assert body["intent"] == "auto"
+        assert len(calls) == 1
+        assert calls[0]["text"] == ""
+
+        with session_local() as db:
+            row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
+            assert row.client_request_id == "attachment-only-1"
+            assert row.status == INPUT_STATUS_DELIVERED
+            attachment_count = (
+                db.query(SessionInputAttachment)
+                .filter(SessionInputAttachment.session_input_id == row.id)
+                .count()
+            )
+            assert attachment_count == 1
+    finally:
+        asyncio.run(session_lock_manager.release(str(session_id)))
+        api_app_ref.dependency_overrides = {}
+
+
 def test_multipart_rejects_non_codex_transport(monkeypatch, tmp_path):
     _set_blob_root(monkeypatch, tmp_path)
     session_local = _make_db(tmp_path)
