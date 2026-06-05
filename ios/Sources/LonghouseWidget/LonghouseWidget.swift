@@ -200,7 +200,8 @@ private struct SessionWatchLiveActivityView: View {
                     .font(.headline.weight(.semibold))
                     .lineLimit(1)
                 Spacer(minLength: 8)
-                Text(context.attributes.provider.capitalized)
+                ProviderGlyph(provider: context.attributes.provider, size: 16)
+                Text(providerDisplayLabel(context.attributes.provider))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
