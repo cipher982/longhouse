@@ -9,6 +9,7 @@ Covers:
 import asyncio
 import json
 import os
+import re
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -35,6 +36,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
+from zerg.models.agents import SessionTurn
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
@@ -777,7 +779,7 @@ def test_no_query_session_lists_do_not_touch_cold_archive_tables(tmp_path):
     assert agent_first_user_by_id[str(session.id)] == "hot preview"
     assert agent_first_user_by_id[str(missing_preview_session.id)] is None
     assert len(timeline_result.response.sessions) == 2
-    rendered_sql = " ".join(statement.lower() for statement in statements)
+    rendered_sql = re.sub(r"\s+", " ", " ".join(statement.lower() for statement in statements))
     assert "source_lines" not in rendered_sql
     assert "events_fts" not in rendered_sql
     assert " from events" not in rendered_sql
@@ -1494,7 +1496,7 @@ def test_sessions_list_marks_recent_managed_idle_with_missing_assistant_as_synci
         assert row["timeline_card"]["status"]["tone"] == "active"
 
 
-def test_sessions_list_marks_managed_idle_after_unanswered_latest_user_as_syncing(tmp_path):
+def test_sessions_list_marks_managed_idle_with_pending_turn_hot_state_as_syncing(tmp_path):
     factory = _make_db(tmp_path, "materialized_runtime_syncing_unanswered_user.db")
     now = datetime.now(timezone.utc)
 
@@ -1551,6 +1553,27 @@ def test_sessions_list_marks_managed_idle_after_unanswered_latest_user_as_syncin
         session.user_messages = 45
         session.assistant_messages = 113
         session.last_activity_at = now - timedelta(seconds=19)
+        latest_user_event_id = (
+            db.query(AgentEvent.id)
+            .filter(AgentEvent.session_id == session.id)
+            .filter(AgentEvent.role == "user")
+            .order_by(AgentEvent.id.desc())
+            .limit(1)
+            .scalar()
+        )
+        db.add(
+            SessionTurn(
+                session_id=session.id,
+                request_id="native:pending-hot-state",
+                source_kind="transcript_reconstructed",
+                timing_confidence="inferred",
+                state="active",
+                user_event_id=latest_user_event_id,
+                user_submitted_at=now - timedelta(seconds=20),
+                send_accepted_at=now - timedelta(seconds=20),
+                active_phase_observed_at=now - timedelta(seconds=18),
+            )
+        )
         ingest_runtime_events(
             db,
             [

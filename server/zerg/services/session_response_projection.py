@@ -89,7 +89,7 @@ def build_session_response_list(
     runtime_state_map = load_runtime_state_map(db, session_ids)
     control_state_map = load_managed_control_state_map(db, session_ids)
     transcript_preview_map = load_active_provisional_preview_map(db, session_ids)
-    pending_response_turn_map = load_pending_response_turn_map(db, session_ids)
+    pending_response_turn_map = load_pending_response_turn_map(db, session_ids, include_event_fallback=False)
     first_user_map = {
         session.id: preview
         for session in sessions

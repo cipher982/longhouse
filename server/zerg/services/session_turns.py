@@ -412,7 +412,12 @@ def get_session_turn(
     )
 
 
-def load_pending_response_turn_map(db: Session, session_ids: list[UUID]) -> dict[UUID, bool]:
+def load_pending_response_turn_map(
+    db: Session,
+    session_ids: list[UUID],
+    *,
+    include_event_fallback: bool = True,
+) -> dict[UUID, bool]:
     """Return sessions whose latest user prompt has no visible response yet.
 
     Managed sends create exact ``SessionTurn`` rows, but imported/native
@@ -433,8 +438,9 @@ def load_pending_response_turn_map(db: Session, session_ids: list[UUID]) -> dict
         .all()
     )
     pending = {row[0]: True for row in rows if row[0] is not None}
-    remaining_session_ids = [session_id for session_id in session_ids if session_id not in pending]
-    pending.update(_load_unanswered_user_prompt_map(db, remaining_session_ids))
+    if include_event_fallback:
+        remaining_session_ids = [session_id for session_id in session_ids if session_id not in pending]
+        pending.update(_load_unanswered_user_prompt_map(db, remaining_session_ids))
     return pending
 
 
