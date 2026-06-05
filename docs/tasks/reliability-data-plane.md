@@ -46,7 +46,7 @@ Spec: `docs/specs/reliability-data-plane.md`
 
 - [x] Add configurable `hot.db`, `derived.db`, and archive root paths.
 - [x] Add separate factories/pools/serializers.
-- [x] Add empty DB migrations.
+- [x] Add empty-store schema plus migration ledger.
 - [x] Add derived-unavailable tests.
 
 ## Phase 4: Shadow Ingest and Projectors

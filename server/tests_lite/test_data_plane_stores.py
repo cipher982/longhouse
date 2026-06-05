@@ -42,6 +42,60 @@ def test_data_plane_paths_preserve_active_database_url_by_default(tmp_path, monk
     assert paths.archive_root == tmp_path / "archive"
 
 
+def test_data_plane_paths_support_hosted_absolute_sqlite_url(tmp_path, monkeypatch):
+    _clear_data_plane_env(monkeypatch)
+    db_path = tmp_path / "hosted" / "longhouse.db"
+    db_url = _sqlite_url(db_path)
+    monkeypatch.setenv("TESTING", "1")
+    monkeypatch.setenv("DATABASE_URL", db_url)
+
+    paths = get_data_plane_paths(get_settings())
+
+    assert paths.hot_database_url == db_url
+    assert paths.derived_database_url == _sqlite_url(db_path.parent / "derived.db")
+    assert paths.archive_root == db_path.parent / "archive"
+
+
+def test_data_plane_paths_strip_quoted_database_url(tmp_path, monkeypatch):
+    _clear_data_plane_env(monkeypatch)
+    db_path = tmp_path / "quoted" / "longhouse.db"
+    db_url = _sqlite_url(db_path)
+    monkeypatch.setenv("TESTING", "1")
+    monkeypatch.setenv("DATABASE_URL", f'"{db_url}"')
+
+    paths = get_data_plane_paths(get_settings())
+
+    assert paths.hot_database_url == db_url
+    assert paths.derived_database_url == _sqlite_url(db_path.parent / "derived.db")
+    assert paths.archive_root == db_path.parent / "archive"
+
+
+def test_data_plane_paths_support_driver_qualified_sqlite_url(tmp_path, monkeypatch):
+    _clear_data_plane_env(monkeypatch)
+    db_path = tmp_path / "driver" / "longhouse.db"
+    db_url = f"sqlite+pysqlite:///{db_path.as_posix()}"
+    monkeypatch.setenv("TESTING", "1")
+    monkeypatch.setenv("DATABASE_URL", db_url)
+
+    paths = get_data_plane_paths(get_settings())
+
+    assert paths.hot_database_url == db_url
+    assert paths.derived_database_url == _sqlite_url(db_path.parent / "derived.db")
+    assert paths.archive_root == db_path.parent / "archive"
+
+
+def test_data_plane_paths_document_relative_database_url_behavior(monkeypatch):
+    _clear_data_plane_env(monkeypatch)
+    monkeypatch.setenv("TESTING", "1")
+    monkeypatch.setenv("DATABASE_URL", "sqlite:///longhouse.db")
+
+    paths = get_data_plane_paths(get_settings())
+
+    assert paths.hot_database_url == "sqlite:///longhouse.db"
+    assert paths.derived_database_url == "sqlite:///derived.db"
+    assert paths.archive_root == Path("archive")
+
+
 def test_data_plane_root_opts_into_hot_derived_archive_layout(tmp_path, monkeypatch):
     _clear_data_plane_env(monkeypatch)
     root = tmp_path / "longhouse-data"
@@ -96,6 +150,36 @@ def test_empty_hot_and_derived_store_migrations_are_independent(tmp_path, monkey
     finally:
         hot.dispose()
         derived.dispose()
+
+
+def test_empty_store_initialization_is_idempotent(tmp_path, monkeypatch):
+    settings = _configure_store_env(tmp_path, monkeypatch)
+    hot = create_hot_store(settings)
+    try:
+        initialize_hot_database(hot.engine)
+        initialize_hot_database(hot.engine)
+
+        with hot.session_factory() as db:
+            count = db.execute(sa_text("SELECT COUNT(*) FROM data_plane_migration_runs")).scalar()
+
+        assert count == 1
+        assert _meta_value(hot, "role") == "hot"
+    finally:
+        hot.dispose()
+
+
+def test_settings_resolution_does_not_touch_filesystem(tmp_path, monkeypatch):
+    _clear_data_plane_env(monkeypatch)
+    db_path = tmp_path / "lazy" / "longhouse.db"
+    monkeypatch.setenv("TESTING", "1")
+    monkeypatch.setenv("DATABASE_URL", _sqlite_url(db_path))
+
+    paths = get_data_plane_paths(get_settings())
+
+    assert paths.derived_database_url == _sqlite_url(db_path.parent / "derived.db")
+    assert not db_path.exists()
+    assert not (db_path.parent / "derived.db").exists()
+    assert not paths.archive_root.exists()
 
 
 @pytest.mark.asyncio

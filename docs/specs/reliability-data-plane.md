@@ -761,6 +761,10 @@ same directory. Setting `LONGHOUSE_DATA_ROOT` opts into the future
 `LONGHOUSE_HOT_DATABASE_URL`, `LONGHOUSE_DERIVED_DATABASE_URL`, and
 `LONGHOUSE_ARCHIVE_ROOT` override both.
 
+Relative `DATABASE_URL` values keep relative derived/archive paths for
+compatibility; Phase 4 must either preserve that explicitly or move store
+creation to absolute paths before projectors start creating files.
+
 **Rationale:** This gives tests and future projectors separate store handles
 without changing active read/write paths during the skeleton phase.
 

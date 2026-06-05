@@ -76,17 +76,16 @@ def _sqlite_file_path(database_url: str) -> Path | None:
         return None
     # sqlite:///relative.db parses as /relative.db. SQLAlchemy treats that as a
     # relative database path, so remove one leading slash for the three-slash
-    # form while preserving sqlite:////absolute.db.
-    if database_url.startswith("sqlite:////"):
+    # form while preserving sqlite:////absolute.db. Driver-qualified SQLite
+    # URLs such as sqlite+pysqlite:///... follow the same slash convention.
+    if database_url.startswith(f"{parsed.scheme}:////"):
         return Path("/" + raw_path.lstrip("/"))
-    if database_url.startswith("sqlite:///"):
+    if database_url.startswith(f"{parsed.scheme}:///"):
         return Path(raw_path.lstrip("/"))
     return None
 
 
 def _sqlite_url_for_path(path: Path) -> str:
-    if path.is_absolute():
-        return f"sqlite:///{path.as_posix()}"
     return f"sqlite:///{path.as_posix()}"
 
 
@@ -102,23 +101,24 @@ def _default_data_plane_root(database_url: str, explicit_root: str | None) -> Pa
 def _resolve_data_plane_settings(database_url: str) -> tuple[str | None, str, str, str]:
     """Resolve hot/derived/archive locations without changing active DB use."""
 
+    normalized_database_url = _strip_env_quotes(database_url)
     data_root_env = os.getenv("LONGHOUSE_DATA_ROOT")
-    root = _default_data_plane_root(database_url, data_root_env)
+    root = _default_data_plane_root(normalized_database_url, data_root_env)
 
-    hot_database_url = os.getenv("LONGHOUSE_HOT_DATABASE_URL")
+    hot_database_url = _strip_env_quotes(os.getenv("LONGHOUSE_HOT_DATABASE_URL") or "")
     if not hot_database_url and data_root_env:
         hot_database_url = _sqlite_url_for_path(root / "hot.db")
     if not hot_database_url:
-        hot_database_url = database_url or "sqlite://"
+        hot_database_url = normalized_database_url or "sqlite://"
 
-    derived_database_url = os.getenv("LONGHOUSE_DERIVED_DATABASE_URL")
+    derived_database_url = _strip_env_quotes(os.getenv("LONGHOUSE_DERIVED_DATABASE_URL") or "")
     if not derived_database_url:
-        if data_root_env or _sqlite_file_path(database_url) is not None:
+        if data_root_env or _sqlite_file_path(normalized_database_url) is not None:
             derived_database_url = _sqlite_url_for_path(root / "derived.db")
         else:
             derived_database_url = "sqlite://"
 
-    archive_root = os.getenv("LONGHOUSE_ARCHIVE_ROOT") or str(root / "archive")
+    archive_root = _strip_env_quotes(os.getenv("LONGHOUSE_ARCHIVE_ROOT") or "") or str(root / "archive")
     return data_root_env, hot_database_url, derived_database_url, archive_root
 
 
