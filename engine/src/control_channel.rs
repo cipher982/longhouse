@@ -772,6 +772,21 @@ async fn execute_command(
                 // `claude --session-id <longhouse-uuid>`, so the resume target's
                 // thread_id is that same id. No transcript path is needed
                 // (unlike codex) — `claude --resume <id>` reads the local store.
+                // Preflight (claude-scoped on purpose): if the server passed a
+                // transcript path (the adopt-unmanaged continue case), fail
+                // honestly with transcript_not_found when it's gone, instead of a
+                // generic provider_launch_failed. Codex resume has its own bridge
+                // path and is intentionally not changed here.
+                if let Some(target) = resume_target.as_ref() {
+                    if let Some(path) = target.thread_path.as_ref() {
+                        if !path.trim().is_empty() && !std::path::Path::new(path).exists() {
+                            return Err(CommandError {
+                                code: "transcript_not_found".to_string(),
+                                message: format!("resume transcript no longer exists: {path}"),
+                            });
+                        }
+                    }
+                }
                 let resume_provider_session_id =
                     resume_target.as_ref().map(|target| target.thread_id.clone());
                 return launch_claude_channel_session(
@@ -2616,6 +2631,37 @@ exit 1
 
         assert_eq!(result["ok"], false);
         assert_eq!(result["error"]["code"], "cwd_not_allowed");
+    }
+
+    #[tokio::test]
+    async fn claude_continue_rejects_missing_resume_transcript() {
+        // Adopt-unmanaged continue carries a transcript path; if it's gone we
+        // must fail with transcript_not_found, not a generic launch failure.
+        let tmp = std::env::temp_dir();
+        let mut cache = command_cache();
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-claude-missing-transcript",
+                "session_id": "00000000-0000-0000-0000-000000000003",
+                "command_type": COMMAND_LAUNCH,
+                "payload": {
+                    "provider": "claude",
+                    "cwd": tmp.to_string_lossy(),
+                    "mode": "continue",
+                    "resume": {
+                        "thread_id": "raw-provider-id",
+                        "thread_path": "/does/not/exist/raw-transcript.jsonl",
+                    },
+                },
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"]["code"], "transcript_not_found");
     }
 
     #[tokio::test]

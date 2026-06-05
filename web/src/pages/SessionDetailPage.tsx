@@ -145,6 +145,13 @@ function SessionDetailWorkspaceRoute({
       continueTarget &&
       !continuationSession.capabilities?.can_send_input,
   );
+  // Adopting an unmanaged/raw transcript starts a fresh managed process — be
+  // honest about that vs. re-launching an already-managed session.
+  const isAdoptUnmanaged = continueTarget?.adoption_mode === "adopt_unmanaged";
+  const continueIdleLabel = isAdoptUnmanaged ? "Continue in Longhouse" : "Continue";
+  const continueTitle = isAdoptUnmanaged
+    ? "Starts a fresh managed Longhouse process from this transcript"
+    : "Continue session";
   const sessionLaunchState = session?.launch_state ?? null;
   const localContinueLaunchState =
     continueLaunchState && continueLaunchState.sessionId === continuationSession?.id
@@ -344,12 +351,12 @@ function SessionDetailWorkspaceRoute({
           size="sm"
           onClick={() => void handleContinueSession()}
           disabled={continuingSession || continueLaunchInProgress}
-          title="Continue session"
-          aria-label="Continue session"
+          title={continueTitle}
+          aria-label={continueTitle}
           data-testid="session-continue-button"
         >
           {continuingSession || continueLaunchInProgress ? <Spinner size="sm" /> : <PlayIcon width={13} height={13} />}
-          <span>{continuingSession || continueLaunchInProgress ? "Continuing" : "Continue"}</span>
+          <span>{continuingSession || continueLaunchInProgress ? "Continuing" : continueIdleLabel}</span>
         </Button>
       ) : null}
       <Button

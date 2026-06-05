@@ -71,6 +71,7 @@ export type RemoteLaunchErrorCode =
   | "cwd_not_found"
   | "machine_offline"
   | "provider_launch_failed"
+  | "transcript_not_found"
   | "launch_timeout";
 
 export type RemoteSessionLaunchRequest = {

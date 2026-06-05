@@ -7858,7 +7858,7 @@ export interface components {
              */
             launch_state: "launching" | "live" | "launching_unknown" | "launch_failed" | "launch_orphaned";
             /** Launch Error Code */
-            launch_error_code?: ("invalid_request" | "device_not_enrolled" | "provider_unsupported" | "cwd_not_allowed" | "cwd_not_found" | "machine_offline" | "provider_launch_failed" | "launch_timeout") | null;
+            launch_error_code?: ("invalid_request" | "device_not_enrolled" | "provider_unsupported" | "cwd_not_allowed" | "cwd_not_found" | "machine_offline" | "provider_launch_failed" | "transcript_not_found" | "launch_timeout") | null;
             /** Launch Error Message */
             launch_error_message?: string | null;
         };
@@ -8981,6 +8981,13 @@ export interface components {
              * @default true
              */
             native_resume_available: boolean;
+            /**
+             * Adoption Mode
+             * @description managed_resume: re-launch an already-managed session. adopt_unmanaged: explicitly bring an imported/raw transcript under Longhouse management by launching a fresh managed process.
+             * @default managed_resume
+             * @enum {string}
+             */
+            adoption_mode: "managed_resume" | "adopt_unmanaged";
         };
         /** SessionControlResponse */
         SessionControlResponse: {
@@ -9590,7 +9597,7 @@ export interface components {
              * Launch Error Code
              * @description Remote-launch error code when launch_state=launch_failed/launch_orphaned
              */
-            launch_error_code?: ("invalid_request" | "device_not_enrolled" | "provider_unsupported" | "cwd_not_allowed" | "cwd_not_found" | "machine_offline" | "provider_launch_failed" | "launch_timeout") | null;
+            launch_error_code?: ("invalid_request" | "device_not_enrolled" | "provider_unsupported" | "cwd_not_allowed" | "cwd_not_found" | "machine_offline" | "provider_launch_failed" | "transcript_not_found" | "launch_timeout") | null;
             /**
              * Launch Error Message
              * @description Remote-launch error message when launch_state=launch_failed/launch_orphaned

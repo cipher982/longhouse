@@ -251,16 +251,20 @@ def _seed_imported_claude_session(
     device_id: str | None = "cinder",
     provider_session_alias: str | None = None,
     observe_only_connection: bool = False,
+    source_path: str | None = None,
+    ended: bool = True,
 ):
     """Seed an imported/unmanaged bare-CLI claude session.
 
-    Unmanaged claude was NOT launched with `claude --session-id <our-uuid>`, so
-    its provider session id alias is either absent or a different provider uuid
-    (its transcript lives under that other id). It must NOT be continuable.
+    Unmanaged claude was NOT launched with `claude --session-id <our-uuid>`; its
+    provider session id is its OWN id (recorded as a provider_session_id alias).
+    Such a session is continuable as ``adopt_unmanaged`` IFF it has both that
+    alias AND a local transcript (source_path) — the user can explicitly adopt
+    it. Missing either → not continuable.
 
-    ``observe_only_connection`` simulates kernel backfill having attached an
-    observe_only connection (and an alias == session.id) — the spoof path that
-    the alias-equality heuristic would have wrongly accepted.
+    ``source_path`` seeds an AgentSourceLine so the transcript-evidence gate is
+    satisfied. ``observe_only_connection`` simulates kernel backfill attaching an
+    observe_only (NOT control) connection.
     """
 
     now = datetime.now(timezone.utc)
@@ -274,7 +278,7 @@ def _seed_imported_claude_session(
         device_name=device_id,
         cwd="/Users/me/repo",
         started_at=now,
-        ended_at=now,
+        ended_at=now if ended else None,
         last_activity_at=now,
         thread_root_session_id=sid,
         continued_from_session_id=None,
@@ -311,6 +315,18 @@ def _seed_imported_claude_session(
             can_terminate=0,
             can_tail_output=1,
             can_resume=0,
+        )
+    if source_path is not None:
+        db.add(
+            AgentSourceLine(
+                session_id=session.id,
+                thread_id=thread.id,
+                source_path=source_path,
+                source_offset=0,
+                branch_id=0,
+                raw_json='{"type":"message"}',
+                line_hash=f"hash-imported-{sid}",
+            )
         )
     db.commit()
     return session.id
@@ -1075,80 +1091,115 @@ def test_continue_claude_session_resumes_by_id_with_null_thread_path(tmp_path):
         assert workspace.session.capabilities.continue_targets[0].carry_context == "native"
 
 
-def test_imported_unmanaged_claude_session_is_not_continuable(tmp_path):
-    """An imported bare-CLI claude session must not expose can_continue.
+def test_unmanaged_claude_with_alias_and_transcript_is_adoptable(tmp_path):
+    """An imported/raw claude session with a provider_session_id alias AND a
+    local transcript is continuable as adopt_unmanaged — the user can explicitly
+    bring it under management. The resume id is the provider's OWN id (alias),
+    not the longhouse id."""
 
-    Its provider session id (if any) differs from the longhouse id, so we have
-    no transcript we could `claude --resume <our-id>` against.
-    """
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    provider_id = str(uuid4())
+
+    with SessionLocal() as db:
+        sid = _seed_imported_claude_session(
+            db,
+            provider_session_alias=provider_id,
+            source_path="/Users/me/.claude/projects/-x/raw.jsonl",
+        )
+        workspace = build_session_workspace(db=db, session_id=sid, owner_id=OWNER_ID)
+        caps = workspace.session.capabilities
+        assert caps.can_continue is True
+        assert caps.continue_targets[0].adoption_mode == "adopt_unmanaged"
+
+
+def test_live_unmanaged_claude_is_not_adoptable(tmp_path):
+    """A still-LIVE raw claude session (ended_at is None) must NOT be adoptable.
+
+    Launching a fresh managed resume of a transcript a live process is still
+    writing = two owners contending for one transcript. The closed-state gate
+    prevents that. Once it closes, it becomes adoptable."""
 
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)
 
     with SessionLocal() as db:
-        # Case A: a foreign provider uuid alias (real bare-CLI ingest shape).
-        foreign_id = _seed_imported_claude_session(db, provider_session_alias=str(uuid4()))
-        workspace = build_session_workspace(db=db, session_id=foreign_id, owner_id=OWNER_ID)
-        assert workspace.session.capabilities.can_continue is False
-        assert workspace.session.capabilities.continue_targets == []
-
-    with SessionLocal() as db:
-        # Case B: no provider session id alias at all.
-        no_alias_id = _seed_imported_claude_session(db, provider_session_alias=None)
-        workspace = build_session_workspace(db=db, session_id=no_alias_id, owner_id=OWNER_ID)
-        assert workspace.session.capabilities.can_continue is False
-        assert workspace.session.capabilities.continue_targets == []
-
-    with SessionLocal() as db:
-        # Case C: backfill spoof — alias == session.id AND an observe_only
-        # connection. The old alias-equality heuristic would have wrongly
-        # accepted this; the managed-control fingerprint must still reject it.
-        spoof_id = uuid4()
-        _seed_imported_claude_session(
+        live_id = _seed_imported_claude_session(
             db,
-            session_id=spoof_id,
-            provider_session_alias=str(spoof_id),
-            observe_only_connection=True,
+            provider_session_alias=str(uuid4()),
+            source_path="/Users/me/.claude/projects/-x/raw.jsonl",
+            ended=False,
         )
-        workspace = build_session_workspace(db=db, session_id=spoof_id, owner_id=OWNER_ID)
+        workspace = build_session_workspace(db=db, session_id=live_id, owner_id=OWNER_ID)
         assert workspace.session.capabilities.can_continue is False
         assert workspace.session.capabilities.continue_targets == []
 
 
-def test_continue_rejects_unmanaged_claude_with_foreign_provider_id(tmp_path):
-    """The execution gate must reject continuing an unmanaged claude session."""
+def test_unmanaged_claude_not_continuable_without_alias_or_transcript(tmp_path):
+    """adopt_unmanaged requires BOTH a provider_session_id alias and transcript
+    evidence. Missing either → no Continue (we'd have nothing to resume)."""
+
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+
+    with SessionLocal() as db:
+        # alias but NO transcript
+        alias_only = _seed_imported_claude_session(db, provider_session_alias=str(uuid4()))
+        workspace = build_session_workspace(db=db, session_id=alias_only, owner_id=OWNER_ID)
+        assert workspace.session.capabilities.can_continue is False
+        assert workspace.session.capabilities.continue_targets == []
+
+    with SessionLocal() as db:
+        # transcript but NO alias
+        path_only = _seed_imported_claude_session(
+            db, provider_session_alias=None, source_path="/Users/me/.claude/projects/-x/raw.jsonl"
+        )
+        workspace = build_session_workspace(db=db, session_id=path_only, owner_id=OWNER_ID)
+        assert workspace.session.capabilities.can_continue is False
+        assert workspace.session.capabilities.continue_targets == []
+
+
+def test_continue_unmanaged_claude_resumes_by_provider_alias(tmp_path):
+    """Executing continue on an adoptable unmanaged claude session dispatches
+    resume.thread_id = the PROVIDER alias id (not session.id)."""
 
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)
     registry = _StubRegistry()
     _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("claude.continue",))
+    provider_id = str(uuid4())
 
     with SessionLocal() as db:
-        session_id = _seed_imported_claude_session(db, provider_session_alias=str(uuid4()))
-        with pytest.raises(RemoteLaunchError) as excinfo:
-            asyncio.run(
-                continue_remote_session(
-                    db,
-                    RemoteContinueParams(
-                        owner_id=OWNER_ID,
-                        session_id=session_id,
-                        client_request_id="unmanaged-claude",
-                    ),
-                    registry=registry,
-                )
+        session_id = _seed_imported_claude_session(
+            db,
+            provider_session_alias=provider_id,
+            source_path="/Users/me/.claude/projects/-x/raw.jsonl",
+        )
+
+    with SessionLocal() as db:
+        result = asyncio.run(
+            continue_remote_session(
+                db,
+                RemoteContinueParams(
+                    owner_id=OWNER_ID,
+                    session_id=session_id,
+                    client_request_id="adopt-unmanaged",
+                ),
+                registry=registry,
             )
+        )
 
-    assert excinfo.value.code == "invalid_request"
-    assert excinfo.value.status_code == 409
-    assert registry.sent == []
+    assert result.launch_state == "live"
+    sent = registry.sent[0]
+    assert sent["payload"]["mode"] == "continue"
+    # Resume id is the provider's own id, NOT the longhouse session id.
+    assert sent["payload"]["resume"]["thread_id"] == provider_id
+    assert sent["payload"]["resume"]["thread_id"] != str(session_id)
 
 
-def test_continue_rejects_unmanaged_claude_without_managed_connection(tmp_path):
-    """Execution gate rejects claude sessions that never held a control path.
-
-    Covers the no-alias import and the backfill spoof (alias == session.id but
-    only an observe_only connection).
-    """
+def test_continue_rejects_unmanaged_claude_without_alias_or_transcript(tmp_path):
+    """Execution gate rejects claude sessions with no resolvable resume identity
+    (no alias, or alias without transcript evidence)."""
 
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)

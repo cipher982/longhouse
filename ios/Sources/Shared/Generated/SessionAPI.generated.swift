@@ -12,6 +12,7 @@ struct APISessionContinueTarget: Codable, Hashable, Sendable {
     let cwd: String?
     let carryContext: String?
     let nativeResumeAvailable: Bool?
+    let adoptionMode: String?
 }
 
 struct APISessionCapabilitiesResponse: Codable, Hashable, Sendable {
