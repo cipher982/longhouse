@@ -707,6 +707,7 @@ def _run_opencode_prompt_async_no_reply_delivery(
             return _status(
                 "pass",
                 provider_session_id=provider_session_id,
+                message_marker=marker,
                 message_marker_sha256=hashlib.sha256(marker.encode("utf-8")).hexdigest(),
                 observed_message_count=len(messages) if isinstance(messages, list) else None,
                 poll_attempts=poll_attempts,
