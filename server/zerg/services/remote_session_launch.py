@@ -27,15 +27,12 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
-from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionLaunchAttempt
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
-from zerg.models.agents import SessionThreadAlias
 from zerg.models.device_token import DeviceToken
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
-from zerg.services.agents.kernel_capabilities import thread_ever_had_managed_control
 from zerg.services.agents.kernel_writes import ensure_open_run_for_session
 from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import record_launch_attempt
@@ -50,6 +47,7 @@ from zerg.services.managed_provider_contracts import continue_supported_provider
 from zerg.services.managed_provider_contracts import control_plane_for_provider
 from zerg.services.managed_provider_contracts import remote_launch_supported_providers
 from zerg.services.managed_provider_contracts import require_contract_for_provider
+from zerg.services.session_continue_targets import resolve_native_continue_target
 from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
 from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
 from zerg.services.session_launch_lifecycle import normalize_remote_launch_error_code
@@ -259,49 +257,17 @@ def _result_resume_thread_path(message: Mapping | None) -> str | None:
     return str(value).strip() if value else None
 
 
-def _latest_thread_alias(db: Session, *, thread: SessionThread, alias_kind: str) -> str | None:
-    value = (
-        db.query(SessionThreadAlias.alias_value)
-        .filter(SessionThreadAlias.thread_id == thread.id)
-        .filter(SessionThreadAlias.provider == thread.provider)
-        .filter(SessionThreadAlias.alias_kind == alias_kind)
-        .order_by(SessionThreadAlias.last_seen_at.desc(), SessionThreadAlias.id.desc())
-        .limit(1)
-        .scalar()
-    )
-    return str(value).strip() if value else None
-
-
-def _latest_source_path(db: Session, *, session: AgentSession, thread: SessionThread) -> str | None:
-    alias = _latest_thread_alias(db, thread=thread, alias_kind="source_path")
-    if alias:
-        return alias
-    row = (
-        db.query(AgentSourceLine.source_path)
-        .filter(AgentSourceLine.session_id == session.id)
-        .filter((AgentSourceLine.thread_id == thread.id) | (AgentSourceLine.thread_id.is_(None)))
-        .order_by(AgentSourceLine.created_at.desc(), AgentSourceLine.id.desc())
-        .limit(1)
-        .first()
-    )
-    source_path = str(row[0]).strip() if row is not None and row[0] else None
-    if source_path:
-        record_thread_alias(
-            db,
-            thread=thread,
-            provider=session.provider,
-            alias_kind="source_path",
-            alias_value=source_path,
-        )
-    return source_path
-
-
 def _resolve_continue_target(db: Session, *, session: AgentSession) -> tuple[SessionThread, str, str | None]:
     """Resolve the provider resume target for a continuable session.
 
-    Returns ``(thread, provider_thread_id, thread_path)``. ``thread_path`` is the
-    provider transcript path for providers that resume by file (codex) and
-    ``None`` for providers that resume by id alone (claude).
+    Returns ``(thread, provider_resume_id, thread_path)``. ``provider_resume_id``
+    is the id passed to the provider's resume flag (the real provider identity
+    from the provider_session_id alias, not the longhouse id). ``thread_path`` is
+    the transcript path for file-resuming providers (codex) and ``None`` for
+    providers that resume by id alone (claude).
+
+    Delegates the managed/unmanaged + id decision to the shared resolver so the
+    Continue button (view) and this execution path can never disagree.
     """
 
     provider = (session.provider or "").strip().lower()
@@ -312,43 +278,21 @@ def _resolve_continue_target(db: Session, *, session: AgentSession) -> tuple[Ses
             status_code=400,
         )
 
-    thread = ensure_primary_thread(db, session)
-    provider_thread_id = _latest_thread_alias(db, thread=thread, alias_kind="provider_session_id")
-
-    if provider == "claude":
-        # Claude pins `claude --session-id <longhouse-uuid>` at launch, so a
-        # managed session resumes by the longhouse id (`claude --resume <id>`,
-        # no transcript path). Only continue if this session was actually managed
-        # by Longhouse — proven by a control-acquisition connection, not an alias
-        # backfill can synthesize. Imported/unmanaged claude has no such
-        # connection and its transcript lives under a different provider uuid, so
-        # reject rather than launch a broken resume.
-        if not thread_ever_had_managed_control(db, thread_id=thread.id):
+    resolution = resolve_native_continue_target(db, session)
+    if resolution is None:
+        # No resolvable resume identity. Give a provider-shaped reason.
+        if provider == "claude":
             raise RemoteLaunchError(
-                "Session is not a managed Claude session; only managed sessions can be continued",
+                "Session has no resolvable Claude resume identity; cannot continue",
                 code="invalid_request",
                 status_code=409,
             )
-        return thread, str(session.id), None
-
-    # codex: resumes by provider thread id + transcript path. The id must be a
-    # real provider thread distinct from the longhouse session id.
-    if provider_thread_id == str(session.id):
-        provider_thread_id = None
-    thread_path = _latest_source_path(db, session=session, thread=thread)
-    if not provider_thread_id:
         raise RemoteLaunchError(
-            "Session is missing a Codex thread id; cannot continue until thread identity is ingested",
+            "Session is missing a Codex thread id or transcript path; cannot continue",
             code="invalid_request",
             status_code=409,
         )
-    if not thread_path:
-        raise RemoteLaunchError(
-            "Session is missing a Codex transcript path; cannot continue without a provider resume target",
-            code="invalid_request",
-            status_code=409,
-        )
-    return thread, provider_thread_id, thread_path
+    return resolution.thread, resolution.provider_resume_id, resolution.source_path
 
 
 async def launch_remote_session(
@@ -632,6 +576,19 @@ async def continue_remote_session(
         return RemoteLaunchResult(session_id=UUID(str(session.id)), launch_state="live")
 
     thread, provider_thread_id, thread_path = _resolve_continue_target(db, session=session)
+
+    # Persist the resolved transcript path as a thread alias eagerly, so the
+    # resume target survives even if the synchronous launch times out and the
+    # late command-result reconciliation never arrives. (The resolver itself is
+    # read-only; recording belongs here at the explicit write boundary.)
+    if thread_path:
+        record_thread_alias(
+            db,
+            thread=thread,
+            provider=provider,
+            alias_kind="source_path",
+            alias_value=thread_path,
+        )
 
     existing = (
         db.query(SessionLaunchAttempt)

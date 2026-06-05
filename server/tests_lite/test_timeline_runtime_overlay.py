@@ -34,7 +34,7 @@ from zerg.services.agents_store import SessionIngest
 from zerg.services.session_observations import OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
-from zerg.services.session_views import _latest_source_line_path_for_native_continue
+from zerg.services.session_continue_targets import _bounded_source_path
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.timeline_session_listing import build_timeline_cards_from_thread_rows
 from zerg.services.timeline_session_listing import list_timeline_sessions_for_browser
@@ -652,7 +652,7 @@ def test_native_continue_source_line_fallback_uses_session_only_lookup(tmp_path)
         bind = db.get_bind()
         sqlalchemy_event.listen(bind, "before_cursor_execute", _collect_statement)
         try:
-            source_path = _latest_source_line_path_for_native_continue(db, session_id=session.id)
+            source_path = _bounded_source_path(db, session_id=session.id)
         finally:
             sqlalchemy_event.remove(bind, "before_cursor_execute", _collect_statement)
     finally:

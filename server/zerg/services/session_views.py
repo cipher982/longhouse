@@ -24,28 +24,24 @@ from sqlalchemy import and_
 
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
-from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionLaunchAttempt
-from zerg.models.agents import SessionThread
-from zerg.models.agents import SessionThreadAlias
 from zerg.models.agents import SessionTurn
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
-from zerg.services.agents.kernel_capabilities import thread_ever_had_managed_control
 from zerg.services.agents_store import AgentsStore
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.managed_control_state import CONTROL_SOURCE_LEGACY_RUNNER
 from zerg.services.managed_control_state import engine_channel_control_overlay
 from zerg.services.managed_control_state import live_transport_control_overlay
 from zerg.services.managed_local_transport import build_managed_local_attach_command
-from zerg.services.managed_provider_contracts import continue_supported_providers
 from zerg.services.managed_provider_contracts import trusted_non_runner_control_planes
 from zerg.services.provisional_events import TranscriptPreview
 from zerg.services.send_affordance import OFFLINE_HOST_STATES
 from zerg.services.send_affordance import SendDisabledReason
 from zerg.services.send_affordance import project_send_affordance
 from zerg.services.session_capabilities import build_session_capability_display
+from zerg.services.session_continue_targets import resolve_native_continue_target
 from zerg.services.session_current_control import engine_control_online
 from zerg.services.session_current_control import engine_session_control_attached
 from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
@@ -230,63 +226,8 @@ def _attach_images_capability(capability_flags, *, live_control_available: bool 
 
 
 def _native_continue_target(db, session: AgentSession) -> SessionContinueTarget | None:
-    provider = (session.provider or "").strip().lower()
-    if provider not in continue_supported_providers():
-        return None
-    thread = (
-        db.query(SessionThread)
-        .filter(SessionThread.session_id == session.id, SessionThread.is_primary == 1)
-        .order_by(SessionThread.created_at.asc(), SessionThread.id.asc())
-        .first()
-    )
-    if thread is None:
-        return None
-
-    provider_thread_id = (
-        db.query(SessionThreadAlias.alias_value)
-        .filter(SessionThreadAlias.thread_id == thread.id)
-        .filter(SessionThreadAlias.provider == session.provider)
-        .filter(SessionThreadAlias.alias_kind == "provider_session_id")
-        .order_by(SessionThreadAlias.last_seen_at.desc(), SessionThreadAlias.id.desc())
-        .limit(1)
-        .scalar()
-    )
-    provider_thread_id = str(provider_thread_id).strip() if provider_thread_id else ""
-
-    if provider == "claude":
-        # Claude resumes by id alone (`claude --resume <id>`), and a managed
-        # launch pins that id to the longhouse session id. Only offer continue
-        # if this session was actually managed by Longhouse — proven by a
-        # control-acquisition connection, not by an alias that backfill can
-        # synthesize. Imported/unmanaged bare-CLI claude has no such connection,
-        # and `claude --resume <our-id>` would target a non-existent transcript.
-        if not thread_ever_had_managed_control(db, thread_id=thread.id):
-            return None
-        return SessionContinueTarget(
-            provider=session.provider,
-            device_id=session.device_id,
-            cwd=session.cwd,
-            carry_context="native",
-            native_resume_available=True,
-        )
-
-    # codex: requires a real provider thread id (distinct from the longhouse id)
-    # plus a local transcript path to resume against.
-    if not provider_thread_id or provider_thread_id == str(session.id):
-        return None
-    source_path = (
-        db.query(SessionThreadAlias.alias_value)
-        .filter(SessionThreadAlias.thread_id == thread.id)
-        .filter(SessionThreadAlias.provider == session.provider)
-        .filter(SessionThreadAlias.alias_kind == "source_path")
-        .order_by(SessionThreadAlias.last_seen_at.desc(), SessionThreadAlias.id.desc())
-        .limit(1)
-        .scalar()
-    )
-    if not source_path:
-        source_path = _latest_source_line_path_for_native_continue(db, session_id=session.id)
-    source_path = str(source_path).strip() if source_path else ""
-    if not source_path:
+    resolution = resolve_native_continue_target(db, session)
+    if resolution is None:
         return None
     return SessionContinueTarget(
         provider=session.provider,
@@ -294,24 +235,7 @@ def _native_continue_target(db, session: AgentSession) -> SessionContinueTarget 
         cwd=session.cwd,
         carry_context="native",
         native_resume_available=True,
-    )
-
-
-def _latest_source_line_path_for_native_continue(db, *, session_id) -> str | None:
-    """Find source evidence without touching ``thread_id`` on the hot path.
-
-    Hosted tenant DBs can have millions of source lines. A single
-    ``thread_id = ? OR thread_id IS NULL`` predicate has been observed to choose
-    a full-table OR plan and block timeline cards. Native continue only needs
-    evidence that the session has a local source transcript, so keep the fallback
-    bounded to the existing source_lines session index.
-    """
-    return (
-        db.query(AgentSourceLine.source_path)
-        .filter(AgentSourceLine.session_id == session_id)
-        .order_by(AgentSourceLine.id.desc())
-        .limit(1)
-        .scalar()
+        adoption_mode=resolution.adoption_mode,
     )
 
 
@@ -566,6 +490,14 @@ class SessionContinueTarget(BaseModel):
     cwd: str | None = Field(None, description="Recorded working directory for the session")
     carry_context: Literal["native"] = Field("native", description="Continuation context strategy")
     native_resume_available: bool = Field(True, description="True when provider-native resume data exists")
+    adoption_mode: Literal["managed_resume", "adopt_unmanaged"] = Field(
+        "managed_resume",
+        description=(
+            "managed_resume: re-launch an already-managed session. "
+            "adopt_unmanaged: explicitly bring an imported/raw transcript under "
+            "Longhouse management by launching a fresh managed process."
+        ),
+    )
 
 
 class SessionCapabilitiesResponse(BaseModel):
