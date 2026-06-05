@@ -30,6 +30,7 @@ RemoteLaunchErrorCode = Literal[
     "cwd_not_found",
     "machine_offline",
     "provider_launch_failed",
+    "transcript_not_found",
     "launch_timeout",
 ]
 KNOWN_REMOTE_LAUNCH_ERROR_CODES = frozenset(get_args(RemoteLaunchErrorCode))
@@ -41,6 +42,7 @@ REMOTE_LAUNCH_ERROR_TITLES: dict[RemoteLaunchErrorCode, str] = {
     "cwd_not_found": "Check the workspace path",
     "machine_offline": "Machine is offline",
     "provider_launch_failed": "Provider failed to start",
+    "transcript_not_found": "Transcript no longer exists on this machine",
     "launch_timeout": "Launch timed out",
 }
 
