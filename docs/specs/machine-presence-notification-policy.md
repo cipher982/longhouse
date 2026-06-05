@@ -78,6 +78,8 @@ Why:
 Policy:
 
 - fresh active evidence on any owned machine suppresses ready nudges;
+- recently active machine evidence may suppress for a short grace window so a
+  single missed presence post does not immediately lower thresholds;
 - fresh visible web-client presence also suppresses ready nudges;
 - away evidence requires at least one fresh machine presence signal and no fresh
   active/visible signal;
@@ -192,6 +194,7 @@ device token, not an arbitrary client-supplied value.
 Initial constants:
 
 - `MACHINE_PRESENCE_FRESHNESS = 90s`
+- `MACHINE_ACTIVE_SUPPRESSION_GRACE = 3m`
 - `LONG_RUN_WAITING_THRESHOLD_UNKNOWN = 30m`
 - `LONG_RUN_WAITING_THRESHOLD_IDLE_10M = 15m`
 - `LONG_RUN_WAITING_THRESHOLD_LOCKED = 10m`
@@ -203,6 +206,7 @@ Owner presence resolution:
 | --- | --- |
 | visible web client | suppress |
 | any machine `active` | suppress |
+| any machine recently `active` within grace window | suppress |
 | any machine `locked`, no active/visible signal | threshold 10m |
 | all fresh machines at least `idle_10m`, no active/visible signal | threshold 15m |
 | only `idle_5m`, no active/visible signal | threshold 30m |

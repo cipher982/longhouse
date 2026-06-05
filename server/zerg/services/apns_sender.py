@@ -42,6 +42,7 @@ LONG_RUN_WAITING_IDLE_10M_THRESHOLD = timedelta(minutes=15)
 LONG_RUN_WAITING_LOCKED_THRESHOLD = timedelta(minutes=10)
 LONG_RUN_WAITING_MIN_MEANINGFUL_RUN = timedelta(minutes=5)
 MACHINE_PRESENCE_FRESHNESS_WINDOW = timedelta(seconds=90)
+MACHINE_ACTIVE_SUPPRESSION_GRACE_WINDOW = timedelta(minutes=3)
 WEB_CLIENT_PRESENCE_SUPPRESSION_WINDOW = timedelta(seconds=90)
 WIDGET_PUSH_DEBOUNCE = timedelta(seconds=30)
 WIDGET_PUSH_PLATFORM = "ios_widget"
@@ -530,15 +531,21 @@ def _recent_visible_web_client_exists(db: Session, *, owner_id: int, occurred_at
     )
 
 
-def _recent_machine_presence_rows(db: Session, *, owner_id: int, occurred_at: datetime) -> list[MachinePresence]:
-    threshold = occurred_at - MACHINE_PRESENCE_FRESHNESS_WINDOW
+def _machine_presence_rows_since(
+    db: Session,
+    *,
+    owner_id: int,
+    occurred_at: datetime,
+    window: timedelta,
+) -> list[MachinePresence]:
+    threshold = occurred_at - window
     rows = db.query(MachinePresence).filter(MachinePresence.owner_id == owner_id).all()
-    fresh_rows: list[MachinePresence] = []
+    recent_rows: list[MachinePresence] = []
     for row in rows:
         received_at = _as_aware_utc(row.received_at)
         if received_at is not None and received_at >= threshold:
-            fresh_rows.append(row)
-    return fresh_rows
+            recent_rows.append(row)
+    return recent_rows
 
 
 def _long_run_waiting_threshold_for_owner(
@@ -550,10 +557,23 @@ def _long_run_waiting_threshold_for_owner(
     if _recent_visible_web_client_exists(db, owner_id=owner_id, occurred_at=occurred_at):
         return None
 
-    rows = _recent_machine_presence_rows(db, owner_id=owner_id, occurred_at=occurred_at)
-    states = {str(row.state or "").strip() for row in rows}
-    if "active" in states:
+    active_grace_rows = _machine_presence_rows_since(
+        db,
+        owner_id=owner_id,
+        occurred_at=occurred_at,
+        window=MACHINE_ACTIVE_SUPPRESSION_GRACE_WINDOW,
+    )
+    active_grace_states = {str(row.state or "").strip() for row in active_grace_rows}
+    if "active" in active_grace_states:
         return None
+
+    rows = _machine_presence_rows_since(
+        db,
+        owner_id=owner_id,
+        occurred_at=occurred_at,
+        window=MACHINE_PRESENCE_FRESHNESS_WINDOW,
+    )
+    states = {str(row.state or "").strip() for row in rows}
     if "locked" in states:
         return LONG_RUN_WAITING_LOCKED_THRESHOLD
     if states and states.issubset({"idle_10m"}):

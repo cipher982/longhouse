@@ -1136,6 +1136,46 @@ def test_long_run_waiting_any_active_machine_presence_wins(tmp_path):
     engine.dispose()
 
 
+def test_long_run_waiting_recent_active_machine_grace_wins(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+    occurred_at = t0 + timedelta(minutes=16)
+    _seed_long_run_waiting_policy_case(
+        SessionLocal,
+        session_id=session_id,
+        started_at=t0,
+        machine_presence=[
+            ("desktop", "idle_10m", occurred_at - timedelta(seconds=10)),
+            ("laptop", "active", occurred_at - timedelta(minutes=2)),
+        ],
+    )
+
+    assert _prepare_policy_long_run_push(SessionLocal, session_id=session_id, occurred_at=occurred_at) is None
+
+    engine.dispose()
+
+
+def test_long_run_waiting_mixed_idle_5m_keeps_default_threshold(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+    occurred_at = t0 + timedelta(minutes=16)
+    _seed_long_run_waiting_policy_case(
+        SessionLocal,
+        session_id=session_id,
+        started_at=t0,
+        machine_presence=[
+            ("desktop", "idle_10m", occurred_at - timedelta(seconds=10)),
+            ("laptop", "idle_5m", occurred_at - timedelta(seconds=10)),
+        ],
+    )
+
+    assert _prepare_policy_long_run_push(SessionLocal, session_id=session_id, occurred_at=occurred_at) is None
+
+    engine.dispose()
+
+
 def test_presence_long_run_waiting_preserves_through_idle_blip(tmp_path):
     engine, SessionLocal = _make_db(tmp_path)
     session_id = str(uuid4())
