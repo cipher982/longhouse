@@ -1,6 +1,6 @@
 # Reliability Data Plane
 
-**Status:** Phase 6 read cutover in progress; backup gate satisfied for additive read-only export
+**Status:** Phase 7 archive-primary writes complete; Phase 8 decommission plan pending
 **Owner:** Longhouse core
 **Created:** 2026-06-05
 **Branch:** `epic/reliability-data-plane`
@@ -264,6 +264,18 @@ Chunk format v1:
   "raw_b64": "..."
 }
 ```
+
+`stream` is the logical raw source stream. Phase 7 writes:
+
+- `source_lines`: raw provider transcript/source lines, usually keyed by
+  `source_path` and `source_offset`;
+- `events`: raw provider event payloads, including events with no source file
+  coordinates.
+
+`events.legacy_ref` has a union shape. Legacy-exported event rows may use
+`{table, rowid, event_hash, event_uuid}` while live archive-primary event rows
+use `{source, event_key, role, timestamp, tool_call_id, source_path,
+source_offset}`. Event-stream consumers must tolerate both shapes.
 
 Use `jsonl.zst` for v1. Store raw bytes exactly via base64 unless a provider
 format is proven text-only and byte-equivalent. Compression should offset much
@@ -730,6 +742,8 @@ Goal: reclaim old monolith storage only after explicit approval.
 Scope:
 
 - clean rebuild plan for hot/derived from archive;
+- event-stream replay/reader that handles both legacy-exported and live
+  archive-primary `events.legacy_ref` shapes;
 - restore drill on a clean machine or volume;
 - old DB retention/deletion plan.
 
@@ -742,6 +756,7 @@ Acceptance:
 Tests:
 
 - restore from archive to clean stores;
+- event-stream replay for legacy-exported and live archive-primary records;
 - smoke timeline/search/detail/control on restored data.
 
 Review gate: maintainer approval plus Hatch Opus review.

@@ -3,7 +3,7 @@
 Due: none
 Area: longhouse
 Workspace: /Users/davidrose/git/_wt/longhouse-reliability-data-plane
-Status: Phase 6 read cutover in progress
+Status: Phase 7 archive-primary writes complete; Phase 8 decommission plan pending
 
 This task file tracks the SDP-1 epic for separating hot product/control state
 from raw archive and derived search/detail state.
@@ -77,13 +77,14 @@ Spec: `docs/specs/reliability-data-plane.md`
 
 ## Phase 7: Archive-Primary Writes
 
-- [ ] Make archive primary for new raw data behind a flag.
-- [ ] Keep legacy raw fallback.
-- [ ] Add rollback tests and runbook.
+- [x] Make archive primary for new raw data behind a flag.
+- [x] Keep legacy raw fallback.
+- [x] Add rollback tests and runbook.
 
 ## Phase 8: Decommission Plan
 
 - [ ] Restore from archive to clean stores.
+- [ ] Add event-stream replay for legacy-exported and live archive-primary records.
 - [ ] Smoke timeline/search/detail/control on restored data.
 - [ ] Draft old DB retention/reclaim plan.
 - [ ] Require explicit maintainer approval before deletion or compaction.
