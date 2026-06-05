@@ -72,7 +72,7 @@ Spec: `docs/specs/reliability-data-plane.md`
 - [ ] Move timeline list to hot cards.
 - [ ] Keep control/health/launch independent of derived/archive.
 - [ ] Materialize native/imported pending-response turn state off request paths before relying on syncing labels.
-- [ ] Add tests proving hot endpoints work with derived DB locked/missing.
+- [x] Add tests proving hot endpoints work with derived DB locked/missing.
 - [x] Add tests proving hot endpoints do not query legacy cold tables.
 
 ## Phase 7: Archive-Primary Writes

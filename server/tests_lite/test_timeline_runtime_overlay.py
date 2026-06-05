@@ -674,9 +674,15 @@ def test_native_continue_source_line_fallback_uses_session_only_lookup(tmp_path)
     assert "thread_id" not in source_statements
 
 
-def test_no_query_session_lists_do_not_touch_cold_archive_tables(tmp_path):
+def test_no_query_session_lists_do_not_touch_cold_archive_tables(tmp_path, monkeypatch):
     factory = _make_db(tmp_path, "hot_list_cold_table_guard.db")
     now = datetime.now(timezone.utc)
+
+    def _store_unavailable(*_args, **_kwargs):
+        raise RuntimeError("cold store unavailable")
+
+    monkeypatch.setattr("zerg.data_plane.create_derived_store", _store_unavailable)
+    monkeypatch.setattr("zerg.data_plane.create_archive_store", _store_unavailable)
 
     db = factory()
     try:
