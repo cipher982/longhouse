@@ -60,11 +60,11 @@ Spec: `docs/specs/reliability-data-plane.md`
 ## Phase 5: Backup Gate and Legacy Exporter
 
 - [x] Satisfy backup gate and record validation evidence in the spec.
-- [ ] Add read-only resumable legacy exporter.
-- [ ] Add export ledger.
-- [ ] Add low-disk pause.
-- [ ] Add corruption quarantine.
-- [ ] Add interrupted export and low-disk tests.
+- [x] Add read-only resumable legacy exporter.
+- [x] Add export ledger.
+- [x] Add low-disk pause.
+- [x] Add corruption quarantine.
+- [x] Add interrupted export and low-disk tests.
 
 ## Phase 6: Read Cutover
 

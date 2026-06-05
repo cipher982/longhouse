@@ -310,7 +310,8 @@ class AgentSession(AgentsBase):
             )
             if run is None:
                 return None
-            conn = sess.query(SessionConnection).filter(SessionConnection.run_id == run.id).order_by(SessionConnection.id.desc()).first()
+            conn_query = sess.query(SessionConnection).filter(SessionConnection.run_id == run.id)
+            conn = conn_query.order_by(SessionConnection.id.desc()).first()
             if conn is None:
                 return None
             mapping = {
@@ -554,7 +555,8 @@ class AgentEvent(AgentsBase):
     raw_json = Column(Text, nullable=True)
     raw_json_z = Column(LargeBinary, nullable=True)
     raw_json_codec = Column(Integer, nullable=False, server_default=text("0"))
-    event_uuid = Column(String(255), nullable=True, index=True)  # Raw line uuid (Claude/Codex/Antigravity/Gemini event id)
+    # Raw line uuid from Claude/Codex/Antigravity/Gemini event streams.
+    event_uuid = Column(String(255), nullable=True, index=True)
     parent_event_uuid = Column(String(255), nullable=True, index=True)  # Raw parent linkage id (Claude parentUuid)
     event_origin = Column(String(32), nullable=False, server_default=text("'durable'"), index=True)
     provisional_state = Column(String(32), nullable=True, index=True)
@@ -751,6 +753,33 @@ class ArchiveExportCheckpoint(AgentsBase):
             name="uq_archive_export_checkpoint_scope",
         ),
         Index("ix_archive_export_checkpoints_status_updated", "status", "updated_at"),
+    )
+
+
+class ArchiveExportQuarantine(AgentsBase):
+    """Corrupt legacy raw row recorded during archive export."""
+
+    __tablename__ = "archive_export_quarantine"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    exporter_name = Column(String(128), nullable=False)
+    tenant_id = Column(String(255), nullable=True)
+    source_table = Column(String(64), nullable=False)
+    rowid = Column(BigInteger, nullable=False)
+    session_id = Column(GUID(), nullable=True, index=True)
+    error = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "exporter_name",
+            "tenant_id",
+            "source_table",
+            "rowid",
+            name="uq_archive_export_quarantine_row",
+        ),
+        Index("ix_archive_export_quarantine_session", "session_id", "source_table"),
     )
 
 
@@ -1544,7 +1573,8 @@ def _seed_legacy_attrs_on_load(target, _context):
         )
         if run is None:
             return
-        conn = sess.query(SessionConnection).filter(SessionConnection.run_id == run.id).order_by(SessionConnection.id.desc()).first()
+        conn_query = sess.query(SessionConnection).filter(SessionConnection.run_id == run.id)
+        conn = conn_query.order_by(SessionConnection.id.desc()).first()
         if conn is None:
             return
         derived = _CONTROL_PLANE_TO_TRANSPORT.get((conn.control_plane or "").strip())
