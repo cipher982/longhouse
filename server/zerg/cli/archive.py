@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import asdict
 from datetime import UTC
 from datetime import datetime
 from pathlib import Path
@@ -11,12 +12,14 @@ from typing import Any
 
 import typer
 
+from zerg.config import get_settings
 from zerg.services.archive_backlog import collect_archive_backlog
 from zerg.services.archive_backlog import dead_letter_archive_path
 from zerg.services.archive_backlog import inspect_archive_backlog
 from zerg.services.archive_backlog import parse_byte_budget
 from zerg.services.archive_backlog import ready_archive_backlog
 from zerg.services.archive_backlog import write_archive_control
+from zerg.services.archive_store import FilesystemArchiveStore
 
 app = typer.Typer(help="Inspect and control local archive backlog repair")
 
@@ -424,3 +427,77 @@ def dead_letter_command(
 
     changed = dead_letter_archive_path(state_root, file_path=file_path, reason=reason)
     typer.echo(f"Dead-lettered {changed} pending archive range(s).")
+
+
+@app.command("export-legacy")
+def export_legacy_command(
+    session_id: str = typer.Option(..., "--session-id", help="Session UUID to export."),
+    source_table: str = typer.Option(
+        "source_lines",
+        "--source-table",
+        help="Legacy raw table: source_lines or events.",
+    ),
+    disk_floor: str = typer.Option(..., "--disk-floor", help="Required free-space floor, e.g. 30gb."),
+    database_url: str | None = typer.Option(None, "--database-url", help="SQLite DATABASE_URL override."),
+    archive_root: Path | None = typer.Option(None, "--archive-root", help="Archive root override."),
+    tenant_id: str | None = typer.Option(None, "--tenant-id", help="Archive tenant id override."),
+    batch_size: int = typer.Option(500, "--batch-size", min=1, help="Maximum legacy rows to read."),
+    chunk_target: str = typer.Option("8mb", "--chunk-target", help="Target uncompressed archive chunk size."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Decode and count rows without archive/checkpoint writes."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """Export one read-only legacy raw batch into the archive."""
+
+    normalized_table = source_table.strip().lower()
+    if normalized_table not in {"source_lines", "events"}:
+        raise typer.BadParameter("--source-table must be source_lines or events")
+    disk_floor_bytes = parse_byte_budget(disk_floor)
+    if disk_floor_bytes is None or disk_floor_bytes <= 0:
+        raise typer.BadParameter("--disk-floor must be greater than zero")
+    chunk_target_bytes = parse_byte_budget(chunk_target)
+    if chunk_target_bytes is None or chunk_target_bytes <= 0:
+        raise typer.BadParameter("--chunk-target must be greater than zero")
+
+    settings = get_settings()
+    effective_database_url = database_url or settings.database_url
+    effective_tenant_id = tenant_id or settings.archive_shadow_tenant_id
+    effective_archive_root = archive_root or Path(settings.archive_root)
+
+    from zerg.database import make_engine
+    from zerg.database import make_sessionmaker
+    from zerg.services.legacy_archive_exporter import export_legacy_raw_archive_batch
+
+    engine = make_engine(effective_database_url)
+    SessionLocal = make_sessionmaker(engine)
+    archive_store = FilesystemArchiveStore(effective_archive_root)
+    try:
+        with SessionLocal() as db:
+            result = export_legacy_raw_archive_batch(
+                db,
+                archive_store=archive_store,
+                tenant_id=effective_tenant_id,
+                source_table=normalized_table,  # type: ignore[arg-type]
+                session_id=session_id,
+                batch_size=batch_size,
+                chunk_target_uncompressed_bytes=chunk_target_bytes,
+                disk_floor_bytes=disk_floor_bytes,
+                dry_run=dry_run,
+            )
+            if not dry_run:
+                db.commit()
+    finally:
+        engine.dispose()
+
+    payload = asdict(result)
+    payload["session_id"] = str(result.session_id)
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+
+    status = "paused" if result.paused else "ok"
+    typer.echo(
+        f"{status}: {result.source_table} session={result.session_id} "
+        f"selected={result.selected_rows} exported={result.rows_exported} "
+        f"skipped_no_raw={result.rows_skipped_no_raw} quarantined={result.rows_quarantined} "
+        f"chunks={result.chunks_written} last_rowid={result.last_rowid}"
+    )
