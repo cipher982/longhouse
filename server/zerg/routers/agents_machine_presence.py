@@ -18,12 +18,31 @@ from zerg.database import get_db
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.device_token import DeviceToken
 from zerg.models.machine_presence import MachinePresence
+from zerg.services.session_chat_impl import _resolve_agents_owner_id
 from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.time import UTCBaseModel
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
 MachinePresenceState = Literal["active", "idle_5m", "idle_10m", "locked", "unknown"]
+
+
+def _bucket_state_from_idle_seconds(idle_seconds: int) -> MachinePresenceState:
+    if idle_seconds >= 10 * 60:
+        return "idle_10m"
+    if idle_seconds >= 5 * 60:
+        return "idle_5m"
+    return "active"
+
+
+def _coarse_idle_seconds(state: MachinePresenceState) -> int | None:
+    if state == "active":
+        return 0
+    if state == "idle_5m":
+        return 5 * 60
+    if state == "idle_10m":
+        return 10 * 60
+    return None
 
 
 class MachinePresenceIn(UTCBaseModel):
@@ -54,7 +73,7 @@ async def update_machine_presence(
     db: Session = Depends(get_db),
     token: DeviceToken | None = Depends(verify_agents_token),
 ) -> MachinePresenceResponse:
-    if not isinstance(token, DeviceToken):
+    if token is not None and not isinstance(token, DeviceToken):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Machine presence requires a device token",
@@ -62,8 +81,14 @@ async def update_machine_presence(
 
     now = datetime.now(timezone.utc)
     measured_at = (payload.measured_at or now).astimezone(timezone.utc)
-    owner_id = int(token.owner_id)
-    device_id = str(token.device_id or f"device:{token.id}")[:255]
+    owner_id = _resolve_agents_owner_id(db, token)
+    device_id = (str(token.device_id or f"device:{token.id}") if isinstance(token, DeviceToken) else "auth-disabled-local")[:255]
+    state: MachinePresenceState = (
+        _bucket_state_from_idle_seconds(payload.idle_seconds)
+        if payload.idle_seconds is not None and payload.state != "locked"
+        else payload.state
+    )
+    coarse_idle_seconds = _coarse_idle_seconds(state)
 
     def _write(write_db: Session) -> MachinePresenceResponse:
         row = (
@@ -78,26 +103,26 @@ async def update_machine_presence(
             row = MachinePresence(
                 owner_id=owner_id,
                 device_id=device_id,
-                state=payload.state,
+                state=state,
                 source=payload.source,
-                idle_seconds=payload.idle_seconds,
+                idle_seconds=coarse_idle_seconds,
                 measured_at=measured_at,
                 received_at=now,
             )
             write_db.add(row)
         else:
-            row.state = payload.state
+            row.state = state
             row.source = payload.source
-            row.idle_seconds = payload.idle_seconds
+            row.idle_seconds = coarse_idle_seconds
             row.measured_at = measured_at
             row.received_at = now
 
         return MachinePresenceResponse(
             owner_id=owner_id,
             device_id=device_id,
-            state=payload.state,
+            state=state,
             source=payload.source,
-            idle_seconds=payload.idle_seconds,
+            idle_seconds=coarse_idle_seconds,
             measured_at=measured_at,
             received_at=now,
         )

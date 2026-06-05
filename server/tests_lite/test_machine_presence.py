@@ -72,7 +72,7 @@ def test_machine_presence_upserts_device_token_owned_state(tmp_path):
         assert first_body["device_id"] == "work-macbook"
         assert first_body["state"] == "idle_5m"
         assert first_body["source"] == "macos_hid_idle"
-        assert first_body["idle_seconds"] == 360
+        assert first_body["idle_seconds"] == 300
 
         second = client.post(
             "/agents/machine-presence",
@@ -95,7 +95,7 @@ def test_machine_presence_upserts_device_token_owned_state(tmp_path):
         assert row.device_id == "work-macbook"
         assert row.state == "active"
         assert row.source == "macos_hid_idle"
-        assert row.idle_seconds == 3
+        assert row.idle_seconds == 0
 
     _cleanup_overrides()
     engine.dispose()
@@ -131,6 +131,67 @@ def test_machine_presence_rejects_invalid_state_and_idle_range(tmp_path):
             headers={"X-Agents-Token": "zdt_test"},
         )
         assert bad_idle.status_code == 422
+
+    _cleanup_overrides()
+    engine.dispose()
+
+
+def test_machine_presence_rebuckets_idle_seconds_server_side(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "machine_presence_rebucket.db")
+    with SessionLocal() as db:
+        db.add(User(id=1, email="user@example.com", role="ADMIN"))
+        db.commit()
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = lambda: _device_token()
+
+    with TestClient(api_app) as client:
+        response = client.post(
+            "/agents/machine-presence",
+            json={"state": "active", "source": "macos_hid_idle", "idle_seconds": 999},
+            headers={"X-Agents-Token": "zdt_test"},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["state"] == "idle_10m"
+        assert body["idle_seconds"] == 600
+
+    _cleanup_overrides()
+    engine.dispose()
+
+
+def test_machine_presence_auth_disabled_uses_single_tenant_owner(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "machine_presence_auth_disabled.db")
+    with SessionLocal() as db:
+        db.add(User(id=7, email="user@example.com", role="ADMIN"))
+        db.commit()
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = lambda: None
+
+    with TestClient(api_app) as client:
+        response = client.post(
+            "/agents/machine-presence",
+            json={"state": "active", "source": "macos_hid_idle", "idle_seconds": 2},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["owner_id"] == 7
+        assert body["device_id"] == "auth-disabled-local"
 
     _cleanup_overrides()
     engine.dispose()
