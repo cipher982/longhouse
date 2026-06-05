@@ -658,6 +658,97 @@ class AgentSourceLine(AgentsBase):
     )
 
 
+class ArchiveChunk(AgentsBase):
+    """Sealed raw archive chunk manifest row.
+
+    The filesystem/object store owns bytes; this table records the append-only
+    sealed chunk metadata that projectors and exporters can checkpoint against.
+    ``session_id`` is intentionally not a cascading FK: archive metadata should
+    survive hot session-row churn until an explicit decommission step.
+    """
+
+    __tablename__ = "archive_chunks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    tenant_id = Column(String(255), nullable=True, index=True)
+    session_id = Column(GUID(), nullable=False, index=True)
+    stream = Column(String(64), nullable=False, index=True)
+    relative_path = Column(Text, nullable=False, unique=True)
+    first_source_seq = Column(BigInteger, nullable=False)
+    last_source_seq = Column(BigInteger, nullable=False)
+    record_count = Column(Integer, nullable=False)
+    uncompressed_bytes = Column(BigInteger, nullable=False)
+    compressed_bytes = Column(BigInteger, nullable=False)
+    payload_sha256 = Column(String(64), nullable=False)
+    file_sha256 = Column(String(64), nullable=False)
+    state = Column(String(32), nullable=False, server_default=text("'sealed'"))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    sealed_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_archive_chunks_session_stream_seq", "session_id", "stream", "first_source_seq"),
+        Index("ix_archive_chunks_state_created", "state", "created_at"),
+    )
+
+
+class ArchiveExportCheckpoint(AgentsBase):
+    """Resumable legacy-export checkpoint for raw archive migration."""
+
+    __tablename__ = "archive_export_checkpoints"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    exporter_name = Column(String(128), nullable=False)
+    tenant_id = Column(String(255), nullable=True)
+    source_table = Column(String(64), nullable=False)
+    session_id = Column(GUID(), nullable=True, index=True)
+    last_rowid = Column(BigInteger, nullable=False, server_default=text("0"))
+    last_source_seq = Column(BigInteger, nullable=False, server_default=text("0"))
+    status = Column(String(32), nullable=False, server_default=text("'idle'"))
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "exporter_name",
+            "tenant_id",
+            "source_table",
+            "session_id",
+            name="uq_archive_export_checkpoint_scope",
+        ),
+        Index("ix_archive_export_checkpoints_status_updated", "status", "updated_at"),
+    )
+
+
+class ProjectorCheckpoint(AgentsBase):
+    """Per-projector checkpoint into sealed archive chunks."""
+
+    __tablename__ = "projector_checkpoints"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    projector_name = Column(String(128), nullable=False)
+    parser_revision = Column(String(128), nullable=False)
+    session_id = Column(GUID(), nullable=False, index=True)
+    chunk_id = Column(Integer, nullable=True, index=True)
+    chunk_payload_sha256 = Column(String(64), nullable=True)
+    last_record_ordinal = Column(Integer, nullable=False, server_default=text("0"))
+    status = Column(String(32), nullable=False, server_default=text("'idle'"))
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "projector_name",
+            "parser_revision",
+            "session_id",
+            "chunk_id",
+            name="uq_projector_checkpoint_position",
+        ),
+        Index("ix_projector_checkpoints_status_updated", "status", "updated_at"),
+    )
+
+
 class SessionObservation(AgentsBase):
     """Append-only raw observation bus for session-related facts.
 

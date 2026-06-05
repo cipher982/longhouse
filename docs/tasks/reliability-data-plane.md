@@ -35,12 +35,12 @@ Spec: `docs/specs/reliability-data-plane.md`
 
 ## Phase 2: Filesystem Archive Store
 
-- [ ] Add `ArchiveStore` interface.
-- [ ] Add `FilesystemArchiveStore`.
-- [ ] Add chunk writer/reader/verifier.
-- [ ] Add orphan recovery.
-- [ ] Add archive manifest/checkpoint models.
-- [ ] Add raw-byte, zstd, checksum, corruption, and recovery tests.
+- [x] Add `ArchiveStore` interface.
+- [x] Add `FilesystemArchiveStore`.
+- [x] Add chunk writer/reader/verifier.
+- [x] Add orphan recovery.
+- [x] Add archive manifest/checkpoint models.
+- [x] Add raw-byte, zstd, checksum, corruption, and recovery tests.
 
 ## Phase 3: Hot and Derived Store Skeletons
 
