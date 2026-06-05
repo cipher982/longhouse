@@ -119,10 +119,18 @@ def project_archive_chunks_to_hot_cards(
             chunks_failed += len(selected_for_session)
             continue
 
-        all_session_chunks = _load_session_archive_chunks(db, session_id=session_id)
+        chunks_to_checkpoint = selected_for_session
         try:
-            records = _read_records_for_chunks(archive_store, all_session_chunks)
-            projection = build_hot_card_projection(records)
+            selected_records = _read_records_for_chunks(archive_store, selected_for_session)
+            projection = build_hot_card_projection(selected_records)
+            if projection.has_full_coverage and projection.events_projected > 0:
+                all_session_chunks = _load_session_archive_chunks(db, session_id=session_id)
+                selected_chunk_ids = {int(chunk.id) for chunk in selected_for_session}
+                all_chunk_ids = {int(chunk.id) for chunk in all_session_chunks}
+                chunks_to_checkpoint = all_session_chunks
+                if selected_chunk_ids != all_chunk_ids:
+                    records = _read_records_for_chunks(archive_store, all_session_chunks)
+                    projection = build_hot_card_projection(records)
         except Exception as exc:
             logger.warning("Hot-card archive projection failed for session %s: %s", session_id, exc, exc_info=True)
             for chunk in selected_for_session:
@@ -157,7 +165,7 @@ def project_archive_chunks_to_hot_cards(
         else:
             sessions_partial += 1
 
-        for chunk in selected_for_session:
+        for chunk in chunks_to_checkpoint:
             _upsert_projector_checkpoint(
                 db,
                 chunk=chunk,
@@ -165,7 +173,7 @@ def project_archive_chunks_to_hot_cards(
                 status=status,
                 error=None,
             )
-        checkpoints_written += len(selected_for_session)
+        checkpoints_written += len(chunks_to_checkpoint)
 
     db.flush()
     return ArchiveHotProjectorResult(

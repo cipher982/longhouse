@@ -101,8 +101,15 @@ def project_archive_chunks_to_derived_events(
                 chunk=chunk,
                 parser_revision=parser_revision,
             )
-            insert_derived_events(derived_db, events)
+            replace_derived_events_for_chunk(
+                derived_db,
+                chunk_id=int(chunk.id),
+                parser_revision=parser_revision,
+                events=events,
+            )
+            derived_db.commit()
         except Exception as exc:
+            derived_db.rollback()
             logger.warning("Derived archive projection failed for chunk %s: %s", chunk.id, exc, exc_info=True)
             _upsert_projector_checkpoint(
                 manifest_db,
@@ -133,7 +140,6 @@ def project_archive_chunks_to_derived_events(
         checkpoints_written += 1
 
     manifest_db.flush()
-    derived_db.flush()
     return ArchiveDerivedProjectorResult(
         selected_chunks=len(pending_chunks),
         chunks_projected=chunks_projected,
@@ -186,6 +192,55 @@ def parse_archive_records_to_derived_events(
             unsupported_records += 1
         events.extend(parsed)
     return events, unsupported_records
+
+
+def replace_derived_events_for_chunk(
+    db: Session,
+    *,
+    chunk_id: int,
+    parser_revision: str,
+    events: Iterable[DerivedArchiveEvent],
+) -> int:
+    """Idempotently replace one chunk/parser projection in derived.db.
+
+    The manifest checkpoint lives in a separate database, so reruns must repair
+    a crash after derived rows commit but before the manifest checkpoint does.
+    """
+    existing_row_ids = db.execute(
+        text(
+            """
+            SELECT id FROM derived_events
+            WHERE archive_chunk_id = :chunk_id
+              AND parser_revision = :parser_revision
+            """
+        ),
+        {"chunk_id": chunk_id, "parser_revision": parser_revision},
+    ).fetchall()
+    if existing_row_ids:
+        db.execute(
+            text(
+                """
+                DELETE FROM derived_events_fts
+                WHERE rowid IN (
+                    SELECT id FROM derived_events
+                    WHERE archive_chunk_id = :chunk_id
+                      AND parser_revision = :parser_revision
+                )
+                """
+            ),
+            {"chunk_id": chunk_id, "parser_revision": parser_revision},
+        )
+        db.execute(
+            text(
+                """
+                DELETE FROM derived_events
+                WHERE archive_chunk_id = :chunk_id
+                  AND parser_revision = :parser_revision
+                """
+            ),
+            {"chunk_id": chunk_id, "parser_revision": parser_revision},
+        )
+    return insert_derived_events(db, events)
 
 
 def insert_derived_events(db: Session, events: Iterable[DerivedArchiveEvent]) -> int:
@@ -264,14 +319,16 @@ def insert_derived_events(db: Session, events: Iterable[DerivedArchiveEvent]) ->
                     tool_output_text,
                     tool_name,
                     role,
-                    session_id
+                    session_id,
+                    parser_revision
                 ) VALUES (
                     :rowid,
                     :content_text,
                     :tool_output_text,
                     :tool_name,
                     :role,
-                    :session_id
+                    :session_id,
+                    :parser_revision
                 )
                 """
             ),
@@ -282,6 +339,7 @@ def insert_derived_events(db: Session, events: Iterable[DerivedArchiveEvent]) ->
                 "tool_name": event.tool_name,
                 "role": event.role,
                 "session_id": event.session_id,
+                "parser_revision": event.parser_revision,
             },
         )
     db.flush()

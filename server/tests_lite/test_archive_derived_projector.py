@@ -37,7 +37,10 @@ def test_archive_derived_projector_writes_events_and_fts(tmp_path):
                     session_id,
                     source_seq=1,
                     source_offset=0,
-                    raw='{"type":"user","timestamp":"2026-01-01T00:00:00Z","message":{"content":"Find archive search"}}',
+                    raw=(
+                        '{"type":"user","timestamp":"2026-01-01T00:00:00Z",'
+                        '"message":{"content":"Find archive search"}}'
+                    ),
                 ),
                 _record(
                     session_id,
@@ -49,7 +52,11 @@ def test_archive_derived_projector_writes_events_and_fts(tmp_path):
                     session_id,
                     source_seq=3,
                     source_offset=200,
-                    raw='{"type":"user","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_result","tool_use_id":"tool-1","content":"file output"}]}}',
+                    raw=(
+                        '{"type":"user","timestamp":"2026-01-01T00:00:03Z",'
+                        '"message":{"content":[{"type":"tool_result","tool_use_id":"tool-1",'
+                        '"content":"file output"}]}}'
+                    ),
                 ),
             ],
         )
@@ -59,9 +66,11 @@ def test_archive_derived_projector_writes_events_and_fts(tmp_path):
         manifest_db.commit()
         derived_db.commit()
 
-        rows = derived_db.execute(text("SELECT role, content_text, tool_name, tool_output_text FROM derived_events ORDER BY id")).fetchall()
+        rows = derived_db.execute(
+            text("SELECT role, content_text, tool_name, tool_output_text FROM derived_events ORDER BY id")
+        ).fetchall()
         fts_rows = derived_db.execute(
-            text("SELECT session_id FROM derived_events_fts WHERE derived_events_fts MATCH 'archive'")
+            text("SELECT session_id, parser_revision FROM derived_events_fts WHERE derived_events_fts MATCH 'archive'")
         ).fetchall()
         checkpoint = manifest_db.query(ProjectorCheckpoint).filter(ProjectorCheckpoint.session_id == session_id).one()
 
@@ -71,7 +80,7 @@ def test_archive_derived_projector_writes_events_and_fts(tmp_path):
         assert [row[0] for row in rows] == ["user", "assistant", "assistant", "tool"]
         assert rows[1][2] == "Read"
         assert rows[3][3] == "file output"
-        assert fts_rows == [(str(session_id),)]
+        assert fts_rows == [(str(session_id), DERIVED_EVENTS_PARSER_REVISION)]
         assert checkpoint.projector_name == DERIVED_EVENTS_PROJECTOR_NAME
         assert checkpoint.parser_revision == DERIVED_EVENTS_PARSER_REVISION
         assert checkpoint.status == "current"
@@ -122,7 +131,71 @@ def test_archive_derived_projector_supports_generic_events_and_parser_revisions(
         assert first.selected_chunks == 1
         assert second.selected_chunks == 1
         assert derived_db.execute(text("SELECT COUNT(*) FROM derived_events")).scalar() == 2
+        fts_rows = derived_db.execute(
+            text(
+                """
+                SELECT parser_revision FROM derived_events_fts
+                WHERE derived_events_fts MATCH 'codex'
+                ORDER BY parser_revision
+                """
+            )
+        ).fetchall()
+        current_revision_rows = derived_db.execute(
+            text(
+                """
+                SELECT parser_revision FROM derived_events_fts
+                WHERE derived_events_fts MATCH 'codex'
+                  AND parser_revision = 'derived-b'
+                """
+            )
+        ).fetchall()
+        assert fts_rows == [("derived-a",), ("derived-b",)]
+        assert current_revision_rows == [("derived-b",)]
         assert manifest_db.query(ProjectorCheckpoint).filter(ProjectorCheckpoint.session_id == session_id).count() == 2
+
+
+def test_archive_derived_projector_repairs_after_manifest_checkpoint_loss(tmp_path):
+    manifest, derived = _stores(tmp_path)
+    archive_store = FilesystemArchiveStore(tmp_path / "archive")
+    session_id = uuid4()
+
+    with manifest() as manifest_db:
+        _add_session(manifest_db, session_id=session_id, provider="claude")
+        _add_archive_chunk(
+            manifest_db,
+            archive_store,
+            session_id=session_id,
+            records=[
+                _record(
+                    session_id,
+                    source_seq=1,
+                    source_offset=0,
+                    raw='{"type":"user","timestamp":"2026-01-01T00:00:00Z","message":{"content":"crash repair"}}',
+                )
+            ],
+        )
+        manifest_db.commit()
+
+    with manifest() as manifest_db, derived() as derived_db:
+        first = project_archive_chunks_to_derived_events(manifest_db, derived_db, archive_store=archive_store)
+        assert first.events_projected == 1
+        assert derived_db.execute(text("SELECT COUNT(*) FROM derived_events")).scalar() == 1
+        assert derived_db.execute(text("SELECT COUNT(*) FROM derived_events_fts")).scalar() == 1
+        # Simulate a process crash after derived.db committed but before the
+        # manifest checkpoint transaction committed.
+        manifest_db.rollback()
+
+    with manifest() as manifest_db, derived() as derived_db:
+        assert manifest_db.query(ProjectorCheckpoint).filter(ProjectorCheckpoint.session_id == session_id).count() == 0
+        rerun = project_archive_chunks_to_derived_events(manifest_db, derived_db, archive_store=archive_store)
+        manifest_db.commit()
+
+        checkpoint = manifest_db.query(ProjectorCheckpoint).filter(ProjectorCheckpoint.session_id == session_id).one()
+        assert rerun.selected_chunks == 1
+        assert rerun.events_projected == 1
+        assert checkpoint.status == "current"
+        assert derived_db.execute(text("SELECT COUNT(*) FROM derived_events")).scalar() == 1
+        assert derived_db.execute(text("SELECT COUNT(*) FROM derived_events_fts")).scalar() == 1
 
 
 def test_archive_derived_projector_marks_unsupported_terminal(tmp_path):
@@ -324,7 +397,9 @@ def _record(
     )
 
 
-def _add_archive_chunk(db, archive_store: FilesystemArchiveStore, *, session_id, records: list[ArchiveRecord]) -> ArchiveChunk:
+def _add_archive_chunk(
+    db, archive_store: FilesystemArchiveStore, *, session_id, records: list[ArchiveRecord]
+) -> ArchiveChunk:
     ref = archive_store.write_chunk(records)
     chunk = ArchiveChunk(
         tenant_id=ref.tenant_id,

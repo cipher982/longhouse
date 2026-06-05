@@ -221,11 +221,29 @@ def _initialize_derived_schema(conn) -> None:
     )
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_derived_events_session_timestamp ON derived_events(session_id, timestamp)"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS ix_derived_events_chunk ON derived_events(archive_chunk_id)"))
+    _initialize_derived_events_fts(conn)
+
+
+def _initialize_derived_events_fts(conn) -> None:
+    existing_sql = conn.execute(
+        text(
+            """
+            SELECT sql FROM sqlite_master
+            WHERE type = 'table'
+              AND name = 'derived_events_fts'
+            """
+        )
+    ).scalar()
+    if existing_sql:
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(derived_events_fts)")).fetchall()}
+        normalized_sql = str(existing_sql).lower()
+        if "parser_revision" not in columns or "parser_revision unindexed" not in normalized_sql:
+            conn.execute(text("DROP TABLE derived_events_fts"))
     conn.execute(
         text(
             """
             CREATE VIRTUAL TABLE IF NOT EXISTS derived_events_fts
-            USING fts5(content_text, tool_output_text, tool_name, role, session_id)
+            USING fts5(content_text, tool_output_text, tool_name, role, session_id, parser_revision UNINDEXED)
             """
         )
     )

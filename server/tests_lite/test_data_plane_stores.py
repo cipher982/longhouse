@@ -172,6 +172,32 @@ def test_derived_store_initialization_creates_event_search_tables(tmp_path, monk
         derived.dispose()
 
 
+def test_derived_store_initialization_rebuilds_legacy_fts_shape(tmp_path, monkeypatch):
+    settings = _configure_store_env(tmp_path, monkeypatch)
+    derived = create_derived_store(settings)
+    try:
+        with derived.engine.begin() as conn:
+            conn.execute(
+                sa_text(
+                    """
+                    CREATE VIRTUAL TABLE derived_events_fts
+                    USING fts5(content_text, tool_output_text, tool_name, role, session_id)
+                    """
+                )
+            )
+
+        initialize_derived_database(derived.engine)
+
+        with derived.session_factory() as db:
+            columns = {row[1] for row in db.execute(sa_text("PRAGMA table_info(derived_events_fts)")).fetchall()}
+            fts_sql = db.execute(sa_text("SELECT sql FROM sqlite_master WHERE name = 'derived_events_fts'")).scalar()
+
+        assert "parser_revision" in columns
+        assert "parser_revision UNINDEXED" in fts_sql
+    finally:
+        derived.dispose()
+
+
 def test_empty_store_initialization_is_idempotent(tmp_path, monkeypatch):
     settings = _configure_store_env(tmp_path, monkeypatch)
     hot = create_hot_store(settings)
@@ -214,9 +240,7 @@ async def test_hot_write_succeeds_when_derived_db_is_missing(tmp_path, monkeypat
         (tmp_path / "derived.db").unlink()
 
         await hot.write_serializer.execute(
-            lambda db: db.execute(
-                sa_text("INSERT INTO data_plane_store_meta (key, value) VALUES ('hot_write', 'ok')")
-            ),
+            lambda db: db.execute(sa_text("INSERT INTO data_plane_store_meta (key, value) VALUES ('hot_write', 'ok')")),
             label="hot-data-plane-test",
         )
 
