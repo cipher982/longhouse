@@ -22,6 +22,7 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.models.apns_device_registration import APNSDeviceRegistration
 from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration
 from zerg.models.apns_widget_push_state import APNSWidgetPushState
+from zerg.models.machine_presence import MachinePresence
 from zerg.models.notification_client_presence import NotificationClientPresence
 from zerg.models.notification_event import NotificationEvent
 from zerg.models.user import User
@@ -37,6 +38,10 @@ RESOLVABLE_ATTENTION_PUSH_STATES = ATTENTION_PUSH_STATES | {"needs_user"}
 ATTENTION_PUSH_DEBOUNCE = timedelta(seconds=30)
 BLOCKED_REMINDER_DELAY = timedelta(minutes=15)
 LONG_RUN_WAITING_THRESHOLD = timedelta(minutes=30)
+LONG_RUN_WAITING_IDLE_10M_THRESHOLD = timedelta(minutes=15)
+LONG_RUN_WAITING_LOCKED_THRESHOLD = timedelta(minutes=10)
+LONG_RUN_WAITING_MIN_MEANINGFUL_RUN = timedelta(minutes=5)
+MACHINE_PRESENCE_FRESHNESS_WINDOW = timedelta(seconds=90)
 WEB_CLIENT_PRESENCE_SUPPRESSION_WINDOW = timedelta(seconds=90)
 WIDGET_PUSH_DEBOUNCE = timedelta(seconds=30)
 WIDGET_PUSH_PLATFORM = "ios_widget"
@@ -525,6 +530,37 @@ def _recent_visible_web_client_exists(db: Session, *, owner_id: int, occurred_at
     )
 
 
+def _recent_machine_presence_rows(db: Session, *, owner_id: int, occurred_at: datetime) -> list[MachinePresence]:
+    threshold = occurred_at - MACHINE_PRESENCE_FRESHNESS_WINDOW
+    rows = db.query(MachinePresence).filter(MachinePresence.owner_id == owner_id).all()
+    fresh_rows: list[MachinePresence] = []
+    for row in rows:
+        received_at = _as_aware_utc(row.received_at)
+        if received_at is not None and received_at >= threshold:
+            fresh_rows.append(row)
+    return fresh_rows
+
+
+def _long_run_waiting_threshold_for_owner(
+    db: Session,
+    *,
+    owner_id: int,
+    occurred_at: datetime,
+) -> timedelta | None:
+    if _recent_visible_web_client_exists(db, owner_id=owner_id, occurred_at=occurred_at):
+        return None
+
+    rows = _recent_machine_presence_rows(db, owner_id=owner_id, occurred_at=occurred_at)
+    states = {str(row.state or "").strip() for row in rows}
+    if "active" in states:
+        return None
+    if "locked" in states:
+        return LONG_RUN_WAITING_LOCKED_THRESHOLD
+    if states and states.issubset({"idle_10m"}):
+        return LONG_RUN_WAITING_IDLE_10M_THRESHOLD
+    return LONG_RUN_WAITING_THRESHOLD
+
+
 def _session_execution_started_at(db: Session, *, session_id) -> datetime | None:
     runtime_state = (
         db.query(SessionRuntimeState)
@@ -567,7 +603,11 @@ def prepare_long_run_waiting_push(
     if execution_started_at is None:
         return None
     elapsed = occurred_at - execution_started_at
-    if elapsed < LONG_RUN_WAITING_THRESHOLD:
+    threshold = _long_run_waiting_threshold_for_owner(db, owner_id=owner_id, occurred_at=occurred_at)
+    if threshold is None:
+        return None
+    threshold = max(threshold, LONG_RUN_WAITING_MIN_MEANINGFUL_RUN)
+    if elapsed < threshold:
         return None
 
     previous_stamp_state = str(session.last_attention_push_state or "").strip() or None
@@ -575,8 +615,6 @@ def prepare_long_run_waiting_push(
     if _base_attention_state(previous_stamp_state) == "needs_user":
         return None
     if _base_attention_state(previous_stamp_state) == "blocked" and previous_stamp_state != _resolved_attention_state("blocked"):
-        return None
-    if _recent_visible_web_client_exists(db, owner_id=owner_id, occurred_at=occurred_at):
         return None
 
     if targets is _TARGETS_SENTINEL:

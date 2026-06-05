@@ -26,17 +26,20 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.models.apns_device_registration import APNSDeviceRegistration
 from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration
 from zerg.models.apns_widget_push_state import APNSWidgetPushState
+from zerg.models.machine_presence import MachinePresence
 from zerg.models.notification_client_presence import NotificationClientPresence
 from zerg.models.notification_event import NotificationEvent
 from zerg.models.user import User
 from zerg.services.apns_sender import ATTENTION_NOTIFICATION_CATEGORY
 from zerg.services.apns_sender import ATTENTION_NOTIFICATION_THREAD_PREFIX
+from zerg.services.apns_sender import APNSDeviceTarget
 from zerg.services.apns_sender import SessionAttentionPush
 from zerg.services.apns_sender import _attention_collapse_id
 from zerg.services.apns_sender import build_session_attention_payload
 from zerg.services.apns_sender import build_session_attention_resolution_payload
 from zerg.services.apns_sender import build_session_live_activity_payload
 from zerg.services.apns_sender import build_widget_timeline_payload
+from zerg.services.apns_sender import prepare_long_run_waiting_push
 from zerg.services.apns_sender import prepare_session_attention_resolution_push
 from zerg.services.apns_sender import prepare_widget_timeline_push
 
@@ -955,6 +958,181 @@ def test_presence_long_run_waiting_sends_once_and_resolves(tmp_path):
         assert event.channel_results["apns_ios"]["accepted"] is True
 
     _cleanup_overrides()
+    engine.dispose()
+
+
+def _seed_long_run_waiting_policy_case(
+    SessionLocal,
+    *,
+    session_id: str,
+    started_at: datetime,
+    machine_presence: list[tuple[str, str, datetime]] | None = None,
+) -> None:
+    with SessionLocal() as db:
+        db.add(User(id=1, email="user@example.com", role="ADMIN"))
+        db.commit()
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="test",
+                project="zerg",
+                started_at=started_at,
+                loop_mode="assist",
+                summary_title="Presence policy run",
+            )
+        )
+        db.add(
+            SessionRuntimeState(
+                runtime_key=f"codex:{session_id}",
+                session_id=session_id,
+                provider="codex",
+                device_id="work-macbook",
+                phase="needs_user",
+                phase_source="test",
+                phase_started_at=started_at,
+                execution_started_at=started_at,
+                last_runtime_signal_at=started_at,
+                timeline_anchor_at=started_at,
+                updated_at=started_at,
+            )
+        )
+        for device_id, state, received_at in machine_presence or []:
+            db.add(
+                MachinePresence(
+                    owner_id=1,
+                    device_id=device_id,
+                    state=state,
+                    source="test",
+                    idle_seconds=600 if state == "idle_10m" else 300 if state == "idle_5m" else 0,
+                    measured_at=received_at,
+                    received_at=received_at,
+                )
+            )
+        db.commit()
+
+
+def _prepare_policy_long_run_push(SessionLocal, *, session_id: str, occurred_at: datetime):
+    targets = (APNSDeviceTarget(device_token="d" * 64, push_environment="sandbox"),)
+    with SessionLocal() as db:
+        return prepare_long_run_waiting_push(
+            db,
+            owner_id=1,
+            session_id=session_id,
+            current_state="needs_user",
+            occurred_at=occurred_at,
+            targets=targets,
+        )
+
+
+def test_long_run_waiting_active_machine_presence_suppresses_push(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+    occurred_at = t0 + timedelta(minutes=31)
+    _seed_long_run_waiting_policy_case(
+        SessionLocal,
+        session_id=session_id,
+        started_at=t0,
+        machine_presence=[("work-macbook", "active", occurred_at - timedelta(seconds=10))],
+    )
+
+    assert _prepare_policy_long_run_push(SessionLocal, session_id=session_id, occurred_at=occurred_at) is None
+
+    engine.dispose()
+
+
+def test_long_run_waiting_stale_machine_presence_uses_30m_fallback(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+    occurred_at = t0 + timedelta(minutes=31)
+    _seed_long_run_waiting_policy_case(
+        SessionLocal,
+        session_id=session_id,
+        started_at=t0,
+        machine_presence=[("work-macbook", "active", t0 + timedelta(minutes=1))],
+    )
+
+    push = _prepare_policy_long_run_push(SessionLocal, session_id=session_id, occurred_at=occurred_at)
+    assert push is not None
+    assert push.event_type == "long_run_waiting"
+
+    engine.dispose()
+
+
+def test_long_run_waiting_idle_10m_machine_presence_lowers_threshold(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+    occurred_at = t0 + timedelta(minutes=16)
+    _seed_long_run_waiting_policy_case(
+        SessionLocal,
+        session_id=session_id,
+        started_at=t0,
+        machine_presence=[("work-macbook", "idle_10m", occurred_at - timedelta(seconds=10))],
+    )
+
+    push = _prepare_policy_long_run_push(SessionLocal, session_id=session_id, occurred_at=occurred_at)
+    assert push is not None
+    assert push.alert_body == "zerg · Ran 16m · Presence policy run"
+
+    engine.dispose()
+
+
+def test_long_run_waiting_idle_5m_machine_presence_keeps_default_threshold(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+    occurred_at = t0 + timedelta(minutes=16)
+    _seed_long_run_waiting_policy_case(
+        SessionLocal,
+        session_id=session_id,
+        started_at=t0,
+        machine_presence=[("work-macbook", "idle_5m", occurred_at - timedelta(seconds=10))],
+    )
+
+    assert _prepare_policy_long_run_push(SessionLocal, session_id=session_id, occurred_at=occurred_at) is None
+
+    engine.dispose()
+
+
+def test_long_run_waiting_locked_machine_presence_lowers_threshold(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+    occurred_at = t0 + timedelta(minutes=11)
+    _seed_long_run_waiting_policy_case(
+        SessionLocal,
+        session_id=session_id,
+        started_at=t0,
+        machine_presence=[("work-macbook", "locked", occurred_at - timedelta(seconds=10))],
+    )
+
+    push = _prepare_policy_long_run_push(SessionLocal, session_id=session_id, occurred_at=occurred_at)
+    assert push is not None
+    assert push.alert_body == "zerg · Ran 11m · Presence policy run"
+
+    engine.dispose()
+
+
+def test_long_run_waiting_any_active_machine_presence_wins(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+    occurred_at = t0 + timedelta(minutes=31)
+    _seed_long_run_waiting_policy_case(
+        SessionLocal,
+        session_id=session_id,
+        started_at=t0,
+        machine_presence=[
+            ("desktop", "idle_10m", occurred_at - timedelta(seconds=10)),
+            ("laptop", "active", occurred_at - timedelta(seconds=10)),
+        ],
+    )
+
+    assert _prepare_policy_long_run_push(SessionLocal, session_id=session_id, occurred_at=occurred_at) is None
+
     engine.dispose()
 
 
