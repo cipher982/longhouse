@@ -165,6 +165,35 @@ def test_codex_requires_distinct_provider_id_and_transcript(tmp_path):
         assert res.source_path == "/x/codex.jsonl"
 
 
+def test_codex_uses_primary_thread_source_path_not_session_wide_latest(tmp_path):
+    """Codex resumes by transcript PATH, so it must use the PRIMARY thread's
+    path, not a newer child/subagent thread's source line."""
+    SessionLocal = _make_db(tmp_path)
+    with SessionLocal() as db:
+        s = _session(db, provider="codex")
+        primary = ensure_primary_thread(db, s)
+        _alias(db, primary, "codex", "provider_session_id", "codex-thread-1")
+        # Primary-thread source line (the correct resume target).
+        db.add(
+            AgentSourceLine(
+                session_id=s.id, thread_id=primary.id, source_path="/x/primary.jsonl",
+                source_offset=0, branch_id=0, raw_json='{"type":"message"}', line_hash="h-primary",
+            )
+        )
+        # A LATER source line under a DIFFERENT (child) thread — must NOT win.
+        child_thread_id = uuid4()
+        db.add(
+            AgentSourceLine(
+                session_id=s.id, thread_id=child_thread_id, source_path="/x/child-subagent.jsonl",
+                source_offset=999, branch_id=0, raw_json='{"type":"message"}', line_hash="h-child",
+            )
+        )
+        db.commit()
+        res = resolve_native_continue_target(db, s)
+        assert res is not None
+        assert res.source_path == "/x/primary.jsonl"
+
+
 def test_codex_rejected_when_provider_id_equals_session_id(tmp_path):
     SessionLocal = _make_db(tmp_path)
     with SessionLocal() as db:

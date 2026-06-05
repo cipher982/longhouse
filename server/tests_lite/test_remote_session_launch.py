@@ -252,6 +252,7 @@ def _seed_imported_claude_session(
     provider_session_alias: str | None = None,
     observe_only_connection: bool = False,
     source_path: str | None = None,
+    ended: bool = True,
 ):
     """Seed an imported/unmanaged bare-CLI claude session.
 
@@ -277,7 +278,7 @@ def _seed_imported_claude_session(
         device_name=device_id,
         cwd="/Users/me/repo",
         started_at=now,
-        ended_at=now,
+        ended_at=now if ended else None,
         last_activity_at=now,
         thread_root_session_id=sid,
         continued_from_session_id=None,
@@ -1110,6 +1111,28 @@ def test_unmanaged_claude_with_alias_and_transcript_is_adoptable(tmp_path):
         caps = workspace.session.capabilities
         assert caps.can_continue is True
         assert caps.continue_targets[0].adoption_mode == "adopt_unmanaged"
+
+
+def test_live_unmanaged_claude_is_not_adoptable(tmp_path):
+    """A still-LIVE raw claude session (ended_at is None) must NOT be adoptable.
+
+    Launching a fresh managed resume of a transcript a live process is still
+    writing = two owners contending for one transcript. The closed-state gate
+    prevents that. Once it closes, it becomes adoptable."""
+
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+
+    with SessionLocal() as db:
+        live_id = _seed_imported_claude_session(
+            db,
+            provider_session_alias=str(uuid4()),
+            source_path="/Users/me/.claude/projects/-x/raw.jsonl",
+            ended=False,
+        )
+        workspace = build_session_workspace(db=db, session_id=live_id, owner_id=OWNER_ID)
+        assert workspace.session.capabilities.can_continue is False
+        assert workspace.session.capabilities.continue_targets == []
 
 
 def test_unmanaged_claude_not_continuable_without_alias_or_transcript(tmp_path):
