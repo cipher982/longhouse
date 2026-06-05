@@ -89,9 +89,10 @@ def prepare_ingest_shadow_archive(
     settings: Settings | None = None,
     archive_store: FilesystemArchiveStore | None = None,
     manifest_db: Session | None = None,
+    force_enabled: bool = False,
 ) -> PreparedArchiveShadow:
     settings = settings or get_settings()
-    if not settings.archive_shadow_write_enabled:
+    if not force_enabled and not settings.archive_shadow_write_enabled:
         return PreparedArchiveShadow(enabled=False)
 
     source_lines = source_lines_from_ingest(data)

@@ -175,6 +175,8 @@ class Settings:  # noqa: D401 – simple data container
     derived_database_url: str
     archive_root: str
     archive_shadow_write_enabled: bool
+    archive_primary_write_enabled: bool
+    legacy_raw_write_enabled: bool
     archive_shadow_tenant_id: str
     archive_shadow_chunk_target_bytes: int
 
@@ -553,6 +555,9 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         derived_database_url=derived_database_url,
         archive_root=archive_root,
         archive_shadow_write_enabled=_truthy(os.getenv("LONGHOUSE_ARCHIVE_SHADOW_WRITE_ENABLED")),
+        archive_primary_write_enabled=_truthy(os.getenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED")),
+        legacy_raw_write_enabled=not _truthy(os.getenv("LONGHOUSE_DISABLE_LEGACY_RAW_WRITES"))
+        and _truthy(os.getenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "1")),
         archive_shadow_tenant_id=archive_shadow_tenant_id,
         archive_shadow_chunk_target_bytes=int(os.getenv("LONGHOUSE_ARCHIVE_SHADOW_CHUNK_TARGET_BYTES", str(32 * 1024 * 1024))),
         fernet_secret=os.getenv("FERNET_SECRET"),

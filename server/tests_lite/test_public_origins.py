@@ -32,6 +32,8 @@ def _make_settings(**overrides):
         derived_database_url="sqlite:///derived.db",
         archive_root="archive",
         archive_shadow_write_enabled=False,
+        archive_primary_write_enabled=False,
+        legacy_raw_write_enabled=True,
         archive_shadow_tenant_id="default",
         archive_shadow_chunk_target_bytes=1024,
         fernet_secret="test-fernet",

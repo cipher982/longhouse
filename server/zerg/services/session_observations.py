@@ -295,7 +295,7 @@ def record_source_line_observation(
     branch_id: int,
     revision: int,
     line_hash: str,
-    raw_json: str,
+    raw_json: str | None,
     observed_at: datetime,
     received_at: datetime | None = None,
     thread_id: UUID | None = None,
@@ -308,6 +308,14 @@ def record_source_line_observation(
         str(source_offset),
         line_hash,
     )
+    payload = {
+        "branch_id": branch_id,
+        "revision": revision,
+        "line_hash": line_hash,
+    }
+    if raw_json is not None:
+        payload["raw_json"] = raw_json
+
     return record_session_observation(
         db,
         observation_id=observation_id,
@@ -325,12 +333,7 @@ def record_source_line_observation(
         observed_at=observed_at,
         received_at=received_at,
         load_observation=load_observation,
-        payload={
-            "branch_id": branch_id,
-            "revision": revision,
-            "line_hash": line_hash,
-            "raw_json": raw_json,
-        },
+        payload=payload,
     )
 
 
@@ -375,6 +378,21 @@ def record_provider_event_observation(
             source_cursor = f"{source_path}:{source_offset}:{event_hash}"
         else:
             source_cursor = identity
+    payload = {
+        "branch_id": branch_id,
+        "role": role,
+        "content_text": content_text,
+        "tool_name": tool_name,
+        "tool_input_json": tool_input_json,
+        "tool_output_text": tool_output_text,
+        "tool_call_id": tool_call_id,
+        "timestamp": timestamp.isoformat(),
+        "event_hash": event_hash,
+        "event_uuid": event_uuid,
+        "parent_event_uuid": parent_event_uuid,
+    }
+    if raw_json is not None:
+        payload["raw_json"] = raw_json
     return record_session_observation(
         db,
         observation_id=observation_id,
@@ -392,20 +410,7 @@ def record_provider_event_observation(
         observed_at=timestamp,
         received_at=received_at,
         load_observation=load_observation,
-        payload={
-            "branch_id": branch_id,
-            "role": role,
-            "content_text": content_text,
-            "tool_name": tool_name,
-            "tool_input_json": tool_input_json,
-            "tool_output_text": tool_output_text,
-            "tool_call_id": tool_call_id,
-            "timestamp": timestamp.isoformat(),
-            "event_hash": event_hash,
-            "raw_json": raw_json,
-            "event_uuid": event_uuid,
-            "parent_event_uuid": parent_event_uuid,
-        },
+        payload=payload,
     )
 
 

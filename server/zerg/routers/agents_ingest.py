@@ -10,6 +10,7 @@ import time
 from datetime import datetime
 from datetime import timezone
 from uuid import UUID
+from uuid import uuid4
 
 import zstandard
 from fastapi import APIRouter
@@ -21,6 +22,7 @@ from fastapi import status
 from sqlalchemy.orm import Session
 
 from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
+from zerg.config import get_settings
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
@@ -34,6 +36,7 @@ from zerg.models.device_token import DeviceToken
 from zerg.observability import get_tracer
 from zerg.observability import set_span_attributes
 from zerg.services.agents_store import AgentsStore
+from zerg.services.agents_store import IngestResult
 from zerg.services.agents_store import SessionIngest
 from zerg.services.session_views import IngestResponse
 
@@ -495,12 +498,57 @@ def _prepare_shadow_archive_with_fresh_manifest_db(
     data: SessionIngest,
     result,
     prepare_ingest_shadow_archive,
+    settings=None,
+    force_enabled: bool = False,
 ):
     from zerg.database import get_session_factory
 
     SessionLocal = get_session_factory()
     with SessionLocal() as read_db:
-        return prepare_ingest_shadow_archive(data=data, result=result, manifest_db=read_db)
+        return prepare_ingest_shadow_archive(
+            data=data,
+            result=result,
+            settings=settings,
+            manifest_db=read_db,
+            force_enabled=force_enabled,
+        )
+
+
+async def _prepare_archive_primary_before_ingest(
+    *,
+    data: SessionIngest,
+    fallback_db: Session,
+    settings,
+):
+    """Prepare archive-primary chunks before legacy raw writes run."""
+
+    from zerg.services.archive_shadow import prepare_ingest_shadow_archive
+
+    if data.id is None:
+        raise ValueError("archive-primary ingest requires a resolved session id")
+    result = IngestResult(
+        session_id=data.id,
+        events_inserted=0,
+        events_skipped=0,
+        session_created=False,
+        source_lines_inserted=0,
+    )
+    if _is_testing_env():
+        return prepare_ingest_shadow_archive(
+            data=data,
+            result=result,
+            settings=settings,
+            manifest_db=fallback_db,
+            force_enabled=True,
+        )
+    return await asyncio.to_thread(
+        _prepare_shadow_archive_with_fresh_manifest_db,
+        data=data,
+        result=result,
+        prepare_ingest_shadow_archive=prepare_ingest_shadow_archive,
+        settings=settings,
+        force_enabled=True,
+    )
 
 
 # Hard cap on decompressed ingest bodies. Engine splits batches at
@@ -714,6 +762,16 @@ async def ingest_session(
                         )
                     data.device_id = auth_token.device_id
 
+                settings = get_settings()
+                if settings.archive_primary_write_enabled and data.id is None:
+                    data.id = uuid4()
+                if not settings.archive_primary_write_enabled and not settings.legacy_raw_write_enabled:
+                    request_status_label = "invalid_archive_config"
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail="Legacy raw writes cannot be disabled unless archive-primary writes are enabled",
+                    )
+
                 provider_label = data.provider or "unknown"
                 validate_finished_at_ms = _unix_ms()
                 set_span_attributes(
@@ -777,6 +835,35 @@ async def ingest_session(
                         transcript_preview=transcript_preview,
                     )
 
+            archive_primary_prepared = None
+            archive_primary_state = "disabled"
+            archive_primary_records_written = 0
+            legacy_raw_effective = settings.legacy_raw_write_enabled
+            if settings.archive_primary_write_enabled:
+                archive_primary_prepared = await _prepare_archive_primary_before_ingest(
+                    data=data,
+                    fallback_db=db,
+                    settings=settings,
+                )
+                if archive_primary_prepared.error:
+                    if not settings.legacy_raw_write_enabled:
+                        request_status_label = "archive_primary_failed"
+                        raise HTTPException(
+                            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                            detail="Archive-primary write failed and legacy raw fallback is disabled",
+                            headers={"X-Ingest-Archive-Primary": "failed"},
+                        )
+                    archive_primary_state = "fallback"
+                    legacy_raw_effective = True
+                    logger.warning(
+                        "Archive-primary prepare failed for session %s; falling back to legacy raw writes: %s",
+                        data.id,
+                        archive_primary_prepared.error,
+                    )
+                else:
+                    archive_primary_state = "prepared"
+                    archive_primary_records_written = archive_primary_prepared.records_written
+
             from zerg.services.write_serializer import get_write_serializer
 
             ws = get_write_serializer()
@@ -786,12 +873,35 @@ async def ingest_session(
                 write_timeout_seconds = _ARCHIVE_INGEST_WRITE_TIMEOUT_SECONDS
 
             def _do_ingest(write_db):
+                nonlocal archive_primary_state
+                nonlocal legacy_raw_effective
                 write_started_at_ms = _unix_ms()
+                if archive_primary_prepared is not None and archive_primary_state == "prepared" and archive_primary_prepared.chunks:
+                    from zerg.services.archive_shadow import insert_archive_chunk_manifests
+
+                    try:
+                        insert_archive_chunk_manifests(write_db, archive_primary_prepared.chunks)
+                        archive_primary_state = "written"
+                    except Exception:
+                        if not settings.legacy_raw_write_enabled:
+                            raise
+                        archive_primary_state = "fallback"
+                        legacy_raw_effective = True
+                        logger.warning(
+                            "Archive-primary manifest insert failed for session %s; falling back to legacy raw writes",
+                            data.id,
+                            exc_info=True,
+                        )
+                elif archive_primary_state == "prepared":
+                    archive_primary_state = "written"
+
                 store = AgentsStore(write_db)
                 result = store.ingest_session(
                     data,
                     chunk_size=ingest_chunk,
                     synchronous_projections=write_label not in _ARCHIVE_INGEST_LABELS,
+                    write_legacy_raw=legacy_raw_effective,
+                    raw_source_archived=archive_primary_state == "written" and archive_primary_records_written > 0,
                 )
                 store_returned_at_ms = _unix_ms()
                 _persist_ship_trace_event(
@@ -858,6 +968,8 @@ async def ingest_session(
                 response.headers["X-Ingest-Commit-Count"] = str(result.commit_count)
                 response.headers["X-Ingest-Commit-Ms"] = f"{result.commit_ms_total:.1f}"
                 response.headers["X-Ingest-Chunk-Size"] = str(ingest_chunk)
+                response.headers["X-Ingest-Archive-Primary"] = archive_primary_state
+                response.headers["X-Ingest-Legacy-Raw"] = "enabled" if legacy_raw_effective else "disabled"
                 response.headers["X-Ingest-Store-Stage-Ms"] = _stage_timing_header_value(result.store_stage_ms)
                 set_span_attributes(
                     write_span,
@@ -876,7 +988,8 @@ async def ingest_session(
                 agents_ingest_events_total.labels(provider=provider_label, kind="inserted").inc(result.events_inserted)
                 agents_ingest_events_total.labels(provider=provider_label, kind="skipped").inc(result.events_skipped)
 
-            await _write_shadow_archive_after_ingest(data=data, result=result, fallback_db=db)
+            if not settings.archive_primary_write_enabled:
+                await _write_shadow_archive_after_ingest(data=data, result=result, fallback_db=db)
 
             # Publish to per-session pubsub so SSE subscribers wake directly.
             # Lives outside the DB transaction: publish only reflects persisted state.

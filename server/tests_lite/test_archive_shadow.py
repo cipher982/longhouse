@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import threading
 import time
@@ -23,7 +24,10 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
+from zerg.models.agents import AgentEvent
+from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import ArchiveChunk
+from zerg.models.agents import SessionObservation
 from zerg.services.agents.models import EventIngest
 from zerg.services.agents.models import IngestResult
 from zerg.services.agents.models import SessionIngest
@@ -33,6 +37,8 @@ from zerg.services.archive_shadow import build_source_line_archive_records
 from zerg.services.archive_shadow import source_lines_from_ingest
 from zerg.services.archive_shadow import write_ingest_shadow_archive
 from zerg.services.archive_store import FilesystemArchiveStore
+from zerg.services.session_observations import OBS_KIND_PROVIDER_EVENT
+from zerg.services.session_observations import OBS_KIND_PROVIDER_SOURCE_LINE
 
 
 def test_shadow_archive_disabled_does_not_write(tmp_path):
@@ -284,6 +290,175 @@ def test_ingest_route_shadow_writes_archive_when_enabled(tmp_path, monkeypatch):
         archive_store = FilesystemArchiveStore(tmp_path / "route-archive")
         records = archive_store.read_chunk(rows[0].relative_path)
         assert [record.raw_bytes for record in records] == [b'{"type":"message","role":"user"}']
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_ingest_route_archive_primary_can_disable_legacy_raw_writes(tmp_path, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED", "1")
+    monkeypatch.setenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "0")
+    monkeypatch.delenv("LONGHOUSE_DISABLE_LEGACY_RAW_WRITES", raising=False)
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_SHADOW_TENANT_ID", "tenant-primary")
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_ROOT", str(tmp_path / "primary-archive"))
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_SHADOW_CHUNK_TARGET_BYTES", "128")
+
+    client, SessionLocal = _make_client(tmp_path)
+    session_id = uuid4()
+    try:
+        response = client.post(
+            "/agents/ingest",
+            json={
+                "id": str(session_id),
+                "provider": "codex",
+                "environment": "test",
+                "project": "longhouse",
+                "device_id": "route-device",
+                "started_at": "2026-01-01T00:00:00Z",
+                "source_lines": [
+                    {
+                        "source_path": "/tmp/primary-session.jsonl",
+                        "source_offset": 0,
+                        "raw_json": '{"type":"message","role":"user"}',
+                    }
+                ],
+                "events": [
+                    {
+                        "role": "user",
+                        "content_text": "hello from archive primary",
+                        "timestamp": "2026-01-01T00:00:01Z",
+                        "source_path": "/tmp/primary-session.jsonl",
+                        "source_offset": 0,
+                        "raw_json": '{"type":"message","role":"user"}',
+                    }
+                ],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.headers["X-Ingest-Archive-Primary"] == "written"
+        assert response.headers["X-Ingest-Legacy-Raw"] == "disabled"
+        with SessionLocal() as db:
+            chunks = db.query(ArchiveChunk).all()
+            events = db.query(AgentEvent).all()
+            source_lines = db.query(AgentSourceLine).all()
+            source_observation = (
+                db.query(SessionObservation)
+                .filter(SessionObservation.kind == OBS_KIND_PROVIDER_SOURCE_LINE)
+                .one()
+            )
+            event_observation = (
+                db.query(SessionObservation)
+                .filter(SessionObservation.kind == OBS_KIND_PROVIDER_EVENT)
+                .one()
+            )
+
+        assert len(chunks) == 1
+        assert chunks[0].tenant_id == "tenant-primary"
+        assert len(source_lines) == 0
+        assert len(events) == 1
+        assert events[0].content_text == "hello from archive primary"
+        assert events[0].raw_json is None
+        assert events[0].raw_json_z is None
+        assert "raw_json" not in json.loads(source_observation.payload_json or "{}")
+        assert "raw_json" not in json.loads(event_observation.payload_json or "{}")
+
+        archive_store = FilesystemArchiveStore(tmp_path / "primary-archive")
+        records = archive_store.read_chunk(chunks[0].relative_path)
+        assert [record.raw_bytes for record in records] == [b'{"type":"message","role":"user"}']
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_ingest_route_archive_primary_falls_back_to_legacy_raw_on_archive_failure(tmp_path, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED", "1")
+    monkeypatch.setenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "1")
+    bad_archive_root = tmp_path / "not-a-directory"
+    bad_archive_root.write_text("not a directory")
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_ROOT", str(bad_archive_root))
+
+    client, SessionLocal = _make_client(tmp_path)
+    session_id = uuid4()
+    try:
+        response = client.post(
+            "/agents/ingest",
+            json={
+                "id": str(session_id),
+                "provider": "codex",
+                "environment": "test",
+                "project": "longhouse",
+                "device_id": "route-device",
+                "started_at": "2026-01-01T00:00:00Z",
+                "source_lines": [
+                    {
+                        "source_path": "/tmp/fallback-session.jsonl",
+                        "source_offset": 0,
+                        "raw_json": '{"type":"message","role":"user"}',
+                    }
+                ],
+                "events": [
+                    {
+                        "role": "user",
+                        "content_text": "fallback raw event",
+                        "timestamp": "2026-01-01T00:00:01Z",
+                        "source_path": "/tmp/fallback-session.jsonl",
+                        "source_offset": 0,
+                        "raw_json": '{"type":"message","role":"user"}',
+                    }
+                ],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.headers["X-Ingest-Archive-Primary"] == "fallback"
+        assert response.headers["X-Ingest-Legacy-Raw"] == "enabled"
+        with SessionLocal() as db:
+            assert db.query(ArchiveChunk).count() == 0
+            source_line = db.query(AgentSourceLine).one()
+            assert source_line.raw_json_z is not None
+            event = db.query(AgentEvent).one()
+            assert event.raw_json_z is not None
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_ingest_route_archive_primary_fails_closed_when_legacy_raw_disabled(tmp_path, monkeypatch):
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED", "1")
+    monkeypatch.setenv("LONGHOUSE_LEGACY_RAW_WRITE_ENABLED", "0")
+    bad_archive_root = tmp_path / "not-a-directory"
+    bad_archive_root.write_text("not a directory")
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_ROOT", str(bad_archive_root))
+
+    client, SessionLocal = _make_client(tmp_path)
+    session_id = uuid4()
+    try:
+        response = client.post(
+            "/agents/ingest",
+            json={
+                "id": str(session_id),
+                "provider": "codex",
+                "environment": "test",
+                "project": "longhouse",
+                "device_id": "route-device",
+                "started_at": "2026-01-01T00:00:00Z",
+                "source_lines": [
+                    {
+                        "source_path": "/tmp/fail-closed-session.jsonl",
+                        "source_offset": 0,
+                        "raw_json": '{"type":"message","role":"user"}',
+                    }
+                ],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+
+        assert response.status_code == 503
+        assert response.headers["X-Ingest-Archive-Primary"] == "failed"
+        with SessionLocal() as db:
+            assert db.query(ArchiveChunk).count() == 0
+            assert db.query(AgentSourceLine).count() == 0
+            assert db.query(AgentEvent).count() == 0
     finally:
         api_app.dependency_overrides.clear()
 

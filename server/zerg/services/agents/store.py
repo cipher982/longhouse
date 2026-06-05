@@ -1374,6 +1374,8 @@ class AgentsStore:
         *,
         chunk_size: int | None = None,
         synchronous_projections: bool = True,
+        write_legacy_raw: bool = True,
+        raw_source_archived: bool = False,
     ) -> IngestResult:
         """Ingest a session with events, handling deduplication.
 
@@ -1386,6 +1388,10 @@ class AgentsStore:
                 replay/scan paths; smaller values keep live ingest responsive.
             synchronous_projections: When false, skip expensive derived
                 projections that can be reconstructed after archive repair.
+            write_legacy_raw: When false, skip legacy raw payload persistence
+                after archive-primary has stored source fidelity.
+            raw_source_archived: True when this ingest's source payload was
+                written to the archive before the store write.
 
         Returns:
             IngestResult with counts of inserted/skipped events plus commit
@@ -1570,14 +1576,14 @@ class AgentsStore:
                     source_path=event_data.source_path,
                     source_offset=event_data.source_offset,
                     event_hash=event_hash,
-                    raw_json=event_data.raw_json,
+                    raw_json=event_data.raw_json if write_legacy_raw else None,
                     event_uuid=event_uuid,
                     parent_event_uuid=parent_event_uuid,
                     received_at=provider_events_received_at,
                     load_observation=not direct_event_projection,
                 )
                 if direct_event_projection:
-                    raw_json_z = compress_raw_json(event_data.raw_json) if event_data.raw_json is not None else None
+                    raw_json_z = compress_raw_json(event_data.raw_json) if write_legacy_raw and event_data.raw_json is not None else None
                     event_stmt = (
                         sqlite_insert(AgentEvent)
                         .values(
@@ -1698,13 +1704,13 @@ class AgentsStore:
                 branch_id=ingest_branch.id,
                 revision=revision,
                 line_hash=line_hash,
-                raw_json=line_data.raw_json,
+                raw_json=line_data.raw_json if write_legacy_raw else None,
                 observed_at=source_lines_received_at,
                 received_at=source_lines_received_at,
                 load_observation=False,
             )
             row_inserted = False
-            if observation_result.inserted:
+            if write_legacy_raw and observation_result.inserted:
                 source_line_stmt = (
                     sqlite_insert(AgentSourceLine)
                     .values(
@@ -1747,7 +1753,7 @@ class AgentsStore:
         if synchronous_projections:
             self._sync_session_counts_to_head(session_id, head_branch_for_counts)
 
-        transcript_changed = bool(source_lines_inserted) or not source_lines or rewind_signal is not None
+        transcript_changed = bool(source_lines_inserted) or raw_source_archived or not source_lines or rewind_signal is not None
         if events_inserted > 0 and not transcript_changed:
             logger.warning(
                 "Ingest inserted %s event rows for session %s without source-line delta; skipping post-ingest tasks",
