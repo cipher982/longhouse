@@ -58,6 +58,11 @@ fn provider_candidates(home: &Path, claude_root: &Path) -> Vec<ProviderConfig> {
             extension: "jsonl",
         },
         ProviderConfig {
+            name: "opencode",
+            root: home.join(".local").join("share").join("opencode"),
+            extension: "db",
+        },
+        ProviderConfig {
             name: "gemini",
             root: home.join(".gemini").join("tmp"),
             extension: "json",
@@ -116,6 +121,9 @@ pub fn provider_for_path(
 }
 
 fn is_provider_session_file(provider: &ProviderConfig, path: &Path) -> bool {
+    if provider.name == "opencode" {
+        return path.file_name().and_then(|name| name.to_str()) == Some("opencode.db");
+    }
     let extension_matches = path
         .extension()
         .map_or(false, |ext| ext == provider.extension);
@@ -150,7 +158,11 @@ mod tests {
             providers[3].root,
             home.join(".gemini").join("antigravity").join("brain")
         );
-        assert_eq!(providers[4].root, home.join(".gemini").join("tmp"));
+        assert_eq!(
+            providers[4].root,
+            home.join(".local").join("share").join("opencode")
+        );
+        assert_eq!(providers[5].root, home.join(".gemini").join("tmp"));
     }
 
     #[test]
@@ -173,5 +185,21 @@ mod tests {
             Some("antigravity")
         );
         assert_eq!(provider_for_path(&full_transcript, &providers), None);
+    }
+
+    #[test]
+    fn opencode_provider_only_matches_canonical_database_file() {
+        let home = PathBuf::from("/tmp/home");
+        let claude_root = PathBuf::from("/tmp/custom-claude");
+        let providers = provider_candidates(&home, &claude_root);
+        let db = home
+            .join(".local")
+            .join("share")
+            .join("opencode")
+            .join("opencode.db");
+        let wal = db.with_file_name("opencode.db-wal");
+
+        assert_eq!(provider_for_path(&db, &providers), Some("opencode"));
+        assert_eq!(provider_for_path(&wal, &providers), None);
     }
 }

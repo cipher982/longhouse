@@ -18,6 +18,7 @@ mod managed_bridge_scan;
 mod managed_claude_scan;
 mod managed_reaper;
 mod observability;
+mod opencode_db;
 mod outbox;
 mod pipeline;
 mod scheduler;

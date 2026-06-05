@@ -83,6 +83,7 @@ pub struct ParsedSourceLine {
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct SessionMetadata {
     pub session_id: String,
+    pub provider_session_id: Option<String>,
     pub forked_from_session_id: Option<String>,
     pub subagent_id: Option<String>,
     pub subagent_prompt_id: Option<String>,

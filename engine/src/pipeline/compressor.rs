@@ -243,7 +243,10 @@ pub fn build_payload_with_source_lines<'a>(
         git_repo: metadata.git_repo.as_deref(),
         git_branch: metadata.git_branch.as_deref(),
         started_at,
-        provider_session_id: &metadata.session_id,
+        provider_session_id: metadata
+            .provider_session_id
+            .as_deref()
+            .unwrap_or(&metadata.session_id),
         // Allow env var override: agent-mesh sets LONGHOUSE_IS_SIDECHAIN=1 before
         // running sub-agents; the Stop hook inherits it, marking the session as automated.
         is_sidechain: metadata.is_sidechain
