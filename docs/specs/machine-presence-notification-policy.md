@@ -118,8 +118,16 @@ The user-facing settings surface should describe this as:
 
 > Use local Mac idle state to time session notifications.
 
-There must be a clear kill switch before this becomes a broadly distributed
-default.
+Collection must have a clear kill switch. This slice implements a Runtime
+Host-controlled policy check before local idle collection:
+
+- `GET /api/agents/machine-presence/policy` returns whether collection is
+  enabled for the authenticated device owner;
+- the Machine Agent checks that policy before reading local idle state;
+- `LONGHOUSE_DISABLE_MACHINE_PRESENCE=1` disables collection globally;
+- `User.prefs.machine_presence_enabled=false` disables collection per owner;
+- the POST endpoint rejects reports while collection is disabled, covering the
+  race where policy changes between check and report.
 
 ## Mac Collection
 
@@ -155,9 +163,10 @@ Implementation options:
 
 Preferred implementation for this slice:
 
-- add a dedicated `/api/agents/machine-presence` endpoint using the existing
-  device token auth;
+- add dedicated `/api/agents/machine-presence/policy` and
+  `/api/agents/machine-presence` endpoints using the existing device token auth;
 - post coarse presence every 60 seconds while the Machine Agent is online;
+- fetch policy before each local idle read and skip collection when disabled;
 - store only the latest presence per owner/device;
 - keep normal heartbeat cadence unchanged.
 

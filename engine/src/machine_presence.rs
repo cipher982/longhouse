@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use chrono::Utc;
+use serde::Deserialize;
 use serde::Serialize;
 
 use crate::shipping::client::ShipperClient;
@@ -41,6 +42,11 @@ pub struct MachinePresencePayload {
     pub measured_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct MachinePresencePolicy {
+    pub enabled: bool,
+}
+
 pub fn collect_machine_presence() -> MachinePresencePayload {
     let measured_at = Utc::now().to_rfc3339();
     match platform_idle_seconds() {
@@ -69,6 +75,17 @@ pub fn bucket_idle_seconds(idle_seconds: u64) -> MachinePresenceState {
     }
 }
 
+pub async fn fetch_machine_presence_policy(
+    client: &ShipperClient,
+) -> Result<MachinePresencePolicy> {
+    client
+        .get_json_with_timeout(
+            "/api/agents/machine-presence/policy",
+            Some(MACHINE_PRESENCE_POST_TIMEOUT),
+        )
+        .await
+}
+
 pub async fn send_machine_presence(
     client: &ShipperClient,
     payload: &MachinePresencePayload,
@@ -81,6 +98,16 @@ pub async fn send_machine_presence(
             Some(MACHINE_PRESENCE_POST_TIMEOUT),
         )
         .await
+}
+
+pub async fn send_machine_presence_if_enabled(client: &ShipperClient) -> Result<bool> {
+    let policy = fetch_machine_presence_policy(client).await?;
+    if !policy.enabled {
+        return Ok(false);
+    }
+    let payload = collect_machine_presence();
+    send_machine_presence(client, &payload).await?;
+    Ok(true)
 }
 
 #[cfg(target_os = "macos")]
@@ -238,5 +265,12 @@ mod tests {
         let value = serde_json::to_value(payload).unwrap();
         assert_eq!(value["state"], "idle_10m");
         assert_eq!(value["idle_seconds"], 601);
+    }
+
+    #[test]
+    fn machine_presence_policy_parses_enabled_flag_with_extra_fields() {
+        let policy: MachinePresencePolicy =
+            serde_json::from_str(r#"{"enabled":false,"min_interval_seconds":60}"#).unwrap();
+        assert!(!policy.enabled);
     }
 }

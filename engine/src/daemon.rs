@@ -180,7 +180,7 @@ struct HeartbeatPostResult {
 }
 
 struct MachinePresencePostResult {
-    result: Result<(), String>,
+    result: Result<bool, String>,
     task_elapsed_ms: u64,
 }
 
@@ -872,11 +872,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 match machine_presence_post_result {
                     Some(Ok(result)) => {
                         match result.result {
-                            Ok(()) => {
-                                tracing::debug!(
-                                    task_elapsed_ms = result.task_elapsed_ms,
-                                    "Machine presence POST sent"
-                                );
+                            Ok(true) => {
+                                tracing::debug!(task_elapsed_ms = result.task_elapsed_ms, "Machine presence POST sent");
+                            }
+                            Ok(false) => {
+                                tracing::debug!(task_elapsed_ms = result.task_elapsed_ms, "Machine presence collection disabled");
                             }
                             Err(err) => {
                                 tracing::debug!("Machine presence POST failed: {}", err);
@@ -1288,7 +1288,6 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                         spawn_machine_presence_post(
                             &mut machine_presence_post_tasks,
                             client.clone(),
-                            crate::machine_presence::collect_machine_presence(),
                         );
                     } else {
                         tracing::debug!("Skipping machine presence POST while previous POST is still in flight");
@@ -1767,11 +1766,10 @@ fn spawn_heartbeat_post(
 fn spawn_machine_presence_post(
     tasks: &mut JoinSet<MachinePresencePostResult>,
     client: ShipperClient,
-    payload: crate::machine_presence::MachinePresencePayload,
 ) {
     tasks.spawn_local(async move {
         let task_started = Instant::now();
-        let result = crate::machine_presence::send_machine_presence(&client, &payload)
+        let result = crate::machine_presence::send_machine_presence_if_enabled(&client)
             .await
             .map_err(|err| err.to_string());
         MachinePresencePostResult {

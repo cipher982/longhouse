@@ -1061,6 +1061,27 @@ def test_long_run_waiting_stale_machine_presence_uses_30m_fallback(tmp_path):
     engine.dispose()
 
 
+def test_long_run_waiting_missing_optional_presence_tables_uses_30m_fallback(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+    occurred_at = t0 + timedelta(minutes=31)
+    _seed_long_run_waiting_policy_case(
+        SessionLocal,
+        session_id=session_id,
+        started_at=t0,
+    )
+    with engine.begin() as conn:
+        conn.exec_driver_sql("DROP TABLE notification_client_presence")
+        conn.exec_driver_sql("DROP TABLE machine_presence")
+
+    push = _prepare_policy_long_run_push(SessionLocal, session_id=session_id, occurred_at=occurred_at)
+    assert push is not None
+    assert push.event_type == "long_run_waiting"
+
+    engine.dispose()
+
+
 def test_long_run_waiting_idle_10m_machine_presence_lowers_threshold(tmp_path):
     engine, SessionLocal = _make_db(tmp_path)
     session_id = str(uuid4())

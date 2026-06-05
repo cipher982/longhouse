@@ -14,10 +14,12 @@ from pydantic import Field
 from pydantic import field_validator
 from sqlalchemy.orm import Session
 
+from zerg.config import get_settings
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.device_token import DeviceToken
 from zerg.models.machine_presence import MachinePresence
+from zerg.models.user import User
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
 from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.time import UTCBaseModel
@@ -67,22 +69,59 @@ class MachinePresenceResponse(UTCBaseModel):
     received_at: datetime
 
 
+class MachinePresencePolicyResponse(UTCBaseModel):
+    enabled: bool
+    min_interval_seconds: int = 60
+
+
+def _machine_presence_identity(db: Session, token: DeviceToken | None) -> tuple[int, str]:
+    if token is not None and not isinstance(token, DeviceToken):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Machine presence requires a device token",
+        )
+    owner_id = _resolve_agents_owner_id(db, token)
+    device_id = (str(token.device_id or f"device:{token.id}") if isinstance(token, DeviceToken) else "auth-disabled-local")[:255]
+    return owner_id, device_id
+
+
+def _machine_presence_collection_enabled(db: Session, *, owner_id: int) -> bool:
+    settings = get_settings()
+    if not bool(getattr(settings, "machine_presence_enabled", True)):
+        return False
+
+    user = db.query(User).filter(User.id == owner_id).first()
+    prefs = dict(getattr(user, "prefs", None) or {})
+    value = prefs.get("machine_presence_enabled")
+    if isinstance(value, bool):
+        return value
+    return True
+
+
+@router.get("/machine-presence/policy", response_model=MachinePresencePolicyResponse)
+async def get_machine_presence_policy(
+    db: Session = Depends(get_db),
+    token: DeviceToken | None = Depends(verify_agents_token),
+) -> MachinePresencePolicyResponse:
+    owner_id, _device_id = _machine_presence_identity(db, token)
+    return MachinePresencePolicyResponse(enabled=_machine_presence_collection_enabled(db, owner_id=owner_id))
+
+
 @router.post("/machine-presence", response_model=MachinePresenceResponse)
 async def update_machine_presence(
     payload: MachinePresenceIn,
     db: Session = Depends(get_db),
     token: DeviceToken | None = Depends(verify_agents_token),
 ) -> MachinePresenceResponse:
-    if token is not None and not isinstance(token, DeviceToken):
+    owner_id, device_id = _machine_presence_identity(db, token)
+    if not _machine_presence_collection_enabled(db, owner_id=owner_id):
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Machine presence requires a device token",
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Machine presence collection is disabled",
         )
 
     now = datetime.now(timezone.utc)
     measured_at = (payload.measured_at or now).astimezone(timezone.utc)
-    owner_id = _resolve_agents_owner_id(db, token)
-    device_id = (str(token.device_id or f"device:{token.id}") if isinstance(token, DeviceToken) else "auth-disabled-local")[:255]
     state: MachinePresenceState = (
         _bucket_state_from_idle_seconds(payload.idle_seconds)
         if payload.idle_seconds is not None and payload.state != "locked"

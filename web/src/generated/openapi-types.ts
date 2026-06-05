@@ -3554,6 +3554,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/machine-presence/policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Machine Presence Policy */
+        get: operations["get_machine_presence_policy_agents_machine_presence_policy_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/machine-presence": {
         parameters: {
             query?: never;
@@ -6797,6 +6814,16 @@ export interface components {
             idle_seconds?: number | null;
             /** Measured At */
             measured_at?: string | null;
+        };
+        /** MachinePresencePolicyResponse */
+        MachinePresencePolicyResponse: {
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Min Interval Seconds
+             * @default 60
+             */
+            min_interval_seconds: number;
         };
         /** MachinePresenceResponse */
         MachinePresenceResponse: {
@@ -17288,6 +17315,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IngestResponse"];
+                };
+            };
+        };
+    };
+    get_machine_presence_policy_agents_machine_presence_policy_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MachinePresencePolicyResponse"];
                 };
             };
         };

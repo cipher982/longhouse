@@ -518,17 +518,22 @@ def prepare_session_blocked_reminder_push(
 
 def _recent_visible_web_client_exists(db: Session, *, owner_id: int, occurred_at: datetime) -> bool:
     threshold = occurred_at - WEB_CLIENT_PRESENCE_SUPPRESSION_WINDOW
-    return (
-        db.query(NotificationClientPresence.id)
-        .filter(
-            NotificationClientPresence.owner_id == owner_id,
-            NotificationClientPresence.client_type == "web",
-            NotificationClientPresence.visible.is_(True),
-            NotificationClientPresence.last_seen_at >= threshold,
+    try:
+        return (
+            db.query(NotificationClientPresence.id)
+            .filter(
+                NotificationClientPresence.owner_id == owner_id,
+                NotificationClientPresence.client_type == "web",
+                NotificationClientPresence.visible.is_(True),
+                NotificationClientPresence.last_seen_at >= threshold,
+            )
+            .first()
+            is not None
         )
-        .first()
-        is not None
-    )
+    except OperationalError as exc:
+        if _is_missing_optional_table(exc):
+            return False
+        raise
 
 
 def _machine_presence_rows_since(
@@ -539,7 +544,12 @@ def _machine_presence_rows_since(
     window: timedelta,
 ) -> list[MachinePresence]:
     threshold = occurred_at - window
-    rows = db.query(MachinePresence).filter(MachinePresence.owner_id == owner_id).all()
+    try:
+        rows = db.query(MachinePresence).filter(MachinePresence.owner_id == owner_id).all()
+    except OperationalError as exc:
+        if _is_missing_optional_table(exc):
+            return []
+        raise
     recent_rows: list[MachinePresence] = []
     for row in rows:
         received_at = _as_aware_utc(row.received_at)

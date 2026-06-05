@@ -9,6 +9,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use rand::Rng;
 use reqwest::header::{HeaderMap, HeaderValue, CONTENT_ENCODING, CONTENT_TYPE, USER_AGENT};
+use serde::de::DeserializeOwned;
 
 use crate::config::ShipperConfig;
 use crate::pipeline::compressor::{content_encoding, CompressionAlgo};
@@ -269,6 +270,22 @@ impl ShipperClient {
         let resp = request.send().await.context("POST failed")?;
         resp.error_for_status().context("POST returned non-2xx")?;
         Ok(())
+    }
+
+    /// GET a small JSON response with an optional request-level timeout.
+    pub async fn get_json_with_timeout<T: DeserializeOwned>(
+        &self,
+        path_suffix: &str,
+        request_timeout: Option<Duration>,
+    ) -> Result<T> {
+        let url = self.ingest_url.replace("/api/agents/ingest", path_suffix);
+        let mut request = self.client.get(&url);
+        if let Some(request_timeout) = request_timeout {
+            request = request.timeout(request_timeout);
+        }
+        let resp = request.send().await.context("GET failed")?;
+        let resp = resp.error_for_status().context("GET returned non-2xx")?;
+        resp.json::<T>().await.context("GET returned invalid JSON")
     }
 
     /// Get the ingest URL (for logging).
