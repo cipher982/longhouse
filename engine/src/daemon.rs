@@ -164,6 +164,10 @@ struct PathTaskResult {
     processing_elapsed: Duration,
 }
 
+fn is_opencode_database_job(job: &PathJob) -> bool {
+    job.provider == "opencode" && crate::opencode_db::is_opencode_database_path(&job.path)
+}
+
 struct DeferredRetry {
     due_at: Instant,
     provider: &'static str,
@@ -2643,6 +2647,56 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         }
     }
 
+    if is_opencode_database_job(&result.job) {
+        let file_start = Instant::now();
+        match shipper::ship_opencode_database(
+            &result.job.path,
+            &conn,
+            &task_context.client,
+            task_context.algo,
+            task_context.shipper_config.max_batch_bytes,
+            Some(&task_context.tracker),
+            Some(&task_context.parse_tracker),
+        )
+        .await
+        {
+            Ok((sessions_shipped, events_shipped)) => {
+                if sessions_shipped > 0 {
+                    tracing::info!(
+                        context = work_context(result.job.priority),
+                        path = %result.job.path.display(),
+                        provider = result.job.provider,
+                        sessions_shipped,
+                        events_shipped,
+                        elapsed_ms = file_start.elapsed().as_millis() as u64,
+                        "Shipped OpenCode SQLite database"
+                    );
+                }
+                shipper::log_slow_file_processing(
+                    work_context(result.job.priority),
+                    Path::new(&result.job.path),
+                    result.job.provider,
+                    events_shipped,
+                    0,
+                    0,
+                    file_start.elapsed(),
+                );
+                result.events_shipped = events_shipped;
+            }
+            Err(e) => {
+                if task_context.tracker.record_error() {
+                    tracing::warn!(
+                        "Error shipping OpenCode database {}: {}",
+                        result.job.path.display(),
+                        e
+                    );
+                }
+                result.local_retry_after = Some(local_retry_delay(result.job.priority));
+            }
+        }
+        return finish_path_task(result, task_started);
+    }
+
     let file_start = Instant::now();
     let prepare_started_at_ms = chrono::Utc::now().timestamp_millis();
     match prepare_file_for_job(&result.job, &task_context).await {
@@ -2766,6 +2820,47 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_observation() -> ObservationTrace {
+        ObservationTrace {
+            source: "test",
+            observed_at_ms: 1,
+            latest_observed_at_ms: None,
+            wake_received_at_ms: None,
+            enqueued_at_ms: 2,
+            session_id: None,
+            turn_id: None,
+            wake_reason: None,
+            file_len_hint: None,
+        }
+    }
+
+    #[test]
+    fn test_opencode_database_job_uses_sqlite_shipper_path() {
+        let job = PathJob {
+            path: PathBuf::from("/tmp/opencode.db"),
+            provider: "opencode",
+            priority: WorkPriority::Scan,
+            observation: test_observation(),
+        };
+        assert!(is_opencode_database_job(&job));
+
+        let wal_job = PathJob {
+            path: PathBuf::from("/tmp/opencode.db-wal"),
+            provider: "opencode",
+            priority: WorkPriority::Scan,
+            observation: test_observation(),
+        };
+        assert!(!is_opencode_database_job(&wal_job));
+
+        let codex_job = PathJob {
+            path: PathBuf::from("/tmp/opencode.db"),
+            provider: "codex",
+            priority: WorkPriority::Scan,
+            observation: test_observation(),
+        };
+        assert!(!is_opencode_database_job(&codex_job));
+    }
 
     fn empty_heartbeat_payload() -> heartbeat::HeartbeatPayload {
         heartbeat::HeartbeatPayload {
