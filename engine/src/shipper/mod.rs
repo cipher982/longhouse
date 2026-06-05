@@ -224,6 +224,8 @@ pub(crate) async fn ship_opencode_database(
     for candidate in sessions {
         let current_offset = file_state.get_offset(&candidate.source_key)?;
         let current_fingerprint = get_opencode_sqlite_fingerprint(conn, &candidate.source_key)?;
+        let persisted_longhouse_session_id =
+            get_opencode_sqlite_longhouse_session_id(conn, &candidate.source_key)?;
         if candidate.version <= current_offset
             && current_fingerprint.as_deref() == Some(candidate.fingerprint.as_str())
         {
@@ -254,6 +256,7 @@ pub(crate) async fn ship_opencode_database(
             .to_string();
         let longhouse_session_id =
             opencode_db::managed_longhouse_session_id_for_opencode(&provider_session_id)
+                .or(persisted_longhouse_session_id)
                 .unwrap_or_else(|| parse_result.metadata.session_id.clone());
         if parse_result.events.is_empty() && parse_result.source_lines.is_empty() {
             file_state.set_offset(
@@ -268,6 +271,7 @@ pub(crate) async fn ship_opencode_database(
                 &candidate.source_key,
                 &candidate.fingerprint,
                 candidate.version,
+                &longhouse_session_id,
             )?;
             continue;
         }
@@ -332,6 +336,7 @@ pub(crate) async fn ship_opencode_database(
             &candidate.source_key,
             &candidate.fingerprint,
             candidate.version,
+            &longhouse_session_id,
         )?;
         if session_events_shipped > 0 {
             sessions_shipped += 1;
@@ -348,9 +353,24 @@ fn ensure_opencode_sqlite_state_table(conn: &Connection) -> Result<()> {
             source_key TEXT PRIMARY KEY,
             fingerprint TEXT NOT NULL,
             version INTEGER NOT NULL DEFAULT 0,
+            longhouse_session_id TEXT,
             updated_at TEXT NOT NULL
         );",
     )?;
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(opencode_sqlite_state)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|row| row.ok())
+        .collect();
+    if !columns
+        .iter()
+        .any(|column| column == "longhouse_session_id")
+    {
+        conn.execute(
+            "ALTER TABLE opencode_sqlite_state ADD COLUMN longhouse_session_id TEXT",
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -367,23 +387,42 @@ fn get_opencode_sqlite_fingerprint(conn: &Connection, source_key: &str) -> Resul
     }
 }
 
+fn get_opencode_sqlite_longhouse_session_id(
+    conn: &Connection,
+    source_key: &str,
+) -> Result<Option<String>> {
+    let result = conn.query_row(
+        "SELECT longhouse_session_id FROM opencode_sqlite_state WHERE source_key = ?1",
+        [source_key],
+        |row| row.get::<_, Option<String>>(0),
+    );
+    match result {
+        Ok(value) => Ok(value.filter(|value| uuid::Uuid::parse_str(value).is_ok())),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
 fn set_opencode_sqlite_fingerprint(
     conn: &Connection,
     source_key: &str,
     fingerprint: &str,
     version: u64,
+    longhouse_session_id: &str,
 ) -> Result<()> {
     conn.execute(
-        "INSERT INTO opencode_sqlite_state (source_key, fingerprint, version, updated_at)
-         VALUES (?1, ?2, ?3, ?4)
+        "INSERT INTO opencode_sqlite_state (source_key, fingerprint, version, longhouse_session_id, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
          ON CONFLICT(source_key) DO UPDATE SET
              fingerprint = excluded.fingerprint,
              version = MAX(opencode_sqlite_state.version, excluded.version),
+             longhouse_session_id = COALESCE(excluded.longhouse_session_id, opencode_sqlite_state.longhouse_session_id),
              updated_at = excluded.updated_at",
         rusqlite::params![
             source_key,
             fingerprint,
             version as i64,
+            longhouse_session_id,
             Utc::now().to_rfc3339()
         ],
     )?;
@@ -3085,10 +3124,41 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::{Arc, Mutex};
 
+    static OPENCODE_STATE_ROOT_ENV_LOCK: Mutex<()> = Mutex::new(());
+
     fn make_db() -> (tempfile::NamedTempFile, Connection) {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(tmp.path())).unwrap();
         (tmp, conn)
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &std::ffi::OsStr) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::remove_var(key);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.as_ref() {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
     }
 
     fn claude_session_lines() -> &'static str {
@@ -3461,6 +3531,81 @@ mod tests {
         .await
         .unwrap();
         assert_eq!((skipped_sessions, skipped_events), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn test_ship_opencode_database_persists_managed_session_binding() {
+        let _lock = OPENCODE_STATE_ROOT_ENV_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        create_opencode_fixture_db(&db_path);
+        let state_root = temp.path().join("managed-state");
+        std::fs::create_dir_all(&state_root).unwrap();
+        let managed_session_id = "11111111-2222-4333-8444-555555555555";
+        std::fs::write(
+            state_root.join("managed.state.json"),
+            serde_json::json!({
+                "schema_version": 1,
+                "provider": "opencode",
+                "longhouse_session_id": managed_session_id,
+                "opencode_session_id": "ses_test",
+                "phase": "idle"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let (_state_file, conn) = make_db();
+        let (url, captured, handle) = spawn_http_sequence_server(&[("200 OK", "{}")]);
+        let client = make_test_client(&url);
+
+        let env_guard = EnvVarGuard::set("LONGHOUSE_OPENCODE_STATE_ROOT", state_root.as_os_str());
+        ship_opencode_database(
+            &db_path,
+            &conn,
+            &client,
+            CompressionAlgo::Gzip,
+            10_000_000,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        drop(env_guard);
+        handle.join().unwrap();
+        let first_payload = decode_payload(&captured.lock().unwrap()[0]);
+        assert_eq!(first_payload["id"], managed_session_id);
+
+        std::fs::remove_dir_all(&state_root).unwrap();
+        let _removed_env = EnvVarGuard::remove("LONGHOUSE_OPENCODE_STATE_ROOT");
+        Connection::open(&db_path)
+            .unwrap()
+            .execute(
+                "UPDATE part SET data = ?1 WHERE id = 'prt_assistant'",
+                [r#"{"type":"text","text":"managed binding survived"}"#],
+            )
+            .unwrap();
+        let (url, captured, handle) = spawn_http_sequence_server(&[("200 OK", "{}")]);
+        let client = make_test_client(&url);
+
+        ship_opencode_database(
+            &db_path,
+            &conn,
+            &client,
+            CompressionAlgo::Gzip,
+            10_000_000,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        handle.join().unwrap();
+        let second_payload = decode_payload(&captured.lock().unwrap()[0]);
+        assert_eq!(second_payload["id"], managed_session_id);
+        assert_eq!(
+            second_payload["events"][1]["content_text"],
+            "managed binding survived"
+        );
     }
 
     #[tokio::test]

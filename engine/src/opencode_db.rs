@@ -282,10 +282,31 @@ pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Resu
 }
 
 fn open_readonly(path: &Path) -> Result<Connection> {
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .with_context(|| format!("opening OpenCode database {}", path.display()))?;
-    conn.busy_timeout(Duration::from_millis(250))?;
+    let uri = sqlite_readonly_uri(path);
+    let conn = Connection::open_with_flags(
+        &uri,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+    )
+    .with_context(|| format!("opening OpenCode database {}", path.display()))?;
+    conn.busy_timeout(Duration::from_secs(2))?;
     Ok(conn)
+}
+
+fn sqlite_readonly_uri(path: &Path) -> String {
+    let path = path.to_string_lossy();
+    let mut uri = String::from("file:");
+    for byte in path.as_bytes() {
+        match *byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'/' | b'.' | b'-' | b'_' => {
+                uri.push(char::from(*byte));
+            }
+            _ => {
+                uri.push_str(&format!("%{byte:02X}"));
+            }
+        }
+    }
+    uri.push_str("?mode=ro");
+    uri
 }
 
 fn load_session(conn: &Connection, provider_session_id: &str) -> Result<OpenCodeSessionRow> {
@@ -988,6 +1009,31 @@ mod tests {
             .raw_line
             .contains("\"url_original_chars\":922"));
         assert!(!file_source_line.raw_line.contains(&"A".repeat(900)));
+    }
+
+    #[test]
+    fn open_readonly_reads_wal_database_with_writer_present() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("open code.db");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.pragma_update(None, "journal_mode", "WAL").unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sample (id INTEGER PRIMARY KEY, value TEXT);
+             INSERT INTO sample (value) VALUES ('committed');",
+        )
+        .unwrap();
+
+        let writer = Connection::open(&db_path).unwrap();
+        writer
+            .execute_batch("BEGIN IMMEDIATE; INSERT INTO sample (value) VALUES ('pending');")
+            .unwrap();
+
+        let readonly = open_readonly(&db_path).unwrap();
+        let count: i64 = readonly
+            .query_row("SELECT COUNT(*) FROM sample", [], |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(count, 1);
     }
 
     #[test]

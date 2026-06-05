@@ -249,6 +249,9 @@ impl<'a> FileState<'a> {
 
         let mut pruned = 0usize;
         for path in &paths {
+            if path.contains("#opencode:") {
+                continue;
+            }
             if !std::path::Path::new(path).exists() {
                 self.conn
                     .execute("DELETE FROM file_state WHERE path = ?", [path])?;
@@ -387,5 +390,24 @@ mod tests {
             100,
             "Recent entry should survive pruning"
         );
+    }
+
+    #[test]
+    fn test_file_state_prune_keeps_opencode_synthetic_source_keys() {
+        let (_tmp, conn) = setup();
+        let fs = FileState::new(&conn);
+        let old_date = (chrono::Utc::now() - chrono::Duration::days(35)).to_rfc3339();
+        let source_key = "/tmp/opencode.db#opencode:ses_123";
+        conn.execute(
+            "INSERT OR REPLACE INTO file_state (path, acked_offset, queued_offset, provider, session_id, provider_session_id, last_updated)
+             VALUES (?1, 500, 500, 'opencode', '11111111-1111-4111-8111-111111111111', 'ses_123', ?2)",
+            (source_key, old_date),
+        )
+        .unwrap();
+
+        let pruned = fs.prune_stale(30).unwrap();
+
+        assert_eq!(pruned, 0);
+        assert_eq!(fs.get_offset(source_key).unwrap(), 500);
     }
 }
