@@ -859,7 +859,7 @@ report() {
     instance="$(basename "$instance_dir")"
     [[ "$instance" == "tmp" ]] && continue
     latest="$(ls -1t "$instance_dir"/longhouse.*.sqlite.* 2>/dev/null | head -n1 || true)"
-    count="$(ls -1 "$instance_dir"/longhouse.*.sqlite.* 2>/dev/null | wc -l | tr -d ' ')"
+    count="$(find "$instance_dir" -maxdepth 1 -type f -name 'longhouse.*.sqlite.*' -print 2>/dev/null | wc -l | tr -d ' ')"
     if [[ -n "$latest" ]]; then
       size_bytes="$(stat_bytes "$latest")"
       log "backup instance=$instance files=$count latest=$(basename "$latest") latest_bytes=$size_bytes"

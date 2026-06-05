@@ -96,6 +96,12 @@ PY
   [[ -f "$fresh_raw" ]] || fail "expected fresh unmanaged raw backup to be preserved"
   rm -f "$fresh_raw"
 
+  mkdir -p "$backup_root/empty"
+  local report_output
+  report_output="$(bash "$OPS_SCRIPT" report "${common_args[@]}" 2>&1)"
+  grep -q "backup instance=empty files=0" <<<"$report_output" \
+    || fail "expected report to include empty archive directory"
+
   local instance count manifests latest ts manifest restore expected_sha actual_sha
   for instance in alice bob; do
     count="$(ls -1 "$backup_root/$instance"/longhouse.*.sqlite.* 2>/dev/null | wc -l | tr -d ' ')"

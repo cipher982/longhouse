@@ -28,7 +28,7 @@ Spec: `docs/specs/reliability-data-plane.md`
 - [x] Migrate `/api/agents/presence` away from request-session-held serialized writes.
 - [ ] Gate hot endpoint access to raw archive/search/large event tables.
 - [x] Remove no-query session-list dependency on `events.content_text` by using hot card previews.
-- [ ] Add cheap diagnostics that avoid full DB scans.
+- [x] Verify cheap diagnostics avoid full DB scans; fix `zerg-ops report` empty-archive handling.
 
 ## Phase 2: Filesystem Archive Store
 
