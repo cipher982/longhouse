@@ -120,6 +120,37 @@ pub fn provider_for_path(
     None
 }
 
+pub fn session_path_for_watcher_event(
+    path: &std::path::Path,
+    providers: &[ProviderConfig],
+) -> Option<(PathBuf, &'static str)> {
+    for provider in providers {
+        if !path.starts_with(&provider.root) {
+            continue;
+        }
+        if provider.name == "opencode" {
+            if let Some(db_path) = opencode_database_path_for_event(path) {
+                return Some((db_path, provider.name));
+            }
+            continue;
+        }
+        if is_provider_session_file(provider, path) {
+            return Some((path.to_path_buf(), provider.name));
+        }
+    }
+    None
+}
+
+fn opencode_database_path_for_event(path: &Path) -> Option<PathBuf> {
+    match path.file_name().and_then(|name| name.to_str()) {
+        Some("opencode.db") => Some(path.to_path_buf()),
+        Some("opencode.db-wal") | Some("opencode.db-shm") => {
+            Some(path.with_file_name("opencode.db"))
+        }
+        _ => None,
+    }
+}
+
 fn is_provider_session_file(provider: &ProviderConfig, path: &Path) -> bool {
     if provider.name == "opencode" {
         return path.file_name().and_then(|name| name.to_str()) == Some("opencode.db");
@@ -201,5 +232,32 @@ mod tests {
 
         assert_eq!(provider_for_path(&db, &providers), Some("opencode"));
         assert_eq!(provider_for_path(&wal, &providers), None);
+    }
+
+    #[test]
+    fn opencode_watcher_sidecars_map_to_canonical_database_file() {
+        let home = PathBuf::from("/tmp/home");
+        let claude_root = PathBuf::from("/tmp/custom-claude");
+        let providers = provider_candidates(&home, &claude_root);
+        let db = home
+            .join(".local")
+            .join("share")
+            .join("opencode")
+            .join("opencode.db");
+        let wal = db.with_file_name("opencode.db-wal");
+        let shm = db.with_file_name("opencode.db-shm");
+
+        assert_eq!(
+            session_path_for_watcher_event(&db, &providers),
+            Some((db.clone(), "opencode"))
+        );
+        assert_eq!(
+            session_path_for_watcher_event(&wal, &providers),
+            Some((db.clone(), "opencode"))
+        );
+        assert_eq!(
+            session_path_for_watcher_event(&shm, &providers),
+            Some((db, "opencode"))
+        );
     }
 }

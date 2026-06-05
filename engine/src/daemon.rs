@@ -1135,18 +1135,27 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
                 let events = watcher.collect_ready_batch(first_event);
                 for event in events {
-                    if let Some(provider) = discovery::provider_for_path(&event.path, &providers) {
+                    if let Some((session_path, provider)) =
+                        discovery::session_path_for_watcher_event(&event.path, &providers)
+                    {
+                        let session_event = WatcherEvent {
+                            path: session_path,
+                            observed_at_ms: event.observed_at_ms,
+                            latest_observed_at_ms: event.latest_observed_at_ms,
+                        };
                         if should_defer_fsevent_for_managed_wake(
                             &latest_transcript_wake_observed,
                             &managed_codex_transcript_paths,
-                            &event,
+                            &session_event,
                             provider,
                         ) {
                             let observation = ObservationTrace {
                                 source: "fsevent",
-                                observed_at_ms: event.observed_at_ms,
+                                observed_at_ms: session_event.observed_at_ms,
                                 latest_observed_at_ms: Some(
-                                    event.latest_observed_at_ms.max(event.observed_at_ms),
+                                    session_event
+                                        .latest_observed_at_ms
+                                        .max(session_event.observed_at_ms),
                                 ),
                                 wake_received_at_ms: None,
                                 enqueued_at_ms: now_ms(),
@@ -1156,7 +1165,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 file_len_hint: None,
                             };
                             deferred_retries.insert(
-                                event.path.clone(),
+                                session_event.path.clone(),
                                 DeferredRetry {
                                     due_at: Instant::now() + MANAGED_WAKE_FSEVENT_FALLBACK_DELAY,
                                     provider,
@@ -1166,21 +1175,21 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             );
                             tracing::debug!(
                                 provider,
-                                path = %event.path.display(),
-                                observed_at_ms = event.observed_at_ms,
-                                latest_observed_at_ms = event.latest_observed_at_ms,
+                                path = %session_event.path.display(),
+                                observed_at_ms = session_event.observed_at_ms,
+                                latest_observed_at_ms = session_event.latest_observed_at_ms,
                                 delay_ms = MANAGED_WAKE_FSEVENT_FALLBACK_DELAY.as_millis(),
                                 "Deferring filesystem live ship because managed wake socket owns this turn"
                             );
                             continue;
                         }
                         scheduler.enqueue_observed_window(
-                            event.path,
+                            session_event.path,
                             provider,
                             WorkPriority::Live,
                             "fsevent",
-                            event.observed_at_ms,
-                            event.latest_observed_at_ms,
+                            session_event.observed_at_ms,
+                            session_event.latest_observed_at_ms,
                         );
                     } else {
                         tracing::debug!(
