@@ -776,6 +776,107 @@ describe("SessionChat", () => {
     expect(queueCalls).toBe(0);
   });
 
+  it("uses runtime execution as working state when the lock endpoint is stale false", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData<SessionLockInfo | null>(["session-lock", "sess-1"], {
+      locked: false,
+      holder: null,
+      time_remaining_seconds: null,
+      fork_available: false,
+    });
+
+    let submittedIntent: string | null = null;
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve([]);
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        const payload = JSON.parse(String(init.body ?? "{}"));
+        submittedIntent = payload.intent;
+        return Promise.resolve({
+          outcome: "sent",
+          input_id: 44,
+          intent: "steer",
+          queued: [],
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat(
+      {
+        chatMode: "managed_local",
+        canQueueNextInput: true,
+        canSteerActiveTurn: true,
+        isSessionExecuting: true,
+      },
+      { queryClient },
+    );
+
+    await user.type(screen.getByRole("textbox"), "still working");
+    expect(screen.getByRole("button", { name: /send update/i })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: /send update/i }));
+
+    await waitFor(() => expect(submittedIntent).toBe("steer"));
+  });
+
+  it("clears accepted steer input without waiting for a durable user transcript row", async () => {
+    const user = userEvent.setup();
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData<SessionLockInfo | null>(["session-lock", "sess-1"], {
+      locked: true,
+      holder: null,
+      time_remaining_seconds: null,
+      fork_available: true,
+    });
+
+    requestMock.mockImplementation((path: string, init?: RequestInit) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: true, fork_available: true });
+      }
+      if (String(path).endsWith("/inputs") && !init) {
+        return Promise.resolve([]);
+      }
+      if (String(path).endsWith("/input") && init?.method === "POST") {
+        return Promise.resolve({
+          outcome: "sent",
+          input_id: 45,
+          intent: "steer",
+          queued: [],
+        });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    renderSessionChat(
+      {
+        chatMode: "managed_local",
+        canQueueNextInput: true,
+        canSteerActiveTurn: true,
+        isSessionExecuting: true,
+        timelineItems: [],
+      },
+      { queryClient },
+    );
+
+    await user.type(screen.getByRole("textbox"), "redirect now");
+    await user.click(screen.getByRole("button", { name: /send update/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByText("redirect now")).not.toBeInTheDocument();
+      expect(screen.queryByLabelText("Syncing transcript")).not.toBeInTheDocument();
+    });
+    expect(screen.getByText("Sent")).toBeInTheDocument();
+  });
+
   it("offers Queue instead after a steer fails with turn_ended", async () => {
     const user = userEvent.setup();
     const queryClient = new QueryClient({

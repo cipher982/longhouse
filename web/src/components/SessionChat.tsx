@@ -79,6 +79,7 @@ interface PendingManagedLocalInput {
   text: string;
   clientRequestId: string;
   serverInputId: number | null;
+  intent: "auto" | "queue" | "steer";
   phase: "submitting" | "sent";
 }
 
@@ -116,6 +117,8 @@ interface SessionChatProps {
   canSteerActiveTurn?: boolean;
   /** True when backend detected stale managed execution with no active tool. */
   isStalled?: boolean;
+  /** True when runtime truth says the provider is currently executing. */
+  isSessionExecuting?: boolean;
   /**
    * Durable timeline rows visible in the parent workspace. When present,
    * managed-local optimistic inputs stay visible until the backend-authored
@@ -187,6 +190,7 @@ export function SessionChat({
   canQueueNextInput = false,
   canSteerActiveTurn = false,
   isStalled = false,
+  isSessionExecuting = false,
   timelineItems,
 }: SessionChatProps) {
   const isDock = layout === "dock";
@@ -379,7 +383,7 @@ export function SessionChat({
         : null,
     [lockStatusQuery.data],
   );
-  const isSendLocked = Boolean(lockInfo?.locked);
+  const isSendLocked = Boolean(lockInfo?.locked) || isSessionExecuting;
 
   const queuedInputsQuery = useQuery<QueuedInputSummary[]>({
     queryKey: ["session-inputs", session.id],
@@ -439,6 +443,7 @@ export function SessionChat({
         text: message,
         clientRequestId,
         serverInputId: null,
+        intent,
         phase: "submitting",
       });
       setIsSubmitting(true);
@@ -478,11 +483,13 @@ export function SessionChat({
 
           setPendingManagedLocalInput((pending) =>
             pending?.clientRequestId === clientRequestId
-              ? { ...pending, serverInputId: result.input_id, phase: "sent" }
+              ? { ...pending, serverInputId: result.input_id, intent: result.intent, phase: "sent" }
               : pending,
           );
           const refreshPromise = refreshCurrentSessionWorkspace();
-          if (!reconcilePendingInputWithTimeline) {
+          if (result.intent === "steer") {
+            setPendingManagedLocalInput(null);
+          } else if (!reconcilePendingInputWithTimeline) {
             void refreshPromise.finally(() => setPendingManagedLocalInput(null));
           }
         } else {
