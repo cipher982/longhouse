@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime
 from datetime import timezone
 
@@ -14,6 +15,7 @@ from fastapi import status
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
+from zerg.database import get_session_factory
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.metrics import event_age_at_ingest_seconds
@@ -38,6 +40,11 @@ from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.write_serializer import get_write_serializer
 
 router = APIRouter(prefix="/agents/runtime", tags=["agents"])
+_TRUTHY_ENV = {"1", "true", "yes", "on"}
+
+
+def _request_session_released_by_serializer(ws: object) -> bool:
+    return bool(getattr(ws, "is_configured", False)) and os.getenv("TESTING", "").strip().lower() not in _TRUTHY_ENV
 
 
 @router.post("/events/batch", response_model=RuntimeEventBatchResult)
@@ -85,6 +92,7 @@ async def ingest_runtime_observation_batch(
 
         if live_transcript_only:
             _publish_live_transcript_previews(events, now=now_utc)
+        owner_id = resolve_session_message_owner_id(db, _token)
 
         def _do_runtime_state(wdb: Session):
             ingest_result = ingest_runtime_events(wdb, events)
@@ -115,11 +123,12 @@ async def ingest_runtime_observation_batch(
             ]
             return ingest_result, push_contexts
 
-        result, push_contexts = await ws.execute_or_direct(
+        result, push_contexts = await ws.execute_after_closing_request_session(
             _do_runtime_state,
             db,
             label="runtime-live" if live_transcript_only else "runtime-observations",
         )
+        request_session_released = _request_session_released_by_serializer(ws)
         from zerg.services.write_serializer import last_write_timing
 
         timing = last_write_timing()
@@ -153,7 +162,6 @@ async def ingest_runtime_observation_batch(
         widget_push = None
 
         if push_contexts:
-            owner_id = resolve_session_message_owner_id(db, _token)
             push_context_by_session = {item["session_id"]: item for item in push_contexts}
             push_session_ids = list(push_context_by_session.keys())
 
@@ -291,12 +299,22 @@ async def ingest_runtime_observation_batch(
                     dispatch_label_prefix="runtime",
                 )
                 if is_session_message_deliverable_state(canonical_state):
-                    await deliver_queued_session_messages(
-                        db=db,
-                        owner_id=owner_id,
-                        target_session_id=sid,
-                        target_presence_state=canonical_state,
-                    )
+                    if request_session_released:
+                        session_factory = get_session_factory()
+                        with session_factory() as delivery_db:
+                            await deliver_queued_session_messages(
+                                db=delivery_db,
+                                owner_id=owner_id,
+                                target_session_id=sid,
+                                target_presence_state=canonical_state,
+                            )
+                    else:
+                        await deliver_queued_session_messages(
+                            db=db,
+                            owner_id=owner_id,
+                            target_session_id=sid,
+                            target_presence_state=canonical_state,
+                        )
             except Exception:
                 import logging
 
@@ -306,7 +324,10 @@ async def ingest_runtime_observation_batch(
     except HTTPException:
         raise
     except Exception as exc:
-        db.rollback()
+        try:
+            db.rollback()
+        except Exception:
+            pass
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to ingest runtime observations",

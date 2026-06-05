@@ -23,6 +23,7 @@ from uuid import uuid4
 import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -124,6 +125,63 @@ def test_heartbeat_endpoint_creates_row(tmp_path):
             assert hb.is_offline == 0
     finally:
         api_app_ref.dependency_overrides = {}
+
+
+def test_heartbeat_releases_request_db_before_serialized_write(tmp_path, monkeypatch):
+    from zerg.dependencies.agents_auth import verify_agents_token
+    from zerg.main import api_app
+
+    engine = make_engine(f"sqlite:///{tmp_path}/heartbeat_release.db", pool_size=1, max_overflow=0)
+    Base.metadata.create_all(bind=engine)
+    SessionLocal = sessionmaker(bind=engine)
+    observations: dict[str, int] = {}
+
+    class ReleaseCheckingSerializer:
+        is_configured = True
+
+        async def execute_after_closing_request_session(self, fn, fallback_db, **_kwargs):
+            observations["before_close"] = engine.pool.checkedout()
+            fallback_db.close()
+            observations["after_close"] = engine.pool.checkedout()
+            with SessionLocal() as write_db:
+                result = fn(write_db)
+                write_db.commit()
+                return result
+
+        async def execute_or_direct(self, *_args, **_kwargs):  # pragma: no cover - regression guard
+            raise AssertionError("heartbeat must release the request DB before waiting on serialized writes")
+
+    def override_get_db():
+        with SessionLocal() as db:
+            db.execute(text("SELECT 1"))
+            yield db
+
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="heartbeat-release", id="token-1")
+
+    monkeypatch.setattr("zerg.routers.heartbeat.get_write_serializer", lambda: ReleaseCheckingSerializer())
+    api_app.dependency_overrides[get_db] = override_get_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+    try:
+        with TestClient(api_app, backend="asyncio") as client:
+            response = client.post(
+                "/agents/heartbeat",
+                json={
+                    "version": "0.5.0",
+                    "daemon_pid": 12345,
+                    "spool_pending_count": 0,
+                    "parse_error_count_1h": 0,
+                    "consecutive_ship_failures": 0,
+                    "disk_free_bytes": 50_000_000_000,
+                    "is_offline": False,
+                },
+            )
+        assert response.status_code == 204, response.text
+    finally:
+        api_app.dependency_overrides = {}
+        engine.dispose()
+
+    assert observations == {"before_close": 1, "after_close": 0}
 
 
 def test_heartbeat_endpoint_appends_history_rows(tmp_path):

@@ -411,6 +411,48 @@ def test_happy_path_inserts_live_session(tmp_path):
     assert sent["payload"]["provider"] == "codex"
 
 
+def test_remote_launch_does_not_wait_on_write_serializer_when_writer_saturated(tmp_path, monkeypatch):
+    class SaturatedWriter:
+        is_configured = True
+        writer_active = True
+        active_label = "ingest-replay"
+        active_age_ms = 30_000.0
+        queue_depth = 999
+
+        async def execute(self, *_args, **_kwargs):  # pragma: no cover - regression guard
+            raise AssertionError("remote launch should not enter the serialized writer lane")
+
+        async def execute_or_direct(self, *_args, **_kwargs):  # pragma: no cover - regression guard
+            raise AssertionError("remote launch should not enter the serialized writer lane")
+
+        async def execute_after_closing_request_session(self, *_args, **_kwargs):  # pragma: no cover - regression guard
+            raise AssertionError("remote launch should not enter the serialized writer lane")
+
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: SaturatedWriter())
+
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder")
+
+    with SessionLocal() as db:
+        result = asyncio.run(
+            launch_remote_session(
+                db,
+                RemoteLaunchParams(
+                    owner_id=OWNER_ID,
+                    device_id="cinder",
+                    provider="codex",
+                    cwd="/Users/me/repo",
+                ),
+                registry=registry,
+            )
+        )
+
+    assert result.launch_state == "live"
+    assert len(registry.sent) == 1
+
+
 def test_happy_path_inserts_live_claude_channel_session(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)

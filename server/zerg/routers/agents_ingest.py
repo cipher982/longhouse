@@ -744,7 +744,7 @@ async def ingest_session(
             with tracer.start_as_current_span("longhouse.ingest.write") as write_span:
                 write_started = time.monotonic()
                 try:
-                    result = await ws.execute_or_direct(
+                    result = await ws.execute_after_closing_request_session(
                         _do_ingest,
                         db,
                         label=write_label,

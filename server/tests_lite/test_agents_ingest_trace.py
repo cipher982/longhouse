@@ -16,11 +16,13 @@ from fastapi import HTTPException
 from fastapi import Response
 from fastapi import status
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.models.agents import AgentSession
@@ -417,7 +419,7 @@ def test_archive_ingest_write_timeout_returns_typed_backpressure(tmp_path, monke
         active_age_ms = 0.0
         queue_depth = 0
 
-        async def execute_or_direct(self, *args, **kwargs):
+        async def execute_after_closing_request_session(self, *args, **kwargs):
             assert kwargs["label"] == "ingest-replay"
             assert kwargs["timeout_seconds"] is not None
             raise asyncio.TimeoutError
@@ -473,6 +475,86 @@ def test_archive_ingest_write_timeout_returns_typed_backpressure(tmp_path, monke
         assert response.headers["X-Ingest-Error-Kind"] == "archive_ingest_backpressure"
     finally:
         api_app.dependency_overrides.clear()
+
+
+def test_agents_ingest_releases_request_db_before_serialized_write(tmp_path, monkeypatch):
+    engine = make_engine(f"sqlite:///{tmp_path}/ingest_release.db", pool_size=1, max_overflow=0)
+    Base.metadata.create_all(bind=engine)
+    factory = make_sessionmaker(engine)
+    observations: dict[str, int] = {}
+
+    class ReleaseCheckingSerializer:
+        is_configured = True
+        writer_active = False
+        active_label = None
+        active_age_ms = 0.0
+        queue_depth = 0
+
+        async def execute_after_closing_request_session(self, fn, fallback_db, **_kwargs):
+            observations["before_close"] = engine.pool.checkedout()
+            fallback_db.close()
+            observations["after_close"] = engine.pool.checkedout()
+            with factory() as write_db:
+                result = fn(write_db)
+                write_db.commit()
+                return result
+
+        async def execute(self, fn, **_kwargs):
+            with factory() as write_db:
+                result = fn(write_db)
+                write_db.commit()
+                return result
+
+        async def execute_or_direct(self, *_args, **_kwargs):  # pragma: no cover - regression guard
+            raise AssertionError("ingest must release the request DB before waiting on serialized writes")
+
+    def override_db():
+        db = factory()
+        try:
+            db.execute(text("SELECT 1"))
+            yield db
+        finally:
+            db.close()
+
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="ingest-release", id="token-1", owner_id=1)
+
+    monkeypatch.delenv("TESTING", raising=False)
+    monkeypatch.setattr(
+        "zerg.services.write_serializer.get_write_serializer",
+        lambda: ReleaseCheckingSerializer(),
+    )
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+    api_app.dependency_overrides[require_single_tenant] = lambda: None
+    try:
+        response = TestClient(api_app).post(
+            "/agents/ingest",
+            json={
+                "id": "31111111-2222-3333-4444-555555555555",
+                "provider": "codex",
+                "environment": "test",
+                "project": "zerg",
+                "started_at": "2026-01-01T00:00:00Z",
+                "events": [
+                    {
+                        "role": "assistant",
+                        "content_text": "hi",
+                        "timestamp": "2026-01-01T00:00:01Z",
+                        "source_path": "/tmp/ingest-release.jsonl",
+                        "source_offset": 0,
+                        "raw_json": '{"type":"assistant","text":"hi"}',
+                    }
+                ],
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 200, response.text
+    finally:
+        api_app.dependency_overrides.clear()
+        engine.dispose()
+
+    assert observations == {"before_close": 1, "after_close": 0}
 
 
 def test_agents_ingest_emits_phase1_timing_headers(tmp_path):

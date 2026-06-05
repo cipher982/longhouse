@@ -8,6 +8,7 @@ Covers:
 
 import asyncio
 import json
+import os
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -15,8 +16,13 @@ from time import monotonic
 from types import SimpleNamespace
 
 import pytest
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy import event as sqlalchemy_event
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
+os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg.database import Base
 from zerg.database import get_db
@@ -32,6 +38,8 @@ from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
 from zerg.services.session_observations import OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
+from zerg.services.session_listing import SessionListParams
+from zerg.services.session_listing import list_agent_sessions
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_continue_targets import _bounded_source_path
@@ -661,6 +669,100 @@ def test_native_continue_source_line_fallback_uses_session_only_lookup(tmp_path)
     assert source_path == "/tmp/latest-session.jsonl"
     source_statements = " ".join(statement.lower() for statement in statements if "source_lines" in statement.lower())
     assert "thread_id" not in source_statements
+
+
+def test_no_query_session_lists_do_not_touch_cold_archive_tables(tmp_path):
+    factory = _make_db(tmp_path, "hot_list_cold_table_guard.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            provider="codex",
+            project="hot-list-cold-guard",
+            started_at=now - timedelta(minutes=5),
+            user_messages=1,
+            assistant_messages=1,
+        )
+        session.first_user_message_preview = "hot preview"
+        session.last_visible_text_preview = "hot latest"
+        db.add(
+            AgentSourceLine(
+                session_id=session.id,
+                thread_id=None,
+                source_path="/tmp/cold-archive.jsonl",
+                source_offset=1,
+                branch_id=0,
+                raw_json='{"type":"cold"}',
+                line_hash="hot-list-cold-guard",
+            )
+        )
+        db.commit()
+
+        statements: list[str] = []
+
+        def _collect_statement(_conn, _cursor, statement, _parameters, _context, _executemany):
+            statements.append(statement)
+
+        bind = db.get_bind()
+        sqlalchemy_event.listen(bind, "before_cursor_execute", _collect_statement)
+        try:
+            agent_result = asyncio.run(
+                list_agent_sessions(
+                    db=db,
+                    auth=SimpleNamespace(device_id="timeline-runtime", id="token-1", owner_id=1),
+                    params=SessionListParams(
+                        project="hot-list-cold-guard",
+                        provider="codex",
+                        environment=None,
+                        include_test=False,
+                        hide_autonomous=False,
+                        device_id=None,
+                        days_back=90,
+                        query=None,
+                        limit=5,
+                        offset=0,
+                        sort=None,
+                        mode="lexical",
+                        context_mode="forensic",
+                    ),
+                    owner_id=1,
+                )
+            )
+            timeline_result = asyncio.run(
+                list_timeline_sessions_for_browser(
+                    db=db,
+                    params=TimelineSessionListParams(
+                        project="hot-list-cold-guard",
+                        provider="codex",
+                        environment=None,
+                        include_test=False,
+                        hide_autonomous=False,
+                        device_id=None,
+                        days_back=90,
+                        query=None,
+                        limit=5,
+                        offset=0,
+                        sort=None,
+                        mode="lexical",
+                        context_mode="forensic",
+                    ),
+                    owner_id=1,
+                )
+            )
+        finally:
+            sqlalchemy_event.remove(bind, "before_cursor_execute", _collect_statement)
+    finally:
+        db.close()
+
+    assert [item.first_user_message for item in agent_result.response.sessions] == ["hot preview"]
+    assert len(timeline_result.response.sessions) == 1
+    rendered_sql = " ".join(statement.lower() for statement in statements)
+    assert "source_lines" not in rendered_sql
+    assert "events_fts" not in rendered_sql
+    assert " from events" not in rendered_sql
+    assert " join events" not in rendered_sql
 
 
 def test_sessions_list_hides_bridge_transcript_preview_after_durable_activity_catches_up(tmp_path):

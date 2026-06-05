@@ -22,11 +22,11 @@ Spec: `docs/specs/reliability-data-plane.md`
 
 ## Phase 1: Hot-Path Guardrails
 
-- [ ] Add or verify DB-session release before queued writes across hot routes.
-- [ ] Add pool checkout/write timing visibility where missing.
-- [ ] Add tests for writer saturation with health/list/launch/heartbeat.
+- [x] Add or verify DB-session release before queued writes across hot routes.
+- [x] Add pool checkout/write timing visibility where missing.
+- [x] Add tests for writer saturation with health/list/launch/heartbeat.
 - [x] Migrate `/api/agents/presence` away from request-session-held serialized writes.
-- [ ] Gate hot endpoint access to raw archive/search/large event tables.
+- [x] Gate hot endpoint access to raw archive/search/large event tables.
 - [x] Remove no-query session-list dependency on `events.content_text` by using hot card previews.
 - [x] Verify cheap diagnostics avoid full DB scans; fix `zerg-ops report` empty-archive handling.
 
