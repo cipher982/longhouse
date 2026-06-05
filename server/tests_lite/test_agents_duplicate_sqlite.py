@@ -274,6 +274,7 @@ def test_duplicate_ingest_upgrades_generic_environment_to_machine_label(tmp_path
     [
         ("codex", "codex_app_server"),
         ("antigravity", "antigravity_hook_inbox"),
+        ("opencode", "opencode_server_bridge"),
     ],
 )
 def test_duplicate_ingest_replaces_managed_local_placeholder_provider_session_id(
