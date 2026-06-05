@@ -7,9 +7,11 @@ explicit flag.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
 from typing import Iterable
+from uuid import UUID
 
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
@@ -26,12 +28,23 @@ from zerg.services.archive_store import ArchiveRecord
 from zerg.services.archive_store import FilesystemArchiveStore
 
 logger = logging.getLogger(__name__)
+_SOURCE_SEQ_HASH_BITS = 20
+_SOURCE_SEQ_HASH_MASK = (1 << _SOURCE_SEQ_HASH_BITS) - 1
+_SOURCE_SEQ_MAX_OFFSET = ((1 << 63) - 1) >> _SOURCE_SEQ_HASH_BITS
 
 
 @dataclass(frozen=True)
 class ArchiveShadowResult:
     enabled: bool
     chunks_written: int = 0
+    records_written: int = 0
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class PreparedArchiveShadow:
+    enabled: bool
+    chunks: tuple[ArchiveChunkRef, ...] = ()
     records_written: int = 0
     error: str | None = None
 
@@ -44,13 +57,48 @@ def write_ingest_shadow_archive(
     settings: Settings | None = None,
     archive_store: FilesystemArchiveStore | None = None,
 ) -> ArchiveShadowResult:
+    prepared = prepare_ingest_shadow_archive(
+        data=data,
+        result=result,
+        settings=settings,
+        archive_store=archive_store,
+        manifest_db=db,
+    )
+    if not prepared.enabled:
+        return ArchiveShadowResult(enabled=False)
+    if prepared.error:
+        return ArchiveShadowResult(enabled=True, error=prepared.error)
+    if not prepared.chunks:
+        return ArchiveShadowResult(enabled=True, records_written=prepared.records_written)
+
+    try:
+        insert_archive_chunk_manifests(db, prepared.chunks)
+        return ArchiveShadowResult(
+            enabled=True,
+            chunks_written=len(prepared.chunks),
+            records_written=prepared.records_written,
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.warning("Shadow archive manifest write failed for session %s: %s", result.session_id, exc, exc_info=True)
+        return ArchiveShadowResult(enabled=True, error=type(exc).__name__)
+
+
+def prepare_ingest_shadow_archive(
+    *,
+    data: SessionIngest,
+    result: IngestResult,
+    settings: Settings | None = None,
+    archive_store: FilesystemArchiveStore | None = None,
+    manifest_db: Session | None = None,
+) -> PreparedArchiveShadow:
     settings = settings or get_settings()
     if not settings.archive_shadow_write_enabled:
-        return ArchiveShadowResult(enabled=False)
+        return PreparedArchiveShadow(enabled=False)
 
     source_lines = source_lines_from_ingest(data)
     if not source_lines:
-        return ArchiveShadowResult(enabled=True)
+        return PreparedArchiveShadow(enabled=True)
 
     try:
         store = archive_store or create_archive_store(settings)
@@ -60,25 +108,31 @@ def write_ingest_shadow_archive(
             source_lines=source_lines,
             tenant_id=settings.archive_shadow_tenant_id,
         )
+        if manifest_db is not None:
+            archived_keys = archived_source_line_keys(
+                manifest_db,
+                archive_store=store,
+                session_id=result.session_id,
+                stream="source_lines",
+                first_source_seq=min(record.source_seq for record in records),
+                last_source_seq=max(record.source_seq for record in records),
+            )
+            records = [record for record in records if _record_key(record) not in archived_keys]
+        if not records:
+            return PreparedArchiveShadow(enabled=True)
         chunks = store.write_record_chunks(
             records,
             target_uncompressed_bytes=max(1, int(settings.archive_shadow_chunk_target_bytes)),
         )
     except Exception as exc:
         logger.warning("Shadow archive chunk write failed for session %s: %s", result.session_id, exc, exc_info=True)
-        return ArchiveShadowResult(enabled=True, error=type(exc).__name__)
+        return PreparedArchiveShadow(enabled=True, error=type(exc).__name__)
 
-    try:
-        insert_archive_chunk_manifests(db, chunks)
-        return ArchiveShadowResult(
-            enabled=True,
-            chunks_written=len(chunks),
-            records_written=len(source_lines),
-        )
-    except Exception as exc:
-        db.rollback()
-        logger.warning("Shadow archive manifest write failed for session %s: %s", result.session_id, exc, exc_info=True)
-        return ArchiveShadowResult(enabled=True, error=type(exc).__name__)
+    return PreparedArchiveShadow(
+        enabled=True,
+        chunks=tuple(chunks),
+        records_written=len(records),
+    )
 
 
 def source_lines_from_ingest(data: SessionIngest) -> list[SourceLineIngest]:
@@ -113,17 +167,17 @@ def build_source_line_archive_records(
     tenant_id: str,
 ) -> list[ArchiveRecord]:
     sorted_lines = sorted(
-        source_lines,
-        key=lambda line: (line.source_path, int(line.source_offset), line.raw_json),
+        _unique_source_lines(source_lines),
+        key=lambda line: (_stable_source_seq(line), line.source_path, int(line.source_offset), line.raw_json),
     )
     records: list[ArchiveRecord] = []
-    for index, line in enumerate(sorted_lines, start=1):
+    for line in sorted_lines:
         records.append(
             ArchiveRecord(
                 tenant_id=tenant_id,
                 session_id=str(result.session_id),
                 stream="source_lines",
-                source_seq=index,
+                source_seq=_stable_source_seq(line),
                 raw_bytes=line.raw_json.encode("utf-8"),
                 legacy_ref={
                     "source": "agents_ingest",
@@ -136,6 +190,44 @@ def build_source_line_archive_records(
             )
         )
     return records
+
+
+def archived_source_line_keys(
+    db: Session,
+    *,
+    archive_store: FilesystemArchiveStore,
+    session_id: UUID | str,
+    stream: str,
+    first_source_seq: int | None = None,
+    last_source_seq: int | None = None,
+) -> set[tuple[str, int, str]]:
+    query = (
+        db.query(ArchiveChunk)
+        .filter(ArchiveChunk.session_id == UUID(str(session_id)))
+        .filter(ArchiveChunk.stream == stream)
+        .filter(ArchiveChunk.state == "sealed")
+    )
+    if first_source_seq is not None:
+        query = query.filter(ArchiveChunk.last_source_seq >= first_source_seq)
+    if last_source_seq is not None:
+        query = query.filter(ArchiveChunk.first_source_seq <= last_source_seq)
+
+    chunks = query.order_by(ArchiveChunk.first_source_seq).all()
+    keys: set[tuple[str, int, str]] = set()
+    for chunk in chunks:
+        try:
+            for record in archive_store.read_chunk(chunk.relative_path):
+                key = _record_key(record)
+                if key is not None:
+                    keys.add(key)
+        except Exception as exc:
+            logger.warning(
+                "Skipping unreadable archive chunk while filtering shadow ingest overlap: %s: %s",
+                chunk.relative_path,
+                exc,
+                exc_info=True,
+            )
+    return keys
 
 
 def insert_archive_chunk_manifests(db: Session, chunks: Iterable[ArchiveChunkRef]) -> None:
@@ -160,3 +252,34 @@ def insert_archive_chunk_manifests(db: Session, chunks: Iterable[ArchiveChunkRef
         )
         db.execute(stmt)
     db.flush()
+
+
+def _unique_source_lines(source_lines: Iterable[SourceLineIngest]) -> list[SourceLineIngest]:
+    seen: set[tuple[str, int, str]] = set()
+    unique: list[SourceLineIngest] = []
+    for line in source_lines:
+        key = (line.source_path, int(line.source_offset), line.raw_json)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(line)
+    return unique
+
+
+def _stable_source_seq(line: SourceLineIngest) -> int:
+    tie_hash = int.from_bytes(
+        hashlib.blake2b(f"{line.source_path}\0{line.raw_json}".encode("utf-8"), digest_size=8).digest(),
+        "big",
+    )
+    offset = min(max(0, int(line.source_offset)), _SOURCE_SEQ_MAX_OFFSET)
+    return (offset << _SOURCE_SEQ_HASH_BITS) | (tie_hash & _SOURCE_SEQ_HASH_MASK)
+
+
+def _record_key(record: ArchiveRecord) -> tuple[str, int, str] | None:
+    if record.source_path is None or record.source_offset is None:
+        return None
+    return (
+        record.source_path,
+        int(record.source_offset),
+        hashlib.sha256(record.raw_bytes).hexdigest(),
+    )

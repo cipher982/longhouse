@@ -104,6 +104,7 @@ _LABEL_PRIORITIES: dict[str, int] = {
     "summary": 7,
     "summary-title": 7,
     "server-fanout": 65,
+    "archive-shadow-manifest": 65,
     # Render beacons are forensic telemetry. Keep the persistence useful when
     # the system is healthy, but never let it outrank live transcript/runtime
     # writes when SQLite is under pressure.

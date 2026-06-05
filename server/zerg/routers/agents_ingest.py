@@ -426,6 +426,47 @@ def _background_server_fanout_observation(
     )
 
 
+async def _write_shadow_archive_after_ingest(
+    *,
+    data: SessionIngest,
+    result,
+    fallback_db: Session,
+) -> None:
+    """Best-effort archive shadow write without holding the ingest writer slot."""
+    from zerg.services.archive_shadow import insert_archive_chunk_manifests
+    from zerg.services.archive_shadow import prepare_ingest_shadow_archive
+    from zerg.services.write_serializer import get_write_serializer
+
+    def _prepare_with_manifest_read():
+        if _is_testing_env():
+            return prepare_ingest_shadow_archive(data=data, result=result, manifest_db=fallback_db)
+
+        from zerg.database import get_session_factory
+
+        SessionLocal = get_session_factory()
+        with SessionLocal() as read_db:
+            return prepare_ingest_shadow_archive(data=data, result=result, manifest_db=read_db)
+
+    try:
+        if _is_testing_env():
+            prepared = _prepare_with_manifest_read()
+        else:
+            prepared = await asyncio.to_thread(_prepare_with_manifest_read)
+        if not prepared.enabled or prepared.error or not prepared.chunks:
+            return
+
+        def _insert_manifests(write_db: Session) -> None:
+            insert_archive_chunk_manifests(write_db, prepared.chunks)
+
+        ws = get_write_serializer()
+        if ws.is_configured and not _is_testing_env():
+            await ws.execute(_insert_manifests, label="archive-shadow-manifest")
+        else:
+            await ws.execute_or_direct(_insert_manifests, fallback_db, label="archive-shadow-manifest")
+    except Exception:
+        logger.warning("Shadow archive write failed after ingest for session %s", result.session_id, exc_info=True)
+
+
 # Hard cap on decompressed ingest bodies. Engine splits batches at
 # `max_batch_bytes` (default 50 MiB *compressed*); a healthy decompressed
 # JSONL batch decompresses to roughly 5-10× that. 256 MiB is comfortably
@@ -716,9 +757,6 @@ async def ingest_session(
                     chunk_size=ingest_chunk,
                     synchronous_projections=write_label not in _ARCHIVE_INGEST_LABELS,
                 )
-                from zerg.services.archive_shadow import write_ingest_shadow_archive
-
-                write_ingest_shadow_archive(write_db, data=data, result=result)
                 store_returned_at_ms = _unix_ms()
                 _persist_ship_trace_event(
                     write_db,
@@ -801,6 +839,8 @@ async def ingest_session(
                 )
                 agents_ingest_events_total.labels(provider=provider_label, kind="inserted").inc(result.events_inserted)
                 agents_ingest_events_total.labels(provider=provider_label, kind="skipped").inc(result.events_skipped)
+
+            await _write_shadow_archive_after_ingest(data=data, result=result, fallback_db=db)
 
             # Publish to per-session pubsub so SSE subscribers wake directly.
             # Lives outside the DB transaction: publish only reflects persisted state.
