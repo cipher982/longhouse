@@ -10,8 +10,35 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
+from zerg.database import get_pool_status
 from zerg.database import make_engine
 from zerg.routers import health as health_router
+
+
+def test_pool_status_reports_exhausted_queue_pool(tmp_path):
+    engine = make_engine(
+        f"sqlite:///{tmp_path}/pool_status.db",
+        pool_size=1,
+        max_overflow=0,
+    )
+
+    with engine.connect():
+        status = get_pool_status(engine)
+
+    assert status is not None
+    assert status["pool_class"] == "QueuePool"
+    assert status["size"] == 1
+    assert status["checked_out"] == 1
+    assert status["checked_in"] == 0
+    assert status["max_overflow"] == 0
+    assert status["saturated"] is True
+    assert status["total_checkouts"] >= 1
+    assert status["current_max_hold_ms"] >= 0.0
+
+    released_status = get_pool_status(engine)
+    assert released_status is not None
+    assert released_status["completed_checkouts"] >= 1
+    assert released_status["max_hold_ms"] >= 0.0
 
 
 def test_health_reports_saturated_writer_without_entering_writer_lane(tmp_path, monkeypatch):
@@ -57,3 +84,8 @@ def test_health_reports_saturated_writer_without_entering_writer_lane(tmp_path, 
     assert payload["checks"]["write_serializer"]["status"] == "pass"
     assert payload["checks"]["write_serializer"]["queue_depth"] == 999
     assert payload["checks"]["write_serializer"]["writer_active"] is True
+    assert payload["checks"]["db_pool"]["status"] == "pass"
+    assert payload["checks"]["db_pool"]["pool_class"] == "QueuePool"
+    assert payload["checks"]["db_pool"]["checked_out"] == 0
+    assert payload["checks"]["db_pool"]["saturated"] is False
+    assert payload["checks"]["db_pool"]["total_checkouts"] >= 2

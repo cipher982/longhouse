@@ -240,3 +240,47 @@ def test_sessions_list_includes_first_user_message(tmp_path):
         assert sessions[0]["first_user_message"] == "First question here"
     finally:
         api_app.dependency_overrides.clear()
+
+
+def test_sessions_list_falls_back_for_existing_rows_without_hot_preview(tmp_path):
+    """Existing sessions created before preview columns are backfilled still render."""
+    from fastapi.testclient import TestClient
+
+    from zerg.database import Base, get_db, make_engine, make_sessionmaker
+    from zerg.main import api_app
+
+    db_path = tmp_path / "test_first_msg_legacy.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(bind=engine)
+    factory = make_sessionmaker(engine)
+
+    session = _seed_session(
+        factory,
+        project="proj",
+        git_branch="feat",
+        first_user_message_preview=None,
+    )
+    _seed_event(factory, session.id, role="user", content="Legacy first question")
+    _seed_event(factory, session.id, role="assistant", content="Legacy answer")
+
+    def override():
+        d = factory()
+        try:
+            yield d
+        finally:
+            d.close()
+
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="structured-title", id="token-1", owner_id=1)
+
+    api_app.dependency_overrides[get_db] = override
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+    try:
+        client = TestClient(api_app)
+        resp = client.get("/agents/sessions", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200
+        sessions = resp.json()["sessions"]
+        assert len(sessions) == 1
+        assert sessions[0]["first_user_message"] == "Legacy first question"
+    finally:
+        api_app.dependency_overrides.clear()

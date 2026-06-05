@@ -101,6 +101,12 @@ def build_session_response_list(
         )
         is not None
     }
+    missing_preview_ids = [session.id for session in sessions if session.id not in first_user_map]
+    if missing_preview_ids:
+        # Transitional compatibility for sessions created before hot preview
+        # columns existed. New/backfilled rows stay on the hot path; old rows
+        # keep rendering until the archive/hot-card backfill phase retires this.
+        first_user_map.update(store.get_first_message_map(missing_preview_ids, role="user", max_len=FIRST_USER_MESSAGE_RESPONSE_CHARS))
     thread_cache: dict[str, tuple[str, int]] = store.batch_thread_meta(sessions)
     binding_overlay_map = load_binding_overlay(db, session_ids, now=now)
     kernel_capabilities_map = project_capabilities_bulk(db, session_ids=session_ids)

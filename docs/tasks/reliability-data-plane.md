@@ -24,10 +24,12 @@ Spec: `docs/specs/reliability-data-plane.md`
 
 - [x] Add or verify DB-session release before queued writes across hot routes.
 - [x] Add pool checkout/write timing visibility where missing.
-- [x] Add tests for writer saturation with health/list/launch/heartbeat.
+- [ ] Add real concurrent saturation integration test with health/list/launch/heartbeat.
+- [x] Add route-level writer saturation guard tests for health/list/launch/heartbeat.
 - [x] Migrate `/api/agents/presence` away from request-session-held serialized writes.
 - [x] Gate hot endpoint access to raw archive/search/large event tables.
-- [x] Remove no-query session-list dependency on `events.content_text` by using hot card previews.
+- [ ] Remove no-query session-list dependency on `events.content_text` after legacy preview backfill.
+- [x] Use hot card previews for new/backfilled list rows; keep bounded legacy fallback for NULL previews.
 - [x] Verify cheap diagnostics avoid full DB scans; fix `zerg-ops report` empty-archive handling.
 
 ## Phase 2: Filesystem Archive Store

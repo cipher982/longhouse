@@ -355,6 +355,22 @@ def health_check(request: Request):
         health_status["status"] = "unhealthy"
         critical_failure = True
 
+    # 2b. Request DB pool pressure. This is intentionally passive telemetry:
+    # it reads SQLAlchemy pool counters without checking out another connection.
+    try:
+        from zerg.database import get_pool_status
+
+        pool_status = get_pool_status()
+        if pool_status is None:
+            checks["db_pool"] = {"status": "skip", "reason": "engine unavailable"}
+        else:
+            checks["db_pool"] = {
+                "status": "warn" if pool_status.get("saturated") else "pass",
+                **pool_status,
+            }
+    except Exception as e:
+        checks["db_pool"] = {"status": "warn", "error": str(e)}
+
     # 3. SQLite FTS5 readiness
     try:
         from zerg.database import default_engine

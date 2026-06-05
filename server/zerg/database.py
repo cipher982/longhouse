@@ -136,6 +136,24 @@ _metadata = MetaData()
 # Create Base class
 Base = declarative_base(metadata=_metadata)
 
+_pool_metrics_lock = Lock()
+_pool_checkout_metrics: dict[int, dict[str, Any]] = {}
+
+
+def _pool_metrics_for(pool_id: int) -> dict[str, Any]:
+    metrics = _pool_checkout_metrics.get(pool_id)
+    if metrics is None:
+        metrics = {
+            "active": {},
+            "total_checkouts": 0,
+            "completed_checkouts": 0,
+            "total_hold_ms": 0.0,
+            "max_hold_ms": 0.0,
+        }
+        _pool_checkout_metrics[pool_id] = metrics
+    return metrics
+
+
 # Import all models at module level to ensure they are registered with Base
 try:
     from zerg.models.agents import SessionEmbedding  # noqa: F401
@@ -188,6 +206,30 @@ def _configure_sqlite_engine(engine: Engine, *, busy_timeout_ms: int | None = No
             cursor.execute(f"PRAGMA wal_autocheckpoint={wal_autocheckpoint}")
         finally:
             cursor.close()
+
+    pool_id = id(engine.pool)
+
+    @event.listens_for(engine, "checkout")
+    def record_pool_checkout(dbapi_conn, _connection_record, _connection_proxy):
+        with _pool_metrics_lock:
+            metrics = _pool_metrics_for(pool_id)
+            metrics["active"][id(dbapi_conn)] = time.monotonic()
+            metrics["total_checkouts"] += 1
+
+    @event.listens_for(engine, "checkin")
+    def record_pool_checkin(dbapi_conn, _connection_record):
+        if dbapi_conn is None:
+            return
+        finished_at = time.monotonic()
+        with _pool_metrics_lock:
+            metrics = _pool_metrics_for(pool_id)
+            started_at = metrics["active"].pop(id(dbapi_conn), None)
+            if started_at is None:
+                return
+            hold_ms = (finished_at - started_at) * 1000
+            metrics["completed_checkouts"] += 1
+            metrics["total_hold_ms"] += hold_ms
+            metrics["max_hold_ms"] = max(metrics["max_hold_ms"], hold_ms)
 
 
 def make_engine(db_url: str, *, busy_timeout_ms: int | None = None, **kwargs) -> Engine:
@@ -372,6 +414,100 @@ def _resolve_write_session_factory() -> sessionmaker:
 def get_write_engine() -> Engine | None:
     """Return the dedicated write engine (for WAL checkpoint etc.)."""
     return _write_engine
+
+
+def get_pool_status(engine: Engine | None = None) -> dict[str, Any] | None:
+    """Return cheap SQLAlchemy pool counters for health diagnostics.
+
+    Pool implementations differ by test/runtime mode, so this intentionally
+    reports only values the active pool can expose without acquiring a
+    connection.
+    """
+
+    target_engine = engine or default_engine
+    if target_engine is None:
+        return None
+
+    pool = target_engine.pool
+
+    def _call_int(name: str) -> int | None:
+        attr = getattr(pool, name, None)
+        if not callable(attr):
+            return None
+        try:
+            value = attr()
+        except Exception:
+            return None
+        if isinstance(value, bool):
+            return int(value)
+        return int(value) if isinstance(value, (int, float)) else None
+
+    def _private_int(name: str) -> int | None:
+        value = getattr(pool, name, None)
+        if isinstance(value, bool):
+            return int(value)
+        return int(value) if isinstance(value, (int, float)) else None
+
+    status_text = None
+    status_fn = getattr(pool, "status", None)
+    if callable(status_fn):
+        try:
+            status_text = str(status_fn())
+        except Exception:
+            status_text = None
+
+    checked_out = _call_int("checkedout")
+    checked_in = _call_int("checkedin")
+    size = _call_int("size")
+    overflow = _call_int("overflow")
+    max_overflow = _private_int("_max_overflow")
+
+    saturated = False
+    if checked_out is not None and size is not None and checked_in == 0 and checked_out >= size:
+        saturated = True
+    if (
+        checked_out is not None
+        and size is not None
+        and max_overflow is not None
+        and max_overflow >= 0
+        and checked_out >= size + max_overflow
+    ):
+        saturated = True
+
+    now = time.monotonic()
+    with _pool_metrics_lock:
+        metrics = _pool_checkout_metrics.get(id(pool))
+        if metrics is None:
+            active_checkout_ages_ms: list[float] = []
+            total_checkouts = 0
+            completed_checkouts = 0
+            total_hold_ms = 0.0
+            max_hold_ms = 0.0
+        else:
+            active_checkout_ages_ms = [(now - started_at) * 1000 for started_at in metrics["active"].values()]
+            total_checkouts = int(metrics["total_checkouts"])
+            completed_checkouts = int(metrics["completed_checkouts"])
+            total_hold_ms = float(metrics["total_hold_ms"])
+            max_hold_ms = float(metrics["max_hold_ms"])
+
+    avg_hold_ms = total_hold_ms / completed_checkouts if completed_checkouts else 0.0
+    current_max_hold_ms = max(active_checkout_ages_ms) if active_checkout_ages_ms else 0.0
+
+    return {
+        "pool_class": pool.__class__.__name__,
+        "status_text": status_text,
+        "size": size,
+        "checked_in": checked_in,
+        "checked_out": checked_out,
+        "overflow": overflow,
+        "max_overflow": max_overflow,
+        "saturated": saturated,
+        "total_checkouts": total_checkouts,
+        "completed_checkouts": completed_checkouts,
+        "avg_hold_ms": round(avg_hold_ms, 1),
+        "max_hold_ms": round(max_hold_ms, 1),
+        "current_max_hold_ms": round(current_max_hold_ms, 1),
+    }
 
 
 def _get_db_from_factory(session_factory: Any = None) -> Iterator[Session]:
