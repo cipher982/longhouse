@@ -36,7 +36,6 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
-from zerg.models.agents import SessionTurn
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
@@ -45,6 +44,7 @@ from zerg.services.session_listing import SessionListParams
 from zerg.services.session_listing import list_agent_sessions
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
+from zerg.services.session_turns import materialize_recent_managed_transcript_turns
 from zerg.services.session_continue_targets import _bounded_source_path
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.timeline_session_listing import build_timeline_cards_from_thread_rows
@@ -1502,7 +1502,7 @@ def test_sessions_list_marks_recent_managed_idle_with_missing_assistant_as_synci
         assert row["timeline_card"]["status"]["tone"] == "active"
 
 
-def test_sessions_list_marks_managed_idle_with_pending_turn_hot_state_as_syncing(tmp_path):
+def test_sessions_list_marks_managed_idle_after_pending_turn_materialization_as_syncing(tmp_path):
     factory = _make_db(tmp_path, "materialized_runtime_syncing_unanswered_user.db")
     now = datetime.now(timezone.utc)
 
@@ -1559,27 +1559,6 @@ def test_sessions_list_marks_managed_idle_with_pending_turn_hot_state_as_syncing
         session.user_messages = 45
         session.assistant_messages = 113
         session.last_activity_at = now - timedelta(seconds=19)
-        latest_user_event_id = (
-            db.query(AgentEvent.id)
-            .filter(AgentEvent.session_id == session.id)
-            .filter(AgentEvent.role == "user")
-            .order_by(AgentEvent.id.desc())
-            .limit(1)
-            .scalar()
-        )
-        db.add(
-            SessionTurn(
-                session_id=session.id,
-                request_id="native:pending-hot-state",
-                source_kind="transcript_reconstructed",
-                timing_confidence="inferred",
-                state="active",
-                user_event_id=latest_user_event_id,
-                user_submitted_at=now - timedelta(seconds=20),
-                send_accepted_at=now - timedelta(seconds=20),
-                active_phase_observed_at=now - timedelta(seconds=18),
-            )
-        )
         ingest_runtime_events(
             db,
             [
@@ -1609,6 +1588,7 @@ def test_sessions_list_marks_managed_idle_with_pending_turn_hot_state_as_syncing
                 ),
             ],
         )
+        assert materialize_recent_managed_transcript_turns(db, project="runtime-syncing-unanswered", hours_back=1) == 1
         db.commit()
     finally:
         db.close()

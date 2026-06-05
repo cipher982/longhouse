@@ -352,6 +352,107 @@ def materialize_managed_transcript_turns(
     return created
 
 
+def materialize_pending_managed_transcript_turn(
+    db: Session,
+    *,
+    session_id: UUID,
+) -> bool:
+    """Materialize one pending reconstructed turn from transcript/runtime state.
+
+    This keeps list endpoints from reconstructing "waiting for assistant output"
+    by scanning ``events`` at request time. Call it from background,
+    maintenance, or non-list write paths that are allowed to inspect transcript
+    history.
+    """
+
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).one_or_none()
+    if session is None or not str(getattr(session, "managed_transport", "") or "").strip():
+        return False
+
+    existing_pending = (
+        db.query(SessionTurn.id)
+        .filter(
+            SessionTurn.session_id == session_id,
+            SessionTurn.durable_at.is_(None),
+            SessionTurn.state.in_(tuple(PENDING_RESPONSE_TURN_STATES)),
+        )
+        .limit(1)
+        .one_or_none()
+    )
+    if existing_pending is not None:
+        return False
+
+    latest_user = (
+        db.query(AgentEvent.id, AgentEvent.timestamp, AgentEvent.content_text)
+        .filter(AgentEvent.session_id == session_id)
+        .filter(durable_transcript_event_predicate())
+        .filter(AgentEvent.role == "user")
+        .order_by(AgentEvent.id.desc())
+        .limit(1)
+        .one_or_none()
+    )
+    if latest_user is None:
+        return False
+    latest_user_id, latest_user_at, latest_user_text = latest_user
+    latest_response_id = (
+        db.query(func.max(AgentEvent.id))
+        .filter(AgentEvent.session_id == session_id)
+        .filter(durable_transcript_event_predicate())
+        .filter(AgentEvent.role.in_(("assistant", "tool")))
+        .scalar()
+        or 0
+    )
+    latest_user_id_int = int(latest_user_id or 0)
+    if latest_user_id_int <= int(latest_response_id or 0):
+        return False
+
+    user_observed_at = normalize_utc(latest_user_at)
+    if user_observed_at is None:
+        return False
+    active_observation = (
+        db.query(SessionObservation.observed_at)
+        .filter(SessionObservation.session_id == session_id)
+        .filter(SessionObservation.kind == OBS_KIND_RUNTIME_SIGNAL)
+        .filter(SessionObservation.observed_at >= user_observed_at)
+        .filter(SessionObservation.payload_json.like('%"kind":"phase_signal"%'))
+        .filter(
+            or_(
+                SessionObservation.payload_json.like('%"phase":"thinking"%'),
+                SessionObservation.payload_json.like('%"phase":"running"%'),
+                SessionObservation.payload_json.like('%"phase":"blocked"%'),
+            )
+        )
+        .order_by(SessionObservation.observed_at.asc(), SessionObservation.id.asc())
+        .limit(1)
+        .scalar()
+    )
+    active_at = normalize_utc(active_observation)
+    if active_at is None:
+        return False
+
+    request_id = f"{SESSION_TURN_RECONSTRUCTED_REQUEST_PREFIX}:pending:{latest_user_id_int}"
+    normalized_user_text = strip_claude_channel_wrapper(str(latest_user_text or ""))
+    try:
+        with db.begin_nested():
+            turn = create_session_turn(
+                db,
+                session_id=session_id,
+                request_id=request_id,
+                source_kind=SESSION_TURN_SOURCE_TRANSCRIPT_RECONSTRUCTED,
+                timing_confidence=SESSION_TURN_CONFIDENCE_INFERRED,
+                baseline_event_id=int(latest_response_id or 0) or None,
+                user_submitted_at=user_observed_at,
+                expected_user_text=normalized_user_text or None,
+            )
+            turn.user_event_id = latest_user_id_int
+            turn.send_accepted_at = user_observed_at
+            turn.active_phase_observed_at = active_at
+            turn.state = SESSION_TURN_STATE_ACTIVE
+    except IntegrityError:
+        return False
+    return True
+
+
 def _transcript_materialization_event_floor(existing_turns: list[SessionTurn]) -> int | None:
     assistant_event_ids = [
         int(event_id)
@@ -391,6 +492,8 @@ def materialize_recent_managed_transcript_turns(
     created = 0
     for (session_id,) in query.all():
         created += materialize_managed_transcript_turns(db, session_id=session_id)
+        if materialize_pending_managed_transcript_turn(db, session_id=session_id):
+            created += 1
     return created
 
 

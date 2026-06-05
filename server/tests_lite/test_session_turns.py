@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from uuid import uuid4
 
@@ -36,7 +37,10 @@ from zerg.services.session_turns import mark_session_turn_failed
 from zerg.services.session_turns import mark_session_turn_send_accepted
 from zerg.services.session_turns import mark_session_turn_terminal
 from zerg.services.session_turns import materialize_managed_transcript_turns
+from zerg.services.session_turns import materialize_recent_managed_transcript_turns
 from zerg.services.session_turns import maybe_mark_session_turn_durable
+from zerg.services.session_runtime import RuntimeEventIngest
+from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.write_serializer import WriteSerializer
 from zerg.utils.time import normalize_utc
 
@@ -443,6 +447,63 @@ def test_materialize_managed_transcript_turns_backfills_native_completed_turns_i
 
         assert materialize_managed_transcript_turns(db, session_id=session.id) == 0
         assert db.query(SessionTurn).filter(SessionTurn.session_id == session.id).count() == 1
+
+
+def test_materialize_recent_managed_transcript_turns_backfills_pending_turn_after_active_phase(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_session(db)
+        assistant_at = datetime(2026, 4, 23, 20, 0, 0, tzinfo=timezone.utc)
+        user_at = assistant_at + timedelta(seconds=20)
+        db.add_all(
+            [
+                AgentEvent(
+                    session_id=session.id,
+                    role="assistant",
+                    content_text="previous response",
+                    timestamp=assistant_at,
+                ),
+                AgentEvent(
+                    session_id=session.id,
+                    role="user",
+                    content_text="continue without reply yet",
+                    timestamp=user_at,
+                ),
+            ]
+        )
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=f"claude:{session.id}",
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="phase_signal",
+                    phase="thinking",
+                    occurred_at=user_at + timedelta(seconds=2),
+                    freshness_ms=60_000,
+                    dedupe_key=f"{session.id}:pending-thinking",
+                )
+            ],
+        )
+        db.commit()
+
+        assert materialize_recent_managed_transcript_turns(db, project=session.project, hours_back=24) == 1
+        row = db.query(SessionTurn).filter(SessionTurn.session_id == session.id).one()
+        assert row.request_id is not None
+        assert row.request_id.startswith("native:pending:")
+        assert row.source_kind == "transcript_reconstructed"
+        assert row.timing_confidence == "inferred"
+        assert row.state == "active"
+        assert row.user_event_id is not None
+        assert row.durable_at is None
+        assert row.durable_assistant_event_id is None
+        assert row.active_phase_observed_at is not None
+
+        assert materialize_recent_managed_transcript_turns(db, project=session.project, hours_back=24) == 0
 
 
 def test_materialize_managed_transcript_turns_incremental_scans_after_last_materialized_turn(tmp_path, monkeypatch):

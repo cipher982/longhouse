@@ -1829,11 +1829,13 @@ class AgentsStore:
 
         if events_inserted > 0 and transcript_changed and synchronous_projections:
             from zerg.services.session_turns import materialize_managed_transcript_turns
+            from zerg.services.session_turns import materialize_pending_managed_transcript_turn
             from zerg.services.session_turns import maybe_mark_session_turn_durable
 
             stage_started = time.monotonic()
             maybe_mark_session_turn_durable(self.db, session_id=session_id)
             materialize_managed_transcript_turns(self.db, session_id=session_id, incremental=True)
+            materialize_pending_managed_transcript_turn(self.db, session_id=session_id)
             _record_stage("turn_materialization", stage_started)
             stage_started = time.monotonic()
             _commit_with_telemetry()
@@ -1874,10 +1876,12 @@ class AgentsStore:
         self._sync_session_counts_to_head(session_id, head_branch.id)
 
         from zerg.services.session_turns import materialize_managed_transcript_turns
+        from zerg.services.session_turns import materialize_pending_managed_transcript_turn
         from zerg.services.session_turns import maybe_mark_session_turn_durable
 
         maybe_mark_session_turn_durable(self.db, session_id=session_id)
         materialize_managed_transcript_turns(self.db, session_id=session_id, incremental=True)
+        materialize_pending_managed_transcript_turn(self.db, session_id=session_id)
         session_obj.needs_projection = 0
         return True
 
