@@ -14,7 +14,6 @@ from pydantic import Field
 from pydantic import field_validator
 from sqlalchemy.orm import Session
 
-from zerg.config import get_settings
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.device_token import DeviceToken
@@ -86,10 +85,6 @@ def _machine_presence_identity(db: Session, token: DeviceToken | None) -> tuple[
 
 
 def _machine_presence_collection_enabled(db: Session, *, owner_id: int) -> bool:
-    settings = get_settings()
-    if not bool(getattr(settings, "machine_presence_enabled", True)):
-        return False
-
     user = db.query(User).filter(User.id == owner_id).first()
     prefs = dict(getattr(user, "prefs", None) or {})
     value = prefs.get("machine_presence_enabled")

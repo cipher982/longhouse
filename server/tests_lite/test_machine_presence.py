@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime
 from datetime import timezone
 from types import SimpleNamespace
-from unittest.mock import patch
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -161,37 +160,6 @@ def test_machine_presence_policy_and_post_respect_user_disable(tmp_path):
             headers={"X-Agents-Token": "zdt_test"},
         )
         assert update.status_code == 403
-
-    _cleanup_overrides()
-    engine.dispose()
-
-
-def test_machine_presence_policy_respects_global_disable(tmp_path):
-    engine, SessionLocal = _make_db(tmp_path, "machine_presence_global_disabled.db")
-    with SessionLocal() as db:
-        db.add(User(id=1, email="user@example.com", role="ADMIN"))
-        db.commit()
-
-    def override_db():
-        db = SessionLocal()
-        try:
-            yield db
-        finally:
-            db.close()
-
-    api_app.dependency_overrides[get_db] = override_db
-    api_app.dependency_overrides[verify_agents_token] = lambda: _device_token()
-
-    with (
-        patch(
-            "zerg.routers.agents_machine_presence.get_settings",
-            return_value=SimpleNamespace(machine_presence_enabled=False),
-        ),
-        TestClient(api_app) as client,
-    ):
-        response = client.get("/agents/machine-presence/policy", headers={"X-Agents-Token": "zdt_test"})
-        assert response.status_code == 200, response.text
-        assert response.json()["enabled"] is False
 
     _cleanup_overrides()
     engine.dispose()

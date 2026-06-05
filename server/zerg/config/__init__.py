@@ -217,7 +217,6 @@ class Settings:  # noqa: D401 – simple data container
     memory_files_enabled: bool = False
     memory_files_context_enabled: bool = False
     memory_files_auto_summary_enabled: bool = False
-    machine_presence_enabled: bool = True
 
     # Dynamic guards (evaluated at runtime) -----------------------------
     @property
@@ -469,7 +468,6 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         database_url=os.getenv("DATABASE_URL", ""),
         fernet_secret=os.getenv("FERNET_SECRET"),
         _llm_token_stream_default=_truthy(os.getenv("LLM_TOKEN_STREAM")),
-        machine_presence_enabled=not _truthy(os.getenv("LONGHOUSE_DISABLE_MACHINE_PRESENCE")),
         dev_admin=_truthy(os.getenv("DEV_ADMIN")),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         e2e_log_suppress=_truthy(os.getenv("E2E_LOG_SUPPRESS")),
