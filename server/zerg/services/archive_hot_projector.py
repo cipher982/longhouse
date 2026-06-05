@@ -69,6 +69,8 @@ class HotCardProjection:
     unsupported_records: int
     parse_errors: int
     has_full_coverage: bool
+    min_source_offset: int | None
+    max_source_offset: int | None
 
 
 def project_archive_chunks_to_hot_cards(
@@ -140,7 +142,7 @@ def project_archive_chunks_to_hot_cards(
                     db,
                     session_id=session_id,
                     parser_revision=parser_revision,
-                    selected_chunks=selected_for_session,
+                    projection=projection,
                 )
                 if existing_card is not None:
                     apply_incremental_projection = True
@@ -268,6 +270,7 @@ def build_hot_card_projection(records: Iterable[ArchiveRecord]) -> HotCardProjec
         ]
     )
     last_activity_event = _last_event(events)
+    source_offsets = [int(record.source_offset) for record in record_list if record.source_offset is not None]
 
     return HotCardProjection(
         user_messages=len(user_events),
@@ -287,6 +290,8 @@ def build_hot_card_projection(records: Iterable[ArchiveRecord]) -> HotCardProjec
         unsupported_records=unsupported_records,
         parse_errors=parse_errors,
         has_full_coverage=_has_full_coverage(record_list),
+        min_source_offset=min(source_offsets) if source_offsets else None,
+        max_source_offset=max(source_offsets) if source_offsets else None,
     )
 
 
@@ -309,36 +314,16 @@ def _incremental_card_target(
     *,
     session_id: UUID,
     parser_revision: str,
-    selected_chunks: list[ArchiveChunk],
+    projection: HotCardProjection,
 ) -> TimelineCard | None:
     card = db.query(TimelineCard).filter(TimelineCard.session_id == session_id).first()
     if card is None or card.parser_revision != parser_revision or card.archive_state != "current":
         return None
-    max_terminal_seq = _max_terminal_source_seq(db, session_id=session_id, parser_revision=parser_revision)
-    if max_terminal_seq is None:
+    if card.archive_last_source_offset is None or projection.min_source_offset is None:
         return None
-    if any(int(chunk.first_source_seq) <= max_terminal_seq for chunk in selected_chunks):
+    if projection.min_source_offset <= int(card.archive_last_source_offset):
         return None
     return card
-
-
-def _max_terminal_source_seq(db: Session, *, session_id: UUID, parser_revision: str) -> int | None:
-    rows = (
-        db.query(ArchiveChunk.last_source_seq)
-        .join(ProjectorCheckpoint, ProjectorCheckpoint.chunk_id == ArchiveChunk.id)
-        .filter(ProjectorCheckpoint.projector_name == HOT_CARD_PROJECTOR_NAME)
-        .filter(ProjectorCheckpoint.parser_revision == parser_revision)
-        .filter(ProjectorCheckpoint.session_id == session_id)
-        .filter(ProjectorCheckpoint.status.in_(_TERMINAL_CHECKPOINT_STATUSES))
-        .filter(ProjectorCheckpoint.chunk_payload_sha256 == ArchiveChunk.payload_sha256)
-        .filter(ArchiveChunk.session_id == session_id)
-        .filter(ArchiveChunk.stream == "source_lines")
-        .filter(ArchiveChunk.state == "sealed")
-        .all()
-    )
-    if not rows:
-        return None
-    return max(int(row[0]) for row in rows)
 
 
 def _read_records_for_chunks(archive_store: ArchiveStore, chunks: Iterable[ArchiveChunk]) -> list[ArchiveRecord]:
@@ -390,6 +375,7 @@ def _apply_hot_projection(
         "transcript_revision": int(getattr(session, "transcript_revision", 0) or 0),
         "archive_state": "current",
         "archive_lag_records": 0,
+        "archive_last_source_offset": projection.max_source_offset,
         "derived_state": "pending" if int(getattr(session, "needs_projection", 0) or 0) else "current",
         "derived_revision": str(getattr(session, "summary_revision", 0) or 0),
         "parser_revision": parser_revision,
@@ -429,6 +415,8 @@ def _apply_incremental_hot_projection(
     card.last_activity_at = session.last_activity_at
     card.archive_state = "current"
     card.archive_lag_records = 0
+    if projection.max_source_offset is not None:
+        card.archive_last_source_offset = projection.max_source_offset
     card.parser_revision = parser_revision
     card.updated_at = datetime.now(timezone.utc)
 

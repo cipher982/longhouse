@@ -310,7 +310,7 @@ def test_archive_hot_projector_full_rebuild_checkpoints_whole_session_once(tmp_p
             records=[
                 _record(
                     session_id,
-                    source_seq=1,
+                    source_seq=10,
                     source_offset=0,
                     raw='{"type":"user","timestamp":"2026-01-01T00:00:00Z","message":{"content":"first"}}',
                 )
@@ -396,7 +396,7 @@ def test_archive_hot_projector_incrementally_updates_after_checkpointed_append(t
             records=[
                 _record(
                     session_id,
-                    source_seq=2,
+                    source_seq=1,
                     source_offset=100,
                     raw=(
                         '{"type":"assistant","timestamp":"2026-01-01T00:00:03Z",'
@@ -405,7 +405,7 @@ def test_archive_hot_projector_incrementally_updates_after_checkpointed_append(t
                 ),
                 _record(
                     session_id,
-                    source_seq=3,
+                    source_seq=2,
                     source_offset=200,
                     raw='{"type":"user","timestamp":"2026-01-01T00:00:04Z","message":{"content":"third"}}',
                 ),
@@ -428,6 +428,7 @@ def test_archive_hot_projector_incrementally_updates_after_checkpointed_append(t
         assert card.assistant_messages == 1
         assert card.first_user_message_preview == "first"
         assert card.last_visible_text_preview == "third"
+        assert card.archive_last_source_offset == 200
         assert db.query(ProjectorCheckpoint).filter(ProjectorCheckpoint.status == "current").count() == 2
 
 

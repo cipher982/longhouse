@@ -713,6 +713,7 @@ class TimelineCard(AgentsBase):
     transcript_revision = Column(Integer, nullable=False, server_default=text("0"))
     archive_state = Column(String(32), nullable=False, server_default=text("'current'"))
     archive_lag_records = Column(Integer, nullable=False, server_default=text("0"))
+    archive_last_source_offset = Column(BigInteger, nullable=True)
     derived_state = Column(String(32), nullable=False, server_default=text("'unknown'"))
     derived_revision = Column(String(128), nullable=True)
     parser_revision = Column(String(128), nullable=False)
