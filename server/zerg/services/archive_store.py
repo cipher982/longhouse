@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import shutil
+import time
 from abc import ABC
 from abc import abstractmethod
 from dataclasses import dataclass
@@ -98,7 +99,13 @@ class ArchiveStore(ABC):
         """Read and verify one chunk, returning exact raw-byte records."""
 
     @abstractmethod
-    def list_chunks(self, *, session_id: str | None = None, stream: str | None = None) -> list[ArchiveChunkRef]:
+    def list_chunks(
+        self,
+        *,
+        tenant_id: str | None = None,
+        session_id: str | None = None,
+        stream: str | None = None,
+    ) -> list[ArchiveChunkRef]:
         """List sealed chunk files visible in the store."""
 
     @abstractmethod
@@ -112,7 +119,12 @@ class ArchiveStore(ABC):
         """Verify a sealed chunk."""
 
     @abstractmethod
-    def recover_orphans(self, *, known_chunk_paths: Collection[str] | None = None) -> ArchiveRecoveryResult:
+    def recover_orphans(
+        self,
+        *,
+        known_chunk_paths: Collection[str] | None = None,
+        min_temp_age_seconds: float = 300,
+    ) -> ArchiveRecoveryResult:
         """Recover temp files and report sealed chunks missing from a manifest."""
 
 
@@ -135,7 +147,7 @@ class FilesystemArchiveStore(ArchiveStore):
         first_seq = min(record.source_seq for record in batch)
         last_seq = max(record.source_seq for record in batch)
         first = batch[0]
-        chunks_dir = self._chunks_dir(session_id=first.session_id)
+        chunks_dir = self._chunks_dir(tenant_id=first.tenant_id, session_id=first.session_id)
         final_path = chunks_dir / _chunk_filename(first.stream, first_seq, last_seq, payload_sha)
         relative_path = _relative(final_path, self.root)
 
@@ -216,8 +228,23 @@ class FilesystemArchiveStore(ArchiveStore):
             raise ArchiveCorruptionError("; ".join(result.errors))
         return result.records
 
-    def list_chunks(self, *, session_id: str | None = None, stream: str | None = None) -> list[ArchiveChunkRef]:
-        base = self._chunks_dir(session_id=session_id) if session_id else self.root / "sessions"
+    def list_chunks(
+        self,
+        *,
+        tenant_id: str | None = None,
+        session_id: str | None = None,
+        stream: str | None = None,
+    ) -> list[ArchiveChunkRef]:
+        # Recovery/fixture helper: production list paths should use manifest rows
+        # rather than filesystem scans and decompression.
+        if tenant_id and session_id:
+            base = self._chunks_dir(tenant_id=tenant_id, session_id=session_id)
+        elif tenant_id:
+            base = self.root / "tenants" / _safe_component(tenant_id) / "sessions"
+        elif session_id:
+            base = self.root / "tenants"
+        else:
+            base = self.root / "tenants"
         if not base.exists():
             return []
         refs: list[ArchiveChunkRef] = []
@@ -232,6 +259,10 @@ class FilesystemArchiveStore(ArchiveStore):
                 continue
             result = self.verify_chunk(_relative(path, self.root))
             if result.valid and result.chunk is not None:
+                if tenant_id is not None and result.chunk.tenant_id != tenant_id:
+                    continue
+                if session_id is not None and result.chunk.session_id != session_id:
+                    continue
                 refs.append(result.chunk)
         return refs
 
@@ -247,7 +278,7 @@ class FilesystemArchiveStore(ArchiveStore):
         parsed = _parse_chunk_filename(path.name)
         if parsed is None:
             return ArchiveVerifyResult(valid=False, chunk=None, errors=("invalid chunk filename",))
-        stream, first_seq, last_seq, expected_payload_prefix = parsed
+        stream, first_seq, last_seq, expected_payload_sha = parsed
         if not path.exists():
             return ArchiveVerifyResult(valid=False, chunk=None, errors=("chunk file is missing",))
 
@@ -263,7 +294,7 @@ class FilesystemArchiveStore(ArchiveStore):
         payload_sha = _sha256(payload)
         if expected_payload_sha256 is not None and payload_sha != expected_payload_sha256:
             errors.append("payload sha does not match manifest")
-        if not payload_sha.startswith(expected_payload_prefix):
+        if payload_sha != expected_payload_sha:
             errors.append("payload sha does not match chunk filename")
 
         records: list[ArchiveRecord] = []
@@ -285,6 +316,10 @@ class FilesystemArchiveStore(ArchiveStore):
         if records:
             tenant_id = records[0].tenant_id
             session_id = records[0].session_id
+            for previous, current in zip(records, records[1:], strict=False):
+                if current.source_seq <= previous.source_seq:
+                    errors.append("source_seq values must be strictly increasing")
+                    break
             if min(record.source_seq for record in records) != first_seq:
                 errors.append("first source_seq does not match chunk filename")
             if max(record.source_seq for record in records) != last_seq:
@@ -310,12 +345,24 @@ class FilesystemArchiveStore(ArchiveStore):
         )
         return ArchiveVerifyResult(valid=not errors, chunk=chunk, errors=tuple(errors), records=tuple(records))
 
-    def recover_orphans(self, *, known_chunk_paths: Collection[str] | None = None) -> ArchiveRecoveryResult:
+    def recover_orphans(
+        self,
+        *,
+        known_chunk_paths: Collection[str] | None = None,
+        min_temp_age_seconds: float = 300,
+    ) -> ArchiveRecoveryResult:
         self.root.mkdir(parents=True, exist_ok=True)
         orphan_root = self.root / "orphans" / "tmp"
         moved: list[str] = []
+        now = time.time()
         for tmp_path in sorted(self.root.rglob("*.tmp")):
             if _is_in_orphans(tmp_path, self.root):
+                continue
+            try:
+                age_seconds = now - tmp_path.stat().st_mtime
+            except OSError:
+                continue
+            if age_seconds < min_temp_age_seconds:
                 continue
             relative = _relative(tmp_path, self.root)
             target = orphan_root / _safe_component(relative.replace("/", "__"))
@@ -334,8 +381,8 @@ class FilesystemArchiveStore(ArchiveStore):
                     untracked.append(relative)
         return ArchiveRecoveryResult(moved_temp_files=tuple(moved), untracked_chunks=tuple(untracked))
 
-    def _chunks_dir(self, *, session_id: str) -> Path:
-        return self.root / "sessions" / _safe_component(session_id) / "chunks"
+    def _chunks_dir(self, *, tenant_id: str, session_id: str) -> Path:
+        return self.root / "tenants" / _safe_component(tenant_id) / "sessions" / _safe_component(session_id) / "chunks"
 
     def _resolve_relative(self, relative_path: str) -> Path:
         normalized = _normalize_relative(relative_path)
@@ -350,7 +397,14 @@ def _validate_record_batch(records: tuple[ArchiveRecord, ...]) -> None:
     tenant_id = records[0].tenant_id
     session_id = records[0].session_id
     stream = records[0].stream
+    last_source_seq: int | None = None
     for record in records:
+        if not record.tenant_id:
+            raise ValueError("archive chunk records must have tenant_id")
+        if not record.session_id:
+            raise ValueError("archive chunk records must have session_id")
+        if not record.stream:
+            raise ValueError("archive chunk records must have stream")
         if record.tenant_id != tenant_id:
             raise ValueError("archive chunk records must share tenant_id")
         if record.session_id != session_id:
@@ -359,6 +413,9 @@ def _validate_record_batch(records: tuple[ArchiveRecord, ...]) -> None:
             raise ValueError("archive chunk records must share stream")
         if record.source_seq < 0:
             raise ValueError("source_seq must be non-negative")
+        if last_source_seq is not None and record.source_seq <= last_source_seq:
+            raise ValueError("archive chunk source_seq values must be strictly increasing")
+        last_source_seq = record.source_seq
 
 
 def _record_obj(record: ArchiveRecord) -> dict[str, Any]:
@@ -409,15 +466,25 @@ def _decode_record_obj(obj: object, *, ordinal: int, errors: list[str]) -> Archi
         errors.append(f"line {ordinal}: invalid source_seq")
         return None
 
+    tenant_id = str(obj.get("tenant_id") or "")
+    session_id = str(obj.get("session_id") or "")
+    stream = str(obj.get("stream") or "")
+    if not tenant_id:
+        errors.append(f"line {ordinal}: missing tenant_id")
+    if not session_id:
+        errors.append(f"line {ordinal}: missing session_id")
+    if not stream:
+        errors.append(f"line {ordinal}: missing stream")
+
     legacy_ref = obj.get("legacy_ref")
     if legacy_ref is not None and not isinstance(legacy_ref, dict):
         errors.append(f"line {ordinal}: legacy_ref must be an object or null")
         legacy_ref = None
 
     return ArchiveRecord(
-        tenant_id=str(obj.get("tenant_id") or ""),
-        session_id=str(obj.get("session_id") or ""),
-        stream=str(obj.get("stream") or ""),
+        tenant_id=tenant_id,
+        session_id=session_id,
+        stream=stream,
         source_seq=source_seq,
         raw_bytes=raw,
         legacy_ref=legacy_ref,
@@ -439,7 +506,7 @@ def _optional_int(value: object) -> int | None:
 
 
 def _chunk_filename(stream: str, first_seq: int, last_seq: int, payload_sha: str) -> str:
-    return f"{_safe_component(stream)}-{first_seq:012d}-{last_seq:012d}-{payload_sha[:16]}{ARCHIVE_CHUNK_SUFFIX}"
+    return f"{_safe_component(stream)}-{first_seq:012d}-{last_seq:012d}-{payload_sha}{ARCHIVE_CHUNK_SUFFIX}"
 
 
 def _parse_chunk_filename(name: str) -> tuple[str, int, int, str] | None:
@@ -499,6 +566,6 @@ def _session_id_from_path(path: Path, root: Path) -> str | None:
         parts = path.resolve().relative_to(root.resolve()).parts
     except ValueError:
         return None
-    if len(parts) >= 3 and parts[0] == "sessions":
-        return parts[1]
+    if len(parts) >= 5 and parts[0] == "tenants" and parts[2] == "sessions":
+        return parts[3]
     return None

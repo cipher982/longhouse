@@ -155,12 +155,14 @@ For local/self-host/core:
   hot.db
   derived.db
   archive/
-    sessions/
-      <session_id>/
-        manifest.jsonl
-        chunks/
-          000000000001-000000005000-<hash>.jsonl.zst
-          000000005001-000000010000-<hash>.jsonl.zst
+    tenants/
+      <tenant_id>/
+        sessions/
+          <session_id>/
+            manifest.jsonl
+            chunks/
+              source_lines-000000000001-000000005000-<payload_sha256>.jsonl.zst
+              source_lines-000000005001-000000010000-<payload_sha256>.jsonl.zst
 ```
 
 For hosted, the same shape remains tenant-scoped under the tenant data root.
@@ -501,8 +503,9 @@ Acceptance:
 
 - exact raw byte roundtrip;
 - chunk corruption detected;
-- temp-write crash and rename-before-manifest crash are recoverable;
-- duplicate record handling is idempotent;
+- stale temp-write crash artifacts are quarantined without racing live writers;
+- rename-before-manifest crash can be detected as an untracked sealed chunk;
+- duplicate chunk writes are idempotent and duplicate in-chunk source sequences are rejected;
 - manifest entries are append-only/sealed.
 
 Tests:
