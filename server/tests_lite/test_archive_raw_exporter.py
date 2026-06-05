@@ -287,6 +287,63 @@ def test_legacy_exporter_skips_rawless_events_without_quarantine(tmp_path):
         assert db.query(ArchiveChunk).count() == 0
 
 
+def test_legacy_exporter_mixed_raw_and_rawless_events_advance_separate_watermarks(tmp_path):
+    SessionLocal = _session_factory(tmp_path)
+    archive_store = FilesystemArchiveStore(tmp_path / "archive")
+    session_id = uuid4()
+
+    with SessionLocal() as db:
+        _add_session(db, session_id=session_id, provider="codex")
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                role="assistant",
+                content_text="parsed",
+                timestamp=_ts(),
+                source_path="/tmp/events.jsonl",
+                source_offset=25,
+                event_hash="event-hash-1",
+                raw_json=None,
+                raw_json_z=compress_raw_json('{"event":"raw"}'),
+                raw_json_codec=CODEC_ZSTD,
+                event_uuid="event-1",
+            )
+        )
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                role="system",
+                content_text="synthetic",
+                timestamp=_ts(),
+                event_hash="event-hash-2",
+                raw_json=None,
+                raw_json_z=None,
+                raw_json_codec=CODEC_PLAIN,
+            )
+        )
+        db.commit()
+
+        result = export_legacy_raw_archive_batch(
+            db,
+            archive_store=archive_store,
+            tenant_id="tenant-a",
+            source_table="events",
+            session_id=session_id,
+            batch_size=2,
+        )
+        db.commit()
+
+        checkpoint = db.query(ArchiveExportCheckpoint).filter(ArchiveExportCheckpoint.session_id == session_id).one()
+        chunk = db.query(ArchiveChunk).filter(ArchiveChunk.session_id == session_id).one()
+        records = archive_store.read_chunk(chunk.relative_path)
+        assert result.selected_rows == 2
+        assert result.rows_exported == 1
+        assert result.rows_skipped_no_raw == 1
+        assert checkpoint.last_rowid == 2
+        assert checkpoint.last_source_seq == 1
+        assert records[0].raw_bytes == b'{"event":"raw"}'
+
+
 def test_legacy_exporter_dry_run_writes_nothing(tmp_path):
     SessionLocal = _session_factory(tmp_path)
     archive_store = FilesystemArchiveStore(tmp_path / "archive")
