@@ -68,6 +68,7 @@ const LOCAL_RETRY_DELAY_SECS: u64 = 5;
 const LIVE_LOCAL_RETRY_DELAY: Duration = Duration::from_millis(500);
 const STARTUP_RECONCILIATION_SCAN_DELAY: Duration = Duration::from_secs(120);
 const LOCAL_STATUS_INTERVAL_SECS: u64 = 1;
+const MACHINE_PRESENCE_INTERVAL_SECS: u64 = 60;
 const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 5 * 60;
 const FLIGHT_SAMPLE_INTERVAL_SECS: u64 = 5;
 
@@ -175,6 +176,11 @@ struct HeartbeatPostResult {
     reason: &'static str,
     result: Result<(), String>,
     join_elapsed_ms: u64,
+    task_elapsed_ms: u64,
+}
+
+struct MachinePresencePostResult {
+    result: Result<(), String>,
     task_elapsed_ms: u64,
 }
 
@@ -448,6 +454,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut local_status_timer =
         tokio::time::interval(Duration::from_secs(LOCAL_STATUS_INTERVAL_SECS));
     local_status_timer.tick().await; // consume first immediate tick
+    let mut machine_presence_timer =
+        tokio::time::interval(Duration::from_secs(MACHINE_PRESENCE_INTERVAL_SECS));
+    machine_presence_timer.tick().await; // consume first immediate tick
     let mut flight_sample_timer =
         tokio::time::interval(Duration::from_secs(FLIGHT_SAMPLE_INTERVAL_SECS));
     flight_sample_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -476,6 +485,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut runtime_outbox_post_tasks: JoinSet<(usize, usize, u64, u64)> = JoinSet::new();
     let mut heartbeat_post_tasks: JoinSet<HeartbeatPostResult> = JoinSet::new();
+    let mut machine_presence_post_tasks: JoinSet<MachinePresencePostResult> = JoinSet::new();
     let mut claude_terminal_post_tasks: JoinSet<ClaudeTerminalPostResult> = JoinSet::new();
     let mut unmanaged_binding_refresh_tasks: JoinSet<UnmanagedBindingRefreshResult> =
         JoinSet::new();
@@ -853,6 +863,28 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     Some(Err(err)) => {
                         last_runtime_truth_signature = None;
                         tracing::warn!("Heartbeat POST task failed: {}", err);
+                    }
+                    None => {}
+                }
+            }
+
+            machine_presence_post_result = machine_presence_post_tasks.join_next(), if !machine_presence_post_tasks.is_empty() => {
+                match machine_presence_post_result {
+                    Some(Ok(result)) => {
+                        match result.result {
+                            Ok(()) => {
+                                tracing::debug!(
+                                    task_elapsed_ms = result.task_elapsed_ms,
+                                    "Machine presence POST sent"
+                                );
+                            }
+                            Err(err) => {
+                                tracing::debug!("Machine presence POST failed: {}", err);
+                            }
+                        }
+                    }
+                    Some(Err(err)) => {
+                        tracing::warn!("Machine presence POST task failed: {}", err);
                     }
                     None => {}
                 }
@@ -1248,6 +1280,20 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // Frequent local status file refresh for ambient UX and debugging
             _ = local_status_timer.tick() => {
                 maybe_start_managed_observation_scan(&mut managed_observation_scan_tasks, "local_status");
+            }
+
+            _ = machine_presence_timer.tick() => {
+                if !offline.is_offline {
+                    if machine_presence_post_tasks.is_empty() {
+                        spawn_machine_presence_post(
+                            &mut machine_presence_post_tasks,
+                            client.clone(),
+                            crate::machine_presence::collect_machine_presence(),
+                        );
+                    } else {
+                        tracing::debug!("Skipping machine presence POST while previous POST is still in flight");
+                    }
+                }
             }
 
             // Periodic server heartbeat
@@ -1714,6 +1760,23 @@ fn spawn_heartbeat_post(
             result,
             join_elapsed_ms: join_started.elapsed().as_millis() as u64,
             task_elapsed_ms,
+        }
+    });
+}
+
+fn spawn_machine_presence_post(
+    tasks: &mut JoinSet<MachinePresencePostResult>,
+    client: ShipperClient,
+    payload: crate::machine_presence::MachinePresencePayload,
+) {
+    tasks.spawn_local(async move {
+        let task_started = Instant::now();
+        let result = crate::machine_presence::send_machine_presence(&client, &payload)
+            .await
+            .map_err(|err| err.to_string());
+        MachinePresencePostResult {
+            result,
+            task_elapsed_ms: task_started.elapsed().as_millis() as u64,
         }
     });
 }
