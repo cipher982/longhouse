@@ -221,6 +221,60 @@ def test_archive_derived_projector_records_corruption_error_for_retry(tmp_path):
         assert [row.id for row in select_pending_archive_chunks(manifest_db)] == [chunk.id]
 
 
+def test_archive_derived_projector_mixed_batch_keeps_success_and_error_checkpoints(tmp_path):
+    manifest, derived = _stores(tmp_path)
+    archive_store = FilesystemArchiveStore(tmp_path / "archive")
+    good_session_id = uuid4()
+    bad_session_id = uuid4()
+
+    with manifest() as manifest_db, derived() as derived_db:
+        _add_session(manifest_db, session_id=good_session_id, provider="claude")
+        _add_session(manifest_db, session_id=bad_session_id, provider="claude")
+        _add_archive_chunk(
+            manifest_db,
+            archive_store,
+            session_id=good_session_id,
+            records=[
+                _record(
+                    good_session_id,
+                    source_seq=1,
+                    source_offset=0,
+                    raw='{"type":"user","timestamp":"2026-01-01T00:00:00Z","message":{"content":"good"}}',
+                )
+            ],
+        )
+        bad_chunk = _add_archive_chunk(
+            manifest_db,
+            archive_store,
+            session_id=bad_session_id,
+            records=[
+                _record(
+                    bad_session_id,
+                    source_seq=1,
+                    source_offset=0,
+                    raw='{"type":"user","timestamp":"2026-01-01T00:00:00Z","message":{"content":"bad"}}',
+                )
+            ],
+        )
+        archive_store.root.joinpath(bad_chunk.relative_path).write_bytes(b"not zstd")
+        manifest_db.commit()
+
+        result = project_archive_chunks_to_derived_events(manifest_db, derived_db, archive_store=archive_store, limit=2)
+        manifest_db.commit()
+        derived_db.commit()
+
+        statuses = {
+            str(row.session_id): row.status
+            for row in manifest_db.query(ProjectorCheckpoint).order_by(ProjectorCheckpoint.session_id).all()
+        }
+        assert result.selected_chunks == 2
+        assert result.chunks_projected == 1
+        assert result.chunks_failed == 1
+        assert statuses[str(good_session_id)] == "current"
+        assert statuses[str(bad_session_id)] == "error"
+        assert derived_db.execute(text("SELECT content_text FROM derived_events")).fetchall() == [("good",)]
+
+
 def _stores(tmp_path):
     manifest_engine = make_engine(f"sqlite:///{tmp_path / 'manifest.db'}")
     Base.metadata.create_all(bind=manifest_engine)

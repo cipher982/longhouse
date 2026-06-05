@@ -55,7 +55,7 @@ Spec: `docs/specs/reliability-data-plane.md`
 - [x] Project archive chunks to hot cards.
 - [x] Project archive chunks to derived events/search.
 - [x] Add parser-revision checkpoints.
-- [ ] Add projector restart, duplicate, out-of-order, and large-session tests.
+- [x] Add projector restart, duplicate, out-of-order, and large-session tests.
 
 ## Phase 5: Backup Gate and Legacy Exporter
 
