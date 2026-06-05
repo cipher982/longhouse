@@ -93,22 +93,27 @@ def _bounded_source_path(db: Session, *, session_id) -> str:
 
 
 def _thread_scoped_source_path(db: Session, *, session_id, thread_id) -> str:
-    """The latest source path scoped to a specific thread (+ thread-less rows).
+    """The latest source path scoped to a specific thread.
 
     Codex resumes by transcript PATH, so it must use the path for the resumed
-    thread, not the session-wide latest (a child/subagent thread could have
-    newer source lines and we'd resume the wrong transcript). This keeps the
-    thread-scoped semantics the codex path always had.
+    thread when thread-scoped source evidence exists. Avoid a
+    ``thread_id = ? OR thread_id IS NULL`` predicate here: on hosted tenant
+    DBs with millions of source lines, SQLite has picked a full-table OR plan
+    and blocked timeline/session-list cards. If there is no thread-specific
+    row, fall back to bounded session-level evidence rather than scanning all
+    NULL-thread rows.
     """
     row = (
         db.query(AgentSourceLine.source_path)
         .filter(AgentSourceLine.session_id == session_id)
-        .filter((AgentSourceLine.thread_id == thread_id) | (AgentSourceLine.thread_id.is_(None)))
-        .order_by(AgentSourceLine.created_at.desc(), AgentSourceLine.id.desc())
+        .filter(AgentSourceLine.thread_id == thread_id)
+        .order_by(AgentSourceLine.id.desc())
         .limit(1)
         .scalar()
     )
-    return str(row).strip() if row else ""
+    if row:
+        return str(row).strip()
+    return _bounded_source_path(db, session_id=session_id)
 
 
 def resolve_native_continue_target(db: Session, session: AgentSession) -> NativeContinueTargetResolution | None:

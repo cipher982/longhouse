@@ -120,7 +120,8 @@ def _seed_continuable_codex_session(
     session_id=None,
     device_id: str | None = "cinder",
     provider_thread_id: str = "thread-abc",
-    thread_path: str = "/Users/me/.codex/sessions/thread-abc.jsonl",
+    thread_path: str | None = "/Users/me/.codex/sessions/thread-abc.jsonl",
+    session_path: str | None = None,
     ended: bool = True,
 ):
     now = datetime.now(timezone.utc)
@@ -158,17 +159,30 @@ def _seed_continuable_codex_session(
         alias_kind="provider_session_id",
         alias_value=provider_thread_id,
     )
-    db.add(
-        AgentSourceLine(
-            session_id=session.id,
-            thread_id=thread.id,
-            source_path=thread_path,
-            source_offset=0,
-            branch_id=0,
-            raw_json='{"type":"message"}',
-            line_hash=f"hash-{sid}",
+    if thread_path is not None:
+        db.add(
+            AgentSourceLine(
+                session_id=session.id,
+                thread_id=thread.id,
+                source_path=thread_path,
+                source_offset=0,
+                branch_id=0,
+                raw_json='{"type":"message"}',
+                line_hash=f"hash-thread-{sid}",
+            )
         )
-    )
+    if session_path is not None:
+        db.add(
+            AgentSourceLine(
+                session_id=session.id,
+                thread_id=None,
+                source_path=session_path,
+                source_offset=1,
+                branch_id=0,
+                raw_json='{"type":"message"}',
+                line_hash=f"hash-session-{sid}",
+            )
+        )
     db.commit()
     return session.id
 
@@ -1393,6 +1407,72 @@ def test_late_continue_claude_reconciliation_attaches_new_run(tmp_path):
             .one()
         )
         assert new_connection.state == "attached"
+
+
+def test_continue_session_prefers_thread_source_path_over_session_fallback(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.continue",))
+
+    with SessionLocal() as db:
+        session_id = _seed_continuable_codex_session(
+            db,
+            thread_path="/Users/me/.codex/sessions/thread-abc.jsonl",
+            session_path="/Users/me/.codex/sessions/session-fallback.jsonl",
+        )
+
+    with SessionLocal() as db:
+        result = asyncio.run(
+            continue_remote_session(
+                db,
+                RemoteContinueParams(
+                    owner_id=OWNER_ID,
+                    session_id=session_id,
+                    client_request_id="continue-thread-path",
+                ),
+                registry=registry,
+            )
+        )
+
+    assert result.launch_state == "live"
+    assert registry.sent[0]["payload"]["resume"] == {
+        "thread_id": "thread-abc",
+        "thread_path": "/Users/me/.codex/sessions/thread-abc.jsonl",
+    }
+
+
+def test_continue_session_uses_session_bounded_source_path_without_thread_path(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.continue",))
+
+    with SessionLocal() as db:
+        session_id = _seed_continuable_codex_session(
+            db,
+            thread_path=None,
+            session_path="/Users/me/.codex/sessions/session-fallback.jsonl",
+        )
+
+    with SessionLocal() as db:
+        result = asyncio.run(
+            continue_remote_session(
+                db,
+                RemoteContinueParams(
+                    owner_id=OWNER_ID,
+                    session_id=session_id,
+                    client_request_id="continue-session-path",
+                ),
+                registry=registry,
+            )
+        )
+
+    assert result.launch_state == "live"
+    assert registry.sent[0]["payload"]["resume"] == {
+        "thread_id": "thread-abc",
+        "thread_path": "/Users/me/.codex/sessions/session-fallback.jsonl",
+    }
 
 
 def test_continue_session_is_idempotent_by_client_request_id(tmp_path):
