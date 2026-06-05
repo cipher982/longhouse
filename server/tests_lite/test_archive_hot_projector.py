@@ -127,6 +127,86 @@ def test_archive_hot_projector_supports_generic_normalized_event_json(tmp_path):
         assert card.last_visible_text_preview == "shipped"
 
 
+def test_archive_hot_projector_does_not_move_last_activity_backward(tmp_path):
+    SessionLocal = _session_factory(tmp_path)
+    archive_store = FilesystemArchiveStore(tmp_path / "archive")
+    session_id = uuid4()
+    newer_activity = datetime(2026, 1, 1, 1, tzinfo=timezone.utc)
+
+    with SessionLocal() as db:
+        session = _add_session(db, session_id=session_id, provider="claude")
+        session.last_activity_at = newer_activity.replace(tzinfo=None)
+        _add_archive_chunk(
+            db,
+            archive_store,
+            session_id=session_id,
+            records=[
+                _record(
+                    session_id,
+                    source_seq=1,
+                    source_offset=0,
+                    raw='{"type":"user","timestamp":"2026-01-01T00:00:00Z","message":{"content":"older archive"}}',
+                )
+            ],
+        )
+        db.commit()
+
+        result = project_archive_chunks_to_hot_cards(db, archive_store=archive_store)
+        db.commit()
+
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        card = db.query(TimelineCard).filter(TimelineCard.session_id == session_id).one()
+        assert result.sessions_projected == 1
+        assert session.last_activity_at == newer_activity.replace(tzinfo=None)
+        assert card.last_activity_at == newer_activity.replace(tzinfo=None)
+
+
+def test_archive_hot_projector_skips_sidechain_records_for_parent_counts(tmp_path):
+    SessionLocal = _session_factory(tmp_path)
+    archive_store = FilesystemArchiveStore(tmp_path / "archive")
+    session_id = uuid4()
+
+    with SessionLocal() as db:
+        _add_session(db, session_id=session_id, provider="claude")
+        _add_archive_chunk(
+            db,
+            archive_store,
+            session_id=session_id,
+            records=[
+                _record(
+                    session_id,
+                    source_seq=1,
+                    source_offset=0,
+                    raw='{"type":"user","timestamp":"2026-01-01T00:00:00Z","message":{"content":"root request"}}',
+                ),
+                _record(
+                    session_id,
+                    source_seq=2,
+                    source_offset=100,
+                    raw='{"type":"user","isSidechain":true,"timestamp":"2026-01-01T00:00:01Z","message":{"content":"child task"}}',
+                ),
+                _record(
+                    session_id,
+                    source_seq=3,
+                    source_offset=200,
+                    raw='{"type":"assistant","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"text","text":"parent response"}]}}',
+                ),
+            ],
+        )
+        db.commit()
+
+        result = project_archive_chunks_to_hot_cards(db, archive_store=archive_store)
+        db.commit()
+
+        card = db.query(TimelineCard).filter(TimelineCard.session_id == session_id).one()
+        assert result.sessions_projected == 1
+        assert result.events_projected == 2
+        assert card.user_messages == 1
+        assert card.assistant_messages == 1
+        assert card.first_user_message_preview == "root request"
+        assert card.last_visible_text_preview == "parent response"
+
+
 def test_archive_hot_projector_does_not_overwrite_from_partial_archive(tmp_path):
     SessionLocal = _session_factory(tmp_path)
     archive_store = FilesystemArchiveStore(tmp_path / "archive")

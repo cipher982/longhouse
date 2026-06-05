@@ -146,7 +146,7 @@ def project_archive_chunks_to_hot_cards(
         else:
             status = "current"
 
-        if projection.has_full_coverage and not unsupported_status:
+        if projection.has_full_coverage and projection.events_projected > 0 and not unsupported_status:
             _apply_hot_projection(
                 db,
                 session=session,
@@ -301,8 +301,10 @@ def _apply_hot_projection(
     session.tool_calls = projection.tool_calls
     session.first_user_message_preview = projection.first_user_message_preview
     session.last_visible_text_preview = projection.last_visible_text_preview
-    if projection.last_activity_at is not None:
-        session.last_activity_at = _naive_utc(projection.last_activity_at)
+    projected_activity = _naive_utc(projection.last_activity_at) if projection.last_activity_at is not None else None
+    current_activity = _naive_utc(session.last_activity_at) if session.last_activity_at is not None else None
+    if projected_activity is not None and (current_activity is None or projected_activity > current_activity):
+        session.last_activity_at = projected_activity
 
     values = {
         "session_id": session.id,
@@ -374,6 +376,8 @@ def _parse_record_events(record: ArchiveRecord, *, ordinal: int) -> tuple[list[H
         return [], True
     if not isinstance(obj, dict):
         return [], True
+    if _is_sidechain_or_meta_record(obj):
+        return [], False
 
     generic = _parse_generic_event_object(obj, record=record, ordinal=ordinal)
     if generic is not None:
@@ -408,6 +412,18 @@ def _parse_generic_event_object(obj: dict, *, record: ArchiveRecord, ordinal: in
         _optional_str(obj.get("timestamp")) or (None if payload_obj is None else _optional_str(payload_obj.get("timestamp")))
     )
     return [_event(record, ordinal=ordinal, role=role, timestamp=timestamp, content_text=content, tool_name=tool_name)]
+
+
+def _is_sidechain_or_meta_record(obj: dict) -> bool:
+    return _truthy(obj.get("isSidechain")) or _truthy(obj.get("isMeta"))
+
+
+def _truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes"}
+    return False
 
 
 def _parse_claude_event_object(obj: dict, *, record: ArchiveRecord, ordinal: int) -> list[HotArchiveEvent]:
