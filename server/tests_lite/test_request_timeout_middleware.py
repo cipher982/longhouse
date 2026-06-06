@@ -102,3 +102,19 @@ def test_agents_archive_bundle_route_uses_longer_timeout_budget():
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+
+
+def test_provider_live_proof_route_uses_longer_timeout_budget():
+    app = FastAPI()
+    app.add_middleware(RequestTimeoutMiddleware, timeout=0.01)
+
+    @app.post("/api/agents/machines/cinder/provider-live-proof")
+    async def provider_live_proof():
+        await asyncio.sleep(0.05)
+        return {"ok": True}
+
+    with TestClient(app) as client:
+        response = client.post("/api/agents/machines/cinder/provider-live-proof")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
