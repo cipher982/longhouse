@@ -3,7 +3,7 @@
 Due: none
 Area: longhouse
 Workspace: /Users/davidrose/git/_wt/longhouse-reliability-data-plane
-Status: Phase 8 restore/decommission plan implemented; deletion and compaction remain unapproved
+Status: Production dogfood archive-primary enabled with legacy fallback; deletion and compaction remain unapproved
 
 This task file tracks the SDP-1 epic for separating hot product/control state
 from raw archive and derived search/detail state.
@@ -89,8 +89,20 @@ Spec: `docs/specs/reliability-data-plane.md`
 - [x] Draft old DB retention/reclaim plan.
 - [x] Require explicit maintainer approval before deletion or compaction.
 
-## Next Production Milestone
+## Production Dogfood Closeout
 
-Not part of Phase 8 completion: ship additive shadow-mode archive/projector
-infrastructure, compare projected state with legacy reads, and keep storage
-reclaim as a separate explicitly approved operator event.
+Completed for the solo pre-launch `david010` tenant on 2026-06-06:
+
+- additive archive shadow writes were enabled and verified on live ingest;
+- archive-primary writes were enabled with legacy raw fallback still on;
+- clean restore drills passed for both shadow-mode and archive-primary synthetic
+  sessions;
+- bounded ingest stress passed with archive-primary `written` and legacy raw
+  `enabled`;
+- hosted QA and local dogfood checks stayed green on
+  `0bb4ba49f4d2fa402a7585e96684fdb336721f3b`.
+
+Still out of scope for this closeout: historical raw export, clean-store
+replacement for the old monolith DB, deletion, compaction, `VACUUM`, or any
+storage reclaim. Those remain separate operator actions requiring explicit
+approval.
