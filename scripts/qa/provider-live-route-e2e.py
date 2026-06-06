@@ -304,7 +304,8 @@ def _post_live_proof(
         user_agent=user_agent,
         provider=provider,
         accepted=payload,
-        timeout_s=http_timeout_s,
+        http_timeout_s=http_timeout_s,
+        poll_timeout_s=process_timeout_s + 60,
     )
 
 
@@ -316,7 +317,8 @@ def _poll_live_proof_operation(
     user_agent: str,
     provider: str,
     accepted: dict[str, Any],
-    timeout_s: float,
+    http_timeout_s: float,
+    poll_timeout_s: float,
 ) -> tuple[int, dict[str, Any]]:
     status_url = str(accepted.get("status_url") or "").strip()
     operation_id = str(accepted.get("operation_id") or "").strip()
@@ -331,7 +333,7 @@ def _poll_live_proof_operation(
         url = f"{api_url}{status_url}"
     else:
         url = status_url
-    deadline = time.monotonic() + max(1.0, timeout_s)
+    deadline = time.monotonic() + max(1.0, poll_timeout_s)
     last_status = 202
     last_payload: dict[str, Any] = accepted
     while True:
@@ -340,9 +342,12 @@ def _poll_live_proof_operation(
             url=url,
             token=token,
             user_agent=user_agent,
-            timeout_s=min(30.0, max(1.0, timeout_s)),
+            timeout_s=min(30.0, max(1.0, http_timeout_s)),
         )
         if last_status != 200:
+            if _is_retryable_response(last_status, last_payload) and time.monotonic() < deadline:
+                time.sleep(DEFAULT_OPERATION_POLL_INTERVAL_S)
+                continue
             return last_status, last_payload
         operation_status = str(last_payload.get("status") or "")
         if operation_status == "succeeded":
