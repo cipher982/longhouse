@@ -204,3 +204,50 @@ def test_machine_control_registry_reports_offline_device():
         assert response.error == "Machine Agent control channel is offline"
 
     asyncio.run(_run())
+
+
+def test_machine_control_registry_can_send_without_pending_future():
+    async def _run():
+        registry = MachineControlChannelRegistry()
+        websocket = _FakeWebSocket()
+        await registry.register(
+            owner_id=7,
+            device_id="cinder",
+            machine_name="cinder",
+            engine_build="abc123",
+            supports=["provider.live_proof"],
+            websocket=websocket,
+        )
+
+        response = await registry.send_command_nowait(
+            owner_id=7,
+            device_id="cinder",
+            session_id=None,
+            command_type="provider.live_proof",
+            payload={"provider": "claude"},
+            command_id="machine-op:test",
+        )
+
+        assert response.transport_ok is True
+        assert websocket.sent == [
+            {
+                "type": "command",
+                "command_id": "machine-op:test",
+                "command_type": "provider.live_proof",
+                "payload": {"provider": "claude"},
+            }
+        ]
+
+        completed = await registry.complete_command(
+            {
+                "type": "command_result",
+                "command_id": "machine-op:test",
+                "ok": True,
+                "result": {"exit_code": 0},
+            },
+            owner_id=7,
+            device_id="cinder",
+        )
+        assert completed is False
+
+    asyncio.run(_run())

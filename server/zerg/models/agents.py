@@ -1526,6 +1526,54 @@ class SessionLaunchAttempt(AgentsBase):
     )
 
 
+class MachineControlOperation(AgentsBase):
+    """Durable lifecycle for Machine Agent control work that outlives one request."""
+
+    __tablename__ = "machine_control_operations"
+
+    id = Column(String(36), primary_key=True)
+
+    owner_id = Column(Integer, nullable=True, index=True)
+    device_id = Column(String(255), nullable=False, index=True)
+    command_type = Column(String(64), nullable=False, index=True)
+    command_id = Column(String(96), nullable=False, index=True)
+    provider = Column(String(64), nullable=True, index=True)
+
+    status = Column(String(32), nullable=False, server_default=text("'queued'"))
+    request_json = Column(JSON, nullable=False)
+    result_json = Column(JSON, nullable=True)
+    error_json = Column(JSON, nullable=True)
+    timeout_secs = Column(Integer, nullable=False, server_default=text("120"))
+
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
+    __table_args__ = (
+        Index("ix_machine_control_ops_owner_status", "owner_id", "status", "created_at"),
+        Index("ix_machine_control_ops_command", "command_id", unique=True),
+        Index(
+            "ux_machine_control_provider_live_active",
+            "owner_id",
+            "device_id",
+            "provider",
+            "command_type",
+            unique=True,
+            sqlite_where=text("status IN ('queued', 'running') " "AND provider IS NOT NULL " "AND command_type = 'provider.live_proof'"),
+            postgresql_where=text(
+                "status IN ('queued', 'running') " "AND provider IS NOT NULL " "AND command_type = 'provider.live_proof'"
+            ),
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Eager-derive legacy ``managed_transport`` on instance load.
 #

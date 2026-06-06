@@ -13,6 +13,7 @@ from zerg.utils.time import UTCBaseModel
 
 ProviderLiveProofProvider = Literal["claude", "opencode", "antigravity"]
 ArchiveBacklogControlMode = Literal["paused", "trickle", "drain"]
+MachineControlOperationStatus = Literal["queued", "running", "succeeded", "failed", "timed_out"]
 
 ControlChannelStatus = Literal["connected", "disconnected"]
 LaunchBlockedBy = Literal[
@@ -43,7 +44,7 @@ class MachineDirectoryEntry(UTCBaseModel):
     )
     can_launch_codex: bool = Field(
         ...,
-        description=("Compatibility flag for Codex launch readiness. Prefer launchable_providers for provider-agnostic launch."),
+        description=("Compatibility flag for Codex launch readiness. " "Prefer launchable_providers for provider-agnostic launch."),
     )
     launchable_providers: list[str] = Field(
         default_factory=list,
@@ -104,11 +105,28 @@ class ProviderLiveProofRequest(UTCBaseModel):
     )
 
 
-class ProviderLiveProofResponse(UTCBaseModel):
-    device_id: str = Field(..., description="Machine that executed the proof.")
-    provider: ProviderLiveProofProvider = Field(..., description="Provider that was proved.")
-    command_id: str = Field(..., description="Machine-control command id.")
-    result: dict[str, Any] = Field(..., description="Structured provider-live result returned by the Machine Agent.")
+class ProviderLiveProofAcceptedResponse(UTCBaseModel):
+    operation_id: str = Field(..., description="Durable machine-control operation id.")
+    status: MachineControlOperationStatus = Field(..., description="Current operation state.")
+    status_url: str = Field(..., description="Relative API URL for polling operation status.")
+    device_id: str = Field(..., description="Machine that accepted the proof command.")
+    provider: ProviderLiveProofProvider = Field(..., description="Provider that will be proved.")
+
+
+class MachineControlOperationResponse(UTCBaseModel):
+    operation_id: str = Field(..., description="Durable machine-control operation id.")
+    device_id: str = Field(..., description="Target machine id.")
+    command_type: str = Field(..., description="Machine Agent command type.")
+    command_id: str = Field(..., description="Machine Agent command id.")
+    provider: str | None = Field(default=None, description="Provider scoped by the operation, if any.")
+    status: MachineControlOperationStatus = Field(..., description="Current operation state.")
+    request: dict[str, Any] = Field(default_factory=dict, description="Operation request payload.")
+    result: dict[str, Any] | None = Field(default=None, description="Machine Agent result when succeeded.")
+    error: dict[str, Any] | None = Field(default=None, description="Machine Agent error when failed or timed out.")
+    created_at: datetime = Field(..., description="Operation creation time.")
+    started_at: datetime | None = Field(default=None, description="Dispatch start time.")
+    finished_at: datetime | None = Field(default=None, description="Terminal completion time.")
+    timeout_secs: int = Field(..., description="Operation lease in seconds.")
 
 
 class ArchiveBacklogResponse(UTCBaseModel):

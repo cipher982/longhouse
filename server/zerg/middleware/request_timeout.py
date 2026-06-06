@@ -27,7 +27,6 @@ MANAGED_LOCAL_LAUNCH_TIMEOUT_SECONDS = 45
 INTERACTIVE_AUTH_TIMEOUT_SECONDS = 30
 INGEST_TIMEOUT_SECONDS = 30
 ARCHIVE_BUNDLE_TIMEOUT_SECONDS = 120
-PROVIDER_LIVE_PROOF_TIMEOUT_SECONDS = 930
 
 # Paths that are excluded from the timeout enforcement.
 _SKIP_PATHS = ("/readyz", "/health")
@@ -88,8 +87,6 @@ class RequestTimeoutMiddleware:
             return
 
         timeout = self.timeout
-        if api_path.startswith("/agents/machines/") and api_path.endswith("/provider-live-proof"):
-            timeout = PROVIDER_LIVE_PROOF_TIMEOUT_SECONDS
         for prefix, override in _TIMEOUT_OVERRIDES.items():
             if prefix == "/agents/sessions/":
                 if api_path.startswith(prefix) and api_path.endswith("/archive-bundle"):

@@ -32,6 +32,7 @@ DEFAULT_ATTEMPTS = 6
 DEFAULT_RETRY_DELAY_S = 8.0
 DEFAULT_TRANSCRIPT_ATTEMPTS = 18
 DEFAULT_TRANSCRIPT_RETRY_DELAY_S = 5.0
+DEFAULT_OPERATION_POLL_INTERVAL_S = 2.0
 RETRYABLE_STATUS_CODES = {0, 408, 429, 500, 502, 503, 504}
 
 
@@ -286,7 +287,7 @@ def _post_live_proof(
         "timeout_secs": process_timeout_s,
         "expected_provider_version": expected_version,
     }
-    return _request_json(
+    status, payload = _request_json(
         method="POST",
         url=f"{api_url}/api/agents/machines/{device_id}/provider-live-proof",
         token=token,
@@ -294,6 +295,98 @@ def _post_live_proof(
         body=body,
         timeout_s=http_timeout_s,
     )
+    if status != 202:
+        return status, payload
+    return _poll_live_proof_operation(
+        api_url=api_url,
+        device_id=device_id,
+        token=token,
+        user_agent=user_agent,
+        provider=provider,
+        accepted=payload,
+        timeout_s=http_timeout_s,
+    )
+
+
+def _poll_live_proof_operation(
+    *,
+    api_url: str,
+    device_id: str,
+    token: str,
+    user_agent: str,
+    provider: str,
+    accepted: dict[str, Any],
+    timeout_s: float,
+) -> tuple[int, dict[str, Any]]:
+    status_url = str(accepted.get("status_url") or "").strip()
+    operation_id = str(accepted.get("operation_id") or "").strip()
+    if not status_url or not operation_id:
+        return 502, {
+            "detail": {
+                "code": "provider_live_operation_malformed",
+                "message": "provider live proof did not return an operation",
+            }
+        }
+    if status_url.startswith("/"):
+        url = f"{api_url}{status_url}"
+    else:
+        url = status_url
+    deadline = time.monotonic() + max(1.0, timeout_s)
+    last_status = 202
+    last_payload: dict[str, Any] = accepted
+    while True:
+        last_status, last_payload = _request_json(
+            method="GET",
+            url=url,
+            token=token,
+            user_agent=user_agent,
+            timeout_s=min(30.0, max(1.0, timeout_s)),
+        )
+        if last_status != 200:
+            return last_status, last_payload
+        operation_status = str(last_payload.get("status") or "")
+        if operation_status == "succeeded":
+            result = last_payload.get("result")
+            if not isinstance(result, dict):
+                return 502, {
+                    "detail": {
+                        "code": "provider_live_operation_result_malformed",
+                        "message": "provider live proof operation succeeded without a result",
+                    }
+                }
+            return 200, {
+                "device_id": device_id,
+                "provider": provider,
+                "command_id": str(last_payload.get("command_id") or operation_id),
+                "result": result,
+                "operation_id": operation_id,
+            }
+        if operation_status in {"failed", "timed_out"}:
+            error = last_payload.get("error") if isinstance(last_payload.get("error"), dict) else {}
+            code = str(error.get("code") or "provider_live_operation_failed")
+            if code == "provider_version_mismatch":
+                status_code = 409
+            elif operation_status == "timed_out":
+                status_code = 503
+            else:
+                status_code = 502
+            return status_code, {
+                "detail": {
+                    "code": code,
+                    "message": str(error.get("message") or f"provider live proof operation {operation_status}"),
+                },
+                "operation_id": operation_id,
+            }
+        if time.monotonic() >= deadline:
+            return 503, {
+                "detail": {
+                    "code": "provider_live_operation_poll_timeout",
+                    "message": f"provider live proof operation {operation_id} did not finish before client timeout",
+                },
+                "operation_id": operation_id,
+                "last_status": operation_status,
+            }
+        time.sleep(DEFAULT_OPERATION_POLL_INTERVAL_S)
 
 
 def _post_live_proof_with_retry(

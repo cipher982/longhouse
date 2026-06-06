@@ -223,6 +223,55 @@ class MachineControlChannelRegistry:
 
         return MachineControlCommandResponse(transport_ok=True, message=message)
 
+    async def send_command_nowait(
+        self,
+        *,
+        owner_id: int,
+        device_id: str,
+        session_id: str | None,
+        command_type: str,
+        payload: Mapping[str, Any] | None = None,
+        command_id: str | None = None,
+    ) -> MachineControlCommandResponse:
+        """Send a command frame without binding its result to an in-memory future."""
+
+        key = (owner_id, device_id)
+        command_id = command_id or str(uuid.uuid4())
+        async with self._lock:
+            connection = self._connections.get(key)
+            if connection is None:
+                return MachineControlCommandResponse(
+                    transport_ok=False,
+                    error="Machine Agent control channel is offline",
+                )
+            websocket = connection.websocket
+            send_lock = connection.send_lock
+
+        frame = {
+            "type": "command",
+            "command_id": command_id,
+            "command_type": command_type,
+            "payload": dict(payload or {}),
+        }
+        if session_id is not None:
+            frame["session_id"] = session_id
+        try:
+            async with send_lock:
+                await websocket.send_json(frame)
+        except Exception as exc:
+            logger.warning(
+                "Failed to send machine control command %s to owner=%s device=%s: %s",
+                command_id,
+                owner_id,
+                device_id,
+                exc,
+            )
+            return MachineControlCommandResponse(
+                transport_ok=False,
+                error="Failed to send command to Machine Agent control channel",
+            )
+        return MachineControlCommandResponse(transport_ok=True, message=frame)
+
     async def complete_command(
         self,
         message: Mapping[str, Any],

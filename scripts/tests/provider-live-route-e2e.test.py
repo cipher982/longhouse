@@ -20,11 +20,26 @@ HARNESS = REPO_ROOT / "scripts/qa/provider-live-route-e2e.py"
 class _ServerState:
     def __init__(self) -> None:
         self.requests: list[dict] = []
+        self.operations: dict[str, dict] = {}
+        self.next_operation_id = 0
         self.bad_mismatch_shape = False
         self.provider_verdicts: dict[str, str] = {}
         self.transient_match_failures: dict[str, int] = {}
         self.session_search_hits: list[str] = []
         self.session_search_requests: list[dict] = []
+
+    def create_operation(self, provider: str, operation: dict) -> dict:
+        self.next_operation_id += 1
+        operation_id = f"op-{self.next_operation_id}"
+        operation["operation_id"] = operation_id
+        self.operations[operation_id] = operation
+        return {
+            "operation_id": operation_id,
+            "status": "running",
+            "status_url": f"/api/agents/machines/operations/{operation_id}",
+            "device_id": "cinder",
+            "provider": provider,
+        }
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -48,8 +63,20 @@ class _Handler(BaseHTTPRequestHandler):
             query = urllib.parse.parse_qs(parsed.query)
             marker = (query.get("query") or [""])[0]
             self.state.session_search_requests.append({"marker": marker, "query": query})
-            sessions = [{"id": "opencode-session-1", "provider": "opencode"}] if marker in self.state.session_search_hits else []
+            sessions = (
+                [{"id": "opencode-session-1", "provider": "opencode"}]
+                if marker in self.state.session_search_hits
+                else []
+            )
             self._write_json(200, {"sessions": sessions, "total": len(sessions)})
+            return
+        if parsed.path.startswith("/api/agents/machines/operations/"):
+            operation_id = parsed.path.rsplit("/", 1)[-1]
+            operation = self.state.operations.get(operation_id)
+            if operation is None:
+                self._write_json(404, {"detail": "not found"})
+                return
+            self._write_json(200, operation)
             return
         if self.path != "/api/agents/machines":
             self._write_json(404, {"detail": "not found"})
@@ -84,12 +111,14 @@ class _Handler(BaseHTTPRequestHandler):
                 self.state.transient_match_failures[provider] = transient_remaining - 1
                 self._write_json(503, {"detail": "Request timed out"})
                 return
-            self._write_json(
-                200,
+            accepted = self.state.create_operation(
+                provider,
                 {
                     "device_id": "cinder",
                     "provider": provider,
                     "command_id": "cmd-test",
+                    "command_type": "provider.live_proof",
+                    "status": "succeeded",
                     "result": {
                         "provider": provider,
                         "transport": "provider_live_proof",
@@ -117,18 +146,31 @@ class _Handler(BaseHTTPRequestHandler):
                     },
                 },
             )
+            self._write_json(
+                202,
+                accepted,
+            )
             return
         if self.state.bad_mismatch_shape:
             self._write_json(502, {"detail": "origin hid the typed body"})
             return
-        self._write_json(
-            409,
+        accepted = self.state.create_operation(
+            provider,
             {
-                "detail": {
+                "device_id": "cinder",
+                "provider": provider,
+                "command_id": "cmd-test-mismatch",
+                "command_type": "provider.live_proof",
+                "status": "failed",
+                "error": {
                     "code": "provider_version_mismatch",
                     "message": "provider live proof version mismatch",
-                }
+                },
             },
+        )
+        self._write_json(
+            202,
+            accepted,
         )
 
     def log_message(self, format: str, *args) -> None:  # noqa: A002

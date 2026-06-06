@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import os
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
 
@@ -32,6 +33,10 @@ from zerg.dependencies.browser_auth import get_current_browser_user  # noqa: E40
 from zerg.models import User  # noqa: E402
 from zerg.models.device_token import DeviceToken  # noqa: E402
 from zerg.services.machine_control_channel import MachineControlChannelRegistry  # noqa: E402
+from zerg.services.machine_control_operations import create_provider_live_proof_operation  # noqa: E402
+from zerg.services.machine_control_operations import (
+    reconcile_machine_control_operation_from_command_result,  # noqa: E402
+)
 from zerg.services.machines_directory import build_machines_directory  # noqa: E402
 
 OWNER_ID = 42
@@ -78,45 +83,6 @@ class _CompletingWebSocket:
 
     async def send_json(self, message):
         self.sent.append(message)
-        await self.registry.complete_command(
-            {
-                "type": "command_result",
-                "command_id": message["command_id"],
-                "ok": True,
-                "result": {
-                    "provider": message["payload"]["provider"],
-                    "artifact": {
-                        "artifact_kind": "provider_live_canary",
-                        "provider": message["payload"]["provider"],
-                        "verdict": "green",
-                    },
-                },
-            },
-            owner_id=self.owner_id,
-            device_id=self.device_id,
-        )
-
-
-class _FailingWebSocket:
-    def __init__(self, registry: MachineControlChannelRegistry, *, owner_id: int, device_id: str):
-        self.registry = registry
-        self.owner_id = owner_id
-        self.device_id = device_id
-
-    async def send_json(self, message):
-        await self.registry.complete_command(
-            {
-                "type": "command_result",
-                "command_id": message["command_id"],
-                "ok": False,
-                "error": {
-                    "code": "provider_version_mismatch",
-                    "message": "provider live proof version mismatch",
-                },
-            },
-            owner_id=self.owner_id,
-            device_id=self.device_id,
-        )
 
 
 def _register(
@@ -413,23 +379,66 @@ def test_provider_live_proof_route_dispatches_typed_machine_command(tmp_path):
                     "expected_provider_version": "2.1.153",
                 },
             )
+            status_url = resp.json().get("status_url")
+            running_resp = client.get(status_url)
         finally:
             api_app.dependency_overrides.clear()
     finally:
         module.get_machine_control_channel_registry = original
 
-    assert resp.status_code == 200, resp.text
+    assert resp.status_code == 202, resp.text
     body = resp.json()
     assert body["device_id"] == "cinder"
     assert body["provider"] == "claude"
-    assert body["result"]["artifact"]["verdict"] == "green"
+    assert body["status"] == "running"
+    assert body["operation_id"]
+    assert body["status_url"] == f"/api/agents/machines/operations/{body['operation_id']}"
+    assert running_resp.status_code == 200, running_resp.text
+    assert running_resp.json()["status"] == "running"
     assert len(websocket.sent) == 1
     sent = websocket.sent[0]
     assert "session_id" not in sent
     assert sent["command_type"] == "provider.live_proof"
+    assert sent["command_id"] == f"machine-op:{body['operation_id']}"
     assert sent["payload"]["provider"] == "claude"
     assert sent["payload"]["expected_provider_version"] == "2.1.153"
     assert "timeout_secs" not in sent["payload"]
+
+    with SessionLocal() as db:
+        reconciled = reconcile_machine_control_operation_from_command_result(
+            db,
+            {
+                "type": "command_result",
+                "command_id": sent["command_id"],
+                "ok": True,
+                "result": {
+                    "provider": "claude",
+                    "artifact": {
+                        "artifact_kind": "provider_live_canary",
+                        "provider": "claude",
+                        "verdict": "green",
+                    },
+                },
+            },
+            owner_id=OWNER_ID,
+            device_id="cinder",
+        )
+    assert reconciled is True
+
+    original, module = _swap_agents_machines_registry(registry)
+    try:
+        client, api_app = _make_agents_client(SessionLocal)
+        try:
+            done_resp = client.get(body["status_url"])
+        finally:
+            api_app.dependency_overrides.clear()
+    finally:
+        module.get_machine_control_channel_registry = original
+
+    assert done_resp.status_code == 200, done_resp.text
+    done_body = done_resp.json()
+    assert done_body["status"] == "succeeded"
+    assert done_body["result"]["artifact"]["verdict"] == "green"
 
 
 def test_provider_live_proof_route_rejects_machine_without_provider_support(tmp_path):
@@ -459,14 +468,17 @@ def test_provider_live_proof_route_rejects_duplicate_in_flight_request(tmp_path)
     SessionLocal = _make_db(tmp_path)
     _seed_user(SessionLocal)
     registry = MachineControlChannelRegistry()
-    _register(registry, owner_id=OWNER_ID, device_id="cinder", supports=("claude.live_proof",))
+    websocket = _CompletingWebSocket(registry, owner_id=OWNER_ID, device_id="cinder")
+    _register(registry, owner_id=OWNER_ID, device_id="cinder", supports=("claude.live_proof",), websocket=websocket)
 
     original, module = _swap_agents_machines_registry(registry)
-    in_flight_key = (OWNER_ID, "cinder", "claude")
-    module._PROVIDER_LIVE_PROOF_IN_FLIGHT.add(in_flight_key)
     try:
         client, api_app = _make_agents_client(SessionLocal)
         try:
+            first_resp = client.post(
+                "/api/agents/machines/cinder/provider-live-proof",
+                json={"provider": "claude"},
+            )
             resp = client.post(
                 "/api/agents/machines/cinder/provider-live-proof",
                 json={"provider": "claude"},
@@ -474,18 +486,18 @@ def test_provider_live_proof_route_rejects_duplicate_in_flight_request(tmp_path)
         finally:
             api_app.dependency_overrides.clear()
     finally:
-        module._PROVIDER_LIVE_PROOF_IN_FLIGHT.discard(in_flight_key)
         module.get_machine_control_channel_registry = original
 
+    assert first_resp.status_code == 202, first_resp.text
     assert resp.status_code == 409
     assert "already in flight" in resp.text
 
 
-def test_provider_live_proof_route_preserves_machine_error_code(tmp_path):
+def test_provider_live_proof_operation_preserves_machine_error_code(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user(SessionLocal)
     registry = MachineControlChannelRegistry()
-    websocket = _FailingWebSocket(registry, owner_id=OWNER_ID, device_id="cinder")
+    websocket = _CompletingWebSocket(registry, owner_id=OWNER_ID, device_id="cinder")
     _register(
         registry,
         owner_id=OWNER_ID,
@@ -510,11 +522,115 @@ def test_provider_live_proof_route_preserves_machine_error_code(tmp_path):
     finally:
         module.get_machine_control_channel_registry = original
 
-    assert resp.status_code == 409
-    assert resp.json()["detail"] == {
+    assert resp.status_code == 202, resp.text
+    command_id = websocket.sent[0]["command_id"]
+    with SessionLocal() as db:
+        reconciled = reconcile_machine_control_operation_from_command_result(
+            db,
+            {
+                "type": "command_result",
+                "command_id": command_id,
+                "ok": False,
+                "error": {
+                    "code": "provider_version_mismatch",
+                    "message": "provider live proof version mismatch",
+                },
+            },
+            owner_id=OWNER_ID,
+            device_id="cinder",
+        )
+    assert reconciled is True
+
+    original, module = _swap_agents_machines_registry(registry)
+    try:
+        client, api_app = _make_agents_client(SessionLocal)
+        try:
+            status_resp = client.get(resp.json()["status_url"])
+        finally:
+            api_app.dependency_overrides.clear()
+    finally:
+        module.get_machine_control_channel_registry = original
+
+    assert status_resp.status_code == 200, status_resp.text
+    assert status_resp.json()["status"] == "failed"
+    assert status_resp.json()["error"] == {
         "code": "provider_version_mismatch",
         "message": "provider live proof version mismatch",
     }
+
+
+def test_machine_control_operation_route_returns_404_for_missing_operation(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+
+    client, api_app = _make_agents_client(SessionLocal)
+    try:
+        resp = client.get("/api/agents/machines/operations/missing-operation")
+    finally:
+        api_app.dependency_overrides.clear()
+
+    assert resp.status_code == 404
+
+
+def test_machine_control_operation_route_is_owner_scoped(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+    _seed_user(SessionLocal, user_id=OWNER_ID + 1)
+    with SessionLocal() as db:
+        operation = create_provider_live_proof_operation(
+            db,
+            owner_id=OWNER_ID + 1,
+            device_id="cinder",
+            provider="claude",
+            request_payload={"provider": "claude"},
+            timeout_secs=120,
+        )
+        operation_id = operation.id
+
+    client, api_app = _make_agents_client(SessionLocal, owner_id=OWNER_ID)
+    try:
+        foreign_resp = client.get(f"/api/agents/machines/operations/{operation_id}")
+    finally:
+        api_app.dependency_overrides.clear()
+
+    client, api_app = _make_agents_client(SessionLocal, owner_id=OWNER_ID + 1)
+    try:
+        owner_resp = client.get(f"/api/agents/machines/operations/{operation_id}")
+    finally:
+        api_app.dependency_overrides.clear()
+
+    assert foreign_resp.status_code == 404
+    assert owner_resp.status_code == 200, owner_resp.text
+    assert owner_resp.json()["operation_id"] == operation_id
+
+
+def test_machine_control_operation_route_reaps_stale_operation(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user(SessionLocal)
+    with SessionLocal() as db:
+        operation = create_provider_live_proof_operation(
+            db,
+            owner_id=OWNER_ID,
+            device_id="cinder",
+            provider="claude",
+            request_payload={"provider": "claude"},
+            timeout_secs=1,
+        )
+        operation_id = operation.id
+        operation.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+        db.add(operation)
+        db.commit()
+
+    client, api_app = _make_agents_client(SessionLocal)
+    try:
+        resp = client.get(f"/api/agents/machines/operations/{operation_id}")
+    finally:
+        api_app.dependency_overrides.clear()
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "timed_out"
+    assert body["error"]["code"] == "machine_control_operation_timeout"
 
 
 def test_machines_route_returns_empty_for_unknown_user(tmp_path):

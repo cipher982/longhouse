@@ -8,8 +8,6 @@ operator dashboards.
 
 from __future__ import annotations
 
-import asyncio
-
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
@@ -23,10 +21,11 @@ from zerg.models.device_token import DeviceToken
 from zerg.schemas.machines import ArchiveBacklogControlRequest
 from zerg.schemas.machines import ArchiveBacklogControlResponse
 from zerg.schemas.machines import ArchiveBacklogResponse
+from zerg.schemas.machines import MachineControlOperationResponse
 from zerg.schemas.machines import MachineDirectoryEntry
 from zerg.schemas.machines import MachineDirectoryResponse
+from zerg.schemas.machines import ProviderLiveProofAcceptedResponse
 from zerg.schemas.machines import ProviderLiveProofRequest
-from zerg.schemas.machines import ProviderLiveProofResponse
 from zerg.schemas.machines import WorkspaceSuggestion
 from zerg.schemas.machines import WorkspaceSuggestionsResponse
 from zerg.schemas.observability import MachineHealthListResponse
@@ -34,6 +33,11 @@ from zerg.schemas.observability import MachineHealthStatus
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
 from zerg.services.agent_heartbeat_health import list_machine_transport_health
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
+from zerg.services.machine_control_operations import ActiveMachineControlOperationError
+from zerg.services.machine_control_operations import create_provider_live_proof_operation
+from zerg.services.machine_control_operations import fail_machine_control_operation
+from zerg.services.machine_control_operations import get_machine_control_operation_for_owner
+from zerg.services.machine_control_operations import machine_control_operation_to_response
 from zerg.services.machines_directory import build_machines_directory
 from zerg.services.observability_views import build_machine_health_list_response
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
@@ -44,8 +48,6 @@ router = APIRouter(prefix="/agents/machines", tags=["agents"])
 PROVIDER_LIVE_PROOF_COMMAND = "provider.live_proof"
 ARCHIVE_BACKLOG_CONTROL_COMMAND = "archive.backlog_control"
 PROVIDER_LIVE_PROOF_COMMAND_HEADROOM_SECS = 15
-_PROVIDER_LIVE_PROOF_IN_FLIGHT: set[tuple[int, str, str]] = set()
-_PROVIDER_LIVE_PROOF_IN_FLIGHT_LOCK = asyncio.Lock()
 
 
 @router.get("", response_model=MachineDirectoryResponse)
@@ -165,14 +167,28 @@ async def control_machine_archive_backlog(
     )
 
 
-@router.post("/{device_id}/provider-live-proof", response_model=ProviderLiveProofResponse)
+@router.get("/operations/{operation_id}", response_model=MachineControlOperationResponse)
+def get_machine_control_operation(
+    operation_id: str,
+    db: Session = Depends(get_db),
+    device_token: DeviceToken | None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> MachineControlOperationResponse:
+    owner_id = _resolve_agents_owner_id(db, device_token)
+    operation = get_machine_control_operation_for_owner(db, owner_id=owner_id, operation_id=operation_id)
+    if operation is None:
+        raise HTTPException(status_code=404, detail="Machine control operation not found")
+    return MachineControlOperationResponse(**machine_control_operation_to_response(operation))
+
+
+@router.post("/{device_id}/provider-live-proof", response_model=ProviderLiveProofAcceptedResponse, status_code=202)
 async def run_provider_live_proof(
     device_id: str,
     request: ProviderLiveProofRequest,
     db: Session = Depends(get_db),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
-) -> ProviderLiveProofResponse:
+) -> ProviderLiveProofAcceptedResponse:
     """Run a typed provider-live proof on a connected provider-capable machine."""
     owner_id = _resolve_agents_owner_id(db, device_token)
     registry = get_machine_control_channel_registry()
@@ -187,49 +203,54 @@ async def run_provider_live_proof(
             detail=f"Machine Agent does not advertise {capability}",
         )
 
-    in_flight_key = (owner_id, device_id, request.provider)
-    if not await _claim_provider_live_proof(in_flight_key):
+    payload = request.model_dump(exclude_none=True)
+    machine_timeout_secs = _provider_live_proof_machine_timeout_secs(request)
+    operation_timeout_secs = machine_timeout_secs + PROVIDER_LIVE_PROOF_COMMAND_HEADROOM_SECS
+    try:
+        operation = create_provider_live_proof_operation(
+            db,
+            owner_id=owner_id,
+            device_id=device_id,
+            provider=request.provider,
+            request_payload=payload,
+            timeout_secs=operation_timeout_secs,
+        )
+    except ActiveMachineControlOperationError:
         raise HTTPException(
             status_code=409,
             detail=f"Provider live proof already in flight for {device_id}/{request.provider}",
-        )
+        ) from None
 
-    machine_timeout_secs = _provider_live_proof_machine_timeout_secs(request)
-    try:
-        command = await registry.send_command(
-            owner_id=owner_id,
-            device_id=device_id,
-            session_id=None,
-            command_type=PROVIDER_LIVE_PROOF_COMMAND,
-            payload=request.model_dump(exclude_none=True),
-            timeout_secs=machine_timeout_secs + PROVIDER_LIVE_PROOF_COMMAND_HEADROOM_SECS,
-        )
-    finally:
-        await _release_provider_live_proof(in_flight_key)
+    command = await registry.send_command_nowait(
+        owner_id=owner_id,
+        device_id=device_id,
+        session_id=None,
+        command_type=PROVIDER_LIVE_PROOF_COMMAND,
+        payload=payload,
+        command_id=operation.command_id,
+    )
     if not command.transport_ok:
-        raise HTTPException(status_code=503, detail=command.error or "Machine control command failed")
-    message = dict(command.message or {})
-    if not message.get("ok"):
-        error = message.get("error") if isinstance(message.get("error"), dict) else {}
-        error_message = error.get("message") or "Machine Agent provider live proof failed"
-        error_code = error.get("code") or "machine_agent_provider_live_proof_failed"
-        status_code = 409 if error_code == "provider_version_mismatch" else 502
-        raise HTTPException(
-            status_code=status_code,
-            detail={
-                "code": error_code,
-                "message": error_message,
-            },
+        fail_machine_control_operation(
+            db,
+            operation,
+            code="machine_control_dispatch_failed",
+            message=command.error or "Machine control command failed",
         )
-    result = message.get("result")
-    if not isinstance(result, dict):
-        raise HTTPException(status_code=502, detail="Machine Agent returned malformed provider live proof result")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "operation_id": operation.id,
+                "code": "machine_control_dispatch_failed",
+                "message": command.error or "Machine control command failed",
+            },
+        ) from None
 
-    return ProviderLiveProofResponse(
+    return ProviderLiveProofAcceptedResponse(
+        operation_id=operation.id,
         device_id=device_id,
         provider=request.provider,
-        command_id=str(message.get("command_id") or ""),
-        result=result,
+        status="running",
+        status_url=f"/api/agents/machines/operations/{operation.id}",
     )
 
 
@@ -237,16 +258,3 @@ def _provider_live_proof_machine_timeout_secs(request: ProviderLiveProofRequest)
     if request.timeout_secs is not None:
         return request.timeout_secs
     return 120
-
-
-async def _claim_provider_live_proof(key: tuple[int, str, str]) -> bool:
-    async with _PROVIDER_LIVE_PROOF_IN_FLIGHT_LOCK:
-        if key in _PROVIDER_LIVE_PROOF_IN_FLIGHT:
-            return False
-        _PROVIDER_LIVE_PROOF_IN_FLIGHT.add(key)
-        return True
-
-
-async def _release_provider_live_proof(key: tuple[int, str, str]) -> None:
-    async with _PROVIDER_LIVE_PROOF_IN_FLIGHT_LOCK:
-        _PROVIDER_LIVE_PROOF_IN_FLIGHT.discard(key)

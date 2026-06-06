@@ -299,6 +299,32 @@ async def lifespan(app: FastAPI):
                 failed.append(f"remote_launch_reaper ({e})")
                 logger.exception("Failed to start remote_launch_reaper")
 
+            # Machine-control operation reaper: expire commands whose result
+            # did not return before their operation lease.
+            try:
+                from zerg.database import get_session_factory as _get_sf_machine_ops
+                from zerg.services.machine_control_operations import reap_stale_machine_control_operations
+
+                async def _machine_control_operation_reaper_loop() -> None:
+                    while True:
+                        try:
+                            await asyncio.sleep(60)
+                            db = _get_sf_machine_ops()()
+                            try:
+                                reap_stale_machine_control_operations(db)
+                            finally:
+                                db.close()
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception:  # noqa: BLE001
+                            logger.exception("Machine control operation reaper tick failed")
+
+                asyncio.create_task(_machine_control_operation_reaper_loop())
+                started.append("machine_control_operation_reaper")
+            except Exception as e:  # noqa: BLE001
+                failed.append(f"machine_control_operation_reaper ({e})")
+                logger.exception("Failed to start machine_control_operation_reaper")
+
             # Image attachment blob reaper: drops blobs whose parent session_input
             # is in a terminal state and older than the retention window.
             try:

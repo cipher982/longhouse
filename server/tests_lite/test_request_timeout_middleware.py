@@ -104,7 +104,7 @@ def test_agents_archive_bundle_route_uses_longer_timeout_budget():
     assert response.json() == {"ok": True}
 
 
-def test_provider_live_proof_route_uses_longer_timeout_budget():
+def test_provider_live_proof_route_uses_default_timeout_budget():
     app = FastAPI()
     app.add_middleware(RequestTimeoutMiddleware, timeout=0.01)
 
@@ -116,5 +116,5 @@ def test_provider_live_proof_route_uses_longer_timeout_budget():
     with TestClient(app) as client:
         response = client.post("/api/agents/machines/cinder/provider-live-proof")
 
-    assert response.status_code == 200
-    assert response.json() == {"ok": True}
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Request timed out"}
