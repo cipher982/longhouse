@@ -559,6 +559,11 @@ class AgentEvent(AgentsBase):
     event_uuid = Column(String(255), nullable=True, index=True)
     parent_event_uuid = Column(String(255), nullable=True, index=True)  # Raw parent linkage id (Claude parentUuid)
     event_origin = Column(String(32), nullable=False, server_default=text("'durable'"), index=True)
+    # Structured compaction-boundary marker, parsed from the raw line at ingest.
+    # Values: 'summary', 'compact_boundary', 'microcompact_boundary', or NULL.
+    # Lets active-context projection find boundaries without decoding raw_json at
+    # request time, so raw payloads can move to the archive.
+    compaction_kind = Column(String(32), nullable=True, index=True)
     provisional_state = Column(String(32), nullable=True, index=True)
     provisional_key = Column(String(512), nullable=True)
     provisional_cursor = Column(String(512), nullable=True)

@@ -38,6 +38,7 @@ from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionThread
 from zerg.models.agents import TimelineCard
+from zerg.services.agents.compaction import classify_compaction_kind
 from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import ensure_subagent_thread
 from zerg.services.agents.kernel_writes import record_thread_alias
@@ -1645,6 +1646,7 @@ class AgentsStore:
                             raw_json=None,
                             raw_json_z=raw_json_z,
                             raw_json_codec=CODEC_ZSTD if raw_json_z else CODEC_PLAIN,
+                            compaction_kind=classify_compaction_kind(event_data.raw_json),
                             schema_version=1,
                             event_uuid=event_uuid,
                             parent_event_uuid=parent_event_uuid,
@@ -3115,18 +3117,32 @@ class AgentsStore:
         return subtype in {"compact_boundary", "microcompact_boundary"}
 
     def get_active_context_boundary(self, session_id: UUID, *, branch_mode: str = "head") -> CompactionBoundary | None:
-        """Return the latest compaction boundary marker for a session."""
+        """Return the latest compaction boundary marker for a session.
+
+        Prefers the structured ``compaction_kind`` column so the request path
+        does not decode raw payloads. Rows predating the column (``compaction_kind``
+        NULL) fall back to parsing raw JSON; once raw payloads are dropped and the
+        column is backfilled, that fallback disjunct matches nothing and the raw
+        read is never reached.
+        """
+        candidate = or_(
+            AgentEvent.compaction_kind.isnot(None),
+            and_(
+                AgentEvent.compaction_kind.is_(None),
+                AgentEvent.role == "system",
+                or_(AgentEvent.raw_json.isnot(None), AgentEvent.raw_json_z.isnot(None)),
+            ),
+        )
         stmt = (
             select(AgentEvent)
             .where(AgentEvent.session_id == session_id)
-            .where(AgentEvent.role == "system")
-            .where(or_(AgentEvent.raw_json.isnot(None), AgentEvent.raw_json_z.isnot(None)))
+            .where(candidate)
             .order_by(AgentEvent.timestamp.desc(), AgentEvent.id.desc())
         )
         stmt = self._apply_branch_mode_filter(stmt, session_id, branch_mode)
         rows = list(self.db.execute(stmt).scalars().all())
         for event in rows:
-            if not self._is_compaction_boundary_raw_json(decode_raw_json(event)):
+            if event.compaction_kind is None and not self._is_compaction_boundary_raw_json(decode_raw_json(event)):
                 continue
             source_offset = int(event.source_offset) if event.source_offset is not None else None
             return CompactionBoundary(

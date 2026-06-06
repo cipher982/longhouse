@@ -564,3 +564,61 @@ def backfill_previews_command(
         f"cards={result.updated_timeline_cards} first_user={result.first_user_filled} "
         f"last_visible={result.last_visible_filled}"
     )
+
+
+@app.command("backfill-compaction-kind")
+def backfill_compaction_kind_command(
+    database_url: str | None = typer.Option(None, "--database-url", help="SQLite DATABASE_URL override."),
+    batch_size: int = typer.Option(1000, "--batch-size", min=1, help="Rows scanned per batch."),
+    max_batches: int = typer.Option(0, "--max-batches", min=0, help="Stop after N batches (0 = until done)."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Rollback after computing the batches."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """Backfill events.compaction_kind from legacy raw payloads (resumable)."""
+
+    settings = get_settings()
+    effective_database_url = database_url or settings.database_url
+
+    from zerg.database import make_engine
+    from zerg.database import make_sessionmaker
+    from zerg.services.compaction_kind_backfill import backfill_compaction_kind
+
+    engine = make_engine(effective_database_url)
+    SessionLocal = make_sessionmaker(engine)
+    total_scanned = 0
+    total_updated = 0
+    last_id: int | None = 0
+    batches = 0
+    try:
+        with SessionLocal() as db:
+            cursor = 0
+            while True:
+                result = backfill_compaction_kind(db, after_id=cursor, batch_size=batch_size)
+                if result.scanned == 0:
+                    break
+                total_scanned += result.scanned
+                total_updated += result.updated
+                last_id = result.last_id
+                cursor = result.last_id or cursor
+                batches += 1
+                if max_batches and batches >= max_batches:
+                    break
+            if dry_run:
+                db.rollback()
+            else:
+                db.commit()
+    finally:
+        engine.dispose()
+
+    payload = {
+        "scanned": total_scanned,
+        "updated": total_updated,
+        "last_id": last_id,
+        "batches": batches,
+        "dry_run": dry_run,
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+        return
+    status = "dry-run" if dry_run else "ok"
+    typer.echo(f"{status}: scanned={total_scanned} updated={total_updated} batches={batches} last_id={last_id}")

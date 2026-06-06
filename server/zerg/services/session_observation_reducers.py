@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionObservation
+from zerg.services.agents.compaction import classify_compaction_kind
 from zerg.services.raw_json_compression import CODEC_PLAIN
 from zerg.services.raw_json_compression import CODEC_ZSTD
 from zerg.services.raw_json_compression import compress_raw_json
@@ -135,6 +136,7 @@ def reduce_provider_event_observation(db: Session, observation: SessionObservati
             raw_json=None,
             raw_json_z=raw_json_z,
             raw_json_codec=CODEC_ZSTD if raw_json_z else CODEC_PLAIN,
+            compaction_kind=classify_compaction_kind(raw_json),
             schema_version=1,
             event_uuid=event_uuid,
             parent_event_uuid=_optional_str(payload.get("parent_event_uuid")),
