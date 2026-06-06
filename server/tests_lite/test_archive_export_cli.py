@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from datetime import timezone
 from uuid import uuid4
@@ -17,6 +18,10 @@ from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import ArchiveChunk
 from zerg.services.raw_json_compression import CODEC_ZSTD
 from zerg.services.raw_json_compression import compress_raw_json
+
+
+def _strip_ansi(text: str) -> str:
+    return re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", text)
 
 
 def test_archive_export_legacy_cli_exports_one_batch(tmp_path):
@@ -79,7 +84,7 @@ def test_archive_export_legacy_cli_requires_disk_floor(tmp_path):
     )
 
     assert result.exit_code != 0
-    assert "--disk-floor" in result.output
+    assert "--disk-floor" in _strip_ansi(result.output)
 
 
 def test_archive_backfill_previews_cli_updates_legacy_rows(tmp_path):
