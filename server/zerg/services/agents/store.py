@@ -43,6 +43,7 @@ from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import ensure_subagent_thread
 from zerg.services.agents.kernel_writes import record_thread_alias
 from zerg.services.agents.kernel_writes import resolve_primary_thread_by_provider_session_id
+from zerg.services.archive_transcript import load_session_source_line_bytes
 from zerg.services.internal_sessions import internal_canary_session_clause
 from zerg.services.internal_sessions import is_internal_canary_provider_filter
 from zerg.services.provisional_events import durable_transcript_event_predicate
@@ -3504,8 +3505,26 @@ class AgentsStore:
                 AgentSourceLine.id.asc(),
             ).all()
         if source_lines:
+            # Archive-backed reconstruction: once raw bytes move off the monolith
+            # (closeout reclaim phase), the slim source_lines row carries metadata
+            # only and decode_raw_json(row) is None. Fall back to the session's
+            # sealed source_lines archive chunks, keyed by (path, offset). Lazily
+            # loaded so sessions whose rows still carry raw bytes pay nothing.
+            archive_bytes: dict[tuple[str, int], str] | None = None
+
+            def _raw_for(row) -> str | None:
+                nonlocal archive_bytes
+                value = decode_raw_json(row)
+                # A real provider line is never empty; "" / None means the raw
+                # payload has been reclaimed off the monolith — read the archive.
+                if value:
+                    return value
+                if archive_bytes is None:
+                    archive_bytes = load_session_source_line_bytes(self.db, session_id)
+                return archive_bytes.get((row.source_path, int(row.source_offset)))
+
             if branch_mode == "all":
-                lines = [decode_raw_json(row) for row in source_lines]
+                lines = [_raw_for(row) for row in source_lines]
                 lines = [line for line in lines if line is not None]
             else:
                 latest_by_offset: dict[tuple[str, int], AgentSourceLine] = {}
@@ -3532,7 +3551,7 @@ class AgentsStore:
                         len(path_counts),
                         primary_path,
                     )
-                lines = [decode_raw_json(row) for row in normalized_source_lines if row.source_path == primary_path]
+                lines = [_raw_for(row) for row in normalized_source_lines if row.source_path == primary_path]
                 lines = [line for line in lines if line is not None]
             content = "\n".join(lines) + "\n" if lines else ""
             return content.encode("utf-8"), session
