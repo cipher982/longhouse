@@ -30,6 +30,7 @@ from zerg.services.agents.kernel_capabilities import project_session_capabilitie
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_runtime_display import build_session_runtime_display
+from zerg.services.write_serializer import execute_post_write
 
 logger = logging.getLogger(__name__)
 
@@ -921,7 +922,7 @@ async def send_presence_pushes(
     attention_resolution_push: SessionAttentionResolutionPush | None,
     widget_push: WidgetTimelinePush | None,
     live_activity_pushes: tuple[LiveActivityPush, ...],
-    db: Session,
+    db: Session | None,
     ws,
     dispatch_label_prefix: str,
 ) -> None:
@@ -929,7 +930,9 @@ async def send_presence_pushes(
 
     Caller is responsible for preparing the pushes atomically with the
     underlying state write (same WriteSerializer closure). This helper only
-    performs the network send + rollback.
+    performs the network send + rollback. ``db`` is a fallback for unconfigured
+    or test serializers and may be ``None`` after production request-session
+    release.
     """
 
     if attention_push is not None:
@@ -948,13 +951,13 @@ async def send_presence_pushes(
                 occurred_at=attention_push.occurred_at,
             )
 
-        await ws.execute_or_direct(_record_attention_result, db, label=f"{dispatch_label_prefix}-attention-record")
+        await execute_post_write(ws, _record_attention_result, db, label=f"{dispatch_label_prefix}-attention-record")
         if not push_sent:
 
             def _clear_attention(write_db: Session):
                 rollback_session_attention_push_stamp(write_db, notification=attention_push)
 
-            await ws.execute_or_direct(_clear_attention, db, label=f"{dispatch_label_prefix}-attention-clear")
+            await execute_post_write(ws, _clear_attention, db, label=f"{dispatch_label_prefix}-attention-clear")
 
     if attention_resolution_push is not None:
         resolution_accepted = False
@@ -972,7 +975,7 @@ async def send_presence_pushes(
                     attention_push_at=attention_resolution_push.attention_push_at,
                 )
 
-            await ws.execute_or_direct(_clear_resolution, db, label=f"{dispatch_label_prefix}-resolution-clear")
+            await execute_post_write(ws, _clear_resolution, db, label=f"{dispatch_label_prefix}-resolution-clear")
 
     if widget_push is not None:
         widget_accepted = False
@@ -991,7 +994,7 @@ async def send_presence_pushes(
                     previous_push_at=widget_push.previous_push_at,
                 )
 
-            await ws.execute_or_direct(_clear_widget, db, label=f"{dispatch_label_prefix}-widget-clear")
+            await execute_post_write(ws, _clear_widget, db, label=f"{dispatch_label_prefix}-widget-clear")
 
     for live_activity_push in live_activity_pushes:
         accepted = False
@@ -1013,7 +1016,7 @@ async def send_presence_pushes(
                     previous_push_at=push.previous_push_at,
                 )
 
-            await ws.execute_or_direct(_clear_live, db, label=f"{dispatch_label_prefix}-live-clear")
+            await execute_post_write(ws, _clear_live, db, label=f"{dispatch_label_prefix}-live-clear")
 
 
 async def send_session_attention_push(notification: SessionAttentionPush) -> bool:

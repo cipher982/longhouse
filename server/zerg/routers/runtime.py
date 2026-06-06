@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime
 from datetime import timezone
 
@@ -15,7 +14,6 @@ from fastapi import status
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
-from zerg.database import get_session_factory
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.metrics import event_age_at_ingest_seconds
@@ -37,14 +35,12 @@ from zerg.services.session_runtime import RuntimeEventBatchResult
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
+from zerg.services.write_serializer import execute_post_write
 from zerg.services.write_serializer import get_write_serializer
+from zerg.services.write_serializer import post_write_db_session
+from zerg.services.write_serializer import post_write_fallback_db
 
 router = APIRouter(prefix="/agents/runtime", tags=["agents"])
-_TRUTHY_ENV = {"1", "true", "yes", "on"}
-
-
-def _request_session_released_by_serializer(ws: object) -> bool:
-    return bool(getattr(ws, "is_configured", False)) and os.getenv("TESTING", "").strip().lower() not in _TRUTHY_ENV
 
 
 @router.post("/events/batch", response_model=RuntimeEventBatchResult)
@@ -128,7 +124,6 @@ async def ingest_runtime_observation_batch(
             db,
             label="runtime-live" if live_transcript_only else "runtime-observations",
         )
-        request_session_released = _request_session_released_by_serializer(ws)
         from zerg.services.write_serializer import last_write_timing
 
         timing = last_write_timing()
@@ -258,11 +253,7 @@ async def ingest_runtime_observation_batch(
                     )
                 return prepared, next_widget_push
 
-            prepared_per_session, widget_push = await ws.execute_or_direct(
-                _do_runtime_push_prep,
-                db,
-                label="runtime-push",
-            )
+            prepared_per_session, widget_push = await execute_post_write(ws, _do_runtime_push_prep, db, label="runtime-push")
 
         # Send pre-prepared APNs pushes + deliver queued messages, per session.
         # Per-session exception fence so one bad dispatch doesn't skip the rest.
@@ -276,7 +267,7 @@ async def ingest_runtime_observation_batch(
                     attention_resolution_push=None,
                     widget_push=widget_push,
                     live_activity_pushes=(),
-                    db=db,
+                    db=post_write_fallback_db(ws, db),
                     ws=ws,
                     dispatch_label_prefix="runtime",
                 )
@@ -294,23 +285,14 @@ async def ingest_runtime_observation_batch(
                     attention_resolution_push=item["attention_resolution_push"],
                     widget_push=widget_push if index == 0 else None,
                     live_activity_pushes=item["live_activity_pushes"],
-                    db=db,
+                    db=post_write_fallback_db(ws, db),
                     ws=ws,
                     dispatch_label_prefix="runtime",
                 )
                 if is_session_message_deliverable_state(canonical_state):
-                    if request_session_released:
-                        session_factory = get_session_factory()
-                        with session_factory() as delivery_db:
-                            await deliver_queued_session_messages(
-                                db=delivery_db,
-                                owner_id=owner_id,
-                                target_session_id=sid,
-                                target_presence_state=canonical_state,
-                            )
-                    else:
+                    with post_write_db_session(ws, db) as dispatch_db:
                         await deliver_queued_session_messages(
-                            db=db,
+                            db=dispatch_db,
                             owner_id=owner_id,
                             target_session_id=sid,
                             target_presence_state=canonical_state,

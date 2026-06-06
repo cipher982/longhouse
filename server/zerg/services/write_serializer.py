@@ -36,11 +36,13 @@ import logging
 import os
 import time
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
 from dataclasses import field
 from typing import Any
 from typing import Callable
 from typing import Deque
+from typing import Iterator
 from typing import TypeVar
 
 from sqlalchemy.orm import Session
@@ -213,6 +215,61 @@ _last_write_timing: contextvars.ContextVar[LastWriteTiming | None] = contextvars
 def last_write_timing() -> LastWriteTiming | None:
     """Return the timing of the most recent write in this asyncio context."""
     return _last_write_timing.get()
+
+
+def request_session_released_by_serializer(ws: object) -> bool:
+    """Return true when ``execute_after_closing_request_session`` closed fallback DB."""
+
+    return bool(getattr(ws, "is_configured", False)) and os.getenv("TESTING", "").strip().lower() not in _TRUTHY_ENV
+
+
+@contextmanager
+def post_write_db_session(ws: object, fallback_db: Session) -> Iterator[Session]:
+    """Yield a usable DB session after a request-session-releasing write."""
+
+    if request_session_released_by_serializer(ws):
+        from zerg.database import get_session_factory
+
+        SessionLocal = get_session_factory()
+        with SessionLocal() as db:
+            yield db
+        return
+    yield fallback_db
+
+
+def post_write_fallback_db(ws: object, fallback_db: Session) -> Session | None:
+    """Return a safe fallback DB for deferred post-write helpers."""
+
+    if request_session_released_by_serializer(ws):
+        return None
+    return fallback_db
+
+
+async def execute_post_write(
+    ws: object,
+    fn: Callable[[Session], T],
+    fallback_db: Session | None,
+    *,
+    label: str = "",
+    priority: int | None = None,
+    auto_commit: bool = True,
+    timeout_seconds: float | None = None,
+) -> T:
+    """Execute a follow-up write after a request-session-releasing write."""
+
+    execute_or_direct = getattr(ws, "execute_or_direct")
+    kwargs: dict[str, object] = {
+        "label": label,
+        "auto_commit": auto_commit,
+    }
+    if priority is not None:
+        kwargs["priority"] = priority
+    if timeout_seconds is not None:
+        kwargs["timeout_seconds"] = timeout_seconds
+    if fallback_db is None:
+        return await execute_or_direct(fn, None, **kwargs)
+    with post_write_db_session(ws, fallback_db) as db:
+        return await execute_or_direct(fn, db, **kwargs)
 
 
 class WriteSerializer:

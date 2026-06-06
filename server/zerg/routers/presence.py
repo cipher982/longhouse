@@ -27,7 +27,6 @@ Authentication: same X-Agents-Token / device token as ingest.
 from __future__ import annotations
 
 import logging
-import os
 import re
 from datetime import datetime
 from datetime import timezone
@@ -44,7 +43,6 @@ from sqlalchemy.orm import Session
 
 from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
 from zerg.database import get_db
-from zerg.database import get_session_factory
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.services.apns_sender import NOTIFICATION_CHANNEL_APNS_IOS
@@ -73,7 +71,9 @@ from zerg.services.session_runtime import current_presence_state_for_session
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
+from zerg.services.write_serializer import execute_post_write
 from zerg.services.write_serializer import get_write_serializer
+from zerg.services.write_serializer import post_write_db_session
 from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
@@ -81,7 +81,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/agents", tags=["agents"])
 
 VALID_STATES = {"thinking", "running", "idle", "needs_user", "blocked"}
-_TRUTHY_ENV = {"1", "true", "yes", "on"}
 
 # States that trigger auto-resume of snoozed sessions (genuine work restart)
 _AUTO_RESUME_STATES = {"thinking", "running"}
@@ -92,10 +91,6 @@ def _source_for_provider_hook(provider: str | None) -> str:
     if not normalized:
         normalized = "claude"
     return f"{normalized[:58]}_hook"
-
-
-def _request_session_released_by_serializer(ws: object) -> bool:
-    return bool(getattr(ws, "is_configured", False)) and os.getenv("TESTING", "").strip().lower() not in _TRUTHY_ENV
 
 
 class PresenceIn(UTCBaseModel):
@@ -258,7 +253,6 @@ async def upsert_presence(
         db,
         label="presence",
     )
-    request_session_released = _request_session_released_by_serializer(ws)
 
     if session_uuid is not None and should_publish_runtime_update:
         from zerg.services.session_pubsub import publish_session_runtime_update
@@ -270,18 +264,9 @@ async def upsert_presence(
         )
 
     if session_uuid is not None and is_session_message_deliverable_state(canonical_presence_state):
-        if request_session_released:
-            session_factory = get_session_factory()
-            with session_factory() as delivery_db:
-                await deliver_queued_session_messages(
-                    db=delivery_db,
-                    owner_id=owner_id,
-                    target_session_id=session_uuid,
-                    target_presence_state=canonical_presence_state,
-                )
-        else:
+        with post_write_db_session(ws, db) as delivery_db:
             await deliver_queued_session_messages(
-                db=db,
+                db=delivery_db,
                 owner_id=owner_id,
                 target_session_id=session_uuid,
                 target_presence_state=canonical_presence_state,
@@ -302,13 +287,13 @@ async def upsert_presence(
                 occurred_at=attention_push.occurred_at,
             )
 
-        await ws.execute_or_direct(_record_attention_result, db, label="presence-attention-record")
+        await execute_post_write(ws, _record_attention_result, db, label="presence-attention-record")
         if not push_sent:
 
             def _clear_attention_push_stamp(write_db: Session):
                 rollback_session_attention_push_stamp(write_db, notification=attention_push)
 
-            await ws.execute_or_direct(_clear_attention_push_stamp, db, label="presence-attention-push-clear")
+            await execute_post_write(ws, _clear_attention_push_stamp, db, label="presence-attention-push-clear")
     if attention_resolution_push is not None:
         try:
             resolution_accepted = await send_session_attention_resolution_push(attention_resolution_push)
@@ -325,7 +310,12 @@ async def upsert_presence(
                         attention_push_at=attention_resolution_push.attention_push_at,
                     )
 
-                await ws.execute_or_direct(_clear_attention_resolution_stamp, db, label="presence-attention-resolution-clear")
+                await execute_post_write(
+                    ws,
+                    _clear_attention_resolution_stamp,
+                    db,
+                    label="presence-attention-resolution-clear",
+                )
     if widget_push is not None:
         try:
             widget_accepted = await send_widget_timeline_push(widget_push)
@@ -343,7 +333,7 @@ async def upsert_presence(
                         previous_push_at=widget_push.previous_push_at,
                     )
 
-                await ws.execute_or_direct(_clear_widget_timeline_stamp, db, label="presence-widget-push-clear")
+                await execute_post_write(ws, _clear_widget_timeline_stamp, db, label="presence-widget-push-clear")
     for live_activity_push in live_activity_pushes:
         try:
             live_activity_accepted = await send_session_live_activity_push(live_activity_push)
@@ -364,5 +354,5 @@ async def upsert_presence(
                     previous_push_at=push.previous_push_at,
                 )
 
-            await ws.execute_or_direct(_clear_live_activity_stamp, db, label="presence-live-activity-clear")
+            await execute_post_write(ws, _clear_live_activity_stamp, db, label="presence-live-activity-clear")
     return Response(status_code=status.HTTP_204_NO_CONTENT)

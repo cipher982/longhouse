@@ -215,7 +215,7 @@ def test_presence_releases_request_db_before_serialized_write(tmp_path, monkeypa
 
     monkeypatch.delenv("TESTING", raising=False)
     monkeypatch.setattr("zerg.routers.presence.get_write_serializer", lambda: _Serializer())
-    monkeypatch.setattr("zerg.routers.presence.get_session_factory", lambda: SessionLocal)
+    monkeypatch.setattr("zerg.database.get_session_factory", lambda: SessionLocal)
     api_app.dependency_overrides[get_db] = override_db
     api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
     try:

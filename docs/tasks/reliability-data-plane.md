@@ -31,7 +31,7 @@ Spec: `docs/specs/reliability-data-plane.md`
 - [x] Remove no-query session-list dependency on `events.content_text` after legacy preview backfill.
 - [x] Use hot card previews for new/backfilled list rows; NULL previews stay empty until explicit backfill.
 - [x] Verify cheap diagnostics avoid full DB scans; fix `zerg-ops report` empty-archive handling.
-- [ ] Centralize request-session-release/post-write helper and stop passing closed request DB handles to dispatch helpers.
+- [x] Centralize request-session-release/post-write helper and stop passing closed request DB handles to dispatch helpers.
 
 ## Phase 2: Filesystem Archive Store
 

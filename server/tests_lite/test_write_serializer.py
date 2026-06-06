@@ -16,6 +16,9 @@ from sqlalchemy import text as sa_text
 
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.services.write_serializer import execute_post_write
+from zerg.services.write_serializer import post_write_fallback_db
+from zerg.services.write_serializer import request_session_released_by_serializer
 from zerg.services.write_serializer import WriteSerializer
 
 
@@ -392,6 +395,40 @@ async def test_execute_after_closing_request_session_releases_fallback_in_config
 
     assert closed is True
     assert global_rows == ["global-write"]
+    assert request_rows == []
+
+
+@pytest.mark.asyncio
+async def test_execute_post_write_uses_configured_writer_after_request_session_release(tmp_path, monkeypatch):
+    global_engine = make_engine(f"sqlite:///{tmp_path / 'global.db'}")
+    global_factory = make_sessionmaker(global_engine)
+    request_engine = make_engine(f"sqlite:///{tmp_path / 'request.db'}")
+    request_factory = make_sessionmaker(request_engine)
+
+    for engine in (global_engine, request_engine):
+        with engine.begin() as conn:
+            conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)")
+
+    serializer = WriteSerializer()
+    serializer.configure(global_factory)
+    monkeypatch.delenv("TESTING", raising=False)
+
+    with request_factory() as request_db:
+        assert request_session_released_by_serializer(serializer) is True
+        assert post_write_fallback_db(serializer, request_db) is None
+        await execute_post_write(
+            serializer,
+            lambda db: db.execute(sa_text("INSERT INTO writes(label) VALUES ('post-write')")),
+            post_write_fallback_db(serializer, request_db),
+            label="summary",
+        )
+
+    with global_factory() as db:
+        global_rows = [row[0] for row in db.execute(sa_text("SELECT label FROM writes ORDER BY id")).fetchall()]
+    with request_factory() as db:
+        request_rows = [row[0] for row in db.execute(sa_text("SELECT label FROM writes ORDER BY id")).fetchall()]
+
+    assert global_rows == ["post-write"]
     assert request_rows == []
 
 
