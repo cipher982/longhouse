@@ -93,7 +93,7 @@ def test_parse_session_file_full_tracks_offsets_with_compaction_events(tmp_path)
 
 
 def test_parse_session_file_full_does_not_promote_generic_workspace_project(tmp_path):
-    with TemporaryDirectory(prefix="lh-workspace-project-test-") as temp_root:
+    with TemporaryDirectory(prefix="lh-workspace-project-test-", dir="/tmp") as temp_root:
         workspace = Path(temp_root) / "workspace"
         workspace.mkdir()
         path = _write_jsonl(
