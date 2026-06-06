@@ -125,7 +125,10 @@ def _runner_remote_control_id(runner) -> int | None:
 def _derive_project(cwd: str, project: str | None) -> str:
     if project and project.strip():
         return project.strip()
-    return Path(cwd).name or "managed-local"
+    label = Path(cwd).name.strip()
+    if label and label != "workspace":
+        return label
+    return "managed-local"
 
 
 def _build_managed_session_name(seed: str, *, fallback: str) -> str:

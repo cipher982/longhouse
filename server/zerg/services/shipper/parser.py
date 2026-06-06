@@ -104,6 +104,35 @@ def _parse_timestamp(ts: str | None) -> datetime | None:
         return None
 
 
+def _find_git_dir(cwd: Path) -> Path | None:
+    current = cwd
+    while True:
+        candidate = current / ".git"
+        if candidate.exists():
+            return candidate
+        parent = current.parent
+        if parent == current:
+            return None
+        current = parent
+
+
+def _derive_project_from_cwd(cwd: str | None) -> str | None:
+    cwd = (cwd or "").strip()
+    if not cwd:
+        return None
+
+    cwd_path = Path(cwd)
+    git_dir = _find_git_dir(cwd_path)
+    if git_dir is not None:
+        git_root = git_dir.parent
+        return git_root.name or None
+
+    label = cwd_path.name.strip()
+    if label == "workspace":
+        return None
+    return label or None
+
+
 def _extract_user_content(message: dict) -> str | None:
     """Extract text content from a user message."""
     content = message.get("content", "")
@@ -588,8 +617,7 @@ def _parse_with_offset_tracking(
 
     # Finalize metadata
     if meta is not None:
-        if meta.cwd:
-            meta.project = Path(meta.cwd).name
+        meta.project = _derive_project_from_cwd(meta.cwd)
         meta.started_at = _min_ts
         meta.ended_at = _max_ts
 
@@ -640,9 +668,7 @@ def extract_session_metadata(path: Path) -> ParsedSession:
                     timestamps.append(ts)
 
         # Derive project from cwd
-        if result.cwd:
-            # Use last component of path as project name
-            result.project = Path(result.cwd).name
+        result.project = _derive_project_from_cwd(result.cwd)
 
         # Set time bounds
         if timestamps:

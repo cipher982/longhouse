@@ -26,6 +26,7 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
+from zerg.services.managed_local_launcher import _derive_project
 from zerg.services.session_pubsub import TOPIC_TIMELINE
 from zerg.services.session_pubsub import get_pubsub
 from zerg.services.session_pubsub import reset_pubsub_for_test
@@ -75,6 +76,11 @@ def _seed_user_and_runner(db):
     db.commit()
     db.refresh(runner)
     return user, runner
+
+
+def test_managed_local_derived_project_ignores_generic_workspace():
+    assert _derive_project("/private/tmp/longhouse/workspace", None) == "managed-local"
+    assert _derive_project("/private/tmp/longhouse/workspace", "explicit") == "explicit"
 
 
 def test_browser_managed_local_launch_route_is_absent():

@@ -123,7 +123,10 @@ def _verify_device_owned_by(db: Session, *, owner_id: int, device_id: str) -> No
 def _project_for(cwd: str, project: str | None) -> str:
     if project and project.strip():
         return project.strip()
-    return Path(cwd).name or "managed-local"
+    label = Path(cwd).name.strip()
+    if label and label != "workspace":
+        return label
+    return "managed-local"
 
 
 def _launch_result_for_attempt(attempt: SessionLaunchAttempt) -> RemoteLaunchResult:

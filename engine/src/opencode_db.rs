@@ -34,6 +34,8 @@ pub struct OpenCodeSessionCandidate {
 #[derive(Debug)]
 struct OpenCodeSessionRow {
     parent_id: Option<String>,
+    project_worktree: Option<String>,
+    project_name: Option<String>,
     directory: Option<String>,
     path: Option<String>,
     title: Option<String>,
@@ -320,6 +322,36 @@ fn sqlite_readonly_uri(path: &Path) -> String {
 }
 
 fn load_session(conn: &Connection, provider_session_id: &str) -> Result<OpenCodeSessionRow> {
+    if sqlite_table_exists(conn, "project")? && sqlite_column_exists(conn, "session", "project_id")?
+    {
+        return conn
+            .query_row(
+                // Modern OpenCode DBs attach sessions to project.worktree through
+                // project_id. The join tolerates missing project rows; older
+                // schemas fall back to directory/path below.
+                r#"
+                SELECT s.parent_id, p.worktree, p.name, s.directory, s.path, s.title, s.version, s.time_created
+                FROM session s
+                LEFT JOIN project p ON p.id = s.project_id
+                WHERE s.id = ?1
+                "#,
+                params![provider_session_id],
+                |row| {
+                    Ok(OpenCodeSessionRow {
+                        parent_id: row.get(0)?,
+                        project_worktree: row.get(1)?,
+                        project_name: row.get(2)?,
+                        directory: row.get(3)?,
+                        path: row.get(4)?,
+                        title: row.get(5)?,
+                        version: row.get(6)?,
+                        time_created: row.get(7)?,
+                    })
+                },
+            )
+            .with_context(|| format!("loading OpenCode session {provider_session_id}"));
+    }
+
     conn.query_row(
         r#"
         SELECT parent_id, directory, path, title, version, time_created
@@ -330,6 +362,8 @@ fn load_session(conn: &Connection, provider_session_id: &str) -> Result<OpenCode
         |row| {
             Ok(OpenCodeSessionRow {
                 parent_id: row.get(0)?,
+                project_worktree: None,
+                project_name: None,
                 directory: row.get(1)?,
                 path: row.get(2)?,
                 title: row.get(3)?,
@@ -338,7 +372,29 @@ fn load_session(conn: &Connection, provider_session_id: &str) -> Result<OpenCode
             })
         },
     )
-    .with_context(|| format!("loading OpenCode session {provider_session_id}"))
+    .with_context(|| format!("loading legacy OpenCode session {provider_session_id}"))
+}
+
+fn sqlite_table_exists(conn: &Connection, table: &str) -> Result<bool> {
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+        params![table],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+fn sqlite_column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
+    let escaped_table = table.replace('"', "\"\"");
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info(\"{escaped_table}\")"))?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn load_messages(conn: &Connection, provider_session_id: &str) -> Result<Vec<OpenCodeMessageRow>> {
@@ -609,21 +665,42 @@ fn source_line_part_data(part_data: &Value) -> Value {
 
 fn project_label(session: &OpenCodeSessionRow) -> Option<String> {
     session
-        .path
+        .project_worktree
         .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .and_then(|path| Path::new(path).file_name().and_then(|name| name.to_str()))
+        .filter(|value| value.trim() != "/")
+        .and_then(path_basename)
         .map(str::to_string)
+        .or_else(|| {
+            session
+                .project_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        })
         .or_else(|| {
             session
                 .directory
                 .as_deref()
-                .and_then(|directory| Path::new(directory).file_name())
-                .and_then(|name| name.to_str())
+                .and_then(path_basename)
+                .map(str::to_string)
+        })
+        .or_else(|| {
+            session
+                .path
+                .as_deref()
+                .and_then(path_basename)
                 .map(str::to_string)
         })
         .or_else(|| session.title.clone())
+}
+
+fn path_basename(path: &str) -> Option<&str> {
+    Path::new(path.trim())
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 fn opencode_session_environment_override(provider_session_id: &str) -> Option<String> {
@@ -846,6 +923,7 @@ mod tests {
             r#"
             CREATE TABLE session (
                 id text PRIMARY KEY,
+                project_id text NOT NULL,
                 parent_id text,
                 directory text,
                 path text,
@@ -853,6 +931,11 @@ mod tests {
                 version text,
                 time_created integer NOT NULL,
                 time_updated integer NOT NULL
+            );
+            CREATE TABLE project (
+                id text PRIMARY KEY,
+                worktree text NOT NULL,
+                name text
             );
             CREATE TABLE message (
                 id text PRIMARY KEY,
@@ -873,10 +956,16 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO session (id, parent_id, directory, path, title, version, time_created, time_updated)
-             VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO project (id, worktree, name) VALUES (?1, ?2, NULL)",
+            params!["proj_longhouse", "/Users/davidrose/git/zerg/longhouse"],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO session (id, project_id, parent_id, directory, path, title, version, time_created, time_updated)
+             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 "ses_test",
+                "proj_longhouse",
                 "/Users/davidrose/git/zerg/longhouse",
                 "Users/davidrose/git/zerg/longhouse",
                 "Longhouse work",
@@ -988,6 +1077,80 @@ mod tests {
         assert_eq!(result.events[3].content_text.as_deref(), Some("done"));
         assert_eq!(result.source_lines.len(), 3);
         assert!(result.last_good_offset > result.events[3].source_offset);
+    }
+
+    #[test]
+    fn project_label_prefers_worktree_over_generic_opencode_path() {
+        let session = OpenCodeSessionRow {
+            parent_id: None,
+            project_worktree: Some("/Users/davidrose/git/zerg/longhouse".to_string()),
+            project_name: None,
+            directory: Some("/Users/davidrose/git/zerg/longhouse".to_string()),
+            path: Some("/private/tmp/opencode/workspace".to_string()),
+            title: Some("OpenCode work".to_string()),
+            version: None,
+            time_created: 1_779_000_000_000_i64,
+        };
+
+        assert_eq!(project_label(&session).as_deref(), Some("longhouse"));
+    }
+
+    #[test]
+    fn project_label_prefers_worktree_over_project_name() {
+        let session = OpenCodeSessionRow {
+            parent_id: None,
+            project_worktree: Some("/Users/davidrose/git/sauron/jobs".to_string()),
+            project_name: Some("sauron".to_string()),
+            directory: Some("/Users/davidrose/git/sauron/jobs".to_string()),
+            path: Some("/private/tmp/opencode/workspace".to_string()),
+            title: Some("OpenCode work".to_string()),
+            version: None,
+            time_created: 1_779_000_000_000_i64,
+        };
+
+        assert_eq!(project_label(&session).as_deref(), Some("jobs"));
+    }
+
+    #[test]
+    fn load_session_supports_legacy_schema_without_project_table() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE session (
+                id text PRIMARY KEY,
+                parent_id text,
+                directory text,
+                path text,
+                title text,
+                version text,
+                time_created integer NOT NULL,
+                time_updated integer NOT NULL
+            );
+            "#,
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO session (id, parent_id, directory, path, title, version, time_created, time_updated)
+             VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                "ses_legacy",
+                "/tmp/opencode-work",
+                "tmp/opencode-work",
+                "Legacy OpenCode",
+                "1.15.7",
+                1_779_000_000_000_i64,
+                1_779_000_001_000_i64,
+            ],
+        )
+        .unwrap();
+
+        let session = load_session(&conn, "ses_legacy").unwrap();
+
+        assert_eq!(session.project_worktree, None);
+        assert_eq!(session.directory.as_deref(), Some("/tmp/opencode-work"));
+        assert_eq!(project_label(&session).as_deref(), Some("opencode-work"));
     }
 
     #[test]

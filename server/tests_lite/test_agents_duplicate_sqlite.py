@@ -15,6 +15,7 @@ from zerg.database import Base
 from zerg.database import make_engine
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTask
+from zerg.models.agents import TimelineCard
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
@@ -267,6 +268,108 @@ def test_duplicate_ingest_upgrades_generic_environment_to_machine_label(tmp_path
         # explicit terminal_signal (or Phase 6 process-gone) sets ended_at.
         assert stored.ended_at is None
         assert stored.last_activity_at == later_time.replace(tzinfo=None)
+
+
+def test_opencode_reingest_repairs_workspace_project_from_cwd(tmp_path):
+    db_path = tmp_path / "opencode_workspace_project_repair.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    engine = engine.execution_options(schema_translate_map={"agents": None})
+    Base.metadata.create_all(bind=engine)
+
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        base_time = datetime(2026, 6, 6, 10, 0, 0, tzinfo=timezone.utc)
+        session_id = uuid4()
+
+        first = store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="opencode",
+                environment="production",
+                project="workspace",
+                device_id="cinder",
+                cwd="/Users/davidrose/git/zerg/longhouse",
+                started_at=base_time,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="fix the report label",
+                        timestamp=base_time,
+                        source_path="/tmp/opencode.db#opencode:ses_test",
+                        source_offset=1,
+                    )
+                ],
+            )
+        )
+        assert first.session_created is True
+
+        second = store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="opencode",
+                environment="production",
+                project="longhouse",
+                device_id="cinder",
+                cwd="/Users/davidrose/git/zerg/longhouse",
+                started_at=base_time,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="fix the report label",
+                        timestamp=base_time,
+                        source_path="/tmp/opencode.db#opencode:ses_test",
+                        source_offset=1,
+                    )
+                ],
+            )
+        )
+
+        assert second.session_created is False
+        stored = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        assert stored.project == "longhouse"
+        card = db.query(TimelineCard).filter(TimelineCard.session_id == session_id).one()
+        assert card.project == "longhouse"
+
+
+def test_ingest_does_not_promote_generic_workspace_project_from_cwd(tmp_path):
+    db_path = tmp_path / "generic_workspace_project_guard.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    engine = engine.execution_options(schema_translate_map={"agents": None})
+    Base.metadata.create_all(bind=engine)
+
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        base_time = datetime(2026, 6, 6, 10, 0, 0, tzinfo=timezone.utc)
+        session_id = uuid4()
+
+        result = store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="claude",
+                environment="production",
+                project="workspace",
+                device_id="cinder",
+                cwd="/private/tmp/claude/workspace",
+                started_at=base_time,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="generic workspace should not become a project",
+                        timestamp=base_time,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=1,
+                    )
+                ],
+            )
+        )
+
+        assert result.session_created is True
+        stored = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        assert stored.project is None
+        card = db.query(TimelineCard).filter(TimelineCard.session_id == session_id).one()
+        assert card.project is None
 
 
 @pytest.mark.parametrize(

@@ -12,6 +12,7 @@ import time
 from collections import defaultdict
 from datetime import datetime
 from datetime import timezone
+from pathlib import Path
 from typing import Any
 from typing import List
 from typing import Optional
@@ -115,6 +116,27 @@ def _is_opencode_provider_live_test_ingest(data: SessionIngest, incoming_environ
         return False
     cwd = str(data.cwd or "").replace("\\", "/")
     return "/.longhouse/canaries/provider-live/opencode/" in cwd and cwd.endswith("/workspace")
+
+
+def _should_repair_opencode_workspace_project(session: AgentSession, data: SessionIngest) -> bool:
+    if str((session.provider or data.provider) or "").strip().lower() != "opencode":
+        return False
+    existing_project = str(session.project or "").strip()
+    incoming_project = str(data.project or "").strip()
+    if existing_project != "workspace" or not incoming_project or incoming_project == existing_project:
+        return False
+    cwd_name = Path(str(data.cwd or session.cwd or "").strip()).name
+    return bool(cwd_name and cwd_name == incoming_project)
+
+
+def _normalize_ingested_project(data: SessionIngest) -> str | None:
+    project = str(data.project or "").strip()
+    if not project:
+        return None
+    cwd_name = Path(str(data.cwd or "").strip()).name.strip()
+    if project == "workspace" and cwd_name == project and not data.git_repo:
+        return None
+    return project
 
 
 class AgentsStore:
@@ -433,8 +455,9 @@ class AgentsStore:
             if current_activity is None or incoming_ended_at > current_activity:
                 session.last_activity_at = data.ended_at
 
-        if data.project and not session.project:
-            session.project = data.project
+        incoming_project = _normalize_ingested_project(data)
+        if incoming_project and (not session.project or _should_repair_opencode_workspace_project(session, data)):
+            session.project = incoming_project
         if data.device_id and not session.device_id:
             session.device_id = data.device_id
         if not session.device_name:
@@ -1477,7 +1500,7 @@ class AgentsStore:
                 id=session_id,
                 provider=data.provider,
                 environment=data.environment,
-                project=data.project,
+                project=_normalize_ingested_project(data),
                 device_id=data.device_id,
                 device_name=device_name,
                 cwd=data.cwd,

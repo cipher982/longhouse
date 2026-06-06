@@ -45,6 +45,7 @@ from zerg.services.machine_control_channel import get_machine_control_channel_re
 from zerg.services.remote_session_launch import RemoteContinueParams  # noqa: E402
 from zerg.services.remote_session_launch import RemoteLaunchError  # noqa: E402
 from zerg.services.remote_session_launch import RemoteLaunchParams  # noqa: E402
+from zerg.services.remote_session_launch import _project_for  # noqa: E402
 from zerg.services.remote_session_launch import continue_remote_session  # noqa: E402
 from zerg.services.remote_session_launch import launch_remote_session  # noqa: E402
 from zerg.services.remote_session_launch import reap_orphaned_launches  # noqa: E402
@@ -63,6 +64,11 @@ def _latest_attempt(db, session_id):
         .order_by(SessionLaunchAttempt.created_at.desc(), SessionLaunchAttempt.id.desc())
         .one()
     )
+
+
+def test_remote_launch_derived_project_ignores_generic_workspace():
+    assert _project_for("/private/tmp/longhouse/workspace", None) == "managed-local"
+    assert _project_for("/private/tmp/longhouse/workspace", "explicit") == "explicit"
 
 
 def _make_db(tmp_path):

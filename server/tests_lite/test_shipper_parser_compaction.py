@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from zerg.services.shipper.parser import parse_session_file
 from zerg.services.shipper.parser import parse_session_file_full
@@ -89,6 +90,59 @@ def test_parse_session_file_full_tracks_offsets_with_compaction_events(tmp_path)
     assert last_good_offset == path.stat().st_size
     assert metadata.started_at is not None
     assert metadata.ended_at is not None
+
+
+def test_parse_session_file_full_does_not_promote_generic_workspace_project(tmp_path):
+    with TemporaryDirectory(prefix="lh-workspace-project-test-", dir="/private/tmp") as temp_root:
+        workspace = Path(temp_root) / "workspace"
+        workspace.mkdir()
+        path = _write_jsonl(
+            tmp_path,
+            "workspace-session.jsonl",
+            [
+                json.dumps(
+                    {
+                        "type": "user",
+                        "uuid": "u1",
+                        "timestamp": "2026-01-01T00:00:03Z",
+                        "cwd": str(workspace),
+                        "message": {"content": "hello"},
+                    },
+                    separators=(",", ":"),
+                ),
+            ],
+        )
+
+        _events, _last_good_offset, metadata = parse_session_file_full(path)
+
+        assert metadata.cwd == str(workspace)
+        assert metadata.project is None
+
+
+def test_parse_session_file_full_keeps_workspace_when_git_root(tmp_path):
+    workspace = tmp_path / "workspace"
+    (workspace / ".git").mkdir(parents=True)
+    path = _write_jsonl(
+        tmp_path,
+        "workspace-git-session.jsonl",
+        [
+            json.dumps(
+                {
+                    "type": "user",
+                    "uuid": "u1",
+                    "timestamp": "2026-01-01T00:00:03Z",
+                    "cwd": str(workspace),
+                    "message": {"content": "hello"},
+                },
+                separators=(",", ":"),
+            ),
+        ],
+    )
+
+    _events, _last_good_offset, metadata = parse_session_file_full(path)
+
+    assert metadata.cwd == str(workspace)
+    assert metadata.project == "workspace"
 
 
 def test_progress_events_are_intentionally_dropped(tmp_path):

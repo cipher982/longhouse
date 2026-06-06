@@ -973,11 +973,9 @@ fn resolve_git_info(cwd: &Path) -> (Option<String>, Option<String>) {
     let git_dir = match find_git_dir(cwd) {
         Some(d) => d,
         None => {
-            // No git repo — fall back to cwd basename
-            let project = cwd
-                .file_name()
-                .and_then(|s| s.to_str())
-                .map(|s| s.to_string());
+            // No git repo — fall back to cwd basename, but do not promote
+            // generic temp workspace directories into report-level projects.
+            let project = project_from_cwd_basename(cwd);
             return (project, None);
         }
     };
@@ -993,6 +991,14 @@ fn resolve_git_info(cwd: &Path) -> (Option<String>, Option<String>) {
     let git_repo = read_git_remote_url(&git_dir.join("config"));
 
     (project, git_repo)
+}
+
+fn project_from_cwd_basename(cwd: &Path) -> Option<String> {
+    let label = cwd.file_name().and_then(|s| s.to_str())?.trim();
+    if label.is_empty() || label == "workspace" {
+        return None;
+    }
+    Some(label.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -2778,6 +2784,29 @@ mod tests {
         );
         // project derived from cwd basename
         assert_eq!(result.metadata.project.as_deref(), Some("zorb"));
+    }
+
+    #[test]
+    fn resolve_git_info_does_not_promote_generic_workspace_basename() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let (project, git_repo) = resolve_git_info(&workspace);
+
+        assert_eq!(project, None);
+        assert_eq!(git_repo, None);
+    }
+
+    #[test]
+    fn resolve_git_info_keeps_workspace_when_it_is_a_git_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("workspace");
+        std::fs::create_dir_all(workspace.join(".git")).unwrap();
+
+        let (project, _git_repo) = resolve_git_info(&workspace);
+
+        assert_eq!(project.as_deref(), Some("workspace"));
     }
 
     #[test]
