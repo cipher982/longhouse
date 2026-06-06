@@ -98,7 +98,11 @@ def replay_event_stream_records(
     query = db.query(ArchiveChunk).filter(ArchiveChunk.stream == "events").filter(ArchiveChunk.state == "sealed")
     if session_id is not None:
         query = query.filter(ArchiveChunk.session_id == UUID(str(session_id)))
-    chunks = query.order_by(ArchiveChunk.id.asc()).all()
+    chunks = query.order_by(
+        ArchiveChunk.session_id.asc(),
+        ArchiveChunk.first_source_seq.asc(),
+        ArchiveChunk.id.asc(),
+    ).all()
 
     records_read = 0
     live_records = 0
