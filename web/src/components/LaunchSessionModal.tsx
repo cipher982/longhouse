@@ -9,6 +9,7 @@ import {
   type MachineDirectoryEntry,
 } from "../services/api";
 import { Button, Spinner } from "./ui";
+import { getProviderLabel } from "../lib/providers";
 
 interface LaunchSessionModalProps {
   isOpen: boolean;
@@ -229,7 +230,7 @@ export default function LaunchSessionModal({
                   >
                     {selectedMachine.launchable_providers.map((p) => (
                       <option key={p} value={p}>
-                        {p}
+                        {getProviderLabel(p)}
                       </option>
                     ))}
                   </select>

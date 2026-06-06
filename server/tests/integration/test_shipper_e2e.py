@@ -37,7 +37,9 @@ import sqlite3
 import subprocess
 import time
 from pathlib import Path
+from uuid import NAMESPACE_URL
 from uuid import uuid4
+from uuid import uuid5
 
 import pytest
 import requests
@@ -69,6 +71,8 @@ GEMINI_SESSION_ID = "5053c934-f66d-4fea-96af-f95181de5986"
 GEMINI_DRIFT_SESSION_ID = "d1f7b8a2-3e4c-4f56-a789-012345678901"
 GEMINI_TOOL_RESULTS_SESSION_ID = "f2b84f4d-9149-4ed8-8d65-9dc0b6b0fbe2"
 CODEX_SESSION_ID = "019a4bea-3f39-7fe1-b132-6c14579e806c"
+OPENCODE_PROVIDER_SESSION_ID = "ses_longhouse_e2e"
+OPENCODE_SESSION_ID = str(uuid5(NAMESPACE_URL, f"opencode:{OPENCODE_PROVIDER_SESSION_ID}"))
 
 pytestmark = pytest.mark.integration
 
@@ -148,6 +152,195 @@ def _ship(fixture: str, server: str | dict[str, str], provider: str, engine_db: 
         capture_output=True,
         text=True,
         timeout=30,
+    )
+    assert result.returncode == 0, (
+        f"longhouse-engine exited {result.returncode}\n"
+        f"stdout: {result.stdout}\n"
+        f"stderr: {result.stderr}"
+    )
+
+
+def _create_opencode_db(home: Path) -> Path:
+    db_path = home / ".local" / "share" / "opencode" / "opencode.db"
+    db_path.parent.mkdir(parents=True)
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE session (
+                id text PRIMARY KEY,
+                parent_id text,
+                directory text,
+                path text,
+                title text,
+                version text,
+                time_created integer NOT NULL,
+                time_updated integer NOT NULL
+            );
+            CREATE TABLE message (
+                id text PRIMARY KEY,
+                session_id text NOT NULL,
+                time_created integer NOT NULL,
+                time_updated integer NOT NULL,
+                data text NOT NULL
+            );
+            CREATE TABLE part (
+                id text PRIMARY KEY,
+                message_id text NOT NULL,
+                session_id text NOT NULL,
+                time_created integer NOT NULL,
+                time_updated integer NOT NULL,
+                data text NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO session (id, parent_id, directory, path, title, version, time_created, time_updated)
+            VALUES (?, NULL, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                OPENCODE_PROVIDER_SESSION_ID,
+                "/tmp/opencode-work",
+                "tmp/opencode-work",
+                "OpenCode e2e",
+                "1.15.7",
+                1_779_000_000_000,
+                1_779_000_001_300,
+            ),
+        )
+        conn.execute(
+            "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)",
+            (
+                "msg_user",
+                OPENCODE_PROVIDER_SESSION_ID,
+                1_779_000_000_010,
+                1_779_000_000_020,
+                json.dumps({"role": "user"}),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                "prt_user",
+                "msg_user",
+                OPENCODE_PROVIDER_SESSION_ID,
+                1_779_000_000_011,
+                1_779_000_000_011,
+                json.dumps({"type": "text", "text": "hello from opencode e2e"}),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                "prt_file",
+                "msg_user",
+                OPENCODE_PROVIDER_SESSION_ID,
+                1_779_000_000_012,
+                1_779_000_000_012,
+                json.dumps(
+                    {
+                        "type": "file",
+                        "mime": "image/png",
+                        "filename": "clipboard",
+                        "url": "data:image/png;base64," + ("A" * 900),
+                        "source": {
+                            "type": "file",
+                            "path": "clipboard",
+                            "text": {"value": "[Image 1]", "start": 0, "end": 9},
+                        },
+                    }
+                ),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)",
+            (
+                "msg_assistant",
+                OPENCODE_PROVIDER_SESSION_ID,
+                1_779_000_000_100,
+                1_779_000_001_300,
+                json.dumps({"role": "assistant"}),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                "prt_tool",
+                "msg_assistant",
+                OPENCODE_PROVIDER_SESSION_ID,
+                1_779_000_000_110,
+                1_779_000_000_190,
+                json.dumps(
+                    {
+                        "type": "tool",
+                        "tool": "bash",
+                        "callID": "call_opencode_e2e",
+                        "state": {
+                            "status": "completed",
+                            "input": {"command": "pwd"},
+                            "output": "/tmp/opencode-work\n",
+                        },
+                    }
+                ),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                "prt_patch",
+                "msg_assistant",
+                OPENCODE_PROVIDER_SESSION_ID,
+                1_779_000_000_500,
+                1_779_000_000_500,
+                json.dumps(
+                    {
+                        "type": "patch",
+                        "hash": "abc123",
+                        "files": ["/tmp/opencode-work/a.txt", "/tmp/opencode-work/b.txt"],
+                    }
+                ),
+            ),
+        )
+        conn.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                "prt_text",
+                "msg_assistant",
+                OPENCODE_PROVIDER_SESSION_ID,
+                1_779_000_001_200,
+                1_779_000_001_300,
+                json.dumps({"type": "text", "text": "opencode e2e done"}),
+            ),
+        )
+    return db_path
+
+
+def _ship_opencode_sqlite(server: str | dict[str, str], tmp_path: Path, engine_db: Path) -> None:
+    if isinstance(server, dict):
+        home = Path(server["db_path"]).parent / "opencode-home"
+    else:
+        home = tmp_path / "opencode-home"
+    shutil.rmtree(home, ignore_errors=True)
+    _create_opencode_db(home)
+    env = {**os.environ, "HOME": str(home)}
+    result = subprocess.run(
+        [
+            str(ENGINE_BIN),
+            "ship",
+            "--url",
+            _server_url(server),
+            "--token",
+            _server_token(server),
+            "--provider",
+            "opencode",
+            "--db",
+            str(engine_db),
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
     )
     assert result.returncode == 0, (
         f"longhouse-engine exited {result.returncode}\n"
@@ -1175,6 +1368,57 @@ class TestCodexShipping:
         events_before = _get_events(server, CODEX_SESSION_ID)
         _ship(CODEX_FIXTURE, server, "codex", tmp_path / "engine2.db")
         events_after = _get_events(server, CODEX_SESSION_ID)
+        assert len(events_after) == len(events_before), (
+            f"Re-ship created duplicates: {len(events_before)} → {len(events_after)}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# OpenCode SQLite tests
+# ---------------------------------------------------------------------------
+
+
+class TestOpenCodeSQLiteShipping:
+    def test_session_appears_in_db(self, server, tmp_path):
+        _ship_opencode_sqlite(server, tmp_path, tmp_path / "engine.db")
+        session = _get_session(server, OPENCODE_SESSION_ID)
+        assert session is not None, "OpenCode SQLite session not found after shipping"
+        assert session["provider"] == "opencode"
+        assert session["id"] == OPENCODE_SESSION_ID
+
+    def test_events_ingested(self, server, tmp_path):
+        events = _get_events(server, OPENCODE_SESSION_ID)
+        assert len(events) == 6, f"Expected exactly 6 events, got {len(events)}"
+
+    def test_event_roles_and_content(self, server, tmp_path):
+        events = _get_events(server, OPENCODE_SESSION_ID)
+        roles = [event["role"] for event in events]
+        assert roles == ["user", "user", "assistant", "tool", "assistant", "assistant"]
+        contents = [event.get("content_text") or event.get("tool_output_text") or "" for event in events]
+        assert "hello from opencode e2e" in contents
+        assert "Attached file: [Image 1] (clipboard, image/png)" in contents
+        assert "/tmp/opencode-work\n" in contents
+        assert "Patch: /tmp/opencode-work/a.txt, /tmp/opencode-work/b.txt" in contents
+        assert "opencode e2e done" in contents
+
+    def test_provider_session_id_is_native_opencode_id(self, server, tmp_path):
+        rows = _sqlite_rows(
+            server,
+            """
+            SELECT alias_value
+            FROM session_thread_aliases
+            WHERE provider = ?
+              AND alias_kind = ?
+              AND alias_value = ?
+            """,
+            ("opencode", "provider_session_id", OPENCODE_PROVIDER_SESSION_ID),
+        )
+        assert rows and rows[0]["alias_value"] == OPENCODE_PROVIDER_SESSION_ID
+
+    def test_reship_is_idempotent(self, server, tmp_path):
+        events_before = _get_events(server, OPENCODE_SESSION_ID)
+        _ship_opencode_sqlite(server, tmp_path, tmp_path / "engine2.db")
+        events_after = _get_events(server, OPENCODE_SESSION_ID)
         assert len(events_after) == len(events_before), (
             f"Re-ship created duplicates: {len(events_before)} → {len(events_after)}"
         )

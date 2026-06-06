@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use chrono::Utc;
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use tokio::task;
@@ -19,6 +20,7 @@ use tokio::task;
 use crate::discovery::{self, ProviderConfig};
 use crate::error_tracker::{ConsecutiveErrorTracker, RecentIssueTracker};
 use crate::flight::FlightRecorder;
+use crate::opencode_db;
 use crate::pipeline::batcher::{self, PlannedRangeAction, ShipRange};
 use crate::pipeline::compressor::{self, CompressionAlgo};
 use crate::pipeline::parser::{self, ParseResult};
@@ -202,6 +204,229 @@ fn ship_lane_for_context(
         },
         lane => lane,
     }
+}
+
+pub(crate) async fn ship_opencode_database(
+    path: &Path,
+    conn: &Connection,
+    client: &ShipperClient,
+    algo: CompressionAlgo,
+    max_batch_bytes: u64,
+    tracker: Option<&ConsecutiveErrorTracker>,
+    parse_tracker: Option<&RecentIssueTracker>,
+) -> Result<(usize, usize)> {
+    let file_state = FileState::new(conn);
+    ensure_opencode_sqlite_state_table(conn)?;
+    let sessions = opencode_db::list_opencode_sessions(path)?;
+    let mut sessions_shipped = 0usize;
+    let mut events_shipped = 0usize;
+
+    for candidate in sessions {
+        let current_offset = file_state.get_offset(&candidate.source_key)?;
+        let current_fingerprint = get_opencode_sqlite_fingerprint(conn, &candidate.source_key)?;
+        let persisted_longhouse_session_id =
+            get_opencode_sqlite_longhouse_session_id(conn, &candidate.source_key)?;
+        if candidate.version <= current_offset
+            && current_fingerprint.as_deref() == Some(candidate.fingerprint.as_str())
+        {
+            continue;
+        }
+
+        let parse_result =
+            match opencode_db::parse_opencode_session(path, &candidate.provider_session_id) {
+                Ok(result) => result,
+                Err(error) => {
+                    record_parse_issue(parse_tracker);
+                    tracing::warn!(
+                        path = %path.display(),
+                        provider_session_id = %candidate.provider_session_id,
+                        error = %error,
+                        "Skipping OpenCode session after parse failure"
+                    );
+                    continue;
+                }
+            };
+
+        let new_offset = parse_result.last_good_offset.max(candidate.version);
+        let provider_session_id = parse_result
+            .metadata
+            .provider_session_id
+            .as_deref()
+            .unwrap_or(&candidate.provider_session_id)
+            .to_string();
+        let longhouse_session_id =
+            opencode_db::managed_longhouse_session_id_for_opencode(&provider_session_id)
+                .or(persisted_longhouse_session_id)
+                .unwrap_or_else(|| parse_result.metadata.session_id.clone());
+        if parse_result.events.is_empty() && parse_result.source_lines.is_empty() {
+            file_state.set_offset(
+                &candidate.source_key,
+                new_offset,
+                &longhouse_session_id,
+                &provider_session_id,
+                "opencode",
+            )?;
+            set_opencode_sqlite_fingerprint(
+                conn,
+                &candidate.source_key,
+                &candidate.fingerprint,
+                candidate.version,
+                &longhouse_session_id,
+            )?;
+            continue;
+        }
+
+        let rewind_hint =
+            (current_offset > 0).then(|| full_document_rewrite_hint(&candidate.source_key));
+        let compressed = compressor::build_and_compress_with_source_lines(
+            &longhouse_session_id,
+            &parse_result.events,
+            &parse_result.metadata,
+            &candidate.source_key,
+            "opencode",
+            Some(&parse_result.source_lines),
+            rewind_hint.as_ref().map(std::slice::from_ref),
+            algo,
+        )?;
+        let compressed_len = compressed.len() as u64;
+        let result = if compressed_len <= max_batch_bytes {
+            client.ship(compressed).await
+        } else {
+            ShipResult::PayloadTooLarge(format!(
+                "compressed OpenCode SQLite payload is {compressed_len} bytes which exceeds max_batch_bytes {max_batch_bytes}"
+            ))
+        };
+        let session_events_shipped = match result {
+            ShipResult::Ok { .. } => parse_result.events.len(),
+            ShipResult::PayloadTooLarge(_) | ShipResult::PayloadRejected(_, _) => {
+                tracing::error!(
+                    path = %candidate.source_key,
+                    provider = "opencode",
+                    error = %transient_error_message(&result),
+                    "OpenCode SQLite payload rejected; leaving cursor unchanged for next scan"
+                );
+                continue;
+            }
+            other => {
+                let error = transient_error_message(&other);
+                if tracker.map_or(true, |tracker| tracker.record_error()) {
+                    tracing::warn!(
+                        path = %path.display(),
+                        provider_session_id = %candidate.provider_session_id,
+                        error = %error,
+                        "OpenCode SQLite ship failed; leaving cursor unchanged for next scan"
+                    );
+                }
+                continue;
+            }
+        };
+
+        if let Some(tracker) = tracker {
+            tracker.record_success();
+        }
+        file_state.set_offset(
+            &candidate.source_key,
+            new_offset,
+            &longhouse_session_id,
+            &provider_session_id,
+            "opencode",
+        )?;
+        set_opencode_sqlite_fingerprint(
+            conn,
+            &candidate.source_key,
+            &candidate.fingerprint,
+            candidate.version,
+            &longhouse_session_id,
+        )?;
+        if session_events_shipped > 0 {
+            sessions_shipped += 1;
+            events_shipped += session_events_shipped;
+        }
+    }
+
+    Ok((sessions_shipped, events_shipped))
+}
+
+fn ensure_opencode_sqlite_state_table(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS opencode_sqlite_state (
+            source_key TEXT PRIMARY KEY,
+            fingerprint TEXT NOT NULL,
+            version INTEGER NOT NULL DEFAULT 0,
+            longhouse_session_id TEXT,
+            updated_at TEXT NOT NULL
+        );",
+    )?;
+    let columns: Vec<String> = conn
+        .prepare("PRAGMA table_info(opencode_sqlite_state)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|row| row.ok())
+        .collect();
+    if !columns
+        .iter()
+        .any(|column| column == "longhouse_session_id")
+    {
+        conn.execute(
+            "ALTER TABLE opencode_sqlite_state ADD COLUMN longhouse_session_id TEXT",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+fn get_opencode_sqlite_fingerprint(conn: &Connection, source_key: &str) -> Result<Option<String>> {
+    let result = conn.query_row(
+        "SELECT fingerprint FROM opencode_sqlite_state WHERE source_key = ?1",
+        [source_key],
+        |row| row.get::<_, String>(0),
+    );
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn get_opencode_sqlite_longhouse_session_id(
+    conn: &Connection,
+    source_key: &str,
+) -> Result<Option<String>> {
+    let result = conn.query_row(
+        "SELECT longhouse_session_id FROM opencode_sqlite_state WHERE source_key = ?1",
+        [source_key],
+        |row| row.get::<_, Option<String>>(0),
+    );
+    match result {
+        Ok(value) => Ok(value.filter(|value| uuid::Uuid::parse_str(value).is_ok())),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn set_opencode_sqlite_fingerprint(
+    conn: &Connection,
+    source_key: &str,
+    fingerprint: &str,
+    version: u64,
+    longhouse_session_id: &str,
+) -> Result<()> {
+    conn.execute(
+        "INSERT INTO opencode_sqlite_state (source_key, fingerprint, version, longhouse_session_id, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(source_key) DO UPDATE SET
+             fingerprint = excluded.fingerprint,
+             version = MAX(opencode_sqlite_state.version, excluded.version),
+             longhouse_session_id = COALESCE(excluded.longhouse_session_id, opencode_sqlite_state.longhouse_session_id),
+             updated_at = excluded.updated_at",
+        rusqlite::params![
+            source_key,
+            fingerprint,
+            version as i64,
+            longhouse_session_id,
+            Utc::now().to_rfc3339()
+        ],
+    )?;
+    Ok(())
 }
 
 /// Parse and compress a single file from its current offset.
@@ -2805,6 +3030,43 @@ pub(crate) async fn full_scan_with_batch_bytes_and_parse_tracker(
 
     for (path, provider_name) in &all_files {
         let file_start = std::time::Instant::now();
+        if *provider_name == "opencode" && opencode_db::is_opencode_database_path(path) {
+            match ship_opencode_database(
+                path,
+                conn,
+                client,
+                algo,
+                max_batch_bytes,
+                tracker,
+                parse_tracker,
+            )
+            .await
+            {
+                Ok((sessions, events)) => {
+                    if sessions > 0 {
+                        files_shipped += sessions;
+                        events_shipped += events;
+                        log_slow_file_processing(
+                            "opencode_sqlite_scan",
+                            path,
+                            provider_name,
+                            events,
+                            0,
+                            0,
+                            file_start.elapsed(),
+                        );
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        "Error preparing OpenCode database {}: {}",
+                        path.display(),
+                        error
+                    );
+                }
+            }
+            continue;
+        }
         match prepare_file_batches_with_source_line_mode_and_parse_tracker(
             path,
             provider_name,
@@ -2862,10 +3124,41 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::{Arc, Mutex};
 
+    static OPENCODE_STATE_ROOT_ENV_LOCK: Mutex<()> = Mutex::new(());
+
     fn make_db() -> (tempfile::NamedTempFile, Connection) {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(tmp.path())).unwrap();
         (tmp, conn)
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &std::ffi::OsStr) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::remove_var(key);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.as_ref() {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
     }
 
     fn claude_session_lines() -> &'static str {
@@ -3081,6 +3374,312 @@ mod tests {
         config.api_url = url.to_string();
         config.timeout_seconds = 5;
         ShipperClient::with_compression(&config, CompressionAlgo::Gzip).unwrap()
+    }
+
+    fn create_opencode_fixture_db(path: &Path) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE session (
+                id text PRIMARY KEY,
+                parent_id text,
+                directory text,
+                path text,
+                title text,
+                version text,
+                time_created integer NOT NULL,
+                time_updated integer NOT NULL
+            );
+            CREATE TABLE message (
+                id text PRIMARY KEY,
+                session_id text NOT NULL,
+                time_created integer NOT NULL,
+                time_updated integer NOT NULL,
+                data text NOT NULL
+            );
+            CREATE TABLE part (
+                id text PRIMARY KEY,
+                message_id text NOT NULL,
+                session_id text NOT NULL,
+                time_created integer NOT NULL,
+                time_updated integer NOT NULL,
+                data text NOT NULL
+            );
+            "#,
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO session (id, parent_id, directory, path, title, version, time_created, time_updated)
+             VALUES (?1, NULL, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                "ses_test",
+                "/tmp/opencode-project",
+                "tmp/opencode-project",
+                "OpenCode fixture",
+                "1.15.7",
+                1_779_100_000_000_i64,
+                1_779_100_000_300_i64,
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO message (id, session_id, time_created, time_updated, data)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                "msg_user",
+                "ses_test",
+                1_779_100_000_010_i64,
+                1_779_100_000_010_i64,
+                r#"{"role":"user"}"#,
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                "prt_user",
+                "msg_user",
+                "ses_test",
+                1_779_100_000_011_i64,
+                1_779_100_000_011_i64,
+                r#"{"type":"text","text":"hello from OpenCode"}"#,
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO message (id, session_id, time_created, time_updated, data)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                "msg_assistant",
+                "ses_test",
+                1_779_100_000_100_i64,
+                1_779_100_000_300_i64,
+                r#"{"role":"assistant"}"#,
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                "prt_assistant",
+                "msg_assistant",
+                "ses_test",
+                1_779_100_000_200_i64,
+                1_779_100_000_300_i64,
+                r#"{"type":"text","text":"hi from OpenCode"}"#,
+            ],
+        )
+        .unwrap();
+    }
+
+    fn decode_payload(compressed: &[u8]) -> serde_json::Value {
+        let mut decoder = GzDecoder::new(compressed);
+        let mut json_str = String::new();
+        decoder.read_to_string(&mut json_str).unwrap();
+        serde_json::from_str(&json_str).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_ship_opencode_database_posts_changed_session_and_advances_cursor() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        create_opencode_fixture_db(&db_path);
+        let (_state_file, conn) = make_db();
+        let (url, captured, handle) = spawn_http_sequence_server(&[("200 OK", "{}")]);
+        let client = make_test_client(&url);
+
+        let (sessions, events) = ship_opencode_database(
+            &db_path,
+            &conn,
+            &client,
+            CompressionAlgo::Gzip,
+            10_000_000,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(sessions, 1);
+        assert_eq!(events, 2);
+        handle.join().unwrap();
+        let bodies = captured.lock().unwrap();
+        assert_eq!(bodies.len(), 1);
+        let payload = decode_payload(&bodies[0]);
+        assert_eq!(payload["provider"], "opencode");
+        assert_eq!(payload["provider_session_id"], "ses_test");
+        assert_eq!(payload["events"][0]["role"], "user");
+        assert_eq!(payload["events"][0]["content_text"], "hello from OpenCode");
+        assert_eq!(payload["events"][1]["role"], "assistant");
+        assert_eq!(payload["events"][1]["content_text"], "hi from OpenCode");
+        assert!(payload["id"].as_str().unwrap().contains('-'));
+
+        let source_key = opencode_db::opencode_source_key(&db_path, "ses_test");
+        assert!(FileState::new(&conn).get_offset(&source_key).unwrap() > 0);
+
+        let (skipped_sessions, skipped_events) = ship_opencode_database(
+            &db_path,
+            &conn,
+            &client,
+            CompressionAlgo::Gzip,
+            10_000_000,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!((skipped_sessions, skipped_events), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn test_ship_opencode_database_persists_managed_session_binding() {
+        let _lock = OPENCODE_STATE_ROOT_ENV_LOCK.lock().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        create_opencode_fixture_db(&db_path);
+        let state_root = temp.path().join("managed-state");
+        std::fs::create_dir_all(&state_root).unwrap();
+        let managed_session_id = "11111111-2222-4333-8444-555555555555";
+        std::fs::write(
+            state_root.join("managed.state.json"),
+            serde_json::json!({
+                "schema_version": 1,
+                "provider": "opencode",
+                "longhouse_session_id": managed_session_id,
+                "opencode_session_id": "ses_test",
+                "phase": "idle"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let (_state_file, conn) = make_db();
+        let (url, captured, handle) = spawn_http_sequence_server(&[("200 OK", "{}")]);
+        let client = make_test_client(&url);
+
+        let env_guard = EnvVarGuard::set("LONGHOUSE_OPENCODE_STATE_ROOT", state_root.as_os_str());
+        ship_opencode_database(
+            &db_path,
+            &conn,
+            &client,
+            CompressionAlgo::Gzip,
+            10_000_000,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        drop(env_guard);
+        handle.join().unwrap();
+        let first_payload = decode_payload(&captured.lock().unwrap()[0]);
+        assert_eq!(first_payload["id"], managed_session_id);
+
+        std::fs::remove_dir_all(&state_root).unwrap();
+        let _removed_env = EnvVarGuard::remove("LONGHOUSE_OPENCODE_STATE_ROOT");
+        Connection::open(&db_path)
+            .unwrap()
+            .execute(
+                "UPDATE part SET data = ?1 WHERE id = 'prt_assistant'",
+                [r#"{"type":"text","text":"managed binding survived"}"#],
+            )
+            .unwrap();
+        let (url, captured, handle) = spawn_http_sequence_server(&[("200 OK", "{}")]);
+        let client = make_test_client(&url);
+
+        ship_opencode_database(
+            &db_path,
+            &conn,
+            &client,
+            CompressionAlgo::Gzip,
+            10_000_000,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        handle.join().unwrap();
+        let second_payload = decode_payload(&captured.lock().unwrap()[0]);
+        assert_eq!(second_payload["id"], managed_session_id);
+        assert_eq!(
+            second_payload["events"][1]["content_text"],
+            "managed binding survived"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ship_opencode_database_rejected_payload_leaves_cursor_unchanged() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        create_opencode_fixture_db(&db_path);
+        let (_state_file, conn) = make_db();
+        let client = make_test_client("http://127.0.0.1:9");
+
+        let (sessions, events) = ship_opencode_database(
+            &db_path,
+            &conn,
+            &client,
+            CompressionAlgo::Gzip,
+            1,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!((sessions, events), (0, 0));
+        let source_key = opencode_db::opencode_source_key(&db_path, "ses_test");
+        assert_eq!(FileState::new(&conn).get_offset(&source_key).unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_ship_opencode_database_reships_same_timestamp_content_change() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        create_opencode_fixture_db(&db_path);
+        let (_state_file, conn) = make_db();
+        let (url, captured, handle) =
+            spawn_http_sequence_server(&[("200 OK", "{}"), ("200 OK", "{}")]);
+        let client = make_test_client(&url);
+
+        ship_opencode_database(
+            &db_path,
+            &conn,
+            &client,
+            CompressionAlgo::Gzip,
+            10_000_000,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let opencode_conn = Connection::open(&db_path).unwrap();
+        opencode_conn
+            .execute(
+                "UPDATE part SET data = ?1 WHERE id = 'prt_user'",
+                [r#"{"type":"text","text":"HELLO from OpenCode"}"#],
+            )
+            .unwrap();
+
+        ship_opencode_database(
+            &db_path,
+            &conn,
+            &client,
+            CompressionAlgo::Gzip,
+            10_000_000,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        handle.join().unwrap();
+        let bodies = captured.lock().unwrap();
+        assert_eq!(bodies.len(), 2);
+        let payload = decode_payload(&bodies[1]);
+        assert_eq!(payload["events"][0]["content_text"], "HELLO from OpenCode");
     }
 
     fn make_ship_trace(work_context: &'static str) -> ShipTraceContext {

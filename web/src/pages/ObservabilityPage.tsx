@@ -23,6 +23,7 @@ import type {
   ProductHealthCheckSummaryResponse,
   SlowTurnItemResponse,
 } from "../services/api/types";
+import { ProviderGlyph } from "../components/ProviderGlyph";
 
 const OVERVIEW_MACHINE_LIMIT = 8;
 const OVERVIEW_SLOW_TURN_LIMIT = 8;
@@ -483,7 +484,10 @@ function ProviderFocusPanel({ providers }: { providers: ManagedTurnProviderSumma
             className="observability-provider-row"
           >
             <div className="observability-provider-row__left">
-              <div className="observability-provider-row__name">{toTitleCaseWords(provider.provider)}</div>
+              <div className="observability-provider-row__name">
+                <ProviderGlyph provider={provider.provider} size={20} />
+                {toTitleCaseWords(provider.provider)}
+              </div>
               <div className="observability-provider-row__meta">
                 {provider.completed_turns} turns in this window
               </div>

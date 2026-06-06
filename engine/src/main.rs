@@ -18,6 +18,7 @@ mod managed_bridge_scan;
 mod managed_claude_scan;
 mod managed_reaper;
 mod observability;
+mod opencode_db;
 mod outbox;
 mod pipeline;
 mod scheduler;
@@ -269,7 +270,7 @@ enum Commands {
         #[arg(long)]
         file: Option<PathBuf>,
 
-        /// Provider name override when using --file (claude, codex, antigravity, gemini)
+        /// Provider name override when using --file (claude, codex, antigravity, gemini, opencode)
         #[arg(long)]
         provider: Option<String>,
 

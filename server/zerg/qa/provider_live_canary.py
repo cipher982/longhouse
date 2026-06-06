@@ -34,6 +34,7 @@ from typing import Any
 from zerg.provider_live_proof import LIVE_PROOF_ARTIFACT_KIND
 from zerg.provider_live_proof import SUPPORTED_LIVE_PROOF_PROVIDERS
 from zerg.qa.repo_root import provider_live_evidence_base
+from zerg.services.longhouse_paths import get_provider_live_proof_dir
 from zerg.services.managed_provider_contracts import ManagedProviderContract
 from zerg.services.managed_provider_contracts import contract_for_provider
 
@@ -110,6 +111,41 @@ def _fail(code: str, message: str, **fields: Any) -> dict[str, Any]:
     payload = {"status": "fail", "failure_code": code, "message": message}
     payload.update(fields)
     return payload
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(temp_path, path)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
+
+
+def _write_opencode_session_classification_sidecar(
+    *,
+    provider_session_id: str,
+    evidence_root: Path,
+    artifact_path: Path,
+) -> Path:
+    sidecar_path = get_provider_live_proof_dir() / "sessions" / "opencode" / f"{provider_session_id}.json"
+    _write_json_atomic(
+        sidecar_path,
+        {
+            "schema_version": 1,
+            "artifact_kind": "provider_live_session_classification",
+            "provider": "opencode",
+            "provider_session_id": provider_session_id,
+            "environment": "test",
+            "reason": "provider_live_canary",
+            "generated_at": _now_iso(),
+            "artifact_path": str(artifact_path),
+            "evidence_root": str(evidence_root),
+        },
+    )
+    return sidecar_path
 
 
 def _command_evidence(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
@@ -707,6 +743,7 @@ def _run_opencode_prompt_async_no_reply_delivery(
             return _status(
                 "pass",
                 provider_session_id=provider_session_id,
+                message_marker=marker,
                 message_marker_sha256=hashlib.sha256(marker.encode("utf-8")).hexdigest(),
                 observed_message_count=len(messages) if isinstance(messages, list) else None,
                 poll_attempts=poll_attempts,
@@ -1646,6 +1683,12 @@ def run_opencode_live_canary(args: argparse.Namespace, root: Path) -> dict[str, 
             cost=session.get("cost") if isinstance(session, dict) else None,
             tokens=session.get("tokens") if isinstance(session, dict) else None,
         )
+        session_classification_sidecar = _write_opencode_session_classification_sidecar(
+            provider_session_id=provider_session_id,
+            evidence_root=root,
+            artifact_path=args.artifact or root / "provider-live-canary.json",
+        )
+        canaries["session_create"]["classification_sidecar_path"] = str(session_classification_sidecar)
 
         fetched_session = _request_json(
             server_url=server_url,

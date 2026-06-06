@@ -19,8 +19,14 @@ use crate::discovery::ProviderConfig;
 /// Bounded channel capacity for file events.
 const WATCHER_CHANNEL_CAPACITY: usize = 2048;
 
-/// Valid session file extensions.
-const SESSION_EXTENSIONS: &[&str] = &["jsonl", "json"];
+/// Valid session file extensions and SQLite sidecar suffixes emitted by providers.
+const SESSION_EXTENSIONS: &[&str] = &["jsonl", "json", "db", "db-wal", "db-shm"];
+
+fn has_session_extension(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map_or(false, |e| SESSION_EXTENSIONS.contains(&e))
+}
 
 /// Temporary/swap file patterns to ignore.
 fn is_temp_file(path: &std::path::Path) -> bool {
@@ -81,11 +87,7 @@ impl SessionWatcher {
 
                 for path in event.paths {
                     // Filter by extension
-                    let ext_ok = path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .map_or(false, |e| SESSION_EXTENSIONS.contains(&e));
-                    if !ext_ok {
+                    if !has_session_extension(&path) {
                         tracing::debug!(path = %path.display(), "Skipping watcher event path without session extension");
                         continue;
                     }
@@ -261,5 +263,16 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn test_opencode_sqlite_files_pass_extension_filter() {
+        assert!(has_session_extension(std::path::Path::new("opencode.db")));
+        assert!(has_session_extension(std::path::Path::new(
+            "opencode.db-wal"
+        )));
+        assert!(has_session_extension(std::path::Path::new(
+            "opencode.db-shm"
+        )));
     }
 }

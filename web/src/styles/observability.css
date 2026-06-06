@@ -328,6 +328,9 @@
   }
 
   .observability-provider-row__name {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
     font-size: 0.96rem;
     font-weight: 600;
   }

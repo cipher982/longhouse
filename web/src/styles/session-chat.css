@@ -59,6 +59,9 @@
 }
 
 .session-chat-provider {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: var(--font-size-xs);
   color: rgba(138, 122, 100, 0.7);
   text-transform: uppercase;

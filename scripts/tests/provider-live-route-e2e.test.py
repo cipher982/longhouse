@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import urllib.parse
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -22,6 +23,8 @@ class _ServerState:
         self.bad_mismatch_shape = False
         self.provider_verdicts: dict[str, str] = {}
         self.transient_match_failures: dict[str, int] = {}
+        self.session_search_hits: list[str] = []
+        self.session_search_requests: list[dict] = []
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -40,6 +43,14 @@ class _Handler(BaseHTTPRequestHandler):
         return self.server.state  # type: ignore[attr-defined]
 
     def do_GET(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/api/agents/sessions":
+            query = urllib.parse.parse_qs(parsed.query)
+            marker = (query.get("query") or [""])[0]
+            self.state.session_search_requests.append({"marker": marker, "query": query})
+            sessions = [{"id": "opencode-session-1", "provider": "opencode"}] if marker in self.state.session_search_hits else []
+            self._write_json(200, {"sessions": sessions, "total": len(sessions)})
+            return
         if self.path != "/api/agents/machines":
             self._write_json(404, {"detail": "not found"})
             return
@@ -87,6 +98,16 @@ class _Handler(BaseHTTPRequestHandler):
                             "provider": provider,
                             "provider_version": expected,
                             "verdict": self.state.provider_verdicts.get(provider, "green"),
+                            "canaries": {
+                                "prompt_async_no_reply_delivery": {
+                                    "status": "pass",
+                                    "provider_session_id": "ses_opencode_test",
+                                    "message_marker": "LONGHOUSE_OPENCODE_NOREPLY_TEST",
+                                    "message_marker_sha256": "marker-sha",
+                                }
+                            }
+                            if provider == "opencode"
+                            else {},
                         },
                         "provider_version_match": {
                             "status": "match",
@@ -302,6 +323,38 @@ def test_route_e2e_retries_transient_match_failure() -> None:
         server.shutdown()
 
 
+def test_route_e2e_can_require_opencode_transcript_marker() -> None:
+    state = _ServerState()
+    state.session_search_hits.append("LONGHOUSE_OPENCODE_NOREPLY_TEST")
+    server, api_url = _run_server(state)
+    try:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            token_file, proof_dir = _write_inputs(root)
+            result, payload = _run_harness(
+                root,
+                api_url,
+                token_file,
+                proof_dir,
+                "--provider",
+                "opencode",
+                "--skip-mismatch",
+                "--require-opencode-transcript",
+                "--transcript-attempts",
+                "1",
+            )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["verdict"] == "green"
+        [opencode_result] = payload["results"]
+        assert opencode_result["status"] == "pass"
+        assert opencode_result["transcript"]["status"] == "pass"
+        assert opencode_result["transcript"]["matched_session_ids"] == ["opencode-session-1"]
+        assert state.session_search_requests[0]["marker"] == "LONGHOUSE_OPENCODE_NOREPLY_TEST"
+    finally:
+        server.shutdown()
+
+
 def test_route_e2e_fails_when_mismatch_is_not_typed() -> None:
     state = _ServerState()
     state.bad_mismatch_shape = True
@@ -326,6 +379,7 @@ def main() -> int:
         test_route_e2e_accepts_yellow_verdict_by_default,
         test_route_e2e_rejects_yellow_verdict_when_green_is_required,
         test_route_e2e_retries_transient_match_failure,
+        test_route_e2e_can_require_opencode_transcript_marker,
         test_route_e2e_fails_when_mismatch_is_not_typed,
     ]
     for test in tests:

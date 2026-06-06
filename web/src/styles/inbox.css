@@ -256,15 +256,22 @@
   .inbox-row-source {
     grid-area: source;
     display: inline-flex;
-    align-items: baseline;
+    align-items: center;
     gap: var(--space-2);
   }
 
   .inbox-row-provider {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1-5);
+    overflow: hidden;
+    flex: 0 0 auto;
+  }
+
+  .inbox-row-provider-name {
     overflow: hidden;
     text-overflow: ellipsis;
-    text-transform: lowercase;
-    flex: 0 0 auto;
+    text-transform: capitalize;
   }
 
   .inbox-row-branch {

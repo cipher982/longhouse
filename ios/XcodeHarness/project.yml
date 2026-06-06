@@ -94,6 +94,11 @@ targets:
         createIntermediateGroups: true
       - path: ../Sources/Shared
         createIntermediateGroups: true
+      # Provider brand glyphs (ProviderGlyph) live in Shared and resolve image
+      # assets at runtime; the widget bundle needs its own copy of the catalog.
+      - path: ../Resources/Assets.xcassets
+        buildPhase: resources
+        createIntermediateGroups: true
     configFiles:
       Debug: Configs/Longhouse.xcconfig
       Release: Configs/Longhouse.xcconfig

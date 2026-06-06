@@ -82,30 +82,22 @@ export function getProviderColor(provider: string): string {
   }
 }
 
-/** Single-letter icon for compact provider badges. */
-export function getProviderIcon(provider: string): string {
-  switch (provider) {
-    case "claude":
-      return "C";
-    case "codex":
-      return "X";
-    case "opencode":
-      return "O";
-    case "gemini":
-      return "G";
-    case "antigravity":
-      return "A";
-    case "zai":
-      return "Z";
-    default:
-      return "?";
-  }
-}
+/** Proper-cased display names for known providers. */
+const PROVIDER_DISPLAY_NAMES: Record<string, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  openai: "OpenAI",
+  opencode: "OpenCode",
+  antigravity: "Antigravity",
+  gemini: "Gemini",
+  zai: "Z.ai",
+};
 
 /** Human-readable label for a provider. */
 export function getProviderLabel(provider: string): string {
   if (!provider) return "Unknown";
-  return provider.charAt(0).toUpperCase() + provider.slice(1);
+  const key = provider.toLowerCase();
+  return PROVIDER_DISPLAY_NAMES[key] ?? provider.charAt(0).toUpperCase() + provider.slice(1);
 }
 
 /** Launch-facing provider capability contract for the currently supported CLIs. */

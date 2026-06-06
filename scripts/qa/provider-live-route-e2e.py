@@ -15,6 +15,7 @@ import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import UTC
 from datetime import datetime
@@ -29,6 +30,8 @@ DEFAULT_REQUIRE_VERDICT = "non-red"
 # the default route proof patient enough for dogfood without hiding red proofs.
 DEFAULT_ATTEMPTS = 6
 DEFAULT_RETRY_DELAY_S = 8.0
+DEFAULT_TRANSCRIPT_ATTEMPTS = 18
+DEFAULT_TRANSCRIPT_RETRY_DELAY_S = 5.0
 RETRYABLE_STATUS_CODES = {0, 408, 429, 500, 502, 503, 504}
 
 
@@ -178,6 +181,27 @@ def _request_json(
         return 0, {"detail": {"code": "request_error", "message": str(exc)}}
 
 
+def _get_json(
+    *,
+    api_url: str,
+    path: str,
+    token: str,
+    user_agent: str,
+    query: dict[str, Any] | None = None,
+    timeout_s: float,
+) -> tuple[int, dict[str, Any]]:
+    url = f"{api_url}{path}"
+    if query:
+        url = f"{url}?{urllib.parse.urlencode(query)}"
+    return _request_json(
+        method="GET",
+        url=url,
+        token=token,
+        user_agent=user_agent,
+        timeout_s=timeout_s,
+    )
+
+
 def _detail_code(payload: Any) -> str | None:
     if not isinstance(payload, dict):
         return None
@@ -319,6 +343,86 @@ def _artifact_verdict(result: dict[str, Any]) -> str | None:
     return str(value) if value is not None else None
 
 
+def _artifact_canary(result: dict[str, Any], canary_name: str) -> dict[str, Any]:
+    route_result = result.get("result")
+    if not isinstance(route_result, dict):
+        return {}
+    artifact = route_result.get("artifact")
+    if not isinstance(artifact, dict):
+        return {}
+    canaries = artifact.get("canaries")
+    if not isinstance(canaries, dict):
+        return {}
+    canary = canaries.get(canary_name)
+    return canary if isinstance(canary, dict) else {}
+
+
+def _verify_opencode_transcript(args: argparse.Namespace, result: dict[str, Any]) -> dict[str, Any]:
+    canary = _artifact_canary(result["match"]["payload"], "prompt_async_no_reply_delivery")
+    marker = str(canary.get("message_marker") or "").strip()
+    provider_session_id = str(canary.get("provider_session_id") or "").strip()
+    if not marker:
+        return {
+            "status": "fail",
+            "failure_code": "opencode_transcript_marker_missing",
+            "message": "OpenCode route proof artifact did not include a transcript marker",
+            "provider_session_id": provider_session_id or None,
+        }
+
+    attempts: list[dict[str, Any]] = []
+    max_attempts = max(1, int(args.transcript_attempts or 1))
+    for attempt_index in range(max_attempts):
+        status, payload = _get_json(
+            api_url=args.api_url,
+            path="/api/agents/sessions",
+            token=args.token,
+            user_agent=args.user_agent,
+            query={
+                "provider": "opencode",
+                "query": marker,
+                "days_back": 1,
+                "limit": 5,
+                "include_test": "true",
+                "hide_autonomous": "false",
+            },
+            timeout_s=args.http_timeout_s,
+        )
+        sessions = payload.get("sessions") if isinstance(payload, dict) else None
+        matched_ids = [
+            str(session.get("id"))
+            for session in (sessions or [])
+            if isinstance(session, dict) and session.get("id")
+        ]
+        attempts.append(
+            {
+                "status_code": status,
+                "matched_session_ids": matched_ids,
+                "total": payload.get("total") if isinstance(payload, dict) else None,
+            }
+        )
+        if status == 200 and matched_ids:
+            return {
+                "status": "pass",
+                "provider_session_id": provider_session_id or None,
+                "marker_sha256": canary.get("message_marker_sha256"),
+                "matched_session_ids": matched_ids,
+                "attempt_count": len(attempts),
+                "attempts": attempts,
+            }
+        if attempt_index + 1 < max_attempts and args.transcript_retry_delay_s > 0:
+            time.sleep(args.transcript_retry_delay_s)
+
+    return {
+        "status": "fail",
+        "failure_code": "opencode_transcript_not_found",
+        "message": "OpenCode canary marker did not appear in /api/agents/sessions search",
+        "provider_session_id": provider_session_id or None,
+        "marker_sha256": canary.get("message_marker_sha256"),
+        "attempt_count": len(attempts),
+        "attempts": attempts,
+    }
+
+
 def _run_provider(
     args: argparse.Namespace,
     provider: str,
@@ -396,6 +500,19 @@ def _run_provider(
                     "status": "fail",
                     "failure_code": "provider_live_mismatch_not_typed",
                     "message": f"{provider} mismatch proof returned HTTP {mismatch_status} code={code}",
+                }
+            )
+            return result
+
+    if provider == "opencode" and args.require_opencode_transcript:
+        transcript = _verify_opencode_transcript(args, result)
+        result["transcript"] = transcript
+        if transcript.get("status") != "pass":
+            result.update(
+                {
+                    "status": "fail",
+                    "failure_code": transcript.get("failure_code") or "opencode_transcript_failed",
+                    "message": transcript.get("message") or "OpenCode transcript smoke failed",
                 }
             )
             return result
@@ -517,6 +634,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--process-timeout-s", type=int, default=300)
     parser.add_argument("--http-timeout-s", type=float, default=360.0)
+    parser.add_argument(
+        "--require-opencode-transcript",
+        action="store_true",
+        help="For OpenCode, require the provider-live canary marker to appear in /api/agents/sessions search.",
+    )
+    parser.add_argument("--transcript-attempts", type=int, default=DEFAULT_TRANSCRIPT_ATTEMPTS)
+    parser.add_argument("--transcript-retry-delay-s", type=float, default=DEFAULT_TRANSCRIPT_RETRY_DELAY_S)
     parser.add_argument(
         "--attempts",
         type=int,

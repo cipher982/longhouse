@@ -226,118 +226,97 @@ struct TimelineSessionCardRow: View {
     var body: some View {
         let cardAccent = timelineCardAccentColor(session, connectivityBanner: connectivityBanner)
 
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(session.projectLabel)
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                Spacer(minLength: 12)
-            }
+        // Denser two-zone row: a tinted provider glyph anchors the left, the
+        // text column carries identity + status + one preview line. Single-line
+        // title and preview roughly double how many sessions fit per screen
+        // versus the old multi-line card, while the brand glyph adds the color
+        // the all-grey layout was missing.
+        HStack(alignment: .top, spacing: 11) {
+            ProviderGlyph(provider: session.provider, size: 30)
 
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    ProviderBadge(session: session)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(session.projectLabel)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
                     if let branch = session.timelineBranchBadgeLabel {
-                        MetadataBadge(systemImage: "arrow.triangle.branch", text: branch)
+                        Text(branch)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                            .layoutPriority(-1)
                     }
-                }
-                .lineLimit(1)
-
-                HStack(spacing: 8) {
-                    RuntimeBadge(session: session, connectivityBanner: connectivityBanner)
+                    Spacer(minLength: 6)
                     CapabilityBadge(session: session)
                 }
-            }
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text(session.title)
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                CompactRuntimeLine(session: session, connectivityBanner: connectivityBanner)
 
                 if let summary = session.timelineSummaryPreview {
                     Text(summary)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .lineLimit(1)
+                } else {
+                    Text(session.title)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-            }
 
-            Divider()
-
-            HStack(spacing: 6) {
-                Text("\(session.turnCount) \(session.turnCount == 1 ? "turn" : "turns")")
-                    .foregroundStyle(turnColor(session.turnCount))
-                Text("·")
-                    .foregroundStyle(.tertiary)
-                Text("\(session.toolCount) \(session.toolCount == 1 ? "tool" : "tools")")
-                Spacer(minLength: 12)
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.tertiary)
+                HStack(spacing: 5) {
+                    Text("\(session.turnCount) \(session.turnCount == 1 ? "turn" : "turns")")
+                        .foregroundStyle(turnColor(session.turnCount))
+                    Text("·")
+                        .foregroundStyle(.tertiary)
+                    Text("\(session.toolCount) \(session.toolCount == 1 ? "tool" : "tools")")
+                }
+                .font(.caption2.weight(.medium))
+                .foregroundStyle(.secondary)
             }
-            .font(.caption.weight(.medium))
-            .foregroundStyle(.secondary)
         }
-        .padding(14)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.vertical, 11)
+        .padding(.horizontal, 12)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(alignment: .leading) {
             RoundedRectangle(cornerRadius: 2)
                 .fill(cardAccent)
                 .frame(width: emphasized ? 4 : 3)
-                .padding(.vertical, 12)
+                .padding(.vertical, 10)
         }
         .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(cardAccent.opacity(emphasized ? 0.45 : 0.18), lineWidth: emphasized ? 1.2 : 0.8)
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(cardAccent.opacity(emphasized ? 0.45 : 0.16), lineWidth: emphasized ? 1.2 : 0.8)
         }
     }
 }
 
-private struct ProviderBadge: View {
-    let session: SessionSummary
-
-    var body: some View {
-        HStack(spacing: 5) {
-            Image(systemName: providerIcon(session.provider))
-                .font(.caption2.weight(.semibold))
-            Text(session.providerLabel)
-                .font(.caption.weight(.semibold))
-        }
-        .foregroundStyle(providerColor(session.provider))
-    }
-}
-
-private struct RuntimeBadge: View {
+/// Compact one-line runtime status: liveness dot + state label + duration,
+/// with an inline "stale" flag. Distilled from the old pill-shaped
+/// `RuntimeBadge` so it sits naturally in the denser row without a capsule.
+private struct CompactRuntimeLine: View {
     let session: SessionSummary
     let connectivityBanner: TimelineConnectivityBanner
 
     var body: some View {
         let isClosed = session.timelineStatusLabel == "Closed"
-        // Only a clear global banner suppresses status color. Transient
-        // stream churn stays invisible here so live session badges do not
-        // dim just because the realtime optimization reconnected.
         let globalHealthy = connectivityBanner == .none
         let attentionTone = timelineAttentionTone(session.timelineStatusTone)
         let withinDeadline = session.runtimeDisplay.activityRecency == "live"
         let sessionStale = !withinDeadline && !isClosed
-        // Pulse only when global is healthy AND the server's own
-        // phase-signal deadline hasn't passed. Anything else freezes.
         let pulsing = globalHealthy && withinDeadline && attentionTone == .working
         let color = globalHealthy && !sessionStale ? timelineStatusColor(session) : .secondary
-        let backgroundOpacity = globalHealthy && !sessionStale && attentionTone == .working ? 0.22 : 0.14
 
         HStack(spacing: 6) {
             LivenessDot(color: color, pulsing: pulsing)
             Text(session.timelineStatusLabel)
                 .font(.caption.weight(.semibold))
+                .foregroundStyle(color)
                 .lineLimit(1)
             if let duration = stateDurationLabel(for: session) {
                 Text("·")
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.tertiary)
                 Text(duration)
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
@@ -345,18 +324,12 @@ private struct RuntimeBadge: View {
                     .monospacedDigit()
             }
             if sessionStale {
-                Text("·")
-                    .foregroundStyle(.tertiary)
-                Text("stale")
+                Text("· stale")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.orange)
                     .lineLimit(1)
             }
         }
-        .foregroundStyle(color)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(color.opacity(backgroundOpacity), in: Capsule())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(runtimeBadgeAccessibilityLabel(for: session, stale: sessionStale))
     }
@@ -480,30 +453,6 @@ private struct CapabilityBadge: View {
     }
 }
 
-private struct MetadataBadge: View {
-    let systemImage: String?
-    let text: String
-
-    init(systemImage: String? = nil, text: String) {
-        self.systemImage = systemImage
-        self.text = text
-    }
-
-    var body: some View {
-        HStack(spacing: 4) {
-            if let systemImage {
-                Image(systemName: systemImage)
-                    .font(.caption2.weight(.semibold))
-            }
-            Text(text)
-                .font(.caption.weight(.medium))
-        }
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
-        .background(Color(.tertiarySystemGroupedBackground), in: Capsule())
-    }
-}
 
 protocol TimelineSessionsClient: Sendable {
     func recentSessions(limit: Int) async throws -> [SessionSummary]
@@ -993,20 +942,6 @@ private func timelineStatusColor(_ session: SessionSummary) -> Color {
 
 private func managementColor(_ session: SessionSummary) -> Color {
     .secondary
-}
-
-private func providerColor(_: String?) -> Color {
-    .secondary
-}
-
-private func providerIcon(_ provider: String?) -> String {
-    switch provider?.lowercased() {
-    case "codex": return "terminal"
-    case "antigravity": return "sparkles"
-    case "gemini": return "sparkles"
-    case "claude": return "sparkle"
-    default: return "chevron.left.forwardslash.chevron.right"
-    }
 }
 
 private func turnColor(_ turnCount: Int) -> Color {

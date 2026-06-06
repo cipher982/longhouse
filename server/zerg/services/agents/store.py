@@ -108,6 +108,15 @@ def _is_managed_codex_ingest(
     return False
 
 
+def _is_opencode_provider_live_test_ingest(data: SessionIngest, incoming_environment: str) -> bool:
+    if incoming_environment not in {"test", "e2e"}:
+        return False
+    if str(data.provider or "").strip().lower() != "opencode":
+        return False
+    cwd = str(data.cwd or "").replace("\\", "/")
+    return "/.longhouse/canaries/provider-live/opencode/" in cwd and cwd.endswith("/workspace")
+
+
 class AgentsStore:
     """Service for storing and querying agent sessions."""
 
@@ -265,13 +274,21 @@ class AgentsStore:
 
         for index, path_session in enumerate(path_sessions):
             event_thread_id = thread_id if index == len(path_sessions) - 1 else None
-            visible_count = self.count_session_events(path_session.id, thread_id=event_thread_id, branch_mode=branch_mode)
+            visible_count = self.count_session_events(
+                path_session.id,
+                thread_id=event_thread_id,
+                branch_mode=branch_mode,
+            )
             event_counts.append(visible_count)
             total += visible_count
             if index > 0:
                 total += 1
             if branch_mode == "head":
-                forensic_total = self.count_session_events(path_session.id, thread_id=event_thread_id, branch_mode="all")
+                forensic_total = self.count_session_events(
+                    path_session.id,
+                    thread_id=event_thread_id,
+                    branch_mode="all",
+                )
                 abandoned_events += max(0, forensic_total - visible_count)
 
         if load_from_end:
@@ -440,6 +457,8 @@ class AgentsStore:
             should_update_environment = not existing_environment
             if not should_update_environment:
                 should_update_environment = existing_environment_is_generic and incoming_environment_is_specific
+            if not should_update_environment:
+                should_update_environment = _is_opencode_provider_live_test_ingest(data, incoming_environment)
             if should_update_environment:
                 session.environment = incoming_environment
 
