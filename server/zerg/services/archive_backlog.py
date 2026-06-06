@@ -17,6 +17,22 @@ from zerg.services.longhouse_paths import get_agent_status_path
 HUGE_RANGE_BYTES = 100 * 1024 * 1024
 DEFAULT_TRICKLE_TICK_BYTES = 512 * 1024 * 1024
 DEFAULT_DRAIN_TICK_BYTES = 4 * 1024 * 1024 * 1024
+RECOVERABLE_DEAD_ERROR_PATTERNS = (
+    "%Archive ingest backlog is throttled%",
+    "500:%",
+    "502:%",
+    "503:%",
+    "504:%",
+    "520:%",
+    "521:%",
+    "522:%",
+    "523:%",
+    "524:%",
+    "525:%",
+    "526:%",
+    "527:%",
+    "error sending request for url (%",
+)
 
 
 def _utc_now_iso() -> str:
@@ -222,6 +238,50 @@ def ready_archive_backlog(base_dir: Path | None = None) -> int:
             WHERE status = 'pending'
             """,
             (now,),
+        ).rowcount
+        conn.commit()
+    return int(changed)
+
+
+def retry_dead_archive_path(
+    base_dir: Path | None = None,
+    *,
+    file_path: str,
+    recoverable_only: bool = True,
+) -> int:
+    """Move dead-lettered archive ranges for one path back to pending retry."""
+    normalized_path = str(file_path or "").strip()
+    if not normalized_path:
+        raise ValueError("file_path is required")
+    db_path = get_agent_db_path(base_dir)
+    if not db_path.exists():
+        return 0
+    now = _utc_now_iso()
+    with sqlite3.connect(db_path) as conn:
+        if not _has_spool_queue(conn):
+            return 0
+        where = "status = 'dead' AND file_path = ?"
+        params: list[Any] = [normalized_path]
+        if recoverable_only:
+            pattern_terms = []
+            for pattern in RECOVERABLE_DEAD_ERROR_PATTERNS:
+                pattern_terms.append("last_error LIKE ?")
+                params.append(pattern)
+            where += f" AND ({' OR '.join(pattern_terms)})"
+        changed = conn.execute(
+            f"""
+            UPDATE spool_queue
+            SET status = 'pending',
+                retry_count = 0,
+                next_retry_at = ?,
+                last_error = CASE
+                    WHEN last_error IS NULL OR TRIM(last_error) = ''
+                    THEN 'operator retried dead archive range'
+                    ELSE 'operator retried dead archive range; previous_error=' || last_error
+                END
+            WHERE {where}
+            """,
+            [now, *params],
         ).rowcount
         conn.commit()
     return int(changed)

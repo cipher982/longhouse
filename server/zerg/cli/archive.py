@@ -18,6 +18,7 @@ from zerg.services.archive_backlog import dead_letter_archive_path
 from zerg.services.archive_backlog import inspect_archive_backlog
 from zerg.services.archive_backlog import parse_byte_budget
 from zerg.services.archive_backlog import ready_archive_backlog
+from zerg.services.archive_backlog import retry_dead_archive_path
 from zerg.services.archive_backlog import write_archive_control
 from zerg.services.archive_store import FilesystemArchiveStore
 
@@ -427,6 +428,26 @@ def dead_letter_command(
 
     changed = dead_letter_archive_path(state_root, file_path=file_path, reason=reason)
     typer.echo(f"Dead-lettered {changed} pending archive range(s).")
+
+
+@app.command("retry-dead")
+def retry_dead_command(
+    file_path: str = typer.Option(..., "--path", help="Exact source path to retry."),
+    recoverable_only: bool = typer.Option(
+        True,
+        "--recoverable-only/--all",
+        help="Only retry dead ranges with recoverable host/network errors.",
+    ),
+    state_root: Path | None = typer.Option(None, "--state-root", help="Longhouse home override for tests/debugging."),
+) -> None:
+    """Move dead-lettered archive ranges for one source path back to pending retry."""
+
+    changed = retry_dead_archive_path(
+        state_root,
+        file_path=file_path,
+        recoverable_only=recoverable_only,
+    )
+    typer.echo(f"Queued {changed} dead-lettered archive range(s) for retry.")
 
 
 @app.command("export-legacy")

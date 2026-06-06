@@ -10,6 +10,7 @@ from zerg.cli.main import app
 from zerg.services.archive_backlog import collect_archive_backlog
 from zerg.services.archive_backlog import inspect_archive_backlog
 from zerg.services.archive_backlog import ready_archive_backlog
+from zerg.services.archive_backlog import retry_dead_archive_path
 from zerg.services.archive_backlog import write_archive_control
 from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_state_dir
@@ -254,6 +255,60 @@ def test_ready_archive_backlog_makes_pending_ranges_eligible(tmp_path: Path):
     assert rows[1][0] == "pending"
     assert rows[0][1] == rows[1][1]
     assert rows[2][0] == "dead"
+
+
+def test_retry_dead_archive_path_revives_recoverable_dead_range(tmp_path: Path):
+    _create_spool_db(tmp_path)
+    db_path = get_agent_db_path(tmp_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE spool_queue SET last_error = '525:<!DOCTYPE html>' WHERE status = 'dead'")
+        conn.commit()
+
+    changed = retry_dead_archive_path(tmp_path, file_path="/tmp/dead.jsonl")
+
+    assert changed == 1
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT status, retry_count, last_error FROM spool_queue WHERE file_path = '/tmp/dead.jsonl'",
+        ).fetchone()
+
+    assert row == (
+        "pending",
+        0,
+        "operator retried dead archive range; previous_error=525:<!DOCTYPE html>",
+    )
+
+
+def test_retry_dead_archive_path_leaves_nonrecoverable_dead_range_by_default(tmp_path: Path):
+    _create_spool_db(tmp_path)
+    db_path = get_agent_db_path(tmp_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE spool_queue SET last_error = 'parse error' WHERE status = 'dead'")
+        conn.commit()
+
+    changed = retry_dead_archive_path(tmp_path, file_path="/tmp/dead.jsonl")
+
+    assert changed == 0
+    with sqlite3.connect(db_path) as conn:
+        status = conn.execute("SELECT status FROM spool_queue WHERE file_path = '/tmp/dead.jsonl'").fetchone()[0]
+    assert status == "dead"
+
+
+def test_archive_retry_dead_cli_revives_recoverable_range(tmp_path: Path):
+    _create_spool_db(tmp_path)
+    db_path = get_agent_db_path(tmp_path)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("UPDATE spool_queue SET last_error = '503:busy' WHERE status = 'dead'")
+        conn.commit()
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["archive", "retry-dead", "--path", "/tmp/dead.jsonl", "--state-root", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert "Queued 1 dead-lettered archive range(s) for retry." in result.stdout
+    with sqlite3.connect(db_path) as conn:
+        status = conn.execute("SELECT status FROM spool_queue WHERE file_path = '/tmp/dead.jsonl'").fetchone()[0]
+    assert status == "pending"
 
 
 def test_archive_drain_retry_now_cli_resets_pending_clocks(tmp_path: Path):
