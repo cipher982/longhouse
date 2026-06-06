@@ -1,6 +1,6 @@
 # Reliability Data Plane
 
-**Status:** Phase 7 archive-primary writes complete; Phase 8 decommission plan pending
+**Status:** Phase 8 restore/decommission plan implemented; deletion and compaction remain unapproved
 **Owner:** Longhouse core
 **Created:** 2026-06-05
 **Branch:** `epic/reliability-data-plane`
@@ -95,6 +95,24 @@ Hot-path dependency changes landed during the epic:
   try to open derived/archive stores;
 - `/api/agents/presence`, heartbeat, and machine-presence were migrated away
   from request-session-held serialized writes.
+
+## Rollout Readiness
+
+This branch is a local implementation and restore-planning checkpoint, not a
+production migration.
+
+Current readiness:
+
+- spec/design: high confidence;
+- local implementation: substantial but still branch-only;
+- data safety posture: backup gate and restore/decommission guardrails exist;
+- production migration: not started;
+- production-shipped verification of the new data plane: none.
+
+The next production milestone should be shadow-mode only: deploy additive
+archive/projector infrastructure, keep existing serving behavior available,
+compare projected hot/derived state against legacy reads, and avoid storage
+reclaim. Cutover and reclaim are separate operator events.
 
 ## Design Principles
 
@@ -277,6 +295,10 @@ Chunk format v1:
 use `{source, event_key, role, timestamp, tool_call_id, source_path,
 source_offset}`. Event-stream consumers must tolerate both shapes.
 
+Phase 8 restore/decommission procedure is documented in
+`docs/runbooks/archive-decommission-plan.md`. That runbook is an approval gate,
+not approval to delete, compact, vacuum, or rewrite production data.
+
 Use `jsonl.zst` for v1. Store raw bytes exactly via base64 unless a provider
 format is proven text-only and byte-equivalent. Compression should offset much
 of the base64 overhead, and exact bytes keep the rebuild contract simple.
@@ -419,6 +441,20 @@ stay behind a fallback flag until confidence is high.
 Only after backup, export, replay, comparison, and explicit maintainer approval.
 Preferred reclaim path is to build clean stores from archive, not in-place
 SQLite surgery on the 116 GB DB.
+The Phase 8 implementation proves the clean-store restore shape on fixtures and
+documents the production reclaim gate; it does not run destructive work.
+
+### Production Rollout Gates
+
+1. Shadow archive/projector deployment with legacy serving paths retained.
+2. Comparison reports for timeline cards, detail projections, search, and
+   control labels on sampled heavy sessions.
+3. Hot read cutover after comparison evidence and rollback procedure are
+   reviewed.
+4. Archive-primary writes after replay evidence proves both `source_lines` and
+   `events` streams preserve raw fidelity.
+5. Storage reclaim only as a separate explicit operator event with exact paths,
+   backup/snapshot id, rollback commands, and maintainer approval.
 
 ## Backup Plan
 
@@ -751,7 +787,8 @@ Acceptance:
 
 - no deletion happens in this phase without a separate maintainer command;
 - restore drill proves archive can rebuild product-critical state;
-- final decision recorded.
+- final decision gate recorded with exact backup/archive/DB paths before any
+  reclaim command runs.
 
 Tests:
 
@@ -852,7 +889,7 @@ and the compatibility default is no longer needed.
 
 ## Current Pause Point
 
-Local implementation may continue through Phase 6 read cutover. The hosted
-production exporter/backfill still requires Hatch Opus review before it runs.
-Any raw-data cutover, compaction, or deletion remains blocked on explicit
-maintainer approval after replay/comparison evidence.
+Local implementation has reached the Phase 8 restore/decommission planning
+boundary. Any hosted raw-data cutover, storage reclaim, compaction, or deletion
+remains blocked on explicit maintainer approval after backup/export/replay,
+comparison evidence, and Hatch Opus review.

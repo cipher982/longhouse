@@ -3,7 +3,7 @@
 Due: none
 Area: longhouse
 Workspace: /Users/davidrose/git/_wt/longhouse-reliability-data-plane
-Status: Phase 7 archive-primary writes complete; Phase 8 decommission plan pending
+Status: Phase 8 restore/decommission plan implemented; deletion and compaction remain unapproved
 
 This task file tracks the SDP-1 epic for separating hot product/control state
 from raw archive and derived search/detail state.
@@ -83,8 +83,14 @@ Spec: `docs/specs/reliability-data-plane.md`
 
 ## Phase 8: Decommission Plan
 
-- [ ] Restore from archive to clean stores.
-- [ ] Add event-stream replay for legacy-exported and live archive-primary records.
-- [ ] Smoke timeline/search/detail/control on restored data.
-- [ ] Draft old DB retention/reclaim plan.
-- [ ] Require explicit maintainer approval before deletion or compaction.
+- [x] Restore from archive to clean stores.
+- [x] Add event-stream replay for legacy-exported and live archive-primary records.
+- [x] Smoke timeline/search/detail/control on restored data.
+- [x] Draft old DB retention/reclaim plan.
+- [x] Require explicit maintainer approval before deletion or compaction.
+
+## Next Production Milestone
+
+Not part of Phase 8 completion: ship additive shadow-mode archive/projector
+infrastructure, compare projected state with legacy reads, and keep storage
+reclaim as a separate explicitly approved operator event.
