@@ -43,6 +43,7 @@ from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import ensure_subagent_thread
 from zerg.services.agents.kernel_writes import record_thread_alias
 from zerg.services.agents.kernel_writes import resolve_primary_thread_by_provider_session_id
+from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 from zerg.services.archive_transcript import load_session_source_line_bytes
 from zerg.services.internal_sessions import internal_canary_session_clause
 from zerg.services.internal_sessions import is_internal_canary_provider_filter
@@ -3533,7 +3534,7 @@ class AgentsStore:
             # loaded so sessions whose rows still carry raw bytes pay nothing.
             archive_bytes: dict[tuple[str, int, str], str] | None = None
 
-            def _raw_for(row) -> str | None:
+            def _raw_for(row) -> str:
                 nonlocal archive_bytes
                 value = decode_raw_json(row)
                 # A real provider line is never empty; "" / None means the raw
@@ -3544,11 +3545,19 @@ class AgentsStore:
                     archive_bytes = load_session_source_line_bytes(self.db, session_id)
                 # Key by line_hash, not offset: rewrites/branches share an offset,
                 # and the row's line_hash is the exact-byte identity we want.
-                return archive_bytes.get((row.source_path, int(row.source_offset), row.line_hash))
+                resolved = archive_bytes.get((row.source_path, int(row.source_offset), row.line_hash))
+                if resolved is None:
+                    # Fail closed: a slim row with no bytes in monolith OR archive
+                    # is data loss, not an empty line. Better to error than to hand
+                    # back a silently-truncated transcript for resume.
+                    raise ArchiveTranscriptUnavailable(
+                        f"session {session_id} source line {row.source_path}:{row.source_offset} "
+                        f"(line_hash={row.line_hash}) has no raw bytes in the monolith or the archive"
+                    )
+                return resolved
 
             if branch_mode == "all":
                 lines = [_raw_for(row) for row in source_lines]
-                lines = [line for line in lines if line is not None]
             else:
                 latest_by_offset: dict[tuple[str, int], AgentSourceLine] = {}
                 for row in source_lines:
@@ -3575,7 +3584,6 @@ class AgentsStore:
                         primary_path,
                     )
                 lines = [_raw_for(row) for row in normalized_source_lines if row.source_path == primary_path]
-                lines = [line for line in lines if line is not None]
             content = "\n".join(lines) + "\n" if lines else ""
             return content.encode("utf-8"), session
 
@@ -3590,8 +3598,11 @@ class AgentsStore:
         events_stmt = self._apply_branch_mode_filter(events_stmt, session_id, branch_mode)
         events = list(self.db.execute(events_stmt).scalars().all())
 
-        # Check if we have raw_json available (lossless path)
-        has_raw_json = any(decode_raw_json(event) is not None for event in events)
+        # Check if we have raw_json available (lossless path). Use truthiness, not
+        # "is not None": a reclaimed row stores raw_json="" with plain codec, and
+        # decode returns "" — that is NOT real raw, so it must NOT be emitted as a
+        # blank transcript line. Such rows synthesize from structured columns.
+        has_raw_json = any(decode_raw_json(event) for event in events)
 
         lines = []
         if has_raw_json:
@@ -3600,14 +3611,14 @@ class AgentsStore:
             seen_offsets: set[tuple[str | None, int | None]] = set()
             for event in events:
                 _raw = decode_raw_json(event)
-                if _raw is not None:
+                if _raw:
                     key = (event.source_path, event.source_offset)
                     if key not in seen_offsets:
                         seen_offsets.add(key)
                         lines.append(_raw)
                 else:
-                    # Mixed case: some events have raw_json, some don't
-                    # Fall back to synthesized for this event
+                    # Mixed/reclaimed case: no real raw for this event — synthesize
+                    # a coherent line from structured columns instead of a blank.
                     lines.append(self._synthesize_event_jsonl(event))
         else:
             # Legacy path: synthesize JSONL from parsed columns

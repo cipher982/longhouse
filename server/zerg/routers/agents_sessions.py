@@ -27,6 +27,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.device_token import DeviceToken
 from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
 from zerg.services.agents_store import AgentsStore
+from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_archive import SessionArchiveBundleResponse
@@ -1173,7 +1174,15 @@ def export_session(
             detail="branch_mode must be one of: head, all",
         )
 
-    result = store.export_session_jsonl(session_id, branch_mode=branch_mode)
+    try:
+        result = store.export_session_jsonl(session_id, branch_mode=branch_mode)
+    except ArchiveTranscriptUnavailable as exc:
+        # Fail closed: raw bytes for a known source line are missing from both the
+        # monolith and the archive. Surface 503 rather than a truncated transcript.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Transcript raw bytes unavailable for session {session_id}: {exc}",
+        )
 
     if not result:
         raise HTTPException(

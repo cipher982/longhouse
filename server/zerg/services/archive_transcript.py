@@ -25,6 +25,16 @@ from zerg.services.archive_store import FilesystemArchiveStore
 logger = logging.getLogger(__name__)
 
 
+class ArchiveTranscriptUnavailable(Exception):
+    """Raised when a source_lines row's raw bytes cannot be resolved.
+
+    Once the archive is the sole raw store, a slim source_lines row whose bytes
+    are missing from BOTH the monolith and the archive is genuine data loss, not
+    an empty line. Transcript export/resume must fail closed on this rather than
+    silently returning a truncated transcript.
+    """
+
+
 def load_session_source_line_bytes(
     db: Session,
     session_id: UUID | str,

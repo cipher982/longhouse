@@ -120,3 +120,36 @@ def test_export_reconstructs_from_archive_when_raw_dropped(tmp_path, monkeypatch
         rebuilt = AgentsStore(db).export_session_jsonl(session_id)
         assert rebuilt is not None
         assert rebuilt[0] == baseline_bytes
+
+
+def test_export_fails_closed_when_archive_bytes_missing(tmp_path, monkeypatch):
+    # If a slim source_lines row's bytes are in NEITHER the monolith nor the
+    # archive, export must raise (fail closed) rather than silently truncate.
+    import pytest
+
+    from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
+
+    archive_root = tmp_path / "archive"
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_ROOT", str(archive_root))
+    monkeypatch.setenv("LONGHOUSE_ARCHIVE_SHADOW_TENANT_ID", "default")
+
+    factory = _factory(tmp_path)
+    session_id = uuid4()
+    with factory() as db:
+        _ingest_with_source_lines(AgentsStore(db), session_id)
+        db.commit()
+
+    # Strip monolith raw WITHOUT seeding the archive — the bytes now exist nowhere.
+    with factory() as db:
+        db.query(AgentSourceLine).filter(AgentSourceLine.session_id == session_id).update(
+            {
+                AgentSourceLine.raw_json: "",
+                AgentSourceLine.raw_json_z: None,
+                AgentSourceLine.raw_json_codec: CODEC_PLAIN,
+            }
+        )
+        db.commit()
+
+    with factory() as db:
+        with pytest.raises(ArchiveTranscriptUnavailable):
+            AgentsStore(db).export_session_jsonl(session_id)
