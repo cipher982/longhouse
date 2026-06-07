@@ -372,6 +372,64 @@ fixture; no code change required.
 - **Shared worktree / parallel agents.** Commit only touched paths; anchor any
   deploy claim to exact SHA.
 
+## First-Principles Architecture Gate (hatch codex xhigh, 2026-06-06)
+
+A from-scratch architecture review (not just plan validation) on the live-measured
+116 GB confirmed the end state but found two **production-data-correctness bugs**.
+Live-measured raw carriers: `source_lines.raw_json_z` ≈48 GB,
+`session_observations.payload_json` ≈27 GB (uncompressed; ~96% `provider_event`),
+`events.raw_json_z` ≈13 GB — ~88 GB of redundant raw stored up to 3× plus the
+archive.
+
+**Confirmed bugs (verified in code):**
+
+1. **Slim index won't exist under archive-only ingest.** `store.py:1758`
+   (`if write_legacy_raw and observation_result.inserted:`) skips the
+   `AgentSourceLine` insert entirely when raw writes are off. The slim index the
+   whole plan relies on would be absent for new ingest. Fix: always write the
+   slim row; gate only the raw payload columns on `write_legacy_raw`.
+2. **Archive byte lookup keyed wrong (in committed PR2).**
+   `archive_transcript.py` keyed by `(source_path, source_offset)` + highest
+   hash-`source_seq`. Multiple revisions share an offset (rewrite/branch), so it
+   can return the WRONG raw line. Fix: key by `line_hash` (= sha256 of raw
+   bytes); the `source_lines` dedup index already includes `line_hash`.
+
+**Correctness invariants (must hold before any reclaim):**
+
+- `source_lines` stays the authoritative ordering/branch/revision index; archive
+  bytes are addressed by `(session_id, source_path, source_offset, line_hash)`,
+  never by hash-`source_seq` and never by offset alone.
+- `events` is durable *serving* state with stable autoincrement ids/FTS rowids.
+  Do NOT rebuild `events` from archive replay (id/identity drift breaks UI refs,
+  tool pairing, active-context). Restore `events` from DB backup; archive only
+  rebuilds raw transcript + (via slim index) export/resume.
+- Backup story changes: a tenant is now `DB + archive/`. Backup/restore must
+  snapshot both; restore verification checks `file_sha256` + `payload_sha256` +
+  per-record raw hash before any raw SQLite reclaim.
+
+**Observation ledger decision (David-approved, codex-confirmed):** archive becomes
+the SOLE durable raw transcript source. `provider_event` / `provider_source_line`
+observations demote to a transient projection buffer, pruned only after the row
+is both projected AND archive-sealed. `rebuild-from-ledger` for transcript is
+retired in favor of archive-backed rebuild. Bridge/runtime/client/server
+observations are NOT transcript raw — keep them with bounded retention (several
+product paths read them: `session_turns.py`, `session_runtime.py`,
+`client_render_observations.py`, `realtime_propagation.py`). All of this is
+destructive and lives **behind the approval gate**.
+
+**Re-scoped PR3 = the correctness gate PR (non-destructive, safe now):**
+- always write slim `source_lines` rows even when `write_legacy_raw=False`;
+- key archive export lookup by `line_hash` (fixes committed PR2);
+- add a row-level verifier: every reclaim-candidate `source_lines` row has a
+  verified archive record matching `(session_id, source_path, source_offset,
+  line_hash)`;
+- export parity tests over rewrites, branch copies, duplicate offsets, multiple
+  paths, legacy rows.
+
+The single most important thing before touching production data: **prove
+byte-identity at the `source_lines` row level via `line_hash`.** Without it,
+reclaim can silently produce valid-looking but wrong resumed transcripts.
+
 ## Execution Sequence (hatch codex-directed, David-approved)
 
 Decisive, non-bundled, reversible at every step. **STOP before Phase B.**

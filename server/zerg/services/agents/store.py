@@ -1755,7 +1755,25 @@ class AgentsStore:
                 load_observation=False,
             )
             row_inserted = False
-            if write_legacy_raw and observation_result.inserted:
+            if observation_result.inserted:
+                # Always write the slim source_lines row (path/offset/branch/
+                # revision/line_hash) — it is the authoritative ordering/branch
+                # index that drives export, resume, and rewind. Only the raw
+                # payload columns are gated on write_legacy_raw; when raw moves
+                # to the archive, the row stays and bytes are fetched by
+                # line_hash via load_session_source_line_bytes.
+                if write_legacy_raw:
+                    raw_values = {
+                        "raw_json": "",
+                        "raw_json_z": compress_raw_json(line_data.raw_json),
+                        "raw_json_codec": CODEC_ZSTD,
+                    }
+                else:
+                    raw_values = {
+                        "raw_json": "",
+                        "raw_json_z": None,
+                        "raw_json_codec": CODEC_PLAIN,
+                    }
                 source_line_stmt = (
                     sqlite_insert(AgentSourceLine)
                     .values(
@@ -1766,10 +1784,8 @@ class AgentsStore:
                         branch_id=ingest_branch.id,
                         revision=revision,
                         is_branch_copy=0,
-                        raw_json="",
-                        raw_json_z=compress_raw_json(line_data.raw_json),
-                        raw_json_codec=CODEC_ZSTD,
                         line_hash=line_hash,
+                        **raw_values,
                     )
                     .on_conflict_do_nothing(
                         index_elements=[
@@ -3510,7 +3526,7 @@ class AgentsStore:
             # only and decode_raw_json(row) is None. Fall back to the session's
             # sealed source_lines archive chunks, keyed by (path, offset). Lazily
             # loaded so sessions whose rows still carry raw bytes pay nothing.
-            archive_bytes: dict[tuple[str, int], str] | None = None
+            archive_bytes: dict[tuple[str, int, str], str] | None = None
 
             def _raw_for(row) -> str | None:
                 nonlocal archive_bytes
@@ -3521,7 +3537,9 @@ class AgentsStore:
                     return value
                 if archive_bytes is None:
                     archive_bytes = load_session_source_line_bytes(self.db, session_id)
-                return archive_bytes.get((row.source_path, int(row.source_offset)))
+                # Key by line_hash, not offset: rewrites/branches share an offset,
+                # and the row's line_hash is the exact-byte identity we want.
+                return archive_bytes.get((row.source_path, int(row.source_offset), row.line_hash))
 
             if branch_mode == "all":
                 lines = [_raw_for(row) for row in source_lines]

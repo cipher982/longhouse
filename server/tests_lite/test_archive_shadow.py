@@ -404,7 +404,13 @@ def test_ingest_route_archive_primary_can_disable_legacy_raw_writes(tmp_path, mo
 
         assert {chunk.stream for chunk in chunks} == {"events", "source_lines"}
         assert all(chunk.tenant_id == "tenant-primary" for chunk in chunks)
-        assert len(source_lines) == 0
+        # The slim source_lines index row is always written (it drives export,
+        # resume, and rewind), but carries NO raw payload when legacy raw writes
+        # are disabled — raw bytes live only in the archive, fetched by line_hash.
+        assert len(source_lines) == 1
+        assert source_lines[0].line_hash
+        assert source_lines[0].raw_json_z is None
+        assert (source_lines[0].raw_json or "") == ""
         assert len(events) == 2
         assert events[0].content_text == "hello from archive primary"
         assert events[1].content_text == "server synthetic event"
