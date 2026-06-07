@@ -15,7 +15,9 @@ import uuid
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 
-from zerg.database import Base
+from sqlalchemy import text
+
+from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
@@ -28,8 +30,12 @@ from zerg.services.session_observation_rebuild import rebuild_session_observatio
 
 
 def _factory(tmp_path):
+    # initialize_database (not bare create_all) so events_fts exists — that is
+    # what makes large ingests take the observation->reducer (bulk) path with
+    # FTS triggers disabled. A bare create_all would silently route through the
+    # direct-projection path and hide bulk-path bugs.
     engine = make_engine(f"sqlite:///{tmp_path / 'archive_only.db'}")
-    Base.metadata.create_all(bind=engine)
+    initialize_database(engine)
     return make_sessionmaker(engine)
 
 
@@ -74,6 +80,12 @@ def test_bulk_ingest_preserves_compaction_kind_with_raw_off(tmp_path):
     factory = _factory(tmp_path)
     session_id = uuid.uuid4()
     with factory() as db:
+        # Guard the guard: this test is only meaningful if events_fts exists, so
+        # the >=100-event ingest actually takes the bulk reducer path.
+        fts = db.execute(
+            text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts'")
+        ).fetchone()
+        assert fts is not None, "events_fts must exist for the bulk path to engage"
         store = AgentsStore(db)
         store.ingest_session(_boundary_session(session_id, 120), write_legacy_raw=False)
         db.commit()

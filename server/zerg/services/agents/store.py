@@ -1622,6 +1622,10 @@ class AgentsStore:
                     source_offset=event_data.source_offset,
                     event_hash=event_hash,
                     raw_json=event_data.raw_json if write_legacy_raw else None,
+                    # Classify the boundary from the ORIGINAL raw (before the
+                    # write_legacy_raw gate) so the structured marker survives even
+                    # when raw bytes are not persisted to the observation payload.
+                    compaction_kind=classify_compaction_kind(event_data.raw_json),
                     event_uuid=event_uuid,
                     parent_event_uuid=parent_event_uuid,
                     received_at=provider_events_received_at,

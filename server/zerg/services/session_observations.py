@@ -356,6 +356,7 @@ def record_provider_event_observation(
     source_path: str | None = None,
     source_offset: int | None = None,
     raw_json: str | None = None,
+    compaction_kind: str | None = None,
     event_uuid: str | None = None,
     parent_event_uuid: str | None = None,
     received_at: datetime | None = None,
@@ -390,11 +391,11 @@ def record_provider_event_observation(
         "event_hash": event_hash,
         "event_uuid": event_uuid,
         "parent_event_uuid": parent_event_uuid,
-        # Structured compaction-boundary marker, derived from raw at ingest so the
-        # reducer never needs stored raw to classify boundaries (raw may live only
-        # in the archive). NULL for non-boundary lines. Imported lazily to avoid a
-        # package import cycle through zerg.services.agents.__init__.
-        "compaction_kind": _classify_compaction_kind(raw_json),
+        # Structured compaction-boundary marker. The caller classifies it from the
+        # original raw BEFORE the write_legacy_raw gate, so it survives even when
+        # raw bytes are not persisted here. Fall back to classifying the payload
+        # raw only when the caller did not supply it (older callers).
+        "compaction_kind": compaction_kind if compaction_kind is not None else _classify_compaction_kind(raw_json),
     }
     if raw_json is not None:
         payload["raw_json"] = raw_json
