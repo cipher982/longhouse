@@ -42,7 +42,11 @@ def reduce_source_line_observation(db: Session, observation: SessionObservation)
     payload = _observation_payload(observation)
     raw_json = payload.get("raw_json")
     line_hash = payload.get("line_hash")
-    if not isinstance(raw_json, str) or not isinstance(line_hash, str):
+    # line_hash is the durable identity; raw_json may be absent when raw bytes
+    # live only in the archive. The slim source_lines row (the ordering/branch
+    # index) must be written either way — only the raw payload columns depend on
+    # raw_json being present.
+    if not isinstance(line_hash, str):
         return None
 
     branch_id = _coerce_int(payload.get("branch_id"))
@@ -50,7 +54,10 @@ def reduce_source_line_observation(db: Session, observation: SessionObservation)
     if branch_id is None or revision is None:
         return None
 
-    raw_json_z = compress_raw_json(raw_json)
+    if isinstance(raw_json, str):
+        raw_values = {"raw_json": "", "raw_json_z": compress_raw_json(raw_json), "raw_json_codec": CODEC_ZSTD}
+    else:
+        raw_values = {"raw_json": "", "raw_json_z": None, "raw_json_codec": CODEC_PLAIN}
     stmt = (
         sqlite_insert(AgentSourceLine)
         .values(
@@ -61,10 +68,8 @@ def reduce_source_line_observation(db: Session, observation: SessionObservation)
             branch_id=branch_id,
             revision=revision,
             is_branch_copy=0,
-            raw_json="",
-            raw_json_z=raw_json_z,
-            raw_json_codec=CODEC_ZSTD,
             line_hash=line_hash,
+            **raw_values,
         )
         .on_conflict_do_nothing(
             index_elements=["session_id", "branch_id", "source_path", "source_offset", "line_hash"],
@@ -117,6 +122,12 @@ def reduce_provider_event_observation(db: Session, observation: SessionObservati
 
     raw_json = _optional_str(payload.get("raw_json"))
     raw_json_z = compress_raw_json(raw_json) if raw_json is not None else None
+    # Prefer the structured compaction_kind carried in the payload (derived from
+    # raw at ingest). Fall back to classifying raw for older observations that
+    # predate the field. Never depends on stored raw at projection time.
+    compaction_kind = payload.get("compaction_kind")
+    if compaction_kind is None:
+        compaction_kind = classify_compaction_kind(raw_json)
     stmt = (
         sqlite_insert(AgentEvent)
         .values(
@@ -136,7 +147,7 @@ def reduce_provider_event_observation(db: Session, observation: SessionObservati
             raw_json=None,
             raw_json_z=raw_json_z,
             raw_json_codec=CODEC_ZSTD if raw_json_z else CODEC_PLAIN,
-            compaction_kind=classify_compaction_kind(raw_json),
+            compaction_kind=compaction_kind,
             schema_version=1,
             event_uuid=event_uuid,
             parent_event_uuid=_optional_str(payload.get("parent_event_uuid")),

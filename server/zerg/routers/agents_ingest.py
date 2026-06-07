@@ -884,7 +884,19 @@ async def ingest_session(
                         archive_primary_state = "written"
                     except Exception:
                         if not settings.legacy_raw_write_enabled:
-                            raise
+                            # Archive is the only raw store and the manifest write
+                            # failed: fail closed with the same 503 semantics as a
+                            # prepare failure, not a generic 500.
+                            logger.warning(
+                                "Archive-primary manifest insert failed for session %s and legacy raw fallback is disabled",
+                                data.id,
+                                exc_info=True,
+                            )
+                            raise HTTPException(
+                                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                                detail="Archive-primary write failed and legacy raw fallback is disabled",
+                                headers={"X-Ingest-Archive-Primary": "failed"},
+                            )
                         archive_primary_state = "fallback"
                         legacy_raw_effective = True
                         logger.warning(

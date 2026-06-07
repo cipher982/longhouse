@@ -390,6 +390,11 @@ def record_provider_event_observation(
         "event_hash": event_hash,
         "event_uuid": event_uuid,
         "parent_event_uuid": parent_event_uuid,
+        # Structured compaction-boundary marker, derived from raw at ingest so the
+        # reducer never needs stored raw to classify boundaries (raw may live only
+        # in the archive). NULL for non-boundary lines. Imported lazily to avoid a
+        # package import cycle through zerg.services.agents.__init__.
+        "compaction_kind": _classify_compaction_kind(raw_json),
     }
     if raw_json is not None:
         payload["raw_json"] = raw_json
@@ -436,3 +441,12 @@ def _hash_parts(*parts: str) -> str:
         hasher.update(part.encode("utf-8"))
         hasher.update(b"\0")
     return hasher.hexdigest()
+
+
+def _classify_compaction_kind(raw_json: str | None) -> str | None:
+    # Lazy import: zerg.services.agents.__init__ pulls in the heavy agents
+    # package (store -> session_observations), so a module-level import here
+    # would create a cycle.
+    from zerg.services.agents.compaction import classify_compaction_kind
+
+    return classify_compaction_kind(raw_json)

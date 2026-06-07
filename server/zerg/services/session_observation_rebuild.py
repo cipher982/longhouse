@@ -84,7 +84,6 @@ def rebuild_session_observation_projections(
     runtime_signals_reduced = 0
     skipped_observations = 0
     errors: list[SessionObservationReducerError] = []
-    transcript_touched = False
 
     for observation in observations:
         try:
@@ -92,7 +91,6 @@ def rebuild_session_observation_projections(
                 reduction = reduce_provider_event_observation(db, observation)
                 if reduction.event is not None:
                     provider_events_reduced += 1
-                    transcript_touched = True
                 else:
                     skipped_observations += 1
             elif observation.kind == OBS_KIND_BRIDGE_TRANSCRIPT_DELTA:
@@ -435,6 +433,7 @@ def _copy_event_prefix(
                 raw_json=event.raw_json,
                 raw_json_z=event.raw_json_z,
                 raw_json_codec=event.raw_json_codec,
+                compaction_kind=event.compaction_kind,
                 event_uuid=event.event_uuid,
                 parent_event_uuid=event.parent_event_uuid,
                 event_origin="durable",
