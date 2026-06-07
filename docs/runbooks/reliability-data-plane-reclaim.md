@@ -179,14 +179,30 @@ archive. Demote transcript observations:
 
 ### E3 — Build clean slim DB and swap (NOT in-place)
 
-Per `archive-decommission-plan.md`. Copy structured + control tables, omit raw
-payloads, preserve event ids/order/indexes/triggers/FTS/`sqlite_sequence`.
+**DESIGN (hatch-confirmed, Option B): KEEP the raw column definitions, write
+sentinel/NULL values instead of payloads.** Do NOT remove
+`raw_json`/`raw_json_z`/`raw_json_codec` from the models for this reclaim —
+that's a coupled big-bang change that would break the exporter/verifiers and
+every ORM SELECT during the dangerous phase. Instead the rebuild copies rows
+but writes `source_lines.raw_json=''`/`raw_json_z=NULL`/`codec=0` and
+`events.raw_json=NULL`/`raw_json_z=NULL`/`codec=0`. SQLite only copies real cell
+payloads, so a freshly-built DB with NULLed raw reclaims the ~61GB while model +
+readers stay intact. Step 5 therefore needs NO code PR — the runtime is already
+raw-payload-tolerant (PR4 fail-closed/synthesize + archive-backed reads,
+db_diagnostics column-guarded). Physical column removal is a LATER cleanup phase
+after the archive-only state survives the retention window.
+
+**Sequencing catch:** the events verifier goes vacuous after the swap
+(`decode_raw_json` returns nothing → `rows_with_raw=0`), so events-raw coverage
+MUST be proven before the swap, against the current/pre-slim DB.
 
 ```bash
 # On a target volume with space:
-# 1. Build clean slim DB by copying control/structured tables (no raw columns),
-#    dropping source_lines.raw_json_z and events.raw_json_z, keeping slim index.
-# 2. quick_check + row counts vs source (structured rows must match exactly).
+# 1. Build clean slim DB by copying control/structured tables; KEEP raw columns
+#    but write sentinels (raw_json=''/NULL, raw_json_z=NULL, codec=0). Keep slim index.
+# 2. quick_check + row counts vs source (structured rows + ids must match exactly;
+#    preserve events.id, FTS rowids, source_lines.id, manifests, indexes, triggers,
+#    sqlite_sequence).
 # 3. Stop runtime:        ssh zerg 'docker stop longhouse-david010'
 # 4. Move old aside:      mv /data/longhouse.db /data/longhouse.db.preslim-<date>  (retain)
 # 5. Place clean DB:      mv /data/longhouse-slim.db /data/longhouse.db
