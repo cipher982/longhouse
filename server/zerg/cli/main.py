@@ -11,6 +11,7 @@ from zerg.build_info import BuildIdentityMissing
 from zerg.build_info import load as load_build_identity
 from zerg.cli.antigravity import antigravity
 from zerg.cli.antigravity_channel import app as antigravity_channel_app
+from zerg.cli.apns_smoke import apns_smoke_command
 from zerg.cli.archive import app as archive_app
 from zerg.cli.claude import claude
 from zerg.cli.claude_channel import app as claude_channel_app
@@ -276,6 +277,7 @@ app.command(name="upgrade")(upgrade_command)
 app.command(hidden=True, name="record-install")(record_install_command)
 app.command(hidden=True, name="runtime-artifact-install")(runtime_artifact_install_command)
 app.command(hidden=True, name="runtime-artifact-smoke")(runtime_artifact_smoke_command)
+app.command(hidden=True, name="apns-smoke")(apns_smoke_command)
 
 
 @app.command()
