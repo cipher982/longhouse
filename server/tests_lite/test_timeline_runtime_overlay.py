@@ -684,7 +684,6 @@ def test_no_query_session_lists_do_not_touch_cold_archive_tables(tmp_path, monke
     def _store_unavailable(*_args, **_kwargs):
         raise RuntimeError("cold store unavailable")
 
-    monkeypatch.setattr("zerg.data_plane.create_derived_store", _store_unavailable)
     monkeypatch.setattr("zerg.data_plane.create_archive_store", _store_unavailable)
 
     db = factory()

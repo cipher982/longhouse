@@ -224,16 +224,25 @@ Only after E is stable for the retention window. Collapse to a single path —
 full inventory in `docs/specs/reliability-data-plane-closeout.md` "Scaffolding
 Deletion Inventory". Summary:
 
+ALREADY DONE (shipped — the dead hot/derived split, loose ends #1 and #2, was
+never wired at runtime so it was safe to delete immediately, not gated):
+- Deleted `data_plane.py` hot/derived store factories (`create_hot_store`,
+  `create_derived_store`, `DataPlaneStore`, `initialize_*`), the `derived_events`
+  schema, `archive_derived_projector.py`, `archive_hot_projector.py`,
+  `archive_restore.py`, and their tests. `data_plane.py` is now just
+  `create_archive_store`.
+- Removed env split `LONGHOUSE_DATA_ROOT` / `LONGHOUSE_HOT_DATABASE_URL` /
+  `LONGHOUSE_DERIVED_DATABASE_URL` and the `hot_database_url`/`derived_database_url`/
+  `longhouse_data_root` Settings fields. `archive_root` resolves directly.
+
+STILL GATED (load-bearing dual-write — removing these IS the reclaim, can't go
+until raw is exported and legacy writes disabled):
 - Remove flags + env: `LONGHOUSE_ARCHIVE_SHADOW_WRITE_ENABLED`,
   `LONGHOUSE_ARCHIVE_PRIMARY_WRITE_ENABLED`, `LONGHOUSE_LEGACY_RAW_WRITE_ENABLED`,
-  `LONGHOUSE_DISABLE_LEGACY_RAW_WRITES`, `LONGHOUSE_ARCHIVE_SHADOW_CHUNK_TARGET_BYTES`,
-  `LONGHOUSE_DATA_ROOT`, `LONGHOUSE_HOT_DATABASE_URL`, `LONGHOUSE_DERIVED_DATABASE_URL`.
+  `LONGHOUSE_DISABLE_LEGACY_RAW_WRITES`, `LONGHOUSE_ARCHIVE_SHADOW_CHUNK_TARGET_BYTES`.
 - Collapse ingest shadow-vs-primary branch into one unconditional archive write;
   drop `X-Ingest-Archive-Primary` / `X-Ingest-Legacy-Raw` headers.
 - Remove `ingest_session` params `write_legacy_raw` / `raw_source_archived`.
-- Delete `data_plane.py` hot/derived store factories, `archive_derived_projector.py`,
-  and `archive_hot_projector.py` (clean-store rebuild copies structured tables,
-  doesn't replay). Keep `create_archive_store`.
 - Retire `legacy_archive_exporter.py` + `archive export-legacy` (one-shot, done).
 - Remove tests asserting raw columns / the shadow-primary flag matrix.
 
