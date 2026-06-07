@@ -111,6 +111,23 @@ Gate: 100% of unique `source_lines` raw records covered in the archive by
 Rollback: none needed — read-only. If aborted, archive has partial chunks;
 re-running resumes from the export ledger.
 
+**VERIFIED 2026-06-07 (both streams 100% covered):**
+- source_lines: 10,441 sessions, 12,867,874 rows checked, 12,867,874 covered,
+  0 incomplete (by `(source_path, source_offset, line_hash)`).
+- events: scoped to the only sessions where events raw is the SOLE source —
+  5,672 events-only + 571 partial-source-line = 6,243 sessions; 1,703,283 raw
+  event rows checked, 1,703,283 covered, 0 incomplete (by `sha256(raw_bytes)`).
+  The other ~9,900 source-line-backed sessions need no events-raw proof: their
+  transcript is recoverable from the verified `source_lines` archive and
+  `export_session_jsonl` never reads events raw for them.
+- **Conclusion: both `source_lines.raw_json_z` and `events.raw_json_z` are safe
+  to drop in the Option-B rebuild.** Drivers: `lh_export_driver.py`,
+  `lh_partial_audit_sql.py`, `lh_events_coverage_scoped.py` (in `/data/` on host).
+- Partial-audit method note: detecting partial-source-line sessions via per-
+  session ORM iteration STALLS on 600k-event whale sessions (loads raw blobs).
+  Use the SQL-only anti-join (`ix_events_dedup` covers the join key); the
+  coverage phase then scopes to events-only + partial, skipping the whales.
+
 ---
 
 ## Phase D — Disable legacy raw writes (new data archive-only)
