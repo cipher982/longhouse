@@ -62,6 +62,13 @@ def _collect_stream_events(events: list[dict]) -> dict[str, list[dict]]:
     return result
 
 
+def _current_workspace_fingerprint(sf, session_id) -> str:
+    with sf() as db:
+        revision = load_session_workspace_revision(db, session_id)
+        assert revision is not None
+        return revision.fingerprint
+
+
 async def _run_stream(
     sf,
     session_id,
@@ -542,6 +549,7 @@ def test_workspace_stream_wake_includes_fanout_metadata(tmp_path):
             session_factory=sf,
             session_id=session_id,
             skip_initial=True,
+            known_workspace_fingerprint=_current_workspace_fingerprint(sf, session_id),
         ):
             events.append(event)
             if event.get("event") == "workspace_changed":
@@ -620,6 +628,7 @@ def test_workspace_stream_does_not_preview_durable_tool_call(tmp_path):
             session_factory=sf,
             session_id=session_id,
             skip_initial=True,
+            known_workspace_fingerprint=_current_workspace_fingerprint(sf, session_id),
         ):
             events.append(event)
             if event.get("event") == "workspace_changed":
@@ -688,6 +697,7 @@ def test_workspace_stream_can_emit_live_preview_before_db_signature_changes(tmp_
             session_factory=sf,
             session_id=session_id,
             skip_initial=True,
+            known_workspace_fingerprint=_current_workspace_fingerprint(sf, session_id),
         ):
             events.append(event)
             if event.get("event") == "workspace_changed":
@@ -712,7 +722,7 @@ def test_workspace_stream_can_emit_live_preview_before_db_signature_changes(tmp_
 
 @patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
 def test_workspace_stream_skip_initial(tmp_path):
-    """skip_initial=True should delay first workspace_changed by one cycle."""
+    """skip_initial=True without a known fingerprint emits an initial change."""
     sf = _make_db(tmp_path)
     now = datetime.now(timezone.utc)
 
@@ -958,6 +968,7 @@ def test_codex_live_preview_round_trip_post_to_sse(tmp_path):
                 session_factory=sf,
                 session_id=session_id,
                 skip_initial=True,
+                known_workspace_fingerprint=_current_workspace_fingerprint(sf, session_id),
             ):
                 events.append(event)
                 if event.get("event") == "workspace_changed":

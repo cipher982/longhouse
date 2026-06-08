@@ -893,6 +893,12 @@ async def _session_workspace_stream(
                 previous_sig = revision.signature
             else:
                 skip_initial = False
+        elif skip_initial:
+            # Unsafe legacy callers do not get to skip without proving the
+            # snapshot they rendered. First-party clients now send a known
+            # workspace fingerprint; no-fingerprint callers get an initial
+            # invalidation instead of waiting for a future pubsub wake.
+            skip_initial = False
 
         if replay_gap:
             yield {
