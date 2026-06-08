@@ -224,21 +224,24 @@ struct TimelineSessionCardRow: View {
     var connectivityBanner: TimelineConnectivityBanner = .none
 
     var body: some View {
-        let cardAccent = timelineCardAccentColor(session, connectivityBanner: connectivityBanner)
+        let signal = timelineSignal(session, connectivityBanner: connectivityBanner)
+        let cardAccent = signal.accentColor
 
-        // Denser two-zone row: a tinted provider glyph anchors the left, the
-        // text column carries identity + status + one preview line. Single-line
-        // title and preview roughly double how many sessions fit per screen
-        // versus the old multi-line card, while the brand glyph adds the color
-        // the all-grey layout was missing.
+        // Three-line row built for glanceability:
+        //  - kicker: project · branch ........................ when
+        //  - headline: ● <frozen server-resolved title>
+        //  - status: demoted runtime state, colored by signal
+        // The frozen `title` (server timeline_title) is the muscle-memory anchor;
+        // the leading dot + status carry "is it active / waiting on me / done".
+        // No Managed badge, no turns/tools — that was the dead right half.
         HStack(alignment: .top, spacing: 11) {
             ProviderGlyph(provider: session.provider, size: 30)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(session.projectLabel)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                     if let branch = session.timelineBranchBadgeLabel {
                         Text(branch)
@@ -248,32 +251,24 @@ struct TimelineSessionCardRow: View {
                             .layoutPriority(-1)
                     }
                     Spacer(minLength: 6)
-                    CapabilityBadge(session: session)
+                    if let duration = stateDurationLabel(for: session) {
+                        Text(duration)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.tertiary)
+                            .monospacedDigit()
+                    }
                 }
 
-                CompactRuntimeLine(session: session, connectivityBanner: connectivityBanner)
-
-                if let summary = session.timelineSummaryPreview {
-                    Text(summary)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                } else {
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    LivenessDot(color: signal.dotColor, pulsing: signal.pulses)
+                        .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
                     Text(session.title)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
                 }
 
-                HStack(spacing: 5) {
-                    Text("\(session.turnCount) \(session.turnCount == 1 ? "turn" : "turns")")
-                        .foregroundStyle(turnColor(session.turnCount))
-                    Text("·")
-                        .foregroundStyle(.tertiary)
-                    Text("\(session.toolCount) \(session.toolCount == 1 ? "tool" : "tools")")
-                }
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(.secondary)
+                CompactRuntimeLine(session: session, signal: signal)
             }
         }
         .padding(.vertical, 11)
@@ -292,37 +287,23 @@ struct TimelineSessionCardRow: View {
     }
 }
 
-/// Compact one-line runtime status: liveness dot + state label + duration,
-/// with an inline "stale" flag. Distilled from the old pill-shaped
-/// `RuntimeBadge` so it sits naturally in the denser row without a capsule.
+/// Demoted runtime status line under the headline: the state label, colored by
+/// the row signal, with an inline "stale" flag. The dot moved up to the
+/// headline, so this line is text-only and subordinate.
 private struct CompactRuntimeLine: View {
     let session: SessionSummary
-    let connectivityBanner: TimelineConnectivityBanner
+    let signal: TimelineSignal
 
     var body: some View {
-        let isClosed = session.timelineStatusLabel == "Closed"
-        let globalHealthy = connectivityBanner == .none
-        let attentionTone = timelineAttentionTone(session.timelineStatusTone)
-        let withinDeadline = session.runtimeDisplay.activityRecency == "live"
-        let sessionStale = !withinDeadline && !isClosed
-        let pulsing = globalHealthy && withinDeadline && attentionTone == .working
-        let color = globalHealthy && !sessionStale ? timelineStatusColor(session) : .secondary
+        let sessionStale = signal == .quiet
+            && !session.isClosed
+            && session.runtimeDisplay.activityRecency != "live"
 
-        HStack(spacing: 6) {
-            LivenessDot(color: color, pulsing: pulsing)
+        HStack(spacing: 5) {
             Text(session.timelineStatusLabel)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(color)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(signal.statusColor)
                 .lineLimit(1)
-            if let duration = stateDurationLabel(for: session) {
-                Text("·")
-                    .foregroundStyle(.tertiary)
-                Text(duration)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .monospacedDigit()
-            }
             if sessionStale {
                 Text("· stale")
                     .font(.caption2.weight(.semibold))
@@ -439,19 +420,6 @@ private struct LivenessDot: View {
     }
 }
 
-private struct CapabilityBadge: View {
-    let session: SessionSummary
-
-    var body: some View {
-        Text(session.managementLabel)
-            .font(.caption.weight(.semibold))
-            .lineLimit(1)
-            .foregroundStyle(managementColor(session))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(managementColor(session).opacity(0.14), in: Capsule())
-    }
-}
 
 
 protocol TimelineSessionsClient: Sendable {
@@ -890,64 +858,80 @@ private func nonEmpty(_ value: String?) -> String? {
     return trimmed
 }
 
-private enum TimelineAttentionTone {
-    case working
+/// The single attention axis for a timeline row. Three semantic stops the user
+/// can read pre-attentively, plus a closed/quiet resting state:
+///   - attention: the session is WAITING ON YOU — steady amber, never pulses.
+///   - working:   the session is actively running — teal, breathing (live only).
+///   - quiet:     idle/stale — grey, static.
+///   - closed:    ended — dimmed grey, static.
+/// Provider identity color stays on the glyph; it never bleeds into this axis.
+enum TimelineSignal {
     case attention
+    case working
     case quiet
     case closed
+
+    /// Amber for "needs you". Separated from teal/grey on luminance + hue so it
+    /// survives colorblindness; the status label text is the redundant code.
+    static let amber = Color(red: 0.91, green: 0.64, blue: 0.24)
+    static let teal = Color(red: 0.24, green: 0.71, blue: 0.78)
+
+    /// The leading dot color — the loudest at-a-glance signal.
+    var dotColor: Color {
+        switch self {
+        case .attention: return Self.amber
+        case .working: return Self.teal
+        case .quiet: return .secondary
+        case .closed: return .secondary.opacity(0.6)
+        }
+    }
+
+    /// Card edge/accent. Quiet by default ("dark cockpit"): only the row that
+    /// wants you lights up, so it pops by contrast rather than a wall of color.
+    var accentColor: Color {
+        switch self {
+        case .attention: return Self.amber
+        case .working: return Self.teal.opacity(0.8)
+        case .quiet: return .secondary.opacity(0.4)
+        case .closed: return .secondary.opacity(0.3)
+        }
+    }
+
+    /// Status-label text color, demoted relative to the dot.
+    var statusColor: Color {
+        switch self {
+        case .attention: return Self.amber
+        case .working: return Self.teal
+        case .closed: return .secondary.opacity(0.7)
+        case .quiet: return .secondary
+        }
+    }
+
+    /// Motion is reserved for genuine live work. "Waiting on you" is a STABLE
+    /// state, so attention is steady, not pulsing — avoids alarm fatigue.
+    var pulses: Bool { self == .working }
 }
 
-private func timelineAttentionTone(_ tone: String) -> TimelineAttentionTone {
-    switch tone.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+/// Resolve the row's attention signal from runtime tone + liveness + global
+/// connectivity. `needs_attention` (curated) drives amber, not raw needs_user.
+func timelineSignal(_ session: SessionSummary, connectivityBanner: TimelineConnectivityBanner) -> TimelineSignal {
+    if session.isClosed { return .closed }
+    // A global banner owns severity; per-card attention color is suppressed.
+    guard connectivityBanner == .none else { return .quiet }
+
+    if session.needsAttention { return .attention }
+
+    let tone = session.timelineStatusTone.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    let live = session.runtimeDisplay.activityRecency == "live"
+    switch tone {
     case "thinking", "running":
-        return .working
+        // Only animate genuinely live work; a stale "running" must not pulse.
+        return live ? .working : .quiet
     case "blocked", "stalled":
         return .attention
-    case "closed":
-        return .closed
     default:
         return .quiet
     }
-}
-
-private func timelineCardAccentColor(_ session: SessionSummary, connectivityBanner: TimelineConnectivityBanner) -> Color {
-    // A visible global banner suppresses per-card attention color; the
-    // connection strip owns that severity signal.
-    guard connectivityBanner == .none else { return .secondary.opacity(0.45) }
-
-    switch timelineAttentionTone(session.timelineBorderTone) {
-    case .attention:
-        return .orange
-    case .working:
-        return .primary
-    case .closed:
-        return .secondary.opacity(0.38)
-    case .quiet:
-        return .secondary.opacity(0.45)
-    }
-}
-
-private func timelineStatusColor(_ session: SessionSummary) -> Color {
-    switch timelineAttentionTone(session.timelineStatusTone) {
-    case .working:
-        return .primary
-    case .attention:
-        return .orange
-    case .closed:
-        return .secondary.opacity(0.7)
-    case .quiet:
-        return .secondary
-    }
-}
-
-private func managementColor(_ session: SessionSummary) -> Color {
-    .secondary
-}
-
-private func turnColor(_ turnCount: Int) -> Color {
-    if turnCount >= 50 { return .red }
-    if turnCount >= 20 { return .orange }
-    return .secondary
 }
 
 private func relativeTime(_ value: String?) -> String {

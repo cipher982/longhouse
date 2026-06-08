@@ -24,6 +24,9 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
     let summary: String?
     let summaryStatus: String?
     let firstUserMessage: String?
+    // Live, drifting summary title — used for the subordinate "now:" drift line,
+    // NOT the headline. The stable headline is `title` (server timeline_title).
+    let summaryTitle: String?
     let userState: String?
     let status: String?
     let displayPhase: String?
@@ -52,6 +55,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         summary: String? = nil,
         summaryStatus: String? = nil,
         firstUserMessage: String? = nil,
+        summaryTitle: String? = nil,
         userState: String? = nil,
         status: String? = nil,
         displayPhase: String? = nil,
@@ -79,6 +83,7 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         self.summary = summary
         self.summaryStatus = summaryStatus
         self.firstUserMessage = firstUserMessage
+        self.summaryTitle = summaryTitle
         self.userState = userState
         self.status = status
         self.displayPhase = displayPhase
@@ -188,19 +193,13 @@ struct SessionSummary: Identifiable, Hashable, Codable, Sendable {
         return summary
     }
 
-    var firstUserPreview: String? {
-        guard let firstUserMessage = firstUserMessage?.trimmingCharacters(in: .whitespacesAndNewlines), !firstUserMessage.isEmpty else {
+    /// Live, drifting summary title for the subordinate "now:" drift line.
+    /// Suppressed when it would just echo the frozen headline (`title`).
+    var driftTitle: String? {
+        guard let drift = summaryTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !drift.isEmpty else {
             return nil
         }
-        return firstUserMessage
-    }
-
-    var timelineSummaryPreview: String? {
-        if let summaryPreview {
-            return summaryPreview
-        }
-        guard let firstUserPreview else { return nil }
-        return firstUserPreview == title.trimmingCharacters(in: .whitespacesAndNewlines) ? nil : firstUserPreview
+        return drift == title.trimmingCharacters(in: .whitespacesAndNewlines) ? nil : drift
     }
 
     /// Decoded summary lifecycle. Falls back to inferring from `summary` when

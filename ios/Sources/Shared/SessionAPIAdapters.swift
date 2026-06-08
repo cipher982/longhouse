@@ -31,6 +31,13 @@ private func providerDisplayName(_ provider: String) -> String {
 }
 
 private func timelineCardTitle(for session: APISessionResponse) -> String {
+    // The server resolves a single sanitized, frozen headline (timeline_title)
+    // so iOS/web/widget render identical text and the row stays stable as the
+    // live summary drifts. The block below is only a fallback for cached or
+    // pre-anchor_title payloads that predate the server field.
+    if let resolved = compactSessionText(session.timelineTitle) {
+        return resolved
+    }
     if hasMeaningfulSessionTitle(session.summaryTitle), let title = compactSessionText(session.summaryTitle) {
         return title
     }
@@ -380,6 +387,7 @@ extension APITimelineSessionCardResponse {
             summary: head.summary,
             summaryStatus: head.summaryStatus,
             firstUserMessage: head.firstUserMessage,
+            summaryTitle: head.summaryTitle,
             userState: head.userState,
             status: head.status,
             displayPhase: head.displayPhase,
