@@ -1,5 +1,6 @@
 """Unit tests for the pure timeline-title helpers."""
 
+from zerg.services.session_title import anchor_freeze_policy
 from zerg.services.session_title import freeze_anchor_title
 from zerg.services.session_title import resolve_timeline_title
 from zerg.services.session_title import sanitize_title
@@ -110,3 +111,11 @@ class TestFreezeAnchorTitle:
     def test_skips_when_nothing_usable(self):
         assert freeze_anchor_title("[Image #1]") is None
         assert freeze_anchor_title(None) is None
+
+
+class TestAnchorFreezePolicy:
+    def test_live_is_write_once(self):
+        assert anchor_freeze_policy(is_closed=False) == "write_once"
+
+    def test_closed_overwrites(self):
+        assert anchor_freeze_policy(is_closed=True) == "overwrite"

@@ -125,6 +125,17 @@ def resolve_timeline_title(
     return structured_fallback_title(project, git_branch)
 
 
+def anchor_freeze_policy(is_closed: bool) -> str:
+    """Whether a fresh title should overwrite the frozen anchor or hold it.
+
+    While a session is live the anchor is write-once (muscle-memory stability).
+    Once closed, the final summary is the best stable title a user will revisit,
+    so we promote it — overwriting an anchor that may have frozen too early on a
+    tiny opening transcript. Returns 'overwrite' or 'write_once'.
+    """
+    return "overwrite" if is_closed else "write_once"
+
+
 def freeze_anchor_title(summary_title: str | None) -> str | None:
     """Sanitized snapshot to persist as the frozen anchor, or None to skip.
 
