@@ -52,7 +52,10 @@ src_probe.close()
 db = sqlite3.connect(f"file:{dst_path}?mode=rwc", uri=True)
 db.row_factory = sqlite3.Row
 db.execute(f"PRAGMA page_size={page_size}")
-db.execute("PRAGMA journal_mode=WAL")  # establishes the file with the page_size
+# Throwaway build artifact: journal_mode=OFF + synchronous=OFF is safe and faster
+# (a failed/crashed build just leaves an unusable slim DB; the source is never
+# touched). The final journal_mode is set to WAL at the end before handoff.
+db.execute("PRAGMA journal_mode=OFF")
 db.execute("PRAGMA foreign_keys=OFF")
 db.execute("PRAGMA synchronous=OFF")
 # Attach src read-only via the URI mode=ro (do NOT use PRAGMA query_only — it is
@@ -224,47 +227,58 @@ def copy_source_lines():
 
 
 def copy_events():
-    # Conditional: events coverage is sha256(raw bytes); raw is zstd in
-    # raw_json_z, which SQL cannot hash — so copy row-by-row in Python, sentinel
-    # only when the decoded raw's hash is covered, else keep raw verbatim.
-    cols = columns("events")
-    placeholders = ", ".join("?" for _ in cols)
-    col_list = ", ".join(q(c) for c in cols)
-    ins = f"INSERT INTO main.events ({col_list}) VALUES ({placeholders})"
-    idx = {c: i for i, c in enumerate(cols)}
-    cur = db.execute(f"SELECT {col_list} FROM src.events")
+    # Conditional, owner-aware. events coverage is sha256(decoded raw bytes), and
+    # raw is zstd in raw_json_z which SQL can't hash. We do the O(N) decode+hash
+    # exactly ONCE into a temp table ev_hash(rowid, raw_sha256), then the actual
+    # copy is a single set-based INSERT...SELECT with two LEFT JOINs — NO per-row
+    # Python and NO 10.5M per-row SELECTs (that loop was the dominant downtime
+    # cost). Semantics are identical to the old row-by-row path.
+    db.execute("CREATE TEMP TABLE ev_hash (rowid INTEGER PRIMARY KEY, raw_sha256 TEXT)")
+    cur = db.execute("SELECT id, raw_json, raw_json_z, raw_json_codec FROM src.events")
     db.execute("BEGIN")
     batch = []
     while True:
-        rows = cur.fetchmany(5000)
+        rows = cur.fetchmany(20000)
         if not rows:
             break
-        for r in rows:
-            r = list(r)
-            rj, rz, codec = r[idx["raw_json"]], r[idx["raw_json_z"]], r[idx["raw_json_codec"]] or 0
-            sid = str(r[idx["session_id"]])
+        for eid, rj, rz, codec in rows:
             raw = None
-            if codec == CODEC_ZSTD and rz is not None:
+            if (codec or 0) == CODEC_ZSTD and rz is not None:
                 raw = decompress_raw_json(rz)
             elif rj:
                 raw = rj
             if raw:
-                h = _hashlib.sha256(raw.encode("utf-8")).hexdigest()
-                # Owner-aware: covered only under THIS row's session_id (owner_map
-                # already folded child-alias chunks onto the parent owner).
-                covered = db.execute("SELECT 1 FROM covered_ev WHERE owner_sid=? AND h=? LIMIT 1", (sid, h)).fetchone() is not None
-                if covered:
-                    r[idx["raw_json"]] = None
-                    r[idx["raw_json_z"]] = None
-                    r[idx["raw_json_codec"]] = 0
-                else:
-                    kept_raw["events"] += 1
-            batch.append(r)
-            if len(batch) >= 5000:
-                db.executemany(ins, batch)
+                batch.append((eid, _hashlib.sha256(raw.encode("utf-8")).hexdigest()))
+            if len(batch) >= 20000:
+                db.executemany("INSERT INTO ev_hash VALUES (?,?)", batch)
                 batch = []
     if batch:
-        db.executemany(ins, batch)
+        db.executemany("INSERT INTO ev_hash VALUES (?,?)", batch)
+    db.commit()
+
+    cols = columns("events")
+    main_cols = ", ".join(q(c) for c in cols)
+    sel = []
+    for c in cols:
+        if c in ("raw_json",):
+            sel.append("CASE WHEN cov.h IS NOT NULL THEN NULL ELSE e.raw_json END")
+        elif c == "raw_json_z":
+            sel.append("CASE WHEN cov.h IS NOT NULL THEN NULL ELSE e.raw_json_z END")
+        elif c == "raw_json_codec":
+            sel.append("CASE WHEN cov.h IS NOT NULL THEN 0 ELSE e.raw_json_codec END")
+        else:
+            sel.append(f"e.{q(c)}")
+    # cov matches => this row's raw bytes are archive-covered UNDER ITS OWN owner
+    # => sentinel. No cov match (uncovered, or row had no raw so no ev_hash) => keep.
+    join = ("LEFT JOIN ev_hash eh ON eh.rowid = e.id "
+            "LEFT JOIN covered_ev cov ON cov.owner_sid = e.session_id AND cov.h = eh.raw_sha256")
+    db.execute("BEGIN")
+    db.execute(f"INSERT INTO main.events ({main_cols}) SELECT {', '.join(sel)} FROM src.events e {join}")
+    kept = db.execute(
+        f"SELECT COUNT(*) FROM src.events e {join} "
+        "WHERE cov.h IS NULL AND (e.raw_json_z IS NOT NULL OR (e.raw_json IS NOT NULL AND e.raw_json <> ''))"
+    ).fetchone()[0]
+    kept_raw["events"] = int(kept)
     db.commit()
 
 
@@ -356,6 +370,10 @@ if integrity != "ok":
     raise SystemExit(f"integrity_check failed: {integrity}")
 
 db.execute(f"PRAGMA user_version={user_version}")
-db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+db.commit()
+# Built with journal_mode=OFF, so there is NO WAL/journal sidecar to checkpoint or
+# clean up — the file IS the whole DB, which is exactly what we want for the swap.
+# The live runtime forces journal_mode=WAL on first open (database.py), so we don't
+# set it here (and flipping mid-connection with temp tables open trips a lock).
 db.close()
 print("=== SLIM BUILD OK ===", flush=True)
