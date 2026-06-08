@@ -188,8 +188,11 @@ def test_managed_local_truth_implies_managed_control_path(display: SessionRuntim
 
 def test_needs_attention_implies_blocked_and_open(display: SessionRuntimeDisplay) -> None:
     if display.needs_attention:
-        assert display.state == "blocked"
+        assert display.state == "blocked" or (
+            display.pause_request is not None and display.pause_request.get("status") == "pending"
+        )
         assert display.lifecycle != "closed"
+        assert display.tone == "blocked"
 
 
 def test_is_stalled_locks_state_and_tone(display: SessionRuntimeDisplay) -> None:
@@ -209,6 +212,7 @@ def test_closed_lifecycle_locks_outputs(display: SessionRuntimeDisplay) -> None:
         assert display.headline == "Closed"
         assert display.phase_label == "Closed"
         assert display.tone == "closed"
+        assert display.pause_request is None
 
 
 def test_no_signal_constraints(display: SessionRuntimeDisplay) -> None:

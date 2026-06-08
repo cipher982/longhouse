@@ -18,6 +18,7 @@
     "signal_tier": "process_binding",
     "state": null,
     "terminal_reason": "host_expired",
+    "pause_request": null,
     "tone": "inactive",
     "truth_tier": "stale"
   },

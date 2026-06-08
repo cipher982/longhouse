@@ -18,6 +18,7 @@
     "signal_tier": "phase_signal",
     "state": "running",
     "terminal_reason": null,
+    "pause_request": null,
     "tone": "running",
     "truth_tier": "managed-local"
   },

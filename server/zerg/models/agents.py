@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from sqlalchemy import JSON
 from sqlalchemy import BigInteger
+from sqlalchemy import Boolean
 from sqlalchemy import Column
 from sqlalchemy import DateTime
 from sqlalchemy import ForeignKey
@@ -1086,6 +1087,57 @@ class SessionRuntimeState(AgentsBase):
         Index("ix_runtime_state_anchor", "timeline_anchor_at"),
         Index("ix_runtime_state_updated", "updated_at"),
         Index("ix_runtime_state_device_provider", "device_id", "provider"),
+    )
+
+
+class SessionPauseRequest(AgentsBase):
+    """Durable provider question waiting for a user answer.
+
+    Phase truth stays in ``SessionRuntimeState``. This row only stores the
+    actionable structured-question request that can make ``needs_user`` require
+    attention.
+    """
+
+    __tablename__ = "session_pause_requests"
+
+    id = Column(GUID(), primary_key=True, default=uuid4)
+    session_id = Column(
+        GUID(),
+        ForeignKey("sessions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    runtime_key = Column(String(255), nullable=False, index=True)
+    provider = Column(String(64), nullable=False)
+    request_key = Column(String(512), nullable=False, unique=True)
+    provider_request_id = Column(String(255), nullable=True)
+    provider_ref_json = Column(JSON(), nullable=True)
+    kind = Column(String(64), nullable=False)
+    status = Column(String(32), nullable=False, server_default=text("'pending'"))
+    tool_name = Column(String(128), nullable=True)
+    title = Column(String(255), nullable=True)
+    summary = Column(Text, nullable=True)
+    request_payload_json = Column(JSON(), nullable=True)
+    response_payload_json = Column(JSON(), nullable=True)
+    response_text = Column(Text, nullable=True)
+    can_respond = Column(Boolean, nullable=False, default=False, server_default="false")
+    occurred_at = Column(DateTime(timezone=True), nullable=False)
+    last_seen_at = Column(DateTime(timezone=True), nullable=False)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_pause_requests_session_status_occurred", "session_id", "status", "occurred_at"),
+        Index("ix_pause_requests_runtime_status_occurred", "runtime_key", "status", "occurred_at"),
+        Index(
+            "ix_pause_requests_provider_request",
+            "provider",
+            "provider_request_id",
+            postgresql_where=text("provider_request_id IS NOT NULL"),
+            sqlite_where=text("provider_request_id IS NOT NULL"),
+        ),
     )
 
 

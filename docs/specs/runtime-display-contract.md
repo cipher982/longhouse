@@ -116,6 +116,9 @@ the session; valid joint states are constrained (see [Joint states](#joint-state
 - `headline`, `detail`, `phase_label`, `compact_tool_label` — copy emitted by
   the server. Clients must render these strings as-is. No client-side
   copy canonicalization, no fallbacks.
+- `pause_request` — active structured provider question, or `null`. Pending
+  pause requests make quiet `needs_user` actionable without changing the
+  top-level phase vocabulary.
 - Booleans — `is_live`, `is_executing`, `needs_attention`, `is_idle`,
   `is_stalled`, `is_managed_local_truth`, `has_signal`. These must be
   derivable from the axes above; they're emitted for client convenience.
@@ -129,14 +132,16 @@ restating these invariants.
 - `is_live == is_executing` always. (They mean the same thing.)
 - `state in {"running", "thinking"}` ⇒ `is_executing == True`.
 - `is_stalled == True` ⇔ `state == "stalled"` ∧ `tone == "stalled"`.
-- `needs_attention == True` ⇒ `state == "blocked"` ∧ `lifecycle != "closed"`.
+- `needs_attention == True` ⇒ `lifecycle != "closed"` ∧
+  (`state == "blocked"` ∨ `pause_request.status == "pending"`).
+- `needs_attention == True` ⇒ `tone == "blocked"`.
 - `truth_tier == "managed-local"` ⇒ `control_path == "managed"`
   ∧ `is_managed_local_truth == True`.
 - `lifecycle == "closed"` ⇒ all of:
   `is_executing == False`, `needs_attention == False`,
   `is_idle == True`, `headline == "Closed"`,
   `phase_label == "Closed"`, `tone == "closed"`,
-  `state == None`.
+  `state == None`, `pause_request == None`.
 - `lifecycle == "closed"` ⇒ `terminal_reason is not None`.
 - `has_signal == False` ⇒ `state == None`
   ∧ `truth_tier in {"stale", "none"}`

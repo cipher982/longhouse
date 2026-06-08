@@ -18,6 +18,7 @@
     "signal_tier": "phase_signal",
     "state": null,
     "terminal_reason": null,
+    "pause_request": null,
     "tone": "inactive",
     "truth_tier": "stale"
   },

@@ -13,6 +13,7 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from enum import Enum
+from typing import Any
 
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.session_runtime import EXPLICIT_CLOSED_TERMINAL_STATES
@@ -118,6 +119,7 @@ class SessionRuntimeDisplay:
     lifecycle: str  # Lifecycle
     host_state: str  # HostState
     terminal_reason: str | None  # TerminalReason when lifecycle == "closed"
+    pause_request: dict[str, Any] | None
 
 
 def _normalize_presence_state(state: str | None) -> str | None:
@@ -308,6 +310,7 @@ def build_session_runtime_display(
     assistant_messages: int | None = None,
     has_visible_transcript_preview: bool = False,
     has_pending_response_turn: bool = False,
+    pause_request: dict[str, Any] | None = None,
     now: datetime | None = None,
 ) -> SessionRuntimeDisplay:
     status = runtime_view.status
@@ -435,17 +438,35 @@ def build_session_runtime_display(
         is_idle = True
         process_observed = False
         is_stalled = False
-    transcript_sync_pending = _transcript_sync_pending(
-        control_path=control_path,
-        lifecycle=lifecycle,
-        presence_state=presence_state,
-        runtime_view=runtime_view,
-        last_activity_at=last_activity_at,
-        user_messages=user_messages,
-        assistant_messages=assistant_messages,
-        has_visible_transcript_preview=has_visible_transcript_preview,
-        has_pending_response_turn=has_pending_response_turn,
-        now=now,
+        pause_request = None
+    active_pause_request = _active_pause_request_projection(
+        pause_request,
+        control_unavailable=explicit_host_unavailable,
+    )
+    if active_pause_request is not None:
+        headline = "Needs answer"
+        detail = _pause_request_detail(active_pause_request)
+        phase_label = "Needs answer"
+        is_executing = False
+        needs_attention = True
+        is_idle = False
+        process_observed = False
+        is_stalled = False
+        has_signal = True
+    transcript_sync_pending = (
+        _transcript_sync_pending(
+            control_path=control_path,
+            lifecycle=lifecycle,
+            presence_state=presence_state,
+            runtime_view=runtime_view,
+            last_activity_at=last_activity_at,
+            user_messages=user_messages,
+            assistant_messages=assistant_messages,
+            has_visible_transcript_preview=has_visible_transcript_preview,
+            has_pending_response_turn=has_pending_response_turn and active_pause_request is None,
+            now=now,
+        )
+        and active_pause_request is None
     )
     if transcript_sync_pending:
         presence_state = TRANSCRIPT_SYNC_STATE
@@ -459,7 +480,9 @@ def build_session_runtime_display(
         is_stalled = False
     no_runtime_signal = signal_tier == "none" and presence_state is None and not process_observed and not live_control_ready
     tone = (
-        "active"
+        "blocked"
+        if active_pause_request is not None
+        else "active"
         if transcript_sync_pending
         else "closed"
         if lifecycle == "closed"
@@ -494,6 +517,7 @@ def build_session_runtime_display(
         lifecycle=lifecycle,
         host_state=host_state,
         terminal_reason=terminal_reason,
+        pause_request=active_pause_request,
     )
 
 
@@ -600,3 +624,30 @@ def _derive_terminal_reason(terminal_state: str | None) -> str | None:
     # Provider terminal values such as "session_ended" and "finished" collapse
     # to provider_signal. Machine-derived terminal values stay explicit.
     return "provider_signal"
+
+
+def _active_pause_request_projection(
+    pause_request: dict[str, Any] | None,
+    *,
+    control_unavailable: bool,
+) -> dict[str, Any] | None:
+    if not isinstance(pause_request, dict):
+        return None
+    if str(pause_request.get("status") or "").strip() != "pending":
+        return None
+    if str(pause_request.get("kind") or "").strip() != "structured_question":
+        return None
+    projection = dict(pause_request)
+    if control_unavailable:
+        projection["can_respond"] = False
+    return projection
+
+
+def _pause_request_detail(pause_request: dict[str, Any]) -> str:
+    summary = str(pause_request.get("summary") or "").strip()
+    if summary:
+        return summary
+    title = str(pause_request.get("title") or "").strip()
+    if title:
+        return title
+    return "Question waiting"

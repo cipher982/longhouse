@@ -14,6 +14,8 @@ from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
+from zerg.services.session_pause_requests import load_active_pause_request_map
+from zerg.services.session_pause_requests import serialize_pause_request_projection
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_turns import load_pending_response_turn_map
@@ -87,6 +89,8 @@ def build_session_workspace(
     with timing.span("load_runtime"):
         with timing.span("runtime_state"):
             runtime_state_map = load_runtime_state_map(db, thread_session_ids)
+        with timing.span("pause_requests"):
+            pause_request_map = load_active_pause_request_map(db, thread_session_ids)
         with timing.span("control_state"):
             control_state_map = load_managed_control_state_map(db, thread_session_ids)
         with timing.span("provisional_preview"):
@@ -122,6 +126,7 @@ def build_session_workspace(
                 owner_id=owner_id,
                 kernel_capabilities=kernel_capabilities_map.get(item.id),
                 has_pending_response_turn=bool(pending_response_turn_map.get(item.id)),
+                pause_request=serialize_pause_request_projection(pause_request_map.get(item.id)),
             )
             for item in thread_sessions
         }
@@ -146,6 +151,7 @@ def build_session_workspace(
             owner_id=owner_id,
             kernel_capabilities=kernel_capabilities_map.get(session.id),
             has_pending_response_turn=bool(pending_response_turn_map.get(session.id)),
+            pause_request=serialize_pause_request_projection(pause_request_map.get(session.id)),
         )
 
     with timing.span("build_projection"):
@@ -237,6 +243,8 @@ def build_session_mobile_tail(
     with timing.span("load_runtime"):
         with timing.span("runtime_state"):
             runtime_state_map = load_runtime_state_map(db, thread_session_ids)
+        with timing.span("pause_requests"):
+            pause_request_map = load_active_pause_request_map(db, thread_session_ids)
         with timing.span("control_state"):
             control_state_map = load_managed_control_state_map(db, thread_session_ids)
         with timing.span("provisional_preview"):
@@ -268,6 +276,7 @@ def build_session_mobile_tail(
             control_overlay=control_state_map.get(session.id),
             transcript_preview=transcript_preview_map.get(str(session.id)),
             owner_id=owner_id,
+            pause_request=serialize_pause_request_projection(pause_request_map.get(session.id)),
             has_pending_response_turn=bool(pending_response_turn_map.get(session.id)),
         )
 

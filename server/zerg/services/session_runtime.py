@@ -31,7 +31,14 @@ from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_observations import record_runtime_observation
 from zerg.utils.time import normalize_utc
 
-RuntimeEventKind = Literal["phase_signal", "progress_signal", "terminal_signal", "binding_signal"]
+RuntimeEventKind = Literal[
+    "phase_signal",
+    "progress_signal",
+    "terminal_signal",
+    "binding_signal",
+    "pause_request",
+    "pause_resolution",
+]
 RuntimeEventApplyOutcome = Literal["applied", "ignored", "protected_session_ended", "stored_live_overlay"]
 
 PHASE_FRESHNESS = {
@@ -643,7 +650,7 @@ def runtime_event_from_observation(observation) -> RuntimeEventIngest | None:
         return None
     payload = _observation_payload(observation)
     kind = str(payload.get("kind") or "").strip()
-    valid_kinds = {"phase_signal", "progress_signal", "terminal_signal", "binding_signal"}
+    valid_kinds = {"phase_signal", "progress_signal", "terminal_signal", "binding_signal", "pause_request", "pause_resolution"}
     if kind not in valid_kinds:
         raise ValueError(f"runtime_signal observation {observation.observation_id} has invalid kind {kind!r}")
     return RuntimeEventIngest(
@@ -787,9 +794,15 @@ def _phase_reanchors(prev_phase: str | None, next_phase: str) -> bool:
 
 
 def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEventApplyOutcome:
+    if event.kind in {"pause_request", "pause_resolution"}:
+        from zerg.services.session_pause_requests import apply_pause_runtime_event
+
+        return "applied" if apply_pause_runtime_event(db, event) else "ignored"
+
     state = _ensure_state(db, event)
     before = _state_snapshot(state)
     occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
+    pause_changed = False
 
     if state.terminal_state == "session_ended":
         incoming_terminal_state = str((event.payload or {}).get("terminal_state") or "").strip()
@@ -882,6 +895,19 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         state.terminal_reason = None
         state.terminal_source = None
         state.terminal_at = None
+        if next_phase in LIVE_EXECUTION_PHASES:
+            from zerg.services.session_pause_requests import resolve_pending_pause_requests_for_runtime
+
+            pause_changed = (
+                resolve_pending_pause_requests_for_runtime(
+                    db,
+                    runtime_key=event.runtime_key,
+                    status="resolved",
+                    occurred_at=occurred_at,
+                    response_text="Provider continued.",
+                )
+                > 0
+            )
 
     elif event.kind == "progress_signal":
         latest_progress_related_at = _latest_timestamp(
@@ -954,6 +980,29 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
             session = db.query(AgentSession).filter(AgentSession.id == event.session_id).first()
             if session is not None and session.ended_at is None:
                 session.ended_at = occurred_at
+            from zerg.services.session_pause_requests import expire_pending_pause_requests_for_session
+
+            pause_changed = (
+                expire_pending_pause_requests_for_session(
+                    db,
+                    session_id=event.session_id,
+                    occurred_at=occurred_at,
+                    response_text=f"Session ended: {terminal_state}.",
+                )
+                > 0
+            )
+        else:
+            from zerg.services.session_pause_requests import expire_pending_pause_requests_for_runtime
+
+            pause_changed = (
+                expire_pending_pause_requests_for_runtime(
+                    db,
+                    runtime_key=event.runtime_key,
+                    occurred_at=occurred_at,
+                    response_text=f"Runtime ended: {terminal_state}.",
+                )
+                > 0
+            )
 
     elif event.kind == "binding_signal":
         if event.session_id is not None:
@@ -962,6 +1011,9 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
     after = _state_snapshot(state)
     if after != before:
         state.runtime_version = int(state.runtime_version or 0) + 1
+        db.flush()
+        return "applied"
+    if pause_changed:
         db.flush()
         return "applied"
     return "ignored"

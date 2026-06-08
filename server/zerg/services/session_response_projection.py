@@ -17,6 +17,8 @@ from zerg.services.agents_store import AgentsStore
 from zerg.services.internal_sessions import internal_canary_session_clause
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
+from zerg.services.session_pause_requests import load_active_pause_request_map
+from zerg.services.session_pause_requests import serialize_pause_request_projection
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_turns import load_pending_response_turn_map
@@ -87,6 +89,7 @@ def build_session_response_list(
     activity_map = store.get_last_activity_map(session_ids)
     now = datetime.now(timezone.utc)
     runtime_state_map = load_runtime_state_map(db, session_ids)
+    pause_request_map = load_active_pause_request_map(db, session_ids)
     control_state_map = load_managed_control_state_map(db, session_ids)
     transcript_preview_map = load_active_provisional_preview_map(db, session_ids)
     pending_response_turn_map = load_pending_response_turn_map(db, session_ids, include_event_fallback=False)
@@ -144,6 +147,7 @@ def build_session_response_list(
                 summary_status=summary_status,
                 kernel_capabilities=kernel_capabilities_map.get(session.id),
                 has_pending_response_turn=bool(pending_response_turn_map.get(session.id)),
+                pause_request=serialize_pause_request_projection(pause_request_map.get(session.id)),
                 launch_attempt=launch_attempt_map.get(session.id),
             )
         )

@@ -45,6 +45,8 @@ from zerg.services.session_listing import SessionListParams
 from zerg.services.session_listing import list_agent_sessions
 from zerg.services.session_messages import create_session_message
 from zerg.services.session_messages import resolve_session_message_owner_id
+from zerg.services.session_pause_requests import load_active_pause_request_map
+from zerg.services.session_pause_requests import serialize_pause_request_projection
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_turns import execute_session_turn_write
@@ -623,6 +625,7 @@ def list_active_sessions(
         last_ai = store.get_last_message_map(session_ids, role="assistant", max_len=300)
         now = datetime.now(timezone.utc)
         runtime_state_map = load_runtime_state_map(db, [session.id for session in sessions])
+        pause_request_map = load_active_pause_request_map(db, session_ids)
         control_state_map = load_managed_control_state_map(db, [session.id for session in sessions])
         binding_overlay_map = load_binding_overlay(db, session_ids, now=now)
         kernel_capabilities_map = project_capabilities_bulk(db, session_ids=session_ids)
@@ -656,6 +659,7 @@ def list_active_sessions(
                     binding_overlay=binding_overlay_map.get(s.id),
                     control_overlay=control_state_map.get(s.id),
                     kernel_capabilities=kernel_capabilities_map.get(s.id),
+                    pause_request=serialize_pause_request_projection(pause_request_map.get(s.id)),
                 )
             )
 
@@ -812,6 +816,7 @@ def get_session(
     now = datetime.now(timezone.utc)
     with timing.span("load_runtime"):
         runtime_state_map = load_runtime_state_map(db, [session.id])
+        pause_request_map = load_active_pause_request_map(db, [session.id])
         transcript_preview_map = load_active_provisional_preview_map(db, [session.id])
         pending_response_turn_map = load_pending_response_turn_map(db, [session.id])
         binding_overlay_map = load_binding_overlay(db, [session.id], now=now)
@@ -836,6 +841,7 @@ def get_session(
             transcript_preview=transcript_preview_map.get(str(session.id)),
             owner_id=effective_owner_id,
             has_pending_response_turn=bool(pending_response_turn_map.get(session.id)),
+            pause_request=serialize_pause_request_projection(pause_request_map.get(session.id)),
         )
     timing.apply(response)
     return result
@@ -875,6 +881,7 @@ def get_session_thread(
     now = datetime.now(timezone.utc)
     with timing.span("load_runtime"):
         runtime_state_map = load_runtime_state_map(db, [item.id for item in thread_sessions])
+        pause_request_map = load_active_pause_request_map(db, thread_session_ids)
         transcript_preview_map = load_active_provisional_preview_map(db, [item.id for item in thread_sessions])
         pending_response_turn_map = load_pending_response_turn_map(db, thread_session_ids)
         binding_overlay_map = load_binding_overlay(db, [item.id for item in thread_sessions], now=now)
@@ -906,6 +913,7 @@ def get_session_thread(
                     control_overlay=control_state_map.get(item.id),
                     owner_id=effective_owner_id,
                     has_pending_response_turn=bool(pending_response_turn_map.get(item.id)),
+                    pause_request=serialize_pause_request_projection(pause_request_map.get(item.id)),
                     launch_attempt=launch_attempt_map.get(item.id),
                 )
                 for item in thread_sessions

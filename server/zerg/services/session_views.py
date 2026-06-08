@@ -274,6 +274,7 @@ def build_session_runtime_display_response(
     assistant_messages: int | None = None,
     has_visible_transcript_preview: bool = False,
     has_pending_response_turn: bool = False,
+    pause_request: dict[str, Any] | None = None,
     now: datetime | None = None,
 ) -> SessionRuntimeDisplayResponse:
     display = build_session_runtime_display(
@@ -287,6 +288,7 @@ def build_session_runtime_display_response(
         assistant_messages=assistant_messages,
         has_visible_transcript_preview=has_visible_transcript_preview,
         has_pending_response_turn=has_pending_response_turn,
+        pause_request=pause_request,
         now=now,
     )
     return SessionRuntimeDisplayResponse(
@@ -310,6 +312,7 @@ def build_session_runtime_display_response(
         lifecycle=display.lifecycle,
         host_state=display.host_state,
         terminal_reason=display.terminal_reason,
+        pause_request=display.pause_request,
     )
 
 
@@ -389,6 +392,13 @@ def _timeline_status_from_display(
             label="Syncing",
             tone="active",
             seen_at=None,
+            seen_at_prefix="Updated",
+        )
+    if runtime_display.pause_request is not None and runtime_display.pause_request.status == "pending":
+        return TimelineStatusPresentationResponse(
+            label="Needs answer",
+            tone="blocked",
+            seen_at=presence_at or runtime_display.pause_request.last_seen_at,
             seen_at_prefix="Updated",
         )
     if runtime_display.lifecycle == Lifecycle.CLOSED:
@@ -573,6 +583,38 @@ class SessionCapabilitiesResponse(BaseModel):
     )
 
 
+class SessionPauseQuestionOptionResponse(BaseModel):
+    label: str = Field(..., description="User-facing option label")
+    description: Optional[str] = Field(None, description="Optional explanatory text for the option")
+    value: Optional[str] = Field(None, description="Provider-native option value when distinct from label")
+
+
+class SessionPauseQuestionResponse(BaseModel):
+    id: str = Field(..., description="Stable question identifier")
+    header: Optional[str] = Field(None, description="Short question header")
+    question: str = Field(..., description="Question text")
+    multi_select: bool = Field(False, description="True when multiple options may be selected")
+    options: list[SessionPauseQuestionOptionResponse] = Field(default_factory=list, description="Provider-native answer options")
+
+
+class SessionPauseRequestProjectionResponse(UTCBaseModel):
+    id: str = Field(..., description="Pause request UUID")
+    session_id: str = Field(..., description="Session UUID")
+    runtime_key: str = Field(..., description="Runtime key that emitted this request")
+    kind: Literal["structured_question"] = Field(..., description="Pause request kind")
+    status: Literal["pending", "resolved", "rejected", "failed", "expired"] = Field(..., description="Pause lifecycle status")
+    provider: str = Field(..., description="Provider that emitted the request")
+    can_respond: bool = Field(..., description="True when Longhouse can answer through a provider-native path")
+    title: Optional[str] = Field(None, description="Short title for the request")
+    summary: Optional[str] = Field(None, description="Short user-facing detail for the request")
+    tool_name: Optional[str] = Field(None, description="Provider tool/dialog name when known")
+    questions: list[SessionPauseQuestionResponse] = Field(default_factory=list, description="Structured questions to render")
+    occurred_at: Optional[datetime] = Field(None, description="When the provider emitted the request")
+    last_seen_at: Optional[datetime] = Field(None, description="When Longhouse last observed the request")
+    resolved_at: Optional[datetime] = Field(None, description="When the request resolved")
+    expires_at: Optional[datetime] = Field(None, description="Optional provider/request expiry")
+
+
 class SessionRuntimeDisplayResponse(BaseModel):
     truth_tier: TruthTier = Field(..., description="Runtime truth tier")
     signal_tier: SignalTier = Field(..., description="Strongest source signal tier")
@@ -596,6 +638,10 @@ class SessionRuntimeDisplayResponse(BaseModel):
     terminal_reason: Optional[TerminalReason] = Field(
         ...,
         description="Why the session is closed (when lifecycle=='closed'), else null",
+    )
+    pause_request: Optional[SessionPauseRequestProjectionResponse] = Field(
+        None,
+        description="Active structured provider question, when the runtime is waiting for an answer.",
     )
 
 
@@ -1255,6 +1301,7 @@ def build_session_response(
     control_overlay=None,
     kernel_capabilities=None,
     has_pending_response_turn: bool = False,
+    pause_request: dict[str, Any] | None = None,
     launch_attempt: SessionLaunchAttempt | None | object = _LAUNCH_ATTEMPT_MISSING,
 ) -> SessionResponse:
     cache = thread_cache if thread_cache is not None else {}
@@ -1324,6 +1371,7 @@ def build_session_response(
         assistant_messages=session.assistant_messages or 0,
         has_visible_transcript_preview=has_visible_transcript_preview,
         has_pending_response_turn=has_pending_response_turn,
+        pause_request=pause_request,
         now=current_now,
     )
     runtime_facts = derive_session_liveness_facts(
@@ -1494,6 +1542,7 @@ def build_active_session_response(
     binding_overlay=None,
     control_overlay=None,
     kernel_capabilities=None,
+    pause_request: dict[str, Any] | None = None,
 ) -> ActiveSessionResponse:
     if kernel_capabilities is None:
         kernel_capabilities = project_session_capabilities(store.db, session_id=session.id)
@@ -1522,6 +1571,7 @@ def build_active_session_response(
         ended_at=session.ended_at,
         binding_host_state=binding_host_state,
         binding_terminal_reason=binding_terminal_reason,
+        pause_request=pause_request,
     )
     runtime_facts = derive_session_liveness_facts(
         runtime_overlay=runtime_overlay,

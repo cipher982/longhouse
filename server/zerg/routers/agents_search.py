@@ -22,6 +22,8 @@ from zerg.services.internal_sessions import internal_canary_session_clause
 from zerg.services.internal_sessions import is_internal_canary_provider_filter
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.provisional_events import load_active_provisional_preview_map
+from zerg.services.session_pause_requests import load_active_pause_request_map
+from zerg.services.session_pause_requests import serialize_pause_request_projection
 from zerg.services.session_views import RecallMatch
 from zerg.services.session_views import RecallResponse
 from zerg.services.session_views import SemanticSearchResponse
@@ -148,7 +150,9 @@ async def semantic_search_sessions(
 
     matched_sessions = [session for session, _snippet, _score in matched_rows]
     thread_cache = store.batch_thread_meta(matched_sessions)
-    transcript_preview_map = load_active_provisional_preview_map(db, [session.id for session in matched_sessions])
+    matched_session_ids = [session.id for session in matched_sessions]
+    transcript_preview_map = load_active_provisional_preview_map(db, matched_session_ids)
+    pause_request_map = load_active_pause_request_map(db, matched_session_ids)
     sessions = [
         build_session_response(
             store,
@@ -157,6 +161,7 @@ async def semantic_search_sessions(
             match_snippet=snippet,
             match_score=score,
             transcript_preview=transcript_preview_map.get(str(session.id)),
+            pause_request=serialize_pause_request_projection(pause_request_map.get(session.id)),
         )
         for session, snippet, score in matched_rows
     ]

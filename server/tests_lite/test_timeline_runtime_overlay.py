@@ -42,6 +42,7 @@ from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 from zerg.services.session_observations import OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
+from zerg.services.session_pause_requests import upsert_pause_request
 from zerg.services.session_listing import SessionListParams
 from zerg.services.session_listing import list_agent_sessions
 from zerg.services.session_runtime import RuntimeEventIngest
@@ -425,6 +426,7 @@ def test_sessions_list_uses_recent_activity_anchor_for_old_live_session(tmp_path
             "lifecycle": "open",
             "host_state": "unknown",
             "terminal_reason": None,
+            "pause_request": None,
         }
         assert top["timeline_card"]["status"]["label"] == "Using Shell"
         assert top["timeline_card"]["status"]["tone"] == "running"
@@ -1556,6 +1558,154 @@ def test_sessions_list_marks_materialized_needs_user_as_idle(tmp_path):
         assert row["runtime_display"]["detail"] == "Waiting for next prompt"
         assert row["runtime_display"]["tone"] == "idle"
         assert row["runtime_display"]["needs_attention"] is False
+
+
+def test_sessions_list_marks_pending_structured_question_as_needs_answer(tmp_path):
+    factory = _make_db(tmp_path, "materialized_runtime_pause_question.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            started_at=now - timedelta(hours=6),
+            ended_at=None,
+            project="runtime-pause-question",
+            execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
+            managed_transport="codex_app_server",
+            source_runner_id=None,
+            managed_session_name="codex",
+            provider="codex",
+        )
+        runtime_key = f"codex:{session.id}"
+        db.add(
+            SessionRuntimeState(
+                runtime_key=runtime_key,
+                session_id=session.id,
+                provider="codex",
+                device_id="cinder",
+                phase="needs_user",
+                phase_source="codex_bridge",
+                active_tool=None,
+                phase_started_at=now - timedelta(seconds=30),
+                last_runtime_signal_at=now - timedelta(seconds=30),
+                last_progress_at=now - timedelta(seconds=25),
+                last_live_at=now - timedelta(seconds=30),
+                timeline_anchor_at=now - timedelta(seconds=25),
+                freshness_expires_at=now + timedelta(minutes=10),
+                terminal_state=None,
+                terminal_at=None,
+                runtime_version=4,
+            )
+        )
+        pause, _changed = upsert_pause_request(
+            db,
+            session_id=session.id,
+            runtime_key=runtime_key,
+            provider="codex",
+            request_key=f"codex:{session.id}:question-1",
+            provider_request_id="question-1",
+            title="Choose storage",
+            summary="The agent needs a storage decision.",
+            request_payload={
+                "questions": [
+                    {
+                        "id": "storage",
+                        "question": "Which storage backend?",
+                        "options": [{"label": "SQLite"}, {"label": "Postgres"}],
+                    }
+                ]
+            },
+            can_respond=True,
+            occurred_at=now - timedelta(seconds=20),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        resp = client.get("/agents/sessions?days_back=14&limit=1", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200, resp.text
+        row = resp.json()["sessions"][0]
+        assert row["id"] == str(session.id)
+        assert row["presence_state"] == "needs_user"
+        assert row["runtime_display"]["state"] == "needs_user"
+        assert row["runtime_display"]["headline"] == "Needs answer"
+        assert row["runtime_display"]["detail"] == "The agent needs a storage decision."
+        assert row["runtime_display"]["tone"] == "blocked"
+        assert row["runtime_display"]["needs_attention"] is True
+        assert row["runtime_display"]["pause_request"]["id"] == str(pause.id)
+        assert row["runtime_display"]["pause_request"]["can_respond"] is True
+        assert row["runtime_display"]["pause_request"]["questions"][0]["id"] == "storage"
+        assert row["timeline_card"]["status"]["label"] == "Needs answer"
+        assert row["timeline_card"]["status"]["tone"] == "blocked"
+        assert row["timeline_card"]["border_tone"] == "blocked"
+
+
+def test_sessions_list_keeps_stale_structured_question_visible(tmp_path):
+    factory = _make_db(tmp_path, "stale_runtime_pause_question.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            started_at=now - timedelta(hours=6),
+            ended_at=None,
+            project="runtime-stale-pause-question",
+            execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
+            managed_transport="codex_app_server",
+            source_runner_id=None,
+            managed_session_name="codex",
+            provider="codex",
+        )
+        runtime_key = f"codex:{session.id}"
+        db.add(
+            SessionRuntimeState(
+                runtime_key=runtime_key,
+                session_id=session.id,
+                provider="codex",
+                device_id="cinder",
+                phase="needs_user",
+                phase_source="codex_bridge",
+                active_tool=None,
+                phase_started_at=now - timedelta(minutes=20),
+                last_runtime_signal_at=now - timedelta(minutes=20),
+                last_progress_at=now - timedelta(minutes=20),
+                last_live_at=now - timedelta(minutes=20),
+                timeline_anchor_at=now - timedelta(minutes=20),
+                freshness_expires_at=now - timedelta(minutes=10),
+                terminal_state=None,
+                terminal_at=None,
+                runtime_version=4,
+            )
+        )
+        pause, _changed = upsert_pause_request(
+            db,
+            session_id=session.id,
+            runtime_key=runtime_key,
+            provider="codex",
+            request_key=f"codex:{session.id}:question-1",
+            provider_request_id="question-1",
+            title="Choose approach",
+            occurred_at=now - timedelta(minutes=20),
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        resp = client.get("/agents/sessions?days_back=14&limit=1", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200, resp.text
+        row = resp.json()["sessions"][0]
+        assert row["runtime_phase"] is None
+        assert row["presence_state"] is None
+        assert row["runtime_display"]["state"] is None
+        assert row["runtime_display"]["headline"] == "Needs answer"
+        assert row["runtime_display"]["tone"] == "blocked"
+        assert row["runtime_display"]["needs_attention"] is True
+        assert row["runtime_display"]["pause_request"]["id"] == str(pause.id)
+        assert row["timeline_card"]["status"]["label"] == "Needs answer"
 
 
 def test_sessions_list_marks_recent_managed_idle_with_missing_assistant_as_syncing(tmp_path):
