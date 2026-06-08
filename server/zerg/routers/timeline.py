@@ -68,6 +68,7 @@ from zerg.services.session_views import SessionTurnsListResponse
 from zerg.services.session_views import SessionWorkspaceResponse
 from zerg.services.session_workspace import build_session_mobile_tail
 from zerg.services.session_workspace import build_session_workspace
+from zerg.services.session_workspace_revision import load_session_workspace_revision
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.timeline_session_listing import TimelineSessionsListResponse
 from zerg.services.timeline_session_listing import list_timeline_sessions_for_browser
@@ -704,67 +705,10 @@ def _load_workspace_signature(
     db: Session,
     session_id: UUID,
 ) -> tuple:
-    """Lightweight signature for a session's workspace state.
+    """Lightweight signature for session workspace-visible state."""
 
-    Returns a tuple of scalar values that change whenever the workspace has
-    new data the browser should display.  Comparing successive tuples is
-    cheap — a single DB query touching indexed columns only.
-    """
-    from zerg.models.agents import AgentEvent
-    from zerg.models.agents import AgentSession
-    from zerg.models.agents import SessionLivePreview
-    from zerg.models.agents import SessionRuntimeState
-
-    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
-    if session is None:
-        return ()
-
-    # Session-identity-kernel cleanup: ``thread_root_session_id`` was dropped.
-    # Treat each session as its own thread root for the workspace signature.
-    thread_root_id = session.id
-    thread_sessions = db.query(AgentSession.id, AgentSession.updated_at).filter(AgentSession.id == thread_root_id).all()
-    thread_session_ids = [str(row.id) for row in thread_sessions]
-    latest_session_updated = max((row.updated_at for row in thread_sessions if row.updated_at), default=None)
-
-    latest_event_id_query = db.query(func.max(AgentEvent.id)).filter(AgentEvent.session_id.in_(thread_session_ids))
-    latest_event_id = latest_event_id_query.scalar() or 0
-
-    # Latest event emitted_at (the provider/engine timestamp on the newest event).
-    # This feeds client beacons so we can measure true end-to-end latency.
-    latest_event_timestamp_column = func.max(AgentEvent.timestamp)
-    agent_event_session_filter = AgentEvent.session_id.in_(thread_session_ids)
-    latest_event_timestamp_query = db.query(latest_event_timestamp_column).filter(agent_event_session_filter)
-    latest_event_timestamp = latest_event_timestamp_query.scalar()
-
-    # Latest runtime signal across thread — the runtime state row advances on every
-    # hook-driven phase change, so this replaces the old SessionPresence anchor.
-    latest_runtime_signal = (
-        db.query(func.max(SessionRuntimeState.updated_at)).filter(SessionRuntimeState.session_id.in_(thread_session_ids)).scalar()
-    )
-
-    runtime_version_sum = (
-        db.query(func.sum(SessionRuntimeState.runtime_version)).filter(SessionRuntimeState.session_id.in_(thread_session_ids)).scalar()
-    ) or 0
-
-    live_preview_updated_at_column = func.max(SessionLivePreview.preview_updated_at)
-    live_preview_session_filter = SessionLivePreview.session_id.in_(thread_session_ids)
-    live_preview_updated_at = (
-        db.query(live_preview_updated_at_column)
-        .filter(live_preview_session_filter)
-        .filter(SessionLivePreview.superseded_at.is_(None))
-        .scalar()
-    )
-
-    return (
-        str(thread_root_id),
-        latest_session_updated,
-        latest_event_id,
-        latest_runtime_signal,
-        runtime_version_sum,
-        len(thread_session_ids),
-        latest_event_timestamp,
-        live_preview_updated_at,
-    )
+    revision = load_session_workspace_revision(db, session_id)
+    return revision.signature if revision is not None else ()
 
 
 def _load_workspace_transcript_preview_payload(

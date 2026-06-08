@@ -28,6 +28,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionLivePreview
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
+from zerg.services.session_pause_requests import upsert_pause_request
 
 
 async def _noop_coro() -> None:
@@ -265,6 +266,67 @@ def test_workspace_stream_detects_live_preview_projection_update(tmp_path):
     assert preview_changed["latest_event_id"] == -1
     assert preview_changed["transcript_preview"]["text"] == "hello live"
     assert preview_changed["transcript_preview"]["event_origin"] == "live_provisional"
+
+
+@patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
+def test_workspace_stream_detects_pause_request_update(tmp_path):
+    """Pending pause requests are viewport state and must wake session detail."""
+    sf = _make_db(tmp_path, name="workspace_stream_pause_request.db")
+    now = datetime.now(timezone.utc)
+
+    with sf() as db:
+        session = AgentSession(
+            provider="claude",
+            environment="production",
+            project="test",
+            started_at=now,
+            user_messages=1,
+            assistant_messages=0,
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        session_id = session.id
+
+    class _MutatePauseRequest:
+        def __init__(self):
+            self._checks = 0
+
+        async def is_disconnected(self) -> bool:
+            self._checks += 1
+            if self._checks == 2:
+                with sf() as db:
+                    upsert_pause_request(
+                        db,
+                        session_id=session_id,
+                        runtime_key="claude:session-1",
+                        provider="claude",
+                        request_key="claude:session-1:question-1",
+                        provider_request_id="question-1",
+                        title="Approval",
+                        request_payload={"questions": [{"id": "approval", "question": "Proceed?"}]},
+                        can_respond=True,
+                        occurred_at=now,
+                    )
+                    db.commit()
+            return self._checks > 3
+
+    async def _run():
+        request = _MutatePauseRequest()
+        events: list[dict] = []
+        async for event in timeline_mod._session_workspace_stream(
+            request,
+            session_factory=sf,
+            session_id=session_id,
+            skip_initial=False,
+        ):
+            events.append(event)
+        return events
+
+    events = asyncio.run(_run())
+    grouped = _collect_stream_events(events)
+
+    assert len(grouped.get("workspace_changed", [])) == 2
 
 
 @patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())

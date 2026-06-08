@@ -265,10 +265,25 @@ export interface AgentSessionProjectionResponse {
   abandoned_events?: number;
 }
 
+export interface AgentSessionWorkspaceRevision {
+  latest_event_id?: number;
+  latest_session_updated_at?: string | null;
+  latest_runtime_signal_at?: string | null;
+  runtime_version_sum?: number;
+  pause_request_count?: number;
+  pause_request_fingerprint?: string | null;
+  managed_control_count?: number;
+  managed_control_fingerprint?: string | null;
+  live_preview_updated_at?: string | null;
+  thread_session_count?: number;
+  fingerprint: string;
+}
+
 export interface AgentSessionWorkspaceResponse {
   session: AgentSession;
   thread: AgentSessionThreadResponse;
   projection: AgentSessionProjectionResponse;
+  workspace_revision: AgentSessionWorkspaceRevision;
 }
 
 export type AgentSessionTurnState =

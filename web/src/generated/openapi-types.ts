@@ -9477,6 +9477,8 @@ export interface components {
              * @description Latest durable event id used to anchor older-page fetches
              */
             snapshot_event_id?: number | null;
+            /** @description Durable viewport freshness revision */
+            workspace_revision: components["schemas"]["SessionWorkspaceRevisionResponse"];
         };
         /** SessionPauseQuestionOptionResponse */
         SessionPauseQuestionOptionResponse: {
@@ -10383,6 +10385,74 @@ export interface components {
             thread: components["schemas"]["SessionThreadResponse"];
             /** @description First page of the stitched lineage projection */
             projection: components["schemas"]["SessionProjectionResponse"];
+            /** @description Durable viewport freshness revision */
+            workspace_revision: components["schemas"]["SessionWorkspaceRevisionResponse"];
+        };
+        /**
+         * SessionWorkspaceRevisionResponse
+         * @description Durable fingerprint for session viewport-visible state.
+         */
+        SessionWorkspaceRevisionResponse: {
+            /**
+             * Latest Event Id
+             * @description Latest durable event id included in the viewport signature
+             * @default 0
+             */
+            latest_event_id: number;
+            /**
+             * Latest Session Updated At
+             * @description Latest session row update in the viewport path
+             */
+            latest_session_updated_at?: string | null;
+            /**
+             * Latest Runtime Signal At
+             * @description Latest runtime-state update in the viewport path
+             */
+            latest_runtime_signal_at?: string | null;
+            /**
+             * Runtime Version Sum
+             * @description Sum of runtime versions in the viewport path
+             * @default 0
+             */
+            runtime_version_sum: number;
+            /**
+             * Pause Request Count
+             * @description Active pause requests included in the viewport signature
+             * @default 0
+             */
+            pause_request_count: number;
+            /**
+             * Pause Request Fingerprint
+             * @description Hash of active pause-request viewport state
+             */
+            pause_request_fingerprint?: string | null;
+            /**
+             * Managed Control Count
+             * @description Managed control connections included in the viewport signature
+             * @default 0
+             */
+            managed_control_count: number;
+            /**
+             * Managed Control Fingerprint
+             * @description Hash of managed-control viewport state
+             */
+            managed_control_fingerprint?: string | null;
+            /**
+             * Live Preview Updated At
+             * @description Latest live preview update in the viewport path
+             */
+            live_preview_updated_at?: string | null;
+            /**
+             * Thread Session Count
+             * @description Number of sessions in the viewport path
+             * @default 0
+             */
+            thread_session_count: number;
+            /**
+             * Fingerprint
+             * @description Hash of the complete durable viewport signature
+             */
+            fingerprint: string;
         };
         /**
          * SessionsListResponse

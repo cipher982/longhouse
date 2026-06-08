@@ -272,12 +272,31 @@ extension APISessionThreadResponse {
     }
 }
 
+extension APISessionWorkspaceRevisionResponse {
+    var sessionWorkspaceRevision: SessionWorkspaceRevision {
+        SessionWorkspaceRevision(
+            latestEventId: latestEventId,
+            latestSessionUpdatedAt: latestSessionUpdatedAt,
+            latestRuntimeSignalAt: latestRuntimeSignalAt,
+            runtimeVersionSum: runtimeVersionSum,
+            pauseRequestCount: pauseRequestCount,
+            pauseRequestFingerprint: pauseRequestFingerprint,
+            managedControlCount: managedControlCount,
+            managedControlFingerprint: managedControlFingerprint,
+            livePreviewUpdatedAt: livePreviewUpdatedAt,
+            threadSessionCount: threadSessionCount,
+            fingerprint: fingerprint
+        )
+    }
+}
+
 extension APISessionWorkspaceResponse {
     var sessionWorkspaceResponse: SessionWorkspaceResponse {
         SessionWorkspaceResponse(
             session: session.sessionDetail,
             thread: thread.sessionThreadResponse,
-            projection: projection.sessionProjectionResponse
+            projection: projection.sessionProjectionResponse,
+            workspaceRevision: workspaceRevision.sessionWorkspaceRevision
         )
     }
 }

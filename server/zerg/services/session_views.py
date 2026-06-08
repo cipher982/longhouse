@@ -1095,12 +1095,29 @@ class SessionProjectionResponse(BaseModel):
     abandoned_events: int = Field(0, description="Events excluded from head projection due to rewind branches")
 
 
+class SessionWorkspaceRevisionResponse(BaseModel):
+    """Durable fingerprint for session viewport-visible state."""
+
+    latest_event_id: int = Field(0, description="Latest durable event id included in the viewport signature")
+    latest_session_updated_at: Optional[datetime] = Field(None, description="Latest session row update in the viewport path")
+    latest_runtime_signal_at: Optional[datetime] = Field(None, description="Latest runtime-state update in the viewport path")
+    runtime_version_sum: int = Field(0, description="Sum of runtime versions in the viewport path")
+    pause_request_count: int = Field(0, description="Active pause requests included in the viewport signature")
+    pause_request_fingerprint: Optional[str] = Field(None, description="Hash of active pause-request viewport state")
+    managed_control_count: int = Field(0, description="Managed control connections included in the viewport signature")
+    managed_control_fingerprint: Optional[str] = Field(None, description="Hash of managed-control viewport state")
+    live_preview_updated_at: Optional[datetime] = Field(None, description="Latest live preview update in the viewport path")
+    thread_session_count: int = Field(0, description="Number of sessions in the viewport path")
+    fingerprint: str = Field(..., description="Hash of the complete durable viewport signature")
+
+
 class SessionWorkspaceResponse(BaseModel):
     """Response for the primary session workspace bootstrap payload."""
 
     session: SessionResponse = Field(..., description="Focused session metadata")
     thread: SessionThreadResponse = Field(..., description="Logical thread continuations for the focused session")
     projection: SessionProjectionResponse = Field(..., description="First page of the stitched lineage projection")
+    workspace_revision: SessionWorkspaceRevisionResponse = Field(..., description="Durable viewport freshness revision")
 
 
 class SessionMobileTailResponse(BaseModel):
@@ -1109,6 +1126,7 @@ class SessionMobileTailResponse(BaseModel):
     session: SessionResponse = Field(..., description="Focused session metadata")
     projection: SessionProjectionResponse = Field(..., description="Tail page of the stitched lineage projection")
     snapshot_event_id: Optional[int] = Field(None, description="Latest durable event id used to anchor older-page fetches")
+    workspace_revision: SessionWorkspaceRevisionResponse = Field(..., description="Durable viewport freshness revision")
 
 
 class IngestResponse(BaseModel):

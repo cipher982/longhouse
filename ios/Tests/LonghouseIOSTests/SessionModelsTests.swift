@@ -458,6 +458,19 @@ struct SessionModelsTests {
             "page_offset": 0,
             "branch_mode": "head",
             "abandoned_events": 0
+          },
+          "workspace_revision": {
+            "latest_event_id": 44,
+            "latest_session_updated_at": "2026-05-15T20:00:00Z",
+            "latest_runtime_signal_at": null,
+            "runtime_version_sum": 0,
+            "pause_request_count": 0,
+            "pause_request_fingerprint": null,
+            "managed_control_count": 0,
+            "managed_control_fingerprint": null,
+            "live_preview_updated_at": null,
+            "thread_session_count": 1,
+            "fingerprint": "sha256:workspace"
           }
         }
         """.data(using: .utf8)!
@@ -469,6 +482,7 @@ struct SessionModelsTests {
         #expect(workspace.thread.sessions.map(\.id) == ["workspace-session"])
         #expect(workspace.events.map(\.id) == [44])
         #expect(workspace.events.first?.toolInputString("file_path") == "/tmp/workspace.swift")
+        #expect(workspace.workspaceRevision?.fingerprint == "sha256:workspace")
     }
 
     @Test

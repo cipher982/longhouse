@@ -24,11 +24,14 @@ from zerg.services.session_views import SessionProjectionItemResponse
 from zerg.services.session_views import SessionProjectionResponse
 from zerg.services.session_views import SessionThreadResponse
 from zerg.services.session_views import SessionWorkspaceResponse
+from zerg.services.session_views import SessionWorkspaceRevisionResponse
 from zerg.services.session_views import build_event_input_origin_map
 from zerg.services.session_views import build_event_response
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import build_tool_call_state_map
 from zerg.services.session_views import is_session_closed
+from zerg.services.session_workspace_revision import SessionWorkspaceRevision
+from zerg.services.session_workspace_revision import load_session_workspace_revision
 from zerg.services.unmanaged_bindings import load_binding_overlay
 from zerg.utils.server_timing import ServerTimingRecorder
 from zerg.utils.time import normalize_utc
@@ -82,6 +85,13 @@ def build_session_workspace(
             branch_mode=branch_mode,
             limit=limit,
             load_from_end=True,
+        )
+    with timing.span("workspace_revision"):
+        workspace_revision = load_session_workspace_revision(db, session_id)
+    if workspace_revision is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session {session_id} not found",
         )
 
     thread_cache = store.batch_thread_meta(thread_sessions)
@@ -172,6 +182,7 @@ def build_session_workspace(
                 sessions=[thread_response_map.get(str(item.id), session_response) for item in thread_sessions],
             ),
             projection=projection_response,
+            workspace_revision=_build_workspace_revision_response(workspace_revision),
         )
 
 
@@ -226,6 +237,13 @@ def build_session_mobile_tail(
             limit=limit,
             offset=offset,
             load_from_end=True,
+        )
+    with timing.span("workspace_revision"):
+        workspace_revision = load_session_workspace_revision(db, session_id)
+    if workspace_revision is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session {session_id} not found",
         )
 
     current_snapshot_event_id = _projection_snapshot_event_id(store, projection)
@@ -294,12 +312,29 @@ def build_session_mobile_tail(
         session=session_response,
         projection=projection_response,
         snapshot_event_id=current_snapshot_event_id,
+        workspace_revision=_build_workspace_revision_response(workspace_revision),
     )
 
 
 def _projection_snapshot_event_id(store: AgentsStore, projection) -> int | None:
     latest_event_ids = [store.get_latest_event_id(path_session.id) for path_session in projection.path_sessions]
     return max((event_id for event_id in latest_event_ids if event_id is not None), default=None)
+
+
+def _build_workspace_revision_response(revision: SessionWorkspaceRevision) -> SessionWorkspaceRevisionResponse:
+    return SessionWorkspaceRevisionResponse(
+        latest_event_id=revision.latest_event_id,
+        latest_session_updated_at=revision.latest_session_updated_at,
+        latest_runtime_signal_at=revision.latest_runtime_signal_at,
+        runtime_version_sum=revision.runtime_version_sum,
+        pause_request_count=revision.pause_request_count,
+        pause_request_fingerprint=revision.pause_request_fingerprint,
+        managed_control_count=revision.managed_control_count,
+        managed_control_fingerprint=revision.managed_control_fingerprint,
+        live_preview_updated_at=revision.live_preview_updated_at,
+        thread_session_count=revision.thread_session_count,
+        fingerprint=revision.fingerprint,
+    )
 
 
 def _load_provisional_preview_map(

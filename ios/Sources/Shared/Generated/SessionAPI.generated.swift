@@ -353,10 +353,25 @@ struct APISessionProjectionResponse: Codable, Hashable, Sendable {
     let abandonedEvents: Int?
 }
 
+struct APISessionWorkspaceRevisionResponse: Codable, Hashable, Sendable {
+    let latestEventId: Int?
+    let latestSessionUpdatedAt: String?
+    let latestRuntimeSignalAt: String?
+    let runtimeVersionSum: Int?
+    let pauseRequestCount: Int?
+    let pauseRequestFingerprint: String?
+    let managedControlCount: Int?
+    let managedControlFingerprint: String?
+    let livePreviewUpdatedAt: String?
+    let threadSessionCount: Int?
+    let fingerprint: String
+}
+
 struct APISessionWorkspaceResponse: Codable, Hashable, Sendable {
     let session: APISessionResponse
     let thread: APISessionThreadResponse
     let projection: APISessionProjectionResponse
+    let workspaceRevision: APISessionWorkspaceRevisionResponse
 }
 
 struct APIQueuedInputSummary: Codable, Hashable, Sendable {

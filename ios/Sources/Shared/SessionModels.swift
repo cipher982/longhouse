@@ -739,10 +739,25 @@ struct SessionProjectionResponse: Codable, Sendable {
     let abandonedEvents: Int
 }
 
+struct SessionWorkspaceRevision: Codable, Hashable, Sendable {
+    let latestEventId: Int?
+    let latestSessionUpdatedAt: String?
+    let latestRuntimeSignalAt: String?
+    let runtimeVersionSum: Int?
+    let pauseRequestCount: Int?
+    let pauseRequestFingerprint: String?
+    let managedControlCount: Int?
+    let managedControlFingerprint: String?
+    let livePreviewUpdatedAt: String?
+    let threadSessionCount: Int?
+    let fingerprint: String
+}
+
 struct SessionWorkspaceResponse: Codable, Sendable {
     let session: SessionDetail
     let thread: SessionThreadResponse
     let projection: SessionProjectionResponse
+    var workspaceRevision: SessionWorkspaceRevision? = nil
 
     var events: [SessionEvent] {
         projection.items.compactMap(\.event)
@@ -753,6 +768,7 @@ struct SessionMobileTailResponse: Codable, Sendable {
     let session: SessionDetail
     let projection: SessionProjectionResponse
     let snapshotEventId: Int?
+    var workspaceRevision: SessionWorkspaceRevision? = nil
 
     var events: [SessionEvent] {
         projection.items.compactMap(\.event)
