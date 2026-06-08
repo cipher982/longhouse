@@ -299,8 +299,8 @@
    * on luminance + hue for colorblind safety; the status label is the redundant
    * text code. Provider identity color lives on the glyph, never here. */
   .inbox-row-status-dot[data-signal] {
-    --signal-attention: #d4a843; /* amber, == --color-intent-warning */
-    --signal-working: #3db5c8; /* teal, matches iOS */
+    --signal-attention: #e8a33d; /* amber, matches iOS TimelineSignal.amber */
+    --signal-working: #3db5c8; /* teal, matches iOS TimelineSignal.teal */
   }
 
   .inbox-row-status-dot[data-signal="attention"] {

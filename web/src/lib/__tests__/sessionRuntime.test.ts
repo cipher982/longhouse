@@ -152,4 +152,17 @@ describe("resolveTimelineSignal", () => {
   it("a global connectivity banner suppresses attention", () => {
     expect(sig({ needs_attention: true }, { connectivityHealthy: false })).toBe("quiet");
   });
+
+  it("does not shout amber for a parked session (matches iOS isUserActive gate)", () => {
+    const parked = resolveTimelineSignal({
+      runtime_display: makeRuntimeDisplay({ needs_attention: true }),
+      user_state: "parked",
+    });
+    expect(parked).toBe("quiet");
+    const active = resolveTimelineSignal({
+      runtime_display: makeRuntimeDisplay({ needs_attention: true }),
+      user_state: "active",
+    });
+    expect(active).toBe("attention");
+  });
 });

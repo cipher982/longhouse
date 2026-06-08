@@ -130,7 +130,7 @@ struct SessionsWidgetView: View {
                 count: attentionCount,
                 label: attentionCount == 1 ? "needs permission" : "need permission",
                 shortLabel: "permission",
-                color: .orange
+                color: TimelineSignal.amber
             )
         }
         return WidgetMetric(

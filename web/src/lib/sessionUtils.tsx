@@ -162,7 +162,12 @@ export function getDriftTitle(
 ): string | null {
   const drift = compactText(session.summary_title);
   if (!drift) return null;
-  return drift === compactText(headline) ? null : drift;
+  // The headline may be truncated ("Foo bar…"); treat the drift as an echo when
+  // it equals or starts with the headline's text so a long anchor that matches
+  // the live title doesn't surface a redundant "now: …" line.
+  const head = compactText(headline).replace(/[…]+$/, "").replace(/\.\.\.$/, "").trim();
+  if (head && (drift === head || drift.startsWith(head))) return null;
+  return drift;
 }
 
 export function getBranchLabel(value: string | null | undefined): string | null {

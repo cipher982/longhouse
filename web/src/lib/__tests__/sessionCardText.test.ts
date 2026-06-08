@@ -64,4 +64,11 @@ describe("getDriftTitle", () => {
   it("returns null when there is no summary title", () => {
     expect(getDriftTitle({ summary_title: null }, "Anything")).toBeNull();
   });
+
+  it("suppresses the drift line when the headline was truncated to the same text", () => {
+    // Headline truncated with an ellipsis; drift equals the full prefix -> echo.
+    expect(
+      getDriftTitle({ summary_title: "Refresh token rotation hardening pass" }, "Refresh token rotation…"),
+    ).toBeNull();
+  });
 });

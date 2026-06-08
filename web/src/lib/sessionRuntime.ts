@@ -55,7 +55,7 @@ export function isSessionClosed(
 export type TimelineSignal = "attention" | "working" | "quiet" | "closed";
 
 export function resolveTimelineSignal(
-  session: Pick<AgentSession, "runtime_display">,
+  session: Pick<AgentSession, "runtime_display" | "user_state">,
   options: { connectivityHealthy?: boolean } = {},
 ): TimelineSignal {
   if (isSessionClosed(session)) return "closed";
@@ -64,7 +64,10 @@ export function resolveTimelineSignal(
 
   const display = session.runtime_display;
   // Curated needs_attention drives amber, NOT the noisy raw needs_user state.
-  if (display.needs_attention) return "attention";
+  // Gated on the user being active (parked/snoozed/archived rows don't shout),
+  // matching iOS SessionSummary.needsAttention so all surfaces stay in lockstep.
+  const userActive = session.user_state == null || session.user_state === "active";
+  if (userActive && display.needs_attention) return "attention";
 
   const tone = (display.tone ?? "").trim().toLowerCase();
   const live = display.activity_recency === "live";
