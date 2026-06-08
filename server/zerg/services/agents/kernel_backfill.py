@@ -326,6 +326,10 @@ def cleanup_workflow_journal_sessions(db: Session) -> dict[str, int]:
 
         thread_ids = [row.id for row in db.query(SessionThread.id).filter(SessionThread.session_id == session_id).all()]
         source_lines_deleted += db.query(AgentSourceLine).filter(AgentSourceLine.session_id == session_id).delete(synchronize_session=False)
+        # Source-line ingest also records a session-scoped SessionObservation per
+        # line (not an FK); delete them so they don't linger/replay after the
+        # journal session is gone.
+        db.query(SessionObservation).filter(SessionObservation.session_id == session_id).delete(synchronize_session=False)
         db.query(SessionTask).filter(SessionTask.session_id == str(session_id)).delete(synchronize_session=False)
         db.query(SessionEmbedding).filter(SessionEmbedding.session_id == session_id).delete(synchronize_session=False)
         db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session_id).delete(synchronize_session=False)

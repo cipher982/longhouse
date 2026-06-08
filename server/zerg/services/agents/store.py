@@ -147,20 +147,27 @@ def _normalize_ingested_project(data: SessionIngest) -> str | None:
 _WORKFLOW_JOURNAL_RE = re.compile(r"/subagents/workflows/[^/]+/journal\.jsonl$")
 
 
-def _is_workflow_journal_only_ingest(data: SessionIngest, source_lines) -> bool:
+def _is_workflow_journal_path(source_path) -> bool:
+    if not source_path:
+        return False
+    return _WORKFLOW_JOURNAL_RE.search(str(source_path).replace("\\", "/")) is not None
+
+
+def is_workflow_journal_only_payload(data: SessionIngest) -> bool:
     """True when a payload is purely a dynamic-workflow ``journal.jsonl`` ledger:
     no role events, and every source line path is a workflow-journal path.
 
     Such a payload carries only ``{type:"started"|"result"}`` bookkeeping and
-    would otherwise create an empty, timeline-visible session.
+    would otherwise create an empty, timeline-visible session. Callable from the
+    ingest router (to short-circuit before archive writes) and from the store
+    (in-process defense in depth).
     """
     if data.events:
         return False
-    paths = [getattr(line, "source_path", None) for line in (source_lines or [])]
-    paths = [p for p in paths if p]
+    paths = [p for p in (getattr(line, "source_path", None) for line in (data.source_lines or [])) if p]
     if not paths:
         return False
-    return all(_WORKFLOW_JOURNAL_RE.search(str(p).replace("\\", "/")) is not None for p in paths)
+    return all(_is_workflow_journal_path(p) for p in paths)
 
 
 class AgentsStore:
@@ -1479,7 +1486,7 @@ class AgentsStore:
         # The engine now skips it at discovery, but guard here too: an ingest
         # with no role events whose source lines are all workflow-journal paths
         # is dropped so it never creates an empty, timeline-visible session.
-        if _is_workflow_journal_only_ingest(data, source_lines):
+        if is_workflow_journal_only_payload(data):
             return IngestResult(
                 session_id=session_id,
                 events_inserted=0,

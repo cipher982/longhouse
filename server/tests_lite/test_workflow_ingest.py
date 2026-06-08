@@ -55,6 +55,7 @@ def _seed_legacy_journal_session(db):
     from zerg.models.agents import AgentSession
     from zerg.models.agents import AgentSessionBranch
     from zerg.models.agents import AgentSourceLine
+    from zerg.models.agents import SessionObservation
 
     db.add(
         AgentSession(
@@ -80,6 +81,18 @@ def _seed_legacy_journal_session(db):
             branch_id=branch.id,
             raw_json='{"type":"started","key":"v2:abc","agentId":"a049eaf15e4dbcae3"}',
             line_hash="0" * 64,
+        )
+    )
+    # Source-line ingest also records a session-scoped observation per line.
+    db.add(
+        SessionObservation(
+            observation_id="obs-journal-1",
+            session_id=JOURNAL_ID,
+            provider="claude",
+            source_domain="transcript",
+            kind="provider_source_line",
+            source="agents_ingest",
+            observed_at=NOW,
         )
     )
     db.flush()
@@ -216,6 +229,13 @@ def test_cleanup_removes_already_ingested_journal_session(tmp_path):
         assert report["sessions_removed"] == 1
         assert db.query(AgentSession).filter(AgentSession.id == JOURNAL_ID).first() is None
 
+        # No residue: source lines AND observations for the journal session gone.
+        from zerg.models.agents import AgentSourceLine
+        from zerg.models.agents import SessionObservation
+
+        assert db.query(AgentSourceLine).filter(AgentSourceLine.session_id == JOURNAL_ID).count() == 0
+        assert db.query(SessionObservation).filter(SessionObservation.session_id == JOURNAL_ID).count() == 0
+
         # Parent + its subagent thread untouched.
         assert db.query(AgentSession).filter(AgentSession.id == PARENT_ID).first() is not None
         assert db.query(SessionThread).filter(SessionThread.branch_kind == "subagent").count() == 1
@@ -287,3 +307,37 @@ def test_agent_after_parent_attaches_as_subagent_thread(tmp_path):
             .one()
         )
         assert child.is_primary == 0
+
+
+# === Phase 1: shared journal predicate (used by router short-circuit + store guard) ===
+
+
+def test_is_workflow_journal_only_payload_predicate():
+    from zerg.routers.agents_ingest import is_workflow_journal_only_payload
+
+    # Pure journal payload -> True
+    assert is_workflow_journal_only_payload(_journal_payload()) is True
+
+    # An agent transcript (has events) -> False, even though it is under subagents/
+    assert is_workflow_journal_only_payload(_agent_payload()) is False
+
+    # A normal session -> False
+    assert is_workflow_journal_only_payload(_parent_payload()) is False
+
+    # A non-workflow file literally named journal.jsonl -> False (path guard).
+    not_workflow = SessionIngest(
+        id=UUID("77777777-0000-0000-0000-0000000000cc"),
+        provider="claude",
+        environment="production",
+        project="g55",
+        started_at=NOW,
+        events=[],
+        source_lines=[
+            {
+                "source_path": f"{_PROJECT_DIR}/{PARENT_ID}/journal.jsonl",
+                "source_offset": 0,
+                "raw_json": '{"type":"started"}',
+            }
+        ],
+    )
+    assert is_workflow_journal_only_payload(not_workflow) is False

@@ -35,6 +35,7 @@ from zerg.metrics import event_age_at_ingest_seconds
 from zerg.models.device_token import DeviceToken
 from zerg.observability import get_tracer
 from zerg.observability import set_span_attributes
+from zerg.services.agents.store import is_workflow_journal_only_payload
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import IngestResult
 from zerg.services.agents_store import SessionIngest
@@ -761,6 +762,20 @@ async def ingest_session(
                             auth_token.device_id,
                         )
                     data.device_id = auth_token.device_id
+
+                # Dynamic-workflow `journal.jsonl` is a control ledger, not a
+                # session. Short-circuit BEFORE any archive prepare/write so it
+                # never leaves archive chunk residue or an empty session. The
+                # engine sees a 2xx and advances its offset, so it does not
+                # re-ship. (The store guard is the in-process defense in depth.)
+                if is_workflow_journal_only_payload(data):
+                    request_status_label = "ok"
+                    return IngestResponse(
+                        session_id=str(data.id) if data.id else str(uuid4()),
+                        events_inserted=0,
+                        events_skipped=0,
+                        session_created=False,
+                    )
 
                 settings = get_settings()
                 if settings.archive_primary_write_enabled and data.id is None:
