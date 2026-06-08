@@ -21,9 +21,17 @@
 >   step 6 against the settled keying, and use the conditional-rebuild rule below
 >   (sentinel only proven-covered rows; KEEP raw for any uncovered row; FAIL on a row
 >   with neither raw nor coverage). hatch confirmed the unconditional drop is unsafe.
-> - The "REAL HOLE" verdict from the first subagent diagnostic was inconclusive (it
->   only searched the parent session_id; subagent bytes may be archived under the
->   subagent's own session_id). See the definitive check result before trusting it.
+> - RESOLVED (definitive cross-session scan, 2026-06-08): NO data hole. All 72
+>   sampled "missing" subagent bytes ARE sealed in the archive — under the
+>   SUBAGENT's own resolved session_id (e.g. `6333677e-...`), not the parent. The
+>   reclaim verifier scopes archive chunks by the parent session_id and so misses
+>   subagent-keyed chunks. Mechanism: archive-primary keys subagent source_lines
+>   chunks by the subagent session_id; `ingest_session` merges the slim rows under
+>   the parent. **Fix the reclaim verifier + rebuild to resolve a parent's subagent
+>   source_lines coverage across the child session_ids** — and do it against the
+>   POST-workflow-ingest keying, since their Phase 2 re-parenting changes these
+>   parent↔child relationships. No raw is at risk; this is a scoping correctness
+>   fix, not a loss.
 
 **Status:** DRAFT — requires David's explicit approval before ANY step runs.
 **Predecessor:** `docs/specs/reliability-data-plane-closeout.md` (architecture + PRs 1–3, shipped).
