@@ -2031,6 +2031,14 @@ final class SessionViewModel: ObservableObject {
         prefetchInFlightSnapshotEventId = snapshotEventId
         prefetchTask = Task { [weak self] in
             guard let self else { return }
+            defer {
+                if self.prefetchInFlightOffset == offset,
+                   self.prefetchInFlightSnapshotEventId == snapshotEventId {
+                    self.prefetchInFlightOffset = nil
+                    self.prefetchInFlightSnapshotEventId = nil
+                    self.prefetchTask = nil
+                }
+            }
             do {
                 let tail = try await self.fetchOlderTail(api: api, sessionId: sessionId, offset: offset)
                 guard !Task.isCancelled,
@@ -2050,12 +2058,6 @@ final class SessionViewModel: ObservableObject {
                 self.prefetchedOlderOffset = nil
                 self.prefetchedOlderSnapshotEventId = nil
             }
-            if self.prefetchInFlightOffset == offset,
-               self.prefetchInFlightSnapshotEventId == snapshotEventId {
-                self.prefetchInFlightOffset = nil
-                self.prefetchInFlightSnapshotEventId = nil
-            }
-            self.prefetchTask = nil
         }
     }
 
