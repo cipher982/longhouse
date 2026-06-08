@@ -135,6 +135,7 @@ def test_codex_contract_is_current_remote_launch_engine_channel_provider():
         "codex.send",
         "codex.interrupt",
         "codex.steer",
+        "codex.answer_pause",
         "codex.launch",
         "codex.continue",
     )
@@ -238,15 +239,19 @@ def test_control_plane_aliases_are_explicit_contract_not_scattered_literals():
         ("codex", "session.send_text", "codex.send"),
         ("codex", "session.interrupt", "codex.interrupt"),
         ("codex", "session.steer_text", "codex.steer"),
+        ("codex", "session.answer_pause", "codex.answer_pause"),
         ("claude", "session.send_text", "claude.send"),
         ("claude", "session.interrupt", "claude.interrupt"),
         ("claude", "session.steer_text", "claude.steer"),
+        ("claude", "session.answer_pause", None),
         ("opencode", "session.send_text", "opencode.send"),
         ("opencode", "session.interrupt", "opencode.interrupt"),
         ("opencode", "session.steer_text", None),
+        ("opencode", "session.answer_pause", None),
         ("antigravity", "session.send_text", "antigravity.send"),
         ("antigravity", "session.interrupt", None),
         ("antigravity", "session.steer_text", None),
+        ("antigravity", "session.answer_pause", None),
     ],
 )
 def test_machine_control_capability_for_command_uses_provider_contract(provider, command_type, capability):
@@ -267,12 +272,13 @@ def test_machine_control_operations_by_provider_projects_live_supports():
             "claude.launch",
             "claude.steer",
             "codex.send",
+            "codex.answer_pause",
             "codex.launch",
             "unknown.launch",
         ],
         connected=True,
     ) == {
-        "codex": ("send", "launch"),
+        "codex": ("send", "answer_pause", "launch"),
         "claude": ("steer", "launch"),
     }
 

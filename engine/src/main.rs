@@ -42,10 +42,11 @@ use codex_app_server_canary::{
     run as run_codex_app_server_canary, CanaryConfig,
 };
 use codex_bridge::{
-    cmd_codex_bridge_attach, cmd_codex_bridge_interrupt, cmd_codex_bridge_run,
-    cmd_codex_bridge_send, cmd_codex_bridge_start, cmd_codex_bridge_steer, cmd_codex_bridge_stop,
-    BridgeAttachConfig, BridgeInterruptConfig, BridgeLaunchMode, BridgeRunConfig, BridgeSendConfig,
-    BridgeStartConfig, BridgeSteerConfig, BridgeSteerError, BridgeStopConfig,
+    cmd_codex_bridge_attach, cmd_codex_bridge_interrupt, cmd_codex_bridge_pause_response,
+    cmd_codex_bridge_run, cmd_codex_bridge_send, cmd_codex_bridge_start, cmd_codex_bridge_steer,
+    cmd_codex_bridge_stop, BridgeAttachConfig, BridgeInterruptConfig, BridgeLaunchMode,
+    BridgePauseResponseConfig, BridgeRunConfig, BridgeSendConfig, BridgeStartConfig,
+    BridgeSteerConfig, BridgeSteerError, BridgeStopConfig,
 };
 use config::ShipperConfig;
 use pipeline::compressor::CompressionAlgo;
@@ -67,6 +68,22 @@ fn parse_attachments_cli_arg(
     let value: serde_json::Value = serde_json::from_str(trimmed)
         .map_err(|e| anyhow::anyhow!("--attachments-json is not valid JSON: {e}"))?;
     crate::codex_attachments::parse_attachments(&serde_json::json!({ "attachments": value }))
+}
+
+fn parse_json_value_cli_arg(
+    name: &str,
+    raw: Option<&str>,
+) -> anyhow::Result<Option<serde_json::Value>> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_str(trimmed)
+        .map(Some)
+        .map_err(|e| anyhow::anyhow!("{name} is not valid JSON: {e}"))
 }
 
 fn parse_compression_algo(s: &str) -> anyhow::Result<CompressionAlgo> {
@@ -676,6 +693,34 @@ enum CodexBridgeCommands {
         attachments_json: Option<String>,
     },
 
+    /// Answer a held structured provider question through the managed bridge IPC socket.
+    #[command(hide = true)]
+    PauseResponse {
+        #[arg(long)]
+        session_id: String,
+
+        #[arg(long)]
+        request_key: String,
+
+        #[arg(long, default_value = "answer")]
+        decision: String,
+
+        #[arg(long)]
+        answers_json: Option<String>,
+
+        #[arg(long)]
+        content_json: Option<String>,
+
+        #[arg(long)]
+        message: Option<String>,
+
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Stop a running managed bridge and its local Codex app-server child
     Stop {
         #[arg(long)]
@@ -750,6 +795,7 @@ fn command_name(command: &Commands) -> &'static str {
             CodexBridgeCommands::Send { .. } => "codex-bridge-send",
             CodexBridgeCommands::Interrupt { .. } => "codex-bridge-interrupt",
             CodexBridgeCommands::Steer { .. } => "codex-bridge-steer",
+            CodexBridgeCommands::PauseResponse { .. } => "codex-bridge-pause-response",
             CodexBridgeCommands::Stop { .. } => "codex-bridge-stop",
         },
     }
@@ -1316,6 +1362,42 @@ fn main() -> anyhow::Result<()> {
                             std::process::exit(2);
                         }
                         Err(err) => return Err(anyhow::anyhow!(err)),
+                    }
+                }
+                CodexBridgeCommands::PauseResponse {
+                    session_id,
+                    request_key,
+                    decision,
+                    answers_json,
+                    content_json,
+                    message,
+                    state_root,
+                    json,
+                } => {
+                    let answers =
+                        parse_json_value_cli_arg("--answers-json", answers_json.as_deref())?;
+                    let content =
+                        parse_json_value_cli_arg("--content-json", content_json.as_deref())?;
+                    let response =
+                        rt.block_on(cmd_codex_bridge_pause_response(BridgePauseResponseConfig {
+                            session_id,
+                            state_root,
+                            request_key,
+                            decision,
+                            answers,
+                            content,
+                            message,
+                        }))?;
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&response)?);
+                    } else {
+                        println!(
+                            "status: {}",
+                            response
+                                .get("status")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or("resolved")
+                        );
                     }
                 }
                 CodexBridgeCommands::Stop {

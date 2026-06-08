@@ -70,7 +70,14 @@
           "next": "promote with live transcript assertion"
         }
       },
-      "machine_control_supports": ["codex.send", "codex.interrupt", "codex.steer", "codex.launch", "codex.continue"]
+      "machine_control_supports": [
+        "codex.send",
+        "codex.interrupt",
+        "codex.steer",
+        "codex.answer_pause",
+        "codex.launch",
+        "codex.continue"
+      ]
     },
     {
       "provider": "claude",

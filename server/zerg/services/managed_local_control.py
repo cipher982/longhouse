@@ -21,6 +21,7 @@ from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
+from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_ANSWER_PAUSE
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_INTERRUPT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_STEER_TEXT
@@ -30,6 +31,7 @@ from zerg.services.managed_control_dispatcher import dispatch_managed_control_co
 from zerg.services.managed_control_dispatcher import select_managed_control_transport
 from zerg.services.managed_local_transport import ManagedLocalTransportError
 from zerg.services.managed_local_transport import build_managed_local_interrupt_command
+from zerg.services.managed_local_transport import build_managed_local_pause_response_command
 from zerg.services.managed_local_transport import build_managed_local_send_text_command
 from zerg.services.managed_local_transport import build_managed_local_steer_text_command
 from zerg.services.provisional_events import durable_transcript_event_predicate
@@ -747,5 +749,86 @@ async def steer_text_to_managed_local_session(
             ok=False,
             exit_code=exit_code,
             error=detail or "Managed local steer command failed",
+        )
+    return ManagedLocalSendResult(ok=True, exit_code=0)
+
+
+async def answer_pause_request_on_managed_local_session(
+    *,
+    db: Session,
+    owner_id: int,
+    session: AgentSession,
+    request_key: str,
+    decision: str,
+    answers: Mapping[str, object] | None = None,
+    content: object | None = None,
+    message: str | None = None,
+    commis_id: str | None = None,
+    timeout_secs: int = 30,
+) -> ManagedLocalSendResult:
+    """Send a provider-native answer for a held structured pause request."""
+
+    if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
+        return ManagedLocalSendResult(ok=False, error="Session is not managed_local")
+    transport_error = _managed_control_transport_error(
+        session,
+        owner_id=owner_id,
+        command_type=MANAGED_CONTROL_COMMAND_ANSWER_PAUSE,
+    )
+    if transport_error is not None:
+        return ManagedLocalSendResult(ok=False, error=transport_error)
+
+    try:
+        command = build_managed_local_pause_response_command(
+            session=session,
+            request_key=request_key,
+            decision=decision,
+            answers=answers,
+            content=content,
+            message=message,
+        )
+    except ManagedLocalTransportError as exc:
+        return ManagedLocalSendResult(ok=False, error=str(exc))
+
+    payload: dict[str, object] = {
+        "provider": str(getattr(session, "provider", "") or "codex").strip() or "codex",
+        "request_key": request_key,
+        "decision": decision,
+    }
+    if answers is not None:
+        payload["answers"] = dict(answers)
+    if content is not None:
+        payload["content"] = content
+    if message:
+        payload["message"] = message
+
+    result = await dispatch_managed_control_command(
+        db=db,
+        owner_id=owner_id,
+        session=session,
+        command=command,
+        timeout_secs=timeout_secs,
+        command_type=MANAGED_CONTROL_COMMAND_ANSWER_PAUSE,
+        payload=payload,
+        commis_id=commis_id,
+        run_id=None,
+        failure_message="Failed to dispatch pause response command",
+    )
+    if not result.ok:
+        return ManagedLocalSendResult(
+            ok=False,
+            error=result.error or "Failed to dispatch pause response command",
+        )
+
+    data = result.data or {}
+    exit_code = int(data.get("exit_code", 1))
+    if exit_code != 0:
+        stderr = str(data.get("stderr") or "")
+        stdout = str(data.get("stdout") or "")
+        detail = stderr.strip() or stdout.strip()
+        return ManagedLocalSendResult(
+            ok=False,
+            exit_code=exit_code,
+            error=detail or "Managed local pause response command failed",
         )
     return ManagedLocalSendResult(ok=True, exit_code=0)

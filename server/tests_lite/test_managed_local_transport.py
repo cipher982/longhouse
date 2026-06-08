@@ -17,6 +17,7 @@ os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-value")
 from zerg.services.managed_local_transport import ManagedLocalTransportError
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.managed_local_transport import build_managed_local_interrupt_command
+from zerg.services.managed_local_transport import build_managed_local_pause_response_command
 from zerg.services.managed_local_transport import build_managed_local_send_text_command
 from zerg.services.managed_local_transport import build_managed_local_steer_text_command
 from zerg.session_execution_home import ManagedSessionTransport
@@ -246,6 +247,42 @@ def test_build_managed_local_interrupt_command_uses_engine_bridge_for_codex_app_
     inner = _wrapped_inner(command)
     assert 'engine="$(command -v longhouse-engine || true)"' in inner
     assert '"$engine" codex-bridge interrupt --session-id session-123' in inner
+
+
+def test_build_managed_local_pause_response_command_uses_engine_bridge_for_codex_app_server():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.CODEX_APP_SERVER.value,
+    )
+
+    command = build_managed_local_pause_response_command(
+        session=session,
+        request_key="codex:session-123:req-1",
+        decision="answer",
+        answers={"storage": ["SQLite"]},
+        message="Use SQLite.",
+    )
+    inner = _wrapped_inner(command)
+    assert 'engine="$(command -v longhouse-engine || true)"' in inner
+    assert '"$engine" codex-bridge pause-response --session-id session-123' in inner
+    assert "--request-key codex:session-123:req-1" in inner
+    assert "--answers-json" in inner
+    assert "SQLite" in inner
+    assert "--message 'Use SQLite.'" in inner
+    assert inner.endswith("--json")
+
+
+def test_build_managed_local_pause_response_command_rejects_non_codex_transport():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value,
+    )
+
+    with pytest.raises(ManagedLocalTransportError, match="Remote pause responses are not supported"):
+        build_managed_local_pause_response_command(
+            session=session,
+            request_key="claude:session-123:req-1",
+        )
 
 
 def test_build_managed_local_interrupt_command_uses_local_bridge_for_claude_channel_transport():

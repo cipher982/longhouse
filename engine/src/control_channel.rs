@@ -20,9 +20,10 @@ use tokio_tungstenite::tungstenite::Message;
 
 use crate::build_identity;
 use crate::codex_bridge::{
-    cmd_codex_bridge_interrupt, cmd_codex_bridge_send, cmd_codex_bridge_start,
-    cmd_codex_bridge_steer, validate_codex_bridge_attached, BridgeInterruptConfig,
-    BridgeLaunchMode, BridgeSendConfig, BridgeStartConfig, BridgeSteerConfig, BridgeSteerError,
+    cmd_codex_bridge_interrupt, cmd_codex_bridge_pause_response, cmd_codex_bridge_send,
+    cmd_codex_bridge_start, cmd_codex_bridge_steer, validate_codex_bridge_attached,
+    BridgeInterruptConfig, BridgeLaunchMode, BridgePauseResponseConfig, BridgeSendConfig,
+    BridgeStartConfig, BridgeSteerConfig, BridgeSteerError,
 };
 use crate::config::ShipperConfig;
 #[cfg(unix)]
@@ -32,6 +33,7 @@ use std::path::{Path, PathBuf};
 const COMMAND_SEND_TEXT: &str = "session.send_text";
 const COMMAND_INTERRUPT: &str = "session.interrupt";
 const COMMAND_STEER_TEXT: &str = "session.steer_text";
+const COMMAND_ANSWER_PAUSE: &str = "session.answer_pause";
 const COMMAND_LAUNCH: &str = "session.launch";
 const COMMAND_PROVIDER_LIVE_PROOF: &str = "provider.live_proof";
 const COMMAND_ARCHIVE_BACKLOG_CONTROL: &str = "archive.backlog_control";
@@ -996,6 +998,40 @@ async fn execute_command(
                 Err(BridgeSteerError::TurnEnded(message)) => Err(CommandError::turn_ended(message)),
                 Err(err) => Err(CommandError::command_failed(err)),
             }
+        }
+        COMMAND_ANSWER_PAUSE => {
+            let provider = payload_optional_string(&payload, "provider")
+                .unwrap_or_else(|| "codex".to_string());
+            if provider != "codex" {
+                return Err(CommandError {
+                    code: "unsupported_command".to_string(),
+                    message: format!("{provider} does not support remote pause responses yet"),
+                });
+            }
+            let request_key = payload_required_string(&payload, "request_key")?;
+            let decision = payload_optional_string(&payload, "decision")
+                .unwrap_or_else(|| "answer".to_string());
+            validate_codex_bridge_attached(&session_id, None)
+                .map_err(CommandError::session_not_attached)?;
+            let response = cmd_codex_bridge_pause_response(BridgePauseResponseConfig {
+                session_id,
+                state_root: None,
+                request_key,
+                decision,
+                answers: payload.get("answers").cloned(),
+                content: payload.get("content").cloned(),
+                message: payload_optional_string(&payload, "message"),
+            })
+            .await
+            .map_err(CommandError::command_failed)?;
+            Ok(json!({
+                "exit_code": 0,
+                "stdout": serde_json::to_string(&response).unwrap_or_default(),
+                "stderr": "",
+                "provider": "codex",
+                "transport": "codex_app_server",
+                "pause_response": response,
+            }))
         }
         other => Err(CommandError {
             code: "unsupported_command".to_string(),

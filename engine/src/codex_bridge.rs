@@ -173,6 +173,17 @@ pub struct BridgeSteerConfig {
     pub attachments: Vec<crate::codex_attachments::AttachmentRef>,
 }
 
+#[derive(Debug, Clone)]
+pub struct BridgePauseResponseConfig {
+    pub session_id: String,
+    pub state_root: Option<PathBuf>,
+    pub request_key: String,
+    pub decision: String,
+    pub answers: Option<Value>,
+    pub content: Option<Value>,
+    pub message: Option<String>,
+}
+
 /// Failure modes specific to the steer IPC path. Distinguishes "the turn
 /// we would have steered into has already ended" (a product concept the
 /// backend must surface) from generic protocol errors.
@@ -1610,6 +1621,86 @@ async fn send_via_ipc_steer_inner(
     }
 
     Ok(())
+}
+
+#[cfg(unix)]
+async fn send_via_ipc_pause_response(
+    sock_path: &Path,
+    config: &BridgePauseResponseConfig,
+) -> Result<Value> {
+    tokio::time::timeout(
+        IPC_SEND_TIMEOUT,
+        send_via_ipc_pause_response_inner(sock_path, config),
+    )
+    .await
+    .map_err(|_| {
+        anyhow!(
+            "IPC pause response timed out after {}s",
+            IPC_SEND_TIMEOUT.as_secs()
+        )
+    })?
+}
+
+#[cfg(unix)]
+async fn send_via_ipc_pause_response_inner(
+    sock_path: &Path,
+    config: &BridgePauseResponseConfig,
+) -> Result<Value> {
+    let mut stream = tokio::net::UnixStream::connect(sock_path)
+        .await
+        .with_context(|| format!("connecting to IPC socket {}", sock_path.display()))?;
+
+    let mut payload = json!({
+        "kind": "pause_response",
+        "request_key": config.request_key,
+        "decision": config.decision,
+    });
+    if let Some(answers) = config.answers.as_ref() {
+        payload["answers"] = answers.clone();
+    }
+    if let Some(content) = config.content.as_ref() {
+        payload["content"] = content.clone();
+    }
+    if let Some(message) = config.message.as_deref() {
+        payload["message"] = Value::String(message.to_string());
+    }
+    let mut request = serde_json::to_vec(&payload)?;
+    request.push(b'\n');
+    stream.write_all(&request).await?;
+    stream.shutdown().await?;
+
+    let mut response_buf = Vec::new();
+    stream.read_to_end(&mut response_buf).await?;
+    let response: Value =
+        serde_json::from_slice(&response_buf).context("parsing IPC pause response")?;
+
+    if response.get("ok").and_then(Value::as_bool) != Some(true) {
+        let error = response
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown IPC pause response error");
+        bail!("daemon IPC pause response error: {error}");
+    }
+    Ok(response)
+}
+
+#[cfg(unix)]
+pub async fn cmd_codex_bridge_pause_response(config: BridgePauseResponseConfig) -> Result<Value> {
+    let paths = resolve_bridge_paths(config.state_root.as_deref(), &config.session_id, None)?;
+    let sock_path = ipc_socket_path(&paths.state_file);
+    if !sock_path.exists() {
+        bail!(
+            "IPC socket {} is missing for managed Codex session {}; cannot answer pending provider question",
+            sock_path.display(),
+            config.session_id
+        );
+    }
+    send_via_ipc_pause_response(&sock_path, &config).await
+}
+
+#[cfg(not(unix))]
+pub async fn cmd_codex_bridge_pause_response(_config: BridgePauseResponseConfig) -> Result<Value> {
+    bail!("codex-bridge pause-response is only supported on unix platforms");
 }
 
 #[cfg(unix)]
@@ -8339,6 +8430,88 @@ mod tests {
             .unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("no active turn"), "unexpected error: {msg}");
+    }
+
+    #[tokio::test]
+    async fn send_via_ipc_pause_response_roundtrips_ok_response() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sock = tmp.path().join("pause.sock");
+        let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+
+        let server = tokio::spawn(async move {
+            let (mut stream, _addr) = listener.accept().await.unwrap();
+            let mut buf = Vec::new();
+            tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut buf)
+                .await
+                .unwrap();
+            let request: Value = serde_json::from_slice(&buf).unwrap();
+            assert_eq!(request["kind"], "pause_response");
+            assert_eq!(request["request_key"], "codex:codex:session-123:req-1");
+            assert_eq!(request["decision"], "answer");
+            assert_eq!(request["answers"]["storage"], json!(["SQLite"]));
+            assert_eq!(request["content"]["notes"], "small app");
+            assert_eq!(request["message"], "Use SQLite.");
+            let response = b"{\"ok\": true, \"status\": \"resolved\", \"request_key\": \"codex:codex:session-123:req-1\"}\n";
+            tokio::io::AsyncWriteExt::write_all(&mut stream, response)
+                .await
+                .unwrap();
+        });
+
+        let response = send_via_ipc_pause_response(
+            &sock,
+            &BridgePauseResponseConfig {
+                session_id: "session-123".to_string(),
+                state_root: None,
+                request_key: "codex:codex:session-123:req-1".to_string(),
+                decision: "answer".to_string(),
+                answers: Some(json!({"storage": ["SQLite"]})),
+                content: Some(json!({"notes": "small app"})),
+                message: Some("Use SQLite.".to_string()),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(response["status"], "resolved");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn send_via_ipc_pause_response_surfaces_daemon_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sock = tmp.path().join("pause-err.sock");
+        let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+
+        tokio::spawn(async move {
+            let (mut stream, _addr) = listener.accept().await.unwrap();
+            let mut buf = Vec::new();
+            tokio::io::AsyncReadExt::read_to_end(&mut stream, &mut buf)
+                .await
+                .unwrap();
+            let response = b"{\"ok\": false, \"error\": \"no pending pause request\"}\n";
+            tokio::io::AsyncWriteExt::write_all(&mut stream, response)
+                .await
+                .unwrap();
+        });
+
+        let err = send_via_ipc_pause_response(
+            &sock,
+            &BridgePauseResponseConfig {
+                session_id: "session-123".to_string(),
+                state_root: None,
+                request_key: "codex:codex:session-123:req-missing".to_string(),
+                decision: "answer".to_string(),
+                answers: None,
+                content: None,
+                message: None,
+            },
+        )
+        .await
+        .unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("no pending pause request"),
+            "unexpected error: {msg}"
+        );
     }
 
     #[test]

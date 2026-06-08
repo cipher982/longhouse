@@ -68,7 +68,7 @@ def test_support_state_separates_candidate_release_from_local_readiness() -> Non
         control_channel={
             "status": "connected",
             "control_operations_by_provider": {
-                "codex": ["send", "interrupt", "steer", "launch", "continue"],
+                "codex": ["send", "interrupt", "steer", "answer_pause", "launch", "continue"],
             },
         },
     )
@@ -81,6 +81,7 @@ def test_support_state_separates_candidate_release_from_local_readiness() -> Non
         "send",
         "interrupt",
         "steer",
+        "answer_pause",
         "launch",
         "continue",
     ]

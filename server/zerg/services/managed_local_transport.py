@@ -322,10 +322,50 @@ def build_managed_local_steer_text_command(
     )
 
 
+def build_managed_local_pause_response_command(
+    *,
+    session: AgentSession,
+    request_key: str,
+    decision: str = "answer",
+    answers: Mapping[str, Any] | None = None,
+    content: Any | None = None,
+    message: str | None = None,
+) -> str:
+    """Build a provider-native response command for a held pause request."""
+
+    transport = _resolve_transport(getattr(session, "managed_transport", None))
+    session_id = str(getattr(session, "id", "") or "").strip()
+    if not session_id:
+        raise ManagedLocalTransportError("Managed local session is missing session ID")
+    if transport != ManagedSessionTransport.CODEX_APP_SERVER:
+        raise ManagedLocalTransportError(
+            f"Remote pause responses are not supported on {transport.value} transports",
+        )
+    args: list[str] = [
+        "--request-key",
+        shlex.quote(request_key),
+        "--decision",
+        shlex.quote(decision or "answer"),
+    ]
+    if answers is not None:
+        args.extend(("--answers-json", shlex.quote(json.dumps(answers, separators=(",", ":")))))
+    if content is not None:
+        args.extend(("--content-json", shlex.quote(json.dumps(content, separators=(",", ":")))))
+    if message:
+        args.extend(("--message", shlex.quote(message)))
+    args.append("--json")
+    return _build_engine_bridge_shell_command(
+        session_id=session_id,
+        subcommand="pause-response",
+        args=tuple(args),
+    )
+
+
 __all__ = [
     "ManagedLocalTransportError",
     "build_managed_local_attach_command",
     "build_managed_local_interrupt_command",
+    "build_managed_local_pause_response_command",
     "build_managed_local_send_text_command",
     "build_managed_local_steer_text_command",
 ]

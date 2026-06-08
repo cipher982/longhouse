@@ -24,6 +24,7 @@ from zerg.session_execution_home import SessionExecutionHome
 MANAGED_CONTROL_COMMAND_INTERRUPT = "session.interrupt"
 MANAGED_CONTROL_COMMAND_SEND_TEXT = "session.send_text"
 MANAGED_CONTROL_COMMAND_STEER_TEXT = "session.steer_text"
+MANAGED_CONTROL_COMMAND_ANSWER_PAUSE = "session.answer_pause"
 MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL = "engine_channel"
 MANAGED_CONTROL_TRANSPORT_LEGACY_RUNNER = "legacy_runner"
 MANAGED_CONTROL_TRANSPORT_NONE = "none"

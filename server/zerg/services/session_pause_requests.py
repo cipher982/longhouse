@@ -227,6 +227,40 @@ def load_active_pause_request_for_session(db: Session, session_id: UUID) -> Sess
     return load_active_pause_request_map(db, [session_id]).get(session_id)
 
 
+def list_pause_requests_for_session(
+    db: Session,
+    session_id: UUID,
+    *,
+    status: str | None = PENDING_STATUS,
+) -> list[SessionPauseRequest]:
+    query = db.query(SessionPauseRequest).filter(SessionPauseRequest.session_id == session_id)
+    cleaned_status = _clean_str(status)
+    if cleaned_status:
+        query = query.filter(SessionPauseRequest.status == cleaned_status)
+    return query.order_by(
+        SessionPauseRequest.status.asc(),
+        SessionPauseRequest.last_seen_at.desc(),
+        SessionPauseRequest.occurred_at.desc(),
+        SessionPauseRequest.created_at.desc(),
+    ).all()
+
+
+def get_pause_request_for_session(
+    db: Session,
+    *,
+    session_id: UUID,
+    pause_request_id: UUID,
+) -> SessionPauseRequest | None:
+    return (
+        db.query(SessionPauseRequest)
+        .filter(
+            SessionPauseRequest.session_id == session_id,
+            SessionPauseRequest.id == pause_request_id,
+        )
+        .first()
+    )
+
+
 def apply_pause_runtime_event(db: Session, event: Any) -> bool:
     """Apply a pause_request/pause_resolution runtime event without writing phase."""
 
