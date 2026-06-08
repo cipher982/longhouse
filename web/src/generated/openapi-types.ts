@@ -17123,6 +17123,8 @@ export interface operations {
             query?: {
                 /** @description When true, wait for first change before emitting workspace_changed. */
                 skip_initial?: boolean;
+                /** @description Fingerprint from the client's rendered workspace snapshot; when stale, skip_initial is ignored. */
+                known_workspace_fingerprint?: string | null;
             };
             header?: never;
             path: {
@@ -17972,6 +17974,7 @@ export interface operations {
         parameters: {
             query?: {
                 skip_initial?: boolean;
+                known_workspace_fingerprint?: string | null;
             };
             header?: never;
             path: {

@@ -32,6 +32,9 @@ struct TranscriptSnapshotStore: Sendable {
         /// Last realtime pubsub sequence we rendered. Persisted for M2 cheap
         /// stream replay; unused (nil) in M1.
         var lastPubsubSeq: Int?
+        /// Durable viewport revision rendered by this snapshot. Optional so
+        /// snapshots written before the handshake rollout still decode.
+        var workspaceRevisionFingerprint: String?
         var savedAt: Date
     }
 
@@ -114,6 +117,7 @@ struct TranscriptSnapshotStore: Sendable {
         totalProjectionItemCount: Int,
         tailSnapshotEventId: Int?,
         lastPubsubSeq: Int?,
+        workspaceRevisionFingerprint: String? = nil,
         savedAt: Date = Date()
     ) {
         let snapshot = Snapshot(
@@ -126,6 +130,7 @@ struct TranscriptSnapshotStore: Sendable {
             totalProjectionItemCount: totalProjectionItemCount,
             tailSnapshotEventId: tailSnapshotEventId,
             lastPubsubSeq: lastPubsubSeq,
+            workspaceRevisionFingerprint: workspaceRevisionFingerprint,
             savedAt: savedAt
         )
         let url = fileURL(serverURL: serverURL, sessionId: sessionId)

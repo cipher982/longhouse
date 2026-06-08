@@ -29,6 +29,7 @@ from zerg.models.agents import SessionLivePreview
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.session_pause_requests import upsert_pause_request
+from zerg.services.session_workspace_revision import load_session_workspace_revision
 
 
 async def _noop_coro() -> None:
@@ -68,6 +69,7 @@ async def _run_stream(
     cycles: int = 2,
     skip_initial: bool = False,
     last_event_id: int | None = None,
+    known_workspace_fingerprint: str | None = None,
 ) -> list[dict]:
     request = _DisconnectAfterNCycles(cycles)
     events: list[dict] = []
@@ -77,6 +79,7 @@ async def _run_stream(
         session_id=session_id,
         skip_initial=skip_initial,
         last_event_id=last_event_id,
+        known_workspace_fingerprint=known_workspace_fingerprint,
     ):
         events.append(event)
     return events
@@ -732,6 +735,131 @@ def test_workspace_stream_skip_initial(tmp_path):
 
     assert "connected" in grouped
     assert len(grouped.get("workspace_changed", [])) >= 1
+
+
+@patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
+def test_workspace_stream_known_fingerprint_match_suppresses_initial_emit(tmp_path):
+    """A fresh rendered snapshot can attach without an initial invalidation."""
+    sf = _make_db(tmp_path, name="workspace_stream_known_match.db")
+    now = datetime.now(timezone.utc)
+
+    with sf() as db:
+        session = AgentSession(
+            provider="claude",
+            environment="production",
+            project="test",
+            started_at=now,
+            user_messages=1,
+            assistant_messages=1,
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        session_id = session.id
+        revision = load_session_workspace_revision(db, session_id)
+        assert revision is not None
+        known_fingerprint = revision.fingerprint
+
+    events = asyncio.run(
+        _run_stream(
+            sf,
+            session_id,
+            cycles=3,
+            skip_initial=True,
+            known_workspace_fingerprint=known_fingerprint,
+        )
+    )
+    grouped = _collect_stream_events(events)
+
+    assert "connected" in grouped
+    assert grouped.get("workspace_changed", []) == []
+
+
+@patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
+def test_workspace_stream_known_fingerprint_mismatch_ignores_skip_initial(tmp_path):
+    """A stale rendered snapshot gets an immediate durable invalidation."""
+    sf = _make_db(tmp_path, name="workspace_stream_known_mismatch.db")
+    now = datetime.now(timezone.utc)
+
+    with sf() as db:
+        session = AgentSession(
+            provider="claude",
+            environment="production",
+            project="test",
+            started_at=now,
+            user_messages=1,
+            assistant_messages=1,
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        session_id = session.id
+
+    events = asyncio.run(
+        _run_stream(
+            sf,
+            session_id,
+            cycles=2,
+            skip_initial=True,
+            known_workspace_fingerprint="sha256:stale",
+        )
+    )
+    grouped = _collect_stream_events(events)
+
+    assert "connected" in grouped
+    assert len(grouped.get("workspace_changed", [])) == 1
+
+
+@patch.object(timeline_mod, "_wait_for_session_change", lambda _sub: _noop_coro())
+def test_workspace_stream_known_fingerprint_catches_snapshot_to_attach_race(tmp_path):
+    """Changes committed after REST render but before SSE attach must wake immediately."""
+    sf = _make_db(tmp_path, name="workspace_stream_known_race.db")
+    now = datetime.now(timezone.utc)
+
+    with sf() as db:
+        session = AgentSession(
+            provider="claude",
+            environment="production",
+            project="test",
+            started_at=now,
+            user_messages=1,
+            assistant_messages=1,
+        )
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        session_id = session.id
+        revision = load_session_workspace_revision(db, session_id)
+        assert revision is not None
+        stale_fingerprint = revision.fingerprint
+
+        upsert_pause_request(
+            db,
+            session_id=session_id,
+            runtime_key="claude:session-1",
+            provider="claude",
+            request_key="claude:session-1:question-1",
+            provider_request_id="question-1",
+            title="Approval",
+            request_payload={"questions": [{"id": "approval", "question": "Proceed?"}]},
+            can_respond=True,
+            occurred_at=now,
+        )
+        db.commit()
+
+    events = asyncio.run(
+        _run_stream(
+            sf,
+            session_id,
+            cycles=2,
+            skip_initial=True,
+            known_workspace_fingerprint=stale_fingerprint,
+        )
+    )
+    grouped = _collect_stream_events(events)
+
+    assert "connected" in grouped
+    assert len(grouped.get("workspace_changed", [])) == 1
 
 
 def test_codex_live_preview_round_trip_post_to_sse(tmp_path):

@@ -138,6 +138,36 @@ export function useSessionWorkspace(
     setStreamTranscriptPreview(undefined);
   }, [sessionId]);
 
+  const [showAbandonedBranches, setShowAbandonedBranches] = useState(false);
+  const branchMode = showAbandonedBranches ? "all" : "head";
+  const {
+    data: workspaceData,
+    isLoading: sessionLoading,
+    error: sessionError,
+  } = useAgentSessionWorkspace(sessionId, {
+    limit: INITIAL_EVENTS_PAGE_SIZE,
+    branch_mode: branchMode,
+    refetchInterval: (query) => {
+      const currentSession = query.state.data?.session;
+      if (!documentVisible || !shouldRefreshWorkspaceSession(currentSession)) {
+        return false;
+      }
+
+      // Slow reconciliation: server flips unpaired tool calls to "dropped"
+      // after 1h on demand, so we re-ask occasionally even when SSE is quiet.
+      if (streamConnected) {
+        return workspaceHasRunningTool(query.state.data)
+          ? WORKSPACE_RECONCILE_REFRESH_MS
+          : false;
+      }
+
+      // Stream is down: poll at the shorter fallback cadence.
+      return WORKSPACE_FALLBACK_REFRESH_MS;
+    },
+  });
+  const knownWorkspaceFingerprint = workspaceData?.workspace_revision?.fingerprint ?? null;
+  const workspaceReady = workspaceData !== undefined;
+
   // SSE stream subscription — invalidates queries on server-side change detection
   useEffect(() => {
     // Always reset connection state at effect entry; the replacement stream
@@ -145,7 +175,7 @@ export function useSessionWorkspace(
     // fresh onConnected fires.
     setStreamConnected(false);
 
-    if (!sessionId || !documentVisible) {
+    if (!sessionId || !documentVisible || !workspaceReady) {
       return;
     }
 
@@ -212,39 +242,11 @@ export function useSessionWorkspace(
         },
         onError: () => setStreamConnected(false),
       },
-      { skipInitial: true },
+      { skipInitial: true, knownWorkspaceFingerprint },
     );
 
     return cleanup;
-  }, [sessionId, documentVisible, queryClient, onlineEpoch]);
-
-  const [showAbandonedBranches, setShowAbandonedBranches] = useState(false);
-  const branchMode = showAbandonedBranches ? "all" : "head";
-  const {
-    data: workspaceData,
-    isLoading: sessionLoading,
-    error: sessionError,
-  } = useAgentSessionWorkspace(sessionId, {
-    limit: INITIAL_EVENTS_PAGE_SIZE,
-    branch_mode: branchMode,
-    refetchInterval: (query) => {
-      const currentSession = query.state.data?.session;
-      if (!documentVisible || !shouldRefreshWorkspaceSession(currentSession)) {
-        return false;
-      }
-
-      // Slow reconciliation: server flips unpaired tool calls to "dropped"
-      // after 1h on demand, so we re-ask occasionally even when SSE is quiet.
-      if (streamConnected) {
-        return workspaceHasRunningTool(query.state.data)
-          ? WORKSPACE_RECONCILE_REFRESH_MS
-          : false;
-      }
-
-      // Stream is down: poll at the shorter fallback cadence.
-      return WORKSPACE_FALLBACK_REFRESH_MS;
-    },
-  });
+  }, [sessionId, documentVisible, workspaceReady, knownWorkspaceFingerprint, queryClient, onlineEpoch]);
   const rawSession = workspaceData?.session ?? null;
   const session = useMemo(
     () =>

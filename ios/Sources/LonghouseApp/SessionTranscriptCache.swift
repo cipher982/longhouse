@@ -11,6 +11,9 @@ final class SessionTranscriptCache {
         /// Last realtime pubsub seq seen, so a same-process nav-away/back can
         /// seed the SSE reconnect cursor instead of replaying cold.
         let lastPubsubSeq: Int?
+        /// Durable viewport revision rendered by the cached snapshot. Used to
+        /// suppress only safe initial SSE invalidations on resume.
+        let workspaceRevisionFingerprint: String?
         let savedAt: Date
         fileprivate let estimatedBytes: Int
         fileprivate var lastAccessedAt: Date
@@ -52,7 +55,8 @@ final class SessionTranscriptCache {
         loadedProjectionItemCount: Int,
         totalProjectionItemCount: Int,
         tailSnapshotEventId: Int?,
-        lastPubsubSeq: Int? = nil
+        lastPubsubSeq: Int? = nil,
+        workspaceRevisionFingerprint: String? = nil
     ) {
         guard maxBytes > 0 else { return }
         let date = now()
@@ -69,6 +73,7 @@ final class SessionTranscriptCache {
             totalProjectionItemCount: totalProjectionItemCount,
             tailSnapshotEventId: tailSnapshotEventId,
             lastPubsubSeq: lastPubsubSeq,
+            workspaceRevisionFingerprint: workspaceRevisionFingerprint,
             savedAt: date,
             estimatedBytes: estimatedBytes,
             lastAccessedAt: date

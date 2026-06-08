@@ -82,6 +82,7 @@ actor SessionWorkspaceStream {
     private let baseURL: URL
     private let sessionId: String
     private let skipInitial: Bool
+    private let knownWorkspaceFingerprint: String?
     private var task: Task<Void, Never>?
     /// Reconnect cursor. The server sets the SSE `id:` field to the per-topic
     /// pubsub sequence (NOT the DB event id), and replays buffered messages
@@ -92,23 +93,40 @@ actor SessionWorkspaceStream {
     private var serverClockSkewMs: Int64 = 0
     private var continuation: AsyncStream<Event>.Continuation?
 
-    init(baseURL: URL, sessionId: String, skipInitial: Bool = true, sinceSeq: Int? = nil) {
+    init(
+        baseURL: URL,
+        sessionId: String,
+        skipInitial: Bool = true,
+        sinceSeq: Int? = nil,
+        knownWorkspaceFingerprint: String? = nil
+    ) {
         self.baseURL = baseURL
         self.sessionId = sessionId
         self.skipInitial = skipInitial
+        self.knownWorkspaceFingerprint = knownWorkspaceFingerprint
         if let sinceSeq, sinceSeq > 0 {
             self.lastEventId = sinceSeq
         }
     }
 
-    static func streamURL(baseURL: URL, sessionId: String, skipInitial: Bool = true) -> URL {
+    static func streamURL(
+        baseURL: URL,
+        sessionId: String,
+        skipInitial: Bool = true,
+        knownWorkspaceFingerprint: String? = nil
+    ) -> URL {
         var components = URLComponents(
             url: baseURL.appendingPathComponent("/api/timeline/sessions/\(sessionId)/workspace/stream"),
             resolvingAgainstBaseURL: false
         )!
+        var queryItems: [URLQueryItem] = []
         if skipInitial {
-            components.queryItems = [URLQueryItem(name: "skip_initial", value: "true")]
+            queryItems.append(URLQueryItem(name: "skip_initial", value: "true"))
         }
+        if let knownWorkspaceFingerprint, !knownWorkspaceFingerprint.isEmpty {
+            queryItems.append(URLQueryItem(name: "known_workspace_fingerprint", value: knownWorkspaceFingerprint))
+        }
+        components.queryItems = queryItems.isEmpty ? nil : queryItems
         return components.url!
     }
 
@@ -180,7 +198,12 @@ actor SessionWorkspaceStream {
     }
 
     private func openAndDrain() async throws {
-        let url = Self.streamURL(baseURL: baseURL, sessionId: sessionId, skipInitial: skipInitial)
+        let url = Self.streamURL(
+            baseURL: baseURL,
+            sessionId: sessionId,
+            skipInitial: skipInitial,
+            knownWorkspaceFingerprint: knownWorkspaceFingerprint
+        )
         var req = URLRequest(url: url)
         req.addValue("text/event-stream", forHTTPHeaderField: "Accept")
         req.addValue("no-cache", forHTTPHeaderField: "Cache-Control")

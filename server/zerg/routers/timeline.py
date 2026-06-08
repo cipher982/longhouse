@@ -836,6 +836,7 @@ async def _session_workspace_stream(
     session_id: UUID,
     skip_initial: bool,
     last_event_id: int | None = None,
+    known_workspace_fingerprint: str | None = None,
 ):
     """SSE generator that emits workspace_changed when a session's data mutates.
 
@@ -876,6 +877,20 @@ async def _session_workspace_stream(
     # stay attached for future live messages.
     subscribe_since_seq = None if replay_gap else last_event_id
     with bus.subscribe(topic, since_seq=subscribe_since_seq) as subscription:
+        if skip_initial and known_workspace_fingerprint:
+            with session_factory() as db:
+                revision = load_session_workspace_revision(db, session_id)
+            if revision is None:
+                yield {
+                    "event": "error",
+                    "data": json.dumps({"error": "session_not_found"}),
+                }
+                return
+            if revision.fingerprint == known_workspace_fingerprint:
+                previous_sig = revision.signature
+            else:
+                skip_initial = False
+
         if replay_gap:
             yield {
                 "event": "replay_gap",
@@ -1040,6 +1055,10 @@ async def stream_session_workspace(
         False,
         description="When true, wait for first change before emitting workspace_changed.",
     ),
+    known_workspace_fingerprint: str | None = Query(
+        None,
+        description="Fingerprint from the client's rendered workspace snapshot; when stale, skip_initial is ignored.",
+    ),
 ) -> EventSourceResponse:
     """SSE stream that emits workspace_changed when the session's data mutates.
 
@@ -1066,6 +1085,7 @@ async def stream_session_workspace(
             session_id=session_id,
             skip_initial=skip_initial,
             last_event_id=last_event_id,
+            known_workspace_fingerprint=known_workspace_fingerprint,
         ),
     )
 
@@ -1083,6 +1103,7 @@ async def stream_canary_workspace(
     request: Request,
     session_id: UUID,
     skip_initial: bool = Query(False),
+    known_workspace_fingerprint: str | None = Query(None),
 ) -> EventSourceResponse:
     """Canary-only SSE: same generator as the browser endpoint, token-auth.
 
@@ -1112,5 +1133,6 @@ async def stream_canary_workspace(
             session_id=session_id,
             skip_initial=skip_initial,
             last_event_id=last_event_id,
+            known_workspace_fingerprint=known_workspace_fingerprint,
         ),
     )

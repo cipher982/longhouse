@@ -7,8 +7,18 @@ struct SessionWorkspaceStreamSource: Sendable {
     let stop: @Sendable () async -> Void
     let clockSkewMs: @Sendable () async -> Int64
 
-    static func live(baseURL: URL, sessionId: String, sinceSeq: Int? = nil) -> SessionWorkspaceStreamSource {
-        let stream = SessionWorkspaceStream(baseURL: baseURL, sessionId: sessionId, sinceSeq: sinceSeq)
+    static func live(
+        baseURL: URL,
+        sessionId: String,
+        sinceSeq: Int? = nil,
+        knownWorkspaceFingerprint: String? = nil
+    ) -> SessionWorkspaceStreamSource {
+        let stream = SessionWorkspaceStream(
+            baseURL: baseURL,
+            sessionId: sessionId,
+            sinceSeq: sinceSeq,
+            knownWorkspaceFingerprint: knownWorkspaceFingerprint
+        )
         return SessionWorkspaceStreamSource(
             start: { await stream.start() },
             stop: { await stream.stop() },
@@ -1323,7 +1333,7 @@ final class SessionViewModel: ObservableObject {
     private var isLoadingOlder = false
     private var openWaterfall: SessionOpenWaterfall?
     private let apiFactory: (String) -> SessionWorkspaceClient?
-    private let streamFactory: (URL, String, Int?) -> SessionWorkspaceStreamSource
+    private let streamFactory: (URL, String, Int?, String?) -> SessionWorkspaceStreamSource
     private let enableRealtime: Bool
     private let transcriptCache: SessionTranscriptCache?
     /// Durable on-disk mirror of the tail; survives app eviction so a cold
@@ -1331,12 +1341,18 @@ final class SessionViewModel: ObservableObject {
     /// `transcriptCache` stays as the fast warm-resume path.
     private let snapshotStore: TranscriptSnapshotStore?
     private var lastPubsubSeq: Int?
+    private var lastWorkspaceRevisionFingerprint: String?
     private let initialTailLimit = 50
     private let olderPageLimit = 50
     init(
         apiFactory: @escaping (String) -> SessionWorkspaceClient? = { LonghouseAPI(host: $0) },
-        streamFactory: @escaping (URL, String, Int?) -> SessionWorkspaceStreamSource = { baseURL, sessionId, sinceSeq in
-            SessionWorkspaceStreamSource.live(baseURL: baseURL, sessionId: sessionId, sinceSeq: sinceSeq)
+        streamFactory: @escaping (URL, String, Int?, String?) -> SessionWorkspaceStreamSource = { baseURL, sessionId, sinceSeq, fingerprint in
+            SessionWorkspaceStreamSource.live(
+                baseURL: baseURL,
+                sessionId: sessionId,
+                sinceSeq: sinceSeq,
+                knownWorkspaceFingerprint: fingerprint
+            )
         },
         enableRealtime: Bool = true,
         transcriptCache: SessionTranscriptCache? = nil,
@@ -1375,6 +1391,7 @@ final class SessionViewModel: ObservableObject {
             refreshErrorMessage = nil
             pauseResponseErrorMessage = nil
             lastPubsubSeq = nil
+            lastWorkspaceRevisionFingerprint = nil
             streamAuthRefreshAttempted = false
             // Warm path: in-memory cache survives backgrounding while the
             // process lives. Cold path: the durable on-disk snapshot survives
@@ -1751,7 +1768,7 @@ final class SessionViewModel: ObservableObject {
         // where we left off instead of cold. The server buffer is bounded
         // (~1000 msgs, process-local) with no gap signal, so this is a latency
         // optimization only — refreshTail() remains the correctness backstop.
-        let s = streamFactory(base, sessionId, lastPubsubSeq)
+        let s = streamFactory(base, sessionId, lastPubsubSeq, lastWorkspaceRevisionFingerprint)
         stream = s
         streamTask = Task { [weak self] in
             let events = await s.start()
@@ -1908,6 +1925,7 @@ final class SessionViewModel: ObservableObject {
             )
             self.totalProjectionItemCount = tail.projection.total
             self.tailSnapshotEventId = tail.snapshotEventId
+            self.lastWorkspaceRevisionFingerprint = tail.workspaceRevision?.fingerprint
             self.prefetchedOlderTail = nil
             self.prefetchedOlderOffset = nil
             let builtItems = TimelineBuilder.build(
@@ -1988,6 +2006,7 @@ final class SessionViewModel: ObservableObject {
 
     private func applyOlderTail(_ tail: SessionMobileTailResponse) {
         totalProjectionItemCount = tail.projection.total
+        lastWorkspaceRevisionFingerprint = tail.workspaceRevision?.fingerprint ?? lastWorkspaceRevisionFingerprint
         loadedProjectionItemCount = max(loadedProjectionItemCount, tail.projection.total - tail.projection.pageOffset)
         let existingEventIds = Set(lastWorkspaceEvents.map(\.id))
         let olderEvents = tail.events.filter { !existingEventIds.contains($0.id) }
@@ -2011,6 +2030,7 @@ final class SessionViewModel: ObservableObject {
         totalProjectionItemCount = snapshot.totalProjectionItemCount
         tailSnapshotEventId = snapshot.tailSnapshotEventId
         lastPubsubSeq = snapshot.lastPubsubSeq
+        lastWorkspaceRevisionFingerprint = snapshot.workspaceRevisionFingerprint
         prefetchedOlderTail = nil
         prefetchedOlderOffset = nil
         items = TimelineBuilder.build(events: snapshot.events)
@@ -2027,6 +2047,7 @@ final class SessionViewModel: ObservableObject {
         totalProjectionItemCount = snapshot.totalProjectionItemCount
         tailSnapshotEventId = snapshot.tailSnapshotEventId
         lastPubsubSeq = snapshot.lastPubsubSeq
+        lastWorkspaceRevisionFingerprint = snapshot.workspaceRevisionFingerprint
         prefetchedOlderTail = nil
         prefetchedOlderOffset = nil
         items = TimelineBuilder.build(events: snapshot.events)
@@ -2066,7 +2087,8 @@ final class SessionViewModel: ObservableObject {
             loadedProjectionItemCount: loadedProjectionItemCount,
             totalProjectionItemCount: totalProjectionItemCount,
             tailSnapshotEventId: tailSnapshotEventId,
-            lastPubsubSeq: lastPubsubSeq
+            lastPubsubSeq: lastPubsubSeq,
+            workspaceRevisionFingerprint: lastWorkspaceRevisionFingerprint
         )
         snapshotStore?.save(
             serverURL: activeServerURL,
@@ -2076,7 +2098,8 @@ final class SessionViewModel: ObservableObject {
             loadedProjectionItemCount: loadedProjectionItemCount,
             totalProjectionItemCount: totalProjectionItemCount,
             tailSnapshotEventId: tailSnapshotEventId,
-            lastPubsubSeq: lastPubsubSeq
+            lastPubsubSeq: lastPubsubSeq,
+            workspaceRevisionFingerprint: lastWorkspaceRevisionFingerprint
         )
     }
 

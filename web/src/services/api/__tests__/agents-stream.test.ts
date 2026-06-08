@@ -136,7 +136,7 @@ describe("Timeline session stream", () => {
     const disconnect = connectSessionWorkspaceStream(
       "session-1",
       { onWorkspaceChanged },
-      { skipInitial: true },
+      { skipInitial: true, knownWorkspaceFingerprint: "sha256:cached" },
     );
 
     expect(MockEventSource.instances).toHaveLength(1);
@@ -144,6 +144,7 @@ describe("Timeline session stream", () => {
       "/api/timeline/sessions/session-1/workspace/stream",
     );
     expect(MockEventSource.instances[0].url).toContain("skip_initial=true");
+    expect(MockEventSource.instances[0].url).toContain("known_workspace_fingerprint=sha256%3Acached");
 
     MockEventSource.instances[0].emit("connected", {
       session_id: "session-1",

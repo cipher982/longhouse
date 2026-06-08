@@ -77,6 +77,24 @@ struct LonghouseAPITests {
     }
 
     @Test
+    func sessionWorkspaceStreamURLIncludesKnownWorkspaceFingerprint() throws {
+        let baseURL = try #require(URL(string: "https://demo.longhouse.ai"))
+
+        let url = SessionWorkspaceStream.streamURL(
+            baseURL: baseURL,
+            sessionId: "session-1",
+            knownWorkspaceFingerprint: "sha256:cached"
+        )
+        let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+
+        #expect(components.path == "/api/timeline/sessions/session-1/workspace/stream")
+        #expect(components.queryItems == [
+            URLQueryItem(name: "skip_initial", value: "true"),
+            URLQueryItem(name: "known_workspace_fingerprint", value: "sha256:cached"),
+        ])
+    }
+
+    @Test
     func structuredErrorParsingDecodesHTTPExceptionDetail() throws {
         let data = try #require("""
         {

@@ -90,7 +90,8 @@ struct TranscriptSnapshotStoreTests {
             loadedProjectionItemCount: 2,
             totalProjectionItemCount: 2,
             tailSnapshotEventId: 11,
-            lastPubsubSeq: 42
+            lastPubsubSeq: 42,
+            workspaceRevisionFingerprint: "sha256:cached"
         )
         store.waitForPendingWrites()
 
@@ -100,6 +101,7 @@ struct TranscriptSnapshotStoreTests {
         #expect(loaded?.detail.id == "session-1")
         #expect(loaded?.tailSnapshotEventId == 11)
         #expect(loaded?.lastPubsubSeq == 42)
+        #expect(loaded?.workspaceRevisionFingerprint == "sha256:cached")
     }
 
     @Test

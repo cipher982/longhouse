@@ -100,6 +100,14 @@ function seedHookMocks(eventCount: number = 80, sessionOverrides: Record<string,
         total: events.length,
         abandoned_events: 0,
       },
+      workspace_revision: {
+        latest_event_id: events.at(-1)?.id ?? 0,
+        runtime_version_sum: 0,
+        pause_request_count: 0,
+        managed_control_count: 0,
+        thread_session_count: 1,
+        fingerprint: "sha256:workspace",
+      },
     },
     isLoading: false,
     error: null,
@@ -260,6 +268,19 @@ describe("useSessionWorkspace", () => {
       enabled: true,
       refetchInterval: 5_000,
     });
+  });
+
+  it("opens the workspace stream with the rendered revision fingerprint", () => {
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    expect(streamMocks.connectSessionWorkspaceStream).toHaveBeenCalledWith(
+      baseSession.id,
+      expect.any(Object),
+      {
+        skipInitial: true,
+        knownWorkspaceFingerprint: "sha256:workspace",
+      },
+    );
   });
 
   it("invalidates the workspace query itself when the SSE stream reports a change", () => {

@@ -693,11 +693,14 @@ export interface SessionWorkspaceStreamHandlers {
 export function connectSessionWorkspaceStream(
   sessionId: string,
   handlers: SessionWorkspaceStreamHandlers = {},
-  options: { skipInitial?: boolean } = {},
+  options: { skipInitial?: boolean; knownWorkspaceFingerprint?: string | null } = {},
 ): () => void {
   const params = new URLSearchParams();
   if (options.skipInitial) {
     params.set("skip_initial", "true");
+  }
+  if (options.knownWorkspaceFingerprint) {
+    params.set("known_workspace_fingerprint", options.knownWorkspaceFingerprint);
   }
   const queryString = params.toString();
   const url = buildUrl(

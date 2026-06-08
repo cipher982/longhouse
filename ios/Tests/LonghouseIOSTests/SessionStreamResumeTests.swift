@@ -28,7 +28,8 @@ struct SessionStreamResumeTests {
             loadedProjectionItemCount: workspace.events.count,
             totalProjectionItemCount: workspace.projection.total,
             tailSnapshotEventId: 30,
-            lastPubsubSeq: 777
+            lastPubsubSeq: 777,
+            workspaceRevisionFingerprint: "sha256:cached"
         )
         store.waitForPendingWrites()
 
@@ -37,7 +38,9 @@ struct SessionStreamResumeTests {
         appState.serverURL = serverURL
         let model = SessionViewModel(
             apiFactory: { _ in api },
-            streamFactory: { _, _, sinceSeq in recorder.make(sinceSeq: sinceSeq) },
+            streamFactory: { _, _, sinceSeq, fingerprint in
+                recorder.make(sinceSeq: sinceSeq, knownWorkspaceFingerprint: fingerprint)
+            },
             enableRealtime: true,
             transcriptCache: SessionTranscriptCache(maxBytes: 0),
             snapshotStore: store
@@ -48,6 +51,7 @@ struct SessionStreamResumeTests {
         try? await Task.sleep(nanoseconds: 50_000_000)
 
         #expect(recorder.lastSinceSeq == 777)
+        #expect(recorder.lastKnownWorkspaceFingerprint == "sha256:cached")
         model.stop()
     }
 
@@ -60,7 +64,9 @@ struct SessionStreamResumeTests {
         appState.serverURL = serverURL
         let model = SessionViewModel(
             apiFactory: { _ in api },
-            streamFactory: { _, _, sinceSeq in recorder.make(sinceSeq: sinceSeq) },
+            streamFactory: { _, _, sinceSeq, fingerprint in
+                recorder.make(sinceSeq: sinceSeq, knownWorkspaceFingerprint: fingerprint)
+            },
             enableRealtime: true,
             transcriptCache: SessionTranscriptCache(maxBytes: 0),
             snapshotStore: nil
@@ -105,7 +111,9 @@ struct SessionStreamResumeTests {
         appState.serverURL = serverURL
         let model = SessionViewModel(
             apiFactory: { _ in api },
-            streamFactory: { _, _, sinceSeq in recorder.make(sinceSeq: sinceSeq) },
+            streamFactory: { _, _, sinceSeq, fingerprint in
+                recorder.make(sinceSeq: sinceSeq, knownWorkspaceFingerprint: fingerprint)
+            },
             enableRealtime: true,
             transcriptCache: SessionTranscriptCache(maxBytes: 0),
             snapshotStore: nil
@@ -147,7 +155,8 @@ struct SessionStreamResumeTests {
             loadedProjectionItemCount: workspace.events.count,
             totalProjectionItemCount: workspace.projection.total,
             tailSnapshotEventId: 30,
-            lastPubsubSeq: 777
+            lastPubsubSeq: 777,
+            workspaceRevisionFingerprint: "sha256:cached-gap"
         )
         store.waitForPendingWrites()
 
@@ -156,7 +165,9 @@ struct SessionStreamResumeTests {
         appState.serverURL = serverURL
         let model = SessionViewModel(
             apiFactory: { _ in api },
-            streamFactory: { _, _, sinceSeq in recorder.make(sinceSeq: sinceSeq) },
+            streamFactory: { _, _, sinceSeq, fingerprint in
+                recorder.make(sinceSeq: sinceSeq, knownWorkspaceFingerprint: fingerprint)
+            },
             enableRealtime: true,
             transcriptCache: SessionTranscriptCache(maxBytes: 0),
             snapshotStore: store
@@ -165,6 +176,7 @@ struct SessionStreamResumeTests {
         await model.start(sessionId: "session-1", appState: appState)
         try? await Task.sleep(nanoseconds: 50_000_000)
         #expect(recorder.lastSinceSeq == 777)
+        #expect(recorder.lastKnownWorkspaceFingerprint == "sha256:cached-gap")
 
         recorder.emitReplayGap(latestSeq: 0)
         try? await Task.sleep(nanoseconds: 100_000_000)
@@ -174,6 +186,7 @@ struct SessionStreamResumeTests {
         await model.start(sessionId: "session-1", appState: appState)
         try? await Task.sleep(nanoseconds: 50_000_000)
         #expect(recorder.lastSinceSeq == nil, "replay gap should clear stale persisted cursor")
+        #expect(recorder.lastKnownWorkspaceFingerprint == nil, "tail refresh should replace a stale cached fingerprint")
 
         model.stop()
     }
@@ -185,16 +198,21 @@ struct SessionStreamResumeTests {
 private final class StreamFactoryRecorder: Sendable {
     private struct State {
         var lastSinceSeq: Int?
+        var lastKnownWorkspaceFingerprint: String?
         var startCount = 0
         var continuation: AsyncStream<SessionWorkspaceStream.Event>.Continuation?
     }
     private let state = OSAllocatedUnfairLock(initialState: State())
 
     var lastSinceSeq: Int? { state.withLock { $0.lastSinceSeq } }
+    var lastKnownWorkspaceFingerprint: String? { state.withLock { $0.lastKnownWorkspaceFingerprint } }
     var startCount: Int { state.withLock { $0.startCount } }
 
-    func make(sinceSeq: Int?) -> SessionWorkspaceStreamSource {
-        state.withLock { $0.lastSinceSeq = sinceSeq }
+    func make(sinceSeq: Int?, knownWorkspaceFingerprint: String?) -> SessionWorkspaceStreamSource {
+        state.withLock {
+            $0.lastSinceSeq = sinceSeq
+            $0.lastKnownWorkspaceFingerprint = knownWorkspaceFingerprint
+        }
         return SessionWorkspaceStreamSource(
             start: { [state] in
                 // Do NOT auto-emit .connected: a real 401 stream never reaches
