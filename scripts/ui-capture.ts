@@ -377,6 +377,43 @@ async function installSceneMocks(
         return;
       }
 
+      // Dynamic-workflow run grouping (WorkflowRunsPanel).
+      if (pathname === `/api/agents/sessions/${fixture.session.id}/workflows`) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            session_id: fixture.session.id,
+            workflow_runs: [{ workflow_run_id: "wf_deep_research", agent_count: 18, skill: "deep-research" }],
+          }),
+        });
+        return;
+      }
+
+      if (pathname === "/api/agents/workflows/wf_deep_research") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            workflow_run_id: "wf_deep_research",
+            skill: "deep-research",
+            parent_session_id: fixture.session.id,
+            agent_count: 18,
+            agents: Array.from({ length: 18 }, (_v, i) => ({
+              thread_id: `t-${i}`,
+              session_id: fixture.session.id,
+              is_primary: false,
+              branch_kind: "subagent",
+              agent_id: `a${(i + 1).toString(16).padStart(15, "0")}`,
+              attribution_agent: "workflow-subagent",
+              attribution_skill: "deep-research",
+              source_path: null,
+            })),
+          }),
+        });
+        return;
+      }
+
       await route.fallback();
     });
     return;

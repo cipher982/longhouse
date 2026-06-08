@@ -471,6 +471,23 @@ def get_workflow_run(
     return run
 
 
+@router.get("/sessions/{session_id}/workflows")
+def list_session_workflow_runs(
+    session_id: UUID,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict:
+    """List dynamic-workflow runs whose subagent threads live under this session.
+
+    Each entry is one collapsible 'workflow run' node for the session detail UI:
+    {workflow_run_id, agent_count, skill}.
+    """
+    store = AgentsStore(db)
+    runs = store.list_workflow_runs_for_session(session_id)
+    return {"session_id": str(session_id), "workflow_runs": runs}
+
+
 @router.get("/sessions/{session_id}/tail")
 def session_tail(
     session_id: UUID,

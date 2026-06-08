@@ -198,6 +198,38 @@ export interface AgentSessionThreadResponse {
   sessions: AgentSession[];
 }
 
+/** One dynamic-workflow run whose subagent threads live under a session. */
+export interface WorkflowRunSummary {
+  workflow_run_id: string;
+  agent_count: number;
+  skill: string | null;
+}
+
+export interface SessionWorkflowRunsResponse {
+  session_id: string;
+  workflow_runs: WorkflowRunSummary[];
+}
+
+/** One subagent within a dynamic-workflow run. */
+export interface WorkflowRunAgent {
+  thread_id: string;
+  session_id: string;
+  is_primary: boolean;
+  branch_kind: string | null;
+  agent_id: string | null;
+  attribution_agent: string | null;
+  attribution_skill: string | null;
+  source_path: string | null;
+}
+
+export interface WorkflowRunResponse {
+  workflow_run_id: string;
+  skill: string | null;
+  parent_session_id: string | null;
+  agent_count: number;
+  agents: WorkflowRunAgent[];
+}
+
 export interface AgentSessionProjectionItem {
   kind: "event" | "seam";
   session_id: string;
@@ -743,6 +775,26 @@ export async function fetchAgentSessionThread(
 ): Promise<AgentSessionThreadResponse> {
   return request<AgentSessionThreadResponse>(
     `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/thread`,
+    { method: "GET" },
+  );
+}
+
+/** List the dynamic-workflow runs whose subagent threads live under a session. */
+export async function fetchSessionWorkflowRuns(
+  sessionId: string,
+): Promise<SessionWorkflowRunsResponse> {
+  return request<SessionWorkflowRunsResponse>(
+    `/agents/sessions/${sessionId}/workflows`,
+    { method: "GET" },
+  );
+}
+
+/** Fetch one dynamic-workflow run with its individual subagent threads. */
+export async function fetchWorkflowRun(
+  workflowRunId: string,
+): Promise<WorkflowRunResponse> {
+  return request<WorkflowRunResponse>(
+    `/agents/workflows/${workflowRunId}`,
     { method: "GET" },
   );
 }

@@ -470,6 +470,31 @@ def test_relink_failure_does_not_corrupt_committed_parent(tmp_path, monkeypatch)
         assert db.query(AgentSession).filter(AgentSession.id == AGENT_ID).first() is not None
 
 
+def test_list_workflow_runs_for_session(tmp_path):
+    """The session detail data source: one entry per workflow run under the
+    parent, with agent count + skill."""
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        store.ingest_session(_parent_payload())
+        store.ingest_session(_agent_payload(agent_session_id=AGENT_ID, subagent_id="a049eaf15e4dbcae3"))
+        store.ingest_session(
+            _agent_payload(
+                agent_session_id=UUID("88888888-0000-0000-0000-0000000000cc"),
+                subagent_id="a04eaddc8e3b46986",
+            )
+        )
+
+        runs = store.list_workflow_runs_for_session(PARENT_ID)
+        assert len(runs) == 1
+        assert runs[0]["workflow_run_id"] == RUN
+        assert runs[0]["agent_count"] == 2
+        assert runs[0]["skill"] == "deep-research"
+
+        # A session with no workflow subagents -> empty list.
+        assert store.list_workflow_runs_for_session(JOURNAL_ID) == []
+
+
 def test_workflow_run_query_endpoint(tmp_path):
     from types import SimpleNamespace
 

@@ -2103,6 +2103,45 @@ class AgentsStore:
             "agents": agents,
         }
 
+    def list_workflow_runs_for_session(self, session_id: UUID) -> list[dict]:
+        """List the dynamic-workflow runs whose subagent threads live under this
+        parent session, each with its agent count + skill label.
+
+        Used by the session detail UI to render each workflow run as one
+        collapsible node instead of N loose subagent threads.
+        """
+        # All workflow_run_id aliases on threads belonging to this session.
+        rows = (
+            self.db.query(SessionThreadAlias.alias_value, SessionThread.id)
+            .join(SessionThread, SessionThreadAlias.thread_id == SessionThread.id)
+            .filter(SessionThread.session_id == session_id)
+            .filter(SessionThreadAlias.alias_kind == "workflow_run_id")
+            .all()
+        )
+        run_to_threads: dict[str, set] = {}
+        for run_id, thread_id in rows:
+            if run_id:
+                run_to_threads.setdefault(run_id, set()).add(thread_id)
+        if not run_to_threads:
+            return []
+
+        # Skill label per run (first non-empty attribution_skill among its threads).
+        all_thread_ids = {tid for tids in run_to_threads.values() for tid in tids}
+        skill_by_thread: dict = {}
+        for tid, skill in (
+            self.db.query(SessionThreadAlias.thread_id, SessionThreadAlias.alias_value)
+            .filter(SessionThreadAlias.thread_id.in_(all_thread_ids))
+            .filter(SessionThreadAlias.alias_kind == "workflow_attribution_skill")
+            .all()
+        ):
+            skill_by_thread.setdefault(tid, skill)
+
+        runs: list[dict] = []
+        for run_id, thread_ids in sorted(run_to_threads.items()):
+            skill = next((skill_by_thread.get(tid) for tid in thread_ids if skill_by_thread.get(tid)), None)
+            runs.append({"workflow_run_id": run_id, "agent_count": len(thread_ids), "skill": skill})
+        return runs
+
     def reconcile_derived_projections(self, session_id: UUID) -> bool:
         """Rebuild derived projections skipped by archive ingest."""
         session_obj = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()

@@ -13,6 +13,7 @@ import {
   truncatePath,
 } from "../../lib/sessionWorkspace";
 import { ContinuationsList } from "./ContinuationsList";
+import { WorkflowRunsPanel } from "./WorkflowRunsPanel";
 import { ManagedLaunchHintCard } from "./ManagedLaunchHintCard";
 import { ProviderGlyph } from "../ProviderGlyph";
 
@@ -223,6 +224,8 @@ export function SessionContextPane({
         headSessionId={headThreadSession?.id ?? null}
         onOpenSession={onOpenSession}
       />
+
+      <WorkflowRunsPanel sessionId={session.id} />
 
       {showAttachDebug ? (
         <details

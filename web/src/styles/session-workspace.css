@@ -2482,3 +2482,44 @@
       z-index: 3;
     }
   }
+
+/* Dynamic-workflow run grouping (session detail context pane). */
+.session-workflow-runs-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.session-workflow-run__agents {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-2);
+}
+
+.session-workflow-run__agent {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(158, 124, 90, 0.14);
+  background: rgba(24, 18, 14, 0.6);
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+}
+
+.session-workflow-run__agent-id {
+  font-family: var(--font-mono, monospace);
+}
+
+.session-workflow-run__agent-kind {
+  opacity: 0.7;
+}
+
+.session-workflow-run__loading {
+  padding: var(--space-2) var(--space-3);
+  font-size: 0.85rem;
+  opacity: 0.7;
+}
