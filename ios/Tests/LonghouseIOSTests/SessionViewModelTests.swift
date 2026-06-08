@@ -106,7 +106,7 @@ struct SessionViewModelTests {
         appState.serverURL = "https://example.longhouse.ai"
         let model = SessionViewModel(
             apiFactory: { _ in api },
-            streamFactory: { _, _, _ in Self.neverConnectingStreamSource() },
+            streamFactory: { _, _, _, _ in Self.neverConnectingStreamSource() },
             enableRealtime: true,
             transcriptCache: SessionTranscriptCache(maxBytes: 0),
             snapshotStore: nil
@@ -144,7 +144,7 @@ struct SessionViewModelTests {
         appState.serverURL = "https://example.longhouse.ai"
         let model = SessionViewModel(
             apiFactory: { _ in api },
-            streamFactory: { _, _, _ in Self.neverConnectingStreamSource() },
+            streamFactory: { _, _, _, _ in Self.neverConnectingStreamSource() },
             enableRealtime: true,
             transcriptCache: cache,
             snapshotStore: nil
@@ -167,7 +167,7 @@ struct SessionViewModelTests {
         #expect(offsets.filter { $0 == 50 }.count == 2)
         #expect(await api.tailRequest(at: 2)?.offset == 50)
         #expect(await api.tailRequest(at: 2)?.snapshotEventId == 51)
-        #expect(model.items.map(\.id) == ["user:2", "user:51"])
+        #expect(model.items.map { $0.id } == ["user:2", "user:51"])
         model.stop()
     }
 

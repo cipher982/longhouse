@@ -1336,6 +1336,8 @@ final class SessionViewModel: ObservableObject {
     private var prefetchedOlderSnapshotEventId: Int?
     private var prefetchInFlightOffset: Int?
     private var prefetchInFlightSnapshotEventId: Int?
+    private var prefetchInFlightToken: Int?
+    private var nextPrefetchToken = 0
     private var isLoadingOlder = false
     private var openWaterfall: SessionOpenWaterfall?
     private let apiFactory: (String) -> SessionWorkspaceClient?
@@ -1394,6 +1396,7 @@ final class SessionViewModel: ObservableObject {
             prefetchedOlderSnapshotEventId = nil
             prefetchInFlightOffset = nil
             prefetchInFlightSnapshotEventId = nil
+            prefetchInFlightToken = nil
             prefetchTask?.cancel()
             prefetchTask = nil
             errorMessage = nil
@@ -1482,6 +1485,7 @@ final class SessionViewModel: ObservableObject {
         prefetchTask = nil
         prefetchInFlightOffset = nil
         prefetchInFlightSnapshotEventId = nil
+        prefetchInFlightToken = nil
         streamTask?.cancel()
         streamTask = nil
         Task { [stream] in await stream?.stop() }
@@ -1502,6 +1506,7 @@ final class SessionViewModel: ObservableObject {
         prefetchedOlderSnapshotEventId = nil
         prefetchInFlightOffset = nil
         prefetchInFlightSnapshotEventId = nil
+        prefetchInFlightToken = nil
     }
 
     /// Full teardown for genuine nav-away or session switch: stops realtime AND
@@ -2027,15 +2032,18 @@ final class SessionViewModel: ObservableObject {
 
         prefetchTask?.cancel()
         prefetchTask = nil
+        nextPrefetchToken += 1
+        let prefetchToken = nextPrefetchToken
         prefetchInFlightOffset = offset
         prefetchInFlightSnapshotEventId = snapshotEventId
+        prefetchInFlightToken = prefetchToken
         prefetchTask = Task { [weak self] in
             guard let self else { return }
             defer {
-                if self.prefetchInFlightOffset == offset,
-                   self.prefetchInFlightSnapshotEventId == snapshotEventId {
+                if self.prefetchInFlightToken == prefetchToken {
                     self.prefetchInFlightOffset = nil
                     self.prefetchInFlightSnapshotEventId = nil
+                    self.prefetchInFlightToken = nil
                     self.prefetchTask = nil
                 }
             }
@@ -2103,6 +2111,7 @@ final class SessionViewModel: ObservableObject {
         prefetchedOlderSnapshotEventId = nil
         prefetchInFlightOffset = nil
         prefetchInFlightSnapshotEventId = nil
+        prefetchInFlightToken = nil
         items = TimelineBuilder.build(events: snapshot.events)
         isInitialLoading = false
         errorMessage = nil
@@ -2123,6 +2132,7 @@ final class SessionViewModel: ObservableObject {
         prefetchedOlderSnapshotEventId = nil
         prefetchInFlightOffset = nil
         prefetchInFlightSnapshotEventId = nil
+        prefetchInFlightToken = nil
         items = TimelineBuilder.build(events: snapshot.events)
         isInitialLoading = false
         errorMessage = nil

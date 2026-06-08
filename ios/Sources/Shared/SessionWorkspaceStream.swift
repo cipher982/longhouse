@@ -85,7 +85,6 @@ actor SessionWorkspaceStream {
     private let skipInitial: Bool
     private let knownWorkspaceFingerprint: String?
     private let logger = Logger(subsystem: "ai.longhouse.ios", category: "SessionStream")
-    private let logger = Logger(subsystem: "ai.longhouse.ios", category: "SessionStream")
     private var task: Task<Void, Never>?
     /// Reconnect cursor. The server sets the SSE `id:` field to the per-topic
     /// pubsub sequence (NOT the DB event id), and replays buffered messages
