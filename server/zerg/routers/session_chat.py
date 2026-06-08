@@ -450,24 +450,45 @@ async def _respond_to_pause_request(
         message=body.message,
         commis_id=f"pause-{row.id}",
     )
-    status_value = "resolved" if result.ok and decision == "answer" else "rejected" if result.ok else "failed"
-    response_payload: dict[str, Any] = {
-        "decision": decision,
-        "answers": body.answers,
-        "content": body.content,
-        "message": body.message,
-        "dispatch_ok": result.ok,
-        "exit_code": result.exit_code,
-    }
-    if result.error:
-        response_payload["error"] = result.error
+    if not result.ok:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": "pause_response_dispatch_failed",
+                "error_code": "pause_response_dispatch_failed",
+                "message": str(result.error or "Failed to dispatch pause response command"),
+                "pause_request_id": str(row.id),
+                "retryable": True,
+            },
+        )
+
+    bridge_response = dict(result.response_data or {})
+    bridge_status = str(bridge_response.get("status") or "").strip().lower()
+    status_value = (
+        bridge_status if bridge_status in {"resolved", "rejected", "failed"} else ("resolved" if decision == "answer" else "rejected")
+    )
+    bridge_payload = bridge_response.get("response_payload")
+    response_payload: dict[str, Any]
+    if isinstance(bridge_payload, dict):
+        response_payload = bridge_payload
+    else:
+        response_payload = {
+            "decision": decision,
+            "answers": body.answers,
+            "content": body.content,
+            "message": body.message,
+            "dispatch_ok": result.ok,
+            "exit_code": result.exit_code,
+            "bridge_response": bridge_response or None,
+        }
+    response_text = str(bridge_response.get("response_text") or body.message or "").strip() or None
     resolved = resolve_pause_request(
         db,
         pause_request_id=row.id,
         status=status_value,
         occurred_at=datetime.utcnow(),
         response_payload=response_payload,
-        response_text=body.message or result.error,
+        response_text=response_text,
     )
     db.commit()
     if resolved is None:

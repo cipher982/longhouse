@@ -233,7 +233,25 @@ def test_answerable_pause_response_dispatches_and_resolves(monkeypatch, tmp_path
 
     async def fake_answer(**kwargs):
         calls.append(kwargs)
-        return ManagedLocalSendResult(ok=True, exit_code=0)
+        return ManagedLocalSendResult(
+            ok=True,
+            exit_code=0,
+            response_data={
+                "request_key": "codex:pause-routes:req-1",
+                "provider_request_id": "req-1",
+                "status": "resolved",
+                "response_payload": {
+                    "request": {
+                        "decision": "answer",
+                        "answers": {"storage": ["SQLite"]},
+                    },
+                    "provider_result": {
+                        "answers": {"storage": {"answers": ["SQLite"]}},
+                    },
+                },
+                "response_text": "Use SQLite.",
+            },
+        )
 
     monkeypatch.setattr(session_chat, "answer_pause_request_on_managed_local_session", fake_answer)
     client, api_app_ref = _make_client(
@@ -257,11 +275,12 @@ def test_answerable_pause_response_dispatches_and_resolves(monkeypatch, tmp_path
             row = db.query(SessionPauseRequest).filter(SessionPauseRequest.id == pause_id).one()
             assert row.status == "resolved"
             assert row.response_text == "Use SQLite."
+            assert row.response_payload_json["provider_result"]["answers"]["storage"]["answers"] == ["SQLite"]
     finally:
         api_app_ref.dependency_overrides = {}
 
 
-def test_pause_response_dispatch_failure_marks_request_failed(monkeypatch, tmp_path):
+def test_pause_response_dispatch_failure_leaves_request_pending(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_codex_session(session_local)
     pause_id = _seed_pause_request(session_local, session_id, can_respond=True)
@@ -279,12 +298,13 @@ def test_pause_response_dispatch_failure_marks_request_failed(monkeypatch, tmp_p
             f"/api/sessions/{session_id}/pause-requests/{pause_id}/response",
             json={"decision": "answer", "answers": {"storage": ["SQLite"]}},
         )
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["status"] == "failed"
+        assert resp.status_code == 502, resp.text
+        assert resp.json()["detail"]["code"] == "pause_response_dispatch_failed"
+        assert resp.json()["detail"]["retryable"] is True
         with session_local() as db:
             row = db.query(SessionPauseRequest).filter(SessionPauseRequest.id == pause_id).one()
-            assert row.status == "failed"
-            assert row.response_text == "bridge offline"
+            assert row.status == "pending"
+            assert row.response_text is None
     finally:
         api_app_ref.dependency_overrides = {}
 

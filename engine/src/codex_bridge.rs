@@ -2893,6 +2893,14 @@ impl PauseRequestResponder {
             "id": pending.request_id,
             "result": result,
         });
+        let response_text = request
+            .get("message")
+            .and_then(Value::as_str)
+            .map(ToString::to_string);
+        let response_payload = json!({
+            "request": request,
+            "provider_result": provider_payload.get("result").cloned().unwrap_or(Value::Null),
+        });
         let line = serde_json::to_string(&provider_payload)?;
         if let Err(err) = self.outbound.send(line) {
             self.runtime.post_pause_resolution(
@@ -2913,19 +2921,15 @@ impl PauseRequestResponder {
         self.runtime.post_pause_resolution(
             &pending,
             status,
-            json!({
-                "request": request,
-                "provider_result": provider_payload.get("result").cloned().unwrap_or(Value::Null),
-            }),
-            request
-                .get("message")
-                .and_then(Value::as_str)
-                .map(ToString::to_string),
+            response_payload.clone(),
+            response_text.clone(),
         );
         Ok(json!({
             "request_key": pending.request_key,
             "provider_request_id": pending.provider_request_id,
             "status": status,
+            "response_payload": response_payload,
+            "response_text": response_text,
         }))
     }
 
@@ -8208,6 +8212,11 @@ mod tests {
         let ipc_response: Value = serde_json::from_slice(&ipc_response).unwrap();
         assert_eq!(ipc_response["ok"], true);
         assert_eq!(ipc_response["status"], "resolved");
+        assert_eq!(
+            ipc_response["response_payload"],
+            pause_resolution["payload"]["response_payload"]
+        );
+        assert_eq!(ipc_response["response_text"], "Use red.");
         ipc_task.await.unwrap().unwrap();
 
         events_tx
@@ -8354,6 +8363,10 @@ mod tests {
         let ipc_response: Value = serde_json::from_slice(&ipc_response).unwrap();
         assert_eq!(ipc_response["ok"], true);
         assert_eq!(ipc_response["status"], "resolved");
+        assert_eq!(
+            ipc_response["response_payload"],
+            pause_resolution["payload"]["response_payload"]
+        );
         ipc_task.await.unwrap().unwrap();
     }
 

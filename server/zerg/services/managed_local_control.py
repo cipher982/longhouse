@@ -7,6 +7,7 @@ session-chat route and Loop actions use the same managed-local semantics.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -76,6 +77,7 @@ class ManagedLocalSendResult:
     baseline_event_id: int | None = None
     verified_turn_started: bool = False
     verified_user_event_id: int | None = None
+    response_data: Mapping[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -831,4 +833,18 @@ async def answer_pause_request_on_managed_local_session(
             exit_code=exit_code,
             error=detail or "Managed local pause response command failed",
         )
-    return ManagedLocalSendResult(ok=True, exit_code=0)
+    pause_response = data.get("pause_response")
+    if not isinstance(pause_response, Mapping):
+        stdout = str(data.get("stdout") or "").strip()
+        if stdout:
+            try:
+                decoded = json.loads(stdout)
+            except json.JSONDecodeError:
+                decoded = None
+            if isinstance(decoded, Mapping):
+                pause_response = decoded
+    return ManagedLocalSendResult(
+        ok=True,
+        exit_code=0,
+        response_data=dict(pause_response) if isinstance(pause_response, Mapping) else None,
+    )
