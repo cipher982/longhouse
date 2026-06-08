@@ -4,6 +4,7 @@ import {
   isSessionClosed,
   resolveSessionOwnershipLabel,
   resolveSessionRuntimeState,
+  resolveTimelineSignal,
 } from "../sessionRuntime";
 import { getRuntimeDisplayCopy, getRuntimeOutcomeLabel } from "../sessionUtils";
 
@@ -115,5 +116,40 @@ describe("resolveSessionRuntimeState", () => {
     expect(runtime.tone).toBe("closed");
     expect(isSessionClosed({ runtime_display: runtime.runtimeDisplay })).toBe(true);
     expect(getRuntimeOutcomeLabel(runtime)).toBe("Closed");
+  });
+});
+
+describe("resolveTimelineSignal", () => {
+  const sig = (overrides: Partial<TimelineRuntimeSession["runtime_display"]>, opts = {}) =>
+    resolveTimelineSignal({ runtime_display: makeRuntimeDisplay(overrides) }, opts);
+
+  it("closed wins over everything", () => {
+    expect(sig({ lifecycle: "closed", needs_attention: true, tone: "running" })).toBe("closed");
+  });
+
+  it("needs_attention drives amber (not raw running tone)", () => {
+    expect(sig({ needs_attention: true, tone: "running", activity_recency: "live" })).toBe("attention");
+  });
+
+  it("live thinking/running is working (teal, pulses)", () => {
+    expect(sig({ tone: "running", activity_recency: "live" })).toBe("working");
+    expect(sig({ tone: "thinking", activity_recency: "live" })).toBe("working");
+  });
+
+  it("stale running does NOT pulse — falls to quiet", () => {
+    expect(sig({ tone: "running", activity_recency: "stale" })).toBe("quiet");
+  });
+
+  it("blocked/stalled map to attention", () => {
+    expect(sig({ tone: "stalled" })).toBe("attention");
+    expect(sig({ tone: "blocked" })).toBe("attention");
+  });
+
+  it("idle is quiet", () => {
+    expect(sig({ tone: "idle" })).toBe("quiet");
+  });
+
+  it("a global connectivity banner suppresses attention", () => {
+    expect(sig({ needs_attention: true }, { connectivityHealthy: false })).toBe("quiet");
   });
 });

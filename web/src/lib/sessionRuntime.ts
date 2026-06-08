@@ -42,6 +42,54 @@ export function isSessionClosed(
   return session?.runtime_display?.lifecycle === "closed";
 }
 
+/**
+ * The single attention axis for a timeline row, mirroring iOS TimelineSignal.
+ * Three semantic stops the user reads pre-attentively, plus closed:
+ *   - attention: WAITING ON YOU — steady amber, never pulses.
+ *   - working:   actively running — teal, pulses (live only).
+ *   - quiet:     idle/stale — grey, static.
+ *   - closed:    ended — dimmed, static.
+ * Drives `data-signal` on the row; CSS owns the colors. Keep in lockstep with
+ * `timelineSignal` in ios/.../InboxView.swift.
+ */
+export type TimelineSignal = "attention" | "working" | "quiet" | "closed";
+
+export function resolveTimelineSignal(
+  session: Pick<AgentSession, "runtime_display">,
+  options: { connectivityHealthy?: boolean } = {},
+): TimelineSignal {
+  if (isSessionClosed(session)) return "closed";
+  // A global connectivity banner owns severity; suppress per-row attention.
+  if (options.connectivityHealthy === false) return "quiet";
+
+  const display = session.runtime_display;
+  // Curated needs_attention drives amber, NOT the noisy raw needs_user state.
+  if (display.needs_attention) return "attention";
+
+  const tone = (display.tone ?? "").trim().toLowerCase();
+  const live = display.activity_recency === "live";
+  if (tone === "thinking" || tone === "running") {
+    // Only animate genuinely live work; a stale "running" must not pulse.
+    return live ? "working" : "quiet";
+  }
+  if (tone === "blocked" || tone === "stalled") return "attention";
+  return "quiet";
+}
+
+/** Spoken equivalent of the signal, so the dot's meaning reaches a11y. */
+export function timelineSignalLabel(signal: TimelineSignal): string {
+  switch (signal) {
+    case "attention":
+      return "Waiting on you";
+    case "working":
+      return "Working";
+    case "quiet":
+      return "Idle";
+    case "closed":
+      return "Closed";
+  }
+}
+
 export interface SessionRuntimeState {
   status: string | null;
   presenceState: KnownPresenceState | null;

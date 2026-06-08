@@ -51,6 +51,10 @@ export interface AgentSession {
   tool_calls: number;
   summary: string | null;
   summary_title: string | null;
+  /** Frozen, write-once headline; stable across the session's life. */
+  anchor_title?: string | null;
+  /** Server-resolved headline to render verbatim (no client fallback ladder). */
+  timeline_title?: string | null;
   summary_status?: "ready" | "pending" | "failed" | "unavailable" | (string & {}) | null;
   first_user_message: string | null;
   match_event_id?: number | null;

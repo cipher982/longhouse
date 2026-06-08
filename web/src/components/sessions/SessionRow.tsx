@@ -10,7 +10,7 @@ import { useCallback, useEffect, useRef, type CSSProperties, type ReactNode, typ
 import type { DraggableAttributes } from "@dnd-kit/core";
 import type { SyntheticListenerMap } from "@dnd-kit/core/dist/hooks/utilities";
 import { type TimelineSessionCard } from "../../services/api/agents";
-import { isSessionClosed } from "../../lib/sessionRuntime";
+import { isSessionClosed, resolveTimelineSignal, timelineSignalLabel } from "../../lib/sessionRuntime";
 import {
   formatRelativeTime,
   getBranchLabel,
@@ -81,6 +81,9 @@ export function SessionRow({
 
   const statusTone = isClosed ? "closed" : timelineStatus.tone;
   const statusLabel = isClosed ? "closed" : timelineStatus.label;
+  // 3-stop attention signal (amber=waiting / teal=working / grey=quiet), shared
+  // with iOS. Drives the dot color + the a11y label so amber isn't sight-only.
+  const signal = resolveTimelineSignal(session);
 
   const hoverTimerRef = useRef<number | null>(null);
   const clearHover = useCallback(() => {
@@ -144,7 +147,8 @@ export function SessionRow({
         <span
           className="inbox-row-status-dot"
           data-tone={statusTone}
-          aria-hidden="true"
+          data-signal={signal}
+          aria-label={timelineSignalLabel(signal)}
         />
         <span className="inbox-row-status-label">{statusLabel}</span>
       </span>

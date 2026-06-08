@@ -113,6 +113,18 @@ export function getSessionCardText(
   const preferGenerated = options.preferGenerated ?? true;
   const firstUser = compactText(session.first_user_message);
 
+  // The server resolves a single sanitized, frozen headline (timeline_title) so
+  // iOS/web/widget render identical text and the row stays stable as the live
+  // summary drifts. Prefer it; the ladder below is only for pre-anchor payloads.
+  const resolved = compactText(session.timeline_title);
+  if (preferGenerated && resolved) {
+    return {
+      title: truncateText(resolved, titleMaxChars),
+      titleSource: "generated",
+      subheading: firstUser ? truncateText(firstUser, subheadingMaxChars) : null,
+    };
+  }
+
   if (preferGenerated && isGeneratedSessionTitle(session.summary_title)) {
     return {
       title: truncateText(compactText(session.summary_title), titleMaxChars),
