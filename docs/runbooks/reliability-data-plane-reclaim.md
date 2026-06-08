@@ -46,6 +46,23 @@
 >   parent↔child relationships. No raw is at risk; this is a scoping correctness
 >   fix, not a loss.
 
+> ## ⏱️ DOWNTIME FINDING (2026-06-08) — swap as-built is a 2-3 HOUR outage, NOT minutes
+> First live swap attempt was aborted in read-only preflight (DB untouched, tenant
+> healthy) after a full-DB `quick_check` projected to ~2.5h. That heavy preflight
+> check is removed. BUT a deeper hatch review found the build itself runs entirely
+> DURING downtime and is inherently long for this 117GB tenant: archive coverage
+> pass (~30min), 89-table copy, 12.9M source_lines join, **10.5M-event row-by-row
+> Python decode+hash (~30-90min)**, FTS rebuild, integrity check → **90min best
+> case, 2-3h likely.** Live coding sessions spool/survive, but browser+iOS steering
+> is down the whole window. DO NOT run the all-in-stopped-window builder expecting
+> a short outage. Right shape (hatch): precompute coverage + event raw-hashes
+> WHILE UP (archive is append-only; events immutable) into a sidecar DB; build the
+> slim candidate online from a snapshot; stop only for a short delta catch-up +
+> swap. Needs a correct catch-up path for mutable tables. Until that's built,
+> options are: accept a multi-hour outage in a planned window, or do the rework
+> first. (Longer-term: persist events.raw_sha256 at ingest so Phase E never
+> decodes historical BLOBs.)
+
 **Status:** DRAFT — requires David's explicit approval before ANY step runs.
 **Predecessor:** `docs/specs/reliability-data-plane-closeout.md` (architecture + PRs 1–3, shipped).
 **Companion gate:** `docs/runbooks/archive-decommission-plan.md` (the approval-gate doctrine this obeys).
