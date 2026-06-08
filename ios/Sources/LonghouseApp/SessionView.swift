@@ -326,7 +326,7 @@ struct SessionView: View {
     @ViewBuilder
     private var composer: some View {
         if let detail = viewModel.detail {
-            if detail.canSendLive {
+            if detail.activePauseRequest != nil || detail.canSendLive {
                 composerField(detail: detail)
             } else {
                 unavailableComposerFooter(detail: detail)
@@ -335,6 +335,7 @@ struct SessionView: View {
     }
 
     private func composerField(detail: SessionDetail) -> some View {
+        let pauseRequest = detail.activePauseRequest
         return VStack(alignment: .leading, spacing: 6) {
             if let draftError = viewModel.draftErrorMessage {
                 Text(draftError)
@@ -399,89 +400,110 @@ struct SessionView: View {
                     .foregroundStyle(.orange)
             }
 
-            if detail.attachImagesEnabled {
+            if let pauseRequest {
+                SessionPauseRequestCard(
+                    pauseRequest: pauseRequest,
+                    isResponding: viewModel.isRespondingToPauseRequest,
+                    errorMessage: viewModel.pauseResponseErrorMessage,
+                    onRespond: { decision, answers, content, message in
+                        await viewModel.respondToPauseRequest(
+                            sessionId: sessionId,
+                            appState: appState,
+                            pauseRequest: pauseRequest,
+                            decision: decision,
+                            answers: answers,
+                            content: content,
+                            message: message
+                        )
+                    }
+                )
+            }
+
+            if detail.attachImagesEnabled && pauseRequest == nil {
                 attachmentTray
             }
 
-            HStack(alignment: .bottom, spacing: 8) {
-                // Sparkle: AI draft, only when field is empty
-                Button {
-                    Task { await draft() }
-                } label: {
-                    if viewModel.isDrafting {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Image(systemName: "sparkles")
-                            .font(.title3)
-                            .foregroundStyle(composerHasText ? Color.secondary.opacity(0.3) : Color.secondary)
-                    }
-                }
-                .frame(width: 32, height: 32)
-                .disabled(composerHasText || viewModel.isSending || viewModel.isDrafting)
-                .accessibilityLabel("Draft reply")
-
-                if detail.attachImagesEnabled {
-                    let attachmentSlotsLeft = attachmentStore.slotsLeft
-                    let attachmentIsProcessing = attachmentStore.isProcessing
-                    let canAttachImages = attachmentInputEnabled
-                    PhotosPicker(
-                        selection: $pickerSelection,
-                        maxSelectionCount: max(1, attachmentSlotsLeft),
-                        matching: .images
-                    ) {
-                        Image(systemName: attachmentIsProcessing ? "ellipsis.circle" : "paperclip")
-                            .font(.title3)
-                            .foregroundStyle(canAttachImages && attachmentSlotsLeft > 0 ? Color.accentColor : Color.secondary.opacity(0.3))
+            if pauseRequest == nil {
+                HStack(alignment: .bottom, spacing: 8) {
+                    // Sparkle: AI draft, only when field is empty
+                    Button {
+                        Task { await draft() }
+                    } label: {
+                        if viewModel.isDrafting {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "sparkles")
+                                .font(.title3)
+                                .foregroundStyle(composerHasText ? Color.secondary.opacity(0.3) : Color.secondary)
+                        }
                     }
                     .frame(width: 32, height: 32)
-                    .disabled(!canAttachImages || attachmentSlotsLeft <= 0 || attachmentIsProcessing || isLoadingPickerItems || viewModel.isSending)
-                    .accessibilityLabel("Attach images")
-                    .accessibilityIdentifier("session-chat-attach")
-                }
+                    .disabled(composerHasText || viewModel.isSending || viewModel.isDrafting)
+                    .accessibilityLabel("Draft reply")
 
-                TextField(detail.composerPlaceholder, text: $composerText, axis: .vertical)
-                    .lineLimit(1...6)
-                    .focused($composerFocused)
-                    .disabled(viewModel.isDrafting)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .accessibilityIdentifier("session-chat-composer")
-
-                // Send button: monochrome circle (light fill + dark glyph when
-                // armed, ghost when empty). Long-press reveals steer/queue split.
-                Button {
-                    Task { await send() }
-                } label: {
-                    if viewModel.isSending {
-                        ProgressView()
-                            .frame(width: 30, height: 30)
-                    } else {
-                        Image(systemName: sendIcon)
-                            .font(.subheadline.weight(.bold))
-                            .foregroundStyle(composerHasContent ? Color(.systemBackground) : Color(.systemGray))
-                            .frame(width: 30, height: 30)
-                            .background(
-                                Circle().fill(composerHasContent
-                                    ? AnyShapeStyle(Color.primary)
-                                    : AnyShapeStyle(Color(.tertiarySystemFill)))
-                            )
-                    }
-                }
-                .disabled(!composerHasContent || viewModel.isSending || viewModel.isDrafting || attachmentStore.isProcessing || isLoadingPickerItems || attachmentSendBlocked)
-                .accessibilityLabel(sendAccessibilityLabel)
-                .accessibilityIdentifier("session-chat-send")
-                .contextMenu {
-                    if showSecondaryQueueAction && attachmentStore.isEmpty {
-                        Button {
-                            Task { await send(intent: "steer") }
-                        } label: {
-                            Label("Send update now", systemImage: "arrow.up.circle")
+                    if detail.attachImagesEnabled {
+                        let attachmentSlotsLeft = attachmentStore.slotsLeft
+                        let attachmentIsProcessing = attachmentStore.isProcessing
+                        let canAttachImages = attachmentInputEnabled
+                        PhotosPicker(
+                            selection: $pickerSelection,
+                            maxSelectionCount: max(1, attachmentSlotsLeft),
+                            matching: .images
+                        ) {
+                            Image(systemName: attachmentIsProcessing ? "ellipsis.circle" : "paperclip")
+                                .font(.title3)
+                                .foregroundStyle(canAttachImages && attachmentSlotsLeft > 0 ? Color.accentColor : Color.secondary.opacity(0.3))
                         }
-                        Button {
-                            Task { await send(intent: "queue") }
-                        } label: {
-                            Label("Queue for next turn", systemImage: "clock.arrow.circlepath")
+                        .frame(width: 32, height: 32)
+                        .disabled(!canAttachImages || attachmentSlotsLeft <= 0 || attachmentIsProcessing || isLoadingPickerItems || viewModel.isSending)
+                        .accessibilityLabel("Attach images")
+                        .accessibilityIdentifier("session-chat-attach")
+                    }
+
+                    TextField(detail.composerPlaceholder, text: $composerText, axis: .vertical)
+                        .lineLimit(1...6)
+                        .focused($composerFocused)
+                        .disabled(viewModel.isDrafting)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                        .accessibilityIdentifier("session-chat-composer")
+
+                    // Send button: monochrome circle (light fill + dark glyph when
+                    // armed, ghost when empty). Long-press reveals steer/queue split.
+                    Button {
+                        Task { await send() }
+                    } label: {
+                        if viewModel.isSending {
+                            ProgressView()
+                                .frame(width: 30, height: 30)
+                        } else {
+                            Image(systemName: sendIcon)
+                                .font(.subheadline.weight(.bold))
+                                .foregroundStyle(composerHasContent ? Color(.systemBackground) : Color(.systemGray))
+                                .frame(width: 30, height: 30)
+                                .background(
+                                    Circle().fill(composerHasContent
+                                        ? AnyShapeStyle(Color.primary)
+                                        : AnyShapeStyle(Color(.tertiarySystemFill)))
+                                )
+                        }
+                    }
+                    .disabled(!composerHasContent || viewModel.isSending || viewModel.isDrafting || attachmentStore.isProcessing || isLoadingPickerItems || attachmentSendBlocked)
+                    .accessibilityLabel(sendAccessibilityLabel)
+                    .accessibilityIdentifier("session-chat-send")
+                    .contextMenu {
+                        if showSecondaryQueueAction && attachmentStore.isEmpty {
+                            Button {
+                                Task { await send(intent: "steer") }
+                            } label: {
+                                Label("Send update now", systemImage: "arrow.up.circle")
+                            }
+                            Button {
+                                Task { await send(intent: "queue") }
+                            } label: {
+                                Label("Queue for next turn", systemImage: "clock.arrow.circlepath")
+                            }
                         }
                     }
                 }
@@ -667,6 +689,354 @@ struct SessionView: View {
         composerText = draft
         composerFocused = true
     }
+}
+
+private struct SessionPauseRequestCard: View {
+    let pauseRequest: SessionPauseRequest
+    let isResponding: Bool
+    let errorMessage: String?
+    let onRespond: (
+        _ decision: String,
+        _ answers: [String: [String]]?,
+        _ content: String?,
+        _ message: String?
+    ) async -> Bool
+
+    @State private var answers: [String: [String]]
+    @State private var fallbackText: String
+    @State private var submitted = false
+
+    init(
+        pauseRequest: SessionPauseRequest,
+        isResponding: Bool,
+        errorMessage: String?,
+        onRespond: @escaping (
+            _ decision: String,
+            _ answers: [String: [String]]?,
+            _ content: String?,
+            _ message: String?
+        ) async -> Bool
+    ) {
+        self.pauseRequest = pauseRequest
+        self.isResponding = isResponding
+        self.errorMessage = errorMessage
+        self.onRespond = onRespond
+        _answers = State(initialValue: Self.initialAnswers(for: pauseRequest.questions))
+        _fallbackText = State(initialValue: "")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider().opacity(0.4)
+
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "questionmark.bubble")
+                    .font(.subheadline)
+                    .foregroundStyle(.orange)
+                    .frame(width: 18, height: 18)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Needs answer")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.orange)
+                    Text(pauseRequest.title?.nonEmptyTrimmed ?? "Provider question")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                    Text(detailText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                }
+                Spacer(minLength: 0)
+            }
+
+            if !pauseRequest.questions.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(Array(pauseRequest.questions.enumerated()), id: \.offset) { index, question in
+                        questionView(question: question, index: index)
+                    }
+                }
+            } else if pauseRequest.canRespond {
+                TextField("Answer", text: $fallbackText, axis: .vertical)
+                    .lineLimit(1...4)
+                    .disabled(isDisabled)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .accessibilityIdentifier("session-pause-freeform")
+            }
+
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .accessibilityIdentifier("session-pause-error")
+            }
+
+            HStack(spacing: 8) {
+                if pauseRequest.canRespond {
+                    Button {
+                        Task { await submitAnswer() }
+                    } label: {
+                        if isResponding {
+                            ProgressView().controlSize(.mini)
+                        } else {
+                            Label("Send answer", systemImage: "checkmark.circle")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(!canSubmitAnswer || isDisabled)
+                    .accessibilityIdentifier("session-pause-send")
+
+                    Button {
+                        Task { await cancelRequest() }
+                    } label: {
+                        Label("Cancel", systemImage: "xmark.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(isDisabled)
+                    .accessibilityIdentifier("session-pause-cancel")
+                } else {
+                    Label("Waiting in terminal", systemImage: "terminal")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("session-pause-card")
+        .onChange(of: pauseRequest.id) { _, _ in
+            answers = Self.initialAnswers(for: pauseRequest.questions)
+            fallbackText = ""
+            submitted = false
+        }
+    }
+
+    @ViewBuilder
+    private func questionView(question: SessionPauseQuestion, index: Int) -> some View {
+        let key = Self.questionKey(question, index: index)
+        VStack(alignment: .leading, spacing: 5) {
+            if let header = question.header?.nonEmptyTrimmed {
+                Text(header)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            Text(question.question)
+                .font(.caption)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if question.options.isEmpty {
+                TextField("Answer", text: Binding(
+                    get: { answers[key]?.first ?? "" },
+                    set: { answers[key] = [$0] }
+                ), axis: .vertical)
+                .lineLimit(1...3)
+                .disabled(isDisabled)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(question.options.enumerated()), id: \.offset) { optionIndex, option in
+                        optionButton(question: question, option: option, key: key, optionIndex: optionIndex)
+                    }
+                }
+            }
+        }
+    }
+
+    private func optionButton(
+        question: SessionPauseQuestion,
+        option: SessionPauseQuestionOption,
+        key: String,
+        optionIndex: Int
+    ) -> some View {
+        let value = Self.optionValue(option)
+        let selected = answers[key, default: []].contains(value)
+        return Button {
+            if question.multiSelect {
+                toggleValue(value, for: key)
+            } else {
+                answers[key] = [value]
+            }
+        } label: {
+            HStack(alignment: .top, spacing: 7) {
+                Image(systemName: selected ? "checkmark.circle.fill" : (question.multiSelect ? "square" : "circle"))
+                    .font(.caption)
+                    .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                    .frame(width: 16, height: 16)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(option.label)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if let description = option.description?.nonEmptyTrimmed {
+                        Text(description)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .accessibilityIdentifier("session-pause-option-\(key)-\(optionIndex)")
+    }
+
+    private var providerLabel: String {
+        pauseRequest.provider.prefix(1).uppercased() + String(pauseRequest.provider.dropFirst())
+    }
+
+    private var detailText: String {
+        if let summary = pauseRequest.summary?.nonEmptyTrimmed {
+            return summary
+        }
+        return pauseRequest.canRespond
+            ? "\(providerLabel) is waiting for your answer."
+            : "Answer this in the terminal or reconnect the host."
+    }
+
+    private var isDisabled: Bool {
+        isResponding || submitted || !pauseRequest.canRespond
+    }
+
+    private var canSubmitAnswer: Bool {
+        if pauseRequest.questions.isEmpty {
+            return !fallbackText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+        return pauseRequest.questions.enumerated().allSatisfy { index, question in
+            let key = Self.questionKey(question, index: index)
+            return answers[key, default: []].contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        }
+    }
+
+    private func submitAnswer() async {
+        let structuredAnswers: [String: [String]]?
+        let content: String?
+        if pauseRequest.questions.isEmpty {
+            structuredAnswers = nil
+            content = fallbackText.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            structuredAnswers = normalizedAnswers()
+            content = nil
+        }
+        let ok = await onRespond(
+            "answer",
+            structuredAnswers,
+            content,
+            answerMessage(structuredAnswers: structuredAnswers, content: content)
+        )
+        if ok { submitted = true }
+    }
+
+    private func cancelRequest() async {
+        let ok = await onRespond("cancel", nil, nil, "Cancelled in Longhouse.")
+        if ok { submitted = true }
+    }
+
+    private func normalizedAnswers() -> [String: [String]] {
+        Dictionary(uniqueKeysWithValues: pauseRequest.questions.enumerated().map { index, question in
+            let key = Self.questionKey(question, index: index)
+            let values = answers[key, default: []]
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            return (key, values)
+        })
+    }
+
+    private func answerMessage(structuredAnswers: [String: [String]]?, content: String?) -> String? {
+        if let structuredAnswers {
+            let parts = pauseRequest.questions.enumerated().compactMap { index, question -> String? in
+                let key = Self.questionKey(question, index: index)
+                guard let values = structuredAnswers[key], !values.isEmpty else { return nil }
+                let label = question.header?.nonEmptyTrimmed ?? question.question
+                return "\(label): \(values.joined(separator: ", "))"
+            }
+            return parts.isEmpty ? nil : parts.joined(separator: "; ")
+        }
+        return content?.nonEmptyTrimmed
+    }
+
+    private func toggleValue(_ value: String, for key: String) {
+        var values = answers[key, default: []]
+        if values.contains(value) {
+            values.removeAll { $0 == value }
+        } else {
+            values.append(value)
+        }
+        answers[key] = values
+    }
+
+    private static func initialAnswers(for questions: [SessionPauseQuestion]) -> [String: [String]] {
+        Dictionary(uniqueKeysWithValues: questions.enumerated().map { index, question in
+            (questionKey(question, index: index), [])
+        })
+    }
+
+    private static func questionKey(_ question: SessionPauseQuestion, index: Int) -> String {
+        let trimmed = question.id.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "question-\(index + 1)" : trimmed
+    }
+
+    private static func optionValue(_ option: SessionPauseQuestionOption) -> String {
+        let raw = option.value ?? option.label
+        return raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+private extension String {
+    var nonEmptyTrimmed: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+#Preview("Session pause request") {
+    VStack(alignment: .leading, spacing: 12) {
+        SessionPauseRequestCard(
+            pauseRequest: SessionPauseRequest(
+                id: "pause-preview",
+                sessionId: "session-preview",
+                runtimeKey: "codex:session-preview",
+                kind: "structured_question",
+                status: "pending",
+                provider: "codex",
+                canRespond: true,
+                title: "Choose storage",
+                summary: "Codex needs a storage decision before it can continue.",
+                toolName: "requestUserInput",
+                questions: [
+                    SessionPauseQuestion(
+                        id: "storage",
+                        header: "Storage",
+                        question: "Which storage backend should I implement?",
+                        multiSelect: false,
+                        options: [
+                            SessionPauseQuestionOption(label: "SQLite", description: "Keep it local and simple.", value: "sqlite"),
+                            SessionPauseQuestionOption(label: "Postgres", description: "Use managed database features.", value: "postgres"),
+                        ]
+                    )
+                ],
+                occurredAt: nil,
+                lastSeenAt: nil,
+                resolvedAt: nil,
+                expiresAt: nil
+            ),
+            isResponding: false,
+            errorMessage: nil,
+            onRespond: { _, _, _, _ in true }
+        )
+    }
+    .padding()
+    .background(Color(.systemBackground))
+    .preferredColorScheme(.dark)
 }
 
 struct SessionBottomInsetCalculator {
@@ -914,8 +1284,10 @@ final class SessionViewModel: ObservableObject {
     @Published var isSending = false
     @Published var isDrafting = false
     @Published var isUpdatingLoopMode = false
+    @Published var isRespondingToPauseRequest = false
     @Published var draftErrorMessage: String?
     @Published var loopModeErrorMessage: String?
+    @Published var pauseResponseErrorMessage: String?
     private var transcriptDiagnostics: RenderBeaconReporter.WebKitDiagnostics?
     /// Most recent send outcome so the UI can distinguish an immediate
     /// dispatch from a queued input without pretending the latter was sent.
@@ -1003,6 +1375,7 @@ final class SessionViewModel: ObservableObject {
             prefetchTask = nil
             errorMessage = nil
             refreshErrorMessage = nil
+            pauseResponseErrorMessage = nil
             lastPubsubSeq = nil
             streamAuthRefreshAttempted = false
             // Warm path: in-memory cache survives backgrounding while the
@@ -1268,6 +1641,42 @@ final class SessionViewModel: ObservableObject {
             try await refreshTail(api: api, sessionId: sessionId)
         } catch {
             loopModeErrorMessage = "Mode unavailable: \(error.localizedDescription)"
+        }
+    }
+
+    func respondToPauseRequest(
+        sessionId: String,
+        appState: AppState,
+        pauseRequest: SessionPauseRequest,
+        decision: String,
+        answers: [String: [String]]?,
+        content: String?,
+        message: String?
+    ) async -> Bool {
+        guard let api = apiFactory(appState.serverURL) else {
+            pauseResponseErrorMessage = "Invalid server URL"
+            return false
+        }
+        isRespondingToPauseRequest = true
+        pauseResponseErrorMessage = nil
+        defer { isRespondingToPauseRequest = false }
+        do {
+            _ = try await api.respondToPauseRequest(
+                sessionId: sessionId,
+                pauseRequestId: pauseRequest.id,
+                decision: decision,
+                answers: answers,
+                content: content,
+                message: message
+            )
+            try? await refreshTail(api: api, sessionId: sessionId, allowFailure: true)
+            return true
+        } catch let LonghouseAPIError.structured(_, _, message) {
+            pauseResponseErrorMessage = message.isEmpty ? "Failed to send answer." : message
+            return false
+        } catch {
+            pauseResponseErrorMessage = "Answer failed: \(error.localizedDescription)"
+            return false
         }
     }
 
@@ -1756,6 +2165,9 @@ final class SessionViewModel: ObservableObject {
             String(rd.isExecuting),
             String(rd.needsAttention),
             String(rd.isStalled),
+            rd.pauseRequest?.id ?? "",
+            rd.pauseRequest?.status ?? "",
+            rd.pauseRequest?.title ?? "",
             detail.project ?? "",
             detail.provider,
         ].joined(separator: "|")

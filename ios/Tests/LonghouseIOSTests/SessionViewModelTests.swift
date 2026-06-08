@@ -318,6 +318,72 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func respondToPauseRequestPostsStructuredAnswersAndRefreshesTail() async throws {
+        let pauseRequestJSON = """
+        {
+          "id": "pause-1",
+          "session_id": "session-1",
+          "runtime_key": "codex:session-1",
+          "kind": "structured_question",
+          "status": "pending",
+          "provider": "codex",
+          "can_respond": true,
+          "title": "Choose storage",
+          "summary": "Codex needs a storage decision.",
+          "tool_name": "requestUserInput",
+          "questions": [
+            {
+              "id": "storage",
+              "header": "Storage",
+              "question": "Which storage backend?",
+              "multi_select": false,
+              "options": [
+                {"label": "SQLite", "description": "Keep it local.", "value": "sqlite"},
+                {"label": "Postgres", "description": "Use managed DB.", "value": "postgres"}
+              ]
+            }
+          ],
+          "occurred_at": "2026-05-02T20:00:00Z",
+          "last_seen_at": "2026-05-02T20:00:00Z",
+          "resolved_at": null,
+          "expires_at": null
+        }
+        """
+        let before = try makeWorkspace(eventId: 10, content: "Before answer", pauseRequestJSON: pauseRequestJSON)
+        let after = try makeWorkspace(eventId: 11, content: "After answer")
+        let api = FakeSessionWorkspaceClient(workspaces: [before, after])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let request = try #require(model.detail?.activePauseRequest)
+        let answered = await model.respondToPauseRequest(
+            sessionId: "session-1",
+            appState: appState,
+            pauseRequest: request,
+            decision: "answer",
+            answers: ["storage": ["sqlite"]],
+            content: nil,
+            message: "Storage: sqlite"
+        )
+
+        #expect(answered)
+        #expect(model.isRespondingToPauseRequest == false)
+        #expect(model.pauseResponseErrorMessage == nil)
+        #expect(model.items.map(\.id) == ["user:11"])
+        let responses = await api.pauseResponses()
+        #expect(responses.count == 1)
+        #expect(responses.first?.sessionId == "session-1")
+        #expect(responses.first?.pauseRequestId == "pause-1")
+        #expect(responses.first?.decision == "answer")
+        #expect(responses.first?.answers?["storage"] == ["sqlite"])
+        #expect(responses.first?.content == nil)
+        #expect(responses.first?.message == "Storage: sqlite")
+        #expect(await api.workspaceRequestCount() == 2)
+    }
+
+    @Test
     func successfulRetryClearsPriorFailedBubbleForSameText() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let api = FakeSessionWorkspaceClient(workspaces: [before])
@@ -542,6 +608,7 @@ struct SessionViewModelTests {
         isHeadBranch: Bool = true,
         inputOriginJSON: String? = nil,
         transcriptPreviewJSON: String? = nil,
+        pauseRequestJSON: String? = nil,
         total: Int = 1,
         pageOffset: Int = 0
     ) throws -> SessionWorkspaceResponse {
@@ -549,6 +616,7 @@ struct SessionViewModelTests {
         let encodedTimestamp = try jsonString(timestamp)
         let inputOriginField = inputOriginJSON.map { ",\n                  \"input_origin\": \($0)" } ?? ""
         let transcriptPreviewField = transcriptPreviewJSON.map { ",\n            \"transcript_preview\": \($0)" } ?? ""
+        let pauseRequestField = pauseRequestJSON.map { ",\n            \"pause_request\": \($0)" } ?? ""
         let json = """
         {
           "session": {
@@ -582,7 +650,7 @@ struct SessionViewModelTests {
             "activity_recency": "none",
             "lifecycle": "open",
             "host_state": "unknown",
-            "terminal_reason": null
+            "terminal_reason": null\(pauseRequestField)
           },
           "loop_mode": "assist"\(transcriptPreviewField)
           },
@@ -665,26 +733,40 @@ private enum FakeSendStep: Sendable {
 }
 
 private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
+    struct PauseResponseRecord: Sendable {
+        let sessionId: String
+        let pauseRequestId: String
+        let decision: String
+        let answers: [String: [String]]?
+        let content: String?
+        let message: String?
+    }
+
     private var workspaces: [SessionWorkspaceResponse]
     private let sendResponse: SessionInputResponse
     private let afterSendWorkspace: (@Sendable (String?) throws -> SessionWorkspaceResponse)?
     private var shouldFailWorkspaceLoads = false
     private var sendError: Error?
     private var sendSteps: [FakeSendStep] = []
+    private var pauseResponseError: Error?
+    private var pauseResponse: PauseRequestResponse?
     private var workspaceRequests: [(id: String, limit: Int, branchMode: String)] = []
     private var tailRequests: [(id: String, limit: Int, offset: Int, branchMode: String, snapshotEventId: Int?)] = []
     private var sentInputs: [String] = []
+    private var pauseResponseRequests: [PauseResponseRecord] = []
     private var postedRenderBeacons: [RenderBeaconReporter.Payload] = []
     private var lastClientRequestId: String?
 
     init(
         workspaces: [SessionWorkspaceResponse],
         sendResponse: SessionInputResponse = SessionInputResponse(outcome: .sent, inputId: 1, clientRequestId: nil, intent: .auto, queued: []),
-        afterSendWorkspace: (@Sendable (String?) throws -> SessionWorkspaceResponse)? = nil
+        afterSendWorkspace: (@Sendable (String?) throws -> SessionWorkspaceResponse)? = nil,
+        pauseResponse: PauseRequestResponse? = nil
     ) {
         self.workspaces = workspaces
         self.sendResponse = sendResponse
         self.afterSendWorkspace = afterSendWorkspace
+        self.pauseResponse = pauseResponse
     }
 
     func sessionWorkspace(id: String, limit: Int, branchMode: String) async throws -> SessionWorkspaceResponse {
@@ -746,6 +828,50 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
         try await sendInput(id: id, text: text, intent: "auto", clientRequestId: clientRequestId)
     }
 
+    func respondToPauseRequest(
+        sessionId: String,
+        pauseRequestId: String,
+        decision: String,
+        answers: [String: [String]]?,
+        content: String?,
+        message: String?
+    ) async throws -> PauseRequestResponse {
+        pauseResponseRequests.append(PauseResponseRecord(
+            sessionId: sessionId,
+            pauseRequestId: pauseRequestId,
+            decision: decision,
+            answers: answers,
+            content: content,
+            message: message
+        ))
+        if let pauseResponseError {
+            throw pauseResponseError
+        }
+        if let pauseResponse {
+            return pauseResponse
+        }
+        return PauseRequestResponse(
+            status: "resolved",
+            pauseRequest: SessionPauseRequest(
+                id: pauseRequestId,
+                sessionId: sessionId,
+                runtimeKey: "codex:\(sessionId)",
+                kind: "structured_question",
+                status: "resolved",
+                provider: "codex",
+                canRespond: false,
+                title: nil,
+                summary: nil,
+                toolName: nil,
+                questions: [],
+                occurredAt: nil,
+                lastSeenAt: nil,
+                resolvedAt: "2026-05-02T20:00:01Z",
+                expiresAt: nil
+            )
+        )
+    }
+
     func draftReply(id: String, maxChars: Int) async throws -> DraftReplyResponse {
         DraftReplyResponse(draftText: "Draft", model: "test", generatedAt: "2026-05-02T20:00:00Z", basedOnEventIds: [])
     }
@@ -770,6 +896,10 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
         sendSteps = steps
     }
 
+    func failFuturePauseResponses(_ error: Error) {
+        pauseResponseError = error
+    }
+
     func workspaceRequestCount() -> Int {
         workspaceRequests.count
     }
@@ -786,6 +916,10 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
 
     func sendRequests() -> [String] {
         sentInputs
+    }
+
+    func pauseResponses() -> [PauseResponseRecord] {
+        pauseResponseRequests
     }
 
     func renderBeacons() -> [RenderBeaconReporter.Payload] {

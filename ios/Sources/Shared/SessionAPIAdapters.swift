@@ -88,7 +88,48 @@ extension APISessionRuntimeDisplayResponse {
             activityRecency: activityRecency.rawValue,
             lifecycle: lifecycle.rawValue,
             hostState: hostState.rawValue,
-            terminalReason: terminalReason?.rawValue
+            terminalReason: terminalReason?.rawValue,
+            pauseRequest: pauseRequest?.sessionPauseRequest
+        )
+    }
+}
+
+extension APISessionPauseQuestionOptionResponse {
+    var sessionPauseQuestionOption: SessionPauseQuestionOption {
+        SessionPauseQuestionOption(label: label, description: description, value: value)
+    }
+}
+
+extension APISessionPauseQuestionResponse {
+    var sessionPauseQuestion: SessionPauseQuestion {
+        SessionPauseQuestion(
+            id: id,
+            header: header,
+            question: question,
+            multiSelect: multiSelect ?? false,
+            options: (options ?? []).map(\.sessionPauseQuestionOption)
+        )
+    }
+}
+
+extension APISessionPauseRequestProjectionResponse {
+    var sessionPauseRequest: SessionPauseRequest {
+        SessionPauseRequest(
+            id: id,
+            sessionId: sessionId,
+            runtimeKey: runtimeKey,
+            kind: kind,
+            status: status,
+            provider: provider,
+            canRespond: canRespond,
+            title: title,
+            summary: summary,
+            toolName: toolName,
+            questions: (questions ?? []).map(\.sessionPauseQuestion),
+            occurredAt: occurredAt,
+            lastSeenAt: lastSeenAt,
+            resolvedAt: resolvedAt,
+            expiresAt: expiresAt
         )
     }
 }

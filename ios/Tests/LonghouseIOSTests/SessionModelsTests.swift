@@ -92,6 +92,58 @@ struct SessionModelsTests {
     }
 
     @Test
+    func sessionDetailDecodesActivePauseRequest() throws {
+        let pauseRequestJSON = """
+        {
+          "id": "pause-storage",
+          "session_id": "session-card-contract",
+          "runtime_key": "codex:session-card-contract",
+          "kind": "structured_question",
+          "status": "pending",
+          "provider": "codex",
+          "can_respond": true,
+          "title": "Choose storage",
+          "summary": "Codex needs a storage decision.",
+          "tool_name": "requestUserInput",
+          "questions": [
+            {
+              "id": "storage",
+              "header": "Storage",
+              "question": "Which storage backend should I implement?",
+              "multi_select": false,
+              "options": [
+                {"label": "SQLite", "description": "Keep it local.", "value": "sqlite"},
+                {"label": "Postgres", "description": "Use managed DB.", "value": "postgres"}
+              ]
+            }
+          ],
+          "occurred_at": "2026-04-25T20:01:00Z",
+          "last_seen_at": "2026-04-25T20:01:05Z",
+          "resolved_at": null,
+          "expires_at": null
+        }
+        """
+        let json = apiSessionJSON()
+            .replacingOccurrences(of: #""headline": "Idle","#, with: #""headline": "Needs answer","#)
+            .replacingOccurrences(of: #""detail": "Waiting for next prompt","#, with: #""detail": "Codex needs a storage decision.","#)
+            .replacingOccurrences(of: #""phase_label": "Idle","#, with: #""phase_label": "Needs answer","#)
+            .replacingOccurrences(of: #""needs_attention": false,"#, with: #""needs_attention": true,"#)
+            .replacingOccurrences(
+                of: #""terminal_reason": null"#,
+                with: #""terminal_reason": null, "pause_request": \#(pauseRequestJSON)"#
+            )
+        let decoded = try JSONDecoder.snakeCase.decode(APISessionResponse.self, from: Data(json.utf8)).sessionDetail
+        let pauseRequest = try #require(decoded.activePauseRequest)
+
+        #expect(decoded.runtimeDisplay.needsAttention)
+        #expect(pauseRequest.id == "pause-storage")
+        #expect(pauseRequest.canRespond)
+        #expect(pauseRequest.questions.first?.id == "storage")
+        #expect(pauseRequest.questions.first?.options.first?.label == "SQLite")
+        #expect(pauseRequest.questions.first?.options.first?.value == "sqlite")
+    }
+
+    @Test
     func sessionWorkspaceDecodesThreadProjectionEventsAndSeams() throws {
         let json = """
         {

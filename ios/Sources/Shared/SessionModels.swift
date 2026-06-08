@@ -307,6 +307,45 @@ struct SessionInputResponse: Codable, Sendable {
     }
 }
 
+struct SessionPauseQuestionOption: Codable, Hashable, Sendable {
+    let label: String
+    let description: String?
+    let value: String?
+}
+
+struct SessionPauseQuestion: Codable, Hashable, Sendable {
+    let id: String
+    let header: String?
+    let question: String
+    let multiSelect: Bool
+    let options: [SessionPauseQuestionOption]
+}
+
+struct SessionPauseRequest: Codable, Hashable, Sendable, Identifiable {
+    let id: String
+    let sessionId: String
+    let runtimeKey: String
+    let kind: String
+    let status: String
+    let provider: String
+    let canRespond: Bool
+    let title: String?
+    let summary: String?
+    let toolName: String?
+    let questions: [SessionPauseQuestion]
+    let occurredAt: String?
+    let lastSeenAt: String?
+    let resolvedAt: String?
+    let expiresAt: String?
+
+    var isPending: Bool { status == "pending" }
+}
+
+struct PauseRequestResponse: Codable, Sendable {
+    let status: String
+    let pauseRequest: SessionPauseRequest
+}
+
 extension SessionRuntimeDisplay {
     /// Synthetic placeholder for SwiftUI previews and widget snapshot fixtures.
     /// Production runtimeDisplay always comes from the server projection.
@@ -336,7 +375,8 @@ extension SessionRuntimeDisplay {
             activityRecency: "none",
             lifecycle: lifecycle,
             hostState: "unknown",
-            terminalReason: nil
+            terminalReason: nil,
+            pauseRequest: nil
         )
     }
 }
@@ -362,6 +402,53 @@ struct SessionRuntimeDisplay: Codable, Hashable, Sendable {
     let lifecycle: String
     let hostState: String
     let terminalReason: String?
+    let pauseRequest: SessionPauseRequest?
+
+    init(
+        truthTier: String,
+        signalTier: String,
+        state: String?,
+        tone: String,
+        headline: String,
+        detail: String?,
+        phaseLabel: String,
+        compactToolLabel: String?,
+        isLive: Bool,
+        isExecuting: Bool,
+        needsAttention: Bool,
+        isIdle: Bool,
+        isStalled: Bool,
+        isManagedLocalTruth: Bool,
+        hasSignal: Bool,
+        controlPath: String,
+        activityRecency: String,
+        lifecycle: String,
+        hostState: String,
+        terminalReason: String?,
+        pauseRequest: SessionPauseRequest? = nil
+    ) {
+        self.truthTier = truthTier
+        self.signalTier = signalTier
+        self.state = state
+        self.tone = tone
+        self.headline = headline
+        self.detail = detail
+        self.phaseLabel = phaseLabel
+        self.compactToolLabel = compactToolLabel
+        self.isLive = isLive
+        self.isExecuting = isExecuting
+        self.needsAttention = needsAttention
+        self.isIdle = isIdle
+        self.isStalled = isStalled
+        self.isManagedLocalTruth = isManagedLocalTruth
+        self.hasSignal = hasSignal
+        self.controlPath = controlPath
+        self.activityRecency = activityRecency
+        self.lifecycle = lifecycle
+        self.hostState = hostState
+        self.terminalReason = terminalReason
+        self.pauseRequest = pauseRequest
+    }
 }
 
 struct SessionTranscriptPreview: Codable, Hashable, Sendable {
@@ -471,6 +558,12 @@ struct SessionDetail: Codable, Identifiable, Sendable {
     }
 
     var isClosed: Bool { runtimeDisplay.lifecycle == "closed" }
+    var activePauseRequest: SessionPauseRequest? {
+        guard !isClosed, let request = runtimeDisplay.pauseRequest, request.isPending else {
+            return nil
+        }
+        return request
+    }
 
     var canSendLive: Bool {
         if isClosed { return false }

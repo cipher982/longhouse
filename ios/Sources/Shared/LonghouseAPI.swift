@@ -104,9 +104,35 @@ protocol SessionWorkspaceClient: Sendable {
     ) async throws -> SessionMobileTailResponse
     func sendInput(id: String, text: String, intent: String, clientRequestId: String?) async throws -> SessionInputResponse
     func sendInputMultipart(id: String, text: String, attachments: [ComposerAttachment], clientRequestId: String?) async throws -> SessionInputResponse
+    func respondToPauseRequest(
+        sessionId: String,
+        pauseRequestId: String,
+        decision: String,
+        answers: [String: [String]]?,
+        content: String?,
+        message: String?
+    ) async throws -> PauseRequestResponse
     func draftReply(id: String, maxChars: Int) async throws -> DraftReplyResponse
     func setSessionLoopMode(id: String, loopMode: SessionLoopMode) async throws -> LoopModeResponse
     func postRenderBeacon(_ payload: RenderBeaconReporter.Payload) async
+}
+
+extension SessionWorkspaceClient {
+    func respondToPauseRequest(
+        sessionId: String,
+        pauseRequestId: String,
+        decision: String,
+        answers: [String: [String]]?,
+        content: String?,
+        message: String?
+    ) async throws -> PauseRequestResponse {
+        throw LonghouseAPIError.requestFailed
+    }
+}
+
+private struct APIPauseRequestResponsePayload: Decodable {
+    let status: String
+    let pauseRequest: APISessionPauseRequestProjectionResponse
 }
 
 struct LonghouseAPI: Sendable {
@@ -357,6 +383,43 @@ struct LonghouseAPI: Sendable {
             throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
         return try JSONDecoder.snakeCase.decode(APISessionInputResponse.self, from: data).sessionInputResponse
+    }
+
+    func respondToPauseRequest(
+        sessionId: String,
+        pauseRequestId: String,
+        decision: String,
+        answers: [String: [String]]?,
+        content: String?,
+        message: String?
+    ) async throws -> PauseRequestResponse {
+        var request = URLRequest(
+            url: baseURL.appendingPathComponent("/api/sessions/\(sessionId)/pause-requests/\(pauseRequestId)/response")
+        )
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.addValue("application/json", forHTTPHeaderField: "Accept")
+        var body: [String: Any] = ["decision": decision]
+        if let answers {
+            body["answers"] = answers
+        }
+        if let content, !content.isEmpty {
+            body["content"] = content
+        }
+        if let message, !message.isEmpty {
+            body["message"] = message
+        }
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, httpResponse) = try await data(for: request)
+        guard (200..<300).contains(httpResponse.statusCode) else {
+            if let structured = Self.parseStructuredError(statusCode: httpResponse.statusCode, data: data) {
+                throw structured
+            }
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+        let decoded = try JSONDecoder.snakeCase.decode(APIPauseRequestResponsePayload.self, from: data)
+        return PauseRequestResponse(status: decoded.status, pauseRequest: decoded.pauseRequest.sessionPauseRequest)
     }
 
     static func buildMultipartBody(
