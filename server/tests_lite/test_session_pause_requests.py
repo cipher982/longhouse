@@ -184,6 +184,94 @@ def test_runtime_pause_events_create_and_resolve_without_mutating_phase(tmp_path
         db.close()
 
 
+def test_pause_request_can_keep_multiple_pending_when_provider_allows_it(tmp_path):
+    factory = _make_db(tmp_path, "pause_multiple_pending.db")
+    now = datetime(2026, 6, 7, 12, 0, tzinfo=timezone.utc)
+    db = factory()
+    try:
+        session = _seed_session(db, started_at=now - timedelta(minutes=5))
+        runtime_key = f"codex:{session.id}"
+
+        for idx in (1, 2):
+            ingest_runtime_events(
+                db,
+                [
+                    RuntimeEventIngest(
+                        runtime_key=runtime_key,
+                        session_id=session.id,
+                        provider="codex",
+                        device_id="cinder",
+                        source="codex_bridge",
+                        kind="pause_request",
+                        occurred_at=now + timedelta(seconds=idx),
+                        dedupe_key=f"pause-question-{idx}",
+                        payload={
+                            "provider_request_id": f"question-{idx}",
+                            "title": f"Question {idx}",
+                            "single_active": False,
+                        },
+                    )
+                ],
+            )
+        db.commit()
+
+        rows = db.query(SessionPauseRequest).filter(SessionPauseRequest.runtime_key == runtime_key).order_by(
+            SessionPauseRequest.provider_request_id
+        )
+        assert [(row.provider_request_id, row.status) for row in rows] == [
+            ("question-1", "pending"),
+            ("question-2", "pending"),
+        ]
+    finally:
+        db.close()
+
+
+def test_phase_signal_can_preserve_pending_pause_request(tmp_path):
+    factory = _make_db(tmp_path, "pause_phase_preserve.db")
+    now = datetime(2026, 6, 7, 12, 0, tzinfo=timezone.utc)
+    db = factory()
+    try:
+        session = _seed_session(db, started_at=now - timedelta(minutes=5))
+        runtime_key = f"codex:{session.id}"
+        pause, _changed = upsert_pause_request(
+            db,
+            session_id=session.id,
+            runtime_key=runtime_key,
+            provider="codex",
+            request_key=f"codex:{session.id}:question-1",
+            provider_request_id="question-1",
+            title="Choose approach",
+            occurred_at=now,
+        )
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_bridge",
+                    kind="phase_signal",
+                    phase="running",
+                    tool_name="Bash",
+                    occurred_at=now + timedelta(seconds=5),
+                    freshness_ms=10 * 60 * 1000,
+                    dedupe_key="phase-running-preserve-pause",
+                    payload={"pause_request_still_pending": True},
+                )
+            ],
+        )
+        db.commit()
+
+        db.refresh(pause)
+        assert pause.status == "pending"
+        assert pause.resolved_at is None
+    finally:
+        db.close()
+
+
 def test_terminal_signal_expires_pending_pause_requests(tmp_path):
     factory = _make_db(tmp_path, "pause_terminal_expiry.db")
     now = datetime(2026, 6, 7, 12, 0, tzinfo=timezone.utc)

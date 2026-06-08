@@ -895,7 +895,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         state.terminal_reason = None
         state.terminal_source = None
         state.terminal_at = None
-        if next_phase in LIVE_EXECUTION_PHASES:
+        if next_phase in LIVE_EXECUTION_PHASES and not bool((event.payload or {}).get("pause_request_still_pending")):
             from zerg.services.session_pause_requests import resolve_pending_pause_requests_for_runtime
 
             pause_changed = (

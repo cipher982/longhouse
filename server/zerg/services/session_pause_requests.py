@@ -245,7 +245,8 @@ def apply_pause_runtime_event(db: Session, event: Any) -> bool:
     if event.kind == "pause_request":
         if event.session_id is None:
             return False
-        _supersede_runtime_requests_if_needed(db, runtime_key=runtime_key, request_key=request_key, occurred_at=occurred_at)
+        if _bool(payload.get("single_active", True)):
+            _supersede_runtime_requests_if_needed(db, runtime_key=runtime_key, request_key=request_key, occurred_at=occurred_at)
         _row, changed = upsert_pause_request(
             db,
             session_id=event.session_id,
