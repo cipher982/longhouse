@@ -7,6 +7,7 @@ from datetime import timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
@@ -32,6 +33,7 @@ from zerg.models.user import User
 from zerg.routers import session_chat
 from zerg.services.managed_local_control import ManagedLocalSendResult
 from zerg.services.session_pause_requests import PAUSE_KIND_STRUCTURED_QUESTION
+from zerg.services.session_pause_requests import apply_pause_runtime_event
 from zerg.services.session_pause_requests import upsert_pause_request
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
@@ -280,6 +282,121 @@ def test_answerable_pause_response_dispatches_and_resolves(monkeypatch, tmp_path
         api_app_ref.dependency_overrides = {}
 
 
+def test_route_response_converges_with_pause_resolution_event(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_codex_session(session_local)
+    pause_id = _seed_pause_request(session_local, session_id, can_respond=True)
+    response_payload = {
+        "request": {
+            "decision": "answer",
+            "answers": {"storage": ["SQLite"]},
+        },
+        "provider_result": {
+            "answers": {"storage": {"answers": ["SQLite"]}},
+        },
+    }
+
+    async def fake_answer(**_kwargs):
+        return ManagedLocalSendResult(
+            ok=True,
+            exit_code=0,
+            response_data={
+                "request_key": "codex:pause-routes:req-1",
+                "provider_request_id": "req-1",
+                "status": "resolved",
+                "response_payload": response_payload,
+                "response_text": "Use SQLite.",
+            },
+        )
+
+    monkeypatch.setattr(session_chat, "answer_pause_request_on_managed_local_session", fake_answer)
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        resp = client.post(
+            f"/api/sessions/{session_id}/pause-requests/{pause_id}/response",
+            json={"decision": "answer", "answers": {"storage": ["SQLite"]}, "message": "Use SQLite."},
+        )
+        assert resp.status_code == 200, resp.text
+
+        with session_local() as db:
+            row = db.query(SessionPauseRequest).filter(SessionPauseRequest.id == pause_id).one()
+            original_resolved_at = row.resolved_at
+            event = SimpleNamespace(
+                kind="pause_resolution",
+                session_id=session_id,
+                runtime_key=row.runtime_key,
+                provider="codex",
+                tool_name=None,
+                occurred_at=datetime.now(timezone.utc),
+                dedupe_key="pause-resolution-1",
+                payload={
+                    "request_key": row.request_key,
+                    "provider_request_id": row.provider_request_id,
+                    "status": "resolved",
+                    "response_payload": response_payload,
+                    "response_text": "Use SQLite.",
+                },
+            )
+            assert apply_pause_runtime_event(db, event) is True
+            db.commit()
+            db.refresh(row)
+            assert row.status == "resolved"
+            assert row.resolved_at == original_resolved_at
+            assert row.response_text == "Use SQLite."
+            assert row.response_payload_json == response_payload
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+@pytest.mark.parametrize("decision", ["reject", "cancel"])
+def test_pause_response_reject_and_cancel_persist_rejected(monkeypatch, tmp_path, decision):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_codex_session(session_local)
+    pause_id = _seed_pause_request(session_local, session_id, can_respond=True)
+
+    async def fake_answer(**kwargs):
+        assert kwargs["decision"] == decision
+        return ManagedLocalSendResult(
+            ok=True,
+            exit_code=0,
+            response_data={
+                "request_key": "codex:pause-routes:req-1",
+                "provider_request_id": "req-1",
+                "status": "rejected",
+                "response_payload": {
+                    "request": {"decision": decision},
+                    "provider_result": {"status": "rejected"},
+                },
+                "response_text": f"{decision}ed",
+            },
+        )
+
+    monkeypatch.setattr(session_chat, "answer_pause_request_on_managed_local_session", fake_answer)
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        resp = client.post(
+            f"/api/sessions/{session_id}/pause-requests/{pause_id}/response",
+            json={"decision": decision},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["status"] == "rejected"
+        assert body["pause_request"]["status"] == "rejected"
+
+        with session_local() as db:
+            row = db.query(SessionPauseRequest).filter(SessionPauseRequest.id == pause_id).one()
+            assert row.status == "rejected"
+            assert row.response_payload_json["request"]["decision"] == decision
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
 def test_pause_response_dispatch_failure_leaves_request_pending(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_codex_session(session_local)
@@ -301,6 +418,7 @@ def test_pause_response_dispatch_failure_leaves_request_pending(monkeypatch, tmp
         assert resp.status_code == 502, resp.text
         assert resp.json()["detail"]["code"] == "pause_response_dispatch_failed"
         assert resp.json()["detail"]["retryable"] is True
+        assert resp.json()["detail"]["refetch_required"] is True
         with session_local() as db:
             row = db.query(SessionPauseRequest).filter(SessionPauseRequest.id == pause_id).one()
             assert row.status == "pending"

@@ -11,6 +11,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
+from datetime import timezone
 from hashlib import blake2b
 from typing import Any
 
@@ -459,6 +460,7 @@ async def _respond_to_pause_request(
                 "message": str(result.error or "Failed to dispatch pause response command"),
                 "pause_request_id": str(row.id),
                 "retryable": True,
+                "refetch_required": True,
             },
         )
 
@@ -486,7 +488,7 @@ async def _respond_to_pause_request(
         db,
         pause_request_id=row.id,
         status=status_value,
-        occurred_at=datetime.utcnow(),
+        occurred_at=datetime.now(timezone.utc),
         response_payload=response_payload,
         response_text=response_text,
     )
