@@ -420,6 +420,10 @@ Codex approval requests such as `item/commandExecution/requestApproval`,
 on the existing blocked/approval path for this project. Do not add new UX for
 them in v1.
 
+If a pending structured question and a current provider `blocked` approval
+state ever coexist, `blocked` remains the notification attention priority. A
+stale pause row must not make a permission prompt look like `needs_answer`.
+
 Current bug to fix: the Codex bridge currently answers structured user-input
 server requests immediately. In user-managed sessions, that is not enough.
 However, holding a provider request open is a bridge concurrency change, not a

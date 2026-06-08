@@ -25,11 +25,14 @@ from zerg.services.apns_sender import prepare_session_attention_push
 from zerg.services.apns_sender import prepare_session_attention_resolution_push
 from zerg.services.apns_sender import prepare_session_blocked_reminder_push
 from zerg.services.apns_sender import prepare_session_live_activity_pushes
+from zerg.services.apns_sender import prepare_session_needs_answer_push
 from zerg.services.apns_sender import prepare_widget_timeline_push
 from zerg.services.apns_sender import send_presence_pushes
 from zerg.services.session_messages import deliver_queued_session_messages
 from zerg.services.session_messages import is_session_message_deliverable_state
 from zerg.services.session_messages import resolve_session_message_owner_id
+from zerg.services.session_pause_requests import PAUSE_KIND_STRUCTURED_QUESTION
+from zerg.services.session_pause_requests import load_active_pause_request_map
 from zerg.services.session_runtime import RuntimeEventBatchIngest
 from zerg.services.session_runtime import RuntimeEventBatchResult
 from zerg.services.session_runtime import ingest_runtime_events
@@ -103,10 +106,11 @@ async def ingest_runtime_observation_batch(
             if not updated_runtime_keys:
                 return ingest_result, []
 
-            updated_session_ids = sorted(
-                {ev.session_id for ev in events if ev.session_id is not None and ev.runtime_key in updated_runtime_keys},
-                key=str,
-            )
+            updated_session_set = set()
+            for ev in events:
+                if ev.session_id is not None and ev.runtime_key in updated_runtime_keys:
+                    updated_session_set.add(ev.session_id)
+            updated_session_ids = sorted(updated_session_set, key=str)
             if not updated_session_ids:
                 return ingest_result, []
 
@@ -165,7 +169,13 @@ async def ingest_runtime_observation_batch(
                 # rather than per-session × per-prep-fn. The widget timeline push is
                 # owner-scoped (not session-scoped), so prepare it ONCE per changed batch.
                 ios_targets = (
-                    active_ios_targets_for_owner(wdb, owner_id=owner_id, log_context="runtime batch") if owner_id is not None else None
+                    active_ios_targets_for_owner(
+                        wdb,
+                        owner_id=owner_id,
+                        log_context="runtime batch",
+                    )
+                    if owner_id is not None
+                    else None
                 )
                 widget_targets = (
                     active_ios_targets_for_owner(
@@ -187,6 +197,7 @@ async def ingest_runtime_observation_batch(
                 prepared: list[dict] = []
                 session_rows = wdb.query(AgentSession).filter(AgentSession.id.in_(push_session_ids)).all()
                 runtime_state_map = load_runtime_state_map(wdb, push_session_ids)
+                pause_request_map = load_active_pause_request_map(wdb, push_session_ids)
                 for session_row in session_rows:
                     canonical_state = resolve_runtime_overlay(
                         session_row,
@@ -197,35 +208,53 @@ async def ingest_runtime_observation_batch(
                     sid = session_row.id
                     context = push_context_by_session.get(sid, {})
                     previous_attention_state = _previous_attention_state_from_session(session_row)
-                    attention_push = prepare_session_attention_push(
-                        wdb,
-                        owner_id=owner_id,
-                        session_id=sid,
-                        previous_state=previous_attention_state,
-                        current_state=canonical_state,
-                        occurred_at=now_utc,
-                        current_tool_name=context.get("tool"),
-                        targets=ios_targets,
+                    active_pause_request = pause_request_map.get(sid)
+                    use_needs_answer = (
+                        active_pause_request is not None
+                        and canonical_state != "blocked"
+                        and str(active_pause_request.kind or "").strip() == PAUSE_KIND_STRUCTURED_QUESTION
                     )
-                    if attention_push is None:
-                        attention_push = prepare_session_blocked_reminder_push(
+                    attention_state = "needs_answer" if use_needs_answer else canonical_state
+                    if use_needs_answer:
+                        attention_push = prepare_session_needs_answer_push(
                             wdb,
                             owner_id=owner_id,
                             session_id=sid,
+                            pause_request=active_pause_request,
+                            previous_state=previous_attention_state,
+                            occurred_at=now_utc,
+                            targets=ios_targets,
+                        )
+                    else:
+                        attention_push = prepare_session_attention_push(
+                            wdb,
+                            owner_id=owner_id,
+                            session_id=sid,
+                            previous_state=previous_attention_state,
                             current_state=canonical_state,
                             occurred_at=now_utc,
                             current_tool_name=context.get("tool"),
                             targets=ios_targets,
                         )
-                    if attention_push is None:
-                        attention_push = prepare_long_run_waiting_push(
-                            wdb,
-                            owner_id=owner_id,
-                            session_id=sid,
-                            current_state=canonical_state,
-                            occurred_at=now_utc,
-                            targets=ios_targets,
-                        )
+                        if attention_push is None:
+                            attention_push = prepare_session_blocked_reminder_push(
+                                wdb,
+                                owner_id=owner_id,
+                                session_id=sid,
+                                current_state=canonical_state,
+                                occurred_at=now_utc,
+                                current_tool_name=context.get("tool"),
+                                targets=ios_targets,
+                            )
+                        if attention_push is None:
+                            attention_push = prepare_long_run_waiting_push(
+                                wdb,
+                                owner_id=owner_id,
+                                session_id=sid,
+                                current_state=canonical_state,
+                                occurred_at=now_utc,
+                                targets=ios_targets,
+                            )
                     prepared.append(
                         {
                             "session_id": sid,
@@ -236,7 +265,7 @@ async def ingest_runtime_observation_batch(
                                 owner_id=owner_id,
                                 session_id=sid,
                                 previous_state=previous_attention_state,
-                                current_state=canonical_state,
+                                current_state=attention_state,
                                 occurred_at=now_utc,
                                 targets=ios_targets,
                             ),
@@ -253,7 +282,12 @@ async def ingest_runtime_observation_batch(
                     )
                 return prepared, next_widget_push
 
-            prepared_per_session, widget_push = await execute_post_write(ws, _do_runtime_push_prep, db, label="runtime-push")
+            prepared_per_session, widget_push = await execute_post_write(
+                ws,
+                _do_runtime_push_prep,
+                db,
+                label="runtime-push",
+            )
 
         # Send pre-prepared APNs pushes + deliver queued messages, per session.
         # Per-session exception fence so one bad dispatch doesn't skip the rest.
@@ -410,6 +444,6 @@ def _preview_seq(preview: dict) -> int:
 def _previous_attention_state_from_session(session: AgentSession) -> str | None:
     value = str(session.last_attention_push_state or "").strip()
     base = value.split(":", 1)[0]
-    if base in {"blocked", "needs_user"}:
+    if base in {"blocked", "needs_user", "needs_answer"}:
         return base
     return None

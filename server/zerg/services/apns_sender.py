@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionPauseRequest
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.apns_device_registration import APNSDeviceRegistration
 from zerg.models.apns_live_activity_registration import APNSLiveActivityRegistration
@@ -27,6 +28,9 @@ from zerg.models.notification_client_presence import NotificationClientPresence
 from zerg.models.notification_event import NotificationEvent
 from zerg.models.user import User
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
+from zerg.services.session_pause_requests import PAUSE_KIND_STRUCTURED_QUESTION
+from zerg.services.session_pause_requests import load_active_pause_request_for_session
+from zerg.services.session_pause_requests import serialize_pause_request_projection
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_runtime_display import build_session_runtime_display
@@ -34,7 +38,7 @@ from zerg.services.write_serializer import execute_post_write
 
 logger = logging.getLogger(__name__)
 
-ATTENTION_PUSH_STATES = {"blocked"}
+ATTENTION_PUSH_STATES = {"blocked", "needs_answer"}
 RESOLVABLE_ATTENTION_PUSH_STATES = ATTENTION_PUSH_STATES | {"needs_user"}
 ATTENTION_PUSH_DEBOUNCE = timedelta(seconds=30)
 BLOCKED_REMINDER_DELAY = timedelta(minutes=15)
@@ -52,6 +56,7 @@ ATTENTION_NOTIFICATION_CATEGORY = "LONGHOUSE_SESSION_ATTENTION"
 ATTENTION_NOTIFICATION_THREAD_PREFIX = "longhouse-session"
 NOTIFICATION_EVENT_SESSION_BLOCKED = "session_blocked"
 NOTIFICATION_EVENT_SESSION_BLOCKED_REMINDER = "session_blocked_reminder"
+NOTIFICATION_EVENT_SESSION_NEEDS_ANSWER = "session_needs_answer"
 NOTIFICATION_EVENT_LONG_RUN_WAITING = "long_run_waiting"
 NOTIFICATION_CHANNEL_APNS_IOS = "apns_ios"
 PROVIDER_DISPLAY_NAMES = {
@@ -84,7 +89,7 @@ class APNSDeviceTarget:
 @dataclass(frozen=True)
 class SessionAttentionPush:
     session_id: str
-    state: Literal["blocked", "needs_user"]
+    state: Literal["blocked", "needs_user", "needs_answer"]
     occurred_at: datetime
     title: str
     summary: str
@@ -97,6 +102,7 @@ class SessionAttentionPush:
     targets: tuple[APNSDeviceTarget, ...]
     event_type: str = NOTIFICATION_EVENT_SESSION_BLOCKED
     notification_event_id: str | None = None
+    pause_request_id: str | None = None
     previous_stamp_state: str | None = None
     previous_stamp_at: datetime | None = None
     stamp_state: str = "blocked"
@@ -105,7 +111,7 @@ class SessionAttentionPush:
 @dataclass(frozen=True)
 class SessionAttentionResolutionPush:
     session_id: str
-    previous_state: Literal["needs_user", "blocked"]
+    previous_state: Literal["needs_user", "blocked", "needs_answer"]
     current_state: str
     occurred_at: datetime
     attention_push_at: datetime
@@ -250,7 +256,8 @@ def clear_session_attention_push_stamp(
     session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
     if session is None:
         return False
-    if str(session.last_attention_push_state or "").strip() != state:
+    current_state = str(session.last_attention_push_state or "").strip()
+    if current_state != state and _base_attention_state(current_state) != state:
         return False
     if not _same_instant(session.last_attention_push_at, occurred_at):
         return False
@@ -321,6 +328,7 @@ def _mark_attention_events_resolved(
                 [
                     NOTIFICATION_EVENT_SESSION_BLOCKED,
                     NOTIFICATION_EVENT_SESSION_BLOCKED_REMINDER,
+                    NOTIFICATION_EVENT_SESSION_NEEDS_ANSWER,
                     NOTIFICATION_EVENT_LONG_RUN_WAITING,
                 ]
             ),
@@ -360,7 +368,8 @@ def clear_live_activity_push_stamp(
 ) -> bool:
     """Rollback a Live Activity push stamp when APNs accepts no update."""
 
-    registration = db.query(APNSLiveActivityRegistration).filter(APNSLiveActivityRegistration.id == registration_id).first()
+    query = db.query(APNSLiveActivityRegistration)
+    registration = query.filter(APNSLiveActivityRegistration.id == registration_id).first()
     if registration is None or registration.last_state_hash != state_hash:
         return False
     registration.last_state_hash = previous_state_hash
@@ -379,7 +388,7 @@ def prepare_session_attention_push(
     current_tool_name: str | None = None,
     targets: tuple[APNSDeviceTarget, ...] | None | object = _TARGETS_SENTINEL,
 ) -> SessionAttentionPush | None:
-    if owner_id is None or current_state not in ATTENTION_PUSH_STATES or previous_state == current_state:
+    if owner_id is None or current_state != "blocked" or previous_state == current_state:
         return None
 
     session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
@@ -402,6 +411,13 @@ def prepare_session_attention_push(
         return None
 
     collapse_id = _attention_collapse_id(str(session.id))
+    if previous_state in RESOLVABLE_ATTENTION_PUSH_STATES and previous_state != current_state:
+        _mark_attention_events_resolved(
+            db,
+            owner_id=owner_id,
+            session_id=str(session.id),
+            occurred_at=occurred_at,
+        )
     session.last_attention_push_at = occurred_at
     session.last_attention_push_state = current_state
     notification_event = _create_notification_event(
@@ -440,6 +456,87 @@ def prepare_session_attention_push(
         previous_stamp_state=last_attention_push_state,
         previous_stamp_at=last_attention_push_at,
         stamp_state=current_state,
+    )
+
+
+def prepare_session_needs_answer_push(
+    db: Session,
+    *,
+    owner_id: int | None,
+    session_id,
+    pause_request: SessionPauseRequest | None,
+    previous_state: str | None,
+    occurred_at: datetime,
+    targets: tuple[APNSDeviceTarget, ...] | None | object = _TARGETS_SENTINEL,
+) -> SessionAttentionPush | None:
+    if owner_id is None or session_id is None or pause_request is None:
+        return None
+    if str(getattr(pause_request, "kind", "") or "").strip() != PAUSE_KIND_STRUCTURED_QUESTION:
+        return None
+
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if session is None:
+        return None
+
+    pause_request_id = str(pause_request.id)
+    stamp_state = f"needs_answer:{pause_request_id}"
+    previous_stamp_state = str(session.last_attention_push_state or "").strip() or None
+    previous_stamp_at = _as_aware_utc(session.last_attention_push_at)
+    if previous_stamp_state == stamp_state:
+        return None
+
+    if targets is _TARGETS_SENTINEL:
+        targets = _active_ios_targets_for_owner(db, owner_id=owner_id, log_context="needs-answer push")
+    if not targets:
+        return None
+
+    collapse_id = _attention_collapse_id(str(session.id))
+    replaces_previous_attention = previous_state != "needs_answer" or previous_stamp_state != stamp_state
+    if previous_state in RESOLVABLE_ATTENTION_PUSH_STATES and replaces_previous_attention:
+        _mark_attention_events_resolved(
+            db,
+            owner_id=owner_id,
+            session_id=str(session.id),
+            occurred_at=occurred_at,
+        )
+    session.last_attention_push_at = occurred_at
+    session.last_attention_push_state = stamp_state
+    notification_event = _create_notification_event(
+        db,
+        owner_id=owner_id,
+        session_id=str(session.id),
+        event_type=NOTIFICATION_EVENT_SESSION_NEEDS_ANSWER,
+        state_key=stamp_state,
+        collapse_key=collapse_id,
+        occurred_at=occurred_at,
+    )
+
+    provider = _clean_label(getattr(session, "provider", None))
+    project = _clean_label(getattr(session, "project", None))
+    title = _session_title(session)
+    summary = str(getattr(session, "summary", "") or "").strip() or title
+    pause_title = _clean_label(getattr(pause_request, "title", None))
+    pause_title = pause_title or _clean_label(getattr(pause_request, "summary", None))
+
+    return SessionAttentionPush(
+        session_id=str(session.id),
+        state="needs_answer",
+        occurred_at=occurred_at,
+        title=title,
+        summary=summary,
+        project=project,
+        provider=provider,
+        tool_name=_clean_label(getattr(pause_request, "tool_name", None)),
+        alert_title="Needs answer",
+        alert_body=_needs_answer_alert_body(project=project, pause_title=pause_title, title=title),
+        collapse_id=collapse_id,
+        targets=targets,
+        event_type=NOTIFICATION_EVENT_SESSION_NEEDS_ANSWER,
+        notification_event_id=str(notification_event.id),
+        pause_request_id=pause_request_id,
+        previous_stamp_state=previous_stamp_state,
+        previous_stamp_at=previous_stamp_at,
+        stamp_state=stamp_state,
     )
 
 
@@ -645,7 +742,9 @@ def prepare_long_run_waiting_push(
     previous_stamp_at = _as_aware_utc(session.last_attention_push_at)
     if _base_attention_state(previous_stamp_state) == "needs_user":
         return None
-    if _base_attention_state(previous_stamp_state) == "blocked" and previous_stamp_state != _resolved_attention_state("blocked"):
+    if _has_unresolved_attention(previous_stamp_state, "blocked"):
+        return None
+    if _has_unresolved_attention(previous_stamp_state, "needs_answer"):
         return None
 
     if targets is _TARGETS_SENTINEL:
@@ -835,7 +934,10 @@ def prepare_session_live_activity_pushes(
         )
     except OperationalError as exc:
         if _is_missing_optional_table(exc):
-            logger.warning("APNs Live Activity table unavailable; skipping Live Activity push for session %s", session_id)
+            logger.warning(
+                "APNs Live Activity table unavailable; skipping Live Activity push for session %s",
+                session_id,
+            )
             return ()
         raise
 
@@ -859,6 +961,7 @@ def prepare_session_live_activity_pushes(
         runtime_view=runtime_overlay,
         capabilities=project_session_capabilities(db, session_id=session.id),
         ended_at=session.ended_at,
+        pause_request=serialize_pause_request_projection(load_active_pause_request_for_session(db, session.id)),
     )
     presence_state = runtime_display.state or str(current_state or getattr(session, "status", None) or "unknown")
     active_tool = runtime_display.compact_tool_label or str(current_tool_name or "").strip() or None
@@ -1205,6 +1308,7 @@ def build_session_attention_payload(notification: SessionAttentionPush) -> dict:
         "project": notification.project,
         "provider": notification.provider,
         "tool_name": notification.tool_name,
+        "pause_request_id": notification.pause_request_id,
     }
 
 
@@ -1395,6 +1499,16 @@ def _attention_alert_body(*, state: str, project: str | None, title: str, tool_n
     return _trim_alert_text(" · ".join(parts))
 
 
+def _needs_answer_alert_body(*, project: str | None, pause_title: str | None, title: str) -> str:
+    parts: list[str] = []
+    if project:
+        parts.append(project)
+    if pause_title:
+        parts.append(pause_title)
+    parts.append(title)
+    return _trim_alert_text(" · ".join(parts))
+
+
 def _clean_label(value: object) -> str | None:
     cleaned = str(value or "").strip()
     return cleaned or None
@@ -1428,6 +1542,10 @@ def _trim_alert_text(value: str, limit: int = 180) -> str:
 
 def _resolved_attention_state(state: str) -> str:
     return f"{state}:resolved"
+
+
+def _has_unresolved_attention(stamp_state: str | None, state: str) -> bool:
+    return _base_attention_state(stamp_state) == state and stamp_state != _resolved_attention_state(state)
 
 
 def _base_attention_state(state: str | None) -> str | None:
@@ -1474,7 +1592,8 @@ def _provider_token() -> str:
     global _cached_provider_token, _cached_provider_token_expires_at
 
     now = datetime.now(timezone.utc)
-    if _cached_provider_token is not None and _cached_provider_token_expires_at is not None and now < _cached_provider_token_expires_at:
+    cached_token_is_fresh = _cached_provider_token_expires_at is not None and now < _cached_provider_token_expires_at
+    if _cached_provider_token is not None and cached_token_is_fresh:
         return _cached_provider_token
 
     settings = get_settings()

@@ -864,6 +864,327 @@ def test_runtime_blocked_events_record_notification_event_and_reminder(tmp_path)
     engine.dispose()
 
 
+def test_runtime_pause_request_sends_needs_answer_attention_and_resolves(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+    runtime_key = f"codex:{session_id}"
+    request_key = f"codex:codex:{session_id}:input-1"
+
+    with SessionLocal() as db:
+        db.add(User(id=1, email="user@example.com", role="ADMIN"))
+        db.commit()
+        db.add(
+            APNSDeviceRegistration(
+                owner_id=1,
+                platform="ios",
+                device_token="d" * 64,
+                push_environment="sandbox",
+                app_build_id="0.1.0-dev+aaaa1111",
+            )
+        )
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="test",
+                project="zerg",
+                started_at=datetime.now(timezone.utc),
+                loop_mode="assist",
+                summary_title="Runtime pause session",
+            )
+        )
+        db.commit()
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="devbox", id="token-1", owner_id=1)
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+    send_mock = AsyncMock(return_value=True)
+    resolution_send_mock = AsyncMock(return_value=True)
+
+    class FrozenDateTime(datetime):
+        current = t0
+
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return cls.current.replace(tzinfo=None)
+            return cls.current.astimezone(tz)
+
+    def runtime_payload(kind: str, seconds: int, payload: dict) -> dict:
+        occurred_at = t0 + timedelta(seconds=seconds)
+        return {
+            "events": [
+                {
+                    "runtime_key": runtime_key,
+                    "session_id": session_id,
+                    "provider": "codex",
+                    "device_id": "devbox",
+                    "source": "codex_bridge",
+                    "kind": kind,
+                    "occurred_at": occurred_at.isoformat(),
+                    "dedupe_key": f"runtime-pause:{kind}:{seconds}",
+                    "payload": payload,
+                }
+            ]
+        }
+
+    pause_payload = {
+        "request_key": request_key,
+        "provider_request_id": "input-1",
+        "kind": "structured_question",
+        "tool_name": "request_user_input",
+        "title": "Choose storage",
+        "summary": "Pick the database for the prototype.",
+        "can_respond": True,
+        "request_payload": {
+            "questions": [
+                {
+                    "id": "storage",
+                    "header": "Storage",
+                    "question": "Which storage backend should I use?",
+                    "options": [
+                        {"label": "SQLite", "description": "Keep it local"},
+                        {"label": "Postgres", "description": "Use a server database"},
+                    ],
+                }
+            ]
+        },
+    }
+
+    with (
+        patch("zerg.routers.runtime.datetime", FrozenDateTime),
+        patch("zerg.services.apns_sender.send_session_attention_push", send_mock),
+        patch("zerg.services.apns_sender.send_session_attention_resolution_push", resolution_send_mock),
+    ):
+        with TestClient(api_app) as client:
+            FrozenDateTime.current = t0
+            first = client.post(
+                "/agents/runtime/events/batch",
+                json=runtime_payload("pause_request", 0, pause_payload),
+                headers={"X-Agents-Token": "device-token"},
+            )
+            assert first.status_code == 200, first.text
+
+            FrozenDateTime.current = t0 + timedelta(seconds=40)
+            refresh = client.post(
+                "/agents/runtime/events/batch",
+                json=runtime_payload("pause_request", 40, pause_payload),
+                headers={"X-Agents-Token": "device-token"},
+            )
+            assert refresh.status_code == 200, refresh.text
+
+            FrozenDateTime.current = t0 + timedelta(seconds=50)
+            resolved = client.post(
+                "/agents/runtime/events/batch",
+                json=runtime_payload(
+                    "pause_resolution",
+                    50,
+                    {
+                        "request_key": request_key,
+                        "provider_request_id": "input-1",
+                        "status": "resolved",
+                        "response_text": "Answered from Longhouse.",
+                    },
+                ),
+                headers={"X-Agents-Token": "device-token"},
+            )
+            assert resolved.status_code == 200, resolved.text
+
+    send_mock.assert_awaited_once()
+    resolution_send_mock.assert_awaited_once()
+    notification = send_mock.await_args_list[0].args[0]
+    assert notification.state == "needs_answer"
+    assert notification.event_type == "session_needs_answer"
+    assert notification.pause_request_id is not None
+    assert notification.alert_title == "Needs answer"
+    assert notification.alert_body == "zerg · Choose storage · Runtime pause session"
+    assert notification.collapse_id == f"lh-attn-{session_id}"
+    payload = build_session_attention_payload(notification)
+    assert payload["state"] == "needs_answer"
+    assert payload["attention_state"] == "needs_answer"
+    assert payload["pause_request_id"] == notification.pause_request_id
+
+    resolution = resolution_send_mock.await_args_list[0].args[0]
+    assert resolution.previous_state == "needs_answer"
+    assert resolution.current_state != "needs_answer"
+
+    with SessionLocal() as db:
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+        assert session is not None
+        assert session.last_attention_push_state == "needs_answer:resolved"
+        events = db.query(NotificationEvent).filter(NotificationEvent.session_id == session_id).all()
+        assert len(events) == 1
+        event = events[0]
+        assert event.event_type == "session_needs_answer"
+        assert event.state_key == f"needs_answer:{notification.pause_request_id}"
+        assert event.collapse_key == f"lh-attn-{session_id}"
+        assert _db_utc(event.delivered_at) == t0
+        assert _db_utc(event.resolved_at) == t0 + timedelta(seconds=50)
+        assert event.channel_results["apns_ios"]["accepted"] is True
+
+    _cleanup_overrides()
+    engine.dispose()
+
+
+def test_runtime_blocked_attention_wins_over_pending_pause_request(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+    runtime_key = f"codex:{session_id}"
+    request_key = f"codex:codex:{session_id}:input-1"
+
+    with SessionLocal() as db:
+        db.add(User(id=1, email="user@example.com", role="ADMIN"))
+        db.commit()
+        db.add(
+            APNSDeviceRegistration(
+                owner_id=1,
+                platform="ios",
+                device_token="d" * 64,
+                push_environment="sandbox",
+                app_build_id="0.1.0-dev+aaaa1111",
+            )
+        )
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="codex",
+                environment="test",
+                project="zerg",
+                started_at=datetime.now(timezone.utc),
+                loop_mode="assist",
+                summary_title="Runtime blocked after pause",
+            )
+        )
+        db.commit()
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="devbox", id="token-1", owner_id=1)
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+
+    t0 = datetime.now(timezone.utc).replace(microsecond=0)
+    send_mock = AsyncMock(return_value=True)
+    resolution_send_mock = AsyncMock(return_value=True)
+
+    class FrozenDateTime(datetime):
+        current = t0
+
+        @classmethod
+        def now(cls, tz=None):
+            if tz is None:
+                return cls.current.replace(tzinfo=None)
+            return cls.current.astimezone(tz)
+
+    def runtime_event(kind: str, seconds: int, payload: dict, *, phase: str | None = None) -> dict:
+        occurred_at = t0 + timedelta(seconds=seconds)
+        event = {
+            "runtime_key": runtime_key,
+            "session_id": session_id,
+            "provider": "codex",
+            "device_id": "devbox",
+            "source": "codex_bridge",
+            "kind": kind,
+            "occurred_at": occurred_at.isoformat(),
+            "dedupe_key": f"runtime-blocked-pause:{kind}:{seconds}",
+            "payload": payload,
+        }
+        if phase is not None:
+            event["phase"] = phase
+            event["freshness_ms"] = 24 * 60 * 60 * 1000
+        return {"events": [event]}
+
+    with (
+        patch("zerg.routers.runtime.datetime", FrozenDateTime),
+        patch("zerg.services.apns_sender.send_session_attention_push", send_mock),
+        patch("zerg.services.apns_sender.send_session_attention_resolution_push", resolution_send_mock),
+    ):
+        with TestClient(api_app) as client:
+            FrozenDateTime.current = t0
+            pause = client.post(
+                "/agents/runtime/events/batch",
+                json=runtime_event(
+                    "pause_request",
+                    0,
+                    {
+                        "request_key": request_key,
+                        "provider_request_id": "input-1",
+                        "kind": "structured_question",
+                        "title": "Choose storage",
+                        "summary": "Pick the database.",
+                        "request_payload": {
+                            "questions": [
+                                {
+                                    "id": "storage",
+                                    "question": "Which storage backend should I use?",
+                                    "options": [{"label": "SQLite"}, {"label": "Postgres"}],
+                                }
+                            ]
+                        },
+                    },
+                ),
+                headers={"X-Agents-Token": "device-token"},
+            )
+            assert pause.status_code == 200, pause.text
+
+            FrozenDateTime.current = t0 + timedelta(seconds=5)
+            blocked = client.post(
+                "/agents/runtime/events/batch",
+                json=runtime_event(
+                    "phase_signal",
+                    5,
+                    {},
+                    phase="blocked",
+                ),
+                headers={"X-Agents-Token": "device-token"},
+            )
+            assert blocked.status_code == 200, blocked.text
+
+    assert send_mock.await_count == 2
+    resolution_send_mock.assert_not_awaited()
+    first_notification = send_mock.await_args_list[0].args[0]
+    second_notification = send_mock.await_args_list[1].args[0]
+    assert first_notification.state == "needs_answer"
+    assert second_notification.state == "blocked"
+    assert second_notification.event_type == "session_blocked"
+    assert second_notification.alert_body == "zerg · Blocked · Runtime blocked after pause"
+
+    with SessionLocal() as db:
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+        assert session is not None
+        assert session.last_attention_push_state == "blocked"
+        events = (
+            db.query(NotificationEvent)
+            .filter(NotificationEvent.session_id == session_id)
+            .order_by(NotificationEvent.event_started_at.asc())
+            .all()
+        )
+        assert [event.event_type for event in events] == ["session_needs_answer", "session_blocked"]
+        assert _db_utc(events[0].resolved_at) == t0 + timedelta(seconds=5)
+        assert events[1].resolved_at is None
+
+    _cleanup_overrides()
+    engine.dispose()
+
+
 def test_presence_long_run_waiting_sends_once_and_resolves(tmp_path):
     engine, SessionLocal = _make_db(tmp_path)
     session_id = str(uuid4())
