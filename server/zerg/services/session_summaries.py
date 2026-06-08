@@ -21,6 +21,7 @@ from zerg.config import get_settings
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.services.provisional_events import durable_transcript_event_predicate
+from zerg.services.session_title import freeze_anchor_title
 
 logger = logging.getLogger(__name__)
 
@@ -200,17 +201,21 @@ async def summarize_and_persist(
     if not content_values:
         logger.warning("Discarding placeholder summary result for session %s", session.id)
 
+    # Freeze the muscle-memory anchor the first time a usable title appears.
+    # COALESCE makes this write-once: summary_title keeps drifting for search,
+    # but anchor_title (what the card renders) never moves once set.
+    frozen_anchor = freeze_anchor_title(content_values.get("summary_title"))
+
     def _do_persist(write_db: Session) -> int:
-        result = write_db.execute(
-            sa_update(AgentSession)
-            .where(AgentSession.id == session.id)
-            .values(
-                summary_event_count=len(events),
-                last_summarized_event_id=new_last_event_id,
-                summary_revision=target_revision,
-                **content_values,
-            )
+        values = dict(
+            summary_event_count=len(events),
+            last_summarized_event_id=new_last_event_id,
+            summary_revision=target_revision,
+            **content_values,
         )
+        if frozen_anchor:
+            values["anchor_title"] = func.coalesce(AgentSession.anchor_title, frozen_anchor)
+        result = write_db.execute(sa_update(AgentSession).where(AgentSession.id == session.id).values(**values))
         return int(result.rowcount or 0)
 
     ws = get_write_serializer()
@@ -220,6 +225,8 @@ async def summarize_and_persist(
             session.summary = content_values["summary"]
         if "summary_title" in content_values:
             session.summary_title = content_values["summary_title"]
+        if frozen_anchor and not session.anchor_title:
+            session.anchor_title = frozen_anchor
         session.summary_event_count = len(events)
         session.last_summarized_event_id = new_last_event_id
         session.summary_revision = target_revision
@@ -401,6 +408,10 @@ async def generate_summary_impl(session_id: str) -> None:
                 content_values = _summary_content_values(summary)
                 if content_values:
                     values.update(content_values)
+                    # Write-once freeze of the timeline anchor (see persist path above).
+                    frozen_anchor = freeze_anchor_title(content_values.get("summary_title"))
+                    if frozen_anchor:
+                        values["anchor_title"] = func.coalesce(AgentSession.anchor_title, frozen_anchor)
                 else:
                     logger.warning("Discarding placeholder summary result for session %s", session_id)
 
