@@ -40,6 +40,19 @@ sqlite3 "$DB" 'PRAGMA journal_mode; PRAGMA page_count; PRAGMA freelist_count;'
 
 echo "=== stop + checkpoint ==="
 docker stop --time 60 "$C"
+# RESTART GUARD: capture the stopped container's identity + a DB content
+# fingerprint. The build below takes ~2h, during which an external actor
+# (control-plane reprovision, another agent's deploy) can `docker start` or
+# recreate the tenant out from under us — `docker stop` is not a lock. If that
+# happens, live ingest resumes and our slim DB becomes a stale snapshot; swapping
+# it in would silently lose the gap writes. Before the swap we re-check these and
+# ABORT fail-closed if anything changed. (This detects the race; it does not
+# prevent it — run only when no reprovision/deploy is expected.)
+GUARD_CID="$(docker inspect "$C" --format '{{.Id}}' 2>/dev/null || true)"
+GUARD_STARTED="$(docker inspect "$C" --format '{{.State.StartedAt}}' 2>/dev/null || true)"
+GUARD_FINGERPRINT="$(sqlite3 "$DB" 'SELECT (SELECT COALESCE(MAX(id),0) FROM events) || ":" || (SELECT COALESCE(MAX(id),0) FROM source_lines) || ":" || (SELECT COUNT(*) FROM sessions);' 2>/dev/null || true)"
+echo "guard: cid=${GUARD_CID:0:12} startedAt=$GUARD_STARTED fingerprint=$GUARD_FINGERPRINT"
+[ -n "$GUARD_FINGERPRINT" ] || { echo "ABORT: could not capture DB fingerprint; not safe to proceed. Restart: docker start $C"; docker start "$C"; exit 1; }
 # Checkpoint+truncate the WAL into the main DB so the build reads a fully
 # consistent quiesced file. No full quick_check here (see note above).
 sqlite3 "$DB" 'PRAGMA wal_checkpoint(TRUNCATE);'
@@ -68,6 +81,31 @@ SELECT "source_lines_raw_kept", COUNT(*) FROM source_lines WHERE raw_json_z IS N
 '
 sqlite3 "$SLIM" 'PRAGMA wal_checkpoint(TRUNCATE);'
 rm -f "$SLIM-wal" "$SLIM-shm"
+
+echo "=== RESTART GUARD re-check (fail closed before touching the live DB) ==="
+# The slim DB is a snapshot from the stop above. If the container was started /
+# recreated during the build, the live DB has diverged and the slim is stale —
+# swapping it would lose the gap writes. Refuse to swap unless the container is
+# STILL the same id, STILL stopped, and the DB fingerprint is UNCHANGED.
+NOW_CID="$(docker inspect "$C" --format '{{.Id}}' 2>/dev/null || true)"
+NOW_RUNNING="$(docker inspect "$C" --format '{{.State.Running}}' 2>/dev/null || true)"
+NOW_STARTED="$(docker inspect "$C" --format '{{.State.StartedAt}}' 2>/dev/null || true)"
+NOW_FINGERPRINT="$(sqlite3 "$DB" 'SELECT (SELECT COALESCE(MAX(id),0) FROM events) || ":" || (SELECT COALESCE(MAX(id),0) FROM source_lines) || ":" || (SELECT COUNT(*) FROM sessions);' 2>/dev/null || true)"
+echo "guard now: cid=${NOW_CID:0:12} running=$NOW_RUNNING startedAt=$NOW_STARTED fingerprint=$NOW_FINGERPRINT"
+GUARD_FAIL=""
+[ "$NOW_CID" = "$GUARD_CID" ] || GUARD_FAIL="container recreated (cid changed)"
+[ "$NOW_RUNNING" = "false" ] || GUARD_FAIL="container is running again (restarted during build)"
+[ "$NOW_STARTED" = "$GUARD_STARTED" ] || GUARD_FAIL="container StartedAt changed (restarted during build)"
+[ "$NOW_FINGERPRINT" = "$GUARD_FINGERPRINT" ] || GUARD_FAIL="live DB changed since stop (fingerprint drift)"
+if [ -n "$GUARD_FAIL" ]; then
+  echo "!!! RESTART GUARD TRIPPED: $GUARD_FAIL"
+  echo "Refusing to swap a stale slim DB. Live DB untouched. Discarding slim build."
+  rm -rf "$WORK"
+  docker start "$C" 2>/dev/null || true   # ensure tenant is up (it may already be)
+  echo "ABORTED safely; live DB intact. Re-run only when no reprovision/deploy can restart the tenant."
+  exit 1
+fi
+echo "guard OK — container still stopped, DB unchanged since build start"
 
 echo "=== atomic swap (old DB moved aside = rollback) ==="
 # Rollback is self-defensive (never let set -e abort mid-recovery) and idempotent
