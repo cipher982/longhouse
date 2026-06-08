@@ -146,9 +146,14 @@ struct SessionRow: View {
     let session: SessionSummary
 
     var body: some View {
+        // Same 3-stop attention signal as the in-app card (shared TimelineSignal):
+        // amber = waiting on you, teal = live work, grey = quiet/closed. Widgets
+        // don't animate, so the dot is always static — color carries the signal.
+        let signal = TimelineSignal.resolve(for: session)
+
         HStack(spacing: 8) {
             Circle()
-                .fill(widgetRuntimeColor(session))
+                .fill(signal.dotColor)
                 .frame(width: 6, height: 6)
 
             VStack(alignment: .leading, spacing: 1) {
@@ -164,12 +169,14 @@ struct SessionRow: View {
                     }
                     Text(session.displayPhaseLabel)
                         .font(.system(size: 10))
-                        .foregroundStyle(widgetRuntimeColor(session).opacity(0.85))
+                        .foregroundStyle(signal.statusColor.opacity(0.85))
                 }
             }
 
             Spacer()
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(session.title), \(signal.accessibilityState)")
     }
 }
 
@@ -178,14 +185,6 @@ private struct WidgetMetric {
     let label: String
     let shortLabel: String
     let color: Color
-}
-
-private func widgetRuntimeColor(_ session: SessionSummary) -> Color {
-    switch session.runtimeTone {
-    case "running": return .green
-    case "thinking", "blocked", "stalled": return .orange
-    default: return .secondary
-    }
 }
 
 #Preview("Medium - Sessions", as: .systemMedium) {
