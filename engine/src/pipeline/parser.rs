@@ -3842,4 +3842,69 @@ mod tests {
         assert!(result.events[0].tool_call_id.is_none());
         assert!(result.events[1].tool_call_id.is_none());
     }
+
+    // === Phase 0 characterization: dynamic-workflow journal.jsonl ===
+
+    fn workflow_fixture_root() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("workflows")
+            .join("claude")
+    }
+
+    #[test]
+    fn baseline_workflow_journal_parses_to_zero_events_with_source_lines() {
+        // BASELINE (to be inverted in Phase 1): journal.jsonl carries only
+        // {type:"started"|"result"} ledger lines — no role events — but the parser
+        // still emits source_lines for them. The shipper only skips when BOTH
+        // events AND source_lines are empty, so today this ships as a 0-event
+        // session that then pollutes the timeline.
+        let journal = workflow_fixture_root()
+            .join("11111111-2222-3333-4444-555555555555")
+            .join("subagents")
+            .join("workflows")
+            .join("wf_testrun01")
+            .join("journal.jsonl");
+        assert!(journal.exists(), "fixture journal missing: {}", journal.display());
+
+        let result = parse_session_file(&journal, 0).unwrap();
+        assert_eq!(result.events.len(), 0, "journal has no role events");
+        assert!(
+            !result.source_lines.is_empty(),
+            "BASELINE: journal still produces source lines, so the shipper does not skip it"
+        );
+        // No timestamps in the ledger -> no started/ended bounds.
+        assert!(result.metadata.started_at.is_none());
+        assert!(!result.metadata.is_sidechain);
+    }
+
+    #[test]
+    fn workflow_agent_transcript_resolves_to_parent_subagent() {
+        // INVARIANT: agent-*.jsonl resolves to the parent via per-line
+        // isSidechain + sessionId, regardless of phase.
+        let agent = workflow_fixture_root()
+            .join("11111111-2222-3333-4444-555555555555")
+            .join("subagents")
+            .join("workflows")
+            .join("wf_testrun01")
+            .join("agent-a049eaf15e4dbcae3.jsonl");
+        assert!(agent.exists(), "fixture agent file missing: {}", agent.display());
+
+        let result = parse_session_file(&agent, 0).unwrap();
+        assert!(result.metadata.is_sidechain);
+        assert_eq!(
+            result.metadata.forked_from_session_id.as_deref(),
+            Some("11111111-2222-3333-4444-555555555555")
+        );
+        assert_eq!(
+            result.metadata.subagent_id.as_deref(),
+            Some("a049eaf15e4dbcae3")
+        );
+        // Its own session id is path-derived, not the parent's.
+        assert_ne!(
+            result.metadata.session_id,
+            "11111111-2222-3333-4444-555555555555"
+        );
+    }
 }

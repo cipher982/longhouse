@@ -171,6 +171,95 @@ fn is_provider_session_file(provider: &ProviderConfig, path: &Path) -> bool {
 mod tests {
     use super::*;
 
+    /// Root of the committed Claude dynamic-workflow fixture tree.
+    /// Mirrors the real on-disk layout produced by a `/deep-research` run.
+    fn workflow_fixture_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("workflows")
+            .join("claude")
+    }
+
+    const FIXTURE_SID: &str = "11111111-2222-3333-4444-555555555555";
+    const FIXTURE_RUN: &str = "wf_testrun01";
+
+    fn claude_provider_for(root: &Path) -> ProviderConfig {
+        ProviderConfig {
+            name: "claude",
+            root: root.to_path_buf(),
+            extension: "jsonl",
+        }
+    }
+
+    // === Phase 0 characterization: TODAY's behavior for dynamic-workflow files ===
+    // These assert the CURRENT (pre-fix) behavior so Phase 1 can invert them.
+
+    #[test]
+    fn baseline_workflow_journal_is_discovered_as_claude_session_today() {
+        // BASELINE (to be inverted in Phase 1): journal.jsonl is a control ledger,
+        // not a transcript, but discovery currently accepts it as a claude session
+        // purely because the extension is `.jsonl`.
+        let providers = vec![claude_provider_for(&workflow_fixture_root())];
+        let journal = workflow_fixture_root()
+            .join(FIXTURE_SID)
+            .join("subagents")
+            .join("workflows")
+            .join(FIXTURE_RUN)
+            .join("journal.jsonl");
+        assert!(journal.exists(), "fixture journal missing: {}", journal.display());
+        assert_eq!(
+            provider_for_path(&journal, &providers),
+            Some("claude"),
+            "BASELINE: journal.jsonl is (wrongly) treated as a claude session today"
+        );
+    }
+
+    #[test]
+    fn workflow_agent_transcript_is_discovered_as_claude_session() {
+        // INVARIANT (must stay true across all phases): agent-*.jsonl ARE real
+        // subagent transcripts and must always be discovered.
+        let providers = vec![claude_provider_for(&workflow_fixture_root())];
+        let agent = workflow_fixture_root()
+            .join(FIXTURE_SID)
+            .join("subagents")
+            .join("workflows")
+            .join(FIXTURE_RUN)
+            .join("agent-a049eaf15e4dbcae3.jsonl");
+        assert!(agent.exists(), "fixture agent file missing: {}", agent.display());
+        assert_eq!(provider_for_path(&agent, &providers), Some("claude"));
+    }
+
+    #[test]
+    fn workflow_main_transcript_is_discovered() {
+        let providers = vec![claude_provider_for(&workflow_fixture_root())];
+        let main = workflow_fixture_root().join(format!("{FIXTURE_SID}.jsonl"));
+        assert!(main.exists(), "fixture main transcript missing: {}", main.display());
+        assert_eq!(provider_for_path(&main, &providers), Some("claude"));
+    }
+
+    #[test]
+    fn workflow_non_jsonl_sidecars_are_never_discovered() {
+        // INVARIANT: .meta.json / .js / .txt sidecars are never sessions.
+        let providers = vec![claude_provider_for(&workflow_fixture_root())];
+        let meta = workflow_fixture_root()
+            .join(FIXTURE_SID)
+            .join("subagents")
+            .join("workflows")
+            .join(FIXTURE_RUN)
+            .join("agent-a049eaf15e4dbcae3.meta.json");
+        assert!(meta.exists());
+        assert_eq!(provider_for_path(&meta, &providers), None);
+
+        let script = workflow_fixture_root()
+            .join(FIXTURE_SID)
+            .join("workflows")
+            .join("scripts")
+            .join(format!("deep-research-{FIXTURE_RUN}.js"));
+        assert!(script.exists());
+        assert_eq!(provider_for_path(&script, &providers), None);
+    }
+
     #[test]
     fn provider_candidates_use_claude_config_dir_for_claude_root() {
         let home = PathBuf::from("/tmp/home");
