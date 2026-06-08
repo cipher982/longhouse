@@ -90,6 +90,38 @@ enum APIPresenceState: String, Codable, Hashable, Sendable, CaseIterable {
     case syncingTranscript = "syncing_transcript"
 }
 
+struct APISessionPauseQuestionOptionResponse: Codable, Hashable, Sendable {
+    let label: String
+    let description: String?
+    let value: String?
+}
+
+struct APISessionPauseQuestionResponse: Codable, Hashable, Sendable {
+    let id: String
+    let header: String?
+    let question: String
+    let multiSelect: Bool?
+    let options: [APISessionPauseQuestionOptionResponse]?
+}
+
+struct APISessionPauseRequestProjectionResponse: Codable, Hashable, Sendable {
+    let id: String
+    let sessionId: String
+    let runtimeKey: String
+    let kind: String
+    let status: String
+    let provider: String
+    let canRespond: Bool
+    let title: String?
+    let summary: String?
+    let toolName: String?
+    let questions: [APISessionPauseQuestionResponse]?
+    let occurredAt: String?
+    let lastSeenAt: String?
+    let resolvedAt: String?
+    let expiresAt: String?
+}
+
 enum APISignalTier: String, Codable, Hashable, Sendable, CaseIterable {
     case none = "none"
     case phaseSignal = "phase_signal"
@@ -144,6 +176,7 @@ struct APISessionRuntimeDisplayResponse: Codable, Hashable, Sendable {
     let lifecycle: APILifecycle
     let hostState: APIHostState
     let terminalReason: APITerminalReason?
+    let pauseRequest: APISessionPauseRequestProjectionResponse?
 }
 
 struct APISessionTranscriptPreviewResponse: Codable, Hashable, Sendable {

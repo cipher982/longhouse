@@ -96,6 +96,16 @@ export type RuntimeActivityRecency = components["schemas"]["ActivityRecency"];
 export type RuntimeLifecycle = components["schemas"]["Lifecycle"];
 export type RuntimeHostState = components["schemas"]["HostState"];
 export type RuntimeTerminalReason = components["schemas"]["TerminalReason"];
+export type SessionPauseQuestionOption =
+  components["schemas"]["SessionPauseQuestionOptionResponse"];
+export type SessionPauseQuestion =
+  components["schemas"]["SessionPauseQuestionResponse"];
+export type SessionPauseRequest =
+  components["schemas"]["SessionPauseRequestProjectionResponse"];
+export type PauseRequestResponseRequest =
+  components["schemas"]["PauseRequestResponseRequest"];
+export type PauseRequestResponseResponse =
+  components["schemas"]["PauseRequestResponseResponse"];
 
 export type SessionRuntimeDisplay =
   components["schemas"]["SessionRuntimeDisplayResponse"];
@@ -845,6 +855,20 @@ export async function fetchAgentSessionWorkspace(
     method: "GET",
     cache: "no-store",
   });
+}
+
+export async function respondToPauseRequest(
+  sessionId: string,
+  pauseRequestId: string,
+  body: PauseRequestResponseRequest,
+): Promise<PauseRequestResponseResponse> {
+  return request<PauseRequestResponseResponse>(
+    `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/pause-requests/${pauseRequestId}/response`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+  );
 }
 
 export async function fetchAgentSessionTurns(

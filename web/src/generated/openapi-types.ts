@@ -2827,6 +2827,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/sessions/{session_id}/pause-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Pause Requests Endpoint */
+        get: operations["list_pause_requests_endpoint_sessions__session_id__pause_requests_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/pause-requests/{pause_request_id}/response": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Respond To Pause Request Endpoint */
+        post: operations["respond_to_pause_request_endpoint_sessions__session_id__pause_requests__pause_request_id__response_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/sessions/managed-local/this-device": {
         parameters: {
             query?: never;
@@ -3036,6 +3070,40 @@ export interface paths {
          *     source runner. It does not confirm that the provider stopped the turn.
          */
         post: operations["interrupt_live_session_agents_agents_sessions__session_id__interrupt_live_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/pause-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Pause Requests Agents */
+        get: operations["list_pause_requests_agents_agents_sessions__session_id__pause_requests_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/pause-requests/{pause_request_id}/response": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Respond To Pause Request Agents */
+        post: operations["respond_to_pause_request_agents_agents_sessions__session_id__pause_requests__pause_request_id__response_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7240,6 +7308,36 @@ export interface components {
             /** Password */
             password: string;
         };
+        /** PauseRequestListResponse */
+        PauseRequestListResponse: {
+            /** Requests */
+            requests: components["schemas"]["SessionPauseRequestProjectionResponse"][];
+            /** Total */
+            total: number;
+        };
+        /** PauseRequestResponseRequest */
+        PauseRequestResponseRequest: {
+            /**
+             * Decision
+             * @description answer | reject | cancel
+             * @default answer
+             */
+            decision: string;
+            /** Answers */
+            answers?: {
+                [key: string]: unknown;
+            } | null;
+            /** Content */
+            content?: unknown | null;
+            /** Message */
+            message?: string | null;
+        };
+        /** PauseRequestResponseResponse */
+        PauseRequestResponseResponse: {
+            /** Status */
+            status: string;
+            pause_request: components["schemas"]["SessionPauseRequestProjectionResponse"];
+        };
         /**
          * PeriodUsage
          * @description Usage stats for a single period.
@@ -8593,7 +8691,7 @@ export interface components {
              * Kind
              * @enum {string}
              */
-            kind: "phase_signal" | "progress_signal" | "terminal_signal" | "binding_signal";
+            kind: "phase_signal" | "progress_signal" | "terminal_signal" | "binding_signal" | "pause_request" | "pause_resolution";
             /** Phase */
             phase?: string | null;
             /** Tool Name */
@@ -9288,6 +9386,133 @@ export interface components {
              */
             snapshot_event_id?: number | null;
         };
+        /** SessionPauseQuestionOptionResponse */
+        SessionPauseQuestionOptionResponse: {
+            /**
+             * Label
+             * @description User-facing option label
+             */
+            label: string;
+            /**
+             * Description
+             * @description Optional explanatory text for the option
+             */
+            description?: string | null;
+            /**
+             * Value
+             * @description Provider-native option value when distinct from label
+             */
+            value?: string | null;
+        };
+        /** SessionPauseQuestionResponse */
+        SessionPauseQuestionResponse: {
+            /**
+             * Id
+             * @description Stable question identifier
+             */
+            id: string;
+            /**
+             * Header
+             * @description Short question header
+             */
+            header?: string | null;
+            /**
+             * Question
+             * @description Question text
+             */
+            question: string;
+            /**
+             * Multi Select
+             * @description True when multiple options may be selected
+             * @default false
+             */
+            multi_select: boolean;
+            /**
+             * Options
+             * @description Provider-native answer options
+             */
+            options?: components["schemas"]["SessionPauseQuestionOptionResponse"][];
+        };
+        /** SessionPauseRequestProjectionResponse */
+        SessionPauseRequestProjectionResponse: {
+            /**
+             * Id
+             * @description Pause request UUID
+             */
+            id: string;
+            /**
+             * Session Id
+             * @description Session UUID
+             */
+            session_id: string;
+            /**
+             * Runtime Key
+             * @description Runtime key that emitted this request
+             */
+            runtime_key: string;
+            /**
+             * Kind
+             * @description Pause request kind
+             * @constant
+             */
+            kind: "structured_question";
+            /**
+             * Status
+             * @description Pause lifecycle status
+             * @enum {string}
+             */
+            status: "pending" | "resolved" | "rejected" | "failed" | "expired";
+            /**
+             * Provider
+             * @description Provider that emitted the request
+             */
+            provider: string;
+            /**
+             * Can Respond
+             * @description True when Longhouse can answer through a provider-native path
+             */
+            can_respond: boolean;
+            /**
+             * Title
+             * @description Short title for the request
+             */
+            title?: string | null;
+            /**
+             * Summary
+             * @description Short user-facing detail for the request
+             */
+            summary?: string | null;
+            /**
+             * Tool Name
+             * @description Provider tool/dialog name when known
+             */
+            tool_name?: string | null;
+            /**
+             * Questions
+             * @description Structured questions to render
+             */
+            questions?: components["schemas"]["SessionPauseQuestionResponse"][];
+            /**
+             * Occurred At
+             * @description When the provider emitted the request
+             */
+            occurred_at?: string | null;
+            /**
+             * Last Seen At
+             * @description When Longhouse last observed the request
+             */
+            last_seen_at?: string | null;
+            /**
+             * Resolved At
+             * @description When the request resolved
+             */
+            resolved_at?: string | null;
+            /**
+             * Expires At
+             * @description Optional provider/request expiry
+             */
+            expires_at?: string | null;
+        };
         /**
          * SessionPreviewMessage
          * @description Preview message entry for session picker.
@@ -9776,6 +10001,8 @@ export interface components {
             host_state: components["schemas"]["HostState"];
             /** @description Why the session is closed (when lifecycle=='closed'), else null */
             terminal_reason: components["schemas"]["TerminalReason"] | null;
+            /** @description Active structured provider question, when the runtime is waiting for an answer. */
+            pause_request?: components["schemas"]["SessionPauseRequestProjectionResponse"] | null;
         };
         /**
          * SessionSummaryResponse
@@ -16033,6 +16260,80 @@ export interface operations {
             };
         };
     };
+    list_pause_requests_endpoint_sessions__session_id__pause_requests_get: {
+        parameters: {
+            query?: {
+                status_filter?: string | null;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PauseRequestListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    respond_to_pause_request_endpoint_sessions__session_id__pause_requests__pause_request_id__response_post: {
+        parameters: {
+            query?: {
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+                pause_request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PauseRequestResponseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PauseRequestResponseResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     launch_managed_local_this_device_sessions_managed_local_this_device_post: {
         parameters: {
             query?: never;
@@ -16407,6 +16708,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionInterruptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_pause_requests_agents_agents_sessions__session_id__pause_requests_get: {
+        parameters: {
+            query?: {
+                status_filter?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PauseRequestListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    respond_to_pause_request_agents_agents_sessions__session_id__pause_requests__pause_request_id__response_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+                pause_request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PauseRequestResponseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PauseRequestResponseResponse"];
                 };
             };
             /** @description Validation Error */

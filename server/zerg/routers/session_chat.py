@@ -87,6 +87,7 @@ from zerg.services.session_pause_requests import load_active_pause_request_for_s
 from zerg.services.session_pause_requests import resolve_pause_request
 from zerg.services.session_pause_requests import serialize_pause_request_projection
 from zerg.services.session_runtime import current_presence_state_for_session
+from zerg.services.session_views import SessionPauseRequestProjectionResponse
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.session_loop_mode import coerce_session_loop_mode
 
@@ -260,7 +261,7 @@ class SessionInputResponse(BaseModel):
 
 
 class PauseRequestListResponse(BaseModel):
-    requests: list[dict[str, Any]]
+    requests: list[SessionPauseRequestProjectionResponse]
     total: int
 
 
@@ -273,7 +274,7 @@ class PauseRequestResponseRequest(BaseModel):
 
 class PauseRequestResponseResponse(BaseModel):
     status: str
-    pause_request: dict[str, Any]
+    pause_request: SessionPauseRequestProjectionResponse
 
 
 class SessionInterruptResponse(BaseModel):

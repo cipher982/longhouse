@@ -9,6 +9,7 @@ import type {
   AgentSession,
   AgentSessionProjectionItem,
   SessionCapabilities,
+  SessionPauseRequest,
   SessionRuntimeDisplay,
   AgentSessionTurn,
 } from "../../services/api/agents";
@@ -23,6 +24,9 @@ const secondClockMocks = vi.hoisted(() => ({
 }));
 const launchApiMocks = vi.hoisted(() => ({
   continueRemoteSession: vi.fn(),
+}));
+const agentApiMocks = vi.hoisted(() => ({
+  respondToPauseRequest: vi.fn(),
 }));
 
 vi.mock("../../hooks/useSessionWorkspace", () => ({
@@ -41,6 +45,14 @@ vi.mock("../../services/api/launch", async (importOriginal) => {
   return {
     ...actual,
     continueRemoteSession: launchApiMocks.continueRemoteSession,
+  };
+});
+
+vi.mock("../../services/api/agents", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../services/api/agents")>();
+  return {
+    ...actual,
+    respondToPauseRequest: agentApiMocks.respondToPauseRequest,
   };
 });
 
@@ -102,6 +114,41 @@ function makeRuntimeDisplay(
     lifecycle: "open",
     host_state: "online",
     terminal_reason: null,
+    pause_request: null,
+    ...overrides,
+  };
+}
+
+function makePauseRequest(
+  overrides: Partial<SessionPauseRequest> = {},
+): SessionPauseRequest {
+  return {
+    id: "pause-1",
+    session_id: "session-codex",
+    runtime_key: "codex:session-codex",
+    kind: "structured_question",
+    status: "pending",
+    provider: "codex",
+    can_respond: true,
+    title: "Choose storage",
+    summary: "The agent needs a product decision.",
+    tool_name: "requestUserInput",
+    questions: [
+      {
+        id: "storage",
+        header: "Storage",
+        question: "Which storage backend should I use?",
+        multi_select: false,
+        options: [
+          { label: "SQLite", description: "Keep it local." },
+          { label: "Postgres", description: "Use a service." },
+        ],
+      },
+    ],
+    occurred_at: "2026-03-22T22:04:00Z",
+    last_seen_at: "2026-03-22T22:04:00Z",
+    resolved_at: null,
+    expires_at: null,
     ...overrides,
   };
 }
@@ -255,6 +302,10 @@ describe("SessionDetailPage", () => {
       launch_state: "live",
       launch_error_code: null,
       launch_error_message: null,
+    });
+    agentApiMocks.respondToPauseRequest.mockResolvedValue({
+      status: "resolved",
+      pause_request: makePauseRequest({ status: "resolved" }),
     });
     secondClockMocks.useSecondClock.mockReturnValue(
       Date.parse("2026-03-22T22:04:30Z"),
@@ -962,6 +1013,104 @@ describe("SessionDetailPage", () => {
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent("Idle");
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
       "Waiting for next prompt",
+    );
+  });
+
+  it("renders an answerable provider pause request and posts selected answers", async () => {
+    const user = userEvent.setup();
+    const pauseRequest = makePauseRequest();
+    const session = makeSession({
+      ended_at: null,
+      status: "idle",
+      presence_state: "needs_user",
+      active_tool: null,
+      runtime_source: "managed_local_transport",
+      confidence: "live",
+      display_phase: "Needs answer",
+      last_live_at: "2026-03-22T22:04:30Z",
+      runtime_display: makeRuntimeDisplay({
+        state: "needs_user",
+        tone: "blocked",
+        headline: "Needs answer",
+        detail: "Question waiting",
+        phase_label: "Needs answer",
+        compact_tool_label: null,
+        is_live: false,
+        is_executing: false,
+        is_idle: false,
+        needs_attention: true,
+        pause_request: pauseRequest,
+      }),
+    });
+
+    mockWorkspaceState({ session, model: buildTimelineModel([]) });
+    renderSessionDetailPage();
+
+    expect(screen.getByTestId("session-control-strip")).toHaveTextContent("Needs answer");
+    expect(screen.getByTestId("session-pause-panel")).toHaveTextContent("Choose storage");
+    expect(screen.getByTestId("session-pause-panel")).toHaveTextContent(
+      "Which storage backend should I use?",
+    );
+    expect(screen.getByTestId("session-chat")).toHaveAttribute(
+      "data-disabled-reason",
+      "Answer the provider question above before sending another prompt.",
+    );
+
+    await user.click(screen.getByLabelText(/SQLite/));
+    await user.click(screen.getByRole("button", { name: /Send answer/ }));
+
+    await waitFor(() => {
+      expect(agentApiMocks.respondToPauseRequest).toHaveBeenCalledWith(
+        "session-codex",
+        "pause-1",
+        expect.objectContaining({
+          decision: "answer",
+          answers: { storage: "SQLite" },
+          content: { storage: "SQLite" },
+          message: "Storage: SQLite",
+        }),
+      );
+    });
+  });
+
+  it("renders non-answerable provider pause requests as terminal-only", () => {
+    const pauseRequest = makePauseRequest({
+      can_respond: false,
+      summary: "Question waiting in terminal",
+    });
+    const session = makeSession({
+      ended_at: null,
+      status: "idle",
+      presence_state: "needs_user",
+      active_tool: null,
+      runtime_source: "managed_local_transport",
+      confidence: "live",
+      display_phase: "Needs answer",
+      last_live_at: "2026-03-22T22:04:30Z",
+      runtime_display: makeRuntimeDisplay({
+        state: "needs_user",
+        tone: "blocked",
+        headline: "Needs answer",
+        detail: "Question waiting in terminal",
+        phase_label: "Needs answer",
+        needs_attention: true,
+        pause_request: pauseRequest,
+      }),
+    });
+
+    mockWorkspaceState({ session, model: buildTimelineModel([]) });
+    renderSessionDetailPage();
+
+    expect(screen.getByTestId("session-pause-panel")).toHaveTextContent(
+      "Question waiting in terminal",
+    );
+    expect(screen.getByTestId("session-pause-panel")).toHaveTextContent(
+      "Waiting in terminal",
+    );
+    expect(screen.queryByRole("button", { name: /Send answer/ })).not.toBeInTheDocument();
+    expect(screen.getByTestId("session-chat")).toHaveAttribute(
+      "data-disabled-reason",
+      "Answer the provider question in the terminal before sending another prompt.",
     );
   });
 

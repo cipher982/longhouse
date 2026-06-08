@@ -26,6 +26,7 @@ import { SessionContextPane } from "../components/session-workspace/SessionConte
 import { SessionInfoDrawer } from "../components/session-workspace/SessionInfoDrawer";
 import { LoopModePill } from "../components/session-workspace/LoopModePill";
 import { RenderTelemetryPanel } from "../components/session-workspace/RenderTelemetryPanel";
+import { SessionPauseRequestPanel } from "../components/session-workspace/SessionPauseRequestPanel";
 import { SessionRuntimeStrip } from "../components/session-workspace/SessionRuntimeStrip";
 import { isSessionClosed, resolveSessionRuntimeState } from "../lib/sessionRuntime";
 import { TimelinePane } from "../components/session-workspace/TimelinePane";
@@ -35,7 +36,11 @@ import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
 import { config } from "../lib/config";
 import { useReadinessFlag } from "../lib/readiness-contract";
 import { getRuntimeElapsedLabel } from "../lib/sessionTiming";
-import { setSessionAction } from "../services/api/agents";
+import {
+  respondToPauseRequest,
+  setSessionAction,
+  type PauseRequestResponseRequest,
+} from "../services/api/agents";
 import { ApiError, DEMO_READ_ONLY_MESSAGE } from "../services/api/base";
 import {
   continueRemoteSession,
@@ -275,6 +280,15 @@ function SessionDetailWorkspaceRoute({
     isViewingHead,
     headThreadSession,
   });
+  const activePauseRequest =
+    branchSourceSession.runtime_display?.pause_request?.status === "pending"
+      ? branchSourceSession.runtime_display.pause_request
+      : null;
+  const composerDisabledReason = activePauseRequest
+    ? activePauseRequest.can_respond
+      ? "Answer the provider question above before sending another prompt."
+      : "Answer the provider question in the terminal before sending another prompt."
+    : interaction.composerDisabledReason;
 
   const sessionChatTarget: SessionChatTarget = {
     id: branchSourceSession.id,
@@ -415,6 +429,20 @@ function SessionDetailWorkspaceRoute({
   const showLoopModePill =
     config.demoMode && interaction.isManagedLocalSession && !sessionEnded;
 
+  const handlePauseRequestResponse = async (body: PauseRequestResponseRequest) => {
+    if (!activePauseRequest) return;
+    if (config.demoMode) {
+      throw new Error(DEMO_READ_ONLY_MESSAGE);
+    }
+    const result = await respondToPauseRequest(
+      branchSourceSession.id,
+      activePauseRequest.id,
+      body,
+    );
+    refreshSessionQueries(branchSourceSession.id);
+    toast.success(result.status === "rejected" ? "Question cancelled" : "Answer sent");
+  };
+
   return (
     <div
       className={workspaceClassName}
@@ -455,6 +483,12 @@ function SessionDetailWorkspaceRoute({
                 testId="session-control-strip"
               />
               <div className="session-control-dock__composer">
+                {activePauseRequest ? (
+                  <SessionPauseRequestPanel
+                    pauseRequest={activePauseRequest}
+                    onRespond={handlePauseRequestResponse}
+                  />
+                ) : null}
                 <SessionChat
                   key={`${sessionChatTarget.id}:${interaction.mode}`}
                   session={sessionChatTarget}
@@ -466,7 +500,7 @@ function SessionDetailWorkspaceRoute({
                       : undefined
                   }
                   composerPlaceholder={interaction.placeholder}
-                  composerDisabledReason={interaction.composerDisabledReason}
+                  composerDisabledReason={composerDisabledReason}
                   managedLaunchSuggestion={null}
                   submitLabel={interaction.submitLabel}
                   canQueueNextInput={Boolean(
