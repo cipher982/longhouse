@@ -97,6 +97,34 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func unchangedTailRefreshKeepsOlderPrefetch() async throws {
+        let tail = try makeWorkspace(eventId: 51, content: "Recent tail", total: 100, pageOffset: 50)
+        let older = try makeWorkspace(eventId: 1, content: "Older page", total: 100, pageOffset: 0)
+        let sameTail = try makeWorkspace(eventId: 51, content: "Recent tail", total: 100, pageOffset: 50)
+        let api = FakeSessionWorkspaceClient(workspaces: [tail, older, sameTail])
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            streamFactory: { _, _, _ in Self.neverConnectingStreamSource() },
+            enableRealtime: true,
+            transcriptCache: SessionTranscriptCache(maxBytes: 0),
+            snapshotStore: nil
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await waitForTailRequestCount(api, atLeast: 2)
+        await model.reload(sessionId: "session-1", appState: appState)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        #expect(await api.tailRequestCount() == 3)
+        #expect(await api.tailRequest(at: 0)?.offset == 0)
+        #expect(await api.tailRequest(at: 1)?.offset == 50)
+        #expect(await api.tailRequest(at: 2)?.offset == 0)
+        model.stop()
+    }
+
+    @Test
     func refreshTailPreservesLoadedOlderPage() async throws {
         let tail = try makeWorkspace(eventId: 51, content: "Recent tail", total: 100, pageOffset: 50)
         let older = try makeWorkspace(eventId: 1, content: "Older page", total: 100, pageOffset: 0)
@@ -774,6 +802,21 @@ struct SessionViewModelTests {
         }
     }
 
+    private func waitForTailRequestCount(_ api: FakeSessionWorkspaceClient, atLeast count: Int) async {
+        for _ in 0..<50 {
+            if await api.tailRequestCount() >= count { return }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
+    private static func neverConnectingStreamSource() -> SessionWorkspaceStreamSource {
+        SessionWorkspaceStreamSource(
+            start: { AsyncStream { _ in } },
+            stop: {},
+            clockSkewMs: { 0 }
+        )
+    }
+
     private func makeEvent(id: Int, role: String, content: String) -> SessionEvent {
         SessionEvent(
             id: id,
@@ -978,6 +1021,10 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
     func tailRequest(at index: Int) -> (id: String, limit: Int, offset: Int, branchMode: String, snapshotEventId: Int?)? {
         guard tailRequests.indices.contains(index) else { return nil }
         return tailRequests[index]
+    }
+
+    func tailRequestCount() -> Int {
+        tailRequests.count
     }
 
     func sendRequests() -> [String] {

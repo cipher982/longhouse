@@ -159,6 +159,9 @@ struct SessionView: View {
                 break
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            viewModel.handleMemoryWarning()
+        }
         .onChange(of: viewModel.liveActivityFingerprint) { _, _ in
             guard let detail = viewModel.detail else { return }
             Task { await liveActivityManager.update(detail: detail) }
@@ -1330,6 +1333,7 @@ final class SessionViewModel: ObservableObject {
     private var tailSnapshotEventId: Int?
     private var prefetchedOlderTail: SessionMobileTailResponse?
     private var prefetchedOlderOffset: Int?
+    private var prefetchedOlderSnapshotEventId: Int?
     private var isLoadingOlder = false
     private var openWaterfall: SessionOpenWaterfall?
     private let apiFactory: (String) -> SessionWorkspaceClient?
@@ -1385,6 +1389,7 @@ final class SessionViewModel: ObservableObject {
             tailSnapshotEventId = nil
             prefetchedOlderTail = nil
             prefetchedOlderOffset = nil
+            prefetchedOlderSnapshotEventId = nil
             prefetchTask?.cancel()
             prefetchTask = nil
             errorMessage = nil
@@ -1476,6 +1481,20 @@ final class SessionViewModel: ObservableObject {
         Task { [stream] in await stream?.stop() }
         stream = nil
         streamConnected = false
+    }
+
+    func handleMemoryWarning() {
+        let hasPrefetch = prefetchedOlderTail != nil
+        openWaterfall?.mark(
+            "memory_warning",
+            "events=\(lastWorkspaceEvents.count) items=\(items.count) has_prefetch=\(hasPrefetch)"
+        )
+        prefetchTask?.cancel()
+        prefetchTask = nil
+        prefetchedOlderTail = nil
+        prefetchedOlderOffset = nil
+        prefetchedOlderSnapshotEventId = nil
+        transcriptCache?.clear()
     }
 
     /// Full teardown for genuine nav-away or session switch: stops realtime AND
@@ -1784,13 +1803,17 @@ final class SessionViewModel: ObservableObject {
         case .connected:
             streamConnected = true
             streamAuthRefreshAttempted = false
+            openWaterfall?.mark("stream_connected")
         case .disconnected:
             streamConnected = false
+            openWaterfall?.mark("stream_disconnected")
         case .unauthorized:
             streamConnected = false
+            openWaterfall?.mark("stream_unauthorized")
             await handleStreamUnauthorized(sessionId: sessionId, appState: appState)
         case .replayGap(let gap):
             streamConnected = true
+            openWaterfall?.mark("stream_replay_gap", "requested=\(gap.requested_seq) latest=\(gap.latest_seq)")
             if gap.session_id == sessionId {
                 lastPubsubSeq = gap.latest_seq > 0 ? gap.latest_seq : nil
             }
@@ -1812,6 +1835,10 @@ final class SessionViewModel: ObservableObject {
             if let seq = change.pubsub_seq {
                 lastPubsubSeq = seq
             }
+            openWaterfall?.mark(
+                "stream_changed",
+                "latest=\(change.latest_event_id) seq=\(change.pubsub_seq ?? 0) preview=\(change.transcript_preview != nil)"
+            )
             if let transcriptPreview = change.transcript_preview?.sessionTranscriptPreview {
                 applyRealtimeTranscriptPreview(transcriptPreview, sessionId: sessionId)
             }
@@ -1873,10 +1900,13 @@ final class SessionViewModel: ObservableObject {
         guard !isLoadingOlder else { return }
         guard let api = apiFactory(appState.serverURL) else { return }
 
-        if let prefetchedOlderTail, prefetchedOlderOffset == loadedProjectionItemCount {
+        if let prefetchedOlderTail,
+           prefetchedOlderOffset == loadedProjectionItemCount,
+           prefetchedOlderSnapshotEventId == tailSnapshotEventId {
             applyOlderTail(prefetchedOlderTail)
             self.prefetchedOlderTail = nil
             self.prefetchedOlderOffset = nil
+            self.prefetchedOlderSnapshotEventId = nil
             scheduleOlderPrefetch(api: api, sessionId: sessionId)
             return
         }
@@ -1923,11 +1953,16 @@ final class SessionViewModel: ObservableObject {
                 tail.projection.total,
                 max(0, max(tail.projection.total - tail.projection.pageOffset, mergedEvents.count))
             )
+            let keepPrefetchedOlderTail = prefetchedOlderOffset == self.loadedProjectionItemCount
+                && prefetchedOlderSnapshotEventId == tail.snapshotEventId
             self.totalProjectionItemCount = tail.projection.total
             self.tailSnapshotEventId = tail.snapshotEventId
             self.lastWorkspaceRevisionFingerprint = tail.workspaceRevision?.fingerprint
-            self.prefetchedOlderTail = nil
-            self.prefetchedOlderOffset = nil
+            if !keepPrefetchedOlderTail {
+                self.prefetchedOlderTail = nil
+                self.prefetchedOlderOffset = nil
+                self.prefetchedOlderSnapshotEventId = nil
+            }
             let builtItems = TimelineBuilder.build(
                 events: TranscriptPreviewProjection.visibleEvents(
                     durableEvents: mergedEvents,
@@ -1977,18 +2012,24 @@ final class SessionViewModel: ObservableObject {
         guard loadedProjectionItemCount < totalProjectionItemCount else { return }
         guard !isLoadingOlder else { return }
         let offset = loadedProjectionItemCount
+        let snapshotEventId = tailSnapshotEventId
         guard prefetchedOlderOffset != offset else { return }
         prefetchTask = Task { [weak self] in
             guard let self else { return }
             do {
                 let tail = try await self.fetchOlderTail(api: api, sessionId: sessionId, offset: offset)
-                guard self.activeSessionId == sessionId, self.loadedProjectionItemCount == offset else { return }
+                guard self.activeSessionId == sessionId,
+                      self.loadedProjectionItemCount == offset,
+                      self.tailSnapshotEventId == snapshotEventId
+                else { return }
                 self.prefetchedOlderTail = tail
                 self.prefetchedOlderOffset = offset
+                self.prefetchedOlderSnapshotEventId = snapshotEventId
             } catch {
                 guard self.activeSessionId == sessionId, self.loadedProjectionItemCount == offset else { return }
                 self.prefetchedOlderTail = nil
                 self.prefetchedOlderOffset = nil
+                self.prefetchedOlderSnapshotEventId = nil
             }
             self.prefetchTask = nil
         }
@@ -2033,6 +2074,7 @@ final class SessionViewModel: ObservableObject {
         lastWorkspaceRevisionFingerprint = snapshot.workspaceRevisionFingerprint
         prefetchedOlderTail = nil
         prefetchedOlderOffset = nil
+        prefetchedOlderSnapshotEventId = nil
         items = TimelineBuilder.build(events: snapshot.events)
         isInitialLoading = false
         errorMessage = nil
@@ -2050,6 +2092,7 @@ final class SessionViewModel: ObservableObject {
         lastWorkspaceRevisionFingerprint = snapshot.workspaceRevisionFingerprint
         prefetchedOlderTail = nil
         prefetchedOlderOffset = nil
+        prefetchedOlderSnapshotEventId = nil
         items = TimelineBuilder.build(events: snapshot.events)
         isInitialLoading = false
         errorMessage = nil

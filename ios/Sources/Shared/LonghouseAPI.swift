@@ -252,13 +252,17 @@ struct LonghouseAPI: Sendable {
         request.addValue("no-cache", forHTTPHeaderField: "Cache-Control")
 
         let requestStartedAt = Date()
-        Self.logger.info("mobile-tail request started session=\(id, privacy: .public) limit=\(limit, privacy: .public) offset=\(offset, privacy: .public)")
+        Self.logger.debug("mobile-tail request started session=\(id, privacy: .public) limit=\(limit, privacy: .public) offset=\(offset, privacy: .public)")
         let (data, httpResponse) = try await data(for: request)
         let responseMs = Int(Date().timeIntervalSince(requestStartedAt) * 1000)
         let contentEncoding = httpResponse.value(forHTTPHeaderField: "content-encoding") ?? "none"
         let wireContentLength = httpResponse.value(forHTTPHeaderField: "content-length") ?? "unknown"
         let serverTiming = httpResponse.value(forHTTPHeaderField: "server-timing") ?? "none"
-        Self.logger.info("mobile-tail response received session=\(id, privacy: .public) status=\(httpResponse.statusCode, privacy: .public) decoded_bytes=\(data.count, privacy: .public) wire_content_length=\(wireContentLength, privacy: .public) encoding=\(contentEncoding, privacy: .public) elapsed_ms=\(responseMs, privacy: .public) server_timing=\(serverTiming, privacy: .public)")
+        if httpResponse.statusCode != 200 || responseMs >= 1_000 {
+            Self.logger.info("mobile-tail response received session=\(id, privacy: .public) status=\(httpResponse.statusCode, privacy: .public) decoded_bytes=\(data.count, privacy: .public) wire_content_length=\(wireContentLength, privacy: .public) encoding=\(contentEncoding, privacy: .public) elapsed_ms=\(responseMs, privacy: .public) server_timing=\(serverTiming, privacy: .public)")
+        } else {
+            Self.logger.debug("mobile-tail response received session=\(id, privacy: .public) status=\(httpResponse.statusCode, privacy: .public) decoded_bytes=\(data.count, privacy: .public) wire_content_length=\(wireContentLength, privacy: .public) encoding=\(contentEncoding, privacy: .public) elapsed_ms=\(responseMs, privacy: .public) server_timing=\(serverTiming, privacy: .public)")
+        }
         guard httpResponse.statusCode == 200 else {
             if let structured = Self.parseStructuredError(statusCode: httpResponse.statusCode, data: data) {
                 throw structured
@@ -268,7 +272,11 @@ struct LonghouseAPI: Sendable {
         let decodeStartedAt = Date()
         let decoded = try JSONDecoder.snakeCase.decode(SessionMobileTailResponse.self, from: data)
         let decodeMs = Int(Date().timeIntervalSince(decodeStartedAt) * 1000)
-        Self.logger.info("mobile-tail decode finished session=\(id, privacy: .public) events=\(decoded.events.count, privacy: .public) total=\(decoded.projection.total, privacy: .public) elapsed_ms=\(decodeMs, privacy: .public)")
+        if decodeMs >= 100 {
+            Self.logger.info("mobile-tail decode finished session=\(id, privacy: .public) events=\(decoded.events.count, privacy: .public) total=\(decoded.projection.total, privacy: .public) elapsed_ms=\(decodeMs, privacy: .public)")
+        } else {
+            Self.logger.debug("mobile-tail decode finished session=\(id, privacy: .public) events=\(decoded.events.count, privacy: .public) total=\(decoded.projection.total, privacy: .public) elapsed_ms=\(decodeMs, privacy: .public)")
+        }
         return decoded
     }
 
