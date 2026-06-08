@@ -81,8 +81,11 @@ rollback() {
 # Guard the initial move too: if the DB move itself fails, restore and bail so
 # we never leave the service stopped with the DB stranded at $OLD.
 mv "$DB" "$OLD" || { echo "ABORT: could not move DB aside; DB untouched. Restart: docker start $C"; docker start "$C"; exit 1; }
-[ ! -e "$DB-wal" ] || mv "$DB-wal" "$OLD-wal"
-[ ! -e "$DB-shm" ] || mv "$DB-shm" "$OLD-shm"
+# Sidecar moves are best-effort and MUST NOT trip set -e between the two main
+# moves (that would exit without rollback, leaving no DB at the live path). The
+# old WAL was TRUNCATE-checkpointed already; preserving the sidecars is a nicety.
+{ [ ! -e "$DB-wal" ] || mv "$DB-wal" "$OLD-wal"; } || true
+{ [ ! -e "$DB-shm" ] || mv "$DB-shm" "$OLD-shm"; } || true
 mv "$SLIM" "$DB" || rollback
 chown --reference="$OLD" "$DB" || rollback
 chmod --reference="$OLD" "$DB" || rollback
