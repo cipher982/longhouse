@@ -63,24 +63,35 @@ sqlite3 "$SLIM" 'PRAGMA wal_checkpoint(TRUNCATE);'
 rm -f "$SLIM-wal" "$SLIM-shm"
 
 echo "=== atomic swap (old DB moved aside = rollback) ==="
-# Rollback if anything past here fails before the container is confirmed healthy.
+# Rollback is self-defensive (never let set -e abort mid-recovery) and idempotent
+# regardless of where the swap died: it guarantees the ORIGINAL db ($OLD) ends up
+# at the live path ($DB) with no stale slim sidecars. Armed as an ERR/INT/TERM
+# trap so a command failure OR a signal (SIGHUP/SIGINT/SIGTERM) during the swap
+# triggers recovery. (A hard kill -9 / host reboot still needs the manual
+# one-liner printed below — that is the irreducible in-place-swap risk; run in
+# tmux on the stable host.)
+SWAP_STARTED=0
 rollback() {
-  echo "!!! SWAP FAILED — rolling back to $OLD"
-  docker stop --time 30 "$C" 2>/dev/null || true
-  # Remove any slim DB + its sidecars sitting at the live path, so the restored
-  # old DB never inherits stale WAL/SHM from the slim build.
-  if [ -e "$DB" ]; then mv "$DB" "$BASE/longhouse.db.slim-failed-$TS"; fi
-  rm -f "$DB-wal" "$DB-shm"
-  mv "$OLD" "$DB"
-  [ ! -e "$OLD-wal" ] || mv "$OLD-wal" "$DB-wal"
-  [ ! -e "$OLD-shm" ] || mv "$OLD-shm" "$DB-shm"
-  docker start "$C"
-  echo "rolled back; original DB restored at $DB"
+  set +e
+  trap - ERR INT TERM
+  echo "!!! SWAP INTERRUPTED — restoring original DB ($OLD -> $DB)"
+  docker stop --time 30 "$C" 2>/dev/null
+  # If $DB is present and is NOT the original (i.e. slim was installed), set it aside.
+  if [ -e "$DB" ] && [ -e "$OLD" ]; then mv "$DB" "$BASE/longhouse.db.slim-failed-$TS" 2>/dev/null; fi
+  rm -f "$DB-wal" "$DB-shm" 2>/dev/null
+  [ -e "$OLD" ] && mv "$OLD" "$DB" 2>/dev/null
+  [ ! -e "$OLD-wal" ] || mv "$OLD-wal" "$DB-wal" 2>/dev/null
+  [ ! -e "$OLD-shm" ] || mv "$OLD-shm" "$DB-shm" 2>/dev/null
+  docker start "$C" 2>/dev/null
+  echo "rolled back; original DB restored at $DB. Manual check: curl -fsS https://david010.longhouse.ai/api/readyz"
   exit 1
 }
+echo "MANUAL ROLLBACK (if this process dies hard): docker stop $C; mv $OLD $DB; docker start $C"
+trap 'rollback' ERR INT TERM
+SWAP_STARTED=1
 # Guard the initial move too: if the DB move itself fails, restore and bail so
 # we never leave the service stopped with the DB stranded at $OLD.
-mv "$DB" "$OLD" || { echo "ABORT: could not move DB aside; DB untouched. Restart: docker start $C"; docker start "$C"; exit 1; }
+mv "$DB" "$OLD" || rollback
 # Sidecars must be GONE from the live path before the slim DB is installed (a
 # stale $DB-wal next to the slim DB would corrupt startup). "Absent" is fine; a
 # real move failure routes to rollback (which restores $OLD and clears live
@@ -97,6 +108,9 @@ sleep 8
 curl -fsS https://david010.longhouse.ai/api/readyz || rollback
 curl -fsS https://david010.longhouse.ai/api/health || rollback
 echo "smoke OK"
+# Swap committed + healthy. Disarm the rollback trap so unrelated post-swap
+# hiccups (e.g. NAS rsync) don't move the now-live slim DB back to the old one.
+trap - ERR INT TERM
 ls -lh "$DB" "$OLD"; df -h /data
 
 echo "=== NAS backup of moved-aside OLD db + archive (after smoke) ==="
