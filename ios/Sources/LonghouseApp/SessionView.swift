@@ -1333,8 +1333,6 @@ final class SessionViewModel: ObservableObject {
     private var lastPubsubSeq: Int?
     private let initialTailLimit = 50
     private let olderPageLimit = 50
-    private let cachedTailRefreshGraceInterval: TimeInterval = 30
-
     init(
         apiFactory: @escaping (String) -> SessionWorkspaceClient? = { LonghouseAPI(host: $0) },
         streamFactory: @escaping (URL, String, Int?) -> SessionWorkspaceStreamSource = { baseURL, sessionId, sinceSeq in
@@ -1390,7 +1388,11 @@ final class SessionViewModel: ObservableObject {
                 )
                 applyCachedSnapshot(snapshot)
                 restoredFromCache = true
-                shouldRefreshCachedTail = Date().timeIntervalSince(snapshot.savedAt) >= cachedTailRefreshGraceInterval
+                // Cache is an instant paint, not the source of truth. Notification
+                // opens often land seconds after new transcript rows, while the
+                // SSE stream uses skip_initial=true and can miss the event that
+                // caused the notification. Always reconcile after restoring.
+                shouldRefreshCachedTail = true
             } else if let disk = snapshotStore?.load(serverURL: appState.serverURL, sessionId: sessionId) {
                 let ageMs = Int(Date().timeIntervalSince(disk.savedAt) * 1000)
                 openWaterfall?.mark(

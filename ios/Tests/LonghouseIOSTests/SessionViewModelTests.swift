@@ -117,7 +117,7 @@ struct SessionViewModelTests {
     }
 
     @Test
-    func startRestoresCachedTailWithoutBlockingOnNetwork() async throws {
+    func startRestoresCachedTailThenRefreshesInBackground() async throws {
         let cached = try makeWorkspace(eventId: 20, content: "Cached tail")
         let fresh = try makeWorkspace(eventId: 21, content: "Network tail")
         let cache = SessionTranscriptCache()
@@ -139,8 +139,9 @@ struct SessionViewModelTests {
 
         #expect(model.isInitialLoading == false)
         #expect(model.detail?.id == "session-1")
-        #expect(model.items.map(\.id) == ["user:20"])
-        #expect(await api.workspaceRequestCount() == 0)
+        await waitForWorkspaceRequestCount(api, atLeast: 1)
+        #expect(model.items.map(\.id) == ["user:21"])
+        #expect(await api.workspaceRequestCount() == 1)
     }
 
     @Test
@@ -161,8 +162,9 @@ struct SessionViewModelTests {
         let secondModel = SessionViewModel(apiFactory: { _ in secondAPI }, enableRealtime: false, transcriptCache: cache)
         await secondModel.start(sessionId: "session-1", appState: appState)
 
-        #expect(secondModel.items.map(\.id) == ["user:1", "user:51"])
-        #expect(await secondAPI.workspaceRequestCount() == 0)
+        await waitForWorkspaceRequestCount(secondAPI, atLeast: 1)
+        #expect(secondModel.items.map(\.id) == ["user:1", "user:51", "user:52"])
+        #expect(await secondAPI.workspaceRequestCount() == 1)
     }
 
     @Test
