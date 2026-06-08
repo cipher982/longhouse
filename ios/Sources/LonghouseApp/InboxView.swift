@@ -224,21 +224,24 @@ struct TimelineSessionCardRow: View {
     var connectivityBanner: TimelineConnectivityBanner = .none
 
     var body: some View {
-        let cardAccent = timelineCardAccentColor(session, connectivityBanner: connectivityBanner)
+        let signal = TimelineSignal.resolve(for: session, suppressed: connectivityBanner != .none)
+        let cardAccent = signal.accentColor
 
-        // Denser two-zone row: a tinted provider glyph anchors the left, the
-        // text column carries identity + status + one preview line. Single-line
-        // title and preview roughly double how many sessions fit per screen
-        // versus the old multi-line card, while the brand glyph adds the color
-        // the all-grey layout was missing.
+        // Three-line row built for glanceability:
+        //  - kicker: project · branch ........................ when
+        //  - headline: ● <frozen server-resolved title>
+        //  - status: demoted runtime state, colored by signal
+        // The frozen `title` (server timeline_title) is the muscle-memory anchor;
+        // the leading dot + status carry "is it active / waiting on me / done".
+        // No Managed badge, no turns/tools — that was the dead right half.
         HStack(alignment: .top, spacing: 11) {
             ProviderGlyph(provider: session.provider, size: 30)
 
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(session.projectLabel)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                     if let branch = session.timelineBranchBadgeLabel {
                         Text(branch)
@@ -248,32 +251,42 @@ struct TimelineSessionCardRow: View {
                             .layoutPriority(-1)
                     }
                     Spacer(minLength: 6)
-                    CapabilityBadge(session: session)
+                    if let duration = stateDurationLabel(for: session) {
+                        Text(duration)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.tertiary)
+                            .monospacedDigit()
+                    }
                 }
 
-                CompactRuntimeLine(session: session, connectivityBanner: connectivityBanner)
-
-                if let summary = session.timelineSummaryPreview {
-                    Text(summary)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                } else {
+                HStack(alignment: .firstTextBaseline, spacing: 7) {
+                    LivenessDot(color: signal.dotColor, pulsing: signal.pulses)
+                        .alignmentGuide(.firstTextBaseline) { d in d[VerticalAlignment.center] + 4 }
                     Text(session.title)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
                 }
+                // The dot is color-only; fold its meaning into the headline so
+                // VoiceOver announces "Waiting on you" / "Working" rather than
+                // leaving amber as the sole, invisible-to-VoiceOver code.
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(session.title), \(signal.accessibilityState)")
 
-                HStack(spacing: 5) {
-                    Text("\(session.turnCount) \(session.turnCount == 1 ? "turn" : "turns")")
-                        .foregroundStyle(turnColor(session.turnCount))
-                    Text("·")
+                CompactRuntimeLine(session: session, signal: signal)
+
+                // B-lite drift line: the live, drifting summary title parked on a
+                // demoted, low-contrast line where movement is legitimate. The
+                // frozen headline above stays put (muscle memory); this is the
+                // "what is it doing now" channel, shown only while actively
+                // working so it never churns under a resting row.
+                if signal == .working, let drift = session.driftTitle {
+                    Text("now: \(drift)")
+                        .font(.caption2)
+                        .italic()
                         .foregroundStyle(.tertiary)
-                    Text("\(session.toolCount) \(session.toolCount == 1 ? "tool" : "tools")")
+                        .lineLimit(1)
                 }
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(.secondary)
             }
         }
         .padding(.vertical, 11)
@@ -292,37 +305,23 @@ struct TimelineSessionCardRow: View {
     }
 }
 
-/// Compact one-line runtime status: liveness dot + state label + duration,
-/// with an inline "stale" flag. Distilled from the old pill-shaped
-/// `RuntimeBadge` so it sits naturally in the denser row without a capsule.
+/// Demoted runtime status line under the headline: the state label, colored by
+/// the row signal, with an inline "stale" flag. The dot moved up to the
+/// headline, so this line is text-only and subordinate.
 private struct CompactRuntimeLine: View {
     let session: SessionSummary
-    let connectivityBanner: TimelineConnectivityBanner
+    let signal: TimelineSignal
 
     var body: some View {
-        let isClosed = session.timelineStatusLabel == "Closed"
-        let globalHealthy = connectivityBanner == .none
-        let attentionTone = timelineAttentionTone(session.timelineStatusTone)
-        let withinDeadline = session.runtimeDisplay.activityRecency == "live"
-        let sessionStale = !withinDeadline && !isClosed
-        let pulsing = globalHealthy && withinDeadline && attentionTone == .working
-        let color = globalHealthy && !sessionStale ? timelineStatusColor(session) : .secondary
+        let sessionStale = signal == .quiet
+            && !session.isClosed
+            && session.runtimeDisplay.activityRecency != "live"
 
-        HStack(spacing: 6) {
-            LivenessDot(color: color, pulsing: pulsing)
+        HStack(spacing: 5) {
             Text(session.timelineStatusLabel)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(color)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(signal.statusColor)
                 .lineLimit(1)
-            if let duration = stateDurationLabel(for: session) {
-                Text("·")
-                    .foregroundStyle(.tertiary)
-                Text(duration)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .monospacedDigit()
-            }
             if sessionStale {
                 Text("· stale")
                     .font(.caption2.weight(.semibold))
@@ -439,19 +438,6 @@ private struct LivenessDot: View {
     }
 }
 
-private struct CapabilityBadge: View {
-    let session: SessionSummary
-
-    var body: some View {
-        Text(session.managementLabel)
-            .font(.caption.weight(.semibold))
-            .lineLimit(1)
-            .foregroundStyle(managementColor(session))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(managementColor(session).opacity(0.14), in: Capsule())
-    }
-}
 
 
 protocol TimelineSessionsClient: Sendable {
@@ -890,65 +876,8 @@ private func nonEmpty(_ value: String?) -> String? {
     return trimmed
 }
 
-private enum TimelineAttentionTone {
-    case working
-    case attention
-    case quiet
-    case closed
-}
-
-private func timelineAttentionTone(_ tone: String) -> TimelineAttentionTone {
-    switch tone.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-    case "thinking", "running":
-        return .working
-    case "blocked", "stalled":
-        return .attention
-    case "closed":
-        return .closed
-    default:
-        return .quiet
-    }
-}
-
-private func timelineCardAccentColor(_ session: SessionSummary, connectivityBanner: TimelineConnectivityBanner) -> Color {
-    // A visible global banner suppresses per-card attention color; the
-    // connection strip owns that severity signal.
-    guard connectivityBanner == .none else { return .secondary.opacity(0.45) }
-
-    switch timelineAttentionTone(session.timelineBorderTone) {
-    case .attention:
-        return .orange
-    case .working:
-        return .primary
-    case .closed:
-        return .secondary.opacity(0.38)
-    case .quiet:
-        return .secondary.opacity(0.45)
-    }
-}
-
-private func timelineStatusColor(_ session: SessionSummary) -> Color {
-    switch timelineAttentionTone(session.timelineStatusTone) {
-    case .working:
-        return .primary
-    case .attention:
-        return .orange
-    case .closed:
-        return .secondary.opacity(0.7)
-    case .quiet:
-        return .secondary
-    }
-}
-
-private func managementColor(_ session: SessionSummary) -> Color {
-    .secondary
-}
-
-private func turnColor(_ turnCount: Int) -> Color {
-    if turnCount >= 50 { return .red }
-    if turnCount >= 20 { return .orange }
-    return .secondary
-}
+// TimelineSignal lives in Sources/Shared/TimelineSignal.swift so the app card
+// and the home-screen widget share one definition. Use TimelineSignal.resolve.
 
 private func relativeTime(_ value: String?) -> String {
     guard let date = parseLonghouseDate(value) else { return "Recent" }
@@ -969,7 +898,9 @@ private func parseLonghouseDate(_ value: String?) -> Date? {
 /// and progress signals (server/zerg/services/session_runtime.py).
 /// Returns nil for closed sessions (we don't want to show a counter there).
 func stateDurationLabel(for session: SessionSummary) -> String? {
-    if session.timelineStatusLabel == "Closed" { return nil }
+    // Use the lifecycle flag, the same "closed" source the signal uses, so the
+    // dot/accent and the duration never disagree about whether a row is closed.
+    if session.isClosed { return nil }
     guard let date = parseLonghouseDate(session.timelineAnchor) else { return nil }
     return compactDuration(since: date)
 }

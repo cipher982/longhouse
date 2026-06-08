@@ -113,6 +113,18 @@ export function getSessionCardText(
   const preferGenerated = options.preferGenerated ?? true;
   const firstUser = compactText(session.first_user_message);
 
+  // The server resolves a single sanitized, frozen headline (timeline_title) so
+  // iOS/web/widget render identical text and the row stays stable as the live
+  // summary drifts. Prefer it; the ladder below is only for pre-anchor payloads.
+  const resolved = compactText(session.timeline_title);
+  if (preferGenerated && resolved) {
+    return {
+      title: truncateText(resolved, titleMaxChars),
+      titleSource: "generated",
+      subheading: firstUser ? truncateText(firstUser, subheadingMaxChars) : null,
+    };
+  }
+
   if (preferGenerated && isGeneratedSessionTitle(session.summary_title)) {
     return {
       title: truncateText(compactText(session.summary_title), titleMaxChars),
@@ -138,6 +150,24 @@ export function getSessionCardText(
     titleSource: "fallback",
     subheading: null,
   };
+}
+
+/**
+ * The live, drifting summary title for the subordinate "now:" drift line.
+ * Returns null when it's empty or would just echo the frozen headline.
+ */
+export function getDriftTitle(
+  session: Pick<AgentSession, "summary_title">,
+  headline: string,
+): string | null {
+  const drift = compactText(session.summary_title);
+  if (!drift) return null;
+  // The headline may be truncated ("Foo bar…"); treat the drift as an echo when
+  // it equals or starts with the headline's text so a long anchor that matches
+  // the live title doesn't surface a redundant "now: …" line.
+  const head = compactText(headline).replace(/[…]+$/, "").replace(/\.\.\.$/, "").trim();
+  if (head && (drift === head || drift.startsWith(head))) return null;
+  return drift;
 }
 
 export function getBranchLabel(value: string | null | undefined): string | null {

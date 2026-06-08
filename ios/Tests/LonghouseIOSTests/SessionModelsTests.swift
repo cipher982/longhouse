@@ -1306,7 +1306,8 @@ struct SessionModelsTests {
 
         #expect(pendingSummary.title == "Investigate stuck generated summary cards.")
         #expect(pendingSummary.summaryStatusValue == .pending)
-        #expect(pendingSummary.timelineSummaryPreview == nil)
+        // No frozen/live summary title yet, so there is no subordinate drift line.
+        #expect(pendingSummary.driftTitle == nil)
     }
 
     @Test

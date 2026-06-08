@@ -64,6 +64,7 @@ from zerg.services.session_runtime_display import TerminalReason
 from zerg.services.session_runtime_display import Tone
 from zerg.services.session_runtime_display import TruthTier
 from zerg.services.session_runtime_display import build_session_runtime_display
+from zerg.services.session_title import resolve_timeline_title
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.session_loop_mode import coerce_session_loop_mode
 from zerg.utils.time import UTCBaseModel
@@ -712,7 +713,16 @@ class SessionResponse(UTCBaseModel):
     active_tool: Optional[str] = Field(None, description="Active tool label for runtime display")
     confidence: Optional[str] = Field(None, description="Runtime confidence: live|stale")
     summary: Optional[str] = Field(None, description="Session summary")
-    summary_title: Optional[str] = Field(None, description="Short session title")
+    summary_title: Optional[str] = Field(None, description="Short session title (drifts as transcript grows)")
+    anchor_title: Optional[str] = Field(None, description="Frozen, write-once headline; stable across the session's life")
+    timeline_title: Optional[str] = Field(
+        None,
+        description=(
+            "Resolved headline a client should render: frozen anchor_title, else ready "
+            "summary_title, else sanitized first message, else 'Summarizing…'/structured fallback. "
+            "Always non-empty. Clients render this verbatim — no client-side fallback ladder."
+        ),
+    )
     summary_status: Optional[str] = Field(
         None,
         description=(
@@ -1440,6 +1450,15 @@ def build_session_response(
         confidence=(runtime_overlay.confidence if include_runtime else None),
         summary=session.summary,
         summary_title=session.summary_title,
+        anchor_title=session.anchor_title,
+        timeline_title=resolve_timeline_title(
+            anchor_title=session.anchor_title,
+            summary_title=session.summary_title,
+            summary_status=summary_status,
+            first_user_message=first_user_message,
+            project=session.project,
+            git_branch=session.git_branch,
+        ),
         summary_status=summary_status,
         first_user_message=first_user_message,
         match_event_id=match_event_id,

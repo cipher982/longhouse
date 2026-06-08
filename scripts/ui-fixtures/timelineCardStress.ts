@@ -86,6 +86,8 @@ type AgentSession = {
   tool_calls: number;
   summary: string | null;
   summary_title: string | null;
+  anchor_title?: string | null;
+  timeline_title?: string | null;
   first_user_message: string | null;
   match_event_id?: number | null;
   match_snippet?: string | null;
@@ -221,6 +223,8 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     summary:
       "Completed timeline cleanup and follow-up fixes after reviewing mobile card composition.",
     summary_title: "Cleanup sessions page",
+    anchor_title: "Cleanup sessions page",
+    timeline_title: "Cleanup sessions page",
     first_user_message: "Clean up the sessions page card layout.",
     match_event_id: null,
     match_snippet: null,

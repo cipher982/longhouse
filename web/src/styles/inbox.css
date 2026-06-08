@@ -292,6 +292,58 @@
     flex-shrink: 0;
   }
 
+  /* 3-stop attention signal, shared with iOS TimelineSignal. The signal axis
+   * takes precedence over the legacy per-tone colors below (which remain as a
+   * fallback for rows rendered without data-signal). amber = waiting on you,
+   * teal = live work, grey = quiet, hollow = closed. amber/teal/grey separate
+   * on luminance + hue for colorblind safety; the status label is the redundant
+   * text code. Provider identity color lives on the glyph, never here. */
+  .inbox-row-status-dot[data-signal] {
+    --signal-attention: #e8a33d; /* amber, matches iOS TimelineSignal.amber */
+    --signal-working: #3db5c8; /* teal, matches iOS TimelineSignal.teal */
+  }
+
+  .inbox-row-status-dot[data-signal="attention"] {
+    /* Steady, not pulsing: "waiting on you" is a stable state (no alarm fatigue). */
+    background: var(--signal-attention);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--signal-attention) 25%, transparent);
+  }
+
+  .inbox-row-status-dot[data-signal="working"] {
+    background: var(--signal-working);
+    animation: inbox-dot-pulse 1.2s ease-in-out infinite;
+  }
+
+  .inbox-row-status-dot[data-signal="quiet"] {
+    background: var(--text-muted);
+  }
+
+  .inbox-row-status-dot[data-signal="closed"] {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--text-muted);
+  }
+
+  @keyframes inbox-dot-pulse {
+    0%,
+    100% {
+      opacity: 1;
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--signal-working) 40%, transparent);
+    }
+    50% {
+      opacity: 0.55;
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--signal-working) 0%, transparent);
+    }
+  }
+
+  /* Motion is reserved for genuine live work; honor Reduce Motion by holding the
+   * teal dot static (color still carries the signal). */
+  @media (prefers-reduced-motion: reduce) {
+    .inbox-row-status-dot[data-signal="working"] {
+      animation: none;
+    }
+  }
+
+  /* Legacy per-tone fallback for rows without a resolved signal. */
   .inbox-row-status-dot[data-tone="thinking"],
   .inbox-row-status-dot[data-tone="active"],
   .inbox-row-status-dot[data-tone="running"] {

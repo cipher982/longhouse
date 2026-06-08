@@ -79,6 +79,11 @@ class AgentSession(AgentsBase):
 
     summary = Column(Text, nullable=True)
     summary_title = Column(String(255), nullable=True)
+    # Frozen, write-once headline for the timeline card. Snapshotted from the
+    # first ready summary_title (and promoted from the final title on close) so
+    # the row keeps a stable "what is this about" anchor while summary_title
+    # itself keeps drifting as the transcript grows. See services/session_title.py.
+    anchor_title = Column(String(255), nullable=True)
     first_user_message_preview = Column(Text, nullable=True)
     last_visible_text_preview = Column(Text, nullable=True)
     summary_event_count = Column(Integer, server_default=text("0"))
