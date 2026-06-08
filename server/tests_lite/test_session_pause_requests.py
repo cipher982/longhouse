@@ -2,6 +2,7 @@ import os
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from uuid import uuid4
 
 from cryptography.fernet import Fernet
 
@@ -180,6 +181,111 @@ def test_runtime_pause_events_create_and_resolve_without_mutating_phase(tmp_path
         db.refresh(pause)
         assert pause.status == "resolved"
         assert normalize_utc(pause.resolved_at) == now + timedelta(seconds=10)
+    finally:
+        db.close()
+
+
+def test_claude_hook_pause_event_creates_detection_only_request(tmp_path):
+    factory = _make_db(tmp_path, "claude_hook_pause_event.db")
+    now = datetime(2026, 6, 7, 12, 0, tzinfo=timezone.utc)
+    db = factory()
+    try:
+        session = _seed_session(db, provider="claude", started_at=now - timedelta(minutes=5))
+        runtime_key = f"claude:{session.id}"
+        request_key = f"claude-hook:elicitation_dialog:{session.id}"
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="pause_request",
+                    occurred_at=now,
+                    dedupe_key=request_key,
+                    payload={
+                        "request_key": request_key,
+                        "provider_request_id": "elicitation_dialog",
+                        "kind": "structured_question",
+                        "tool_name": "AskUserQuestion",
+                        "title": "Question needed",
+                        "summary": "Which direction should I take?",
+                        "can_respond": False,
+                        "single_active": True,
+                        "request_payload": {
+                            "questions": [
+                                {
+                                    "id": "terminal",
+                                    "header": "Claude",
+                                    "question": "Which direction should I take?",
+                                    "options": [],
+                                }
+                            ]
+                        },
+                    },
+                )
+            ],
+        )
+        db.commit()
+
+        pause = db.query(SessionPauseRequest).filter(SessionPauseRequest.runtime_key == runtime_key).one()
+        assert pause.provider == "claude"
+        assert pause.status == "pending"
+        assert pause.provider_request_id == "elicitation_dialog"
+        assert pause.tool_name == "AskUserQuestion"
+        projection = serialize_pause_request_projection(pause)
+        assert projection is not None
+        assert projection["can_respond"] is False
+        assert projection["questions"] == [
+            {
+                "id": "terminal",
+                "header": "Claude",
+                "question": "Which direction should I take?",
+                "multi_select": False,
+                "options": [],
+            }
+        ]
+    finally:
+        db.close()
+
+
+def test_pause_event_for_unknown_session_is_ignored_without_poisoning_batch(tmp_path):
+    factory = _make_db(tmp_path, "pause_unknown_session.db")
+    now = datetime(2026, 6, 7, 12, 0, tzinfo=timezone.utc)
+    db = factory()
+    try:
+        unknown_session_id = uuid4()
+
+        result = ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=f"claude:{unknown_session_id}",
+                    session_id=unknown_session_id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="pause_request",
+                    occurred_at=now,
+                    dedupe_key=f"claude-hook:elicitation_dialog:{unknown_session_id}",
+                    payload={
+                        "request_key": f"claude-hook:elicitation_dialog:{unknown_session_id}",
+                        "provider_request_id": "elicitation_dialog",
+                        "kind": "structured_question",
+                        "tool_name": "AskUserQuestion",
+                        "summary": "Question waiting in Claude terminal",
+                        "can_respond": False,
+                    },
+                )
+            ],
+        )
+        db.commit()
+
+        assert result.accepted == 1
+        assert db.query(SessionPauseRequest).count() == 0
     finally:
         db.close()
 

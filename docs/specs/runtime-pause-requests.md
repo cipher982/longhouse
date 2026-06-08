@@ -1,7 +1,7 @@
 # Runtime Pause Requests
 
-Status: Draft implementation spec
-Date: 2026-06-07
+Status: Implemented for server/Codex/web/iOS/notifications; Claude detection-only
+Date: 2026-06-08
 Owner: Runtime Host + Machine Agent + provider bridges
 Related: `runtime-display-contract.md`, `managed-input-lifecycle.md`,
 `session-alerting-research-spike.md`, `agents-machine-surface.md`,
@@ -481,6 +481,17 @@ Do not claim Claude answerability until a provider-native response path is
 proven. Hooks are enough for detection and notifications; they are not by
 themselves a response channel.
 
+Implementation note: Longhouse currently uses the verified `Notification` /
+`elicitation_dialog` hook path as managed-session detection-only. The hook
+writes a durable `pause_request` runtime event to
+`agent/runtime-events-outbox` with `tool_name=AskUserQuestion`, a terminal
+fallback question, and `can_respond=false` only when
+`LONGHOUSE_MANAGED_SESSION_ID` is present. Bare unmanaged Claude sessions may
+emit provider UUIDs that are not Longhouse session IDs, so they remain
+phase-only until a safe provider-session-to-Longhouse-session mapping exists.
+`idle_prompt` stays quiet `needs_user`, and `permission_prompt` /
+`PermissionRequest` stay `blocked`.
+
 ### OpenCode
 
 Inputs:
@@ -494,6 +505,10 @@ answering must wait for a proven server-bridge response surface.
 
 OpenCode permission events remain on the existing blocked path.
 
+Implementation note: no OpenCode pause-question support is advertised until a
+real structured-question event shape is captured. The managed provider contract
+does not expose `opencode.answer_pause`.
+
 ### Antigravity
 
 Inputs:
@@ -506,6 +521,10 @@ capture should land after the exact Antigravity payload shape is proven.
 
 Initial Antigravity pause requests should be non-answerable unless the
 hook-inbox adapter proves a stable answer path.
+
+Implementation note: no Antigravity pause-question support is advertised until
+the exact hook payload is captured. The managed provider contract does not
+expose `antigravity.answer_pause`.
 
 ## Notification Policy
 
@@ -566,9 +585,13 @@ Do not rely on a real terminal TUI for base coverage.
 Fixture-first tests:
 
 - Codex fake app-server emits `requestUserInput` JSON-RPC requests.
-- Claude hook fixture posts `elicitation_dialog` and `idle_prompt`.
-- OpenCode plugin fixture emits confirmed question events.
-- Antigravity hook fixture emits confirmed question event shapes.
+- Claude hook fixture posts `elicitation_dialog`, `idle_prompt`, and
+  `permission_prompt`; only `elicitation_dialog` creates a detection-only pause
+  event.
+- OpenCode plugin fixture emits confirmed question events after the event shape
+  is known.
+- Antigravity hook fixture emits confirmed question event shapes after the event
+  shape is known.
 
 Provider-live tests:
 
@@ -660,10 +683,12 @@ quiet, and answerable Codex requests can be handled from the app.
 
 ### Phase 6 - Claude/OpenCode/Antigravity Detection
 
-- Claude: create pause requests from verified hook payloads; mark
-  non-answerable unless a native response path exists.
-- OpenCode: add structured-question pause request mapping from provider events.
-- Antigravity: add structured-question pause request mapping after payload
+- Claude: create detection-only pause requests from `Notification` /
+  `elicitation_dialog`; mark non-answerable unless a native response path
+  exists.
+- OpenCode: add structured-question pause request mapping only after provider
+  event shape is proven.
+- Antigravity: add structured-question pause request mapping only after payload
   shape is proven.
 - Add provider-live evidence for each provider surface that claims support.
 
@@ -701,8 +726,9 @@ existing permission alerts remain unchanged.
 
 ## Open Questions
 
-- Does Claude Code's hook payload expose full `AskUserQuestion` questions and
-  options, or only an `elicitation_dialog` notification?
+- Should Claude capture full `AskUserQuestion` questions/options through a
+  richer hook/SDK path, or is `Notification`/`elicitation_dialog` detection
+  enough until a response channel exists?
 - What is the exact OpenCode event payload for structured questions in the
   current supported release?
 - What is the exact Antigravity hook payload for `ask_question` in the current

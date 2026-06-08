@@ -1,5 +1,13 @@
 """Tests for Claude hook installation and session binding behavior."""
 
+import json
+import os
+import shutil
+import subprocess
+import uuid
+
+import pytest
+
 from zerg.services.shipper.hooks import HOOK_SCRIPT
 from zerg.services.shipper.hooks import _make_hook_entries
 
@@ -16,11 +24,21 @@ def test_claude_hook_seeds_session_binding_on_stop():
 def test_claude_hook_writes_presence_to_outbox():
     assert 'LONGHOUSE_HOME="${LONGHOUSE_HOME:-__LONGHOUSE_HOME__}"' in HOOK_SCRIPT
     assert 'OUTBOX="$LONGHOUSE_HOME/agent/outbox"' in HOOK_SCRIPT
+    assert 'OUTBOX="$LONGHOUSE_HOME/agent/runtime-events-outbox"' in HOOK_SCRIPT
     assert "transcript_path: $transcript" in HOOK_SCRIPT
     assert "find_provider_pid()" in HOOK_SCRIPT
     assert "control_path: $control_path" in HOOK_SCRIPT
     assert "provider_pid" in HOOK_SCRIPT
     assert 'write_presence_outbox "$PAYLOAD" >/dev/null 2>&1 || true' in HOOK_SCRIPT
+    assert 'write_runtime_event_outbox "$PAUSE_PAYLOAD" "$REQUEST_KEY" >/dev/null 2>&1 || true' in HOOK_SCRIPT
+
+
+def test_claude_hook_distinguishes_elicitation_from_permissions():
+    assert '-n "$MANAGED_SESSION_ID"' in HOOK_SCRIPT
+    assert '"$NOTIF_TYPE" == "elicitation_dialog"' in HOOK_SCRIPT
+    assert 'tool_name: "AskUserQuestion"' in HOOK_SCRIPT
+    assert "can_respond: false" in HOOK_SCRIPT
+    assert "permission_prompt)              STATE=\"blocked\"" in HOOK_SCRIPT
 
 
 def test_claude_hook_does_not_inject_startup_context_by_default():
@@ -52,3 +70,115 @@ def test_claude_stop_hook_entry_is_sync(tmp_path):
     hook = stop_entry["hooks"][0]
     assert hook["async"] is False
     assert hook["timeout"] == 5
+
+
+def _run_hook(tmp_path, event, *, managed_session_id=None):
+    if shutil.which("jq") is None:
+        pytest.skip("jq is required to execute Claude hook fixture")
+    script = tmp_path / "longhouse-hook.sh"
+    script.write_text(
+        HOOK_SCRIPT.replace("__LONGHOUSE_HOME__", str(tmp_path / "lh"))
+        .replace("__HINDSIGHT_ROOT__", str(tmp_path / "hindsight"))
+        .replace("__ENGINE_PATH__", "/bin/true")
+    )
+    script.chmod(0o755)
+    env = os.environ.copy()
+    env.pop("LONGHOUSE_MANAGED_SESSION_ID", None)
+    env.pop("LONGHOUSE_IS_SIDECHAIN", None)
+    if managed_session_id is not None:
+        env["LONGHOUSE_MANAGED_SESSION_ID"] = managed_session_id
+    completed = subprocess.run(
+        ["/bin/bash", str(script)],
+        input=json.dumps(event),
+        text=True,
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return tmp_path / "lh"
+
+
+def _runtime_event_files(longhouse_home):
+    outbox = longhouse_home / "agent" / "runtime-events-outbox"
+    if not outbox.exists():
+        return []
+    return sorted(outbox.glob("rte.*.json"))
+
+
+def test_claude_elicitation_notification_writes_detection_only_pause_event(tmp_path):
+    session_id = str(uuid.uuid4())
+    provider_session_id = str(uuid.uuid4())
+
+    longhouse_home = _run_hook(
+        tmp_path,
+        {
+            "hook_event_name": "Notification",
+            "session_id": provider_session_id,
+            "transcript_path": str(tmp_path / "transcript.jsonl"),
+            "cwd": str(tmp_path),
+            "notification_type": "elicitation_dialog",
+            "title": "Question needed",
+            "message": "Which direction should I take?",
+        },
+        managed_session_id=session_id,
+    )
+
+    files = _runtime_event_files(longhouse_home)
+    assert len(files) == 1
+    event = json.loads(files[0].read_text())
+    assert event["runtime_key"] == f"claude:{session_id}"
+    assert event["session_id"] == session_id
+    assert event["provider"] == "claude"
+    assert event["source"] == "claude_hook"
+    assert event["kind"] == "pause_request"
+    assert event["dedupe_key"] == f"claude-hook:elicitation_dialog:{session_id}"
+    assert event["payload"]["kind"] == "structured_question"
+    assert event["payload"]["tool_name"] == "AskUserQuestion"
+    assert event["payload"]["can_respond"] is False
+    assert event["payload"]["title"] == "Question needed"
+    assert event["payload"]["summary"] == "Which direction should I take?"
+    assert event["payload"]["request_payload"]["questions"] == [
+        {
+            "id": "terminal",
+            "header": "Claude",
+            "question": "Which direction should I take?",
+            "options": [],
+        }
+    ]
+
+
+def test_claude_unmanaged_elicitation_notification_does_not_write_pause_event(tmp_path):
+    longhouse_home = _run_hook(
+        tmp_path,
+        {
+            "hook_event_name": "Notification",
+            "session_id": str(uuid.uuid4()),
+            "transcript_path": str(tmp_path / "transcript.jsonl"),
+            "cwd": str(tmp_path),
+            "notification_type": "elicitation_dialog",
+            "title": "Question needed",
+            "message": "Which direction should I take?",
+        },
+    )
+
+    assert _runtime_event_files(longhouse_home) == []
+
+
+@pytest.mark.parametrize("notification_type", ["idle_prompt", "permission_prompt"])
+def test_claude_non_elicitation_notifications_do_not_write_pause_event(tmp_path, notification_type):
+    longhouse_home = _run_hook(
+        tmp_path,
+        {
+            "hook_event_name": "Notification",
+            "session_id": str(uuid.uuid4()),
+            "transcript_path": str(tmp_path / "transcript.jsonl"),
+            "cwd": str(tmp_path),
+            "notification_type": notification_type,
+            "title": "Needs attention",
+            "message": "Provider notification",
+        },
+        managed_session_id=str(uuid.uuid4()),
+    )
+
+    assert _runtime_event_files(longhouse_home) == []

@@ -52,11 +52,11 @@ logger = logging.getLogger(__name__)
 
 HOOK_SCRIPT = """\
 #!/bin/bash
-# Longhouse unified Claude hook — presence outbox + session binding seed
+# Longhouse unified Claude hook — presence/runtime outbox + session binding seed
 # Installed by: longhouse connect --install
 # Registered on: SessionStart, Stop, UserPromptSubmit, PreToolUse,
 #                PostToolUse, PostToolUseFailure, PermissionRequest, Notification
-# All events: local-only presence outbox write + session binding seed.
+# All events: local-only outbox write + session binding seed.
 INPUT=$(cat)
 LONGHOUSE_HOME="${LONGHOUSE_HOME:-__LONGHOUSE_HOME__}"
 
@@ -65,14 +65,16 @@ command -v jq >/dev/null 2>&1 || exit 0
 
 # Parse all fields in a single jq call using unit-separator (\\x1f) as delimiter.
 # @tsv would split on spaces inside field values; \\x1f is safe for paths/tool names.
-IFS=$'\\x1f' read -r EVENT SESSION_ID TOOL CWD TRANSCRIPT NOTIF_TYPE <<< "$(
+IFS=$'\\x1f' read -r EVENT SESSION_ID TOOL CWD TRANSCRIPT NOTIF_TYPE NOTIF_TITLE NOTIF_MESSAGE <<< "$(
   printf '%s' "$INPUT" | jq -r '[
     (.hook_event_name // ""),
     (.session_id // ""),
     (.tool_name // ""),
     (.cwd // ""),
     (.transcript_path // ""),
-    (.notification_type // "")
+    (.notification_type // ""),
+    (.title // ""),
+    (.message // "")
   ] | join("\\u001f")'
 )"
 
@@ -94,6 +96,18 @@ write_presence_outbox() {
   TMPFILE=$(mktemp "$OUTBOX/.tmp.XXXXXX") || return 1
   printf '%s\n' "$payload" > "$TMPFILE" || { rm -f "$TMPFILE"; return 1; }
   mv "$TMPFILE" "${TMPFILE/\\.tmp\\./prs.}.json"
+}
+
+write_runtime_event_outbox() {
+  payload="$1"
+  dedupe_key="$2"
+  OUTBOX="$LONGHOUSE_HOME/agent/runtime-events-outbox"
+  [ -d "$OUTBOX" ] || mkdir -p "$OUTBOX" || return 1
+  FILE_KEY="$(printf '%s' "$dedupe_key" | cksum | awk '{print $1}')"
+  [ -n "$FILE_KEY" ] || return 1
+  TMPFILE=$(mktemp "$OUTBOX/.tmp.XXXXXX") || return 1
+  printf '%s\n' "$payload" > "$TMPFILE" || { rm -f "$TMPFILE"; return 1; }
+  mv "$TMPFILE" "$OUTBOX/rte.$FILE_KEY.json"
 }
 
 find_provider_pid() {
@@ -153,6 +167,52 @@ if [[ -n "$STATE" ]] && [[ -n "$SESSION_ID" ]]; then
   fi
 
   write_presence_outbox "$PAYLOAD" >/dev/null 2>&1 || true
+
+  # Claude's Notification/elicitation_dialog means a provider-native
+  # structured question is waiting in the terminal. The hook does not own a
+  # safe answer channel, so this is detection-only: Longhouse can notify and
+  # explain, but the user must answer in Claude's TUI.
+  UUID_RE='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+  if [[ -n "$MANAGED_SESSION_ID" && "$EVENT" == "Notification" && "$NOTIF_TYPE" == "elicitation_dialog" && "$SESSION_ID" =~ $UUID_RE ]]; then
+    OCCURRED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    RUNTIME_KEY="claude:$SESSION_ID"
+    REQUEST_KEY="claude-hook:elicitation_dialog:$SESSION_ID"
+    PAUSE_TITLE="${NOTIF_TITLE:-Question waiting}"
+    PAUSE_SUMMARY="${NOTIF_MESSAGE:-Question waiting in Claude terminal}"
+    PAUSE_PAYLOAD=$(jq -n --arg sid "$SESSION_ID" --arg runtime_key "$RUNTIME_KEY" \\
+          --arg occurred_at "$OCCURRED_AT" --arg request_key "$REQUEST_KEY" \\
+          --arg title "$PAUSE_TITLE" --arg summary "$PAUSE_SUMMARY" \\
+      '{
+        runtime_key: $runtime_key,
+        session_id: $sid,
+        provider: "claude",
+        source: "claude_hook",
+        kind: "pause_request",
+        occurred_at: $occurred_at,
+        dedupe_key: $request_key,
+        payload: {
+          request_key: $request_key,
+          provider_request_id: "elicitation_dialog",
+          kind: "structured_question",
+          tool_name: "AskUserQuestion",
+          title: $title,
+          summary: $summary,
+          can_respond: false,
+          single_active: true,
+          request_payload: {
+            questions: [
+              {
+                id: "terminal",
+                header: "Claude",
+                question: $summary,
+                options: []
+              }
+            ]
+          }
+        }
+      }')
+    write_runtime_event_outbox "$PAUSE_PAYLOAD" "$REQUEST_KEY" >/dev/null 2>&1 || true
+  fi
 fi
 
 # Always exit 0 — hook errors trigger Claude Code's "What should Claude do

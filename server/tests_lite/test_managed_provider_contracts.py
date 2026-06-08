@@ -142,6 +142,18 @@ def test_codex_contract_is_current_remote_launch_engine_channel_provider():
     assert remote_launch_supported_providers() == frozenset({"codex", "claude", "opencode"})
 
 
+def test_only_codex_advertises_remote_pause_answering():
+    supports_by_provider = {
+        contract.provider: set(contract.machine_control_supports)
+        for contract in all_managed_provider_contracts()
+    }
+
+    assert "codex.answer_pause" in supports_by_provider["codex"]
+    assert "claude.answer_pause" not in supports_by_provider["claude"]
+    assert "opencode.answer_pause" not in supports_by_provider["opencode"]
+    assert "antigravity.answer_pause" not in supports_by_provider["antigravity"]
+
+
 def test_continue_supported_providers_is_codex_and_claude_only():
     # Driven by manifest can_resume=true. opencode/antigravity must stay out.
     assert continue_supported_providers() == frozenset({"codex", "claude"})

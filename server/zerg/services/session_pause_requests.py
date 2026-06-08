@@ -10,6 +10,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPauseRequest
 from zerg.utils.time import normalize_utc
 
@@ -278,6 +279,8 @@ def apply_pause_runtime_event(db: Session, event: Any) -> bool:
 
     if event.kind == "pause_request":
         if event.session_id is None:
+            return False
+        if db.query(AgentSession.id).filter(AgentSession.id == event.session_id).first() is None:
             return False
         if _bool(payload.get("single_active", True)):
             _supersede_runtime_requests_if_needed(db, runtime_key=runtime_key, request_key=request_key, occurred_at=occurred_at)
