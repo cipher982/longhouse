@@ -43,34 +43,51 @@ echo "=== build slim DB ==="
 # piped into the container's venv python, reading the quiesced DB via the /data mount.
 BUILD_SLIM="$(dirname "$0")/phase-e-build-slim.py"
 docker run --rm -i \
+  -e REQUIRE_RECLAIM_OK=1 \
+  -e LONGHOUSE_ARCHIVE_ROOT=/data/archive \
   -v "$BASE:/data" \
   --entrypoint /app/.venv/bin/python \
-  "$IMAGE" - "/data/longhouse.db" "/data/phase-e-$TS/longhouse.slim.db" < "$BUILD_SLIM"
+  "$IMAGE" - "/data/longhouse.db" "/data/phase-e-$TS/longhouse.slim.db" < "$BUILD_SLIM" || {
+    echo "SLIM BUILD FAILED — DB untouched, container still stopped. Restart with: docker start $C"; exit 1; }
 
-echo "=== final checks on slim ==="
+echo "=== final checks on slim (raw_left is EXPECTED > 0: deliberately-kept uncovered rows) ==="
+QC=$(sqlite3 "$SLIM" 'PRAGMA quick_check;')
+[ "$QC" = "ok" ] || { echo "SLIM quick_check FAILED: $QC — aborting, DB untouched. Restart: docker start $C"; exit 1; }
 sqlite3 "$SLIM" '
-PRAGMA quick_check;
 SELECT "events", COUNT(*), MIN(id), MAX(id) FROM events;
 SELECT "source_lines", COUNT(*), MIN(id), MAX(id) FROM source_lines;
-SELECT "events_raw_left", COUNT(*) FROM events WHERE raw_json IS NOT NULL OR raw_json_z IS NOT NULL OR raw_json_codec <> 0;
-SELECT "source_lines_raw_left", COUNT(*) FROM source_lines WHERE raw_json <> "" OR raw_json_z IS NOT NULL OR raw_json_codec <> 0;
+SELECT "events_raw_kept", COUNT(*) FROM events WHERE raw_json_z IS NOT NULL OR (raw_json IS NOT NULL AND raw_json <> "");
+SELECT "source_lines_raw_kept", COUNT(*) FROM source_lines WHERE raw_json_z IS NOT NULL OR (raw_json IS NOT NULL AND raw_json <> "");
 '
 sqlite3 "$SLIM" 'PRAGMA wal_checkpoint(TRUNCATE);'
 rm -f "$SLIM-wal" "$SLIM-shm"
 
-echo "=== atomic swap ==="
+echo "=== atomic swap (old DB moved aside = rollback) ==="
+# Rollback if anything past here fails before the container is confirmed healthy.
+rollback() {
+  echo "!!! SWAP FAILED — rolling back to $OLD"
+  docker stop --time 30 "$C" 2>/dev/null || true
+  [ -e "$DB" ] && mv "$DB" "$BASE/longhouse.db.slim-failed-$TS"
+  mv "$OLD" "$DB"
+  [ ! -e "$OLD-wal" ] || mv "$OLD-wal" "$DB-wal"
+  [ ! -e "$OLD-shm" ] || mv "$OLD-shm" "$DB-shm"
+  docker start "$C"
+  echo "rolled back; original DB restored at $DB"
+  exit 1
+}
 mv "$DB" "$OLD"
 [ ! -e "$DB-wal" ] || mv "$DB-wal" "$OLD-wal"
 [ ! -e "$DB-shm" ] || mv "$DB-shm" "$OLD-shm"
-mv "$SLIM" "$DB"
-chown --reference="$OLD" "$DB"
-chmod --reference="$OLD" "$DB"
+mv "$SLIM" "$DB" || rollback
+chown --reference="$OLD" "$DB" || rollback
+chmod --reference="$OLD" "$DB" || rollback
 
-echo "=== start + smoke ==="
-docker start "$C"
-sleep 5
-curl -fsS https://david010.longhouse.ai/api/readyz || true
-curl -fsS https://david010.longhouse.ai/api/health || true
+echo "=== start + GATING smoke ==="
+docker start "$C" || rollback
+sleep 8
+curl -fsS https://david010.longhouse.ai/api/readyz || rollback
+curl -fsS https://david010.longhouse.ai/api/health || rollback
+echo "smoke OK"
 ls -lh "$DB" "$OLD"; df -h /data
 
 echo "=== NAS backup of moved-aside OLD db + archive (after smoke) ==="
