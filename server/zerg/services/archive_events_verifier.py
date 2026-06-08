@@ -24,6 +24,7 @@ from zerg.data_plane import create_archive_store
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import ArchiveChunk
 from zerg.services.archive_store import FilesystemArchiveStore
+from zerg.services.archive_transcript import archive_owning_session_ids
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.raw_json_compression import decode_raw_json
 
@@ -46,10 +47,16 @@ def _archived_event_byte_hashes(
     *,
     archive_store: FilesystemArchiveStore,
 ) -> set[str]:
-    """Return sha256(raw_bytes) for every sealed events-stream archive record."""
+    """Return sha256(raw_bytes) for every sealed events-stream archive record.
+
+    Spans the session's own id plus relinked-subagent original ids (see
+    archive_owning_session_ids): workflow relink rewrites events.session_id to the
+    parent but leaves event archive chunks keyed by the original child id.
+    """
+    owner_ids = [UUID(s) for s in archive_owning_session_ids(db, session_id)]
     chunks = (
         db.query(ArchiveChunk)
-        .filter(ArchiveChunk.session_id == UUID(str(session_id)))
+        .filter(ArchiveChunk.session_id.in_(owner_ids))
         .filter(ArchiveChunk.stream == "events")
         .filter(ArchiveChunk.state == "sealed")
         .order_by(ArchiveChunk.first_source_seq.asc())

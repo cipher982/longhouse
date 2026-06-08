@@ -20,9 +20,38 @@ from sqlalchemy.orm import Session
 
 from zerg.data_plane import create_archive_store
 from zerg.models.agents import ArchiveChunk
+from zerg.models.agents import SessionThread
+from zerg.models.agents import SessionThreadAlias
 from zerg.services.archive_store import FilesystemArchiveStore
 
 logger = logging.getLogger(__name__)
+
+
+def archive_owning_session_ids(db: Session, session_id: UUID | str) -> set[str]:
+    """Return every session id that may own this session's archive chunks.
+
+    Workflow subagent relink (``_move_subagent_session_under_parent``) rewrites
+    ``source_lines.session_id`` to the PARENT but leaves ``archive_chunks`` keyed
+    by the subagent's ORIGINAL session id (and deletes the child AgentSession).
+    The original id is preserved as a ``longhouse_session_id`` alias on the child
+    subagent SessionThread. So a parent's full archive coverage spans its own id
+    plus those child-thread alias ids. Returns string ids.
+    """
+    sid = str(session_id)
+    owners = {sid}
+    rows = (
+        db.query(SessionThreadAlias.alias_value)
+        .join(SessionThread, SessionThread.id == SessionThreadAlias.thread_id)
+        .filter(SessionThread.session_id == UUID(sid))
+        .filter(SessionThread.branch_kind == "subagent")
+        .filter(SessionThreadAlias.alias_kind == "longhouse_session_id")
+        .all()
+    )
+    for (value,) in rows:
+        normalized = str(value or "").strip()
+        if normalized:
+            owners.add(normalized)
+    return owners
 
 
 class ArchiveTranscriptUnavailable(Exception):
@@ -53,9 +82,13 @@ def load_session_source_line_bytes(
     reconstruction.
     """
     store = archive_store or create_archive_store()
+    # Span the session's own id plus any relinked-subagent original ids: after
+    # workflow relink the source_lines rows live under the parent but their
+    # archive chunks remain keyed by the original child session id.
+    owner_ids = [UUID(s) for s in archive_owning_session_ids(db, session_id)]
     chunks = (
         db.query(ArchiveChunk)
-        .filter(ArchiveChunk.session_id == UUID(str(session_id)))
+        .filter(ArchiveChunk.session_id.in_(owner_ids))
         .filter(ArchiveChunk.stream == "source_lines")
         .filter(ArchiveChunk.state == "sealed")
         .order_by(ArchiveChunk.first_source_seq.asc())
