@@ -8488,6 +8488,26 @@ mod tests {
         server.await.unwrap();
     }
 
+    #[test]
+    fn request_user_input_response_accepts_scalar_and_array_answers() {
+        let params = json!({
+            "questions": [
+                {"id": "color", "question": "Color?"},
+                {"id": "storage", "question": "Storage?"},
+            ]
+        });
+        let answers = build_request_user_input_answers_from_response(
+            &params,
+            Some(&json!({
+                "color": "red",
+                "storage": ["SQLite"],
+            })),
+        );
+
+        assert_eq!(answers["color"]["answers"], json!(["red"]));
+        assert_eq!(answers["storage"]["answers"], json!(["SQLite"]));
+    }
+
     #[tokio::test]
     async fn send_via_ipc_pause_response_surfaces_daemon_error() {
         let tmp = tempfile::tempdir().unwrap();

@@ -34,12 +34,28 @@ function answerHasValue(value: AnswerValue | undefined): boolean {
 function answerParts(questions: SessionPauseQuestion[], draft: AnswerDraft): string[] {
   return questions.flatMap((question, index) => {
     const key = questionKey(question, index);
-    const value = draft[key];
-    if (!answerHasValue(value)) return [];
-    const values = Array.isArray(value) ? value : [value];
+    const values = normalizedAnswerValues(draft[key]);
+    if (values.length === 0) return [];
     const label = question.header || question.question;
     return [`${label}: ${values.join(", ")}`];
   });
+}
+
+function normalizedAnswerValues(value: AnswerValue | undefined): string[] {
+  if (Array.isArray(value)) {
+    return value.map((item) => item.trim()).filter(Boolean);
+  }
+  const single = value?.trim();
+  return single ? [single] : [];
+}
+
+function normalizedAnswers(questions: SessionPauseQuestion[], draft: AnswerDraft): Record<string, string[]> {
+  return Object.fromEntries(
+    questions.map((question, index) => {
+      const key = questionKey(question, index);
+      return [key, normalizedAnswerValues(draft[key])];
+    }),
+  );
 }
 
 function initialDraft(questions: SessionPauseQuestion[]): AnswerDraft {
@@ -59,6 +75,7 @@ export function SessionPauseRequestPanel({
   const [draft, setDraft] = useState<AnswerDraft>(() => initialDraft(questions));
   const [fallbackMessage, setFallbackMessage] = useState("");
   const [submitting, setSubmitting] = useState<"answer" | "reject" | null>(null);
+  const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -66,10 +83,12 @@ export function SessionPauseRequestPanel({
     setFallbackMessage("");
     setError(null);
     setSubmitting(null);
+    setSubmitted(false);
   }, [pauseRequest.id, questions]);
 
   const canAnswer =
     pauseRequest.can_respond &&
+    !submitted &&
     (questions.length > 0
       ? questions.every((question, index) => answerHasValue(draft[questionKey(question, index)]))
       : fallbackMessage.trim().length > 0);
@@ -91,12 +110,18 @@ export function SessionPauseRequestPanel({
         answerParts(questions, draft).join("; ") ||
         fallbackMessage.trim() ||
         undefined;
-      await onRespond({
+      const body: PauseRequestResponseRequest = {
         decision: "answer",
-        answers: questions.length > 0 ? draft : null,
-        content: questions.length > 0 ? draft : fallbackMessage.trim(),
         message,
-      });
+      };
+      if (questions.length > 0) {
+        body.answers = normalizedAnswers(questions, draft);
+      } else {
+        body.answers = null;
+        body.content = fallbackMessage.trim();
+      }
+      await onRespond(body);
+      setSubmitted(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send answer");
     } finally {
@@ -114,6 +139,7 @@ export function SessionPauseRequestPanel({
         content: null,
         message: "Cancelled in Longhouse.",
       });
+      setSubmitted(true);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to cancel request");
     } finally {
@@ -174,7 +200,7 @@ export function SessionPauseRequestPanel({
                             type={question.multi_select ? "checkbox" : "radio"}
                             name={`pause-${pauseRequest.id}-${key}`}
                             checked={checked}
-                            disabled={!pauseRequest.can_respond || submitting != null}
+                            disabled={!pauseRequest.can_respond || submitting != null || submitted}
                             onChange={(event) => {
                               if (question.multi_select) {
                                 toggleMultiValue(key, value, event.currentTarget.checked);
@@ -197,7 +223,7 @@ export function SessionPauseRequestPanel({
                   <textarea
                     className="session-pause-freeform"
                     value={typeof currentValue === "string" ? currentValue : ""}
-                    disabled={!pauseRequest.can_respond || submitting != null}
+                    disabled={!pauseRequest.can_respond || submitting != null || submitted}
                     onChange={(event) => setQuestionAnswer(key, event.currentTarget.value)}
                     rows={2}
                   />
@@ -210,7 +236,7 @@ export function SessionPauseRequestPanel({
         <textarea
           className="session-pause-freeform"
           value={fallbackMessage}
-          disabled={submitting != null}
+          disabled={submitting != null || submitted}
           onChange={(event) => setFallbackMessage(event.currentTarget.value)}
           rows={2}
           aria-label="Answer"
@@ -237,7 +263,7 @@ export function SessionPauseRequestPanel({
               variant="secondary"
               size="sm"
               onClick={() => void rejectRequest()}
-              disabled={submitting != null}
+              disabled={submitting != null || submitted}
             >
               <XIcon width={14} height={14} />
               <span>{submitting === "reject" ? "Cancelling" : "Cancel"}</span>

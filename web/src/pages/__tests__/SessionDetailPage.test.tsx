@@ -1065,12 +1065,161 @@ describe("SessionDetailPage", () => {
         "pause-1",
         expect.objectContaining({
           decision: "answer",
-          answers: { storage: "SQLite" },
-          content: { storage: "SQLite" },
+          answers: { storage: ["SQLite"] },
           message: "Storage: SQLite",
         }),
       );
     });
+    expect(agentApiMocks.respondToPauseRequest.mock.calls.at(-1)?.[2]).not.toHaveProperty("content");
+  });
+
+  it("posts multi-select pause answers as arrays", async () => {
+    const user = userEvent.setup();
+    const pauseRequest = makePauseRequest({
+      questions: [
+        {
+          id: "checks",
+          header: "Checks",
+          question: "Which checks should I run?",
+          multi_select: true,
+          options: [
+            { label: "Lint", description: "Run lint." },
+            { label: "Tests", description: "Run tests." },
+          ],
+        },
+      ],
+    });
+    const session = makeSession({
+      ended_at: null,
+      runtime_display: makeRuntimeDisplay({
+        state: "needs_user",
+        tone: "blocked",
+        headline: "Needs answer",
+        detail: "Question waiting",
+        phase_label: "Needs answer",
+        needs_attention: true,
+        pause_request: pauseRequest,
+      }),
+    });
+
+    mockWorkspaceState({ session, model: buildTimelineModel([]) });
+    renderSessionDetailPage();
+
+    await user.click(screen.getByLabelText(/Lint/));
+    await user.click(screen.getByLabelText(/Tests/));
+    await user.click(screen.getByRole("button", { name: /Send answer/ }));
+
+    await waitFor(() => {
+      expect(agentApiMocks.respondToPauseRequest).toHaveBeenCalledWith(
+        "session-codex",
+        "pause-1",
+        expect.objectContaining({
+          decision: "answer",
+          answers: { checks: ["Lint", "Tests"] },
+          message: "Checks: Lint, Tests",
+        }),
+      );
+    });
+    expect(agentApiMocks.respondToPauseRequest.mock.calls.at(-1)?.[2]).not.toHaveProperty("content");
+  });
+
+  it("posts freeform pause answers as content when no questions are available", async () => {
+    const user = userEvent.setup();
+    const pauseRequest = makePauseRequest({
+      title: "Need details",
+      questions: [],
+    });
+    const session = makeSession({
+      ended_at: null,
+      runtime_display: makeRuntimeDisplay({
+        state: "needs_user",
+        tone: "blocked",
+        headline: "Needs answer",
+        detail: "Question waiting",
+        phase_label: "Needs answer",
+        needs_attention: true,
+        pause_request: pauseRequest,
+      }),
+    });
+
+    mockWorkspaceState({ session, model: buildTimelineModel([]) });
+    renderSessionDetailPage();
+
+    await user.type(screen.getByLabelText("Answer"), "Use the webhook path.");
+    await user.click(screen.getByRole("button", { name: /Send answer/ }));
+
+    await waitFor(() => {
+      expect(agentApiMocks.respondToPauseRequest).toHaveBeenCalledWith(
+        "session-codex",
+        "pause-1",
+        expect.objectContaining({
+          decision: "answer",
+          answers: null,
+          content: "Use the webhook path.",
+          message: "Use the webhook path.",
+        }),
+      );
+    });
+  });
+
+  it("posts cancel for pause request cancellation", async () => {
+    const user = userEvent.setup();
+    const pauseRequest = makePauseRequest();
+    const session = makeSession({
+      ended_at: null,
+      runtime_display: makeRuntimeDisplay({
+        state: "needs_user",
+        tone: "blocked",
+        headline: "Needs answer",
+        detail: "Question waiting",
+        phase_label: "Needs answer",
+        needs_attention: true,
+        pause_request: pauseRequest,
+      }),
+    });
+
+    mockWorkspaceState({ session, model: buildTimelineModel([]) });
+    renderSessionDetailPage();
+
+    await user.click(screen.getByRole("button", { name: /Cancel/ }));
+
+    await waitFor(() => {
+      expect(agentApiMocks.respondToPauseRequest).toHaveBeenCalledWith(
+        "session-codex",
+        "pause-1",
+        expect.objectContaining({
+          decision: "cancel",
+          answers: null,
+          content: null,
+        }),
+      );
+    });
+  });
+
+  it("surfaces pause response errors without crashing", async () => {
+    const user = userEvent.setup();
+    agentApiMocks.respondToPauseRequest.mockRejectedValueOnce(new Error("Request already resolved"));
+    const pauseRequest = makePauseRequest();
+    const session = makeSession({
+      ended_at: null,
+      runtime_display: makeRuntimeDisplay({
+        state: "needs_user",
+        tone: "blocked",
+        headline: "Needs answer",
+        detail: "Question waiting",
+        phase_label: "Needs answer",
+        needs_attention: true,
+        pause_request: pauseRequest,
+      }),
+    });
+
+    mockWorkspaceState({ session, model: buildTimelineModel([]) });
+    renderSessionDetailPage();
+
+    await user.click(screen.getByLabelText(/SQLite/));
+    await user.click(screen.getByRole("button", { name: /Send answer/ }));
+
+    expect(await screen.findByText("Request already resolved")).toBeInTheDocument();
   });
 
   it("renders non-answerable provider pause requests as terminal-only", () => {
