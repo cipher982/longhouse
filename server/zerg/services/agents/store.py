@@ -1969,6 +1969,31 @@ class AgentsStore:
             source_lines_inserted,
         )
 
+        # Self-heal ship-order races: if this ingest is a parent session (not a
+        # sidechain), re-parent any subagent sessions that were ingested before
+        # it and are still standalone orphans pointing at this provider session.
+        # Workflows fan out many agents concurrently with the parent, so an agent
+        # file frequently lands first. Scoped to this one parent — no global scan.
+        if not data.is_sidechain:
+            try:
+                from zerg.services.agents.kernel_backfill import relink_orphan_subagents_for_parent
+
+                parent_provider_session_id = data.provider_session_id or str(session_id)
+                relink_summary = relink_orphan_subagents_for_parent(
+                    self.db,
+                    provider=data.provider,
+                    parent_provider_session_id=parent_provider_session_id,
+                )
+                if relink_summary["candidates_resolved"]:
+                    _commit_with_telemetry()
+                    logger.info(
+                        "Relinked %s orphan subagent(s) under parent %s",
+                        relink_summary["candidates_resolved"],
+                        session_id,
+                    )
+            except Exception:
+                logger.warning("Orphan subagent relink failed for %s", session_id, exc_info=True)
+
         return IngestResult(
             session_id=session_id,
             events_inserted=events_inserted,

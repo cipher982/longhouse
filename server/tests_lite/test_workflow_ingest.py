@@ -30,6 +30,7 @@ from sqlalchemy.orm import sessionmaker
 
 from zerg.database import Base
 from zerg.database import make_engine
+from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionThread
 from zerg.services.agents_store import AgentsStore
@@ -263,31 +264,67 @@ def test_backfill_does_not_relink_workflow_journal(tmp_path):
         assert db.query(SessionThread).filter(SessionThread.branch_kind == "subagent").count() == 0
 
 
-def test_agent_before_parent_becomes_orphan_baseline(tmp_path):
-    """BASELINE (inverted in Phase 2): a subagent ingested BEFORE its parent
-    becomes a standalone orphan session and does NOT self-heal when the parent
-    arrives later."""
+def test_agent_before_parent_self_heals_on_parent_arrival(tmp_path):
+    """Phase 2: a subagent ingested BEFORE its parent first becomes a standalone
+    orphan, then is automatically re-parented when the parent arrives."""
     SessionLocal = _session_factory(tmp_path)
     with SessionLocal() as db:
         store = AgentsStore(db)
-        # Agent arrives first — parent unknown.
+        # Agent arrives first — parent unknown -> orphan.
         result = store.ingest_session(_agent_payload())
         assert result.session_id == AGENT_ID, "orphan keeps its own session id"
-
-        primary = (
+        orphan_primary = (
             db.query(SessionThread)
             .filter(SessionThread.session_id == AGENT_ID, SessionThread.is_primary == 1)
             .one()
         )
-        assert primary.branch_kind == "subagent"
-        assert primary.parent_thread_id is None
+        assert orphan_primary.branch_kind == "subagent"
+        assert orphan_primary.parent_thread_id is None
+        assert db.query(AgentSession).count() == 1
 
-        # Parent arrives later — today nothing re-parents the orphan.
+        # Parent arrives -> orphan is relinked under it, standalone session gone.
         store.ingest_session(_parent_payload())
-        assert db.query(AgentSession).filter(AgentSession.id == AGENT_ID).first() is not None, (
-            "BASELINE: orphan does not self-heal on parent arrival"
+        assert db.query(AgentSession).filter(AgentSession.id == AGENT_ID).first() is None
+        assert db.query(AgentSession).count() == 1
+
+        child = (
+            db.query(SessionThread)
+            .filter(SessionThread.session_id == PARENT_ID, SessionThread.branch_kind == "subagent")
+            .one()
         )
-        assert db.query(AgentSession).count() == 2
+        assert child.is_primary == 0
+        # The subagent's event now lives under the parent + child thread.
+        moved_event = db.query(AgentEvent).filter(AgentEvent.content_text == "decompose the research question").one()
+        assert moved_event.session_id == PARENT_ID
+        assert moved_event.thread_id == child.id
+
+
+def test_relink_is_idempotent(tmp_path):
+    """Re-ingesting the parent after a relink is a no-op (no duplicate threads,
+    no resurrected orphan)."""
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        store.ingest_session(_agent_payload())
+        store.ingest_session(_parent_payload())
+        store.ingest_session(_parent_payload())  # second parent ingest
+
+        assert db.query(AgentSession).count() == 1
+        assert db.query(SessionThread).filter(SessionThread.branch_kind == "subagent").count() == 1
+
+
+def test_journal_before_parent_does_not_relink(tmp_path):
+    """A journal ingested before the parent is dropped (not an orphan), and the
+    parent's later arrival does not resurrect or relink anything."""
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        store.ingest_session(_journal_payload())  # dropped by the guard
+        assert db.query(AgentSession).count() == 0
+
+        store.ingest_session(_parent_payload())
+        assert db.query(AgentSession).count() == 1
+        assert db.query(SessionThread).filter(SessionThread.branch_kind == "subagent").count() == 0
 
 
 def test_agent_after_parent_attaches_as_subagent_thread(tmp_path):

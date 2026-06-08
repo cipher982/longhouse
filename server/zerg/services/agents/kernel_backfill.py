@@ -349,6 +349,251 @@ def cleanup_workflow_journal_sessions(db: Session) -> dict[str, int]:
     }
 
 
+def _move_subagent_session_under_parent(
+    db: Session,
+    *,
+    child_session: AgentSession,
+    parent_thread: SessionThread,
+    source_path: str | None,
+    raw_agent_id: str | None,
+    raw_prompt_id: str | None,
+    parent_provider_id: str,
+) -> dict[str, int]:
+    """Re-stamp a leaked standalone subagent session's transcript/runtime rows
+    onto its parent session + a child ``SessionThread``, then remove the now-empty
+    standalone session. Returns per-table move counts plus ``sessions_removed``.
+
+    Shared by the one-shot backfill sweep and the live relink-on-parent-ingest
+    path so both behave identically.
+    """
+    child_session_id = child_session.id
+    counts = {
+        "events_moved": 0,
+        "source_lines_moved": 0,
+        "observations_moved": 0,
+        "turns_moved": 0,
+        "inputs_moved": 0,
+        "runtime_rows_moved": 0,
+        "runs_moved": 0,
+        "legacy_tasks_deleted": 0,
+        "embeddings_deleted": 0,
+        "sessions_removed": 0,
+    }
+
+    child_thread = ensure_subagent_thread(
+        db,
+        parent_thread=parent_thread,
+        provider=child_session.provider,
+        source_path=source_path,
+        child_longhouse_session_id=str(child_session.id),
+        child_provider_session_id=str(child_session.id),
+        subagent_id=raw_agent_id or _subagent_id_from_source_path(source_path),
+        subagent_prompt_id=raw_prompt_id,
+        parent_provider_session_id=parent_provider_id,
+    )
+    parent_branch = _ensure_head_branch(db, parent_thread.session_id)
+
+    old_thread_ids = [row.id for row in db.query(SessionThread.id).filter(SessionThread.session_id == child_session_id).all()]
+
+    result = db.execute(
+        sql_update(AgentEvent)
+        .where(AgentEvent.session_id == child_session_id)
+        .values(session_id=parent_thread.session_id, thread_id=child_thread.id, branch_id=parent_branch.id)
+    )
+    counts["events_moved"] += int(result.rowcount or 0)
+
+    result = db.execute(
+        sql_update(AgentSourceLine)
+        .where(AgentSourceLine.session_id == child_session_id)
+        .values(session_id=parent_thread.session_id, thread_id=child_thread.id, branch_id=parent_branch.id)
+    )
+    counts["source_lines_moved"] += int(result.rowcount or 0)
+
+    result = db.execute(
+        sql_update(SessionObservation)
+        .where(SessionObservation.session_id == child_session_id)
+        .values(session_id=parent_thread.session_id, thread_id=child_thread.id)
+    )
+    counts["observations_moved"] += int(result.rowcount or 0)
+
+    result = db.execute(
+        sql_update(SessionTurn)
+        .where(SessionTurn.session_id == child_session_id)
+        .values(session_id=parent_thread.session_id, thread_id=child_thread.id)
+    )
+    counts["turns_moved"] += int(result.rowcount or 0)
+
+    result = db.execute(
+        sql_update(SessionInput)
+        .where(SessionInput.session_id == child_session_id)
+        .values(session_id=parent_thread.session_id, thread_id=child_thread.id)
+    )
+    counts["inputs_moved"] += int(result.rowcount or 0)
+
+    result = db.execute(
+        sql_update(SessionRuntimeState)
+        .where(SessionRuntimeState.session_id == child_session_id)
+        .values(session_id=parent_thread.session_id, thread_id=child_thread.id)
+    )
+    counts["runtime_rows_moved"] += int(result.rowcount or 0)
+
+    if old_thread_ids:
+        result = db.execute(sql_update(SessionRun).where(SessionRun.thread_id.in_(old_thread_ids)).values(thread_id=child_thread.id))
+        counts["runs_moved"] += int(result.rowcount or 0)
+        db.execute(
+            sql_update(SessionLaunchAttempt)
+            .where(SessionLaunchAttempt.thread_id.in_(old_thread_ids))
+            .values(session_id=parent_thread.session_id, thread_id=child_thread.id)
+        )
+
+    remaining = 0
+    for model in (AgentEvent, AgentSourceLine, SessionObservation, SessionTurn, SessionInput, SessionRuntimeState):
+        remaining += db.query(model).filter(model.session_id == child_session_id).limit(1).count()
+    if remaining == 0:
+        counts["legacy_tasks_deleted"] += (
+            db.query(SessionTask).filter(SessionTask.session_id == str(child_session_id)).delete(synchronize_session=False)
+        )
+        counts["embeddings_deleted"] += (
+            db.query(SessionEmbedding).filter(SessionEmbedding.session_id == child_session_id).delete(synchronize_session=False)
+        )
+        if old_thread_ids:
+            db.query(SessionThreadAlias).filter(SessionThreadAlias.thread_id.in_(old_thread_ids)).delete(synchronize_session=False)
+            db.query(SessionThread).filter(SessionThread.id.in_(old_thread_ids)).delete(synchronize_session=False)
+        db.query(AgentSessionBranch).filter(AgentSessionBranch.session_id == child_session_id).delete(synchronize_session=False)
+        db.query(TimelineCard).filter(TimelineCard.session_id == child_session_id).delete(synchronize_session=False)
+        db.query(AgentSession).filter(AgentSession.id == child_session_id).delete(synchronize_session=False)
+        counts["sessions_removed"] += 1
+
+    return counts
+
+
+def _refresh_parent_counts(db: Session, parent_session_ids: set[UUID]) -> int:
+    refreshed = 0
+    for parent_session_id in parent_session_ids:
+        parent_session = db.query(AgentSession).filter(AgentSession.id == parent_session_id).first()
+        if parent_session is None:
+            continue
+        primary_thread_id = parent_session.primary_thread_id
+        thread_filter = AgentEvent.thread_id == primary_thread_id if primary_thread_id is not None else text("1=1")
+        parent_session.user_messages = (
+            db.query(func.count(AgentEvent.id))
+            .filter(AgentEvent.session_id == parent_session_id)
+            .filter(thread_filter)
+            .filter(AgentEvent.role == "user")
+            .scalar()
+            or 0
+        )
+        parent_session.assistant_messages = (
+            db.query(func.count(AgentEvent.id))
+            .filter(AgentEvent.session_id == parent_session_id)
+            .filter(thread_filter)
+            .filter(AgentEvent.role == "assistant")
+            .scalar()
+            or 0
+        )
+        parent_session.tool_calls = (
+            db.query(func.count(AgentEvent.id))
+            .filter(AgentEvent.session_id == parent_session_id)
+            .filter(thread_filter)
+            .filter(AgentEvent.tool_name.isnot(None))
+            .scalar()
+            or 0
+        )
+        parent_session.last_activity_at = (
+            db.query(func.max(AgentEvent.timestamp)).filter(AgentEvent.session_id == parent_session_id).scalar()
+            or parent_session.last_activity_at
+        )
+        parent_session.needs_embedding = True
+        refreshed += 1
+    return refreshed
+
+
+def _rebuild_fts_if_sqlite(db: Session, touched: set[UUID]) -> int:
+    bind = db.get_bind()
+    if getattr(getattr(bind, "dialect", None), "name", None) == "sqlite" and touched:
+        fts_exists = db.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")).first()
+        if fts_exists is not None:
+            db.execute(text("INSERT INTO events_fts(events_fts) VALUES('rebuild')"))
+            return 1
+    return 0
+
+
+def relink_orphan_subagents_for_parent(
+    db: Session,
+    *,
+    provider: str,
+    parent_provider_session_id: str | None,
+) -> dict[str, int]:
+    """Self-heal: when a parent session is ingested, re-parent any standalone
+    subagent sessions that were ingested BEFORE it (ship-order race).
+
+    Scoped to a SINGLE parent: only orphans whose primary thread carries a
+    ``forked_from_provider_session_id`` alias equal to this parent are moved, so
+    a live ingest never triggers a global scan. Idempotent — once an orphan is
+    relinked its standalone session is gone, so a second call is a no-op.
+    """
+    summary = {"candidates_resolved": 0, "sessions_removed": 0}
+    parent_provider_session_id = str(parent_provider_session_id or "").strip()
+    if not parent_provider_session_id:
+        return summary
+
+    parent_thread = resolve_primary_thread_by_provider_session_id(db, provider=provider, provider_session_id=parent_provider_session_id)
+    if parent_thread is None:
+        return summary
+
+    # Orphans: primary subagent threads with a forked_from alias pointing here.
+    orphan_thread_rows = (
+        db.query(SessionThread)
+        .join(SessionThreadAlias, SessionThreadAlias.thread_id == SessionThread.id)
+        .filter(SessionThread.provider == provider)
+        .filter(SessionThread.is_primary == 1)
+        .filter(SessionThread.branch_kind == "subagent")
+        .filter(SessionThreadAlias.alias_kind == "forked_from_provider_session_id")
+        .filter(SessionThreadAlias.alias_value == parent_provider_session_id)
+        .all()
+    )
+
+    touched: set[UUID] = set()
+    for orphan_thread in orphan_thread_rows:
+        child_session = db.query(AgentSession).filter(AgentSession.id == orphan_thread.session_id).first()
+        if child_session is None or child_session.id == parent_thread.session_id:
+            continue
+        # Never relink a workflow journal (excluded from candidates) or a session
+        # that is not actually a leaked subagent.
+        source_paths = {
+            row.source_path
+            for row in db.query(AgentSourceLine.source_path).filter(AgentSourceLine.session_id == child_session.id).all()
+            if row.source_path and not _is_workflow_journal_path(row.source_path)
+        }
+        source_path = None
+        for candidate_path in sorted(source_paths):
+            if _subagent_source_parent(candidate_path):
+                source_path = candidate_path
+                break
+        if source_path is None and source_paths:
+            source_path = sorted(source_paths)[0]
+        raw_parent_id, raw_agent_id, raw_prompt_id = _raw_sidechain_metadata_for_session(db, child_session.id)
+
+        counts = _move_subagent_session_under_parent(
+            db,
+            child_session=child_session,
+            parent_thread=parent_thread,
+            source_path=source_path,
+            raw_agent_id=raw_agent_id or _subagent_id_from_source_path(source_path),
+            raw_prompt_id=raw_prompt_id,
+            parent_provider_id=parent_provider_session_id,
+        )
+        summary["candidates_resolved"] += 1
+        summary["sessions_removed"] += counts["sessions_removed"]
+        touched.add(parent_thread.session_id)
+
+    if touched:
+        _refresh_parent_counts(db, touched)
+        _rebuild_fts_if_sqlite(db, touched)
+        db.flush()
+    return summary
+
+
 def backfill_subagent_child_threads(db: Session) -> dict[str, int]:
     """Move leaked provider subagent sessions under their parent session.
 
@@ -359,17 +604,19 @@ def backfill_subagent_child_threads(db: Session) -> dict[str, int]:
     """
 
     candidates_seen = 0
-    candidates_resolved = 0
-    sessions_removed = 0
-    events_moved = 0
-    source_lines_moved = 0
-    observations_moved = 0
-    turns_moved = 0
-    inputs_moved = 0
-    runtime_rows_moved = 0
-    runs_moved = 0
-    legacy_tasks_deleted = 0
-    embeddings_deleted = 0
+    totals = {
+        "candidates_resolved": 0,
+        "sessions_removed": 0,
+        "events_moved": 0,
+        "source_lines_moved": 0,
+        "observations_moved": 0,
+        "turns_moved": 0,
+        "inputs_moved": 0,
+        "runtime_rows_moved": 0,
+        "runs_moved": 0,
+        "legacy_tasks_deleted": 0,
+        "embeddings_deleted": 0,
+    }
     parent_sessions_touched: set[UUID] = set()
 
     for child_session_id, source_paths in _candidate_subagent_sessions(db).items():
@@ -398,159 +645,27 @@ def backfill_subagent_child_threads(db: Session) -> dict[str, int]:
         if parent_thread is None:
             continue
 
-        child_thread = ensure_subagent_thread(
+        counts = _move_subagent_session_under_parent(
             db,
+            child_session=child_session,
             parent_thread=parent_thread,
-            provider=child_session.provider,
             source_path=source_path,
-            child_longhouse_session_id=str(child_session.id),
-            child_provider_session_id=str(child_session.id),
-            subagent_id=raw_agent_id or _subagent_id_from_source_path(source_path),
-            subagent_prompt_id=raw_prompt_id,
-            parent_provider_session_id=parent_provider_id,
+            raw_agent_id=raw_agent_id,
+            raw_prompt_id=raw_prompt_id,
+            parent_provider_id=parent_provider_id,
         )
-        parent_branch = _ensure_head_branch(db, parent_thread.session_id)
+        totals["candidates_resolved"] += 1
+        for key, value in counts.items():
+            totals[key] = totals.get(key, 0) + value
         parent_sessions_touched.add(parent_thread.session_id)
 
-        old_thread_ids = [row.id for row in db.query(SessionThread.id).filter(SessionThread.session_id == child_session_id).all()]
-
-        result = db.execute(
-            sql_update(AgentEvent)
-            .where(AgentEvent.session_id == child_session_id)
-            .values(
-                session_id=parent_thread.session_id,
-                thread_id=child_thread.id,
-                branch_id=parent_branch.id,
-            )
-        )
-        events_moved += int(result.rowcount or 0)
-
-        result = db.execute(
-            sql_update(AgentSourceLine)
-            .where(AgentSourceLine.session_id == child_session_id)
-            .values(
-                session_id=parent_thread.session_id,
-                thread_id=child_thread.id,
-                branch_id=parent_branch.id,
-            )
-        )
-        source_lines_moved += int(result.rowcount or 0)
-
-        result = db.execute(
-            sql_update(SessionObservation)
-            .where(SessionObservation.session_id == child_session_id)
-            .values(session_id=parent_thread.session_id, thread_id=child_thread.id)
-        )
-        observations_moved += int(result.rowcount or 0)
-
-        result = db.execute(
-            sql_update(SessionTurn)
-            .where(SessionTurn.session_id == child_session_id)
-            .values(session_id=parent_thread.session_id, thread_id=child_thread.id)
-        )
-        turns_moved += int(result.rowcount or 0)
-
-        result = db.execute(
-            sql_update(SessionInput)
-            .where(SessionInput.session_id == child_session_id)
-            .values(session_id=parent_thread.session_id, thread_id=child_thread.id)
-        )
-        inputs_moved += int(result.rowcount or 0)
-
-        result = db.execute(
-            sql_update(SessionRuntimeState)
-            .where(SessionRuntimeState.session_id == child_session_id)
-            .values(session_id=parent_thread.session_id, thread_id=child_thread.id)
-        )
-        runtime_rows_moved += int(result.rowcount or 0)
-
-        if old_thread_ids:
-            result = db.execute(sql_update(SessionRun).where(SessionRun.thread_id.in_(old_thread_ids)).values(thread_id=child_thread.id))
-            runs_moved += int(result.rowcount or 0)
-            db.execute(
-                sql_update(SessionLaunchAttempt)
-                .where(SessionLaunchAttempt.thread_id.in_(old_thread_ids))
-                .values(session_id=parent_thread.session_id, thread_id=child_thread.id)
-            )
-
-        candidates_resolved += 1
-
-        remaining = 0
-        for model in (AgentEvent, AgentSourceLine, SessionObservation, SessionTurn, SessionInput, SessionRuntimeState):
-            remaining += db.query(model).filter(model.session_id == child_session_id).limit(1).count()
-        if remaining == 0:
-            legacy_tasks_deleted += (
-                db.query(SessionTask).filter(SessionTask.session_id == str(child_session_id)).delete(synchronize_session=False)
-            )
-            embeddings_deleted += (
-                db.query(SessionEmbedding).filter(SessionEmbedding.session_id == child_session_id).delete(synchronize_session=False)
-            )
-            if old_thread_ids:
-                db.query(SessionThreadAlias).filter(SessionThreadAlias.thread_id.in_(old_thread_ids)).delete(synchronize_session=False)
-                db.query(SessionThread).filter(SessionThread.id.in_(old_thread_ids)).delete(synchronize_session=False)
-            db.query(AgentSessionBranch).filter(AgentSessionBranch.session_id == child_session_id).delete(synchronize_session=False)
-            db.query(AgentSession).filter(AgentSession.id == child_session_id).delete(synchronize_session=False)
-            sessions_removed += 1
-
-    parent_counts_refreshed = 0
-    for parent_session_id in parent_sessions_touched:
-        parent_session = db.query(AgentSession).filter(AgentSession.id == parent_session_id).first()
-        if parent_session is None:
-            continue
-        primary_thread_id = parent_session.primary_thread_id
-        parent_session.user_messages = (
-            db.query(func.count(AgentEvent.id))
-            .filter(AgentEvent.session_id == parent_session_id)
-            .filter(AgentEvent.thread_id == primary_thread_id if primary_thread_id is not None else text("1=1"))
-            .filter(AgentEvent.role == "user")
-            .scalar()
-            or 0
-        )
-        parent_session.assistant_messages = (
-            db.query(func.count(AgentEvent.id))
-            .filter(AgentEvent.session_id == parent_session_id)
-            .filter(AgentEvent.thread_id == primary_thread_id if primary_thread_id is not None else text("1=1"))
-            .filter(AgentEvent.role == "assistant")
-            .scalar()
-            or 0
-        )
-        parent_session.tool_calls = (
-            db.query(func.count(AgentEvent.id))
-            .filter(AgentEvent.session_id == parent_session_id)
-            .filter(AgentEvent.thread_id == primary_thread_id if primary_thread_id is not None else text("1=1"))
-            .filter(AgentEvent.tool_name.isnot(None))
-            .scalar()
-            or 0
-        )
-        parent_session.last_activity_at = (
-            db.query(func.max(AgentEvent.timestamp)).filter(AgentEvent.session_id == parent_session_id).scalar()
-            or parent_session.last_activity_at
-        )
-        parent_session.needs_embedding = True
-        parent_counts_refreshed += 1
-
-    fts_rebuilt = 0
-    bind = db.get_bind()
-    if getattr(getattr(bind, "dialect", None), "name", None) == "sqlite" and parent_sessions_touched:
-        fts_exists = db.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")).first()
-        if fts_exists is not None:
-            db.execute(text("INSERT INTO events_fts(events_fts) VALUES('rebuild')"))
-            fts_rebuilt = 1
+    parent_counts_refreshed = _refresh_parent_counts(db, parent_sessions_touched)
+    fts_rebuilt = _rebuild_fts_if_sqlite(db, parent_sessions_touched)
 
     db.flush()
     return {
         "candidates_seen": candidates_seen,
-        "candidates_resolved": candidates_resolved,
-        "sessions_removed": sessions_removed,
-        "events_moved": events_moved,
-        "source_lines_moved": source_lines_moved,
-        "observations_moved": observations_moved,
-        "turns_moved": turns_moved,
-        "inputs_moved": inputs_moved,
-        "runtime_rows_moved": runtime_rows_moved,
-        "runs_moved": runs_moved,
-        "legacy_tasks_deleted": legacy_tasks_deleted,
-        "embeddings_deleted": embeddings_deleted,
+        **totals,
         "parent_counts_refreshed": parent_counts_refreshed,
         "fts_rebuilt": fts_rebuilt,
     }
