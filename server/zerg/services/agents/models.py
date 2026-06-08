@@ -94,6 +94,8 @@ class SessionIngest(BaseModel):
     )
     subagent_tool_use_id: Optional[str] = Field(None, description="Parent tool-call id that spawned the subagent")
     workflow_run_id: Optional[str] = Field(None, description="Provider workflow/fan-out run id when available")
+    attribution_agent: Optional[str] = Field(None, description="Workflow subagent agent kind, e.g. 'workflow-subagent'")
+    attribution_skill: Optional[str] = Field(None, description="Workflow/skill that spawned the run, e.g. 'deep-research'")
     events: List[EventIngest] = Field(default_factory=list, description="Session events")
     source_lines: List[SourceLineIngest] = Field(default_factory=list, description="Lossless source-line archive")
     rewind_hints: List[SourceRewindHintIngest] = Field(

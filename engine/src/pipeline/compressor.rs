@@ -85,6 +85,10 @@ pub struct IngestPayload<'a> {
     pub subagent_tool_use_id: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workflow_run_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attribution_agent: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attribution_skill: Option<&'a str>,
     pub events: Vec<EventIngest<'a>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub source_lines: Vec<SourceLineIngest<'a>>,
@@ -259,7 +263,9 @@ pub fn build_payload_with_source_lines<'a>(
         subagent_id: metadata.subagent_id.as_deref(),
         subagent_prompt_id: metadata.subagent_prompt_id.as_deref(),
         subagent_tool_use_id: None,
-        workflow_run_id: None,
+        workflow_run_id: metadata.workflow_run_id.as_deref(),
+        attribution_agent: metadata.attribution_agent.as_deref(),
+        attribution_skill: metadata.attribution_skill.as_deref(),
         events: event_ingests,
         source_lines: source_line_ingests,
         rewind_hints: rewind_hints.unwrap_or(&[]).to_vec(),

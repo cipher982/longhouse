@@ -37,6 +37,7 @@ from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionThread
+from zerg.models.agents import SessionThreadAlias
 from zerg.models.agents import TimelineCard
 from zerg.services.agents.compaction import classify_compaction_kind
 from zerg.services.agents.kernel_writes import ensure_primary_thread
@@ -1518,6 +1519,8 @@ class AgentsStore:
                         subagent_prompt_id=data.subagent_prompt_id,
                         subagent_tool_use_id=data.subagent_tool_use_id,
                         workflow_run_id=data.workflow_run_id,
+                        attribution_agent=data.attribution_agent,
+                        attribution_skill=data.attribution_skill,
                         parent_provider_session_id=data.parent_provider_session_id,
                     )
                     session_id = parent_session.id
@@ -1583,6 +1586,21 @@ class AgentsStore:
                     alias_kind="source_path",
                     alias_value=primary_source_path,
                 )
+            # Preserve workflow attribution on the orphan so relink can carry it
+            # forward when the parent later arrives.
+            for alias_kind, alias_value in (
+                ("workflow_run_id", data.workflow_run_id),
+                ("workflow_attribution_agent", data.attribution_agent),
+                ("workflow_attribution_skill", data.attribution_skill),
+            ):
+                if alias_value:
+                    record_thread_alias(
+                        self.db,
+                        thread=primary_thread,
+                        provider=existing.provider,
+                        alias_kind=alias_kind,
+                        alias_value=str(alias_value),
+                    )
 
         thread = resolved_child_thread or primary_thread
         thread_id = thread.id
@@ -2008,6 +2026,64 @@ class AgentsStore:
                 "total": round((time.monotonic() - store_started) * 1000, 3),
             },
         )
+
+    def get_workflow_run(self, workflow_run_id: str) -> dict | None:
+        """Return the subagent threads that belong to a dynamic-workflow run.
+
+        Resolves all threads tagged with the ``workflow_run_id`` alias, groups
+        them under their (single) parent session, and surfaces each agent's
+        attribution labels. Returns ``None`` when the run id is unknown.
+        """
+        run_id = str(workflow_run_id or "").strip()
+        if not run_id:
+            return None
+
+        thread_rows = (
+            self.db.query(SessionThread)
+            .join(SessionThreadAlias, SessionThreadAlias.thread_id == SessionThread.id)
+            .filter(SessionThreadAlias.alias_kind == "workflow_run_id")
+            .filter(SessionThreadAlias.alias_value == run_id)
+            .order_by(SessionThread.created_at.asc(), SessionThread.id.asc())
+            .all()
+        )
+        if not thread_rows:
+            return None
+
+        # Distinct threads (a thread can match the alias more than once defensively).
+        seen: set = set()
+        agents: list[dict] = []
+        parent_session_ids: set = set()
+        skill = None
+        for thread in thread_rows:
+            if thread.id in seen:
+                continue
+            seen.add(thread.id)
+            parent_session_ids.add(str(thread.session_id))
+            labels = {
+                row.alias_kind: row.alias_value
+                for row in self.db.query(SessionThreadAlias).filter(SessionThreadAlias.thread_id == thread.id).all()
+            }
+            skill = skill or labels.get("workflow_attribution_skill")
+            agents.append(
+                {
+                    "thread_id": str(thread.id),
+                    "session_id": str(thread.session_id),
+                    "is_primary": bool(thread.is_primary),
+                    "branch_kind": thread.branch_kind,
+                    "agent_id": labels.get("claude_agent_id"),
+                    "attribution_agent": labels.get("workflow_attribution_agent"),
+                    "attribution_skill": labels.get("workflow_attribution_skill"),
+                    "source_path": labels.get("source_path"),
+                }
+            )
+
+        return {
+            "workflow_run_id": run_id,
+            "skill": skill,
+            "parent_session_id": next(iter(parent_session_ids)) if len(parent_session_ids) == 1 else None,
+            "agent_count": len(agents),
+            "agents": agents,
+        }
 
     def reconcile_derived_projections(self, session_id: UUID) -> bool:
         """Rebuild derived projections skipped by archive ingest."""

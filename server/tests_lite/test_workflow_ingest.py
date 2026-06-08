@@ -158,9 +158,14 @@ def _journal_payload() -> SessionIngest:
     )
 
 
-def _agent_payload(*, parent_provider_session_id: str | None = str(PARENT_ID)) -> SessionIngest:
+def _agent_payload(
+    *,
+    parent_provider_session_id: str | None = str(PARENT_ID),
+    agent_session_id: UUID = AGENT_ID,
+    subagent_id: str = "a049eaf15e4dbcae3",
+) -> SessionIngest:
     return SessionIngest(
-        id=AGENT_ID,
+        id=agent_session_id,
         provider="claude",
         environment="production",
         project="g55",
@@ -168,20 +173,23 @@ def _agent_payload(*, parent_provider_session_id: str | None = str(PARENT_ID)) -
         cwd="/Users/davidrose/git/g55",
         git_branch="main",
         started_at=NOW,
-        provider_session_id=str(AGENT_ID),
+        provider_session_id=str(agent_session_id),
         is_sidechain=True,
         parent_provider_session_id=parent_provider_session_id,
-        subagent_id="a049eaf15e4dbcae3",
+        subagent_id=subagent_id,
+        workflow_run_id=RUN,
+        attribution_agent="workflow-subagent",
+        attribution_skill="deep-research",
         events=[
             EventIngest(
                 role="user",
                 content_text="decompose the research question",
                 timestamp=NOW,
-                source_path=_AGENT_PATH,
+                source_path=f"{_PROJECT_DIR}/{PARENT_ID}/subagents/workflows/{RUN}/agent-{subagent_id}.jsonl",
                 source_offset=0,
                 raw_json=(
                     '{"type":"user","uuid":"agent-u1","isSidechain":true,'
-                    f'"sessionId":"{PARENT_ID}","agentId":"a049eaf15e4dbcae3",'
+                    f'"sessionId":"{PARENT_ID}","agentId":"{subagent_id}",'
                     '"message":{"content":"decompose"}}'
                 ),
             )
@@ -378,3 +386,104 @@ def test_is_workflow_journal_only_payload_predicate():
         ],
     )
     assert is_workflow_journal_only_payload(not_workflow) is False
+
+
+# === Phase 3 (P2): workflow_run_id + attribution stored + queryable ===
+
+
+def test_workflow_run_id_and_attribution_stored_as_thread_aliases(tmp_path):
+    from zerg.models.agents import SessionThreadAlias
+
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        store.ingest_session(_parent_payload())
+        store.ingest_session(_agent_payload())
+
+        child = (
+            db.query(SessionThread)
+            .filter(SessionThread.session_id == PARENT_ID, SessionThread.branch_kind == "subagent")
+            .one()
+        )
+        aliases = {
+            (row.alias_kind, row.alias_value)
+            for row in db.query(SessionThreadAlias).filter(SessionThreadAlias.thread_id == child.id).all()
+        }
+        assert ("workflow_run_id", RUN) in aliases
+        assert ("workflow_attribution_agent", "workflow-subagent") in aliases
+        assert ("workflow_attribution_skill", "deep-research") in aliases
+
+
+def test_multiple_agents_in_run_are_distinct_threads_not_collapsed(tmp_path):
+    """The shared workflow_run_id / attribution must NOT collapse distinct
+    agents onto one thread — each agent file is its own subagent thread."""
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        store.ingest_session(_parent_payload())
+        store.ingest_session(_agent_payload(agent_session_id=AGENT_ID, subagent_id="a049eaf15e4dbcae3"))
+        store.ingest_session(
+            _agent_payload(
+                agent_session_id=UUID("88888888-0000-0000-0000-0000000000cc"),
+                subagent_id="a04eaddc8e3b46986",
+            )
+        )
+
+        subagent_threads = db.query(SessionThread).filter(SessionThread.branch_kind == "subagent").all()
+        assert len(subagent_threads) == 2, "two agents in the run -> two distinct threads"
+
+        run = store.get_workflow_run(RUN)
+        assert run is not None
+        assert run["agent_count"] == 2
+        assert run["skill"] == "deep-research"
+        assert run["parent_session_id"] == str(PARENT_ID)
+        assert {a["agent_id"] for a in run["agents"]} == {"a049eaf15e4dbcae3", "a04eaddc8e3b46986"}
+
+
+def test_get_workflow_run_unknown_returns_none(tmp_path):
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        assert store.get_workflow_run("wf_does_not_exist") is None
+
+
+def test_workflow_run_query_endpoint(tmp_path):
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+
+    from zerg.database import get_db
+    from zerg.dependencies.agents_auth import require_single_tenant
+    from zerg.dependencies.agents_auth import verify_agents_token
+    from zerg.main import api_app
+
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        store.ingest_session(_parent_payload())
+        store.ingest_session(_agent_payload())
+        db.commit()
+
+    def override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="d", id="t", owner_id=1)
+    api_app.dependency_overrides[require_single_tenant] = lambda: None
+    try:
+        client = TestClient(api_app)
+        resp = client.get(f"/agents/workflows/{RUN}")
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["workflow_run_id"] == RUN
+        assert body["agent_count"] == 1
+        assert body["agents"][0]["attribution_skill"] == "deep-research"
+
+        missing = client.get("/agents/workflows/wf_nope")
+        assert missing.status_code == 404
+    finally:
+        api_app.dependency_overrides.clear()

@@ -87,6 +87,15 @@ pub struct SessionMetadata {
     pub forked_from_session_id: Option<String>,
     pub subagent_id: Option<String>,
     pub subagent_prompt_id: Option<String>,
+    /// Claude dynamic-workflow run id, derived from the
+    /// `.../subagents/workflows/<run>/agent-*.jsonl` path segment.
+    pub workflow_run_id: Option<String>,
+    /// `attributionAgent` from workflow subagent assistant lines (e.g.
+    /// "workflow-subagent"); identifies the agent kind within a run.
+    pub attribution_agent: Option<String>,
+    /// `attributionSkill` from workflow subagent assistant lines (e.g.
+    /// "deep-research"); identifies the workflow/skill that spawned the run.
+    pub attribution_skill: Option<String>,
     pub cwd: Option<String>,
     pub git_branch: Option<String>,
     pub git_repo: Option<String>,
@@ -134,6 +143,11 @@ struct RawLine {
     version: Option<String>,
     #[serde(rename = "isSidechain")]
     is_sidechain: Option<bool>,
+    /// Workflow subagent attribution (assistant lines): agent kind + skill.
+    #[serde(rename = "attributionAgent")]
+    attribution_agent: Option<String>,
+    #[serde(rename = "attributionSkill")]
+    attribution_skill: Option<String>,
     /// Claude summary title/body line written during/after compaction.
     summary: Option<String>,
     /// Claude system-message subtype (e.g. compact_boundary).
@@ -566,6 +580,11 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
         }
     }
 
+    // Workflow run id comes from the on-disk path, not the line contents.
+    if result.metadata.workflow_run_id.is_none() {
+        result.metadata.workflow_run_id = workflow_run_id_from_path(path);
+    }
+
     let canonical_session_id = result.metadata.session_id.clone();
     if result
         .events
@@ -578,6 +597,21 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
     }
 
     Ok(result)
+}
+
+/// Extract the dynamic-workflow run id from a Claude workflow subagent path:
+/// `.../subagents/workflows/<run>/agent-*.jsonl` -> `<run>`.
+fn workflow_run_id_from_path(path: &Path) -> Option<String> {
+    let components: Vec<&str> = path
+        .components()
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect();
+    for window in components.windows(3) {
+        if window[0] == "subagents" && window[1] == "workflows" && !window[2].is_empty() {
+            return Some(window[2].to_string());
+        }
+    }
+    None
 }
 
 fn antigravity_session_id_from_path(path: &Path) -> Option<String> {
@@ -1322,6 +1356,29 @@ fn collect_metadata(
             {
                 meta.subagent_prompt_id = Some(prompt_id.to_string());
             }
+        }
+    }
+
+    // Workflow attribution lives on assistant lines, independent of the
+    // isSidechain gate above. First non-empty value wins for the session.
+    if meta.attribution_agent.is_none() {
+        if let Some(agent) = obj
+            .attribution_agent
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            meta.attribution_agent = Some(agent.to_string());
+        }
+    }
+    if meta.attribution_skill.is_none() {
+        if let Some(skill) = obj
+            .attribution_skill
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            meta.attribution_skill = Some(skill.to_string());
         }
     }
 
@@ -3906,5 +3963,34 @@ mod tests {
             result.metadata.session_id,
             "11111111-2222-3333-4444-555555555555"
         );
+    }
+
+    #[test]
+    fn workflow_agent_carries_run_id_and_attribution() {
+        // Phase 2 (P2): workflow_run_id comes from the path; attribution_agent /
+        // attribution_skill come from the assistant lines.
+        let agent = workflow_fixture_root()
+            .join("11111111-2222-3333-4444-555555555555")
+            .join("subagents")
+            .join("workflows")
+            .join("wf_testrun01")
+            .join("agent-a049eaf15e4dbcae3.jsonl");
+        let result = parse_session_file(&agent, 0).unwrap();
+        assert_eq!(result.metadata.workflow_run_id.as_deref(), Some("wf_testrun01"));
+        assert_eq!(result.metadata.attribution_agent.as_deref(), Some("workflow-subagent"));
+        assert_eq!(result.metadata.attribution_skill.as_deref(), Some("deep-research"));
+    }
+
+    #[test]
+    fn non_workflow_session_has_no_run_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "test-session.jsonl",
+            &[r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"content":"hi"}}"#],
+        );
+        let result = parse_session_file(&path, 0).unwrap();
+        assert!(result.metadata.workflow_run_id.is_none());
+        assert!(result.metadata.attribution_agent.is_none());
     }
 }

@@ -358,6 +358,9 @@ def _move_subagent_session_under_parent(
     raw_agent_id: str | None,
     raw_prompt_id: str | None,
     parent_provider_id: str,
+    workflow_run_id: str | None = None,
+    attribution_agent: str | None = None,
+    attribution_skill: str | None = None,
 ) -> dict[str, int]:
     """Re-stamp a leaked standalone subagent session's transcript/runtime rows
     onto its parent session + a child ``SessionThread``, then remove the now-empty
@@ -389,6 +392,9 @@ def _move_subagent_session_under_parent(
         child_provider_session_id=str(child_session.id),
         subagent_id=raw_agent_id or _subagent_id_from_source_path(source_path),
         subagent_prompt_id=raw_prompt_id,
+        workflow_run_id=workflow_run_id,
+        attribution_agent=attribution_agent,
+        attribution_skill=attribution_skill,
         parent_provider_session_id=parent_provider_id,
     )
     parent_branch = _ensure_head_branch(db, parent_thread.session_id)
@@ -574,6 +580,12 @@ def relink_orphan_subagents_for_parent(
             source_path = sorted(source_paths)[0]
         raw_parent_id, raw_agent_id, raw_prompt_id = _raw_sidechain_metadata_for_session(db, child_session.id)
 
+        # Carry forward workflow attribution recorded on the orphan primary thread.
+        orphan_labels = {
+            row.alias_kind: row.alias_value
+            for row in db.query(SessionThreadAlias).filter(SessionThreadAlias.thread_id == orphan_thread.id).all()
+        }
+
         counts = _move_subagent_session_under_parent(
             db,
             child_session=child_session,
@@ -582,6 +594,9 @@ def relink_orphan_subagents_for_parent(
             raw_agent_id=raw_agent_id or _subagent_id_from_source_path(source_path),
             raw_prompt_id=raw_prompt_id,
             parent_provider_id=parent_provider_session_id,
+            workflow_run_id=orphan_labels.get("workflow_run_id"),
+            attribution_agent=orphan_labels.get("workflow_attribution_agent"),
+            attribution_skill=orphan_labels.get("workflow_attribution_skill"),
         )
         summary["candidates_resolved"] += 1
         summary["sessions_removed"] += counts["sessions_removed"]

@@ -166,6 +166,8 @@ def ensure_subagent_thread(
     subagent_prompt_id: str | None = None,
     subagent_tool_use_id: str | None = None,
     workflow_run_id: str | None = None,
+    attribution_agent: str | None = None,
+    attribution_skill: str | None = None,
     parent_provider_session_id: str | None = None,
 ) -> SessionThread:
     """Return a non-primary child thread for a provider subagent transcript.
@@ -176,6 +178,11 @@ def ensure_subagent_thread(
     globally unique.
     """
 
+    # Per-agent identity aliases: unique to THIS subagent transcript. Used both
+    # to resolve an existing child thread and to label it. NOTE:
+    # forked_from_provider_session_id is intentionally NOT here — it is shared by
+    # every sibling subagent of a parent, so using it as an identity key would
+    # collapse all of a workflow run's agents onto one thread.
     alias_pairs: list[tuple[str, str]] = []
     for kind, value in (
         ("source_path", source_path),
@@ -184,12 +191,24 @@ def ensure_subagent_thread(
         ("claude_agent_id", subagent_id),
         ("claude_prompt_id", subagent_prompt_id),
         ("claude_tool_use_id", subagent_tool_use_id),
-        ("workflow_run_id", workflow_run_id),
-        ("forked_from_provider_session_id", parent_provider_session_id),
     ):
         normalized = str(value or "").strip()
         if normalized:
             alias_pairs.append((kind, normalized))
+
+    # Shared / descriptive aliases: recorded on the thread but NOT used for
+    # identity resolution (many subagents share the same parent / run id /
+    # attribution; using these as identity keys would collapse distinct agents).
+    label_pairs: list[tuple[str, str]] = []
+    for kind, value in (
+        ("forked_from_provider_session_id", parent_provider_session_id),
+        ("workflow_run_id", workflow_run_id),
+        ("workflow_attribution_agent", attribution_agent),
+        ("workflow_attribution_skill", attribution_skill),
+    ):
+        normalized = str(value or "").strip()
+        if normalized:
+            label_pairs.append((kind, normalized))
 
     for alias_kind, alias_value in alias_pairs:
         existing = (
@@ -228,7 +247,7 @@ def ensure_subagent_thread(
         except IntegrityError:
             thread = db.query(SessionThread).filter(SessionThread.id == thread_id).one()
 
-    for alias_kind, alias_value in alias_pairs:
+    for alias_kind, alias_value in alias_pairs + label_pairs:
         record_thread_alias(
             db,
             thread=thread,

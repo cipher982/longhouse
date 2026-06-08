@@ -451,6 +451,26 @@ def wall_query(
     return WallResponse(sessions=items, total=len(items))
 
 
+@router.get("/workflows/{workflow_run_id}")
+def get_workflow_run(
+    workflow_run_id: str,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict:
+    """Return the subagent threads that belong to a dynamic-workflow run.
+
+    Groups all agents tagged with this ``workflow_run_id`` under their parent
+    session and surfaces each agent's attribution labels — the data a UI uses to
+    render a workflow as a single collapsible unit.
+    """
+    store = AgentsStore(db)
+    run = store.get_workflow_run(workflow_run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Unknown workflow run: {workflow_run_id}")
+    return run
+
+
 @router.get("/sessions/{session_id}/tail")
 def session_tail(
     session_id: UUID,
