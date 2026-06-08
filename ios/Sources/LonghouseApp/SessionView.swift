@@ -1673,9 +1673,11 @@ final class SessionViewModel: ObservableObject {
             return true
         } catch let LonghouseAPIError.structured(_, _, message) {
             pauseResponseErrorMessage = message.isEmpty ? "Failed to send answer." : message
+            try? await refreshTail(api: api, sessionId: sessionId, allowFailure: true)
             return false
         } catch {
             pauseResponseErrorMessage = "Answer failed: \(error.localizedDescription)"
+            try? await refreshTail(api: api, sessionId: sessionId, allowFailure: true)
             return false
         }
     }

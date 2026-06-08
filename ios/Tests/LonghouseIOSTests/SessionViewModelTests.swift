@@ -384,6 +384,70 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func failedPauseResponseRefreshesStalePauseState() async throws {
+        let pauseRequestJSON = """
+        {
+          "id": "pause-stale",
+          "session_id": "session-1",
+          "runtime_key": "codex:session-1",
+          "kind": "structured_question",
+          "status": "pending",
+          "provider": "codex",
+          "can_respond": true,
+          "title": "Choose storage",
+          "summary": "Codex needs a storage decision.",
+          "tool_name": "requestUserInput",
+          "questions": [
+            {
+              "id": "storage",
+              "header": "Storage",
+              "question": "Which storage backend?",
+              "multi_select": false,
+              "options": [
+                {"label": "SQLite", "description": "Keep it local.", "value": "sqlite"}
+              ]
+            }
+          ],
+          "occurred_at": "2026-05-02T20:00:00Z",
+          "last_seen_at": "2026-05-02T20:00:00Z",
+          "resolved_at": null,
+          "expires_at": null
+        }
+        """
+        let before = try makeWorkspace(eventId: 10, content: "Before stale answer", pauseRequestJSON: pauseRequestJSON)
+        let after = try makeWorkspace(eventId: 11, content: "Already resolved")
+        let api = FakeSessionWorkspaceClient(workspaces: [before, after])
+        await api.failFuturePauseResponses(
+            LonghouseAPIError.structured(
+                status: 409,
+                errorCode: "pause_request_not_pending",
+                message: "This provider question has already resolved."
+            )
+        )
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        let request = try #require(model.detail?.activePauseRequest)
+        let answered = await model.respondToPauseRequest(
+            sessionId: "session-1",
+            appState: appState,
+            pauseRequest: request,
+            decision: "answer",
+            answers: ["storage": ["sqlite"]],
+            content: nil,
+            message: "Storage: sqlite"
+        )
+
+        #expect(!answered)
+        #expect(model.pauseResponseErrorMessage == "This provider question has already resolved.")
+        #expect(model.detail?.activePauseRequest == nil)
+        #expect(model.items.map(\.id) == ["user:11"])
+        #expect(await api.workspaceRequestCount() == 2)
+    }
+
+    @Test
     func successfulRetryClearsPriorFailedBubbleForSameText() async throws {
         let before = try makeWorkspace(eventId: 10, content: "Before send")
         let api = FakeSessionWorkspaceClient(workspaces: [before])
