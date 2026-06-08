@@ -22,6 +22,7 @@ from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionLivePreview
+from zerg.models.agents import SessionRuntimeState
 from zerg.services.session_pause_requests import resolve_pause_request
 from zerg.services.session_pause_requests import upsert_pause_request
 from zerg.services.session_workspace import build_session_mobile_tail
@@ -83,6 +84,26 @@ def test_workspace_revision_tracks_pause_request_create_and_resolve(tmp_path):
         assert pending.pause_request_fingerprint is not None
         assert pending.fingerprint != initial.fingerprint
 
+        _same_pause, changed = upsert_pause_request(
+            db,
+            session_id=session_id,
+            runtime_key="claude:session-1",
+            provider="claude",
+            request_key="claude:session-1:question-1",
+            provider_request_id="question-1",
+            title="Approval",
+            request_payload={"questions": [{"id": "approval", "question": "Proceed?"}]},
+            can_respond=True,
+            occurred_at=now + timedelta(seconds=10),
+        )
+        assert changed is True
+        db.commit()
+
+        reobserved = load_session_workspace_revision(db, session_id)
+        assert reobserved is not None
+        assert reobserved.pause_request_fingerprint == pending.pause_request_fingerprint
+        assert reobserved.fingerprint == pending.fingerprint
+
         resolve_pause_request(db, pause_request_id=pause.id, status="resolved", occurred_at=now + timedelta(seconds=1))
         db.commit()
 
@@ -114,6 +135,24 @@ def test_workspace_revision_tracks_managed_control_changes(tmp_path):
         assert attached.managed_control_fingerprint is not None
         assert attached.fingerprint != initial.fingerprint
 
+        _losing_thread, _losing_run, losing_conn = seed_managed_kernel_rows(db, session, state="detached")
+        db.commit()
+
+        with_losing_connection = load_session_workspace_revision(db, session_id)
+        assert with_losing_connection is not None
+        assert with_losing_connection.managed_control_count == 1
+        assert with_losing_connection.managed_control_fingerprint == attached.managed_control_fingerprint
+        assert with_losing_connection.fingerprint == attached.fingerprint
+
+        losing_conn.last_health_at = datetime.now(timezone.utc) + timedelta(seconds=3)
+        db.add(losing_conn)
+        db.commit()
+
+        losing_connection_ticked = load_session_workspace_revision(db, session_id)
+        assert losing_connection_ticked is not None
+        assert losing_connection_ticked.managed_control_fingerprint == attached.managed_control_fingerprint
+        assert losing_connection_ticked.fingerprint == attached.fingerprint
+
         conn.state = "degraded"
         conn.last_health_at = datetime.now(timezone.utc) + timedelta(seconds=5)
         db.add(conn)
@@ -124,6 +163,50 @@ def test_workspace_revision_tracks_managed_control_changes(tmp_path):
         assert degraded.managed_control_count == 1
         assert degraded.managed_control_fingerprint != attached.managed_control_fingerprint
         assert degraded.fingerprint != attached.fingerprint
+
+
+def test_workspace_revision_tracks_runtime_state_updates(tmp_path):
+    sf = _make_db(tmp_path, name="session_workspace_revision_runtime.db")
+    now = datetime.now(timezone.utc)
+
+    with sf() as db:
+        session = _seed_session(db)
+        db.commit()
+        session_id = session.id
+
+        initial = load_session_workspace_revision(db, session_id)
+        assert initial is not None
+        assert initial.latest_runtime_signal_at is None
+        assert initial.runtime_version_sum == 0
+
+        runtime = SessionRuntimeState(
+            runtime_key=f"claude:{session_id}",
+            session_id=session_id,
+            provider="claude",
+            phase="running",
+            phase_source="runtime_event",
+            timeline_anchor_at=now,
+            updated_at=now,
+            runtime_version=1,
+        )
+        db.add(runtime)
+        db.commit()
+
+        running = load_session_workspace_revision(db, session_id)
+        assert running is not None
+        assert running.latest_runtime_signal_at == now
+        assert running.runtime_version_sum == 1
+        assert running.fingerprint != initial.fingerprint
+
+        runtime.runtime_version = 2
+        runtime.updated_at = now + timedelta(seconds=5)
+        db.add(runtime)
+        db.commit()
+
+        updated = load_session_workspace_revision(db, session_id)
+        assert updated is not None
+        assert updated.runtime_version_sum == 2
+        assert updated.fingerprint != running.fingerprint
 
 
 def test_workspace_revision_tracks_live_preview_updates(tmp_path):
@@ -161,6 +244,25 @@ def test_workspace_revision_tracks_live_preview_updates(tmp_path):
         assert preview is not None
         assert preview.live_preview_updated_at == now
         assert preview.fingerprint != initial.fingerprint
+
+
+def test_workspace_revision_is_stable_for_identical_reads(tmp_path):
+    sf = _make_db(tmp_path, name="session_workspace_revision_stable.db")
+    now = datetime.now(timezone.utc)
+
+    with sf() as db:
+        session = _seed_session(db)
+        db.add(AgentEvent(session_id=str(session.id), role="assistant", content_text="hello", timestamp=now))
+        db.commit()
+        session_id = session.id
+
+        first = load_session_workspace_revision(db, session_id)
+        second = load_session_workspace_revision(db, session_id)
+
+        assert first is not None
+        assert second is not None
+        assert second.signature == first.signature
+        assert second.fingerprint == first.fingerprint
 
 
 def test_workspace_responses_include_matching_revision(tmp_path):

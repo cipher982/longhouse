@@ -21,6 +21,7 @@ from zerg.models.agents import SessionPauseRequest
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionThread
+from zerg.services.managed_control_state import _connection_priority as _managed_control_connection_priority
 from zerg.services.managed_provider_contracts import provider_for_control_plane
 from zerg.services.managed_provider_contracts import trusted_non_runner_control_planes
 from zerg.services.session_pause_requests import PENDING_STATUS
@@ -150,10 +151,8 @@ def _pause_request_signature(db: Session, session_ids: list[UUID]) -> tuple[tupl
             bool(row.can_respond),
             _json_key(row.request_payload_json),
             _dt_key(row.occurred_at),
-            _dt_key(row.last_seen_at),
             _dt_key(row.resolved_at),
             _dt_key(row.expires_at),
-            _dt_key(row.updated_at),
         )
         for row in rows
     )
@@ -180,6 +179,12 @@ def _managed_control_signature(db: Session, session_ids: list[UUID]) -> tuple[tu
         )
         .all()
     )
+    best: dict[UUID, SessionConnection] = {}
+    for session_id, conn in rows:
+        existing = best.get(session_id)
+        if existing is None or _managed_control_connection_priority(conn) > _managed_control_connection_priority(existing):
+            best[session_id] = conn
+
     return tuple(
         (
             str(session_id),
@@ -199,7 +204,7 @@ def _managed_control_signature(db: Session, session_ids: list[UUID]) -> tuple[tu
             _dt_key(conn.released_at),
             _dt_key(conn.last_health_at),
         )
-        for session_id, conn in rows
+        for session_id, conn in sorted(best.items(), key=lambda item: str(item[0]))
     )
 
 
