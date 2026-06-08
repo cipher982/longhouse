@@ -447,6 +447,29 @@ def test_get_workflow_run_unknown_returns_none(tmp_path):
         assert store.get_workflow_run("wf_does_not_exist") is None
 
 
+def test_relink_failure_does_not_corrupt_committed_parent(tmp_path, monkeypatch):
+    """If relink raises mid-ingest, the already-committed parent must survive and
+    the transaction is rolled back cleanly (no half-relinked state)."""
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        store.ingest_session(_agent_payload())  # orphan exists
+
+        def _boom(*_a, **_k):
+            raise RuntimeError("relink blew up")
+
+        monkeypatch.setattr(
+            "zerg.services.agents.kernel_backfill.relink_orphan_subagents_for_parent",
+            _boom,
+        )
+        # Parent ingest must still succeed despite the relink failure.
+        result = store.ingest_session(_parent_payload())
+        assert result.session_id == PARENT_ID
+        # Parent persisted; orphan untouched (relink rolled back, not half-applied).
+        assert db.query(AgentSession).filter(AgentSession.id == PARENT_ID).first() is not None
+        assert db.query(AgentSession).filter(AgentSession.id == AGENT_ID).first() is not None
+
+
 def test_workflow_run_query_endpoint(tmp_path):
     from types import SimpleNamespace
 

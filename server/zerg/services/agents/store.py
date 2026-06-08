@@ -2010,6 +2010,13 @@ class AgentsStore:
                         session_id,
                     )
             except Exception:
+                # The main ingest already committed above; roll back ONLY the
+                # dirty relink work so the auto-commit in the write path (or the
+                # get_db dependency) cannot persist a half-relinked transaction.
+                try:
+                    self.db.rollback()
+                except Exception:
+                    logger.warning("Rollback after failed relink also failed for %s", session_id, exc_info=True)
                 logger.warning("Orphan subagent relink failed for %s", session_id, exc_info=True)
 
         return IngestResult(
@@ -2027,7 +2034,7 @@ class AgentsStore:
             },
         )
 
-    def get_workflow_run(self, workflow_run_id: str) -> dict | None:
+    def get_workflow_run(self, workflow_run_id: str, *, provider: str = "claude") -> dict | None:
         """Return the subagent threads that belong to a dynamic-workflow run.
 
         Resolves all threads tagged with the ``workflow_run_id`` alias, groups
@@ -2038,9 +2045,12 @@ class AgentsStore:
         if not run_id:
             return None
 
+        # provider predicate first so the (provider, alias_kind, alias_value)
+        # composite index drives the lookup.
         thread_rows = (
             self.db.query(SessionThread)
             .join(SessionThreadAlias, SessionThreadAlias.thread_id == SessionThread.id)
+            .filter(SessionThreadAlias.provider == provider)
             .filter(SessionThreadAlias.alias_kind == "workflow_run_id")
             .filter(SessionThreadAlias.alias_value == run_id)
             .order_by(SessionThread.created_at.asc(), SessionThread.id.asc())
@@ -2050,19 +2060,27 @@ class AgentsStore:
             return None
 
         # Distinct threads (a thread can match the alias more than once defensively).
-        seen: set = set()
+        thread_ids = []
+        seen_threads: set = set()
+        for thread in thread_rows:
+            if thread.id not in seen_threads:
+                seen_threads.add(thread.id)
+                thread_ids.append(thread.id)
+
+        # Batch-fetch all labels for these threads in one query (no N+1).
+        labels_by_thread: dict = {}
+        for row in self.db.query(SessionThreadAlias).filter(SessionThreadAlias.thread_id.in_(thread_ids)).all():
+            labels_by_thread.setdefault(row.thread_id, {})[row.alias_kind] = row.alias_value
+
         agents: list[dict] = []
         parent_session_ids: set = set()
         skill = None
         for thread in thread_rows:
-            if thread.id in seen:
+            if thread.id not in seen_threads:
                 continue
-            seen.add(thread.id)
+            seen_threads.discard(thread.id)
             parent_session_ids.add(str(thread.session_id))
-            labels = {
-                row.alias_kind: row.alias_value
-                for row in self.db.query(SessionThreadAlias).filter(SessionThreadAlias.thread_id == thread.id).all()
-            }
+            labels = labels_by_thread.get(thread.id, {})
             skill = skill or labels.get("workflow_attribution_skill")
             agents.append(
                 {

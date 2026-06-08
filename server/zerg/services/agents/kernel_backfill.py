@@ -554,6 +554,9 @@ def relink_orphan_subagents_for_parent(
         .filter(SessionThread.provider == provider)
         .filter(SessionThread.is_primary == 1)
         .filter(SessionThread.branch_kind == "subagent")
+        # provider predicate first so the (provider, alias_kind, alias_value)
+        # composite index drives this hot-path lookup.
+        .filter(SessionThreadAlias.provider == provider)
         .filter(SessionThreadAlias.alias_kind == "forked_from_provider_session_id")
         .filter(SessionThreadAlias.alias_value == parent_provider_session_id)
         .all()
