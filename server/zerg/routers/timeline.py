@@ -45,6 +45,7 @@ from zerg.schemas.machines import MachineDirectoryEntry
 from zerg.schemas.machines import MachineDirectoryResponse
 from zerg.schemas.machines import WorkspaceSuggestion
 from zerg.schemas.machines import WorkspaceSuggestionsResponse
+from zerg.services.agents_store import AgentsStore
 from zerg.services.machines_directory import build_machines_directory
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_views import DemoSeedResponse
@@ -508,6 +509,38 @@ async def get_timeline_session_turns(
         _auth=None,
         _single=None,
     )
+
+
+@router.get("/sessions/{session_id}/workflows")
+def get_timeline_session_workflow_runs(
+    session_id: UUID,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_browser_user),
+) -> dict:
+    """List dynamic-workflow runs whose subagent threads live under this session.
+
+    Browser-cookie-authenticated mirror of the machine-facing
+    ``/agents/sessions/{id}/workflows``. Each entry is one collapsible workflow
+    run node for the session detail UI.
+    """
+    store = AgentsStore(db)
+    runs = store.list_workflow_runs_for_session(session_id)
+    return {"session_id": str(session_id), "workflow_runs": runs}
+
+
+@router.get("/workflows/{workflow_run_id}")
+def get_timeline_workflow_run(
+    workflow_run_id: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_browser_user),
+) -> dict:
+    """Return one dynamic-workflow run's subagent threads (browser-auth mirror of
+    ``/agents/workflows/{run_id}``)."""
+    store = AgentsStore(db)
+    run = store.get_workflow_run(workflow_run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Unknown workflow run: {workflow_run_id}")
+    return run
 
 
 @router.get("/sessions/{session_id}/turns/{turn_id}", response_model=SessionTurnEnvelopeResponse)

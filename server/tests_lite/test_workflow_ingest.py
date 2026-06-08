@@ -519,11 +519,15 @@ def test_workflow_run_query_endpoint(tmp_path):
         finally:
             db.close()
 
+    from zerg.dependencies.browser_auth import get_current_browser_user
+
     api_app.dependency_overrides[get_db] = override_db
     api_app.dependency_overrides[verify_agents_token] = lambda: SimpleNamespace(device_id="d", id="t", owner_id=1)
     api_app.dependency_overrides[require_single_tenant] = lambda: None
+    api_app.dependency_overrides[get_current_browser_user] = lambda: SimpleNamespace(id=1, email="david010@gmail.com")
     try:
         client = TestClient(api_app)
+        # Machine-facing /agents route.
         resp = client.get(f"/agents/workflows/{RUN}")
         assert resp.status_code == 200, resp.text
         body = resp.json()
@@ -533,5 +537,16 @@ def test_workflow_run_query_endpoint(tmp_path):
 
         missing = client.get("/agents/workflows/wf_nope")
         assert missing.status_code == 404
+
+        # Browser-facing /timeline mirror (what the web UI calls).
+        t_resp = client.get(f"/timeline/workflows/{RUN}")
+        assert t_resp.status_code == 200, t_resp.text
+        assert t_resp.json()["workflow_run_id"] == RUN
+
+        t_runs = client.get(f"/timeline/sessions/{PARENT_ID}/workflows")
+        assert t_runs.status_code == 200, t_runs.text
+        t_body = t_runs.json()
+        assert len(t_body["workflow_runs"]) == 1
+        assert t_body["workflow_runs"][0]["workflow_run_id"] == RUN
     finally:
         api_app.dependency_overrides.clear()

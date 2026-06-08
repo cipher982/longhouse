@@ -779,12 +779,14 @@ export async function fetchAgentSessionThread(
   );
 }
 
-/** List the dynamic-workflow runs whose subagent threads live under a session. */
+/** List the dynamic-workflow runs whose subagent threads live under a session.
+ * Browser-cookie-authenticated via the /timeline router (NOT /agents, which is
+ * machine-token auth). */
 export async function fetchSessionWorkflowRuns(
   sessionId: string,
 ): Promise<SessionWorkflowRunsResponse> {
   return request<SessionWorkflowRunsResponse>(
-    `/agents/sessions/${sessionId}/workflows`,
+    `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/workflows`,
     { method: "GET" },
   );
 }
@@ -794,7 +796,7 @@ export async function fetchWorkflowRun(
   workflowRunId: string,
 ): Promise<WorkflowRunResponse> {
   return request<WorkflowRunResponse>(
-    `/agents/workflows/${workflowRunId}`,
+    `${TIMELINE_API_PREFIX}/workflows/${workflowRunId}`,
     { method: "GET" },
   );
 }

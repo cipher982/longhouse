@@ -377,8 +377,8 @@ async function installSceneMocks(
         return;
       }
 
-      // Dynamic-workflow run grouping (WorkflowRunsPanel).
-      if (pathname === `/api/agents/sessions/${fixture.session.id}/workflows`) {
+      // Dynamic-workflow run grouping (WorkflowRunsPanel) — browser-auth timeline routes.
+      if (pathname === `${sessionBasePath}/workflows`) {
         await route.fulfill({
           status: 200,
           contentType: "application/json",
@@ -390,7 +390,7 @@ async function installSceneMocks(
         return;
       }
 
-      if (pathname === "/api/agents/workflows/wf_deep_research") {
+      if (pathname === "/api/timeline/workflows/wf_deep_research") {
         await route.fulfill({
           status: 200,
           contentType: "application/json",
