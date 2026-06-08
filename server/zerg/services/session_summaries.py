@@ -21,7 +21,6 @@ from zerg.config import get_settings
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.services.provisional_events import durable_transcript_event_predicate
-from zerg.services.session_title import anchor_freeze_policy
 from zerg.services.session_title import freeze_anchor_title
 
 logger = logging.getLogger(__name__)
@@ -39,13 +38,6 @@ class _SummaryEventChunk:
     events: list[dict]
     last_event_id: int | None
     has_more: bool
-
-
-def _anchor_value(frozen_anchor: str, *, is_closed: bool):
-    """SQL value for anchor_title: overwrite on close, else write-once COALESCE."""
-    if anchor_freeze_policy(is_closed) == "overwrite":
-        return frozen_anchor
-    return func.coalesce(AgentSession.anchor_title, frozen_anchor)
 
 
 def _summary_content_values(summary: Any) -> dict[str, str]:
@@ -210,11 +202,10 @@ async def summarize_and_persist(
         logger.warning("Discarding placeholder summary result for session %s", session.id)
 
     # Freeze the muscle-memory anchor the first time a usable title appears.
-    # While live this is write-once (COALESCE) so the card never moves; once the
-    # session is closed we promote the final title, the best thing a user
-    # revisiting the row will see. summary_title keeps drifting for search either way.
+    # Write-once (COALESCE) so the card never moves while summary_title keeps
+    # drifting for search. The final title is promoted to anchor_title in the
+    # session-close path (session_runtime.py), not here.
     frozen_anchor = freeze_anchor_title(content_values.get("summary_title"))
-    anchor_closed = session.ended_at is not None
 
     def _do_persist(write_db: Session) -> int:
         values = dict(
@@ -224,7 +215,7 @@ async def summarize_and_persist(
             **content_values,
         )
         if frozen_anchor:
-            values["anchor_title"] = _anchor_value(frozen_anchor, is_closed=anchor_closed)
+            values["anchor_title"] = func.coalesce(AgentSession.anchor_title, frozen_anchor)
         result = write_db.execute(sa_update(AgentSession).where(AgentSession.id == session.id).values(**values))
         return int(result.rowcount or 0)
 
@@ -235,7 +226,7 @@ async def summarize_and_persist(
             session.summary = content_values["summary"]
         if "summary_title" in content_values:
             session.summary_title = content_values["summary_title"]
-        if frozen_anchor and (anchor_closed or not session.anchor_title):
+        if frozen_anchor and not session.anchor_title:
             session.anchor_title = frozen_anchor
         session.summary_event_count = len(events)
         session.last_summarized_event_id = new_last_event_id
@@ -418,11 +409,10 @@ async def generate_summary_impl(session_id: str) -> None:
                 content_values = _summary_content_values(summary)
                 if content_values:
                     values.update(content_values)
-                    # Freeze the timeline anchor (see summarize_and_persist above):
-                    # write-once while live, promote the final title once closed.
+                    # Write-once freeze of the timeline anchor (see summarize_and_persist).
                     frozen_anchor = freeze_anchor_title(content_values.get("summary_title"))
                     if frozen_anchor:
-                        values["anchor_title"] = _anchor_value(frozen_anchor, is_closed=session.ended_at is not None)
+                        values["anchor_title"] = func.coalesce(AgentSession.anchor_title, frozen_anchor)
                 else:
                     logger.warning("Discarding placeholder summary result for session %s", session_id)
 

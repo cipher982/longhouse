@@ -29,6 +29,7 @@ from zerg.services.session_live_previews import live_preview_candidate_from_runt
 from zerg.services.session_live_previews import upsert_session_live_preview
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_observations import record_runtime_observation
+from zerg.services.session_title import freeze_anchor_title
 from zerg.utils.time import normalize_utc
 
 RuntimeEventKind = Literal[
@@ -980,6 +981,12 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
             session = db.query(AgentSession).filter(AgentSession.id == event.session_id).first()
             if session is not None and session.ended_at is None:
                 session.ended_at = occurred_at
+                # Promote the final summary title to the frozen anchor: a closed
+                # session is the stable thing a user revisits, so overwrite any
+                # anchor that froze too early on a tiny opening transcript.
+                promoted = freeze_anchor_title(session.summary_title)
+                if promoted:
+                    session.anchor_title = promoted
             from zerg.services.session_pause_requests import expire_pending_pause_requests_for_session
 
             pause_changed = (

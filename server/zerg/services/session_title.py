@@ -24,8 +24,15 @@ _SUMMARIZING_PLACEHOLDER = "Summarizing…"
 
 # Noise we strip before extracting words. Order matters: fenced blocks and
 # images go first so their contents never leak into the headline.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 _FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
-_INLINE_CODE_RE = re.compile(r"`([^`]*)`")
+# Any run of code-fence backticks (handles unterminated fences in mid-paste
+# first messages, e.g. "```\nplease fix").
+_LOOSE_FENCE_RE = re.compile(r"`{3,}[a-zA-Z0-9_-]*")
+# Inline code is stripped entirely (not unwrapped): a backticked command or
+# path is noise, not a headline.
+_INLINE_CODE_RE = re.compile(r"`[^`]*`")
+_TAG_RE = re.compile(r"</?[a-zA-Z][^>]*>")  # <thinking>, </system>, HTML tags
 _IMAGE_TAG_RE = re.compile(r"\[image[^\]]*\]", re.IGNORECASE)
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
@@ -45,19 +52,23 @@ def sanitize_title(text: str | None, *, max_words: int = _MAX_TITLE_WORDS) -> st
     if not text:
         return None
 
-    cleaned = _FENCE_RE.sub(" ", text)
+    cleaned = _CONTROL_CHARS_RE.sub(" ", text)
+    cleaned = _FENCE_RE.sub(" ", cleaned)
+    cleaned = _LOOSE_FENCE_RE.sub(" ", cleaned)  # unterminated/leftover fences
     cleaned = _MD_IMAGE_RE.sub(" ", cleaned)
     cleaned = _IMAGE_TAG_RE.sub(" ", cleaned)
     cleaned = _MD_LINK_RE.sub(r"\1", cleaned)  # keep link label, drop target
     cleaned = _URL_RE.sub(" ", cleaned)
-    cleaned = _INLINE_CODE_RE.sub(r"\1", cleaned)
+    cleaned = _INLINE_CODE_RE.sub(" ", cleaned)  # drop backticked code/paths
+    cleaned = _TAG_RE.sub(" ", cleaned)  # <thinking>, html, tool tags
     cleaned = _TRIPLE_QUOTE_RE.sub(" ", cleaned)
 
-    # First non-empty line, with any markdown heading marker stripped.
+    # First line with real (alphanumeric) content, heading marker stripped.
+    # Skips lines that are only punctuation/quotes left over from stripping.
     line = ""
     for raw_line in cleaned.splitlines():
         candidate = _HEADING_PREFIX_RE.sub("", raw_line).strip()
-        if candidate:
+        if candidate and any(ch.isalnum() for ch in candidate):
             line = candidate
             break
     if not line:
@@ -125,22 +136,12 @@ def resolve_timeline_title(
     return structured_fallback_title(project, git_branch)
 
 
-def anchor_freeze_policy(is_closed: bool) -> str:
-    """Whether a fresh title should overwrite the frozen anchor or hold it.
-
-    While a session is live the anchor is write-once (muscle-memory stability).
-    Once closed, the final summary is the best stable title a user will revisit,
-    so we promote it — overwriting an anchor that may have frozen too early on a
-    tiny opening transcript. Returns 'overwrite' or 'write_once'.
-    """
-    return "overwrite" if is_closed else "write_once"
-
-
 def freeze_anchor_title(summary_title: str | None) -> str | None:
     """Sanitized snapshot to persist as the frozen anchor, or None to skip.
 
-    Called when a summary first becomes ready. Never freezes garbage: if the
-    title sanitizes to nothing, returns None and the row stays unfrozen until a
-    better title arrives (or close-time promotion fills it in).
+    Called when a summary first becomes ready (write-once) or when a session
+    closes (promotion). Never freezes garbage: if the title sanitizes to
+    nothing, returns None and the row stays unfrozen until a better title
+    arrives (or close-time promotion fills it in).
     """
     return sanitize_title(summary_title)

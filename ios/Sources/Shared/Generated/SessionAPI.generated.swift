@@ -241,6 +241,8 @@ struct APISessionResponse: Codable, Hashable, Sendable {
     let confidence: String?
     let summary: String?
     let summaryTitle: String?
+    let anchorTitle: String?
+    let timelineTitle: String?
     let summaryStatus: String?
     let firstUserMessage: String?
     let matchEventId: Int?

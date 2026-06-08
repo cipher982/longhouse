@@ -1,6 +1,5 @@
 """Unit tests for the pure timeline-title helpers."""
 
-from zerg.services.session_title import anchor_freeze_policy
 from zerg.services.session_title import freeze_anchor_title
 from zerg.services.session_title import resolve_timeline_title
 from zerg.services.session_title import sanitize_title
@@ -46,6 +45,26 @@ class TestSanitizeTitle:
         assert sanitize_title('"""') is None
         assert sanitize_title("[Image #1]") is None
         assert sanitize_title("```\ncode\n```") is None
+
+    def test_drops_inline_code(self):
+        # A backticked command/path is noise, not a headline.
+        assert sanitize_title("`rm -rf /`") is None
+        assert sanitize_title("run `make test` then check") == "run then check"
+
+    def test_strips_unterminated_fence(self):
+        # Mid-paste first messages often have an opening fence with no close.
+        assert sanitize_title("```\nplease fix the bug") == "please fix the bug"
+        assert sanitize_title("```python\nplease fix") == "please fix"
+
+    def test_strips_control_chars(self):
+        assert sanitize_title("\x00\x07 fix the bug") == "fix the bug"
+
+    def test_strips_tags(self):
+        assert sanitize_title("<thinking> do the thing </thinking>") == "do the thing"
+
+    def test_punctuation_only_line_skipped(self):
+        # A leftover quote/bullet line must not become the headline.
+        assert sanitize_title('>\n\nactually fix the thing') == "actually fix the thing"
 
 
 class TestStructuredFallback:
@@ -111,11 +130,3 @@ class TestFreezeAnchorTitle:
     def test_skips_when_nothing_usable(self):
         assert freeze_anchor_title("[Image #1]") is None
         assert freeze_anchor_title(None) is None
-
-
-class TestAnchorFreezePolicy:
-    def test_live_is_write_once(self):
-        assert anchor_freeze_policy(is_closed=False) == "write_once"
-
-    def test_closed_overwrites(self):
-        assert anchor_freeze_policy(is_closed=True) == "overwrite"

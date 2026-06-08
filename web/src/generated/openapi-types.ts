@@ -9898,9 +9898,19 @@ export interface components {
             summary?: string | null;
             /**
              * Summary Title
-             * @description Short session title
+             * @description Short session title (drifts as transcript grows)
              */
             summary_title?: string | null;
+            /**
+             * Anchor Title
+             * @description Frozen, write-once headline; stable across the session's life
+             */
+            anchor_title?: string | null;
+            /**
+             * Timeline Title
+             * @description Resolved headline a client should render: frozen anchor_title, else ready summary_title, else sanitized first message, else 'Summarizing…'/structured fallback. Always non-empty. Clients render this verbatim — no client-side fallback ladder.
+             */
+            timeline_title?: string | null;
             /**
              * Summary Status
              * @description Honest summarization state: ready (summary present), pending (task queued/running), failed (terminal — won't auto-retry), unavailable (no task / too little content). Tiebreaker: ready > pending > failed > unavailable.
