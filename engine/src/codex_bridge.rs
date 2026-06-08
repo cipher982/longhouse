@@ -3,6 +3,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -13,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -39,6 +40,7 @@ pub const LEGACY_LAUNCH_MODE_HEADLESS: &str = "headless";
 // Readers accept the old dogfood `headless` value, but writers emit the product
 // lifecycle name directly.
 pub const PERSISTED_DETACHED_UI_LAUNCH_MODE: &str = LAUNCH_MODE_DETACHED_UI;
+const PAUSE_KIND_STRUCTURED_QUESTION: &str = "structured_question";
 const BRIDGE_OPT_OUT_NOTIFICATION_METHODS: &[&str] = &[
     "item/plan/delta",
     "item/reasoning/summaryTextDelta",
@@ -100,6 +102,9 @@ pub struct BridgeStartConfig {
     pub model_reasoning_effort: Option<String>,
     pub machine_name: Option<String>,
     pub auto_approve: bool,
+    /// Debug/canary flag. When true, structured user-input app-server
+    /// requests are held open for Longhouse to answer over bridge IPC.
+    pub hold_user_input_requests: bool,
     pub state_root: Option<PathBuf>,
     pub longhouse_home: Option<PathBuf>,
     pub log_file: Option<PathBuf>,
@@ -129,6 +134,9 @@ pub struct BridgeRunConfig {
     pub model_reasoning_effort: Option<String>,
     pub machine_name: Option<String>,
     pub auto_approve: bool,
+    /// Debug/canary flag. Normal managed sessions start detection-only until
+    /// the held-request path is proven by provider canaries.
+    pub hold_user_input_requests: bool,
     pub longhouse_home: Option<PathBuf>,
     pub state_file: PathBuf,
     pub log_file: PathBuf,
@@ -308,6 +316,25 @@ struct BridgeContext {
     runtime_tracker: CodexRuntimeTracker,
     subscribed_thread_id: Option<String>,
     rejected_thread_ids: BTreeSet<String>,
+    pending_pause_requests: PendingPauseRequests,
+}
+
+type PendingPauseRequests = Arc<Mutex<BTreeMap<String, PendingProviderRequest>>>;
+
+#[derive(Debug, Clone)]
+struct PendingProviderRequest {
+    request_key: String,
+    provider_request_id: String,
+    method: String,
+    request_id: Value,
+    params: Value,
+}
+
+#[derive(Clone)]
+struct PauseRequestResponder {
+    pending: PendingPauseRequests,
+    outbound: mpsc::UnboundedSender<String>,
+    runtime: BridgeRuntimeSink,
 }
 
 #[derive(Debug, Clone)]
@@ -460,6 +487,7 @@ fn ipc_socket_path(state_file: &Path) -> PathBuf {
 fn spawn_ipc_listener(
     sock_path: PathBuf,
     tx: mpsc::UnboundedSender<IpcCommand>,
+    pause_responder: Option<PauseRequestResponder>,
 ) -> Result<tokio::task::JoinHandle<()>> {
     // Clean up stale socket
     let _ = fs::remove_file(&sock_path);
@@ -479,8 +507,9 @@ fn spawn_ipc_listener(
                 }
             };
             let tx = tx.clone();
+            let pause_responder = pause_responder.clone();
             tokio::spawn(async move {
-                if let Err(e) = handle_ipc_connection(stream, tx).await {
+                if let Err(e) = handle_ipc_connection(stream, tx, pause_responder).await {
                     eprintln!("[codex-bridge] ipc connection error: {e}");
                 }
             });
@@ -492,6 +521,7 @@ fn spawn_ipc_listener(
 async fn handle_ipc_connection(
     mut stream: tokio::net::UnixStream,
     tx: mpsc::UnboundedSender<IpcCommand>,
+    pause_responder: Option<PauseRequestResponder>,
 ) -> Result<()> {
     let mut buf = vec![0u8; 8192];
     let mut total = 0usize;
@@ -511,6 +541,12 @@ async fn handle_ipc_connection(
     }
     let request: Value =
         serde_json::from_slice(&buf[..total]).context("parsing IPC request JSON")?;
+    if request.get("kind").and_then(Value::as_str) == Some("pause_response") {
+        let responder = pause_responder.context("pause response IPC is not enabled")?;
+        let result = responder.respond(request).await;
+        write_ipc_result(&mut stream, result).await?;
+        return Ok(());
+    }
     let (reply_tx, reply_rx) = oneshot::channel();
     let command = match request.get("kind").and_then(Value::as_str) {
         Some("stop") => IpcCommand::Stop {
@@ -573,6 +609,15 @@ async fn handle_ipc_connection(
         .await
         .map_err(|_| anyhow!("daemon dropped reply channel"))?;
 
+    write_ipc_result(&mut stream, result).await?;
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn write_ipc_result(
+    stream: &mut tokio::net::UnixStream,
+    result: Result<Value>,
+) -> Result<()> {
     let response = match result {
         Ok(value) => match value {
             Value::Object(mut object) => {
@@ -714,6 +759,9 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
     }
     if config.auto_approve {
         child.arg("--auto-approve");
+    }
+    if config.hold_user_input_requests {
+        child.arg("--hold-user-input-requests");
     }
     if config.create_initial_thread {
         child.arg("--create-initial-thread");
@@ -1057,6 +1105,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         runtime_tracker: CodexRuntimeTracker::default(),
         subscribed_thread_id: startup_subscribed_thread_id,
         rejected_thread_ids: BTreeSet::new(),
+        pending_pause_requests: Arc::new(Mutex::new(BTreeMap::new())),
     };
     // Mark ready so the CLI can read ws_url and launch the TUI. Prestart
     // launches already have a thread id; legacy TUI launches capture it later
@@ -1073,9 +1122,14 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     // Spawn IPC socket listener so `send` routes through the daemon's persistent connection
     let sock_path = ipc_socket_path(&context.state_file);
     let (ipc_tx, mut ipc_rx) = mpsc::unbounded_channel::<IpcCommand>();
+    let pause_responder = PauseRequestResponder {
+        pending: context.pending_pause_requests.clone(),
+        outbound: websocket_outbound_sender(&client),
+        runtime: context.runtime.clone(),
+    };
 
     #[cfg(unix)]
-    let _ipc_handle = spawn_ipc_listener(sock_path.clone(), ipc_tx)?;
+    let _ipc_handle = spawn_ipc_listener(sock_path.clone(), ipc_tx, Some(pause_responder))?;
 
     // Cleanup socket on exit
     struct SocketCleanup(PathBuf);
@@ -1099,7 +1153,13 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     loop {
         tokio::select! {
             event_result = recv_event(&mut client) => {
-                let event = event_result?;
+                let event = match event_result {
+                    Ok(event) => event,
+                    Err(err) => {
+                        fail_pending_pause_requests(&mut context, "failed", "Codex app-server connection closed.").await;
+                        return Err(err);
+                    }
+                };
                 match event {
                     StreamEvent::Rpc(value) => {
                         if value.get("id").is_some() && value.get("method").is_some() {
@@ -1123,6 +1183,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                     }
                     StreamEvent::StdoutParseError(detail) => {
                         eprintln!("[codex-bridge] protocol error: {detail}");
+                        fail_pending_pause_requests(&mut context, "failed", "Codex app-server protocol error.").await;
                         update_bridge_error(&mut context, &detail)?;
                         bail!("codex bridge protocol error: {detail}");
                     }
@@ -1170,6 +1231,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                         terminal_reason,
                         reply,
                     } => {
+                        fail_pending_pause_requests(&mut context, "expired", "Codex bridge stopped before the question was answered.").await;
                         crate::codex_attachments::cleanup_session_tmpdir(&context.state.session_id);
                         context.state.status = "stopped".to_string();
                         context.state.active_turn_id = None;
@@ -2337,6 +2399,12 @@ async fn send_payload(client: &mut RpcClient, payload: &Value) -> Result<()> {
     Ok(())
 }
 
+fn websocket_outbound_sender(client: &RpcClient) -> mpsc::UnboundedSender<String> {
+    match &client.outbound {
+        RpcOutbound::WebSocket(tx) => tx.clone(),
+    }
+}
+
 async fn send_request(client: &mut RpcClient, method: &str, params: Value) -> Result<Value> {
     let request_id = client.next_request_id;
     client.next_request_id += 1;
@@ -2404,7 +2472,18 @@ async fn send_request_with_runtime(
     send_payload(client, &payload).await?;
 
     loop {
-        let event = recv_event(client).await?;
+        let event = match recv_event(client).await {
+            Ok(event) => event,
+            Err(err) => {
+                fail_pending_pause_requests(
+                    context,
+                    "failed",
+                    "Codex app-server connection closed.",
+                )
+                .await;
+                return Err(err);
+            }
+        };
         match event {
             StreamEvent::Rpc(value) => {
                 if value.get("id").is_some() && value.get("method").is_some() {
@@ -2476,6 +2555,30 @@ async fn handle_server_request(
         emit_runtime_updates(config, context, vec![update]).await;
     }
 
+    let structured_request = if is_structured_pause_request_method(method) {
+        let provider_request_id = provider_request_id_from_jsonrpc_id(&request_id);
+        let pending = PendingProviderRequest {
+            request_key: codex_pause_request_key(&context.state.session_id, &provider_request_id),
+            provider_request_id,
+            method: method.to_string(),
+            request_id: request_id.clone(),
+            params: params.clone(),
+        };
+        let can_respond = config.hold_user_input_requests && !config.auto_approve;
+        context.runtime.post_pause_request(&pending, can_respond);
+        Some((pending, can_respond))
+    } else {
+        None
+    };
+    if let Some((pending, true)) = structured_request {
+        context
+            .pending_pause_requests
+            .lock()
+            .await
+            .insert(pending.request_key.clone(), pending);
+        return Ok(());
+    }
+
     let result = match method {
         "item/commandExecution/requestApproval" => json!({
             "decision": if config.auto_approve { "accept" } else { "decline" }
@@ -2509,6 +2612,251 @@ async fn handle_server_request(
         "result": result,
     });
     send_payload(client, &payload).await
+}
+
+fn is_structured_pause_request_method(method: &str) -> bool {
+    matches!(
+        method,
+        "item/tool/requestUserInput" | "mcpServer/elicitation/request"
+    )
+}
+
+fn provider_request_id_from_jsonrpc_id(request_id: &Value) -> String {
+    if let Some(value) = request_id.as_str() {
+        return value.to_string();
+    }
+    if let Some(value) = request_id.as_u64() {
+        return value.to_string();
+    }
+    if let Some(value) = request_id.as_i64() {
+        return value.to_string();
+    }
+    request_id.to_string()
+}
+
+fn codex_pause_request_key(session_id: &str, provider_request_id: &str) -> String {
+    format!("codex:codex:{session_id}:{provider_request_id}")
+}
+
+fn pause_request_title(method: &str, params: &Value) -> String {
+    if method == "item/tool/requestUserInput" {
+        if let Some(first) = params
+            .get("questions")
+            .and_then(Value::as_array)
+            .and_then(|questions| questions.first())
+        {
+            if let Some(header) =
+                extract_string(first, &["header"]).or_else(|| extract_string(first, &["question"]))
+            {
+                return header;
+            }
+        }
+        return "Question waiting".to_string();
+    }
+    extract_string(params, &["message"]).unwrap_or_else(|| "Question waiting".to_string())
+}
+
+fn pause_request_summary(method: &str, params: &Value) -> String {
+    if method == "mcpServer/elicitation/request" {
+        if let Some(server) = extract_string(params, &["serverName"]) {
+            return format!("{server} needs your answer before the agent can continue.");
+        }
+    }
+    "The agent needs your answer before it can continue.".to_string()
+}
+
+fn pause_request_payload(method: &str, params: &Value) -> Value {
+    if method == "item/tool/requestUserInput" {
+        return json!({
+            "questions": params.get("questions").cloned().unwrap_or_else(|| json!([])),
+        });
+    }
+    let mut question = serde_json::Map::new();
+    question.insert("id".to_string(), Value::String("content".to_string()));
+    question.insert(
+        "question".to_string(),
+        Value::String(
+            extract_string(params, &["message"]).unwrap_or_else(|| "Answer required".to_string()),
+        ),
+    );
+    json!({
+        "questions": [Value::Object(question)],
+        "mode": params.get("mode").cloned().unwrap_or(Value::Null),
+        "requestedSchema": params.get("requestedSchema").cloned().unwrap_or(Value::Null),
+        "url": params.get("url").cloned().unwrap_or(Value::Null),
+        "elicitationId": params.get("elicitationId").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn pause_provider_ref(pending: &PendingProviderRequest) -> Value {
+    json!({
+        "method": pending.method,
+        "request_id": pending.request_id,
+        "thread_id": extract_string(&pending.params, &["threadId"]),
+        "turn_id": extract_string(&pending.params, &["turnId"]),
+        "item_id": extract_string(&pending.params, &["itemId"]),
+        "server_name": extract_string(&pending.params, &["serverName"]),
+    })
+}
+
+fn build_provider_pause_response(
+    pending: &PendingProviderRequest,
+    request: &Value,
+) -> Result<(Value, &'static str)> {
+    let decision = request
+        .get("decision")
+        .and_then(Value::as_str)
+        .unwrap_or("answer");
+    match pending.method.as_str() {
+        "item/tool/requestUserInput" => {
+            if decision == "answer" {
+                Ok((
+                    json!({
+                        "answers": build_request_user_input_answers_from_response(
+                            &pending.params,
+                            request.get("answers"),
+                        )
+                    }),
+                    "resolved",
+                ))
+            } else {
+                Ok((json!({ "answers": {} }), "rejected"))
+            }
+        }
+        "mcpServer/elicitation/request" => {
+            if decision == "answer" {
+                let content = request
+                    .get("content")
+                    .cloned()
+                    .or_else(|| request.get("answers").cloned())
+                    .unwrap_or(Value::Null);
+                Ok((
+                    json!({ "action": "accept", "content": content }),
+                    "resolved",
+                ))
+            } else if decision == "cancel" {
+                Ok((
+                    json!({ "action": "cancel", "content": Value::Null }),
+                    "rejected",
+                ))
+            } else {
+                Ok((
+                    json!({ "action": "decline", "content": Value::Null }),
+                    "rejected",
+                ))
+            }
+        }
+        other => bail!("unsupported pending pause request method: {other}"),
+    }
+}
+
+fn build_request_user_input_answers_from_response(
+    params: &Value,
+    raw_answers: Option<&Value>,
+) -> Value {
+    let mut answers = serde_json::Map::new();
+    let raw = raw_answers.and_then(Value::as_object);
+    let Some(questions) = params.get("questions").and_then(Value::as_array) else {
+        return raw_answers
+            .cloned()
+            .unwrap_or_else(|| Value::Object(answers));
+    };
+    for question in questions {
+        let Some(id) = question.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let raw_value = raw.and_then(|object| object.get(id)).or_else(|| {
+            question
+                .get("question")
+                .and_then(Value::as_str)
+                .and_then(|label| raw.and_then(|object| object.get(label)))
+        });
+        answers.insert(
+            id.to_string(),
+            json!({ "answers": normalize_provider_answer_values(raw_value) }),
+        );
+    }
+    Value::Object(answers)
+}
+
+fn normalize_provider_answer_values(value: Option<&Value>) -> Vec<Value> {
+    let Some(value) = value else {
+        return Vec::new();
+    };
+    if let Some(object) = value.as_object() {
+        if let Some(answers) = object.get("answers") {
+            return normalize_provider_answer_values(Some(answers));
+        }
+    }
+    if let Some(values) = value.as_array() {
+        return values.clone();
+    }
+    vec![value.clone()]
+}
+
+impl PauseRequestResponder {
+    async fn respond(&self, request: Value) -> Result<Value> {
+        let pending = self.load_pending_request(&request).await?;
+        let (result, status) = build_provider_pause_response(&pending, &request)?;
+        let provider_payload = json!({
+            "id": pending.request_id,
+            "result": result,
+        });
+        let line = serde_json::to_string(&provider_payload)?;
+        if let Err(err) = self.outbound.send(line) {
+            self.runtime.post_pause_resolution(
+                &pending,
+                "failed",
+                json!({
+                    "error": "codex app-server outbound channel closed",
+                    "unsent_payload": err.0,
+                }),
+                request
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .map(ToString::to_string),
+            );
+            bail!("codex app-server outbound channel closed");
+        }
+        self.pending.lock().await.remove(&pending.request_key);
+        self.runtime.post_pause_resolution(
+            &pending,
+            status,
+            json!({
+                "request": request,
+                "provider_result": provider_payload.get("result").cloned().unwrap_or(Value::Null),
+            }),
+            request
+                .get("message")
+                .and_then(Value::as_str)
+                .map(ToString::to_string),
+        );
+        Ok(json!({
+            "request_key": pending.request_key,
+            "provider_request_id": pending.provider_request_id,
+            "status": status,
+        }))
+    }
+
+    async fn load_pending_request(&self, request: &Value) -> Result<PendingProviderRequest> {
+        let guard = self.pending.lock().await;
+        if let Some(request_key) = request.get("request_key").and_then(Value::as_str) {
+            return guard.get(request_key).cloned().with_context(|| {
+                format!("no pending pause request for request_key {request_key}")
+            });
+        }
+        if guard.len() == 1 {
+            return guard
+                .values()
+                .next()
+                .cloned()
+                .context("pending pause request disappeared");
+        }
+        bail!(
+            "pause_response requires request_key when {} requests are pending",
+            guard.len()
+        )
+    }
 }
 
 async fn process_notification(
@@ -2787,6 +3135,26 @@ async fn process_notification(
             if let Some(summary) = params.get("summary") {
                 if let Some(event_name) = summary.get("eventName").and_then(Value::as_str) {
                     eprintln!("[codex-bridge] hook completed: {event_name}");
+                }
+            }
+        }
+        "serverRequest/resolved" => {
+            if let Some(request_id) = params.get("requestId") {
+                let provider_request_id = provider_request_id_from_jsonrpc_id(request_id);
+                let request_key =
+                    codex_pause_request_key(&context.state.session_id, &provider_request_id);
+                let pending = context
+                    .pending_pause_requests
+                    .lock()
+                    .await
+                    .remove(&request_key);
+                if let Some(pending) = pending {
+                    context.runtime.post_pause_resolution(
+                        &pending,
+                        "resolved",
+                        json!({ "provider_notification": params }),
+                        Some("Provider cleared the pending question.".to_string()),
+                    );
                 }
             }
         }
@@ -3547,6 +3915,32 @@ async fn emit_runtime_keepalive(config: &BridgeRunConfig, context: &mut BridgeCo
     }
 }
 
+async fn fail_pending_pause_requests(
+    context: &mut BridgeContext,
+    status: &str,
+    response_text: &str,
+) {
+    let pending: Vec<PendingProviderRequest> = context
+        .pending_pause_requests
+        .lock()
+        .await
+        .values()
+        .cloned()
+        .collect();
+    if pending.is_empty() {
+        return;
+    }
+    context.pending_pause_requests.lock().await.clear();
+    for request in pending {
+        context.runtime.post_pause_resolution(
+            &request,
+            status,
+            json!({ "message": response_text }),
+            Some(response_text.to_string()),
+        );
+    }
+}
+
 fn spawn_runtime_event_worker(
     sink: BridgeRuntimeSink,
     mut rx: mpsc::UnboundedReceiver<Vec<Value>>,
@@ -3730,6 +4124,76 @@ impl BridgeRuntimeSink {
             "payload": {
                 "managed_transport": "codex_app_server",
                 "thread_id": self.thread_id,
+            }
+        })]);
+    }
+
+    fn post_pause_request(&self, pending: &PendingProviderRequest, can_respond: bool) {
+        let observed_at = Utc::now();
+        self.post_runtime_events_background(vec![json!({
+            "runtime_key": format!("codex:{}", self.session_id),
+            "session_id": self.session_id,
+            "provider": "codex",
+            "device_id": self.machine_name,
+            "source": BRIDGE_RUNTIME_SOURCE,
+            "kind": "pause_request",
+            "phase": Value::Null,
+            "tool_name": Value::Null,
+            "occurred_at": observed_at.to_rfc3339(),
+            "dedupe_key": format!(
+                "bridge:pause_request:{}:{}",
+                self.session_id,
+                pending.provider_request_id
+            ),
+            "payload": {
+                "managed_transport": "codex_app_server",
+                "thread_id": self.thread_id,
+                "request_key": pending.request_key,
+                "provider_request_id": pending.provider_request_id,
+                "provider_ref": pause_provider_ref(pending),
+                "kind": PAUSE_KIND_STRUCTURED_QUESTION,
+                "title": pause_request_title(&pending.method, &pending.params),
+                "summary": pause_request_summary(&pending.method, &pending.params),
+                "request_payload": pause_request_payload(&pending.method, &pending.params),
+                "can_respond": can_respond,
+                "single_active": true,
+            }
+        })]);
+    }
+
+    fn post_pause_resolution(
+        &self,
+        pending: &PendingProviderRequest,
+        status: &str,
+        response_payload: Value,
+        response_text: Option<String>,
+    ) {
+        let observed_at = Utc::now();
+        self.post_runtime_events_background(vec![json!({
+            "runtime_key": format!("codex:{}", self.session_id),
+            "session_id": self.session_id,
+            "provider": "codex",
+            "device_id": self.machine_name,
+            "source": BRIDGE_RUNTIME_SOURCE,
+            "kind": "pause_resolution",
+            "phase": Value::Null,
+            "tool_name": Value::Null,
+            "occurred_at": observed_at.to_rfc3339(),
+            "dedupe_key": format!(
+                "bridge:pause_resolution:{}:{}:{}",
+                self.session_id,
+                pending.provider_request_id,
+                Uuid::new_v4()
+            ),
+            "payload": {
+                "managed_transport": "codex_app_server",
+                "thread_id": self.thread_id,
+                "request_key": pending.request_key,
+                "provider_request_id": pending.provider_request_id,
+                "provider_ref": pause_provider_ref(pending),
+                "status": status,
+                "response_payload": response_payload,
+                "response_text": response_text,
             }
         })]);
     }
@@ -4431,6 +4895,7 @@ mod tests {
             runtime_tracker: CodexRuntimeTracker::default(),
             subscribed_thread_id: None,
             rejected_thread_ids: BTreeSet::new(),
+            pending_pause_requests: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -4731,6 +5196,7 @@ mod tests {
             model_reasoning_effort: None,
             machine_name: Some("test-box".to_string()),
             auto_approve: true,
+            hold_user_input_requests: false,
             longhouse_home: Some(temp.path().to_path_buf()),
             state_file: temp.path().join("bridge-state.json"),
             log_file: temp.path().join("bridge.log"),
@@ -4739,6 +5205,25 @@ mod tests {
             resume_thread_path: None,
             launch_mode: BridgeLaunchMode::Tui,
         }
+    }
+
+    async fn recv_runtime_event_kind(
+        rx: &mut mpsc::UnboundedReceiver<Vec<Value>>,
+        expected_kind: &str,
+    ) -> Value {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            if let Ok(Some(batch)) =
+                tokio::time::timeout(Duration::from_millis(250), rx.recv()).await
+            {
+                for event in batch {
+                    if event.get("kind").and_then(Value::as_str) == Some(expected_kind) {
+                        return event;
+                    }
+                }
+            }
+        }
+        panic!("timed out waiting for runtime event kind {expected_kind}");
     }
 
     fn assert_phase_update(
@@ -5790,7 +6275,7 @@ mod tests {
     async fn parse_stop_ipc_reason(request: Value) -> String {
         let (mut client, server) = tokio::net::UnixStream::pair().unwrap();
         let (tx, mut rx) = mpsc::unbounded_channel();
-        let task = tokio::spawn(handle_ipc_connection(server, tx));
+        let task = tokio::spawn(handle_ipc_connection(server, tx, None));
 
         let mut bytes = serde_json::to_vec(&request).unwrap();
         bytes.push(b'\n');
@@ -7444,6 +7929,203 @@ mod tests {
         assert_eq!(
             approval_payload["result"]["answers"]["color"]["answers"][0],
             "blue"
+        );
+    }
+
+    #[tokio::test]
+    async fn user_input_request_detection_emits_non_answerable_pause_event() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<String>();
+        let (_events_tx, events_rx) = mpsc::unbounded_channel();
+        let (runtime_tx, mut runtime_rx) = mpsc::unbounded_channel::<Vec<Value>>();
+        let temp = tempfile::tempdir().unwrap();
+
+        let mut client = RpcClient {
+            child: None,
+            child_pid: None,
+            child_pgid: None,
+            child_ws_url: None,
+            outbound: RpcOutbound::WebSocket(outbound_tx),
+            events_rx,
+            pending_methods: BTreeMap::new(),
+            next_request_id: 1,
+            ws_url: "ws://example.test".to_string(),
+        };
+        let mut context = make_test_context(&temp);
+        context.state.thread_id = Some("thr_test".to_string());
+        context.runtime.thread_id = Some("thr_test".to_string());
+        context.runtime.runtime_tx = Some(runtime_tx);
+        let mut config = make_test_run_config(&temp);
+        config.auto_approve = false;
+
+        handle_server_request(
+            &config,
+            json!({
+                "id": "srv-1",
+                "method": "item/tool/requestUserInput",
+                "params": {
+                    "threadId": "thr_test",
+                    "turnId": "turn-live",
+                    "itemId": "input-1",
+                    "questions": [{
+                        "id": "color",
+                        "header": "Color",
+                        "question": "Pick one",
+                        "options": [{"label": "blue"}, {"label": "red"}]
+                    }]
+                }
+            }),
+            &mut client,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        let response_payload: Value =
+            serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+        assert_eq!(response_payload["id"], "srv-1");
+        assert_eq!(
+            response_payload["result"]["answers"]["color"]["answers"],
+            json!([])
+        );
+        assert!(context.pending_pause_requests.lock().await.is_empty());
+
+        let pause_event = recv_runtime_event_kind(&mut runtime_rx, "pause_request").await;
+        assert_eq!(pause_event["provider"], "codex");
+        assert_eq!(pause_event["payload"]["provider_request_id"], "srv-1");
+        assert_eq!(
+            pause_event["payload"]["request_key"],
+            "codex:codex:session-123:srv-1"
+        );
+        assert_eq!(pause_event["payload"]["can_respond"], false);
+        assert_eq!(
+            pause_event["payload"]["request_payload"]["questions"][0]["id"],
+            "color"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn held_user_input_request_can_be_answered_over_ipc_while_turn_start_waits() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<String>();
+        let (events_tx, events_rx) = mpsc::unbounded_channel();
+        let (runtime_tx, mut runtime_rx) = mpsc::unbounded_channel::<Vec<Value>>();
+        let temp = tempfile::tempdir().unwrap();
+
+        let client = RpcClient {
+            child: None,
+            child_pid: None,
+            child_pgid: None,
+            child_ws_url: None,
+            outbound: RpcOutbound::WebSocket(outbound_tx.clone()),
+            events_rx,
+            pending_methods: BTreeMap::new(),
+            next_request_id: 1,
+            ws_url: "ws://example.test".to_string(),
+        };
+        let mut context = make_test_context(&temp);
+        context.state.thread_id = Some("thr_test".to_string());
+        context.runtime.thread_id = Some("thr_test".to_string());
+        context.runtime.runtime_tx = Some(runtime_tx);
+        let responder = PauseRequestResponder {
+            pending: context.pending_pause_requests.clone(),
+            outbound: outbound_tx,
+            runtime: context.runtime.clone(),
+        };
+        let mut config = make_test_run_config(&temp);
+        config.auto_approve = false;
+        config.hold_user_input_requests = true;
+
+        events_tx
+            .send(StreamEvent::Rpc(json!({
+                "id": "srv-1",
+                "method": "item/tool/requestUserInput",
+                "params": {
+                    "threadId": "thr_test",
+                    "turnId": "turn-live",
+                    "itemId": "input-1",
+                    "questions": [{
+                        "id": "color",
+                        "header": "Color",
+                        "question": "Pick one",
+                        "options": [{"label": "blue"}, {"label": "red"}]
+                    }]
+                }
+            })))
+            .unwrap();
+
+        let task = tokio::spawn(async move {
+            let mut client = client;
+            let mut context = context;
+            send_request_with_runtime(
+                &mut client,
+                "turn/start",
+                json!({
+                    "threadId": "thr_test",
+                    "input": [{"type": "text", "text": "continue"}],
+                }),
+                &config,
+                &mut context,
+            )
+            .await
+        });
+
+        let turn_start_payload: Value =
+            serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+        assert_eq!(turn_start_payload["method"], "turn/start");
+
+        let pause_event = recv_runtime_event_kind(&mut runtime_rx, "pause_request").await;
+        let request_key = pause_event["payload"]["request_key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(pause_event["payload"]["can_respond"], true);
+
+        let (mut ipc_client, ipc_server) = tokio::net::UnixStream::pair().unwrap();
+        let (ipc_tx, _ipc_rx) = mpsc::unbounded_channel();
+        let ipc_task = tokio::spawn(handle_ipc_connection(ipc_server, ipc_tx, Some(responder)));
+        let mut request = serde_json::to_vec(&json!({
+            "kind": "pause_response",
+            "request_key": request_key,
+            "decision": "answer",
+            "answers": {"color": ["red"]},
+            "message": "Use red."
+        }))
+        .unwrap();
+        request.push(b'\n');
+        ipc_client.write_all(&request).await.unwrap();
+        ipc_client.shutdown().await.unwrap();
+
+        let provider_response: Value =
+            serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+        assert_eq!(provider_response["id"], "srv-1");
+        assert_eq!(
+            provider_response["result"]["answers"]["color"]["answers"],
+            json!(["red"])
+        );
+
+        let pause_resolution = recv_runtime_event_kind(&mut runtime_rx, "pause_resolution").await;
+        assert_eq!(pause_resolution["payload"]["status"], "resolved");
+        assert_eq!(pause_resolution["payload"]["provider_request_id"], "srv-1");
+
+        let mut ipc_response = Vec::new();
+        ipc_client.read_to_end(&mut ipc_response).await.unwrap();
+        let ipc_response: Value = serde_json::from_slice(&ipc_response).unwrap();
+        assert_eq!(ipc_response["ok"], true);
+        assert_eq!(ipc_response["status"], "resolved");
+        ipc_task.await.unwrap().unwrap();
+
+        events_tx
+            .send(StreamEvent::Rpc(json!({
+                "id": 1,
+                "result": {
+                    "turn": {"id": "turn-live", "status": "inProgress"}
+                }
+            })))
+            .unwrap();
+        let response = task.await.unwrap().unwrap();
+        assert_eq!(
+            extract_string(&response, &["turn", "id"]).as_deref(),
+            Some("turn-live")
         );
     }
 

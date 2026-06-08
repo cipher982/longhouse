@@ -787,8 +787,9 @@ async fn execute_command(
                         }
                     }
                 }
-                let resume_provider_session_id =
-                    resume_target.as_ref().map(|target| target.thread_id.clone());
+                let resume_provider_session_id = resume_target
+                    .as_ref()
+                    .map(|target| target.thread_id.clone());
                 return launch_claude_channel_session(
                     session_id.clone(),
                     cwd,
@@ -823,6 +824,7 @@ async fn execute_command(
                 model_reasoning_effort: None,
                 machine_name: Some(config.machine_name.clone()),
                 auto_approve: false,
+                hold_user_input_requests: false,
                 state_root: None,
                 longhouse_home: None,
                 log_file: None,
@@ -1947,7 +1949,10 @@ mod tests {
         // Fresh launch pins the provider session id to the longhouse id and
         // does NOT pass --resume.
         assert!(!args.iter().any(|a| a == "--resume"));
-        let provider_idx = args.iter().position(|a| a == "--provider-session-id").unwrap();
+        let provider_idx = args
+            .iter()
+            .position(|a| a == "--provider-session-id")
+            .unwrap();
         assert_eq!(args[provider_idx + 1], "sess-123");
     }
 
@@ -1963,7 +1968,10 @@ mod tests {
             Some("sess-123"),
         );
         assert!(args.iter().any(|a| a == "--resume"));
-        let provider_idx = args.iter().position(|a| a == "--provider-session-id").unwrap();
+        let provider_idx = args
+            .iter()
+            .position(|a| a == "--provider-session-id")
+            .unwrap();
         assert_eq!(args[provider_idx + 1], "sess-123");
         // --session-id is always the longhouse id.
         let session_idx = args.iter().position(|a| a == "--session-id").unwrap();
