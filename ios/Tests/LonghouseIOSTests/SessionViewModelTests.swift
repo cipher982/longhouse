@@ -117,10 +117,57 @@ struct SessionViewModelTests {
         await model.reload(sessionId: "session-1", appState: appState)
         try? await Task.sleep(nanoseconds: 50_000_000)
 
-        #expect(await api.tailRequestCount() == 3)
-        #expect(await api.tailRequest(at: 0)?.offset == 0)
-        #expect(await api.tailRequest(at: 1)?.offset == 50)
-        #expect(await api.tailRequest(at: 2)?.offset == 0)
+        let offsets = await api.tailRequestOffsets()
+        #expect(offsets == [0, 50, 0])
+        model.stop()
+    }
+
+    @Test
+    func memoryWarningDropsSpeculativePrefetchWithoutClearingTranscriptCache() async throws {
+        let tail = try makeWorkspace(eventId: 51, content: "Recent tail", total: 100, pageOffset: 50)
+        let prefetchedOlder = try makeWorkspace(eventId: 1, content: "Prefetched older page", total: 100, pageOffset: 0)
+        let fetchedAfterWarning = try makeWorkspace(eventId: 2, content: "Fetched after warning", total: 100, pageOffset: 0)
+        let otherSession = try makeWorkspace(eventId: 80, content: "Other cached session")
+        let cache = SessionTranscriptCache()
+        cache.store(
+            serverURL: "https://example.longhouse.ai",
+            sessionId: "other-session",
+            detail: otherSession.session,
+            events: otherSession.events,
+            loadedProjectionItemCount: otherSession.events.count,
+            totalProjectionItemCount: otherSession.projection.total,
+            tailSnapshotEventId: otherSession.events.map(\.id).max()
+        )
+        let api = FakeSessionWorkspaceClient(workspaces: [tail, prefetchedOlder, fetchedAfterWarning])
+        await api.pauseNextTailResponse(offset: 50)
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            streamFactory: { _, _, _ in Self.neverConnectingStreamSource() },
+            enableRealtime: true,
+            transcriptCache: cache,
+            snapshotStore: nil
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await waitForTailRequestCount(api, atLeast: 2)
+        model.handleMemoryWarning()
+        await api.resumePausedTailResponses()
+        await waitForTailResponseCount(api, atLeast: 2)
+
+        #expect(cache.snapshot(serverURL: "https://example.longhouse.ai", sessionId: "session-1") != nil)
+        #expect(cache.snapshot(serverURL: "https://example.longhouse.ai", sessionId: "other-session") != nil)
+
+        await model.loadOlder(sessionId: "session-1", appState: appState)
+
+        let offsets = await api.tailRequestOffsets()
+        #expect(offsets.count == 3)
+        #expect(offsets.contains(0))
+        #expect(offsets.filter { $0 == 50 }.count == 2)
+        #expect(await api.tailRequest(at: 2)?.offset == 50)
+        #expect(await api.tailRequest(at: 2)?.snapshotEventId == 51)
+        #expect(model.items.map(\.id) == ["user:2", "user:51"])
         model.stop()
     }
 
@@ -809,6 +856,13 @@ struct SessionViewModelTests {
         }
     }
 
+    private func waitForTailResponseCount(_ api: FakeSessionWorkspaceClient, atLeast count: Int) async {
+        for _ in 0..<50 {
+            if await api.tailResponseCount() >= count { return }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
     private static func neverConnectingStreamSource() -> SessionWorkspaceStreamSource {
         SessionWorkspaceStreamSource(
             start: { AsyncStream { _ in } },
@@ -861,6 +915,9 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
     private var pauseResponse: PauseRequestResponse?
     private var workspaceRequests: [(id: String, limit: Int, branchMode: String)] = []
     private var tailRequests: [(id: String, limit: Int, offset: Int, branchMode: String, snapshotEventId: Int?)] = []
+    private var tailResponses = 0
+    private var pausedTailResponseCounts: [Int: Int] = [:]
+    private var pausedTailContinuations: [CheckedContinuation<Void, Never>] = []
     private var sentInputs: [String] = []
     private var pauseResponseRequests: [PauseResponseRecord] = []
     private var postedRenderBeacons: [RenderBeaconReporter.Payload] = []
@@ -892,7 +949,18 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
     ) async throws -> SessionMobileTailResponse {
         workspaceRequests.append((id: id, limit: limit, branchMode: branchMode))
         tailRequests.append((id: id, limit: limit, offset: offset, branchMode: branchMode, snapshotEventId: snapshotEventId))
+        if let pausedCount = pausedTailResponseCounts[offset], pausedCount > 0 {
+            if pausedCount == 1 {
+                pausedTailResponseCounts[offset] = nil
+            } else {
+                pausedTailResponseCounts[offset] = pausedCount - 1
+            }
+            await withCheckedContinuation { continuation in
+                pausedTailContinuations.append(continuation)
+            }
+        }
         let workspace = try nextWorkspace()
+        tailResponses += 1
         return SessionMobileTailResponse(
             session: workspace.session,
             projection: workspace.projection,
@@ -1009,6 +1077,18 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
         pauseResponseError = error
     }
 
+    func pauseNextTailResponse(offset: Int) {
+        pausedTailResponseCounts[offset, default: 0] += 1
+    }
+
+    func resumePausedTailResponses() {
+        let continuations = pausedTailContinuations
+        pausedTailContinuations.removeAll()
+        for continuation in continuations {
+            continuation.resume()
+        }
+    }
+
     func workspaceRequestCount() -> Int {
         workspaceRequests.count
     }
@@ -1025,6 +1105,14 @@ private actor FakeSessionWorkspaceClient: SessionWorkspaceClient {
 
     func tailRequestCount() -> Int {
         tailRequests.count
+    }
+
+    func tailRequestOffsets() -> [Int] {
+        tailRequests.map(\.offset)
+    }
+
+    func tailResponseCount() -> Int {
+        tailResponses
     }
 
     func sendRequests() -> [String] {

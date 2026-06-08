@@ -1334,6 +1334,8 @@ final class SessionViewModel: ObservableObject {
     private var prefetchedOlderTail: SessionMobileTailResponse?
     private var prefetchedOlderOffset: Int?
     private var prefetchedOlderSnapshotEventId: Int?
+    private var prefetchInFlightOffset: Int?
+    private var prefetchInFlightSnapshotEventId: Int?
     private var isLoadingOlder = false
     private var openWaterfall: SessionOpenWaterfall?
     private let apiFactory: (String) -> SessionWorkspaceClient?
@@ -1390,6 +1392,8 @@ final class SessionViewModel: ObservableObject {
             prefetchedOlderTail = nil
             prefetchedOlderOffset = nil
             prefetchedOlderSnapshotEventId = nil
+            prefetchInFlightOffset = nil
+            prefetchInFlightSnapshotEventId = nil
             prefetchTask?.cancel()
             prefetchTask = nil
             errorMessage = nil
@@ -1476,6 +1480,8 @@ final class SessionViewModel: ObservableObject {
         pollTask = nil
         prefetchTask?.cancel()
         prefetchTask = nil
+        prefetchInFlightOffset = nil
+        prefetchInFlightSnapshotEventId = nil
         streamTask?.cancel()
         streamTask = nil
         Task { [stream] in await stream?.stop() }
@@ -1494,7 +1500,8 @@ final class SessionViewModel: ObservableObject {
         prefetchedOlderTail = nil
         prefetchedOlderOffset = nil
         prefetchedOlderSnapshotEventId = nil
-        transcriptCache?.clear()
+        prefetchInFlightOffset = nil
+        prefetchInFlightSnapshotEventId = nil
     }
 
     /// Full teardown for genuine nav-away or session switch: stops realtime AND
@@ -1949,11 +1956,12 @@ final class SessionViewModel: ObservableObject {
             let buildStartedAt = Date()
             let mergedEvents = mergeRefreshedTail(events)
             self.lastWorkspaceEvents = mergedEvents
-            self.loadedProjectionItemCount = min(
+            let refreshedLoadedCount = min(
                 tail.projection.total,
                 max(0, max(tail.projection.total - tail.projection.pageOffset, mergedEvents.count))
             )
-            let keepPrefetchedOlderTail = prefetchedOlderOffset == self.loadedProjectionItemCount
+            self.loadedProjectionItemCount = refreshedLoadedCount
+            let keepPrefetchedOlderTail = prefetchedOlderOffset == refreshedLoadedCount
                 && prefetchedOlderSnapshotEventId == tail.snapshotEventId
             self.totalProjectionItemCount = tail.projection.total
             self.tailSnapshotEventId = tail.snapshotEventId
@@ -2005,20 +2013,28 @@ final class SessionViewModel: ObservableObject {
     }
 
     private func scheduleOlderPrefetch(api: SessionWorkspaceClient, sessionId: String) {
-        prefetchTask?.cancel()
-        prefetchTask = nil
         guard enableRealtime else { return }
         guard activeSessionId == sessionId else { return }
         guard loadedProjectionItemCount < totalProjectionItemCount else { return }
         guard !isLoadingOlder else { return }
         let offset = loadedProjectionItemCount
         let snapshotEventId = tailSnapshotEventId
-        guard prefetchedOlderOffset != offset else { return }
+        let hasStoredPrefetch = prefetchedOlderOffset == offset
+            && prefetchedOlderSnapshotEventId == snapshotEventId
+        let hasInFlightPrefetch = prefetchInFlightOffset == offset
+            && prefetchInFlightSnapshotEventId == snapshotEventId
+        guard !hasStoredPrefetch && !hasInFlightPrefetch else { return }
+
+        prefetchTask?.cancel()
+        prefetchTask = nil
+        prefetchInFlightOffset = offset
+        prefetchInFlightSnapshotEventId = snapshotEventId
         prefetchTask = Task { [weak self] in
             guard let self else { return }
             do {
                 let tail = try await self.fetchOlderTail(api: api, sessionId: sessionId, offset: offset)
-                guard self.activeSessionId == sessionId,
+                guard !Task.isCancelled,
+                      self.activeSessionId == sessionId,
                       self.loadedProjectionItemCount == offset,
                       self.tailSnapshotEventId == snapshotEventId
                 else { return }
@@ -2026,10 +2042,18 @@ final class SessionViewModel: ObservableObject {
                 self.prefetchedOlderOffset = offset
                 self.prefetchedOlderSnapshotEventId = snapshotEventId
             } catch {
-                guard self.activeSessionId == sessionId, self.loadedProjectionItemCount == offset else { return }
+                guard !Task.isCancelled,
+                      self.activeSessionId == sessionId,
+                      self.loadedProjectionItemCount == offset
+                else { return }
                 self.prefetchedOlderTail = nil
                 self.prefetchedOlderOffset = nil
                 self.prefetchedOlderSnapshotEventId = nil
+            }
+            if self.prefetchInFlightOffset == offset,
+               self.prefetchInFlightSnapshotEventId == snapshotEventId {
+                self.prefetchInFlightOffset = nil
+                self.prefetchInFlightSnapshotEventId = nil
             }
             self.prefetchTask = nil
         }
@@ -2075,6 +2099,8 @@ final class SessionViewModel: ObservableObject {
         prefetchedOlderTail = nil
         prefetchedOlderOffset = nil
         prefetchedOlderSnapshotEventId = nil
+        prefetchInFlightOffset = nil
+        prefetchInFlightSnapshotEventId = nil
         items = TimelineBuilder.build(events: snapshot.events)
         isInitialLoading = false
         errorMessage = nil
@@ -2093,6 +2119,8 @@ final class SessionViewModel: ObservableObject {
         prefetchedOlderTail = nil
         prefetchedOlderOffset = nil
         prefetchedOlderSnapshotEventId = nil
+        prefetchInFlightOffset = nil
+        prefetchInFlightSnapshotEventId = nil
         items = TimelineBuilder.build(events: snapshot.events)
         isInitialLoading = false
         errorMessage = nil

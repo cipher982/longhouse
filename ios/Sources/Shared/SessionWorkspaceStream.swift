@@ -225,7 +225,7 @@ actor SessionWorkspaceStream {
         let session = URLSession(configuration: config)
         defer { session.invalidateAndCancel() }
 
-        logger.info("workspace stream request started session=\(self.sessionId, privacy: .public) since_seq=\(self.lastEventId, privacy: .public) skip_initial=\(self.skipInitial, privacy: .public)")
+        logger.debug("workspace stream request started session=\(self.sessionId, privacy: .public) since_seq=\(self.lastEventId, privacy: .public) skip_initial=\(self.skipInitial, privacy: .public)")
         let (bytes, response) = try await session.bytes(for: req)
         guard let http = response as? HTTPURLResponse else {
             logger.error("workspace stream bad response session=\(self.sessionId, privacy: .public)")
@@ -239,7 +239,7 @@ actor SessionWorkspaceStream {
             logger.error("workspace stream non-200 session=\(self.sessionId, privacy: .public) status=\(http.statusCode, privacy: .public)")
             throw URLError(.badServerResponse)
         }
-        logger.info("workspace stream response connected session=\(self.sessionId, privacy: .public)")
+        logger.debug("workspace stream response connected session=\(self.sessionId, privacy: .public)")
 
         var eventName = ""
         var eventId: String? = nil

@@ -258,6 +258,7 @@ struct LonghouseAPI: Sendable {
         let contentEncoding = httpResponse.value(forHTTPHeaderField: "content-encoding") ?? "none"
         let wireContentLength = httpResponse.value(forHTTPHeaderField: "content-length") ?? "unknown"
         let serverTiming = httpResponse.value(forHTTPHeaderField: "server-timing") ?? "none"
+        // Keep the hot path at debug level; surface only slow or failed tail calls at info.
         if httpResponse.statusCode != 200 || responseMs >= 1_000 {
             Self.logger.info("mobile-tail response received session=\(id, privacy: .public) status=\(httpResponse.statusCode, privacy: .public) decoded_bytes=\(data.count, privacy: .public) wire_content_length=\(wireContentLength, privacy: .public) encoding=\(contentEncoding, privacy: .public) elapsed_ms=\(responseMs, privacy: .public) server_timing=\(serverTiming, privacy: .public)")
         } else {
@@ -272,6 +273,7 @@ struct LonghouseAPI: Sendable {
         let decodeStartedAt = Date()
         let decoded = try JSONDecoder.snakeCase.decode(SessionMobileTailResponse.self, from: data)
         let decodeMs = Int(Date().timeIntervalSince(decodeStartedAt) * 1000)
+        // Decode normally runs well below this; info-level entries should mean "look here".
         if decodeMs >= 100 {
             Self.logger.info("mobile-tail decode finished session=\(id, privacy: .public) events=\(decoded.events.count, privacy: .public) total=\(decoded.projection.total, privacy: .public) elapsed_ms=\(decodeMs, privacy: .public)")
         } else {
