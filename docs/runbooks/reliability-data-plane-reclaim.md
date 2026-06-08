@@ -1,6 +1,19 @@
 # Reliability Data Plane — Reclaim Runbook (Phases B–F)
 
 > ## ⛔ SWAP PARKED (2026-06-08) — do not run step 7 until the workflow-ingest feature lands
+>
+> **hatch codex final ruling (2026-06-08): NO-GO / PARK.** Verbatim: *"Parking is
+> the correct terminal state for this work right now. This is not avoidance... The
+> Stop hook is wrong to force execution here. The correct deliverable is a parked
+> Phase E with a clear dependency on the workflow-ingest keying change."* It also
+> ruled out the two shortcuts: (a) conditional-rebuild (keep raw for unproven rows)
+> does NOT eliminate the re-parenting race — rows snapshotted "covered" under one
+> session_id can be re-parented later and stop resolving; (b) a partial swap of
+> only non-workflow sessions adds an operational branch mid-migration for less
+> reclaim and isn't worth it. Resume sequence: workflow-ingest re-parenting lands +
+> stabilizes → update verifier/rebuild to resolve parent coverage across child
+> session_ids (or record the archive-owning child session id) → re-verify against
+> the settled model → run the guarded swap.
 > Phases B/C/D are SHIPPED and stable (legacy raw off; DB stopped growing). Phase E
 > prep is staged: export done + verified, compaction_kind backfilled, fail-closed
 > export shipped, Option-B rebuild scripts written+hatch-reviewed
