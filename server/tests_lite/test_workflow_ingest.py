@@ -48,6 +48,43 @@ _JOURNAL_PATH = f"{_PROJECT_DIR}/{PARENT_ID}/subagents/workflows/{RUN}/journal.j
 _AGENT_PATH = f"{_PROJECT_DIR}/{PARENT_ID}/subagents/workflows/{RUN}/agent-a049eaf15e4dbcae3.jsonl"
 
 
+def _seed_legacy_journal_session(db):
+    """Insert a journal-junk session as it would have been ingested BEFORE the
+    Phase 1 guard existed: a session row + a branch + one source line whose path
+    is a workflow journal, and zero events."""
+    from zerg.models.agents import AgentSession
+    from zerg.models.agents import AgentSessionBranch
+    from zerg.models.agents import AgentSourceLine
+
+    db.add(
+        AgentSession(
+            id=JOURNAL_ID,
+            provider="claude",
+            environment="production",
+            project="g55",
+            device_id="cinder",
+            cwd="/Users/davidrose/git/g55",
+            started_at=NOW,
+            user_messages=0,
+        )
+    )
+    db.flush()
+    branch = AgentSessionBranch(session_id=JOURNAL_ID, branch_reason="root", is_head=1)
+    db.add(branch)
+    db.flush()
+    db.add(
+        AgentSourceLine(
+            session_id=JOURNAL_ID,
+            source_path=_JOURNAL_PATH,
+            source_offset=0,
+            branch_id=branch.id,
+            raw_json='{"type":"started","key":"v2:abc","agentId":"a049eaf15e4dbcae3"}',
+            line_hash="0" * 64,
+        )
+    )
+    db.flush()
+
+
 def _session_factory(tmp_path, name="workflow-ingest.db"):
     engine = make_engine(f"sqlite:///{tmp_path / name}")
     engine = engine.execution_options(schema_translate_map={"agents": None})
@@ -138,29 +175,75 @@ def _agent_payload(*, parent_provider_session_id: str | None = str(PARENT_ID)) -
     )
 
 
-# === Phase 0 characterization: TODAY's behavior ===
+# === Phase 1: journal.jsonl no longer pollutes the timeline ===
 
 
-def test_baseline_workflow_journal_creates_timeline_visible_session(tmp_path):
-    """BASELINE (inverted in Phase 1): a journal-only ingest produces a session
-    that is visible in the default timeline because it has 0 user messages but
-    ``ended_at IS NULL`` (the filter admits open sessions)."""
+def test_workflow_journal_ingest_creates_no_session(tmp_path):
+    """A journal-only ingest is dropped at the store: no session, no source
+    lines, nothing visible in the timeline."""
     SessionLocal = _session_factory(tmp_path)
     with SessionLocal() as db:
         store = AgentsStore(db)
         result = store.ingest_session(_journal_payload())
-        assert result.session_id == JOURNAL_ID
+        assert result.events_inserted == 0
+        assert result.session_created is False
 
-        session = db.query(AgentSession).filter(AgentSession.id == JOURNAL_ID).one()
-        assert session.user_messages == 0
-        assert session.ended_at is None
+        assert db.query(AgentSession).filter(AgentSession.id == JOURNAL_ID).first() is None
+        assert db.query(AgentSession).count() == 0
 
         total, rows = store.list_timeline_thread_page(hide_autonomous=True, include_test=True)
-        visible_ids = {row[1] for row in rows}
-        assert str(JOURNAL_ID) in visible_ids, "BASELINE: journal junk session pollutes the timeline today"
+        assert total == 0
+        assert rows == ()
 
 
-def test_baseline_agent_before_parent_becomes_orphan(tmp_path):
+def test_cleanup_removes_already_ingested_journal_session(tmp_path):
+    """The cleanup sweep removes a journal-junk session that was ingested
+    before the guard existed, and is idempotent."""
+    from zerg.services.agents.kernel_backfill import cleanup_workflow_journal_sessions
+
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        # Real parent + agent must survive the sweep untouched.
+        store.ingest_session(_parent_payload())
+        store.ingest_session(_agent_payload())
+
+        # Simulate a pre-fix leaked journal session directly (bypass the guard).
+        _seed_legacy_journal_session(db)
+        assert db.query(AgentSession).filter(AgentSession.id == JOURNAL_ID).first() is not None
+
+        report = cleanup_workflow_journal_sessions(db)
+        assert report["sessions_removed"] == 1
+        assert db.query(AgentSession).filter(AgentSession.id == JOURNAL_ID).first() is None
+
+        # Parent + its subagent thread untouched.
+        assert db.query(AgentSession).filter(AgentSession.id == PARENT_ID).first() is not None
+        assert db.query(SessionThread).filter(SessionThread.branch_kind == "subagent").count() == 1
+
+        second = cleanup_workflow_journal_sessions(db)
+        assert second["sessions_removed"] == 0
+
+
+def test_backfill_does_not_relink_workflow_journal(tmp_path):
+    """A journal source path under /subagents/ is NOT a subagent relink
+    candidate, so the backfill never re-parents journal junk."""
+    from zerg.services.agents.kernel_backfill import backfill_subagent_child_threads
+
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        store.ingest_session(_parent_payload())
+        _seed_legacy_journal_session(db)
+
+        report = backfill_subagent_child_threads(db)
+        # The only /subagents/ path present is the journal -> not a candidate.
+        assert report["candidates_resolved"] == 0
+        # Journal session still stands alone (cleanup, not backfill, removes it).
+        assert db.query(AgentSession).filter(AgentSession.id == JOURNAL_ID).first() is not None
+        assert db.query(SessionThread).filter(SessionThread.branch_kind == "subagent").count() == 0
+
+
+def test_agent_before_parent_becomes_orphan_baseline(tmp_path):
     """BASELINE (inverted in Phase 2): a subagent ingested BEFORE its parent
     becomes a standalone orphan session and does NOT self-heal when the parent
     arrives later."""

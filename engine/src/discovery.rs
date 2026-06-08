@@ -164,7 +164,33 @@ fn is_provider_session_file(provider: &ProviderConfig, path: &Path) -> bool {
     if provider.name == "antigravity" {
         return path.file_name().and_then(|name| name.to_str()) == Some("transcript.jsonl");
     }
+    if provider.name == "claude" && is_workflow_journal(path) {
+        // Dynamic-workflow runs write a `journal.jsonl` control ledger alongside
+        // the real `agent-*.jsonl` subagent transcripts. It carries only
+        // {type:"started"|"result"} bookkeeping lines (no role events), so it is
+        // not a session — shipping it just pollutes the timeline with an empty
+        // session row. The sibling agent transcripts are still discovered.
+        return false;
+    }
     true
+}
+
+/// True for a Claude dynamic-workflow `journal.jsonl` ledger, i.e. a file named
+/// `journal.jsonl` living under a `.../subagents/workflows/<run>/` directory.
+fn is_workflow_journal(path: &Path) -> bool {
+    if path.file_name().and_then(|name| name.to_str()) != Some("journal.jsonl") {
+        return false;
+    }
+    let parent = match path.parent().and_then(|p| p.parent()) {
+        Some(p) => p,
+        None => return false,
+    };
+    parent.file_name().and_then(|name| name.to_str()) == Some("workflows")
+        && parent
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|name| name.to_str())
+            == Some("subagents")
 }
 
 #[cfg(test)]
@@ -196,10 +222,11 @@ mod tests {
     // These assert the CURRENT (pre-fix) behavior so Phase 1 can invert them.
 
     #[test]
-    fn baseline_workflow_journal_is_discovered_as_claude_session_today() {
-        // BASELINE (to be inverted in Phase 1): journal.jsonl is a control ledger,
-        // not a transcript, but discovery currently accepts it as a claude session
-        // purely because the extension is `.jsonl`.
+    fn workflow_journal_is_not_discovered_as_session() {
+        // Phase 1: journal.jsonl is a control ledger, not a transcript. It must
+        // never be discovered as a claude session (otherwise it pollutes the
+        // timeline with an empty session). The sibling agent transcripts are
+        // still discovered (see the test below).
         let providers = vec![claude_provider_for(&workflow_fixture_root())];
         let journal = workflow_fixture_root()
             .join(FIXTURE_SID)
@@ -210,9 +237,20 @@ mod tests {
         assert!(journal.exists(), "fixture journal missing: {}", journal.display());
         assert_eq!(
             provider_for_path(&journal, &providers),
-            Some("claude"),
-            "BASELINE: journal.jsonl is (wrongly) treated as a claude session today"
+            None,
+            "journal.jsonl must not be treated as a session"
         );
+        // The watcher-event mapping must agree with discovery.
+        assert_eq!(session_path_for_watcher_event(&journal, &providers), None);
+    }
+
+    #[test]
+    fn non_workflow_journal_jsonl_is_still_a_session() {
+        // A file literally named journal.jsonl that is NOT under
+        // subagents/workflows/<run>/ is a normal session and stays discoverable.
+        let providers = vec![claude_provider_for(&workflow_fixture_root())];
+        let path = workflow_fixture_root().join("journal.jsonl");
+        assert!(is_provider_session_file(&providers[0], &path));
     }
 
     #[test]

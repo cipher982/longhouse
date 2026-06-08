@@ -142,6 +142,27 @@ def _normalize_ingested_project(data: SessionIngest) -> str | None:
     return project
 
 
+# `.../subagents/workflows/<run>/journal.jsonl` — a dynamic-workflow control
+# ledger, never a real session.
+_WORKFLOW_JOURNAL_RE = re.compile(r"/subagents/workflows/[^/]+/journal\.jsonl$")
+
+
+def _is_workflow_journal_only_ingest(data: SessionIngest, source_lines) -> bool:
+    """True when a payload is purely a dynamic-workflow ``journal.jsonl`` ledger:
+    no role events, and every source line path is a workflow-journal path.
+
+    Such a payload carries only ``{type:"started"|"result"}`` bookkeeping and
+    would otherwise create an empty, timeline-visible session.
+    """
+    if data.events:
+        return False
+    paths = [getattr(line, "source_path", None) for line in (source_lines or [])]
+    paths = [p for p in paths if p]
+    if not paths:
+        return False
+    return all(_WORKFLOW_JOURNAL_RE.search(str(p).replace("\\", "/")) is not None for p in paths)
+
+
 class AgentsStore:
     """Service for storing and querying agent sessions."""
 
@@ -1453,6 +1474,19 @@ class AgentsStore:
         session_id = data.id if data.id else uuid4()
         source_lines = self._normalize_source_lines_for_ingest(data)
         primary_source_path = self._primary_source_path_for_ingest(data, source_lines)
+
+        # Dynamic-workflow `journal.jsonl` is a control ledger, not a session.
+        # The engine now skips it at discovery, but guard here too: an ingest
+        # with no role events whose source lines are all workflow-journal paths
+        # is dropped so it never creates an empty, timeline-visible session.
+        if _is_workflow_journal_only_ingest(data, source_lines):
+            return IngestResult(
+                session_id=session_id,
+                events_inserted=0,
+                events_skipped=0,
+                session_created=False,
+                source_lines_inserted=0,
+            )
 
         resolved_child_thread = None
         existing = None

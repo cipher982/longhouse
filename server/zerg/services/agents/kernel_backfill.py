@@ -40,6 +40,7 @@ from zerg.models.agents import SessionTask
 from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
 from zerg.models.agents import SessionTurn
+from zerg.models.agents import TimelineCard
 from zerg.services.agents.kernel_writes import ensure_subagent_thread
 from zerg.services.agents.kernel_writes import resolve_primary_thread_by_provider_session_id
 from zerg.services.raw_json_compression import decode_raw_json
@@ -48,6 +49,17 @@ _CLAUDE_SUBAGENT_PARENT_RE = re.compile(
     r"/(?P<parent>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/subagents/"
 )
 _CLAUDE_AGENT_FILE_RE = re.compile(r"/agent-(?P<agent>[^/]+)\.jsonl$")
+# Dynamic-workflow control ledger: `.../subagents/workflows/<run>/journal.jsonl`.
+# It lives under `/subagents/` but is NOT a subagent transcript, so it must be
+# excluded from subagent relink candidates (otherwise it gets re-parented into
+# the workflow's parent as an empty child thread).
+_CLAUDE_WORKFLOW_JOURNAL_RE = re.compile(r"/subagents/workflows/[^/]+/journal\.jsonl$")
+
+
+def _is_workflow_journal_path(source_path: str | None) -> bool:
+    if not source_path:
+        return False
+    return _CLAUDE_WORKFLOW_JOURNAL_RE.search(source_path.replace("\\", "/")) is not None
 
 
 def _ensure_head_branch(db: Session, session_id: UUID) -> AgentSessionBranch:
@@ -111,10 +123,14 @@ def _candidate_subagent_sessions(db: Session) -> dict[UUID, set[str]]:
     for session_id, source_path in (
         db.query(AgentSourceLine.session_id, AgentSourceLine.source_path).filter(AgentSourceLine.source_path.like("%/subagents/%")).all()
     ):
+        if _is_workflow_journal_path(source_path):
+            continue
         candidates.setdefault(session_id, set()).add(source_path)
     for session_id, source_path in (
         db.query(AgentEvent.session_id, AgentEvent.source_path).filter(AgentEvent.source_path.like("%/subagents/%")).all()
     ):
+        if _is_workflow_journal_path(source_path):
+            continue
         candidates.setdefault(session_id, set()).add(source_path)
     return candidates
 
@@ -270,6 +286,63 @@ def backfill_child_thread_ids(db: Session) -> dict[str, int]:
         counts[model.__tablename__] = updated
     db.flush()
     return counts
+
+
+def cleanup_workflow_journal_sessions(db: Session) -> dict[str, int]:
+    """Remove junk sessions ingested from a dynamic-workflow ``journal.jsonl``.
+
+    Before the engine learned to skip ``.../subagents/workflows/<run>/journal.jsonl``,
+    each workflow run leaked one empty session: zero role events, only archived
+    source lines for the control ledger, ``ended_at IS NULL`` so it slipped past
+    the timeline filter. This sweep finds sessions whose source evidence is
+    EXCLUSIVELY workflow-journal lines and deletes them along with their kernel
+    rows. Idempotent: a second run resolves nothing.
+    """
+
+    sessions_removed = 0
+    source_lines_deleted = 0
+
+    # Sessions that have at least one workflow-journal source line.
+    journal_session_ids: set[UUID] = set()
+    for (session_id,) in (
+        db.query(AgentSourceLine.session_id)
+        .filter(AgentSourceLine.source_path.like("%/subagents/workflows/%/journal.jsonl"))
+        .distinct()
+        .all()
+    ):
+        journal_session_ids.add(session_id)
+
+    for session_id in journal_session_ids:
+        # Only remove sessions that are PURELY journal junk: no role events, and
+        # every source line is a workflow-journal line. Never touch a session
+        # that also carries real transcript rows.
+        if db.query(AgentEvent).filter(AgentEvent.session_id == session_id).limit(1).count() > 0:
+            continue
+        source_paths = [
+            row.source_path for row in db.query(AgentSourceLine.source_path).filter(AgentSourceLine.session_id == session_id).all()
+        ]
+        if not source_paths or any(not _is_workflow_journal_path(p) for p in source_paths):
+            continue
+
+        thread_ids = [row.id for row in db.query(SessionThread.id).filter(SessionThread.session_id == session_id).all()]
+        source_lines_deleted += db.query(AgentSourceLine).filter(AgentSourceLine.session_id == session_id).delete(synchronize_session=False)
+        db.query(SessionTask).filter(SessionTask.session_id == str(session_id)).delete(synchronize_session=False)
+        db.query(SessionEmbedding).filter(SessionEmbedding.session_id == session_id).delete(synchronize_session=False)
+        db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session_id).delete(synchronize_session=False)
+        if thread_ids:
+            db.query(SessionThreadAlias).filter(SessionThreadAlias.thread_id.in_(thread_ids)).delete(synchronize_session=False)
+            db.query(SessionThread).filter(SessionThread.id.in_(thread_ids)).delete(synchronize_session=False)
+        db.query(AgentSessionBranch).filter(AgentSessionBranch.session_id == session_id).delete(synchronize_session=False)
+        db.query(TimelineCard).filter(TimelineCard.session_id == session_id).delete(synchronize_session=False)
+        db.query(AgentSession).filter(AgentSession.id == session_id).delete(synchronize_session=False)
+        sessions_removed += 1
+
+    db.flush()
+    return {
+        "journal_sessions_seen": len(journal_session_ids),
+        "sessions_removed": sessions_removed,
+        "source_lines_deleted": source_lines_deleted,
+    }
 
 
 def backfill_subagent_child_threads(db: Session) -> dict[str, int]:
@@ -607,9 +680,11 @@ def backfill_session_identity_kernel(db: Session) -> dict[str, dict[str, int]]:
 
     1. ``backfill_root_threads`` — primary thread + provider_session_id alias.
     2. ``backfill_child_thread_ids`` — stamp thread_id on every legacy child row.
-    3. ``backfill_subagent_child_threads`` — move leaked provider subagent
+    3. ``cleanup_workflow_journal_sessions`` — delete empty junk sessions that
+       leaked from dynamic-workflow ``journal.jsonl`` ledgers.
+    4. ``backfill_subagent_child_threads`` — move leaked provider subagent
        sessions under their parent session as child threads.
-    4. ``backfill_runs_and_connections`` — synthesize one observe-only run +
+    5. ``backfill_runs_and_connections`` — synthesize one observe-only run +
        connection per session for sessions without launcher-owned runs.
 
     Idempotent end-to-end. Safe to run on every startup or as a one-shot CLI.
@@ -618,6 +693,7 @@ def backfill_session_identity_kernel(db: Session) -> dict[str, dict[str, int]]:
     return {
         "threads": backfill_root_threads(db),
         "children": backfill_child_thread_ids(db),
+        "workflow_journals": cleanup_workflow_journal_sessions(db),
         "subagents": backfill_subagent_child_threads(db),
         "runs": backfill_runs_and_connections(db),
     }
