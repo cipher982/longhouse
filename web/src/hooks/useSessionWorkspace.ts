@@ -148,8 +148,14 @@ export function useSessionWorkspace(
     limit: INITIAL_EVENTS_PAGE_SIZE,
     branch_mode: branchMode,
     refetchInterval: (query) => {
+      if (!documentVisible) {
+        return false;
+      }
       const currentSession = query.state.data?.session;
-      if (!documentVisible || !shouldRefreshWorkspaceSession(currentSession)) {
+      if (!currentSession) {
+        return query.state.error ? WORKSPACE_FALLBACK_REFRESH_MS : false;
+      }
+      if (!shouldRefreshWorkspaceSession(currentSession)) {
         return false;
       }
 

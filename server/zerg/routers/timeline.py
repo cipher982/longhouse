@@ -707,6 +707,9 @@ def _load_workspace_signature(
 ) -> tuple:
     """Lightweight signature for session workspace-visible state."""
 
+    # The stream handshake seeds previous_sig from revision.signature and the
+    # main loop compares against this helper, so this tuple shape must stay
+    # identical to SessionWorkspaceRevision.signature.
     revision = load_session_workspace_revision(db, session_id)
     return revision.signature if revision is not None else ()
 
