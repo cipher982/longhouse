@@ -267,6 +267,11 @@ struct TimelineSessionCardRow: View {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                 }
+                // The dot is color-only; fold its meaning into the headline so
+                // VoiceOver announces "Waiting on you" / "Working" rather than
+                // leaving amber as the sole, invisible-to-VoiceOver code.
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(session.title), \(signal.accessibilityState)")
 
                 CompactRuntimeLine(session: session, signal: signal)
             }
@@ -910,6 +915,17 @@ enum TimelineSignal {
     /// Motion is reserved for genuine live work. "Waiting on you" is a STABLE
     /// state, so attention is steady, not pulsing — avoids alarm fatigue.
     var pulses: Bool { self == .working }
+
+    /// Spoken equivalent of the dot color, so the attention axis reaches
+    /// VoiceOver instead of being color-only.
+    var accessibilityState: String {
+        switch self {
+        case .attention: return "Waiting on you"
+        case .working: return "Working"
+        case .quiet: return "Idle"
+        case .closed: return "Closed"
+        }
+    }
 }
 
 /// Resolve the row's attention signal from runtime tone + liveness + global
@@ -953,7 +969,9 @@ private func parseLonghouseDate(_ value: String?) -> Date? {
 /// and progress signals (server/zerg/services/session_runtime.py).
 /// Returns nil for closed sessions (we don't want to show a counter there).
 func stateDurationLabel(for session: SessionSummary) -> String? {
-    if session.timelineStatusLabel == "Closed" { return nil }
+    // Use the lifecycle flag, the same "closed" source the signal uses, so the
+    // dot/accent and the duration never disagree about whether a row is closed.
+    if session.isClosed { return nil }
     guard let date = parseLonghouseDate(session.timelineAnchor) else { return nil }
     return compactDuration(since: date)
 }
