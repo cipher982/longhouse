@@ -3466,6 +3466,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/timeline/sessions/{session_id}/workflows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Timeline Session Workflow Runs
+         * @description List dynamic-workflow runs whose subagent threads live under this session.
+         *
+         *     Browser-cookie-authenticated mirror of the machine-facing
+         *     ``/agents/sessions/{id}/workflows``. Each entry is one collapsible workflow
+         *     run node for the session detail UI.
+         */
+        get: operations["get_timeline_session_workflow_runs_timeline_sessions__session_id__workflows_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/workflows/{workflow_run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Timeline Workflow Run
+         * @description Return one dynamic-workflow run's subagent threads (browser-auth mirror of
+         *     ``/agents/workflows/{run_id}``).
+         */
+        get: operations["get_timeline_workflow_run_timeline_workflows__workflow_run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/timeline/sessions/{session_id}/turns/{turn_id}": {
         parameters: {
             query?: never;
@@ -3923,6 +3968,53 @@ export interface paths {
          *     or UI decides what's relevant — no status bucketing, no pre-computed summaries.
          */
         get: operations["wall_query_agents_sessions_wall_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/workflows/{workflow_run_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Workflow Run
+         * @description Return the subagent threads that belong to a dynamic-workflow run.
+         *
+         *     Groups all agents tagged with this ``workflow_run_id`` under their parent
+         *     session and surfaces each agent's attribution labels — the data a UI uses to
+         *     render a workflow as a single collapsible unit.
+         */
+        get: operations["get_workflow_run_agents_workflows__workflow_run_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/workflows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Session Workflow Runs
+         * @description List dynamic-workflow runs whose subagent threads live under this session.
+         *
+         *     Each entry is one collapsible 'workflow run' node for the session detail UI:
+         *     {workflow_run_id, agent_count, skill}.
+         */
+        get: operations["list_session_workflow_runs_agents_sessions__session_id__workflows_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -17506,6 +17598,72 @@ export interface operations {
             };
         };
     };
+    get_timeline_session_workflow_runs_timeline_sessions__session_id__workflows_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_timeline_workflow_run_timeline_workflows__workflow_run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_timeline_session_turn_timeline_sessions__session_id__turns__turn_id__get: {
         parameters: {
             query?: never;
@@ -18365,6 +18523,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WallResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_workflow_run_agents_workflows__workflow_run_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                workflow_run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_session_workflow_runs_agents_sessions__session_id__workflows_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
