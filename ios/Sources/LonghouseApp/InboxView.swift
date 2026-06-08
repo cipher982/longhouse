@@ -274,6 +274,19 @@ struct TimelineSessionCardRow: View {
                 .accessibilityLabel("\(session.title), \(signal.accessibilityState)")
 
                 CompactRuntimeLine(session: session, signal: signal)
+
+                // B-lite drift line: the live, drifting summary title parked on a
+                // demoted, low-contrast line where movement is legitimate. The
+                // frozen headline above stays put (muscle memory); this is the
+                // "what is it doing now" channel, shown only while actively
+                // working so it never churns under a resting row.
+                if signal == .working, let drift = session.driftTitle {
+                    Text("now: \(drift)")
+                        .font(.caption2)
+                        .italic()
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                }
             }
         }
         .padding(.vertical, 11)

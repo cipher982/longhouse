@@ -14,6 +14,7 @@ import { isSessionClosed, resolveTimelineSignal, timelineSignalLabel } from "../
 import {
   formatRelativeTime,
   getBranchLabel,
+  getDriftTitle,
   getSessionCardText,
   renderHighlightedText,
 } from "../../lib/sessionUtils";
@@ -71,19 +72,26 @@ export function SessionRow({
     relativeNowMs,
   });
 
-  // When the user is searching and the backend returned a match snippet,
-  // show that as the row's secondary line with the query highlighted.
-  const matchSnippet = detailSession?.match_snippet ?? null;
-  const showSnippet = !!highlightQuery && !!matchSnippet;
-  const summary: ReactNode = showSnippet
-    ? renderHighlightedText(matchSnippet!, highlightQuery!)
-    : text.subheading;
-
   const statusTone = isClosed ? "closed" : timelineStatus.tone;
   const statusLabel = isClosed ? "closed" : timelineStatus.label;
   // 3-stop attention signal (amber=waiting / teal=working / grey=quiet), shared
   // with iOS. Drives the dot color + the a11y label so amber isn't sight-only.
   const signal = resolveTimelineSignal(session);
+
+  // When the user is searching and the backend returned a match snippet,
+  // show that as the row's secondary line with the query highlighted.
+  const matchSnippet = detailSession?.match_snippet ?? null;
+  const showSnippet = !!highlightQuery && !!matchSnippet;
+  // B-lite drift line: while actively working, the live (drifting) summary title
+  // is parked on the demoted secondary line as "now: …", where movement is
+  // legitimate. The frozen headline above never moves (muscle memory). Suppressed
+  // when the drift would just echo the headline.
+  const driftTitle = getDriftTitle(session, text.title);
+  const summary: ReactNode = showSnippet
+    ? renderHighlightedText(matchSnippet!, highlightQuery!)
+    : signal === "working" && driftTitle
+      ? `now: ${driftTitle}`
+      : text.subheading;
 
   const hoverTimerRef = useRef<number | null>(null);
   const clearHover = useCallback(() => {

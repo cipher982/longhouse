@@ -152,6 +152,19 @@ export function getSessionCardText(
   };
 }
 
+/**
+ * The live, drifting summary title for the subordinate "now:" drift line.
+ * Returns null when it's empty or would just echo the frozen headline.
+ */
+export function getDriftTitle(
+  session: Pick<AgentSession, "summary_title">,
+  headline: string,
+): string | null {
+  const drift = compactText(session.summary_title);
+  if (!drift) return null;
+  return drift === compactText(headline) ? null : drift;
+}
+
 export function getBranchLabel(value: string | null | undefined): string | null {
   if (!isValidTitle(value)) return null;
   const branch = value!.trim();
