@@ -1,5 +1,30 @@
 # Reliability Data Plane — Reclaim Runbook (Phases B–F)
 
+> ## ⛔ SWAP PARKED (2026-06-08) — do not run step 7 until the workflow-ingest feature lands
+> Phases B/C/D are SHIPPED and stable (legacy raw off; DB stopped growing). Phase E
+> prep is staged: export done + verified, compaction_kind backfilled, fail-closed
+> export shipped, Option-B rebuild scripts written+hatch-reviewed
+> (`scripts/ops/phase-e-reclaim.sh` + `phase-e-build-slim.py`). **The clean-store
+> swap (step 7) has NOT run and must not, because of a hard ordering dependency on
+> another agent's in-flight work:**
+>
+> - The final pre-swap re-verify (step 6) found uncovered `source_lines` rows on
+>   **active workflow sessions** — all under `/subagents/workflows/.../agent-*.jsonl`
+>   sidechain paths (e.g. session `bbac0f94...` 248 rows, `c48dae2b...` ~31.7k rows;
+>   the latter is the g55 workflow run).
+> - A separate agent is building **full Claude Code dynamic-workflow ingest support**
+>   (`/tmp/goal-workflows-ingest.md`). Its Phase 2 **re-parents orphaned subagent
+>   sessions**, which MOVES `source_lines` rows between `session_id`s. My reclaim
+>   drops raw permanently with archive recovery keyed by `session_id`. If I drop
+>   first and they re-key after, moved rows lose their archive linkage → data loss.
+> - Therefore: **hold step 7 until workflow ingest is merged + stable**, then re-run
+>   step 6 against the settled keying, and use the conditional-rebuild rule below
+>   (sentinel only proven-covered rows; KEEP raw for any uncovered row; FAIL on a row
+>   with neither raw nor coverage). hatch confirmed the unconditional drop is unsafe.
+> - The "REAL HOLE" verdict from the first subagent diagnostic was inconclusive (it
+>   only searched the parent session_id; subagent bytes may be archived under the
+>   subagent's own session_id). See the definitive check result before trusting it.
+
 **Status:** DRAFT — requires David's explicit approval before ANY step runs.
 **Predecessor:** `docs/specs/reliability-data-plane-closeout.md` (architecture + PRs 1–3, shipped).
 **Companion gate:** `docs/runbooks/archive-decommission-plan.md` (the approval-gate doctrine this obeys).

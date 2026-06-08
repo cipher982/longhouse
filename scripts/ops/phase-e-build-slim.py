@@ -1,20 +1,34 @@
 """Build a slim Longhouse DB from a quiesced source (Phase E reclaim).
 
-Copies all normal tables from src -> dst preserving explicit ids, replacing the
-raw transcript columns with sentinels (Option B: keep column defs, drop bytes):
-  events.raw_json/raw_json_z = NULL, raw_json_codec = 0
-  source_lines.raw_json = '', raw_json_z = NULL, raw_json_codec = 0
-Recreates events_fts via FTS5 'rebuild', copies indexes/views/triggers/
-sqlite_sequence, and runs integrity + raw-left + fk checks. SQLite copies no raw
-cell payloads, so the new file reclaims the ~61GB.
+⛔ NOT SAFE TO RUN YET. This version UNCONDITIONALLY sentinels raw columns. hatch
+flagged that as unsafe while workflow-subagent source_lines coverage is unsettled
+(see docs/runbooks/reliability-data-plane-reclaim.md, "SWAP PARKED"). Before this
+runs it MUST be made CONDITIONAL: sentinel only rows proven archive-covered by
+(session_id, source_path, source_offset, line_hash); KEEP raw for any uncovered
+row; FAIL the build on a row that has neither raw nor coverage. That conditional
+logic depends on how the in-flight workflow-ingest feature keys subagent
+source_lines, so it is deliberately NOT written yet. Requires the REQUIRE_RECLAIM_OK
+env guard below + explicit approval.
+
+Copies all normal tables from src -> dst preserving explicit ids. Recreates
+events_fts via FTS5 'rebuild', copies indexes/views/triggers/sqlite_sequence,
+runs integrity + raw-left + fk checks. SQLite copies no raw cell payloads, so the
+new file reclaims the ~61GB.
 
 Source MUST be quiesced (container stopped) — no concurrent writers.
-Usage: python build_slim.py <src.db> <dst.slim.db>
+Usage: REQUIRE_RECLAIM_OK=1 python build_slim.py <src.db> <dst.slim.db>
 """
 import os
 import sqlite3
 import sys
 import time
+
+if os.environ.get("REQUIRE_RECLAIM_OK") != "1":
+    raise SystemExit(
+        "REFUSING: phase-e-build-slim is parked (unconditional raw sentinel is unsafe "
+        "until workflow-subagent source_lines keying settles and the rebuild is made "
+        "conditional). Set REQUIRE_RECLAIM_OK=1 only after the runbook gate is cleared."
+    )
 
 src_path, dst_path = sys.argv[1], sys.argv[2]
 
