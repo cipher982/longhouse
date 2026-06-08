@@ -67,7 +67,10 @@ echo "=== atomic swap (old DB moved aside = rollback) ==="
 rollback() {
   echo "!!! SWAP FAILED — rolling back to $OLD"
   docker stop --time 30 "$C" 2>/dev/null || true
-  [ -e "$DB" ] && mv "$DB" "$BASE/longhouse.db.slim-failed-$TS"
+  # Remove any slim DB + its sidecars sitting at the live path, so the restored
+  # old DB never inherits stale WAL/SHM from the slim build.
+  if [ -e "$DB" ]; then mv "$DB" "$BASE/longhouse.db.slim-failed-$TS"; fi
+  rm -f "$DB-wal" "$DB-shm"
   mv "$OLD" "$DB"
   [ ! -e "$OLD-wal" ] || mv "$OLD-wal" "$DB-wal"
   [ ! -e "$OLD-shm" ] || mv "$OLD-shm" "$DB-shm"
@@ -75,7 +78,9 @@ rollback() {
   echo "rolled back; original DB restored at $DB"
   exit 1
 }
-mv "$DB" "$OLD"
+# Guard the initial move too: if the DB move itself fails, restore and bail so
+# we never leave the service stopped with the DB stranded at $OLD.
+mv "$DB" "$OLD" || { echo "ABORT: could not move DB aside; DB untouched. Restart: docker start $C"; docker start "$C"; exit 1; }
 [ ! -e "$DB-wal" ] || mv "$DB-wal" "$OLD-wal"
 [ ! -e "$DB-shm" ] || mv "$DB-shm" "$OLD-shm"
 mv "$SLIM" "$DB" || rollback

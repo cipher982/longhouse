@@ -25,9 +25,9 @@ import time
 
 if os.environ.get("REQUIRE_RECLAIM_OK") != "1":
     raise SystemExit(
-        "REFUSING: phase-e-build-slim is parked (unconditional raw sentinel is unsafe "
-        "until workflow-subagent source_lines keying settles and the rebuild is made "
-        "conditional). Set REQUIRE_RECLAIM_OK=1 only after the runbook gate is cleared."
+        "REFUSING: phase-e-build-slim drops production raw and must only run inside the "
+        "approved reclaim window. Set REQUIRE_RECLAIM_OK=1 (phase-e-reclaim.sh does this) "
+        "after David's explicit swap approval and a fresh coverage re-verify."
     )
 
 src_path, dst_path = sys.argv[1], sys.argv[2]
