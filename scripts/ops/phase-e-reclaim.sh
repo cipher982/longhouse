@@ -31,11 +31,18 @@ printf '%s\n' "$IMAGE" > "$WORK/runtime-image.txt"
 echo "=== pre-flight ==="
 df -h /data "$BASE"
 ls -lh "$DB" "$DB"-wal "$DB"-shm "$BASE/archive" 2>/dev/null || true
-sqlite3 "$DB" 'PRAGMA journal_mode; PRAGMA page_count; PRAGMA freelist_count; PRAGMA quick_check;'
+# NOTE: deliberately NO full-DB quick_check/integrity_check here. On this 117GB
+# tenant that scan runs multi-HOUR (the spec explicitly prohibits it) and adds no
+# safety the build does not already provide: build-slim runs integrity_check +
+# quick_check on the SLIM output (small, fast) and we keep the original DB as
+# rollback. Cheap instant diagnostics only.
+sqlite3 "$DB" 'PRAGMA journal_mode; PRAGMA page_count; PRAGMA freelist_count;'
 
 echo "=== stop + checkpoint ==="
 docker stop --time 60 "$C"
-sqlite3 "$DB" 'PRAGMA wal_checkpoint(TRUNCATE); PRAGMA quick_check;'
+# Checkpoint+truncate the WAL into the main DB so the build reads a fully
+# consistent quiesced file. No full quick_check here (see note above).
+sqlite3 "$DB" 'PRAGMA wal_checkpoint(TRUNCATE);'
 ls -lh "$DB" "$DB"-wal "$DB"-shm 2>/dev/null || true
 
 echo "=== build slim DB ==="
