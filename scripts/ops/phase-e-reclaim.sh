@@ -73,7 +73,7 @@ echo "=== atomic swap (old DB moved aside = rollback) ==="
 SWAP_STARTED=0
 rollback() {
   set +e
-  trap - ERR INT TERM
+  trap - ERR INT TERM HUP
   echo "!!! SWAP INTERRUPTED — restoring original DB ($OLD -> $DB)"
   docker stop --time 30 "$C" 2>/dev/null
   # If $DB is present and is NOT the original (i.e. slim was installed), set it aside.
@@ -86,8 +86,16 @@ rollback() {
   echo "rolled back; original DB restored at $DB. Manual check: curl -fsS https://david010.longhouse.ai/api/readyz"
   exit 1
 }
-echo "MANUAL ROLLBACK (if this process dies hard): docker stop $C; mv $OLD $DB; docker start $C"
-trap 'rollback' ERR INT TERM
+cat <<MANUAL
+MANUAL ROLLBACK (only if this process is hard-killed / host reboots mid-swap):
+  docker stop $C
+  [ -e "$DB" ] && [ -e "$OLD" ] && mv "$DB" "$BASE/longhouse.db.slim-failed-$TS"
+  rm -f "$DB-wal" "$DB-shm"
+  [ -e "$OLD" ] && mv "$OLD" "$DB"
+  [ -e "$OLD-wal" ] && mv "$OLD-wal" "$DB-wal"; [ -e "$OLD-shm" ] && mv "$OLD-shm" "$DB-shm"
+  docker start $C
+MANUAL
+trap 'rollback' ERR INT TERM HUP
 SWAP_STARTED=1
 # Guard the initial move too: if the DB move itself fails, restore and bail so
 # we never leave the service stopped with the DB stranded at $OLD.
