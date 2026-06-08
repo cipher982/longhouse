@@ -118,7 +118,7 @@ curl -fsS https://david010.longhouse.ai/api/health || rollback
 echo "smoke OK"
 # Swap committed + healthy. Disarm the rollback trap so unrelated post-swap
 # hiccups (e.g. NAS rsync) don't move the now-live slim DB back to the old one.
-trap - ERR INT TERM
+trap - ERR INT TERM HUP
 ls -lh "$DB" "$OLD"; df -h /data
 
 echo "=== NAS backup of moved-aside OLD db + archive (after smoke) ==="
