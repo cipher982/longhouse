@@ -1,5 +1,36 @@
 # Reliability Data Plane — Reclaim Runbook (Phases B–F)
 
+> ## 🅿️ RECLAIM PARKED (2026-06-09) — architecture migration DONE; disk reclaim deferred
+> **The architecture migration is complete and live** (Phase D: archive-primary on,
+> legacy raw off — the DB no longer bloats). Phase E (the one-time disk reclaim of
+> the EXISTING 117GB file) was attempted and PARKED. Tenant healthy on the original
+> DB the whole time; ZERO data lost.
+>
+> Why parked: the stopped-window clean-store rebuild is **too slow on this Hetzner
+> volume** — a single run was ~5h (events copy ~66m, source_lines ~41m, observations
+> ~22m, FTS rebuild, then the final check). Three separate attempts each died on a
+> different perf/environment wall (multi-hour preflight quick_check; tenant restarted
+> mid-build by another agent's reprovision; final `integrity_check` read 989GB on an
+> 87GB DB and never converged). None were data-safety bugs — the logic was sound. The
+> built 87GB slim was discarded (stale once the tenant restarted) and the scratch dir
+> deleted. Reclaim would also only have been ~30GB (117→87) because Phase B exported
+> only recent history, not the full corpus.
+>
+> **To do it right next time (do NOT just re-run this script as-is):**
+> 1. Replace `PRAGMA integrity_check` with `PRAGMA quick_check` in phase-e-build-slim
+>    (integrity_check is pathological on FTS5+many-index DBs over this volume).
+> 2. Build the slim copy ONLINE against a snapshot, not in a multi-hour stopped
+>    window — stop only for a short delta + swap. (Removes the restart-collision and
+>    the long-outage problem entirely. This is the real fix; the restart-guard only
+>    detects the collision, doesn't avoid it.)
+> 3. Run Phase B export over the FULL history first, so the reclaim drops the whole
+>    ~60-88GB instead of ~30GB.
+> The build/swap scripts (phase-e-reclaim.sh, phase-e-build-slim.py) + restart guard
+> + conditional owner-aware coverage all work and are committed — reusable once the
+> above are addressed. Related storage wins parked in docket: image dedup,
+> compress session_observations (~18GB, uncompressed today).
+
+
 > ## ⛔ SWAP PARKED (2026-06-08) — do not run step 7 until the workflow-ingest feature lands
 >
 > **hatch codex final ruling (2026-06-08): NO-GO / PARK.** Verbatim: *"Parking is
