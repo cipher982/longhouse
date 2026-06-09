@@ -38,6 +38,21 @@ const RECOVERABLE_ARCHIVE_ERROR_PATTERNS: &[&str] = &[
     "error sending request for url (%",
 ];
 
+fn is_recoverable_archive_error(error: &str) -> bool {
+    RECOVERABLE_ARCHIVE_ERROR_PATTERNS
+        .iter()
+        .any(|pattern| sql_like_pattern_matches(pattern, error))
+}
+
+fn sql_like_pattern_matches(pattern: &str, value: &str) -> bool {
+    match (pattern.strip_prefix('%'), pattern.strip_suffix('%')) {
+        (Some(inner), Some(_)) => value.contains(inner.strip_suffix('%').unwrap_or(inner)),
+        (Some(suffix), None) => value.ends_with(suffix),
+        (None, Some(prefix)) => value.starts_with(prefix),
+        (None, None) => value == pattern,
+    }
+}
+
 /// Default max retries before marking dead.
 const DEFAULT_MAX_RETRIES: u32 = 50;
 
@@ -747,7 +762,7 @@ impl<'a> Spool<'a> {
         )?;
         let new_count = retry_count + 1;
 
-        if new_count as u32 >= max_retries {
+        if new_count as u32 >= max_retries && !is_recoverable_archive_error(error) {
             // Mark as dead
             self.conn.execute(
                 "UPDATE spool_queue SET status = 'dead', retry_count = ?1, last_error = ?2
@@ -1025,12 +1040,32 @@ impl<'a> Spool<'a> {
         let seven_days_ago = (Utc::now() - chrono::Duration::days(7)).to_rfc3339();
         let thirty_days_ago = (Utc::now() - chrono::Duration::days(30)).to_rfc3339();
 
-        // Mark pending >7 days as dead (not deleted — allows inspection)
-        let marked_dead = self.conn.execute(
-            "UPDATE spool_queue SET status = 'dead', last_error = COALESCE(last_error, 'timeout: pending >7 days')
-             WHERE status = 'pending' AND created_at < ?",
-            [&seven_days_ago],
-        )?;
+        let recoverable_clause = RECOVERABLE_ARCHIVE_ERROR_PATTERNS
+            .iter()
+            .enumerate()
+            .map(|(idx, _)| format!("last_error LIKE ?{}", idx + 2))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        let cleanup_query = format!(
+            "UPDATE spool_queue
+             SET status = 'dead',
+                 last_error = COALESCE(last_error, 'timeout: pending >7 days')
+             WHERE status = 'pending'
+               AND created_at < ?1
+               AND (last_error IS NULL OR NOT ({}))",
+            recoverable_clause
+        );
+        let mut cleanup_params: Vec<&dyn rusqlite::ToSql> =
+            Vec::with_capacity(1 + RECOVERABLE_ARCHIVE_ERROR_PATTERNS.len());
+        cleanup_params.push(&seven_days_ago);
+        for pattern in RECOVERABLE_ARCHIVE_ERROR_PATTERNS {
+            cleanup_params.push(pattern);
+        }
+
+        // Mark old nonrecoverable pending entries as dead (not deleted — allows inspection).
+        let marked_dead = self
+            .conn
+            .execute(&cleanup_query, cleanup_params.as_slice())?;
 
         // Hard-delete old dead entries (>30 days)
         let deleted = self.conn.execute(
@@ -1646,6 +1681,49 @@ mod tests {
     }
 
     #[test]
+    fn test_recoverable_archive_error_classifier_matches_runtime_errors() {
+        assert!(is_recoverable_archive_error("525:<!DOCTYPE html>"));
+        assert!(is_recoverable_archive_error(
+            "error sending request for url (https://david010.longhouse.ai/api/agents/ingest)"
+        ));
+        assert!(is_recoverable_archive_error(
+            "503:{\"detail\":\"Archive ingest backlog is throttled; retry shortly\"}"
+        ));
+        assert!(!is_recoverable_archive_error(
+            "payload rejected 422:invalid source line"
+        ));
+    }
+
+    #[test]
+    fn test_mark_failed_keeps_recoverable_server_error_pending_after_max() {
+        let (_tmp, conn) = setup();
+        let spool = Spool::new(&conn);
+
+        spool.enqueue("claude", "/f", 0, 100, None).unwrap();
+        let batch = spool.dequeue_batch(10).unwrap();
+        let id = batch[0].id;
+
+        for _ in 0..3 {
+            let dead = spool
+                .mark_failed_with_max(id, "525:<!DOCTYPE html>", 3)
+                .unwrap();
+            assert!(!dead);
+        }
+
+        let row: (String, i64, String) = conn
+            .query_row(
+                "SELECT status, retry_count, last_error FROM spool_queue WHERE id = ?",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, "pending");
+        assert_eq!(row.1, 3);
+        assert_eq!(row.2, "525:<!DOCTYPE html>");
+        assert_eq!(spool.dead_count().unwrap(), 0);
+    }
+
+    #[test]
     fn test_backpressure() {
         let (_tmp, conn) = setup();
         let spool = Spool::new(&conn);
@@ -1675,6 +1753,43 @@ mod tests {
         let cleaned = spool.cleanup().unwrap();
         assert_eq!(cleaned, 1);
         assert_eq!(spool.total_size().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_cleanup_keeps_old_recoverable_pending_entries_retryable() {
+        let (_tmp, conn) = setup();
+        let spool = Spool::new(&conn);
+        let old_created_at = (Utc::now() - chrono::Duration::days(8)).to_rfc3339();
+
+        conn.execute(
+            "INSERT INTO spool_queue
+             (provider, file_path, start_offset, end_offset, created_at, next_retry_at, retry_count, last_error, status)
+             VALUES
+             ('claude', '/recoverable.jsonl', 0, 100, ?1, ?1, 50, '525:<!DOCTYPE html>', 'pending'),
+             ('claude', '/nonrecoverable.jsonl', 0, 100, ?1, ?1, 50, 'no complete lines ready for replay', 'pending')",
+            [&old_created_at],
+        )
+        .unwrap();
+
+        let changed = spool.cleanup().unwrap();
+        assert_eq!(changed, 1);
+
+        let rows: Vec<(String, String)> = {
+            let mut stmt = conn
+                .prepare("SELECT file_path, status FROM spool_queue ORDER BY file_path")
+                .unwrap();
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .unwrap()
+        };
+        assert_eq!(
+            rows,
+            vec![
+                ("/nonrecoverable.jsonl".to_string(), "dead".to_string()),
+                ("/recoverable.jsonl".to_string(), "pending".to_string()),
+            ]
+        );
     }
 
     #[test]

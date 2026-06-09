@@ -239,7 +239,7 @@ def test_transport_health_keeps_spool_backlog_out_of_live_transport_status():
     assert assessment.reasons == ()
 
 
-def test_transport_health_keeps_dead_archive_ranges_informational():
+def test_transport_health_treats_dead_archive_ranges_as_degraded_attention():
     sample = transport_health_sample_from_engine_status_payload(
         {
             "ship_attempts_1h": 552,
@@ -252,10 +252,10 @@ def test_transport_health_keeps_dead_archive_ranges_informational():
 
     assessment = assess_transport_health(sample)
 
-    assert assessment.status == "healthy"
-    assert assessment.status_reason == "healthy"
-    assert assessment.status_summary == "Shipping healthy."
-    assert assessment.reasons == ()
+    assert assessment.status == "degraded"
+    assert assessment.status_reason == "spool_dead"
+    assert assessment.status_summary == "7 dead-letter archive range(s) need attention."
+    assert assessment.reasons == ("spool_dead",)
 
 
 def test_transport_health_keeps_payload_rejection_broken_above_dead_ranges():
@@ -274,7 +274,7 @@ def test_transport_health_keeps_payload_rejection_broken_above_dead_ranges():
 
     assert assessment.status == "broken"
     assert assessment.status_reason == "payload_rejected"
-    assert assessment.reasons == ("payload_rejected",)
+    assert assessment.reasons == ("spool_dead", "payload_rejected")
 
 
 def test_transport_health_surfaces_last_transport_error_detail():

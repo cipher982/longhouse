@@ -302,8 +302,8 @@ def test_browser_observability_routes_expose_overview_and_raw_slices(tmp_path, m
         assert payload["summary"]["slow_turns"] == 2
         assert payload["machine_counts"] == {
             "total": 2,
-            "healthy": 2,
-            "degraded": 0,
+            "healthy": 1,
+            "degraded": 1,
             "offline": 0,
             "broken": 0,
         }
@@ -311,13 +311,12 @@ def test_browser_observability_routes_expose_overview_and_raw_slices(tmp_path, m
             "broken-machine",
             "healthy-machine",
         }
-        assert payload["machines"][0]["device_id"] == "healthy-machine"
-        assert payload["machines"][0]["status"] == "healthy"
-        assert payload["machines"][1]["device_id"] == "broken-machine"
-        assert payload["machines"][1]["status"] == "healthy"
+        assert payload["machines"][0]["device_id"] == "broken-machine"
+        assert payload["machines"][0]["status"] == "degraded"
+        assert payload["machines"][1]["device_id"] == "healthy-machine"
         assert payload["slow_turn_total"] == 2
         assert payload["slow_turns"][0]["request_id"] == "req-slowest"
-        assert payload["slow_turns"][0]["machine"]["status"] == "healthy"
+        assert payload["slow_turns"][0]["machine"]["status"] == "degraded"
         assert payload["providers"][0]["provider"] == "codex"
         assert payload["providers"][0]["completed_turns"] == 2
         assert payload["providers"][1]["provider"] == "claude"
@@ -363,14 +362,11 @@ def test_browser_observability_routes_expose_overview_and_raw_slices(tmp_path, m
         assert slow_payload["total"] == 1
         assert slow_payload["turns"][0]["request_id"] == "req-slowest"
 
-        healthy = client.get("/observability/machines/health?status=healthy&stale_after_seconds=3600")
-        assert healthy.status_code == 200
-        healthy_payload = healthy.json()
-        assert healthy_payload["total"] == 2
-        assert {machine["device_id"] for machine in healthy_payload["machines"]} == {
-            "broken-machine",
-            "healthy-machine",
-        }
+        degraded = client.get("/observability/machines/health?status=degraded&stale_after_seconds=3600")
+        assert degraded.status_code == 200
+        degraded_payload = degraded.json()
+        assert degraded_payload["total"] == 1
+        assert degraded_payload["machines"][0]["device_id"] == "broken-machine"
 
         recent_default = client.get("/observability/machines/health?stale_after_seconds=3600")
         assert recent_default.status_code == 200

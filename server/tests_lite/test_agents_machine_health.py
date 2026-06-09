@@ -140,25 +140,25 @@ def test_machine_health_route_returns_latest_row_per_device_and_sorts_by_state(t
         payload = response.json()
         assert payload["total"] == 3
         assert [item["device_id"] for item in payload["machines"]] == [
-            "degraded-machine",
             "broken-machine",
+            "degraded-machine",
         ]
 
-        degraded = payload["machines"][0]
+        dead_lettered = payload["machines"][0]
+        assert dead_lettered["version"] == "0.6.0"
+        assert dead_lettered["status"] == "degraded"
+        assert dead_lettered["status_reason"] == "spool_dead"
+        assert dead_lettered["status_summary"] == "2 dead-letter archive range(s) need attention."
+        assert dead_lettered["heartbeat_age_seconds"] == 60
+        assert dead_lettered["ship_success_rate_1h"] == 0.6
+        assert dead_lettered["spool_dead"] == 2
+        assert dead_lettered["reasons"] == ["spool_dead"]
+        assert dead_lettered["last_ship_attempt_at"] == "2026-04-23T20:14:00Z"
+
+        degraded = payload["machines"][1]
         assert degraded["status"] == "degraded"
         assert degraded["status_reason"] == "consecutive_failures"
         assert degraded["heartbeat_age_seconds"] == 120
-
-        archive_detail = payload["machines"][1]
-        assert archive_detail["version"] == "0.6.0"
-        assert archive_detail["status"] == "healthy"
-        assert archive_detail["status_reason"] == "healthy"
-        assert archive_detail["status_summary"] == "Shipping healthy."
-        assert archive_detail["heartbeat_age_seconds"] == 60
-        assert archive_detail["ship_success_rate_1h"] == 0.6
-        assert archive_detail["spool_dead"] == 2
-        assert archive_detail["reasons"] == []
-        assert archive_detail["last_ship_attempt_at"] == "2026-04-23T20:14:00Z"
 
         filtered = client.get("/api/agents/machines/health?status=broken&stale_after_seconds=3600")
         assert filtered.status_code == 200
@@ -470,6 +470,6 @@ def test_machine_health_route_lets_stale_heartbeat_outrank_dead_archive_ranges(t
         assert machine["status"] == "offline"
         assert machine["status_reason"] == "heartbeat_stale"
         assert machine["is_stale"] is True
-        assert machine["reasons"] == ["heartbeat_stale"]
+        assert machine["reasons"] == ["heartbeat_stale", "spool_dead"]
     finally:
         api_app_ref.dependency_overrides = {}
