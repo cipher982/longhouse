@@ -2894,6 +2894,9 @@ async fn replay_spool_entries(
                                 outcome.had_connect_error = true;
                                 break 'entry_loop;
                             }
+                            if crate::state::spool::is_recoverable_archive_error(&error) {
+                                break 'entry_loop;
+                            }
                             continue 'entry_loop;
                         }
                         AttemptedShip::PayloadTooLarge { item } => {

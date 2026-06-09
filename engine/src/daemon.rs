@@ -2046,12 +2046,12 @@ fn queue_pending_spool_paths(
     if control.includes_huge() && !pressure_allows_huge {
         tracing::debug!("Skipping huge archive replay paths while host pressure is above target");
     }
-    let clipped = spool.clip_recoverable_archive_deferrals(ARCHIVE_BACKPRESSURE_MAX_DEFER)?;
+    let clipped = spool.clip_archive_backpressure_deferrals(ARCHIVE_BACKPRESSURE_MAX_DEFER)?;
     if clipped > 0 {
         tracing::info!(
             clipped,
             max_defer_ms = ARCHIVE_BACKPRESSURE_MAX_DEFER.as_millis() as u64,
-            "Clipped stale recoverable archive retry clocks"
+            "Clipped stale archive backpressure retry clocks"
         );
     }
 
