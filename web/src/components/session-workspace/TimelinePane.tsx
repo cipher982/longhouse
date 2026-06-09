@@ -32,6 +32,18 @@ import { SyntaxHighlighter, oneDark } from "../../lib/syntaxHighlighter";
 
 type EventFilter = "all" | "messages" | "tools";
 
+type TranscriptQuestionOption = {
+  label: string;
+  description: string | null;
+};
+
+type TranscriptQuestion = {
+  id: string;
+  header: string | null;
+  question: string;
+  options: TranscriptQuestionOption[];
+};
+
 interface TimelinePaneProps {
   items: TimelineItem[];
   totalEntries: number;
@@ -54,6 +66,58 @@ interface TimelinePaneProps {
   headerRight?: ReactNode;
   dock?: ReactNode;
   listRef?: (node: HTMLDivElement | null) => void;
+}
+
+function nonEmptyText(value: unknown): string | null {
+  if (value == null) return null;
+  const text = String(value).trim();
+  return text || null;
+}
+
+function isAskUserQuestion(interaction: ToolInteraction): boolean {
+  return interaction.toolName === "AskUserQuestion";
+}
+
+function normalizeTranscriptQuestions(input: Record<string, unknown> | null | undefined): TranscriptQuestion[] {
+  if (!input) return [];
+  const rawQuestions = Array.isArray(input.questions)
+    ? input.questions
+    : input.question || input.prompt
+      ? [input]
+      : [];
+
+  return rawQuestions.flatMap((raw, index): TranscriptQuestion[] => {
+    if (!raw || typeof raw !== "object") return [];
+    const item = raw as Record<string, unknown>;
+    const rawOptions = Array.isArray(item.options)
+      ? item.options
+      : Array.isArray(item.choices)
+        ? item.choices
+        : [];
+    const options = rawOptions.flatMap((option): TranscriptQuestionOption[] => {
+      if (option && typeof option === "object") {
+        const optionObject = option as Record<string, unknown>;
+        const label = nonEmptyText(optionObject.label ?? optionObject.value ?? optionObject.text);
+        if (!label) return [];
+        return [
+          {
+            label,
+            description: nonEmptyText(optionObject.description ?? optionObject.detail),
+          },
+        ];
+      }
+      const label = nonEmptyText(option);
+      return label ? [{ label, description: null }] : [];
+    });
+    return [
+      {
+        id: nonEmptyText(item.id ?? item.name ?? item.key) ?? `question-${index + 1}`,
+        header: nonEmptyText(item.header ?? item.title),
+        question: nonEmptyText(item.question ?? item.prompt ?? item.label) ?? "Answer required",
+        options,
+      },
+    ];
+  });
 }
 
 function SeamRow({ seam }: { seam: TimelineSeam }) {
@@ -564,6 +628,56 @@ function NoiseChip({
   );
 }
 
+function AskUserQuestionRow({ interaction, rowId }: { interaction: ToolInteraction; rowId: string }) {
+  const rawInput = interaction.callEvent?.tool_input_json as Record<string, unknown> | null | undefined;
+  const questions = normalizeTranscriptQuestions(rawInput);
+  const title = questions[0]?.header || "Question";
+  const resultText = nonEmptyText(interaction.resultEvent?.tool_output_text);
+  const status = resultText ? "answered" : "waiting";
+
+  return (
+    <article
+      id={rowId}
+      data-testid="session-question-row"
+      data-row-kind="question"
+      data-status={status}
+      className="tl-question"
+    >
+      <div className="tl-question__head">
+        <span className="tl-question__eyebrow">Needs answer</span>
+        <h3>{title}</h3>
+        <p>{resultText ? "Answered in the original session." : "Answer this in the terminal."}</p>
+      </div>
+      {questions.length > 0 ? (
+        <div className="tl-question__items">
+          {questions.map((question) => (
+            <section key={question.id} className="tl-question__item">
+              {question.header && question.header !== title ? (
+                <div className="tl-question__header">{question.header}</div>
+              ) : null}
+              <div className="tl-question__text">{question.question}</div>
+              {question.options.length > 0 ? (
+                <div className="tl-question__options" aria-label="Answer options">
+                  {question.options.map((option, index) => (
+                    <div key={`${question.id}-${option.label}-${index}`} className="tl-question__option" aria-disabled="true">
+                      <span className="tl-question__option-label">{option.label}</span>
+                      {option.description ? (
+                        <span className="tl-question__option-description">{option.description}</span>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </section>
+          ))}
+        </div>
+      ) : (
+        <div className="tl-question__text">Claude is waiting for your answer.</div>
+      )}
+    </article>
+  );
+}
+
 function ToolRow(props: {
   interaction: ToolInteraction;
   rowId: string;
@@ -572,6 +686,9 @@ function ToolRow(props: {
   onSelect: () => void;
   onToggleExpand: () => void;
 }) {
+  if (isAskUserQuestion(props.interaction)) {
+    return <AskUserQuestionRow interaction={props.interaction} rowId={props.rowId} />;
+  }
   const tier = getToolTier(props.interaction);
   if (tier === "context" || tier === "noise") {
     // A solo noise tool renders identically to a context line — one row

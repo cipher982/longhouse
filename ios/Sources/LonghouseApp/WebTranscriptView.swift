@@ -247,6 +247,76 @@ struct WebTranscriptView: UIViewRepresentable {
         )
     }
 
+    private struct TranscriptQuestion: Sendable {
+        let id: String
+        let header: String?
+        let question: String
+        let options: [TranscriptQuestionOption]
+    }
+
+    private struct TranscriptQuestionOption: Sendable {
+        let label: String
+        let description: String?
+    }
+
+    private nonisolated static func transcriptQuestions(from input: [String: JSONValue]?) -> [TranscriptQuestion] {
+        guard let input else { return [] }
+        let rawQuestions: [JSONValue]
+        if case .array(let questions) = input["questions"] {
+            rawQuestions = questions
+        } else if input["question"] != nil || input["prompt"] != nil {
+            rawQuestions = [.object(input)]
+        } else {
+            rawQuestions = []
+        }
+
+        return rawQuestions.enumerated().compactMap { index, raw in
+            guard case .object(let item) = raw else { return nil }
+            let rawOptions: [JSONValue]
+            if case .array(let options) = item["options"] {
+                rawOptions = options
+            } else if case .array(let choices) = item["choices"] {
+                rawOptions = choices
+            } else {
+                rawOptions = []
+            }
+            let options = rawOptions.compactMap(transcriptQuestionOption)
+            return TranscriptQuestion(
+                id: jsonText(item["id"]) ?? jsonText(item["name"]) ?? jsonText(item["key"]) ?? "question-\(index + 1)",
+                header: jsonText(item["header"]) ?? jsonText(item["title"]),
+                question: jsonText(item["question"]) ?? jsonText(item["prompt"]) ?? jsonText(item["label"]) ?? "Answer required",
+                options: options
+            )
+        }
+    }
+
+    private nonisolated static func transcriptQuestionOption(_ raw: JSONValue) -> TranscriptQuestionOption? {
+        if case .object(let item) = raw {
+            guard let label = jsonText(item["label"]) ?? jsonText(item["value"]) ?? jsonText(item["text"]) else {
+                return nil
+            }
+            return TranscriptQuestionOption(
+                label: label,
+                description: jsonText(item["description"]) ?? jsonText(item["detail"])
+            )
+        }
+        guard let label = jsonText(raw) else { return nil }
+        return TranscriptQuestionOption(label: label, description: nil)
+    }
+
+    private nonisolated static func jsonText(_ value: JSONValue?) -> String? {
+        let raw: String?
+        switch value {
+        case .string(let s): raw = s
+        case .int(let n): raw = String(n)
+        case .double(let n): raw = String(n)
+        case .bool(let b): raw = String(b)
+        case .array, .object, .null, .none: raw = nil
+        }
+        let cleaned = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned?.isEmpty == false ? cleaned : nil
+    }
+
     private nonisolated static func toolPayload(
         id: String,
         call: SessionEvent,
@@ -254,6 +324,9 @@ struct WebTranscriptView: UIViewRepresentable {
         orphan: Bool = false
     ) -> WebTranscriptPayloadItem {
         let toolName = call.toolName ?? "Tool"
+        if toolName == "AskUserQuestion" {
+            return askUserQuestionPayload(id: id, call: call, result: result)
+        }
         let resolved = ToolTiers.resolve(toolName)
         let duration = result.flatMap { TimelineBuilder.durationSeconds(call: call, result: $0) }
             .map(TimelineBuilder.formatDuration)
@@ -281,6 +354,41 @@ struct WebTranscriptView: UIViewRepresentable {
             input: prettyJSON(call.toolInputJSON) ?? TimelineBuilder.inputSummary(for: call),
             output: truncatedOutput(result?.toolOutputText),
             calls: [],
+            origin: nil
+        )
+    }
+
+    private nonisolated static func askUserQuestionPayload(
+        id: String,
+        call: SessionEvent,
+        result: SessionEvent?
+    ) -> WebTranscriptPayloadItem {
+        let questions = transcriptQuestions(from: call.toolInputJSON)
+        let title = questions.first?.header ?? "Question"
+        let body = questions.map(\.question).joined(separator: "\n\n")
+        let options = questions.flatMap(\.options).map { option in
+            WebTranscriptToolCall(
+                title: option.label,
+                subtitle: option.description ?? "",
+                status: "option",
+                input: nil,
+                output: nil
+            )
+        }
+        return WebTranscriptPayloadItem(
+            id: id,
+            kind: "question",
+            role: nil,
+            title: title,
+            subtitle: result == nil ? "Answer in terminal" : "Answered in terminal",
+            body: body.isEmpty ? "Claude is waiting for your answer." : body,
+            fullBody: nil,
+            collapsed: false,
+            status: result == nil ? "waiting" : "answered",
+            duration: nil,
+            input: nil,
+            output: nil,
+            calls: options,
             origin: nil
         )
     }
@@ -1065,6 +1173,75 @@ private extension WebTranscriptView {
       padding: 8px 0 8px;
     }
 
+    .question {
+      border-left: 2px solid var(--attention);
+      padding: 8px 0 8px 10px;
+      user-select: text;
+      -webkit-user-select: text;
+    }
+
+    .question-eyebrow {
+      color: var(--attention);
+      font-size: 11px;
+      font-weight: 750;
+      letter-spacing: 0;
+      text-transform: uppercase;
+    }
+
+    .question-title {
+      margin-top: 2px;
+      color: var(--primary);
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1.25;
+    }
+
+    .question-subtitle {
+      margin-top: 2px;
+      color: var(--secondary);
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.3;
+    }
+
+    .question-body {
+      margin-top: 8px;
+      color: var(--primary);
+      font-size: 14px;
+      line-height: 1.42;
+      white-space: pre-wrap;
+    }
+
+    .question-options {
+      display: grid;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .question-option {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding: 7px 8px;
+      border: 1px solid var(--rule);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.025);
+      color: var(--secondary);
+    }
+
+    .question-option-title {
+      color: var(--primary);
+      font-size: 13px;
+      font-weight: 650;
+      line-height: 1.25;
+    }
+
+    .question-option-subtitle {
+      color: var(--secondary);
+      font-size: 12px;
+      line-height: 1.3;
+    }
+
     .section-label {
       margin: 10px 0 4px;
       color: var(--secondary);
@@ -1278,6 +1455,24 @@ private extension WebTranscriptView {
       `;
     }
 
+    function question(item) {
+      const options = (item.calls || []).map(call => `
+        <div class="question-option" aria-disabled="true">
+          <span class="question-option-title">${escapeHtml(call.title || '')}</span>
+          ${call.subtitle ? `<span class="question-option-subtitle">${escapeHtml(call.subtitle)}</span>` : ''}
+        </div>
+      `).join('');
+      return `
+        <article class="row question">
+          <div class="question-eyebrow">Needs answer</div>
+          <div class="question-title">${escapeHtml(item.title || 'Question')}</div>
+          <div class="question-subtitle">${escapeHtml(item.subtitle || 'Answer in terminal')}</div>
+          <div class="question-body">${escapeHtml(item.body || 'Claude is waiting for your answer.')}</div>
+          ${options ? `<div class="question-options" aria-label="Answer options">${options}</div>` : ''}
+        </article>
+      `;
+    }
+
     function message(item, index) {
       const body = item.role === 'assistant'
         ? markdownToHtml(item.body || '')
@@ -1321,6 +1516,7 @@ private extension WebTranscriptView {
     function renderItem(item, index) {
       if (item.kind === 'message') return message(item, index);
       if (item.kind === 'submitted') return submitted(item);
+      if (item.kind === 'question') return question(item);
       if (item.kind === 'tool') return toolDetails(item);
       if (item.kind === 'passiveGroup') return passiveGroup(item);
       return '';

@@ -192,6 +192,45 @@ final class TimelineBuilderTests: XCTestCase {
         XCTAssertFalse(TimelineBuilder.isDropped(call: unset))
     }
 
+    func testAskUserQuestionPayloadRendersAsQuestionNotDroppedTool() {
+        let question = event(
+            id: 1,
+            role: "assistant",
+            tool: "AskUserQuestion",
+            input: [
+                "questions": .array([
+                    .object([
+                        "id": .string("image_scope"),
+                        "header": .string("Image scope"),
+                        "question": .string("How should I run the full image download?"),
+                        "options": .array([
+                            .object([
+                                "label": .string("ibsrv first, then external"),
+                                "description": .string("Download MBWorld-hosted images first."),
+                            ]),
+                            .object([
+                                "label": .string("Both back-to-back"),
+                                "description": .string("Queue both image sets in one run."),
+                            ]),
+                        ]),
+                    ]),
+                ]),
+            ],
+            callId: "toolu-question",
+            toolCallState: .dropped
+        )
+        let items = TimelineBuilder.build(events: [question])
+        let payload = WebTranscriptView.payloadItems(timelineItems: items, submittedInputs: [])
+
+        XCTAssertEqual(payload.count, 1)
+        XCTAssertEqual(payload[0].kind, "question")
+        XCTAssertEqual(payload[0].title, "Image scope")
+        XCTAssertEqual(payload[0].subtitle, "Answer in terminal")
+        XCTAssertEqual(payload[0].status, "waiting")
+        XCTAssertEqual(payload[0].body, "How should I run the full image download?")
+        XCTAssertEqual(payload[0].calls.map(\.title), ["ibsrv first, then external", "Both back-to-back"])
+    }
+
     func testStableIDsAcrossBuilds() {
         let events = [
             event(id: 1, role: "user", text: "hi"),

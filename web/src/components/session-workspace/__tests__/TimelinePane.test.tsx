@@ -80,6 +80,50 @@ function makePendingToolItem(state: "running" | "dropped"): TimelineItem {
   };
 }
 
+function makeAskUserQuestionItem(state: "running" | "dropped" = "dropped"): TimelineItem {
+  return {
+    kind: "tool",
+    interaction: {
+      key: "id:toolu-question",
+      toolName: "AskUserQuestion",
+      callEvent: {
+        id: 4,
+        role: "assistant",
+        content_text: null,
+        tool_name: "AskUserQuestion",
+        tool_input_json: {
+          questions: [
+            {
+              id: "image_scope",
+              header: "Image scope",
+              question: "How should I run the full image download?",
+              options: [
+                {
+                  label: "ibsrv first, then external",
+                  description: "Download MBWorld-hosted images first.",
+                },
+                {
+                  label: "Both back-to-back",
+                  description: "Queue both image sets in one run.",
+                },
+              ],
+            },
+          ],
+        },
+        tool_output_text: null,
+        tool_call_id: "toolu-question",
+        tool_call_state: state,
+        timestamp: "2026-03-19T16:48:00Z",
+        in_active_context: true,
+      },
+      resultEvent: null,
+      pairing: "id",
+      anchorId: 4,
+      timestamp: "2026-03-19T16:48:00Z",
+    },
+  };
+}
+
 describe("TimelinePane", () => {
   it("renders seam items inline in the timeline list", () => {
     render(
@@ -233,5 +277,36 @@ describe("TimelinePane", () => {
     const row = screen.getByTestId("session-timeline-row");
     expect(row).toHaveAttribute("data-status", "error");
     expect(row).toHaveClass("tl-action--dropped");
+  });
+
+  it("renders AskUserQuestion as a readable terminal-only question instead of a dropped tool", () => {
+    render(
+      <TimelinePane
+        items={[makeAskUserQuestionItem("dropped")]}
+        totalEntries={1}
+        loadedEntries={1}
+        abandonedEvents={0}
+        showAbandonedBranches={false}
+        onShowAbandonedBranchesChange={vi.fn()}
+        hasPreviousPage={false}
+        isFetchingPreviousPage={false}
+        onFetchPreviousPage={vi.fn()}
+        loading={false}
+        error={null}
+        selectedKey={null}
+        onSelectKey={vi.fn()}
+      />,
+    );
+
+    const row = screen.getByTestId("session-question-row");
+    expect(row).toHaveAttribute("data-status", "waiting");
+    expect(row).toHaveTextContent("Needs answer");
+    expect(row).toHaveTextContent("Image scope");
+    expect(row).toHaveTextContent("How should I run the full image download?");
+    expect(row).toHaveTextContent("ibsrv first, then external");
+    expect(row).toHaveTextContent("Both back-to-back");
+    expect(row).toHaveTextContent("Answer this in the terminal.");
+    expect(row).not.toHaveTextContent("dropped");
+    expect(row).not.toHaveTextContent("running");
   });
 });
