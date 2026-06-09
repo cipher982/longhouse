@@ -30,14 +30,14 @@ def test_claude_hook_writes_presence_to_outbox():
     assert "control_path: $control_path" in HOOK_SCRIPT
     assert "provider_pid" in HOOK_SCRIPT
     assert 'write_presence_outbox "$PAYLOAD" >/dev/null 2>&1 || true' in HOOK_SCRIPT
-    assert 'write_runtime_event_outbox "$PAUSE_PAYLOAD" "$REQUEST_KEY" >/dev/null 2>&1 || true' in HOOK_SCRIPT
+    assert "write_runtime_event_outbox()" in HOOK_SCRIPT
 
 
-def test_claude_hook_distinguishes_elicitation_from_permissions():
+def test_claude_hook_leaves_elicitation_questions_to_transcript_ingest():
     assert '-n "$MANAGED_SESSION_ID"' in HOOK_SCRIPT
-    assert '"$NOTIF_TYPE" == "elicitation_dialog"' in HOOK_SCRIPT
-    assert 'tool_name: "AskUserQuestion"' in HOOK_SCRIPT
-    assert "can_respond: false" in HOOK_SCRIPT
+    assert "idle_prompt|elicitation_dialog) STATE=\"needs_user\"" in HOOK_SCRIPT
+    assert 'kind: "pause_request"' not in HOOK_SCRIPT
+    assert 'tool_name: "AskUserQuestion"' not in HOOK_SCRIPT
     assert "permission_prompt)              STATE=\"blocked\"" in HOOK_SCRIPT
 
 
@@ -106,7 +106,7 @@ def _runtime_event_files(longhouse_home):
     return sorted(outbox.glob("rte.*.json"))
 
 
-def test_claude_elicitation_notification_writes_detection_only_pause_event(tmp_path):
+def test_claude_managed_elicitation_notification_does_not_write_pause_event(tmp_path):
     session_id = str(uuid.uuid4())
     provider_session_id = str(uuid.uuid4())
 
@@ -124,28 +124,7 @@ def test_claude_elicitation_notification_writes_detection_only_pause_event(tmp_p
         managed_session_id=session_id,
     )
 
-    files = _runtime_event_files(longhouse_home)
-    assert len(files) == 1
-    event = json.loads(files[0].read_text())
-    assert event["runtime_key"] == f"claude:{session_id}"
-    assert event["session_id"] == session_id
-    assert event["provider"] == "claude"
-    assert event["source"] == "claude_hook"
-    assert event["kind"] == "pause_request"
-    assert event["dedupe_key"] == f"claude-hook:elicitation_dialog:{session_id}"
-    assert event["payload"]["kind"] == "structured_question"
-    assert event["payload"]["tool_name"] == "AskUserQuestion"
-    assert event["payload"]["can_respond"] is False
-    assert event["payload"]["title"] == "Question needed"
-    assert event["payload"]["summary"] == "Which direction should I take?"
-    assert event["payload"]["request_payload"]["questions"] == [
-        {
-            "id": "terminal",
-            "header": "Claude",
-            "question": "Which direction should I take?",
-            "options": [],
-        }
-    ]
+    assert _runtime_event_files(longhouse_home) == []
 
 
 def test_claude_unmanaged_elicitation_notification_does_not_write_pause_event(tmp_path):

@@ -168,51 +168,10 @@ if [[ -n "$STATE" ]] && [[ -n "$SESSION_ID" ]]; then
 
   write_presence_outbox "$PAYLOAD" >/dev/null 2>&1 || true
 
-  # Claude's Notification/elicitation_dialog means a provider-native
-  # structured question is waiting in the terminal. The hook does not own a
-  # safe answer channel, so this is detection-only: Longhouse can notify and
-  # explain, but the user must answer in Claude's TUI.
-  UUID_RE='^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
-  if [[ -n "$MANAGED_SESSION_ID" && "$EVENT" == "Notification" && "$NOTIF_TYPE" == "elicitation_dialog" && "$SESSION_ID" =~ $UUID_RE ]]; then
-    OCCURRED_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-    RUNTIME_KEY="claude:$SESSION_ID"
-    REQUEST_KEY="claude-hook:elicitation_dialog:$SESSION_ID"
-    PAUSE_TITLE="${NOTIF_TITLE:-Question waiting}"
-    PAUSE_SUMMARY="${NOTIF_MESSAGE:-Question waiting in Claude terminal}"
-    PAUSE_PAYLOAD=$(jq -n --arg sid "$SESSION_ID" --arg runtime_key "$RUNTIME_KEY" \\
-          --arg occurred_at "$OCCURRED_AT" --arg request_key "$REQUEST_KEY" \\
-          --arg title "$PAUSE_TITLE" --arg summary "$PAUSE_SUMMARY" \\
-      '{
-        runtime_key: $runtime_key,
-        session_id: $sid,
-        provider: "claude",
-        source: "claude_hook",
-        kind: "pause_request",
-        occurred_at: $occurred_at,
-        dedupe_key: $request_key,
-        payload: {
-          request_key: $request_key,
-          provider_request_id: "elicitation_dialog",
-          kind: "structured_question",
-          tool_name: "AskUserQuestion",
-          title: $title,
-          summary: $summary,
-          can_respond: false,
-          single_active: true,
-          request_payload: {
-            questions: [
-              {
-                id: "terminal",
-                header: "Claude",
-                question: $summary,
-                options: []
-              }
-            ]
-          }
-        }
-      }')
-    write_runtime_event_outbox "$PAUSE_PAYLOAD" "$REQUEST_KEY" >/dev/null 2>&1 || true
-  fi
+  # Claude's Notification/elicitation_dialog tells us the terminal is waiting,
+  # but the hook only has notification copy. The transcript ingest path owns
+  # the actual AskUserQuestion payload so Longhouse can render real options
+  # without racing an option-less hook record.
 fi
 
 # Always exit 0 — hook errors trigger Claude Code's "What should Claude do

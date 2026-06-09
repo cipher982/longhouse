@@ -412,6 +412,8 @@ def _normalize_questions(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
         question_id = _clean_str(item.get("id") or item.get("name") or item.get("key")) or f"question_{idx + 1}"
         options = []
         raw_options = item.get("options")
+        if not isinstance(raw_options, list):
+            raw_options = item.get("choices")
         if isinstance(raw_options, list):
             for option in raw_options:
                 if isinstance(option, Mapping):

@@ -143,6 +143,155 @@ def _normalize_ingested_project(data: SessionIngest) -> str | None:
     return project
 
 
+def _clean_ingest_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    return cleaned or None
+
+
+def _claude_pause_event_fingerprint(event: EventIngest) -> str:
+    stable = {
+        "source_path": event.source_path,
+        "source_offset": event.source_offset,
+        "tool_call_id": event.tool_call_id,
+        "timestamp": event.timestamp.isoformat(),
+        "tool_input_json": event.tool_input_json,
+    }
+    blob = json.dumps(stable, default=str, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:24]
+
+
+def _claude_pause_request_suffix(event: EventIngest) -> str:
+    tool_call_id = _clean_ingest_text(event.tool_call_id)
+    if tool_call_id:
+        return tool_call_id[:255]
+    return f"transcript-{_claude_pause_event_fingerprint(event)}"
+
+
+def _claude_pause_title(payload: dict[str, Any]) -> str:
+    raw_questions = payload.get("questions")
+    if isinstance(raw_questions, list) and raw_questions and isinstance(raw_questions[0], dict):
+        first = raw_questions[0]
+        title = _clean_ingest_text(first.get("header") or first.get("title") or first.get("question") or first.get("prompt"))
+        if title:
+            return title[:255]
+    title = _clean_ingest_text(payload.get("header") or payload.get("title") or payload.get("question") or payload.get("prompt"))
+    return (title or "Question waiting")[:255]
+
+
+def _claude_transcript_pause_events(
+    db: Session,
+    runtime_event_cls,
+    *,
+    data: SessionIngest,
+    session_id: UUID,
+    thread_id: UUID,
+    runtime_key: str,
+) -> list[Any]:
+    if str(data.provider or "").strip().lower() != "claude":
+        return []
+
+    ask_call_ids: set[str] = set()
+    tool_result_ids: set[str] = set()
+    for event in data.events:
+        role = str(event.role or "").strip().lower()
+        tool_call_id = _clean_ingest_text(event.tool_call_id)
+        if role == "assistant" and str(event.tool_name or "").strip() == "AskUserQuestion":
+            if tool_call_id:
+                ask_call_ids.add(tool_call_id)
+        elif role == "tool" and tool_call_id:
+            tool_result_ids.add(tool_call_id)
+
+    if tool_result_ids:
+        unmatched_result_ids = tool_result_ids - ask_call_ids
+        if unmatched_result_ids:
+            rows = (
+                db.query(AgentEvent.tool_call_id)
+                .filter(AgentEvent.session_id == session_id)
+                .filter(AgentEvent.tool_name == "AskUserQuestion")
+                .filter(AgentEvent.tool_call_id.in_(list(unmatched_result_ids)))
+                .all()
+            )
+            ask_call_ids.update(str(row[0]) for row in rows if row and row[0])
+
+    runtime_events: list[Any] = []
+    for event in data.events:
+        role = str(event.role or "").strip().lower()
+        occurred_at = _normalize_utc_naive(event.timestamp) or datetime.now(timezone.utc).replace(tzinfo=None)
+        if role == "assistant" and str(event.tool_name or "").strip() == "AskUserQuestion":
+            payload = dict(event.tool_input_json) if isinstance(event.tool_input_json, dict) else {}
+            request_suffix = _claude_pause_request_suffix(event)
+            request_key = f"claude-transcript:{runtime_key}:{request_suffix}"
+            event_fingerprint = _claude_pause_event_fingerprint(event)
+            provider_request_id = _clean_ingest_text(event.tool_call_id)
+            runtime_events.append(
+                runtime_event_cls(
+                    runtime_key=runtime_key,
+                    session_id=session_id,
+                    thread_id=thread_id,
+                    provider=data.provider,
+                    device_id=data.device_id,
+                    source="agents_ingest",
+                    kind="pause_request",
+                    tool_name="AskUserQuestion",
+                    occurred_at=occurred_at,
+                    dedupe_key=f"pause_request:{runtime_key}:{event_fingerprint}",
+                    payload={
+                        "request_key": request_key,
+                        "provider_request_id": provider_request_id or request_suffix,
+                        "provider_ref": {
+                            "source": "transcript",
+                            "source_path": event.source_path,
+                            "source_offset": event.source_offset,
+                            "tool_call_id": provider_request_id,
+                        },
+                        "kind": "structured_question",
+                        "tool_name": "AskUserQuestion",
+                        "title": _claude_pause_title(payload),
+                        "summary": "Waiting for an answer in the original terminal.",
+                        "request_payload": payload,
+                        "can_respond": False,
+                        "single_active": True,
+                    },
+                )
+            )
+            continue
+
+        tool_call_id = _clean_ingest_text(event.tool_call_id)
+        if role == "tool" and tool_call_id and tool_call_id in ask_call_ids:
+            request_key = f"claude-transcript:{runtime_key}:{tool_call_id[:255]}"
+            event_fingerprint = _claude_pause_event_fingerprint(event)
+            response_text = _clean_ingest_text(event.tool_output_text or event.content_text)
+            runtime_events.append(
+                runtime_event_cls(
+                    runtime_key=runtime_key,
+                    session_id=session_id,
+                    thread_id=thread_id,
+                    provider=data.provider,
+                    device_id=data.device_id,
+                    source="agents_ingest",
+                    kind="pause_resolution",
+                    tool_name="AskUserQuestion",
+                    occurred_at=occurred_at,
+                    dedupe_key=f"pause_resolution:{runtime_key}:{event_fingerprint}",
+                    payload={
+                        "request_key": request_key,
+                        "provider_request_id": tool_call_id,
+                        "status": "resolved",
+                        "response_text": response_text,
+                        "response_payload": {
+                            "source": "transcript",
+                            "source_path": event.source_path,
+                            "source_offset": event.source_offset,
+                        },
+                    },
+                )
+            )
+
+    return runtime_events
+
+
 # `.../subagents/workflows/<run>/journal.jsonl` — a dynamic-workflow control
 # ledger, never a real session.
 _WORKFLOW_JOURNAL_RE = re.compile(r"/subagents/workflows/[^/]+/journal\.jsonl$")
@@ -1956,6 +2105,16 @@ class AgentsStore:
                     payload={"progress_kind": "transcript_append"},
                 )
             )
+        runtime_events.extend(
+            _claude_transcript_pause_events(
+                self.db,
+                RuntimeEventIngest,
+                data=data,
+                session_id=session_id,
+                thread_id=thread_id,
+                runtime_key=runtime_key,
+            )
+        )
         ingest_runtime_events(self.db, runtime_events)
         _record_stage("runtime_events", stage_started)
 
