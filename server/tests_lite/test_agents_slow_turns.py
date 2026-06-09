@@ -17,11 +17,11 @@ os.environ.setdefault("TESTING", "1")
 
 import zerg.services.agent_heartbeat_health as machine_health_service
 import zerg.services.session_turns as session_turns_service
+from zerg.database import Base
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentHeartbeat
-from zerg.database import Base
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionRun
@@ -344,9 +344,9 @@ def test_slow_turns_route_returns_managed_completed_turns_with_machine_health(tm
         }
         assert first["machine"] == {
             "device_id": "broken-machine",
-            "status": "broken",
+            "status": "degraded",
             "status_reason": "spool_dead",
-            "status_summary": "1 dead-letter range(s) need repair.",
+            "status_summary": "1 dead-letter archive range(s) need attention.",
             "last_heartbeat_at": "2026-04-23T20:58:00Z",
             "heartbeat_age_seconds": 120,
             "is_stale": False,
@@ -469,7 +469,7 @@ def test_slow_turns_route_supports_filters_machine_status_and_pagination(tmp_pat
             "?provider=claude"
             "&project=zerg"
             "&state=durable"
-            "&machine_status=broken"
+            "&machine_status=degraded"
             "&hours_back=24"
             "&min_total_turn_time_ms=30000"
             "&stale_after_seconds=3600"
@@ -485,12 +485,13 @@ def test_slow_turns_route_supports_filters_machine_status_and_pagination(tmp_pat
         assert item["turn_id"] == fastest_broken_turn_id
         assert item["provider"] == "claude"
         assert item["project"] == "zerg"
-        assert item["machine"]["status"] == "broken"
+        assert item["machine"]["status"] == "degraded"
         assert item["total_turn_time_ms"] == 50000
 
         degraded = client.get(
             "/agents/turns/slow"
             "?provider=claude"
+            "&project=hdr"
             "&machine_status=degraded"
             "&hours_back=24"
             "&min_total_turn_time_ms=30000"
@@ -742,7 +743,7 @@ def test_turn_summary_route_respects_machine_status_and_state_filters(tmp_path, 
             "?provider=claude"
             "&project=zerg"
             "&state=durable"
-            "&machine_status=broken"
+            "&machine_status=degraded"
             "&hours_back=24"
             "&slow_threshold_ms=40000"
             "&stale_after_seconds=3600"

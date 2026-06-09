@@ -144,16 +144,16 @@ def test_machine_health_route_returns_latest_row_per_device_and_sorts_by_state(t
             "degraded-machine",
         ]
 
-        broken = payload["machines"][0]
-        assert broken["version"] == "0.6.0"
-        assert broken["status"] == "broken"
-        assert broken["status_reason"] == "spool_dead"
-        assert broken["status_summary"] == "2 dead-letter range(s) need repair."
-        assert broken["heartbeat_age_seconds"] == 60
-        assert broken["ship_success_rate_1h"] == 0.6
-        assert broken["spool_dead"] == 2
-        assert broken["reasons"] == ["spool_dead"]
-        assert broken["last_ship_attempt_at"] == "2026-04-23T20:14:00Z"
+        dead_lettered = payload["machines"][0]
+        assert dead_lettered["version"] == "0.6.0"
+        assert dead_lettered["status"] == "degraded"
+        assert dead_lettered["status_reason"] == "spool_dead"
+        assert dead_lettered["status_summary"] == "2 dead-letter archive range(s) need attention."
+        assert dead_lettered["heartbeat_age_seconds"] == 60
+        assert dead_lettered["ship_success_rate_1h"] == 0.6
+        assert dead_lettered["spool_dead"] == 2
+        assert dead_lettered["reasons"] == ["spool_dead"]
+        assert dead_lettered["last_ship_attempt_at"] == "2026-04-23T20:14:00Z"
 
         degraded = payload["machines"][1]
         assert degraded["status"] == "degraded"
@@ -163,8 +163,8 @@ def test_machine_health_route_returns_latest_row_per_device_and_sorts_by_state(t
         filtered = client.get("/api/agents/machines/health?status=broken&stale_after_seconds=3600")
         assert filtered.status_code == 200
         filtered_payload = filtered.json()
-        assert filtered_payload["total"] == 1
-        assert filtered_payload["machines"][0]["device_id"] == "broken-machine"
+        assert filtered_payload["total"] == 0
+        assert filtered_payload["machines"] == []
     finally:
         api_app_ref.dependency_overrides = {}
 
@@ -437,7 +437,7 @@ def test_machine_health_route_filters_by_device_and_marks_stale_rows_offline(tmp
         api_app_ref.dependency_overrides = {}
 
 
-def test_machine_health_route_keeps_known_broken_state_even_when_heartbeat_is_stale(tmp_path, monkeypatch):
+def test_machine_health_route_lets_stale_heartbeat_outrank_dead_archive_ranges(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
     pinned_now = datetime(2026, 4, 23, 20, 15, 0, tzinfo=timezone.utc)
     monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
@@ -467,8 +467,8 @@ def test_machine_health_route_keeps_known_broken_state_even_when_heartbeat_is_st
         payload = response.json()
         assert payload["total"] == 1
         machine = payload["machines"][0]
-        assert machine["status"] == "broken"
-        assert machine["status_reason"] == "spool_dead"
+        assert machine["status"] == "offline"
+        assert machine["status_reason"] == "heartbeat_stale"
         assert machine["is_stale"] is True
         assert machine["reasons"] == ["heartbeat_stale", "spool_dead"]
     finally:

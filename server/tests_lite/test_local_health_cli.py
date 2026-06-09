@@ -1600,6 +1600,44 @@ def test_collect_local_health_surfaces_archive_backlog_without_breaking_live_shi
     assert snapshot["archive_repair"]["pending_bytes"] == 16_699_227_012
 
 
+def test_collect_local_health_surfaces_dead_archive_ranges_without_breaking_live_shipping(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(
+        tmp_path,
+        age_seconds=5,
+        payload={
+            "ship_attempts_1h": 552,
+            "ship_successes_1h": 552,
+            "spool_pending_count": 0,
+            "spool_dead_count": 7,
+            "last_ship_result": "ok",
+            "archive_backlog": {
+                "state": "dead_lettered",
+                "mode": "drain",
+                "pending_ranges": 0,
+                "pending_paths": 0,
+                "pending_sessions": 0,
+                "pending_bytes": 0,
+                "dead_ranges": 7,
+                "dead_bytes": 62_675,
+            },
+        },
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "degraded"
+    assert snapshot["severity"] == "yellow"
+    assert snapshot["headline"] == "Longhouse archive repair needs attention"
+    assert "spool_dead" in snapshot["reasons"]
+    assert "archive_dead_lettered" in snapshot["reasons"]
+    assert snapshot["attention"]["state"] == "needs_attention"
+    assert snapshot["transport_health"]["status"] == "degraded"
+    assert snapshot["transport_health"]["status_reason"] == "spool_dead"
+    assert snapshot["archive_repair"]["dead_ranges"] == 7
+
+
 def test_collect_local_health_watches_active_archive_drain_with_live_healthy_copy(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))

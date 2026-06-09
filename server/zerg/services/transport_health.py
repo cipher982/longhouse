@@ -233,11 +233,7 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
         reasons.append("rate_limited")
     if retryable_client_error_burst:
         reasons.append("retryable_client_errors")
-    if sample.spool_dead > 0:
-        status = "broken"
-        status_reason = "spool_dead"
-        status_summary = f"{sample.spool_dead} dead-letter range(s) need repair."
-    elif sample.ship_payload_rejections_1h > 0:
+    if sample.ship_payload_rejections_1h > 0:
         status = "broken"
         status_reason = "payload_rejected"
         status_summary = f"{sample.ship_payload_rejections_1h} ship payload rejection(s) in the last hour."
@@ -249,6 +245,10 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
         status = "offline"
         status_reason = "reported_offline"
         status_summary = "Engine reported offline."
+    elif sample.spool_dead > 0:
+        status = "degraded"
+        status_reason = "spool_dead"
+        status_summary = f"{sample.spool_dead} dead-letter archive range(s) need attention."
     elif sample.parse_errors_1h > 0:
         status = "degraded"
         status_reason = "parse_errors"

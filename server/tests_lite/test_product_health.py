@@ -218,7 +218,7 @@ def test_machine_connected_degraded_when_recent_machine_needs_attention(tmp_path
     assert check.headline == "1 of 2 recent machines healthy; 1 needs attention."
 
 
-def test_machine_connected_fails_when_all_recent_machines_are_broken(tmp_path, monkeypatch):
+def test_machine_connected_degrades_when_all_recent_machines_need_attention(tmp_path, monkeypatch):
     monkeypatch.setattr(product_health, "utc_now", lambda: PINNED_NOW)
     monkeypatch.setattr(heartbeat_health, "utc_now", lambda: PINNED_NOW)
     SessionLocal = _make_db(tmp_path)
@@ -229,9 +229,9 @@ def test_machine_connected_fails_when_all_recent_machines_are_broken(tmp_path, m
         payload = build_product_health_checks(db, window="15m")
 
     check = _check(payload, "machine_connected")
-    assert check.verdict == "failing"
+    assert check.verdict == "degraded"
     assert check.coverage == "full"
-    assert check.headline == "All 2 recent machine connections are broken."
+    assert check.headline == "0 of 2 recent machines healthy; 2 need attention."
 
 
 def test_render_freshness_degrades_when_latest_beacon_is_old(tmp_path, monkeypatch):

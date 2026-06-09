@@ -2796,6 +2796,8 @@ class _HealthClassificationContext:
     archive_state: str
     archive_pending_ranges: int
     archive_pending_bytes: int
+    archive_dead_ranges: int
+    archive_dead_bytes: int
     disk_free_bytes: Any
     outbox_count: int
     outbox_oldest: Any
@@ -2868,7 +2870,7 @@ def _add_transport_health_reasons(
     if "parse_errors" in transport_assessment.reasons:
         _with_action(actions, "Inspect recent dead letters and parser errors")
     if "spool_dead" in transport_assessment.reasons:
-        _with_action(actions, "Repair dead letters before trusting continuity")
+        _with_action(actions, "Inspect archive dead letters: longhouse archive status")
 
 
 def _add_service_status_reasons(
@@ -2974,7 +2976,13 @@ def _add_archive_backlog_reason(
     archive_state: str,
     archive_pending_ranges: int,
     archive_pending_bytes: int,
+    archive_dead_ranges: int,
+    archive_dead_bytes: int,
 ) -> None:
+    if archive_dead_ranges > 0 or archive_dead_bytes > 0:
+        reasons.append("archive_dead_lettered")
+        _with_action(actions, "Inspect archive dead letters: longhouse archive status")
+        _with_action(actions, "Retry recoverable archive dead letters: longhouse archive retry-dead --path <path>")
     if archive_pending_ranges <= 0 and archive_pending_bytes <= 0:
         return
     if archive_state == "paused":
@@ -3113,6 +3121,8 @@ def _health_flags(
     spool_pending: int,
     archive_pending_ranges: int,
     archive_pending_bytes: int,
+    archive_dead_ranges: int,
+    archive_dead_bytes: int,
     orphan_bridge_count: int,
     managed_degraded: int,
     managed_detached: int,
@@ -3124,6 +3134,8 @@ def _health_flags(
     if canonical_sessions_missing or canonical_sessions_invalid:
         degraded = True
     if archive_pending_ranges > 0 or archive_pending_bytes > 0:
+        degraded = True
+    if archive_dead_ranges > 0 or archive_dead_bytes > 0:
         degraded = True
     managed_broken, managed_degraded_flag = _managed_health_flags(
         orphan_bridge_count=orphan_bridge_count,
@@ -3242,6 +3254,8 @@ def _degraded_health_headline(
         headline = "Longhouse archive repair is paused"
     elif "archive_repair_draining" in reasons:
         headline = "Live shipping healthy; archive repair draining"
+    elif "archive_dead_lettered" in reasons:
+        headline = "Longhouse archive repair needs attention"
     elif "archive_backlog_pending" in reasons:
         headline = "Longhouse archive repair pending"
     elif "managed_session_detached" in reasons:
@@ -3273,6 +3287,8 @@ def _health_classification_context(
     archive_state = str(archive_repair.get("state") or "idle")
     archive_pending_ranges = int(archive_repair.get("pending_ranges") or 0)
     archive_pending_bytes = int(archive_repair.get("pending_bytes") or 0)
+    archive_dead_ranges = int(archive_repair.get("dead_ranges") or 0)
+    archive_dead_bytes = int(archive_repair.get("dead_bytes") or 0)
     unknown_managed_phase_count = 0
     for session in managed_sessions:
         if _managed_phase_is_unknown(session.get("raw_phase")):
@@ -3289,6 +3305,8 @@ def _health_classification_context(
         archive_state=archive_state,
         archive_pending_ranges=archive_pending_ranges,
         archive_pending_bytes=archive_pending_bytes,
+        archive_dead_ranges=archive_dead_ranges,
+        archive_dead_bytes=archive_dead_bytes,
         disk_free_bytes=payload.get("disk_free_bytes"),
         outbox_count=int(outbox.get("file_count") or 0),
         outbox_oldest=outbox.get("oldest_age_seconds"),
@@ -3359,6 +3377,8 @@ def _collect_health_reasons(
         archive_state=context.archive_state,
         archive_pending_ranges=context.archive_pending_ranges,
         archive_pending_bytes=context.archive_pending_bytes,
+        archive_dead_ranges=context.archive_dead_ranges,
+        archive_dead_bytes=context.archive_dead_bytes,
     )
     _add_managed_session_reasons(
         reasons,
@@ -3387,6 +3407,7 @@ def _is_uninstalled_health(context: _HealthClassificationContext) -> bool:
         and context.outbox_count == 0
         and context.spool_pending == 0
         and context.archive_pending_ranges == 0
+        and context.archive_dead_ranges == 0
         and context.launch_state != "broken"
     )
 
@@ -3418,6 +3439,8 @@ def _degraded_state_is_watching(
         return False
     if context.archive_pending_ranges > 0 or context.archive_pending_bytes > 0:
         return False
+    if context.archive_dead_ranges > 0 or context.archive_dead_bytes > 0:
+        return False
     if "reported_offline" in reasons and (context.spool_pending > 0 or context.outbox_count > 0):
         return False
     if not reasons:
@@ -3433,6 +3456,8 @@ def _archive_draining_state_is_watching(
     if context.archive_state != "draining":
         return False
     if context.archive_pending_ranges <= 0 and context.archive_pending_bytes <= 0:
+        return False
+    if context.archive_dead_ranges > 0 or context.archive_dead_bytes > 0:
         return False
     if context.service_status != "running":
         return False
@@ -3568,6 +3593,8 @@ def _classify_health(
         spool_pending=context.spool_pending,
         archive_pending_ranges=context.archive_pending_ranges,
         archive_pending_bytes=context.archive_pending_bytes,
+        archive_dead_ranges=context.archive_dead_ranges,
+        archive_dead_bytes=context.archive_dead_bytes,
         orphan_bridge_count=context.orphan_bridge_count,
         managed_degraded=context.managed_degraded,
         managed_detached=context.managed_detached,
