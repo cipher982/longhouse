@@ -876,8 +876,8 @@ private func nonEmpty(_ value: String?) -> String? {
     return trimmed
 }
 
-// TimelineSignal lives in Sources/Shared/TimelineSignal.swift so the app card
-// and the home-screen widget share one definition. Use TimelineSignal.resolve.
+// TimelineSignal lives in shared session models so the app card and the
+// home-screen widget share one definition. Use TimelineSignal.resolve.
 
 private func relativeTime(_ value: String?) -> String {
     guard let date = parseLonghouseDate(value) else { return "Recent" }
