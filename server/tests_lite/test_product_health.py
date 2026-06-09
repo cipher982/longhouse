@@ -202,7 +202,7 @@ def test_machine_connected_unknown_without_recent_heartbeats(tmp_path, monkeypat
     assert check.headline == "No machine heartbeats in the last 15m."
 
 
-def test_machine_connected_degraded_when_recent_machine_needs_attention(tmp_path, monkeypatch):
+def test_machine_connected_ok_when_recent_machine_only_has_archive_detail(tmp_path, monkeypatch):
     monkeypatch.setattr(product_health, "utc_now", lambda: PINNED_NOW)
     monkeypatch.setattr(heartbeat_health, "utc_now", lambda: PINNED_NOW)
     SessionLocal = _make_db(tmp_path)
@@ -213,12 +213,12 @@ def test_machine_connected_degraded_when_recent_machine_needs_attention(tmp_path
         payload = build_product_health_checks(db, window="15m")
 
     check = _check(payload, "machine_connected")
-    assert check.verdict == "degraded"
+    assert check.verdict == "ok"
     assert check.coverage == "full"
-    assert check.headline == "1 of 2 recent machines healthy; 1 needs attention."
+    assert check.headline == "2 recent machines connected and healthy."
 
 
-def test_machine_connected_degrades_when_all_recent_machines_need_attention(tmp_path, monkeypatch):
+def test_machine_connected_ok_when_all_recent_machines_only_have_archive_detail(tmp_path, monkeypatch):
     monkeypatch.setattr(product_health, "utc_now", lambda: PINNED_NOW)
     monkeypatch.setattr(heartbeat_health, "utc_now", lambda: PINNED_NOW)
     SessionLocal = _make_db(tmp_path)
@@ -229,9 +229,9 @@ def test_machine_connected_degrades_when_all_recent_machines_need_attention(tmp_
         payload = build_product_health_checks(db, window="15m")
 
     check = _check(payload, "machine_connected")
-    assert check.verdict == "degraded"
+    assert check.verdict == "ok"
     assert check.coverage == "full"
-    assert check.headline == "0 of 2 recent machines healthy; 2 need attention."
+    assert check.headline == "2 recent machines connected and healthy."
 
 
 def test_render_freshness_degrades_when_latest_beacon_is_old(tmp_path, monkeypatch):

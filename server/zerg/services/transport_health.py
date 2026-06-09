@@ -215,8 +215,6 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
     reasons: list[str] = []
     if sample.is_offline:
         reasons.append("reported_offline")
-    if sample.spool_dead > 0:
-        reasons.append("spool_dead")
     if sample.ship_payload_rejections_1h > 0:
         reasons.append("payload_rejected")
     if sample.ship_payload_too_large_1h > 0:
@@ -245,10 +243,6 @@ def assess_transport_health(sample: TransportHealthSample) -> TransportHealthAss
         status = "offline"
         status_reason = "reported_offline"
         status_summary = "Engine reported offline."
-    elif sample.spool_dead > 0:
-        status = "degraded"
-        status_reason = "spool_dead"
-        status_summary = f"{sample.spool_dead} dead-letter archive range(s) need attention."
     elif sample.parse_errors_1h > 0:
         status = "degraded"
         status_reason = "parse_errors"

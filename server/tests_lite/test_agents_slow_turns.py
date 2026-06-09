@@ -344,9 +344,9 @@ def test_slow_turns_route_returns_managed_completed_turns_with_machine_health(tm
         }
         assert first["machine"] == {
             "device_id": "broken-machine",
-            "status": "degraded",
-            "status_reason": "spool_dead",
-            "status_summary": "1 dead-letter archive range(s) need attention.",
+            "status": "healthy",
+            "status_reason": "healthy",
+            "status_summary": "Shipping healthy.",
             "last_heartbeat_at": "2026-04-23T20:58:00Z",
             "heartbeat_age_seconds": 120,
             "is_stale": False,
@@ -469,7 +469,7 @@ def test_slow_turns_route_supports_filters_machine_status_and_pagination(tmp_pat
             "?provider=claude"
             "&project=zerg"
             "&state=durable"
-            "&machine_status=degraded"
+            "&machine_status=healthy"
             "&hours_back=24"
             "&min_total_turn_time_ms=30000"
             "&stale_after_seconds=3600"
@@ -485,7 +485,7 @@ def test_slow_turns_route_supports_filters_machine_status_and_pagination(tmp_pat
         assert item["turn_id"] == fastest_broken_turn_id
         assert item["provider"] == "claude"
         assert item["project"] == "zerg"
-        assert item["machine"]["status"] == "degraded"
+        assert item["machine"]["status"] == "healthy"
         assert item["total_turn_time_ms"] == 50000
 
         degraded = client.get(
@@ -743,7 +743,7 @@ def test_turn_summary_route_respects_machine_status_and_state_filters(tmp_path, 
             "?provider=claude"
             "&project=zerg"
             "&state=durable"
-            "&machine_status=degraded"
+            "&machine_status=healthy"
             "&hours_back=24"
             "&slow_threshold_ms=40000"
             "&stale_after_seconds=3600"
