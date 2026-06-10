@@ -58,7 +58,9 @@ Timeline card status for `syncing_transcript` maps to:
 - `seen_at_prefix = "Updated"`
 
 The row should read like the existing active state, not like a separate sync or
-completion event.
+completion event. Using `presence_at` is intentional: the card should show the
+fresh runtime signal that caused the transient working state instead of looking
+like an undated synthetic status.
 
 ### Web Chat
 
@@ -87,12 +89,15 @@ sync-only treatment.
 
 ### iOS
 
-iOS should continue to trust the server runtime display fields. Tests and any
-fixtures must expect the safe projection above. Because iOS detail, widget, and
-Live Activity surfaces render the server `headline`, `detail`, and
-`phase_label`, the backend projection change covers those surfaces with no iOS
-view edits. Only fixtures and test expectations should change unless a local
-fallback path is found.
+iOS detail and widget row surfaces should continue to trust the server runtime
+display fields. Tests and fixtures must expect the safe projection above.
+
+The Live Activity compact chip is an exception: `LonghouseWidget.swift` maps raw
+state strings locally for its short label and color. Add a local
+`syncing_transcript` case that follows the active response treatment:
+
+- short label: `Think`
+- color: orange
 
 ### Desktop Menu Bar And Snapshot Tooling
 
@@ -104,8 +109,9 @@ Regenerate the Swift contract with
 `scripts/generate_managed_phase_contract_swift.py`.
 
 The widget snapshot helper has local fallback phase logic for screenshots. It
-should also treat `syncing_transcript` as active/working so local visual checks
-do not render the state as inactive.
+is a standalone script at `scripts/widget-snapshot/Sources/main.swift`. It should
+also treat `syncing_transcript` as active/working so local visual checks do not
+render the state as inactive.
 
 ## Implementation Plan
 
@@ -124,11 +130,13 @@ do not render the state as inactive.
    - Update decoded runtime-display expectations to match the server projection.
    - Add a targeted assertion that no internal transcript-sync copy appears in
      the fixture.
-4. Desktop/menu-bar contract and fixture tooling:
+   - Update the Live Activity raw-state helpers to render `syncing_transcript`
+     with the same compact label/color treatment as active thinking.
+4. Desktop/menu-bar contract and snapshot tooling:
    - Add `syncing_transcript` to `managed_phase_contract.json` as working.
    - Regenerate `ManagedPhaseContract.generated.swift`.
    - Update local-health/menu-bar contract tests.
-   - Update widget snapshot fallback logic if it maps raw presence locally.
+   - Update `scripts/widget-snapshot/Sources/main.swift` fallback logic.
 5. Validation:
    - Backend: `make test`
    - Frontend: `make test-frontend`
@@ -153,6 +161,8 @@ do not render the state as inactive.
   materialization.
 - The menu bar does not raise an unknown-managed-phase warning for
   `syncing_transcript`.
-- The widget snapshot fallback does not render `syncing_transcript` as inactive.
+- The Live Activity compact chip does not render `syncing_transcript` as `?`.
+- The standalone widget snapshot script does not render `syncing_transcript` as
+  inactive.
 - Backend, frontend, iOS, and relevant E2E checks pass or have a documented
   unrelated failure.
