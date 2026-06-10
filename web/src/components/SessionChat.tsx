@@ -140,12 +140,8 @@ function getAssistantText(message: ChatMessage): string {
   return message.content.startsWith(toolPrefix) ? message.content.slice(toolPrefix.length).trim() : message.content.trim();
 }
 
-function getSyncPendingPlaceholder(controlStatus?: SSEDone["control_status"]): string {
-  if (controlStatus === "needs_user") {
-    return "Waiting locally. Transcript syncing...";
-  }
-
-  return "Completed locally. Transcript syncing...";
+function getSyncPendingPlaceholder(): string {
+  return "Response returned. Updating transcript...";
 }
 
 function newClientRequestId(): string {
@@ -332,7 +328,7 @@ export function SessionChat({
 
                 return {
                   ...m,
-                  content: getToolPrefix(m.toolNotices) + getSyncPendingPlaceholder(done.control_status),
+                  content: getToolPrefix(m.toolNotices) + getSyncPendingPlaceholder(),
                 };
               }),
             );

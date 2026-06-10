@@ -320,7 +320,7 @@ export function PresenceBadge({
             : normalizedState === "stalled"
               ? "Stalled"
               : normalizedState === "syncing_transcript"
-                ? "Syncing transcript"
+                ? "Updating transcript"
                 : normalizedState;
     return (
       <span
@@ -437,7 +437,7 @@ export function PresenceBadge({
       <span className={className} style={containerStyle}>
         <Dot state="syncing_transcript" size={dotSize} />
         <span style={{ color: "#a78bfa", fontWeight: 500, letterSpacing: "0.02em" }}>
-          Syncing transcript
+          Updating transcript
         </span>
       </span>
     );

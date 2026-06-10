@@ -390,7 +390,7 @@ def _timeline_status_from_display(
 
     if state == TRANSCRIPT_SYNC_STATE:
         return TimelineStatusPresentationResponse(
-            label="Syncing",
+            label="Response ready",
             tone="active",
             seen_at=None,
             seen_at_prefix="Updated",

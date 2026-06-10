@@ -156,8 +156,8 @@ def test_runtime_transcript_sync_freshness_contract_uses_backend_clock_window():
     )
 
     assert display.state == TRANSCRIPT_SYNC_STATE
-    assert display.headline == "Syncing"
-    assert display.detail == "Waiting for transcript"
+    assert display.headline == "Response ready"
+    assert display.detail == "Updating transcript"
 
     expired_signal_at = PINNED_NOW - TRANSCRIPT_SYNC_DISPLAY_WINDOW - timedelta(microseconds=1)
     expired = build_session_runtime_display(

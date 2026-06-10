@@ -410,9 +410,9 @@ def test_managed_idle_after_user_prompt_displays_transcript_sync():
     )
 
     assert display.state == "syncing_transcript"
-    assert display.headline == "Syncing"
-    assert display.detail == "Waiting for transcript"
-    assert display.phase_label == "Syncing transcript"
+    assert display.headline == "Response ready"
+    assert display.detail == "Updating transcript"
+    assert display.phase_label == "Updating transcript"
     assert display.tone == "active"
     assert display.is_idle is False
 
@@ -442,8 +442,8 @@ def test_managed_idle_after_pending_turn_displays_transcript_sync_without_archiv
     )
 
     assert display.state == "syncing_transcript"
-    assert display.headline == "Syncing"
-    assert display.detail == "Waiting for transcript"
+    assert display.headline == "Response ready"
+    assert display.detail == "Updating transcript"
     assert display.is_idle is False
 
 

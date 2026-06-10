@@ -1758,11 +1758,11 @@ def test_sessions_list_marks_recent_managed_idle_with_missing_assistant_as_synci
         assert row["id"] == str(session.id)
         assert row["presence_state"] == "idle"
         assert row["runtime_display"]["state"] == "syncing_transcript"
-        assert row["runtime_display"]["headline"] == "Syncing"
-        assert row["runtime_display"]["phase_label"] == "Syncing transcript"
+        assert row["runtime_display"]["headline"] == "Response ready"
+        assert row["runtime_display"]["phase_label"] == "Updating transcript"
         assert row["runtime_display"]["tone"] == "active"
         assert row["runtime_display"]["is_idle"] is False
-        assert row["timeline_card"]["status"]["label"] == "Syncing"
+        assert row["timeline_card"]["status"]["label"] == "Response ready"
         assert row["timeline_card"]["status"]["tone"] == "active"
 
 
@@ -1868,7 +1868,7 @@ def test_sessions_list_marks_managed_idle_after_pending_turn_materialization_as_
         assert row["user_messages"] == 45
         assert row["presence_state"] == "idle"
         assert row["runtime_display"]["state"] == "syncing_transcript"
-        assert row["runtime_display"]["phase_label"] == "Syncing transcript"
+        assert row["runtime_display"]["phase_label"] == "Updating transcript"
         assert row["runtime_display"]["is_idle"] is False
 
 

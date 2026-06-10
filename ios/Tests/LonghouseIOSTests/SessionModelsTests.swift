@@ -741,9 +741,9 @@ struct SessionModelsTests {
             "signal_tier": "phase_signal",
             "state": "syncing_transcript",
             "tone": "active",
-            "headline": "Syncing",
-            "detail": "Waiting for transcript",
-            "phase_label": "Syncing transcript",
+            "headline": "Response ready",
+            "detail": "Updating transcript",
+            "phase_label": "Updating transcript",
             "compact_tool_label": null,
             "is_live": false,
             "is_executing": false,
@@ -765,9 +765,9 @@ struct SessionModelsTests {
         let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
 
         #expect(detail.runtimePhaseState == "syncing_transcript")
-        #expect(detail.runtimePhaseLabel == "Syncing transcript")
-        #expect(detail.runtimeHeadline == "Syncing")
-        #expect(detail.runtimeDetail == "Waiting for transcript")
+        #expect(detail.runtimePhaseLabel == "Updating transcript")
+        #expect(detail.runtimeHeadline == "Response ready")
+        #expect(detail.runtimeDetail == "Updating transcript")
         #expect(detail.runtimeTone == "active")
         #expect(!detail.isSessionExecuting)
     }
