@@ -57,7 +57,9 @@ class EmbeddingCache:
         """Eagerly load all session-level embeddings into a numpy matrix."""
         from zerg.models.agents import SessionEmbedding
 
-        embeddings = db.query(SessionEmbedding).filter(SessionEmbedding.kind == "session", SessionEmbedding.model == model).all()
+        query = db.query(SessionEmbedding)
+        query = query.filter(SessionEmbedding.kind == "session", SessionEmbedding.model == model)
+        embeddings = query.all()
 
         if not embeddings:
             self._session_loaded = True
@@ -92,7 +94,9 @@ class EmbeddingCache:
         """Lazy-load turn-level embeddings for recall queries."""
         from zerg.models.agents import SessionEmbedding
 
-        embeddings = db.query(SessionEmbedding).filter(SessionEmbedding.kind == "turn", SessionEmbedding.model == model).all()
+        query = db.query(SessionEmbedding)
+        query = query.filter(SessionEmbedding.kind == "turn", SessionEmbedding.model == model)
+        embeddings = query.all()
 
         if not embeddings:
             self._turn_loaded = True
@@ -130,6 +134,16 @@ class EmbeddingCache:
 
         self._turn_loaded = True
         return len(ids)
+
+    @property
+    def session_embedding_count(self) -> int:
+        """Number of loaded session-level embeddings."""
+        return len(self._session_ids)
+
+    @property
+    def turn_embedding_count(self) -> int:
+        """Number of loaded turn-level embeddings."""
+        return len(self._turn_session_ids)
 
     def search_sessions(
         self,

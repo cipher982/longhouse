@@ -279,10 +279,8 @@ def validate_use_case_llm_config(use_case: str) -> tuple[str, ModelProvider, str
 
     api_key_env_var = _get_api_key_env_var(model_config)
     if not os.getenv(api_key_env_var):
-        raise ValueError(
-            f"{api_key_env_var} required for use case '{use_case}' "
-            f"(model='{model_id}', provider='{model_config.provider.value}')"
-        )
+        model_detail = f"model='{model_id}', provider='{model_config.provider.value}'"
+        raise ValueError(f"{api_key_env_var} required for use case '{use_case}' ({model_detail})")
 
     return model_id, model_config.provider, api_key_env_var
 
@@ -429,6 +427,31 @@ def get_embedding_config() -> EmbeddingConfig | None:
     )
 
 
+def embedding_unavailable_detail() -> str:
+    """Return an operator-facing reason embeddings cannot run."""
+    embedding_cfg = _CONFIG.get("embedding")
+    if not embedding_cfg:
+        return "No embedding provider is declared in config/models.json."
+
+    default = embedding_cfg.get("default")
+    if not default:
+        return "config/models.json has an embedding section but no embedding.default entry."
+
+    api_key_env = default.get("apiKeyEnvVar", "")
+    provider = default.get("provider", "")
+    model = default.get("model", "")
+    if not api_key_env:
+        return f"config/models.json declares an embedding provider ({provider}/{model}) without apiKeyEnvVar."
+    if not os.getenv(api_key_env):
+        return (
+            "config/models.json declares an embedding provider "
+            f"({provider}/{model}), but {api_key_env} is not set. "
+            "Set the env var, or set LLM_DISABLED=1/remove embedding.default "
+            "for an explicit no-embedding runtime."
+        )
+    return "Embedding provider is configured, but runtime setup failed before an embedding config could be built."
+
+
 # =============================================================================
 # CAPABILITY CHECKS - Shared by frontend config.js and /system/capabilities
 # =============================================================================
@@ -523,9 +546,7 @@ def validate_startup_config() -> None:
     missing: list[str] = []
     for env_var, scope, model_id, provider in iter_required_provider_keys():
         if not os.getenv(env_var):
-            missing.append(
-                f"  - {env_var} required for {scope} (provider: {provider}, model: {model_id})"
-            )
+            missing.append(f"  - {env_var} required for {scope} (provider: {provider}, model: {model_id})")
 
     if missing:
         raise RuntimeError(

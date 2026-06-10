@@ -47,6 +47,7 @@ def system_capabilities() -> Dict[str, Any]:
     """
     return {
         "llm_available": is_capability_available("text"),
+        "embeddings_available": is_capability_available("embedding"),
         "auth_disabled": _settings.auth_disabled,
     }
 

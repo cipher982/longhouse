@@ -82,7 +82,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         semantic: bool = False,
         context_mode: str = "forensic",
     ) -> str:
-        """Search past agent sessions by content.
+        """Search the canonical Longhouse agent-session database by content.
 
         Returns session metadata (dates, provider, message counts, snippet) — not event content.
         Use for session discovery: "which sessions touched project X?" or "did anyone work on Y?"
@@ -116,13 +116,15 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         try:
             resp = await client.get(path, params=params)
             if resp.status_code != 200:
-                # Fall back to FTS if semantic search unavailable
                 if semantic:
-                    resp = await client.get("/api/agents/sessions", params=params)
-                    if resp.status_code != 200:
-                        return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
-                else:
-                    return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
+                    return json.dumps(
+                        {
+                            "error": f"Semantic search unavailable: API returned {resp.status_code}",
+                            "detail": resp.text[:500],
+                            "retry": "Call search_sessions with semantic=false for lexical search.",
+                        }
+                    )
+                return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
             return resp.text
         except Exception as exc:
             return _format_error(exc, api_url)
@@ -255,7 +257,12 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                 params=params,
             )
             if events_resp.status_code != 200:
-                return json.dumps({"error": f"API returned {events_resp.status_code}", "detail": events_resp.text[:500]})
+                return json.dumps(
+                    {
+                        "error": f"API returned {events_resp.status_code}",
+                        "detail": events_resp.text[:500],
+                    }
+                )
 
             data = events_resp.json()
             events = [_truncate_event(e, max_content_chars, True) for e in data.get("events", [])]
@@ -309,7 +316,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         context_turns: int = 2,
         context_mode: str = "forensic",
     ) -> str:
-        """Retrieve knowledge from past AI sessions by searching conversation content.
+        """Retrieve context from the canonical Longhouse agent-session database.
 
         Semantic/fuzzy search — returns actual conversation content around relevant turns.
         Use when you don't know the exact phrase but know the concept: "what was decided about auth?"

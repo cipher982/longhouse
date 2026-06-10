@@ -15,7 +15,6 @@ from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
 
-
 BASE_TS = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(days=1)
 
 
@@ -217,6 +216,10 @@ def test_semantic_search_batches_thread_meta_for_result_set(tmp_path):
         def load_session_embeddings(self, db, model, dims):
             self._session_loaded = True
 
+        @property
+        def session_embedding_count(self):
+            return 2
+
         def search_sessions(self, query_vec, limit, session_filter):
             assert first_id in session_filter
             assert second_id in session_filter
@@ -234,7 +237,11 @@ def test_semantic_search_batches_thread_meta_for_result_set(tmp_path):
         patch("zerg.services.embedding_cache.EmbeddingCache", FakeEmbeddingCache),
         patch("zerg.services.session_processing.embeddings.generate_embedding", fake_generate_embedding),
         patch.object(AgentsStore, "batch_thread_meta", record_batch_thread_meta),
-        patch.object(AgentsStore, "get_thread_head", side_effect=AssertionError("semantic search should preload thread metadata")),
+        patch.object(
+            AgentsStore,
+            "get_thread_head",
+            side_effect=AssertionError("semantic search should preload thread metadata"),
+        ),
         patch.object(
             AgentsStore,
             "list_thread_sessions",
@@ -272,6 +279,10 @@ def test_recall_active_context_dedupes_session_boundary_lookups(tmp_path):
         def load_turn_embeddings(self, db, model, dims):
             self._turn_loaded = True
 
+        @property
+        def turn_embedding_count(self):
+            return 2
+
         def search_turns(self, query_vec, limit, session_filter):
             assert len(session_filter) == 1
             session_id = next(iter(session_filter))
@@ -296,10 +307,109 @@ def test_recall_active_context_dedupes_session_boundary_lookups(tmp_path):
         for client in _get_client(factory):
             resp = client.get(
                 "/agents/recall",
-                params={"query": "continue migration", "days_back": 90, "context_mode": "active_context", "max_results": 5},
+                params={
+                    "query": "continue migration",
+                    "days_back": 90,
+                    "context_mode": "active_context",
+                    "max_results": 5,
+                },
             )
             assert resp.status_code == 200, resp.text
             payload = resp.json()
             assert payload["total"] == 2
 
     assert len(boundary_calls) == 1
+
+
+def test_semantic_search_fails_loud_when_embedding_config_unavailable(tmp_path):
+    factory = _make_db(tmp_path)
+    _seed_simple_session(factory, "missing-config")
+
+    with patch("zerg.models_config.get_embedding_config", return_value=None):
+        for client in _get_client(factory):
+            resp = client.get(
+                "/agents/sessions/semantic",
+                params={"query": "anything", "days_back": 90},
+            )
+
+    assert resp.status_code == 503
+    assert "Embeddings unavailable" in resp.json()["detail"]
+
+
+def test_semantic_search_fails_loud_when_corpus_has_no_session_embeddings(tmp_path):
+    factory = _make_db(tmp_path)
+    _seed_simple_session(factory, "empty-session-embeddings")
+
+    class EmptyEmbeddingCache:
+        def __init__(self):
+            self._session_loaded = False
+
+        def load_session_embeddings(self, db, model, dims):
+            self._session_loaded = True
+            return 0
+
+        @property
+        def session_embedding_count(self):
+            return 0
+
+        def search_sessions(self, query_vec, limit, session_filter):
+            raise AssertionError("semantic search should fail before searching an empty embedding corpus")
+
+    async def fake_generate_embedding(query, config):
+        return [0.1, 0.2, 0.3]
+
+    with (
+        patch("zerg.models_config.get_embedding_config", return_value=SimpleNamespace(model="fake", dims=3)),
+        patch("zerg.services.embedding_cache.EmbeddingCache", EmptyEmbeddingCache),
+        patch("zerg.services.session_processing.embeddings.generate_embedding", fake_generate_embedding),
+    ):
+        for client in _get_client(factory):
+            resp = client.get(
+                "/agents/sessions/semantic",
+                params={"query": "anything", "days_back": 90},
+            )
+
+    assert resp.status_code == 503
+    assert "no session embeddings are loaded" in resp.json()["detail"]
+
+
+def test_recall_fails_loud_when_corpus_has_no_turn_embeddings(tmp_path):
+    factory = _make_db(tmp_path)
+    _seed_simple_session(factory, "empty-turn-embeddings")
+
+    class EmptyEmbeddingCache:
+        def __init__(self):
+            self._session_loaded = False
+            self._turn_loaded = False
+
+        def load_session_embeddings(self, db, model, dims):
+            self._session_loaded = True
+            return 0
+
+        def load_turn_embeddings(self, db, model, dims):
+            self._turn_loaded = True
+            return 0
+
+        @property
+        def turn_embedding_count(self):
+            return 0
+
+        def search_turns(self, query_vec, limit, session_filter):
+            raise AssertionError("recall should fail before searching an empty embedding corpus")
+
+    async def fake_generate_embedding(query, config):
+        return [0.1, 0.2, 0.3]
+
+    with (
+        patch("zerg.models_config.get_embedding_config", return_value=SimpleNamespace(model="fake", dims=3)),
+        patch("zerg.services.embedding_cache.EmbeddingCache", EmptyEmbeddingCache),
+        patch("zerg.services.session_processing.embeddings.generate_embedding", fake_generate_embedding),
+    ):
+        for client in _get_client(factory):
+            resp = client.get(
+                "/agents/recall",
+                params={"query": "anything", "since_days": 90},
+            )
+
+    assert resp.status_code == 503
+    assert "no turn embeddings are loaded" in resp.json()["detail"]

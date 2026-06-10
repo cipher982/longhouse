@@ -2,6 +2,7 @@ import { request } from "./base";
 
 export interface SystemCapabilities {
   llm_available: boolean;
+  embeddings_available: boolean;
   auth_disabled: boolean;
 }
 

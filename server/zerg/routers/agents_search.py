@@ -32,6 +32,24 @@ from zerg.services.session_views import build_session_response
 router = APIRouter(prefix="/agents", tags=["agents"])
 
 
+def _embedding_unavailable_response(detail: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=f"Embeddings unavailable: {detail}",
+    )
+
+
+def _embedding_corpus_unavailable_response(kind: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=(
+            f"Embeddings unavailable: no {kind} embeddings are loaded for a nonempty "
+            "session corpus. Run POST /api/agents/backfill-embeddings or fix the "
+            "embedding worker before using semantic search."
+        ),
+    )
+
+
 @router.get("/sessions/semantic", response_model=SemanticSearchResponse)
 async def semantic_search_sessions(
     query: str = Query(..., description="Search query"),
@@ -46,6 +64,7 @@ async def semantic_search_sessions(
     _single: None = Depends(require_single_tenant),
 ) -> SemanticSearchResponse:
     """Search sessions by semantic similarity using embeddings."""
+    from zerg.models_config import embedding_unavailable_detail
     from zerg.models_config import get_embedding_config
     from zerg.services.embedding_cache import EmbeddingCache
     from zerg.services.session_processing.embeddings import generate_embedding
@@ -58,7 +77,7 @@ async def semantic_search_sessions(
 
     config = get_embedding_config()
     if not config:
-        return SemanticSearchResponse(sessions=[], total=0)
+        raise _embedding_unavailable_response(embedding_unavailable_detail())
 
     query_vec = await generate_embedding(query, config)
 
@@ -84,9 +103,12 @@ async def semantic_search_sessions(
     if context_mode == "forensic":
         if not cache._session_loaded:
             cache.load_session_embeddings(db, config.model, config.dims)
+        if valid_ids and cache.session_embedding_count == 0:
+            raise _embedding_corpus_unavailable_response("session")
 
         results = cache.search_sessions(query_vec, limit=limit, session_filter=valid_ids)
-        session_map = {str(session.id): session for session in store.get_sessions_ordered([sid for sid, _score in results])}
+        ordered_session_ids = [sid for sid, _score in results]
+        session_map = {str(session.id): session for session in store.get_sessions_ordered(ordered_session_ids)}
         for sid, score in results:
             session = session_map.get(str(sid))
             if not session:
@@ -95,6 +117,8 @@ async def semantic_search_sessions(
     else:
         if not cache._turn_loaded:
             cache.load_turn_embeddings(db, config.model, config.dims)
+        if valid_ids and cache.turn_embedding_count == 0:
+            raise _embedding_corpus_unavailable_response("turn")
 
         turn_hits = cache.search_turns(
             query_vec,
@@ -132,7 +156,14 @@ async def semantic_search_sessions(
                     .first()
                 )
             boundary = store.get_active_context_boundary(session.id)
-            if boundary is not None and (matched_event is None or not store.is_event_in_active_context(matched_event, boundary)):
+            if boundary is not None:
+                matched_event_active = matched_event is not None and store.is_event_in_active_context(
+                    matched_event,
+                    boundary,
+                )
+            else:
+                matched_event_active = True
+            if not matched_event_active:
                 continue
 
             snippet_source = ""
@@ -182,6 +213,7 @@ async def recall_sessions(
     _single: None = Depends(require_single_tenant),
 ) -> RecallResponse:
     """Recall specific knowledge from past sessions."""
+    from zerg.models_config import embedding_unavailable_detail
     from zerg.models_config import get_embedding_config
     from zerg.services.embedding_cache import EmbeddingCache
     from zerg.services.session_processing.embeddings import generate_embedding
@@ -194,7 +226,7 @@ async def recall_sessions(
 
     config = get_embedding_config()
     if not config:
-        return RecallResponse(matches=[], total=0)
+        raise _embedding_unavailable_response(embedding_unavailable_detail())
 
     from zerg.services.session_processing.content import redact_secrets
 
@@ -212,6 +244,8 @@ async def recall_sessions(
         filter_query = filter_query.filter(AgentSession.project == project)
     filter_query = filter_query.filter(~internal_canary_session_clause(AgentSession))
     valid_ids = {str(row[0]) for row in filter_query.all()}
+    if valid_ids and cache.turn_embedding_count == 0:
+        raise _embedding_corpus_unavailable_response("turn")
 
     results = cache.search_turns(query_vec, limit=max_results, session_filter=valid_ids)
 

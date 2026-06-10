@@ -155,3 +155,37 @@ async def test_peers_falls_back_to_cwd_when_no_git_repo(monkeypatch):
         "repo": "/Users/dev/git/acme/project",
         "days": 7,
     }
+
+
+@pytest.mark.asyncio
+async def test_semantic_search_sessions_fails_loud_instead_of_falling_back():
+    server = create_server("http://example.com", "test-token")
+    tool = server._tool_manager._tools["search_sessions"]
+    semantic_resp = type(
+        "Resp",
+        (),
+        {
+            "status_code": 503,
+            "text": "semantic index unavailable",
+        },
+    )()
+
+    with patch(
+        "zerg.mcp_server.server.LonghouseAPIClient.get",
+        new=AsyncMock(return_value=semantic_resp),
+    ) as mock_get:
+        result = await tool.run({"query": "bedrock", "semantic": True})
+
+    payload = json.loads(result)
+    assert payload["error"] == "Semantic search unavailable: API returned 503"
+    assert payload["retry"] == "Call search_sessions with semantic=false for lexical search."
+    assert mock_get.await_count == 1
+    assert mock_get.await_args.args == ("/api/agents/sessions/semantic",)
+
+
+@pytest.mark.asyncio
+async def test_search_sessions_description_names_canonical_longhouse_database():
+    server = create_server("http://example.com", "test-token")
+    tool = server._tool_manager._tools["search_sessions"]
+
+    assert "canonical Longhouse agent-session database" in tool.fn.__doc__
