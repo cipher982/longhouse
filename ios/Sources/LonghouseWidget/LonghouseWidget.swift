@@ -235,6 +235,8 @@ private func shortState(_ state: String) -> String {
         return "Run"
     case "thinking":
         return "Think"
+    case "syncing_transcript":
+        return "Think"
     case "idle":
         return "Idle"
     default:
@@ -247,6 +249,8 @@ private func liveActivityStateColor(_ state: String) -> Color {
     case "running":
         return .green
     case "thinking":
+        return .orange
+    case "syncing_transcript":
         return .orange
     case "blocked":
         return .orange

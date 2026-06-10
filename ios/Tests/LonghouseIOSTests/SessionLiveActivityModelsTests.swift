@@ -289,4 +289,62 @@ struct SessionLiveActivityModelsTests {
         #expect(state.activeTool == nil)
         #expect(state.isAttention == false)
     }
+
+    @Test
+    func contentStateUsesWorkingPhaseForTranscriptHandoff() throws {
+        let json = """
+        {
+          "id": "session-transcript-handoff",
+          "provider": "claude",
+          "project": "zerg",
+          "cwd": "/Users/example/git/zerg",
+          "git_branch": "main",
+          "summary": "Waiting for visible response",
+          "summary_title": "Waiting for visible response",
+          "presence_state": "idle",
+          "presence_tool": null,
+          "user_state": "active",
+          "status": "idle",
+          "last_activity_at": "2026-04-25T20:00:00Z",
+          "display_phase": "Idle",
+          "active_tool": null,
+          "capabilities": {
+            "live_control_available": true,
+            "host_reattach_available": true,
+            "reply_to_live_session_available": true
+          },
+          "runtime_display": {
+            "truth_tier": "managed-local",
+            "signal_tier": "phase_signal",
+            "state": "syncing_transcript",
+            "tone": "active",
+            "headline": "Working",
+            "detail": null,
+            "phase_label": "Working",
+            "compact_tool_label": null,
+            "is_live": false,
+            "is_executing": false,
+            "needs_attention": false,
+            "is_idle": false,
+            "is_stalled": false,
+            "is_managed_local_truth": true,
+            "has_signal": true,
+            "control_path": "managed",
+            "activity_recency": "live",
+            "lifecycle": "open",
+            "host_state": "online",
+            "terminal_reason": null
+          },
+          "loop_mode": "assist"
+        }
+        """.data(using: .utf8)!
+
+        let detail = try JSONDecoder.snakeCase.decode(SessionDetail.self, from: json)
+        let state = detail.liveActivityContentState(updatedAt: Date(timeIntervalSince1970: 1_777_140_000))
+
+        #expect(state.presenceState == "syncing_transcript")
+        #expect(state.displayPhase == "Working")
+        #expect(state.activeTool == nil)
+        #expect(state.isAttention == false)
+    }
 }

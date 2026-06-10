@@ -14,12 +14,19 @@ struct SessionSummary: Identifiable {
     var isBlocked: Bool { presenceState == "blocked" }
     var isUserActive: Bool { true }
     var needsAttention: Bool { isBlocked && isUserActive }
-    var isExecuting: Bool { presenceState == "thinking" || presenceState == "running" || status == "working" || status == "active" }
+    var isExecuting: Bool {
+        presenceState == "thinking"
+            || presenceState == "running"
+            || presenceState == "syncing_transcript"
+            || status == "working"
+            || status == "active"
+    }
     var isIdle: Bool { presenceState == "idle" || status == "idle" }
     var displayPhaseLabel: String {
         switch presenceState {
         case "running": return "Running"
         case "thinking": return "Thinking"
+        case "syncing_transcript": return "Working"
         case "needs_user": return "Idle"
         case "blocked": return "Needs permission"
         case "idle": return "Idle"
@@ -152,6 +159,7 @@ private func widgetRuntimeColor(_ session: SessionSummary) -> Color {
     if session.isBlocked { return .orange }
     if session.presenceState == "running" { return .green }
     if session.presenceState == "thinking" { return .orange }
+    if session.presenceState == "syncing_transcript" { return .orange }
     if session.isExecuting { return .orange }
     if session.isIdle || session.status == "completed" { return .secondary }
     return .blue
