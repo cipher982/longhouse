@@ -252,7 +252,7 @@ enum Commands {
         #[arg(long, default_value = "300")]
         fallback_scan_secs: u64,
 
-        /// Spool replay interval in seconds
+        /// Retry interval for failed transcript shipments, in seconds
         #[arg(long, default_value = "30")]
         spool_replay_secs: u64,
 

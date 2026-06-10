@@ -9,6 +9,8 @@ Use this when a managed Claude/Codex/Gemini session feels slow, appears stuck, s
 
 ## Fast Path
 
+For "is transcript shipping live/slow?" questions, check `~/.longhouse/agent/engine-status.json` `ship_lanes.live` and `Shipped transcript` engine logs before static code reading.
+
 1. Local truth:
    ```bash
    longhouse local-health --json | jq '.managed_sessions[]? | select(.session_id=="<session-id>")'

@@ -6,6 +6,11 @@
 //! - <10 MB RSS when idle
 //! - 0% CPU when idle (blocked on kernel filesystem events)
 //! - Lightweight background work with bounded concurrency
+//!
+//! Primary transcript shipping is the Live lane: provider file changes or
+//! managed wake signals enqueue `WorkPriority::Live` immediately. The spool is
+//! a retry/archive store for failed or incomplete shipments, not the steady
+//! state live transcript path.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -72,7 +77,7 @@ const MACHINE_PRESENCE_INTERVAL_SECS: u64 = 60;
 const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 5 * 60;
 const FLIGHT_SAMPLE_INTERVAL_SECS: u64 = 5;
 
-fn path_spool_replay_limit(limiter: &AdaptiveLimiter) -> usize {
+fn failed_shipment_retry_path_limit(limiter: &AdaptiveLimiter) -> usize {
     match limiter.archive_target_batch_bytes() {
         bytes if bytes >= crate::scheduler::ARCHIVE_BATCH_TARGET_MAX_BYTES => {
             PATH_SPOOL_REPLAY_LIMIT_FAST
@@ -94,6 +99,10 @@ const CLAUDE_TERMINAL_EVENT_TIMEOUT: Duration = Duration::from_secs(2);
 const CLAUDE_TERMINAL_EVENT_SOURCE: &str = "claude_channel_scan";
 const CLAUDE_TERMINAL_EVENT_STALE_SECS: i64 = 10 * 60;
 const CLAUDE_TERMINAL_EVENT_BATCH_LIMIT: usize = 128;
+// Stable telemetry strings for the retry/archive lane. Keep the wire names
+// for historical engine-status/log readers, but keep code names explicit.
+const FAILED_SHIPMENT_RETRY_CONTEXT: &str = "spool_replay";
+const FAILED_SHIPMENT_RETRY_OBSERVATION_SOURCE: &str = "spool_pending";
 
 /// Offline / connectivity state.
 struct OfflineState {
@@ -420,7 +429,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut managed_observation_scan_tasks: JoinSet<ManagedObservationScanResult> = JoinSet::new();
     let mut deferred_retries = HashMap::new();
 
-    let initial_retry_paths = queue_pending_spool_paths(
+    let initial_retry_paths = queue_failed_shipment_retry_paths(
         &mut scheduler,
         &conn,
         INITIAL_SPOOL_PATH_LIMIT,
@@ -436,7 +445,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
     // 8. Main event loop
     let fallback_interval = Duration::from_secs(config.fallback_scan_secs.max(10));
-    let spool_interval = Duration::from_secs(config.spool_replay_secs.max(5));
+    let failed_ship_retry_interval = Duration::from_secs(config.spool_replay_secs.max(5));
     let health_check_interval = Duration::from_secs(60);
     let prune_interval = Duration::from_secs(24 * 3600);
     let heartbeat_interval = Duration::from_secs(SERVER_HEARTBEAT_INTERVAL_SECS);
@@ -444,8 +453,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut fallback_timer = tokio::time::interval(fallback_interval);
     fallback_timer.tick().await; // consume first immediate tick
 
-    let mut spool_timer = tokio::time::interval(spool_interval);
-    spool_timer.tick().await; // consume first immediate tick
+    let mut failed_ship_retry_timer = tokio::time::interval(failed_ship_retry_interval);
+    failed_ship_retry_timer.tick().await; // consume first immediate tick
 
     let mut health_timer = tokio::time::interval(health_check_interval);
     health_timer.tick().await; // consume first immediate tick
@@ -519,7 +528,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     );
 
     loop {
-        match queue_pending_spool_paths_if_idle(
+        match queue_failed_shipment_retries_if_idle(
             &mut scheduler,
             &conn,
             offline.is_offline,
@@ -529,11 +538,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             Ok(queued) if queued > 0 => {
                 tracing::info!(
                     queued,
-                    "Queued archive replay paths after local scheduler drained"
+                    "Queued failed-shipment retry paths after local scheduler drained"
                 );
             }
             Ok(_) => {}
-            Err(e) => tracing::warn!("Spool replay error while refilling idle scheduler: {}", e),
+            Err(e) => tracing::warn!(
+                "Failed-shipment retry error while refilling idle scheduler: {}",
+                e
+            ),
         }
         pump_ready_local_work(
             &mut scheduler,
@@ -1100,104 +1112,23 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
-            // File change events (primary path). Keep collecting changes during
-            // soft offline windows so short transport hiccups cannot stale the
-            // local outbox or miss session wakeups.
+            // Live transcript lane (primary path): provider file appends enqueue
+            // WorkPriority::Live. Managed wake signals can pre-empt the small
+            // filesystem coalescing window.
             Some(first_event) = watcher.next_event() => {
-                // Keep the coalescing wait cancellable by transcript wakes.
-                // The wake socket is the managed-session completion lane, so
-                // it should not sit behind filesystem batching.
-                let flush = tokio::time::sleep(WATCHER_FLUSH_INTERVAL);
-                tokio::pin!(flush);
-                loop {
-                    tokio::select! {
-                        biased;
-                        Some(signal) = transcript_wake_rx.recv() => {
-                            if let Some(path) = enqueue_transcript_wake_signal(
-                                &mut scheduler,
-                                &mut latest_transcript_wake_observed,
-                                signal,
-                            ) {
-                                deferred_retries.remove(&path);
-                                pump_ready_local_work(
-                                    &mut scheduler,
-                                    &mut in_flight,
-                                    &task_context,
-                                    &mut deferred_retries,
-                                    offline.is_offline,
-                                );
-                            }
-                        }
-                        _ = &mut flush => {
-                            break;
-                        }
-                    }
-                }
-                let events = watcher.collect_ready_batch(first_event);
-                for event in events {
-                    if let Some((session_path, provider)) =
-                        discovery::session_path_for_watcher_event(&event.path, &providers)
-                    {
-                        let session_event = WatcherEvent {
-                            path: session_path,
-                            observed_at_ms: event.observed_at_ms,
-                            latest_observed_at_ms: event.latest_observed_at_ms,
-                        };
-                        if should_defer_fsevent_for_managed_wake(
-                            &latest_transcript_wake_observed,
-                            &managed_codex_transcript_paths,
-                            &session_event,
-                            provider,
-                        ) {
-                            let observation = ObservationTrace {
-                                source: "fsevent",
-                                observed_at_ms: session_event.observed_at_ms,
-                                latest_observed_at_ms: Some(
-                                    session_event
-                                        .latest_observed_at_ms
-                                        .max(session_event.observed_at_ms),
-                                ),
-                                wake_received_at_ms: None,
-                                enqueued_at_ms: now_ms(),
-                                session_id: None,
-                                turn_id: None,
-                                wake_reason: None,
-                                file_len_hint: None,
-                            };
-                            deferred_retries.insert(
-                                session_event.path.clone(),
-                                DeferredRetry {
-                                    due_at: Instant::now() + MANAGED_WAKE_FSEVENT_FALLBACK_DELAY,
-                                    provider,
-                                    priority: WorkPriority::Live,
-                                    observation,
-                                },
-                            );
-                            tracing::debug!(
-                                provider,
-                                path = %session_event.path.display(),
-                                observed_at_ms = session_event.observed_at_ms,
-                                latest_observed_at_ms = session_event.latest_observed_at_ms,
-                                delay_ms = MANAGED_WAKE_FSEVENT_FALLBACK_DELAY.as_millis(),
-                                "Deferring filesystem live ship because managed wake socket owns this turn"
-                            );
-                            continue;
-                        }
-                        scheduler.enqueue_observed_window(
-                            session_event.path,
-                            provider,
-                            WorkPriority::Live,
-                            "fsevent",
-                            session_event.observed_at_ms,
-                            session_event.latest_observed_at_ms,
-                        );
-                    } else {
-                        tracing::debug!(
-                            "Skipping file outside known providers: {}",
-                            event.path.display()
-                        );
-                    }
-                }
+                handle_live_transcript_file_events(
+                    &mut watcher,
+                    first_event,
+                    &providers,
+                    &mut transcript_wake_rx,
+                    &mut scheduler,
+                    &mut latest_transcript_wake_observed,
+                    &managed_codex_transcript_paths,
+                    &mut deferred_retries,
+                    &mut in_flight,
+                    &task_context,
+                    offline.is_offline,
+                ).await;
             }
 
             // Periodic reconciliation scan — repair missed file-watch work after
@@ -1212,9 +1143,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 );
             }
 
-            // Spool replay (retry failed shipments) — skip when offline
-            _ = spool_timer.tick(), if !offline.is_offline => {
-                match queue_pending_spool_paths(
+            // Retry/archive lane: replay failed or incomplete shipments from
+            // the spool. This timer is never the primary live transcript lane.
+            _ = failed_ship_retry_timer.tick(), if !offline.is_offline => {
+                match queue_failed_shipment_retry_paths(
                     &mut scheduler,
                     &conn,
                     PERIODIC_SPOOL_PATH_LIMIT,
@@ -1222,10 +1154,10 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 ) {
                     Ok(queued) => {
                         if queued > 0 {
-                            tracing::debug!("Queued {} retry paths from spool", queued);
+                            tracing::debug!("Queued {} failed-shipment retry paths from spool", queued);
                         }
                     }
-                    Err(e) => tracing::warn!("Spool replay error: {}", e),
+                    Err(e) => tracing::warn!("Failed-shipment retry error: {}", e),
                 }
             }
 
@@ -1641,6 +1573,119 @@ fn maybe_start_reconciliation_scan(
     start_discovery_task(discovery_tasks, providers, WorkPriority::Scan, reason);
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn handle_live_transcript_file_events(
+    watcher: &mut SessionWatcher,
+    first_event: WatcherEvent,
+    providers: &[ProviderConfig],
+    transcript_wake_rx: &mut mpsc::UnboundedReceiver<TranscriptWakeSignal>,
+    scheduler: &mut PathScheduler,
+    latest_transcript_wake_observed: &mut HashMap<PathBuf, i64>,
+    managed_codex_transcript_paths: &HashSet<PathBuf>,
+    deferred_retries: &mut HashMap<PathBuf, DeferredRetry>,
+    in_flight: &mut JoinSet<PathTaskResult>,
+    task_context: &PathTaskContext,
+    offline: bool,
+) {
+    // Keep the coalescing wait cancellable by transcript wakes. The wake socket
+    // is the managed-session completion lane, so it should not sit behind
+    // filesystem batching.
+    let flush = tokio::time::sleep(WATCHER_FLUSH_INTERVAL);
+    tokio::pin!(flush);
+    loop {
+        tokio::select! {
+            biased;
+            Some(signal) = transcript_wake_rx.recv() => {
+                if let Some(path) = enqueue_transcript_wake_signal(
+                    scheduler,
+                    latest_transcript_wake_observed,
+                    signal,
+                ) {
+                    deferred_retries.remove(&path);
+                    pump_ready_local_work(
+                        scheduler,
+                        in_flight,
+                        task_context,
+                        deferred_retries,
+                        offline,
+                    );
+                }
+            }
+            _ = &mut flush => {
+                break;
+            }
+        }
+    }
+
+    let events = watcher.collect_ready_batch(first_event);
+    for event in events {
+        let Some((session_path, provider)) =
+            discovery::session_path_for_watcher_event(&event.path, providers)
+        else {
+            tracing::debug!(
+                "Skipping file outside known providers: {}",
+                event.path.display()
+            );
+            continue;
+        };
+
+        let session_event = WatcherEvent {
+            path: session_path,
+            observed_at_ms: event.observed_at_ms,
+            latest_observed_at_ms: event.latest_observed_at_ms,
+        };
+        if should_defer_fsevent_for_managed_wake(
+            latest_transcript_wake_observed,
+            managed_codex_transcript_paths,
+            &session_event,
+            provider,
+        ) {
+            let observation = ObservationTrace {
+                source: "fsevent",
+                observed_at_ms: session_event.observed_at_ms,
+                latest_observed_at_ms: Some(
+                    session_event
+                        .latest_observed_at_ms
+                        .max(session_event.observed_at_ms),
+                ),
+                wake_received_at_ms: None,
+                enqueued_at_ms: now_ms(),
+                session_id: None,
+                turn_id: None,
+                wake_reason: None,
+                file_len_hint: None,
+            };
+            deferred_retries.insert(
+                session_event.path.clone(),
+                DeferredRetry {
+                    due_at: Instant::now() + MANAGED_WAKE_FSEVENT_FALLBACK_DELAY,
+                    provider,
+                    priority: WorkPriority::Live,
+                    observation,
+                },
+            );
+            tracing::debug!(
+                provider,
+                path = %session_event.path.display(),
+                observed_at_ms = session_event.observed_at_ms,
+                latest_observed_at_ms = session_event.latest_observed_at_ms,
+                delay_ms = MANAGED_WAKE_FSEVENT_FALLBACK_DELAY.as_millis(),
+                "Deferring filesystem live ship because managed wake socket owns this turn"
+            );
+            continue;
+        }
+
+        scheduler.enqueue_observed_window(
+            session_event.path,
+            provider,
+            WorkPriority::Live,
+            "fsevent",
+            session_event.observed_at_ms,
+            session_event.latest_observed_at_ms,
+        );
+    }
+}
+
 fn maybe_start_unmanaged_binding_refresh(
     refresh_tasks: &mut JoinSet<UnmanagedBindingRefreshResult>,
     db_path: Option<PathBuf>,
@@ -2023,7 +2068,7 @@ async fn post_claude_terminal_signals(
     }
 }
 
-fn queue_pending_spool_paths(
+fn queue_failed_shipment_retry_paths(
     scheduler: &mut PathScheduler,
     conn: &rusqlite::Connection,
     limit: usize,
@@ -2069,7 +2114,7 @@ fn queue_pending_spool_paths(
             PathBuf::from(pending.file_path),
             provider,
             WorkPriority::Retry,
-            "spool_pending",
+            FAILED_SHIPMENT_RETRY_OBSERVATION_SOURCE,
             now_ms(),
             Some(pending.pending_bytes),
         );
@@ -2078,7 +2123,7 @@ fn queue_pending_spool_paths(
     Ok(queued)
 }
 
-fn queue_pending_spool_paths_if_idle(
+fn queue_failed_shipment_retries_if_idle(
     scheduler: &mut PathScheduler,
     conn: &rusqlite::Connection,
     offline: bool,
@@ -2088,7 +2133,7 @@ fn queue_pending_spool_paths_if_idle(
     if offline || scheduler.has_pending_work() {
         return Ok(0);
     }
-    queue_pending_spool_paths(scheduler, conn, limit, limiter)
+    queue_failed_shipment_retry_paths(scheduler, conn, limit, limiter)
 }
 
 fn provider_name_to_static(provider: &str) -> Option<&'static str> {
@@ -2104,7 +2149,7 @@ fn provider_name_to_static(provider: &str) -> Option<&'static str> {
 fn work_context(priority: WorkPriority) -> &'static str {
     match priority {
         WorkPriority::Live => "live_transcript",
-        WorkPriority::Retry => "spool_replay",
+        WorkPriority::Retry => FAILED_SHIPMENT_RETRY_CONTEXT,
         WorkPriority::Scan => "reconciliation_scan",
     }
 }
@@ -2586,7 +2631,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
     if result.job.priority != WorkPriority::Live {
         let replay_prepare_at_ms = chrono::Utc::now().timestamp_millis();
         let replay_trace = shipper::ShipTraceContext {
-            work_context: "spool_replay",
+            work_context: FAILED_SHIPMENT_RETRY_CONTEXT,
             observation_source: result.job.observation.source,
             observed_at_ms: result.job.observation.observed_at_ms,
             latest_observed_at_ms: result.job.observation.latest_observed_at_ms,
@@ -2612,7 +2657,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             &task_context.client,
             task_context.algo,
             &result.job.path,
-            path_spool_replay_limit(task_context.limiter.as_ref()),
+            failed_shipment_retry_path_limit(task_context.limiter.as_ref()),
             task_context.shipper_config.max_batch_bytes,
             Some(&task_context.parse_tracker),
             Some(&task_context.ship_stats),
@@ -3958,7 +4003,7 @@ mod tests {
     }
 
     #[test]
-    fn test_queue_pending_spool_paths_if_idle_refills_drained_scheduler() {
+    fn test_queue_failed_shipment_retries_if_idle_refills_drained_scheduler() {
         let db = tempfile::NamedTempFile::new().unwrap();
         let transcript = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(db.path())).unwrap();
@@ -3969,17 +4014,22 @@ mod tests {
 
         let mut scheduler = PathScheduler::new(4);
         let queued =
-            queue_pending_spool_paths_if_idle(&mut scheduler, &conn, false, 10, None).unwrap();
+            queue_failed_shipment_retries_if_idle(&mut scheduler, &conn, false, 10, None).unwrap();
 
         assert_eq!(queued, 1);
-        let job = scheduler.pop_launchable().expect("spool job queued");
+        let job = scheduler
+            .pop_launchable()
+            .expect("failed-shipment retry job queued");
         assert_eq!(job.path, PathBuf::from(&path));
         assert_eq!(job.priority, WorkPriority::Retry);
-        assert_eq!(job.observation.source, "spool_pending");
+        assert_eq!(
+            job.observation.source,
+            FAILED_SHIPMENT_RETRY_OBSERVATION_SOURCE
+        );
     }
 
     #[test]
-    fn test_queue_pending_spool_paths_suppresses_huge_under_host_pressure() {
+    fn test_queue_failed_shipment_retries_suppress_huge_under_host_pressure() {
         let db = tempfile::NamedTempFile::new().unwrap();
         let conn = open_db(Some(db.path())).unwrap();
         Spool::new(&conn)
@@ -4008,7 +4058,7 @@ mod tests {
         assert!(!limiter.huge_range_eligible());
 
         let mut scheduler = PathScheduler::new(4);
-        let queued = queue_pending_spool_paths_if_idle(
+        let queued = queue_failed_shipment_retries_if_idle(
             &mut scheduler,
             &conn,
             false,
@@ -4018,25 +4068,27 @@ mod tests {
         .unwrap();
 
         assert_eq!(queued, 1);
-        let job = scheduler.pop_launchable().expect("small spool job queued");
+        let job = scheduler
+            .pop_launchable()
+            .expect("small failed-shipment retry job queued");
         assert_eq!(job.path, PathBuf::from("/tmp/small-ready.jsonl"));
         assert_eq!(job.priority, WorkPriority::Retry);
         assert!(scheduler.pop_launchable().is_none());
     }
 
     #[test]
-    fn test_path_spool_replay_limit_tracks_archive_pressure() {
+    fn test_failed_shipment_retry_path_limit_tracks_archive_pressure() {
         let limiter = AdaptiveLimiter::new();
-        assert_eq!(path_spool_replay_limit(limiter.as_ref()), 2);
+        assert_eq!(failed_shipment_retry_path_limit(limiter.as_ref()), 2);
 
         limiter.observe_backpressure(Some(Duration::from_secs(5)));
-        assert_eq!(path_spool_replay_limit(limiter.as_ref()), 1);
+        assert_eq!(failed_shipment_retry_path_limit(limiter.as_ref()), 1);
 
         let limiter = AdaptiveLimiter::new();
         for _ in 0..4 {
             limiter.observe_ingest_timing(10.0, Some(50.0), None, None, None, None);
         }
-        assert_eq!(path_spool_replay_limit(limiter.as_ref()), 8);
+        assert_eq!(failed_shipment_retry_path_limit(limiter.as_ref()), 8);
     }
 
     #[test]
