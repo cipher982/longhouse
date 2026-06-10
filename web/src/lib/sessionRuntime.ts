@@ -69,6 +69,10 @@ export function resolveTimelineSignal(
   const userActive = session.user_state == null || session.user_state === "active";
   if (userActive && display.needs_attention) return "attention";
 
+  if (display.state === "syncing_transcript") {
+    return display.activity_recency === "live" ? "working" : "quiet";
+  }
+
   const tone = (display.tone ?? "").trim().toLowerCase();
   const live = display.activity_recency === "live";
   if (tone === "thinking" || tone === "running") {

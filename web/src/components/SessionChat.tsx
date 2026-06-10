@@ -140,10 +140,6 @@ function getAssistantText(message: ChatMessage): string {
   return message.content.startsWith(toolPrefix) ? message.content.slice(toolPrefix.length).trim() : message.content.trim();
 }
 
-function getSyncPendingPlaceholder(): string {
-  return "Response returned. Updating transcript...";
-}
-
 function newClientRequestId(): string {
   const randomUUID = globalThis.crypto?.randomUUID?.bind(globalThis.crypto);
   if (randomUUID) return `web-${randomUUID()}`;
@@ -328,10 +324,12 @@ export function SessionChat({
 
                 return {
                   ...m,
-                  content: getToolPrefix(m.toolNotices) + getSyncPendingPlaceholder(),
+                  content: getToolPrefix(m.toolNotices),
+                  isStreaming: true,
                 };
               }),
             );
+            void refreshCurrentSessionWorkspace();
           }
 
           const nextSessionId = done.shipped_session_id;
@@ -792,14 +790,26 @@ export function SessionChat({
   }
 
   const renderMessages = () =>
-    messages.map((msg) => (
-      <div key={msg.id} className={`session-chat-message session-chat-message--${msg.role}`}>
-        <div className="session-chat-message-role">{msg.role}</div>
-        <div className="session-chat-message-content">
-          {msg.content || (msg.isStreaming ? <Spinner size="sm" /> : null)}
+    messages.map((msg) => {
+      const assistantText = msg.role === "assistant" ? getAssistantText(msg) : msg.content.trim();
+      const showStreamingPlaceholder = Boolean(msg.isStreaming && !assistantText);
+
+      return (
+        <div key={msg.id} className={`session-chat-message session-chat-message--${msg.role}`}>
+          <div className="session-chat-message-role">{msg.role}</div>
+          <div className="session-chat-message-content">
+            {showStreamingPlaceholder ? (
+              <>
+                {msg.content ? `${msg.content}\n` : null}
+                <Spinner size="sm" />
+              </>
+            ) : (
+              msg.content
+            )}
+          </div>
         </div>
-      </div>
-    ));
+      );
+    });
 
   return (
     <div

@@ -136,6 +136,11 @@ describe("resolveTimelineSignal", () => {
     expect(sig({ tone: "thinking", activity_recency: "live" })).toBe("working");
   });
 
+  it("live transcript handoff is working even though the backend tone stays active", () => {
+    expect(sig({ state: "syncing_transcript", tone: "active", activity_recency: "live" })).toBe("working");
+    expect(sig({ state: "syncing_transcript", tone: "active", activity_recency: "stale" })).toBe("quiet");
+  });
+
   it("stale running does NOT pulse — falls to quiet", () => {
     expect(sig({ tone: "running", activity_recency: "stale" })).toBe("quiet");
   });

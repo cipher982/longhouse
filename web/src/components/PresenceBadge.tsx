@@ -102,6 +102,10 @@ function normalizePresenceState(state: PresenceStateInput | null | undefined): P
   return isKnownPresenceState(state) ? state : null;
 }
 
+function dotStateForPresence(state: PresenceState): PresenceState {
+  return state === "syncing_transcript" ? "thinking" : state;
+}
+
 // ---------------------------------------------------------------------------
 // Dot sub-component
 // ---------------------------------------------------------------------------
@@ -191,23 +195,6 @@ function Dot({ state, size, compact = false, animateCompact = false }: DotProps)
           background: compact ? "#b45309" : "radial-gradient(circle, #f59e0b 30%, #b45309 100%)",
           opacity: compact ? 0.84 : 1,
           boxShadow: compact ? undefined : "0 0 6px 2px rgba(245, 158, 11, 0.35)",
-        }}
-      />
-    );
-  }
-
-  if (state === "syncing_transcript") {
-    return (
-      <span
-        style={{
-          ...base,
-          background: compact ? "#a78bfa" : "radial-gradient(circle, #a78bfa 30%, #7c3aed 100%)",
-          animation:
-            !compact || animateCompact
-              ? "presence-pulse 1.6s ease-in-out infinite"
-              : undefined,
-          opacity: compact ? 0.85 : 1,
-          ["--presence-glow" as string]: "rgba(167, 139, 250, 0.5)",
         }}
       />
     );
@@ -320,7 +307,7 @@ export function PresenceBadge({
             : normalizedState === "stalled"
               ? "Stalled"
               : normalizedState === "syncing_transcript"
-                ? "Updating transcript"
+                ? "Working"
                 : normalizedState;
     return (
       <span
@@ -329,7 +316,7 @@ export function PresenceBadge({
         style={{ display: "inline-flex", alignItems: "center" }}
       >
         <Dot
-          state={normalizedState}
+          state={dotStateForPresence(normalizedState)}
           size={dotSize}
           compact
           animateCompact={animateCompact}
@@ -435,10 +422,11 @@ export function PresenceBadge({
   if (normalizedState === "syncing_transcript") {
     return (
       <span className={className} style={containerStyle}>
-        <Dot state="syncing_transcript" size={dotSize} />
-        <span style={{ color: "#a78bfa", fontWeight: 500, letterSpacing: "0.02em" }}>
-          Updating transcript
+        <Dot state="thinking" size={dotSize} />
+        <span style={{ color: "#fb923c", fontWeight: 500, letterSpacing: "0.02em" }}>
+          Working
         </span>
+        <TypingDots />
       </span>
     );
   }
@@ -467,11 +455,10 @@ export function PresenceHero({ state, tool, className }: PresenceHeroProps) {
   const normalizedState = normalizePresenceState(state);
   if (normalizedState === null) return null;
 
-  const isThinking = normalizedState === "thinking";
+  const isThinking = normalizedState === "thinking" || normalizedState === "syncing_transcript";
   const isRunning = normalizedState === "running";
   const isBlocked = normalizedState === "blocked";
   const isStalled = normalizedState === "stalled";
-  const isSyncing = normalizedState === "syncing_transcript";
 
   const borderColor = isThinking
     ? "rgba(251, 146, 60, 0.4)"
@@ -481,9 +468,7 @@ export function PresenceHero({ state, tool, className }: PresenceHeroProps) {
         ? "rgba(248, 113, 113, 0.4)"
         : isStalled
           ? "rgba(245, 158, 11, 0.36)"
-          : isSyncing
-            ? "rgba(167, 139, 250, 0.4)"
-            : "rgba(107, 114, 128, 0.2)";
+          : "rgba(107, 114, 128, 0.2)";
 
   const bgColor = isThinking
     ? "rgba(251, 146, 60, 0.08)"
@@ -493,9 +478,7 @@ export function PresenceHero({ state, tool, className }: PresenceHeroProps) {
         ? "rgba(248, 113, 113, 0.06)"
         : isStalled
           ? "rgba(245, 158, 11, 0.08)"
-          : isSyncing
-            ? "rgba(167, 139, 250, 0.08)"
-            : "rgba(107, 114, 128, 0.04)";
+          : "rgba(107, 114, 128, 0.04)";
 
   return (
     <div
