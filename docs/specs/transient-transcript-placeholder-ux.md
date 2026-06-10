@@ -88,8 +88,24 @@ sync-only treatment.
 ### iOS
 
 iOS should continue to trust the server runtime display fields. Tests and any
-fixtures must expect the safe projection above. If iOS has local fallback logic
-for timeline cards, it should use "Working" for `syncing_transcript`.
+fixtures must expect the safe projection above. Because iOS detail, widget, and
+Live Activity surfaces render the server `headline`, `detail`, and
+`phase_label`, the backend projection change covers those surfaces with no iOS
+view edits. Only fixtures and test expectations should change unless a local
+fallback path is found.
+
+### Desktop Menu Bar And Snapshot Tooling
+
+The desktop menu bar uses `server/zerg/config/managed_phase_contract.json`, not
+the runtime-display projection, to decide whether a managed phase is known. Add
+`syncing_transcript` to that contract with `attention = "working"` so the menu
+bar does not raise an unknown-phase health warning during this normal handoff.
+Regenerate the Swift contract with
+`scripts/generate_managed_phase_contract_swift.py`.
+
+The widget snapshot helper has local fallback phase logic for screenshots. It
+should also treat `syncing_transcript` as active/working so local visual checks
+do not render the state as inactive.
 
 ## Implementation Plan
 
@@ -108,7 +124,12 @@ for timeline cards, it should use "Working" for `syncing_transcript`.
    - Update decoded runtime-display expectations to match the server projection.
    - Add a targeted assertion that no internal transcript-sync copy appears in
      the fixture.
-4. Validation:
+4. Desktop/menu-bar contract and fixture tooling:
+   - Add `syncing_transcript` to `managed_phase_contract.json` as working.
+   - Regenerate `ManagedPhaseContract.generated.swift`.
+   - Update local-health/menu-bar contract tests.
+   - Update widget snapshot fallback logic if it maps raw presence locally.
+5. Validation:
    - Backend: `make test`
    - Frontend: `make test-frontend`
    - iOS: `make test-ios`
@@ -120,6 +141,8 @@ for timeline cards, it should use "Working" for `syncing_transcript`.
 
 - Searching product source and tests for the old happy-path strings finds no
   user-facing runtime copy:
+  - "Syncing"
+  - "Syncing transcript"
   - "Response ready"
   - "Updating transcript"
   - "Response returned. Updating transcript"
@@ -128,5 +151,8 @@ for timeline cards, it should use "Working" for `syncing_transcript`.
   transient handoff.
 - Chat shows a non-textual assistant placeholder during pending transcript
   materialization.
+- The menu bar does not raise an unknown-managed-phase warning for
+  `syncing_transcript`.
+- The widget snapshot fallback does not render `syncing_transcript` as inactive.
 - Backend, frontend, iOS, and relevant E2E checks pass or have a documented
   unrelated failure.
