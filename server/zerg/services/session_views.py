@@ -390,9 +390,9 @@ def _timeline_status_from_display(
 
     if state == TRANSCRIPT_SYNC_STATE:
         return TimelineStatusPresentationResponse(
-            label="Response ready",
-            tone="active",
-            seen_at=None,
+            label="Working",
+            tone="thinking",
+            seen_at=presence_at,
             seen_at_prefix="Updated",
         )
     if runtime_display.pause_request is not None and runtime_display.pause_request.status == "pending":

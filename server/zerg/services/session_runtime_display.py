@@ -470,9 +470,9 @@ def build_session_runtime_display(
     )
     if transcript_sync_pending:
         presence_state = TRANSCRIPT_SYNC_STATE
-        headline = "Response ready"
-        detail = "Updating transcript"
-        phase_label = "Updating transcript"
+        headline = "Working"
+        detail = None
+        phase_label = "Working"
         is_executing = False
         needs_attention = False
         is_idle = False

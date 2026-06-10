@@ -379,9 +379,9 @@
           "signal_tier": "phase_signal",
           "state": "syncing_transcript",
           "tone": "active",
-          "headline": "Syncing",
-          "detail": "Waiting for transcript",
-          "phase_label": "Syncing transcript",
+          "headline": "Working",
+          "detail": null,
+          "phase_label": "Working",
           "compact_tool_label": null,
           "is_live": false,
           "is_executing": false,
@@ -398,19 +398,19 @@
         },
         "timeline_card": {
           "ownership": {"label": "Managed", "tone": "neutral"},
-          "status": {"label": "Syncing", "tone": "active", "seen_at": null, "seen_at_prefix": "Updated"},
-          "border_tone": "active"
+          "status": {"label": "Working", "tone": "thinking", "seen_at": "2026-05-15T21:00:01Z", "seen_at_prefix": "Updated"},
+          "border_tone": "thinking"
         }
       },
       "expectations": {
         "management_label": "Managed",
-        "status_label": "Syncing",
-        "status_tone": "active",
-        "display_phase_label": "Syncing transcript",
-        "runtime_headline": "Syncing",
-        "runtime_detail": "Waiting for transcript",
+        "status_label": "Working",
+        "status_tone": "thinking",
+        "display_phase_label": "Working",
+        "runtime_headline": "Working",
+        "runtime_detail": null,
         "runtime_tone": "active",
-        "seen_at": null,
+        "seen_at": "2026-05-15T21:00:01Z",
         "seen_at_prefix": "Updated"
       }
     }

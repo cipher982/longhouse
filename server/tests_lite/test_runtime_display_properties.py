@@ -192,7 +192,7 @@ def test_projection_satisfies_invariants(payload):
         assert display.truth_tier in {"stale", "none"}
         assert display.activity_recency in {"stale", "none"}
 
-    # Syncing transcript excludes idle/executing.
+    # The transcript handoff state excludes idle/executing.
     if display.state == "syncing_transcript":
         assert display.is_idle is False
         assert display.is_executing is False
