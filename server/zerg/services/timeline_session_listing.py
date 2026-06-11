@@ -15,7 +15,7 @@ from typing import ContextManager
 from pydantic import Field
 from sqlalchemy.orm import Session
 
-from zerg.services.agents_store import AgentsStore
+from zerg.services.agents import AgentsStore
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_listing import SessionListParams
 from zerg.services.session_listing import list_agent_sessions

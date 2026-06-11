@@ -31,9 +31,9 @@ from zerg.models.agents import SessionTask
 from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
 from zerg.services.agents.kernel_backfill import backfill_subagent_child_threads
-from zerg.services.agents_store import AgentsStore
-from zerg.services.agents_store import EventIngest
-from zerg.services.agents_store import SessionIngest
+from zerg.services.agents import AgentsStore
+from zerg.services.agents import EventIngest
+from zerg.services.agents import SessionIngest
 
 PARENT_ID = UUID("f6a553e2-8aca-49c4-9823-3b3d8690fd2e")
 CHILD_ID = UUID("ddb1a69b-628e-5677-bba7-3fb76ba6ffc2")

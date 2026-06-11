@@ -199,10 +199,10 @@ def _ingest_workspace_session(
 
     Returns the ingested session UUID, or None.
     """
-    from zerg.services.agents_store import AgentsStore
-    from zerg.services.agents_store import EventIngest
-    from zerg.services.agents_store import SessionIngest
-    from zerg.services.agents_store import SourceLineIngest
+    from zerg.services.agents import AgentsStore
+    from zerg.services.agents import EventIngest
+    from zerg.services.agents import SessionIngest
+    from zerg.services.agents import SourceLineIngest
     from zerg.services.session_continuity import encode_cwd_for_claude
     from zerg.services.session_continuity import get_claude_config_dir
     from zerg.services.shipper.parser import extract_session_metadata

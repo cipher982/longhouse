@@ -37,9 +37,9 @@ from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import TimelineCard
-from zerg.services.agents_store import AgentsStore
-from zerg.services.agents_store import EventIngest
-from zerg.services.agents_store import SessionIngest
+from zerg.services.agents import AgentsStore
+from zerg.services.agents import EventIngest
+from zerg.services.agents import SessionIngest
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 from zerg.services.session_observations import OBS_KIND_BRIDGE_TRANSCRIPT_DELTA
 from zerg.services.session_pause_requests import upsert_pause_request

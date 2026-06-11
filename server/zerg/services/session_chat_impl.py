@@ -41,8 +41,8 @@ from zerg.models_config import get_llm_client_for_use_case
 from zerg.observability import get_tracer
 from zerg.observability import mark_span_error
 from zerg.observability import set_span_attributes
+from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
-from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_COMPLETED
 from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_FAILED
 from zerg.services.managed_local_control import MANAGED_LOCAL_SYNC_STATUS_COMPLETE

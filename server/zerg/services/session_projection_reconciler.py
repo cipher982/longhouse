@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 
 from zerg.models.agents import AgentSession
-from zerg.services.agents_store import AgentsStore
+from zerg.services.agents import AgentsStore
 
 logger = logging.getLogger(__name__)
 

@@ -41,7 +41,7 @@ def lexical_search(
 
     When over_fetch=True, fetches min(limit * 3, 200) results for RRF fusion.
     """
-    from zerg.services.agents_store import AgentsStore
+    from zerg.services.agents import AgentsStore
 
     fetch_limit = min(limit * 3, 200) if over_fetch else limit
     since = datetime.now(timezone.utc) - timedelta(days=filters.days_back)

@@ -7,7 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from zerg.database import make_engine
 from zerg.database import Base
 from zerg.models.agents import AgentSession
-from zerg.services.agents_store import AgentsStore, EventIngest, SessionIngest
+from zerg.services.agents import AgentsStore, EventIngest, SessionIngest
 
 
 def _make_db(tmp_path):

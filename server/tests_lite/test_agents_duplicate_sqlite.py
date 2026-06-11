@@ -16,10 +16,10 @@ from zerg.database import make_engine
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTask
 from zerg.models.agents import TimelineCard
-from zerg.services.agents_store import AgentsStore
-from zerg.services.agents_store import EventIngest
-from zerg.services.agents_store import SessionIngest
-from zerg.services.agents_store import SourceLineIngest
+from zerg.services.agents import AgentsStore
+from zerg.services.agents import EventIngest
+from zerg.services.agents import SessionIngest
+from zerg.services.agents import SourceLineIngest
 
 
 def test_duplicate_event_sqlite_no_pending_rollback(tmp_path):

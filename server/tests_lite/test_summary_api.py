@@ -22,7 +22,7 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentEvent
 from zerg.database import Base
 from zerg.models.agents import AgentSession
-from zerg.services.agents_store import AgentsStore
+from zerg.services.agents import AgentsStore
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 
 # ---------------------------------------------------------------------------

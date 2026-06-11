@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
-from zerg.services.agents_store import AgentsStore
+from zerg.services.agents import AgentsStore
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_listing_types import SessionListingError
 from zerg.services.session_listing_types import SessionListParams

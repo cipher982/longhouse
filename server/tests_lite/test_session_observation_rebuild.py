@@ -26,10 +26,10 @@ from zerg.database import Base
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
-from zerg.services.agents_store import AgentsStore
-from zerg.services.agents_store import EventIngest
-from zerg.services.agents_store import SessionIngest
-from zerg.services.agents_store import SourceLineIngest
+from zerg.services.agents import AgentsStore
+from zerg.services.agents import EventIngest
+from zerg.services.agents import SessionIngest
+from zerg.services.agents import SourceLineIngest
 from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.session_observation_rebuild import SessionObservationRebuildCoverageError
 from zerg.services.session_observation_rebuild import rebuild_session_observation_projections

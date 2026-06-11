@@ -19,7 +19,7 @@ from sqlalchemy import select
 from zerg.database import db_session
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
-from zerg.services.agents_store import AgentsStore
+from zerg.services.agents import AgentsStore
 from zerg.tools.error_envelope import ErrorType
 from zerg.tools.error_envelope import tool_error
 from zerg.tools.error_envelope import tool_success

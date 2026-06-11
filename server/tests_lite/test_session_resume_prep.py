@@ -17,10 +17,10 @@ from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.database import Base
 from zerg.models.agents import AgentSession
 from zerg.routers import session_chat
-from zerg.services.agents_store import AgentsStore
-from zerg.services.agents_store import EventIngest
-from zerg.services.agents_store import SessionIngest
-from zerg.services.agents_store import SourceLineIngest
+from zerg.services.agents import AgentsStore
+from zerg.services.agents import EventIngest
+from zerg.services.agents import SessionIngest
+from zerg.services.agents import SourceLineIngest
 from zerg.services.session_continuity import ResolvedWorkspace
 from zerg.services.session_continuity import ShipSessionResult
 from zerg.services.session_continuity import WorkspaceResolver

@@ -9,10 +9,10 @@ from sqlalchemy.orm import sessionmaker
 
 from zerg.database import make_engine
 from zerg.database import Base
-from zerg.services.agents_store import AgentsStore
-from zerg.services.agents_store import EventIngest
-from zerg.services.agents_store import SessionIngest
-from zerg.services.agents_store import SourceLineIngest
+from zerg.services.agents import AgentsStore
+from zerg.services.agents import EventIngest
+from zerg.services.agents import SessionIngest
+from zerg.services.agents import SourceLineIngest
 
 
 def _fixture_path(provider: str) -> Path:

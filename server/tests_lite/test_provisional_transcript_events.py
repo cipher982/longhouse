@@ -17,10 +17,10 @@ from zerg.models.agents import SessionLivePreview
 from zerg.models.agents import SessionObservation
 from zerg.services import provisional_events as provisional_events_service
 from zerg.services import session_runtime as session_runtime_service
-from zerg.services.agents_store import AgentsStore
-from zerg.services.agents_store import EventIngest
-from zerg.services.agents_store import SessionIngest
-from zerg.services.agents_store import SourceLineIngest
+from zerg.services.agents import AgentsStore
+from zerg.services.agents import EventIngest
+from zerg.services.agents import SessionIngest
+from zerg.services.agents import SourceLineIngest
 from zerg.services.provisional_events import cleanup_bridge_transcript_preview_observations
 from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_observation_reducers import reduce_bridge_transcript_observation

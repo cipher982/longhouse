@@ -17,7 +17,7 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
-from zerg.services.agents_store import AgentsStore
+from zerg.services.agents import AgentsStore
 from zerg.services.internal_sessions import internal_canary_session_clause
 from zerg.services.internal_sessions import is_internal_canary_provider_filter
 from zerg.services.provisional_events import durable_transcript_event_predicate

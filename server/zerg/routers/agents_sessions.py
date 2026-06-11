@@ -25,8 +25,8 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.models.device_token import DeviceToken
+from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
-from zerg.services.agents_store import AgentsStore
 from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
@@ -93,7 +93,6 @@ from zerg.services.startup_context import STARTUP_CONTEXT_MAX_DAYS_BACK
 from zerg.services.startup_context import STARTUP_CONTEXT_MAX_LIMIT
 from zerg.services.startup_context import load_startup_context_items
 from zerg.services.startup_context import render_startup_context
-from zerg.services.unmanaged_bindings import load_binding_overlay
 from zerg.utils.server_timing import ServerTimingRecorder
 from zerg.utils.time import UTCBaseModel
 
@@ -627,7 +626,6 @@ def list_active_sessions(
         runtime_state_map = load_runtime_state_map(db, [session.id for session in sessions])
         pause_request_map = load_active_pause_request_map(db, session_ids)
         control_state_map = load_managed_control_state_map(db, [session.id for session in sessions])
-        binding_overlay_map = load_binding_overlay(db, session_ids, now=now)
         kernel_capabilities_map = project_capabilities_bulk(db, session_ids=session_ids)
         items: List[ActiveSessionResponse] = []
         for s in sessions:
@@ -656,7 +654,6 @@ def list_active_sessions(
                     last_user_message=last_user.get(s.id),
                     last_assistant_message=last_ai.get(s.id),
                     now=now,
-                    binding_overlay=binding_overlay_map.get(s.id),
                     control_overlay=control_state_map.get(s.id),
                     kernel_capabilities=kernel_capabilities_map.get(s.id),
                     pause_request=serialize_pause_request_projection(pause_request_map.get(s.id)),
@@ -819,7 +816,6 @@ def get_session(
         pause_request_map = load_active_pause_request_map(db, [session.id])
         transcript_preview_map = load_active_provisional_preview_map(db, [session.id])
         pending_response_turn_map = load_pending_response_turn_map(db, [session.id])
-        binding_overlay_map = load_binding_overlay(db, [session.id], now=now)
         control_state_map = load_managed_control_state_map(db, [session.id])
     with timing.span("build_response"):
         effective_owner_id = owner_id
@@ -836,7 +832,6 @@ def get_session(
                 now=now,
             ),
             first_user_message=first_user_map.get(session.id),
-            binding_overlay=binding_overlay_map.get(session.id),
             control_overlay=control_state_map.get(session.id),
             transcript_preview=transcript_preview_map.get(str(session.id)),
             owner_id=effective_owner_id,
@@ -884,7 +879,6 @@ def get_session_thread(
         pause_request_map = load_active_pause_request_map(db, thread_session_ids)
         transcript_preview_map = load_active_provisional_preview_map(db, [item.id for item in thread_sessions])
         pending_response_turn_map = load_pending_response_turn_map(db, thread_session_ids)
-        binding_overlay_map = load_binding_overlay(db, [item.id for item in thread_sessions], now=now)
         control_state_map = load_managed_control_state_map(db, [item.id for item in thread_sessions])
         launch_attempt_map = latest_launch_attempts(db, thread_session_ids)
 
@@ -909,7 +903,6 @@ def get_session_thread(
                     ),
                     first_user_message=first_user_map.get(item.id),
                     transcript_preview=transcript_preview_map.get(str(item.id)),
-                    binding_overlay=binding_overlay_map.get(item.id),
                     control_overlay=control_state_map.get(item.id),
                     owner_id=effective_owner_id,
                     has_pending_response_turn=bool(pending_response_turn_map.get(item.id)),

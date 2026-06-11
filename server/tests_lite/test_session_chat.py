@@ -31,9 +31,9 @@ from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.routers import session_chat
-from zerg.services.agents_store import AgentsStore
-from zerg.services.agents_store import EventIngest
-from zerg.services.agents_store import SessionIngest
+from zerg.services.agents import AgentsStore
+from zerg.services.agents import EventIngest
+from zerg.services.agents import SessionIngest
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.session_chat_impl import _session_is_closed_for_input

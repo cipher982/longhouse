@@ -22,7 +22,7 @@ from zerg.database import Base
 from zerg.database import _ensure_agents_fts
 from zerg.database import make_engine
 from zerg.models.models import User
-from zerg.services.agents_store import AgentsStore
+from zerg.services.agents import AgentsStore
 from zerg.services.demo_sessions import build_demo_agent_sessions
 from zerg.utils.time import utc_now_naive
 

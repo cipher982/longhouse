@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from pydantic import Field
 from sqlalchemy.orm import Session
 
-from zerg.services.agents_store import AgentsStore
+from zerg.services.agents import AgentsStore
 from zerg.utils.time import UTCBaseModel
 
 BUNDLE_VERSION = 1

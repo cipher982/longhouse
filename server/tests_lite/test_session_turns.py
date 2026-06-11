@@ -23,9 +23,9 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTurn
 from zerg.services import session_turns as session_turns_service
-from zerg.services.agents_store import AgentsStore
-from zerg.services.agents_store import EventIngest
-from zerg.services.agents_store import SessionIngest
+from zerg.services.agents import AgentsStore
+from zerg.services.agents import EventIngest
+from zerg.services.agents import SessionIngest
 from zerg.services.session_turns import SESSION_TURN_STATE_DURABLE
 from zerg.services.session_turns import SESSION_TURN_STATE_FAILED
 from zerg.services.session_turns import SESSION_TURN_STATE_TERMINAL
@@ -349,7 +349,7 @@ def test_session_turn_durable_heals_timeout_style_failure_when_events_arrive(tmp
         assert durable_turn.state == SESSION_TURN_STATE_DURABLE
 
 
-def test_agents_store_ingest_marks_canonical_session_turn_durable(tmp_path):
+def test_agents_ingest_marks_canonical_session_turn_durable(tmp_path):
     SessionLocal = _make_db(tmp_path)
 
     with SessionLocal() as db:
@@ -656,7 +656,7 @@ def test_materialize_managed_transcript_turns_skips_session_with_pending_request
         assert row.durable_assistant_event_id is None
 
 
-def test_agents_store_ingest_materializes_native_managed_transcript_turn_without_request_row(tmp_path):
+def test_agents_ingest_materializes_native_managed_transcript_turn_without_request_row(tmp_path):
     SessionLocal = _make_db(tmp_path)
 
     with SessionLocal() as db:

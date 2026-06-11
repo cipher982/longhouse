@@ -12,8 +12,8 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
+from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
-from zerg.services.agents_store import AgentsStore
 from zerg.services.internal_sessions import internal_canary_session_clause
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
@@ -26,7 +26,6 @@ from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import latest_launch_attempts
 from zerg.services.session_views import normalize_utc_datetime
-from zerg.services.unmanaged_bindings import load_binding_overlay
 
 # Mirrors zerg.services.session_summaries — fewer than this many user+assistant
 # messages means the summarizer waits instead of attempting; treat as
@@ -105,7 +104,6 @@ def build_session_response_list(
         is not None
     }
     thread_cache: dict[str, tuple[str, int]] = store.batch_thread_meta(sessions)
-    binding_overlay_map = load_binding_overlay(db, session_ids, now=now)
     kernel_capabilities_map = project_capabilities_bulk(db, session_ids=session_ids)
     launch_attempt_map = latest_launch_attempts(db, session_ids)
     match_map = match_map or {}
@@ -140,7 +138,6 @@ def build_session_response_list(
                 match_snippet=match.get("snippet") or semantic_snippet_map.get(str(session.id)),
                 match_role=match.get("role"),
                 match_score=sem_score_map.get(session.id),
-                binding_overlay=binding_overlay_map.get(session.id),
                 control_overlay=control_state_map.get(session.id),
                 transcript_preview=transcript_preview_map.get(str(session.id)),
                 owner_id=owner_id,

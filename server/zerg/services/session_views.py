@@ -27,9 +27,9 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionLaunchAttempt
 from zerg.models.agents import SessionTurn
+from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
-from zerg.services.agents_store import AgentsStore
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.managed_control_state import CONTROL_SOURCE_RUNNER_CONNECTION
 from zerg.services.managed_control_state import engine_channel_control_overlay

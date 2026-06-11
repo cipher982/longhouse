@@ -11,9 +11,9 @@ from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.services.agents_store import AgentsStore
-from zerg.services.agents_store import EventIngest
-from zerg.services.agents_store import SessionIngest
+from zerg.services.agents import AgentsStore
+from zerg.services.agents import EventIngest
+from zerg.services.agents import SessionIngest
 
 BASE_TS = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(days=1)
 

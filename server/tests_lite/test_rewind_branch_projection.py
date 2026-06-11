@@ -8,11 +8,11 @@ from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
 from zerg.database import Base
 from zerg.models.agents import AgentSessionBranch
-from zerg.services.agents_store import AgentsStore
-from zerg.services.agents_store import EventIngest
-from zerg.services.agents_store import SessionIngest
-from zerg.services.agents_store import SourceLineIngest
-from zerg.services.agents_store import SourceRewindHintIngest
+from zerg.services.agents import AgentsStore
+from zerg.services.agents import EventIngest
+from zerg.services.agents import SessionIngest
+from zerg.services.agents import SourceLineIngest
+from zerg.services.agents import SourceRewindHintIngest
 from zerg.services.provisional_events import EVENT_ORIGIN_LIVE_PROVISIONAL
 
 

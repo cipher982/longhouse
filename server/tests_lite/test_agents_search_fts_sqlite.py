@@ -7,9 +7,9 @@ from sqlalchemy.orm import sessionmaker
 
 from zerg.database import initialize_database
 from zerg.database import make_engine
-from zerg.services.agents_store import AgentsStore
-from zerg.services.agents_store import EventIngest
-from zerg.services.agents_store import SessionIngest
+from zerg.services.agents import AgentsStore
+from zerg.services.agents import EventIngest
+from zerg.services.agents import SessionIngest
 
 
 def test_agents_search_fts_sqlite(tmp_path):

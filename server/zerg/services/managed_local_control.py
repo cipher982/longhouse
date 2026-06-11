@@ -20,7 +20,7 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
-from zerg.services.agents_store import AgentsStore
+from zerg.services.agents import AgentsStore
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_ANSWER_PAUSE
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_INTERRUPT

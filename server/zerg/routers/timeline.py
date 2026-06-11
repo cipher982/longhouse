@@ -45,7 +45,7 @@ from zerg.schemas.machines import MachineDirectoryEntry
 from zerg.schemas.machines import MachineDirectoryResponse
 from zerg.schemas.machines import WorkspaceSuggestion
 from zerg.schemas.machines import WorkspaceSuggestionsResponse
-from zerg.services.agents_store import AgentsStore
+from zerg.services.agents import AgentsStore
 from zerg.services.machines_directory import build_machines_directory
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_views import DemoSeedResponse

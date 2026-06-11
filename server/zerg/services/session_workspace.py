@@ -10,8 +10,8 @@ from fastapi import HTTPException
 from fastapi import status
 from sqlalchemy.orm import Session
 
+from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
-from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
 from zerg.services.session_pause_requests import load_active_pause_request_map
@@ -32,7 +32,6 @@ from zerg.services.session_views import build_tool_call_state_map
 from zerg.services.session_views import is_session_closed
 from zerg.services.session_workspace_revision import SessionWorkspaceRevision
 from zerg.services.session_workspace_revision import load_session_workspace_revision
-from zerg.services.unmanaged_bindings import load_binding_overlay
 from zerg.utils.server_timing import ServerTimingRecorder
 from zerg.utils.time import normalize_utc
 
@@ -112,8 +111,6 @@ def build_session_workspace(
             )
         with timing.span("pending_turns"):
             pending_response_turn_map = load_pending_response_turn_map(db, thread_session_ids)
-        with timing.span("binding_overlay"):
-            binding_overlay_map = load_binding_overlay(db, thread_session_ids, now=now)
         with timing.span("kernel_capabilities"):
             kernel_capabilities_map = project_capabilities_bulk(db, session_ids=thread_session_ids)
     with timing.span("build_thread_responses"):
@@ -130,7 +127,6 @@ def build_session_workspace(
                     now=now,
                 ),
                 first_user_message=first_user_map.get(item.id),
-                binding_overlay=binding_overlay_map.get(item.id),
                 control_overlay=control_state_map.get(item.id),
                 transcript_preview=transcript_preview_map.get(str(item.id)),
                 owner_id=owner_id,
@@ -155,7 +151,6 @@ def build_session_workspace(
                 now=now,
             ),
             first_user_message=first_user_map.get(session.id),
-            binding_overlay=binding_overlay_map.get(session.id),
             control_overlay=control_state_map.get(session.id),
             transcript_preview=transcript_preview_map.get(str(session.id)),
             owner_id=owner_id,
@@ -274,8 +269,6 @@ def build_session_mobile_tail(
             )
         with timing.span("pending_turns"):
             pending_response_turn_map = load_pending_response_turn_map(db, thread_session_ids)
-        with timing.span("binding_overlay"):
-            binding_overlay_map = load_binding_overlay(db, thread_session_ids, now=now)
 
     with timing.span("build_session"):
         session_response = build_session_response(
@@ -290,7 +283,6 @@ def build_session_mobile_tail(
                 now=now,
             ),
             first_user_message=first_user_map.get(session.id),
-            binding_overlay=binding_overlay_map.get(session.id),
             control_overlay=control_state_map.get(session.id),
             transcript_preview=transcript_preview_map.get(str(session.id)),
             owner_id=owner_id,

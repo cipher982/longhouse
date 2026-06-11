@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
-from zerg.services.agents_store import AgentsStore
+from zerg.services.agents import AgentsStore
 from zerg.services.demo_sessions import build_demo_agent_sessions
 
 logger = logging.getLogger(__name__)

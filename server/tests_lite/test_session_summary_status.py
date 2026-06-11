@@ -23,7 +23,7 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTask
-from zerg.services.agents_store import AgentsStore
+from zerg.services.agents import AgentsStore
 from zerg.services.session_response_projection import build_session_response_list
 from zerg.services.session_response_projection import derive_summary_status
 

@@ -35,10 +35,10 @@ from zerg.metrics import event_age_at_ingest_seconds
 from zerg.models.device_token import DeviceToken
 from zerg.observability import get_tracer
 from zerg.observability import set_span_attributes
+from zerg.services.agents import AgentsStore
+from zerg.services.agents import IngestResult
+from zerg.services.agents import SessionIngest
 from zerg.services.agents.store import is_workflow_journal_only_payload
-from zerg.services.agents_store import AgentsStore
-from zerg.services.agents_store import IngestResult
-from zerg.services.agents_store import SessionIngest
 from zerg.services.session_views import IngestResponse
 
 logger = logging.getLogger(__name__)

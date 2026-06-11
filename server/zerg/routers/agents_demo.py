@@ -15,7 +15,7 @@ from zerg.config import get_settings
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.services.agents_store import AgentsStore
+from zerg.services.agents import AgentsStore
 from zerg.services.demo_seed import delete_demo_sessions
 from zerg.services.demo_seed import seed_missing_demo_sessions
 from zerg.services.session_views import CleanupRequest

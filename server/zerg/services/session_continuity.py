@@ -123,7 +123,7 @@ def _export_session_from_db(session_id: str, db: Session) -> tuple[bytes, str, s
     except ValueError as exc:
         raise ValueError(f"Invalid session id: {session_id}") from exc
 
-    from zerg.services.agents_store import AgentsStore
+    from zerg.services.agents import AgentsStore
 
     result = AgentsStore(db).export_session_jsonl(session_uuid, branch_mode="head")
     if not result:
@@ -406,8 +406,8 @@ async def ship_session_to_zerg(
 
     try:
         if db is not None:
-            from zerg.services.agents_store import AgentsStore
-            from zerg.services.agents_store import SessionIngest
+            from zerg.services.agents import AgentsStore
+            from zerg.services.agents import SessionIngest
 
             result = AgentsStore(db).ingest_session(SessionIngest.model_validate(payload))
             logger.info(

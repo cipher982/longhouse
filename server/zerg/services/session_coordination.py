@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionMessage
-from zerg.services.agents_store import AgentsStore
+from zerg.services.agents import AgentsStore
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_messages import MESSAGE_STATUS_DELIVERING
 from zerg.services.session_messages import MESSAGE_STATUS_FAILED

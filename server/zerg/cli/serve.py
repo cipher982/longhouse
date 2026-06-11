@@ -332,7 +332,7 @@ def _build_demo_db(db_path: Path) -> None:
 
     from zerg.database import Base
     from zerg.database import make_engine
-    from zerg.services.agents_store import AgentsStore
+    from zerg.services.agents import AgentsStore
     from zerg.services.demo_sessions import build_demo_agent_sessions
 
     db_url = f"sqlite:///{db_path}"

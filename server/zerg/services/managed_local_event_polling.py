@@ -15,7 +15,7 @@ from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.orm import Session as SQLAlchemySession
 
 from zerg.models.agents import AgentEvent
-from zerg.services.agents_store import AgentsStore
+from zerg.services.agents import AgentsStore
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_turns import get_session_turn_snapshot

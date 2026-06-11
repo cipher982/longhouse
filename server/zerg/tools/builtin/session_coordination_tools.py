@@ -16,7 +16,7 @@ from pydantic import Field
 
 from zerg.database import db_session
 from zerg.models.agents import AgentSession
-from zerg.services.agents_store import AgentsStore
+from zerg.services.agents import AgentsStore
 from zerg.services.session_coordination import acknowledge_session_message as acknowledge_session_message_for_session
 from zerg.services.session_coordination import build_peer_payloads
 from zerg.services.session_coordination import list_session_messages

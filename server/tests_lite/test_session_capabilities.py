@@ -38,7 +38,7 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeState
-from zerg.services.agents_store import AgentsStore
+from zerg.services.agents import AgentsStore
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.session_current_control import current_session_capabilities
 from zerg.services.session_liveness_facts import ActivityObservation

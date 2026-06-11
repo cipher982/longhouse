@@ -42,9 +42,9 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
-from zerg.services.agents_store import AgentsStore
-from zerg.services.agents_store import EventIngest
-from zerg.services.agents_store import SessionIngest
+from zerg.services.agents import AgentsStore
+from zerg.services.agents import EventIngest
+from zerg.services.agents import SessionIngest
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_runtime import phase_freshness_ms

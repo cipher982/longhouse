@@ -14,7 +14,7 @@ from datetime import timezone
 from sqlalchemy.orm import Session
 
 from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
-from zerg.services.agents_store import AgentsStore
+from zerg.services.agents import AgentsStore
 from zerg.services.session_hybrid_search import list_hybrid_sessions
 from zerg.services.session_listing_types import SessionListingError
 from zerg.services.session_listing_types import SessionListParams

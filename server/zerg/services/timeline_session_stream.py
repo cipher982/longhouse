@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 
 from zerg.models.agents import SessionLivePreview
-from zerg.services.agents_store import AgentsStore
+from zerg.services.agents import AgentsStore
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_pubsub import TOPIC_TIMELINE
 from zerg.services.session_pubsub import PubsubMessage

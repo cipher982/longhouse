@@ -23,9 +23,9 @@ from sqlalchemy.orm import sessionmaker
 from zerg.database import Base
 from zerg.database import make_engine
 from zerg.routers.agents_ingest import _ingest_chunk_for_label
-from zerg.services.agents_store import AgentsStore
-from zerg.services.agents_store import EventIngest
-from zerg.services.agents_store import SessionIngest
+from zerg.services.agents import AgentsStore
+from zerg.services.agents import EventIngest
+from zerg.services.agents import SessionIngest
 
 
 def _make_db(tmp_path):
