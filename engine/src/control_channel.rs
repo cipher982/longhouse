@@ -885,6 +885,8 @@ async fn execute_command(
                 .await
                 .map(|output| cli_output_result(output, "antigravity", "antigravity_hook_inbox"));
             }
+            let attachments = crate::codex_attachments::parse_attachments(&payload)
+                .map_err(CommandError::command_failed)?;
             validate_codex_bridge_attached(&session_id, None)
                 .map_err(CommandError::session_not_attached)?;
             let summary = cmd_codex_bridge_send(BridgeSendConfig {
@@ -892,7 +894,7 @@ async fn execute_command(
                 text,
                 state_root: None,
                 allow_direct_ws_fallback: false,
-                attachments: Vec::new(),
+                attachments,
             })
             .await
             .map_err(|err| CommandError::command_failed(err))?;
@@ -975,13 +977,15 @@ async fn execute_command(
                         .to_string(),
                 });
             }
+            let attachments = crate::codex_attachments::parse_attachments(&payload)
+                .map_err(CommandError::command_failed)?;
             validate_codex_bridge_attached(&session_id, None)
                 .map_err(CommandError::session_not_attached)?;
             match cmd_codex_bridge_steer(BridgeSteerConfig {
                 session_id,
                 text,
                 state_root: None,
-                attachments: Vec::new(),
+                attachments,
             })
             .await
             {
@@ -2412,6 +2416,35 @@ mod tests {
         assert_eq!(result["command_id"], "cmd-missing-session");
         assert_eq!(result["ok"], false);
         assert_eq!(result["error"]["code"], "session_not_attached");
+    }
+
+    #[tokio::test]
+    async fn handle_command_frame_rejects_malformed_codex_attachments_before_dispatch() {
+        let mut cache = command_cache();
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-bad-attachments",
+                "session_id": "definitely-missing-control-channel-session",
+                "command_type": COMMAND_SEND_TEXT,
+                "payload": {
+                    "provider": "codex",
+                    "text": "continue",
+                    "attachments": [{"id": "not-a-uuid"}],
+                },
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+
+        assert_eq!(result["command_id"], "cmd-bad-attachments");
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"]["code"], "command_failed");
+        assert!(result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("attachments[0] is not a valid AttachmentRef"));
     }
 
     #[tokio::test]

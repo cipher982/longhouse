@@ -1,12 +1,8 @@
-"""Managed-local transport seam for native-only managed sessions."""
+"""Managed-local attach command planning for native-only managed sessions."""
 
 from __future__ import annotations
 
-import json
 import shlex
-from typing import Any
-from typing import Mapping
-from typing import Sequence
 
 from sqlalchemy.orm import Session
 
@@ -15,10 +11,6 @@ from zerg.services.claude_channel_bridge import build_claude_channel_exec_comman
 from zerg.services.managed_local_shell import build_managed_local_shell_prelude
 from zerg.services.managed_provider_contracts import managed_transport_for_control_plane
 from zerg.session_execution_home import ManagedSessionTransport
-
-
-class ManagedLocalTransportError(ValueError):
-    """Base error for managed-local transport planning."""
 
 
 def _build_engine_bridge_shell_command(
@@ -76,18 +68,6 @@ def _build_longhouse_cli_shell_command(
     return f"zsh -lc {shlex.quote('; '.join(inner_parts))}"
 
 
-def _resolve_transport(value: str | ManagedSessionTransport | None) -> ManagedSessionTransport:
-    if isinstance(value, ManagedSessionTransport):
-        return value
-    raw = str(value or "").strip()
-    if not raw:
-        raise ManagedLocalTransportError("Managed local session is missing transport metadata")
-    try:
-        return ManagedSessionTransport(raw)
-    except ValueError as exc:
-        raise ManagedLocalTransportError(f"Unsupported managed local transport: {raw}") from exc
-
-
 def build_managed_local_attach_command(*, session: AgentSession, db: Session | None = None) -> str | None:
     from sqlalchemy.orm import object_session
 
@@ -100,9 +80,8 @@ def build_managed_local_attach_command(*, session: AgentSession, db: Session | N
         session_db = None
     session_id = str(session.id)
 
-    # Resolve transport: prefer kernel projection when a DB is available,
-    # else fall back to session.managed_transport attribute (used by unit
-    # tests that build SimpleNamespace fixtures).
+    # Resolve transport from the kernel projection when a DB is available.
+    # Minimal non-ORM fixtures provide session.managed_transport directly.
     if session_db is not None:
         caps = project_session_capabilities(session_db, session_id=session.id)
         if not caps.host_reattach_available:
@@ -175,252 +154,6 @@ def build_managed_local_attach_command(*, session: AgentSession, db: Session | N
     )
 
 
-def build_managed_local_interrupt_command(*, session: AgentSession) -> str:
-    """Build a command to interrupt the active turn on a managed-local session."""
-    transport = _resolve_transport(getattr(session, "managed_transport", None))
-    session_id = str(getattr(session, "id", "") or "").strip()
-    if not session_id:
-        raise ManagedLocalTransportError("Managed local session is missing session ID")
-    if transport == ManagedSessionTransport.OPENCODE_SERVER_BRIDGE:
-        return _build_longhouse_cli_shell_command(
-            command_group="opencode-channel",
-            subcommand="interrupt",
-            args=("--session-id", shlex.quote(session_id)),
-        )
-    if transport == ManagedSessionTransport.ANTIGRAVITY_HOOK_INBOX:
-        raise ManagedLocalTransportError("antigravity_hook_inbox does not support remote interrupts yet")
-    if transport == ManagedSessionTransport.ANTIGRAVITY_PROCESS:
-        raise ManagedLocalTransportError("antigravity_process does not support remote interrupts yet")
-    if transport == ManagedSessionTransport.CODEX_APP_SERVER:
-        return _build_engine_bridge_shell_command(
-            session_id=session_id,
-            subcommand="interrupt",
-        )
-    if transport == ManagedSessionTransport.OPENCODE_PROCESS:
-        return _build_longhouse_cli_shell_command(
-            subcommand="interrupt",
-            args=("--session-id", shlex.quote(session_id)),
-            namespace="opencode-bridge",
-        )
-    return _build_longhouse_cli_shell_command(
-        subcommand="interrupt",
-        args=("--session-id", shlex.quote(session_id)),
-    )
-
-
-def _attachment_args(
-    attachments: Sequence[Mapping[str, Any]] | None,
-    *,
-    transport: ManagedSessionTransport,
-) -> tuple[str, ...]:
-    """Serialize attachment refs into `--attachments-json <json>` for the
-    engine codex-bridge subprocess. Returns empty tuple when there are no
-    attachments so text-only sends keep their previous shape.
-
-    Only the codex_app_server transport supports attachments today; for any
-    other transport, a non-empty list is a hard error rather than a silent
-    drop.
-    """
-    if not attachments:
-        return ()
-    if transport != ManagedSessionTransport.CODEX_APP_SERVER:
-        raise ManagedLocalTransportError(
-            "Attachments are only supported on codex_app_server transports",
-        )
-    payload = json.dumps(list(attachments), separators=(",", ":"))
-    return ("--attachments-json", shlex.quote(payload))
-
-
-def build_managed_local_send_text_command(
-    *,
-    session: AgentSession,
-    text: str,
-    attachments: Sequence[Mapping[str, Any]] | None = None,
-) -> str:
-    transport = _resolve_transport(getattr(session, "managed_transport", None))
-    session_id = str(getattr(session, "id", "") or "").strip()
-    if not session_id:
-        raise ManagedLocalTransportError("Managed local session is missing session ID")
-    if transport == ManagedSessionTransport.OPENCODE_SERVER_BRIDGE:
-        if attachments:
-            raise ManagedLocalTransportError(
-                "Attachments are only supported on codex_app_server transports",
-            )
-        return _build_longhouse_cli_shell_command(
-            command_group="opencode-channel",
-            subcommand="send",
-            args=("--session-id", shlex.quote(session_id), "--text", shlex.quote(text)),
-        )
-    if transport == ManagedSessionTransport.ANTIGRAVITY_HOOK_INBOX:
-        if attachments:
-            raise ManagedLocalTransportError(
-                "Attachments are only supported on codex_app_server transports",
-            )
-        return _build_longhouse_cli_shell_command(
-            command_group="antigravity-channel",
-            subcommand="send",
-            args=("--session-id", shlex.quote(session_id), "--text", shlex.quote(text)),
-        )
-    if transport == ManagedSessionTransport.ANTIGRAVITY_PROCESS:
-        raise ManagedLocalTransportError("antigravity_process does not support remote text sends yet")
-    attach_args = _attachment_args(attachments, transport=transport)
-    if transport == ManagedSessionTransport.CODEX_APP_SERVER:
-        return _build_engine_bridge_shell_command(
-            session_id=session_id,
-            subcommand="send",
-            args=("--text", shlex.quote(text), *attach_args),
-        )
-    if transport == ManagedSessionTransport.OPENCODE_PROCESS:
-        return _build_longhouse_cli_shell_command(
-            subcommand="send",
-            args=("--session-id", shlex.quote(session_id), "--text", shlex.quote(text)),
-            namespace="opencode-bridge",
-        )
-    return _build_longhouse_cli_shell_command(
-        subcommand="send",
-        args=("--session-id", shlex.quote(session_id), "--text", shlex.quote(text)),
-    )
-
-
-def build_managed_local_steer_text_command(
-    *,
-    session: AgentSession,
-    text: str,
-    attachments: Sequence[Mapping[str, Any]] | None = None,
-) -> str:
-    """Build a mid-turn steer command.
-
-    Supported on codex_app_server (engine codex-bridge) and
-    claude_channel_bridge (channel send with intent=steer metadata).
-    """
-    transport = _resolve_transport(getattr(session, "managed_transport", None))
-    if transport == ManagedSessionTransport.OPENCODE_SERVER_BRIDGE:
-        raise ManagedLocalTransportError("Mid-turn steer is not supported on opencode_server_bridge transports")
-    if transport == ManagedSessionTransport.OPENCODE_PROCESS:
-        raise ManagedLocalTransportError("Mid-turn steer is not supported on opencode_process transports")
-    if transport == ManagedSessionTransport.ANTIGRAVITY_HOOK_INBOX:
-        raise ManagedLocalTransportError("Mid-turn steer is not supported on antigravity_hook_inbox transports")
-    if transport == ManagedSessionTransport.ANTIGRAVITY_PROCESS:
-        raise ManagedLocalTransportError("Mid-turn steer is not supported on antigravity_process transports")
-    session_id = str(getattr(session, "id", "") or "").strip()
-    if not session_id:
-        raise ManagedLocalTransportError("Managed local session is missing session ID")
-    attach_args = _attachment_args(attachments, transport=transport)
-    if transport == ManagedSessionTransport.CODEX_APP_SERVER:
-        return _build_engine_bridge_shell_command(
-            session_id=session_id,
-            subcommand="steer",
-            args=("--text", shlex.quote(text), *attach_args),
-        )
-    if transport == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE:
-        return _build_longhouse_cli_shell_command(
-            subcommand="send",
-            args=("--session-id", shlex.quote(session_id), "--text", shlex.quote(text), "--meta", "intent=steer"),
-        )
-    raise ManagedLocalTransportError(
-        f"Mid-turn steer is not supported on {transport.value} transports",
-    )
-
-
-def build_managed_local_pause_response_command(
-    *,
-    session: AgentSession,
-    request_key: str,
-    decision: str = "answer",
-    answers: Mapping[str, Any] | None = None,
-    content: Any | None = None,
-    message: str | None = None,
-) -> str:
-    """Build a provider-native response command for a held pause request."""
-
-    transport = _resolve_transport(getattr(session, "managed_transport", None))
-    session_id = str(getattr(session, "id", "") or "").strip()
-    if not session_id:
-        raise ManagedLocalTransportError("Managed local session is missing session ID")
-    if transport == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE:
-        response_text = _pause_response_text(
-            decision=decision,
-            answers=answers,
-            content=content,
-            message=message,
-        )
-        if not response_text:
-            raise ManagedLocalTransportError("Claude pause responses require a non-empty answer message")
-        return _build_longhouse_cli_shell_command(
-            subcommand="send",
-            args=(
-                "--session-id",
-                shlex.quote(session_id),
-                "--text",
-                shlex.quote(response_text),
-                "--meta",
-                "intent=pause_response",
-                "--meta",
-                f"request_key={shlex.quote(request_key)}",
-                "--meta",
-                f"decision={shlex.quote(decision or 'answer')}",
-            ),
-        )
-    if transport != ManagedSessionTransport.CODEX_APP_SERVER:
-        raise ManagedLocalTransportError(
-            f"Remote pause responses are not supported on {transport.value} transports",
-        )
-    args: list[str] = [
-        "--request-key",
-        shlex.quote(request_key),
-        "--decision",
-        shlex.quote(decision or "answer"),
-    ]
-    if answers is not None:
-        args.extend(("--answers-json", shlex.quote(json.dumps(answers, separators=(",", ":")))))
-    if content is not None:
-        args.extend(("--content-json", shlex.quote(json.dumps(content, separators=(",", ":")))))
-    if message:
-        args.extend(("--message", shlex.quote(message)))
-    args.append("--json")
-    return _build_engine_bridge_shell_command(
-        session_id=session_id,
-        subcommand="pause-response",
-        args=tuple(args),
-    )
-
-
-def _pause_response_text(
-    *,
-    decision: str,
-    answers: Mapping[str, Any] | None,
-    content: Any | None,
-    message: str | None,
-) -> str:
-    explicit = str(message or "").strip()
-    if explicit:
-        return explicit
-    if content is not None:
-        cleaned = str(content).strip()
-        if cleaned:
-            return cleaned
-    parts: list[str] = []
-    for key, value in dict(answers or {}).items():
-        label = str(key or "").strip()
-        if isinstance(value, (list, tuple, set)):
-            values = [str(item).strip() for item in value if str(item).strip()]
-        else:
-            values = [str(value).strip()] if str(value).strip() else []
-        if not label or not values:
-            continue
-        parts.append(f"{label}: {', '.join(values)}")
-    if parts:
-        return "; ".join(parts)
-    if str(decision or "").strip().lower() in {"cancel", "reject"}:
-        return "Cancelled in Longhouse."
-    return ""
-
-
 __all__ = [
-    "ManagedLocalTransportError",
     "build_managed_local_attach_command",
-    "build_managed_local_interrupt_command",
-    "build_managed_local_pause_response_command",
-    "build_managed_local_send_text_command",
-    "build_managed_local_steer_text_command",
 ]

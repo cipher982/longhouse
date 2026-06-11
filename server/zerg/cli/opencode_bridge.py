@@ -2,10 +2,9 @@
 
 Longhouse owns ``opencode serve`` (see ``zerg.cli.opencode``) and writes a
 bridge state file that captures the live URL + Basic-Auth password. This
-CLI is the corresponding seam consumed by the managed-local transport
-(see ``zerg.services.managed_local_transport``) so browser / iOS / MCP
-send-text / interrupt / steer flows can drive a managed OpenCode session
-without re-discovery.
+CLI is the corresponding seam consumed by the Machine Agent control
+channel so browser / iOS / MCP send-text / interrupt flows can drive a
+managed OpenCode session without re-discovery.
 
 Endpoints used (from the upstream ``opencode`` server):
 

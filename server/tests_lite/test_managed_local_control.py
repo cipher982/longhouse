@@ -87,8 +87,6 @@ def _seed_user_runner_and_session(db, *, provider: str = "claude"):
         tool_calls=0,
         execution_home="managed_local",
         managed_transport=_managed_transport_for_provider(provider),
-        source_runner_id=runner.id,
-        source_runner_name=runner.name,
         managed_session_name="lh-zerg-managed-local",
         loop_mode="assist",
     )
@@ -182,40 +180,50 @@ def _materialize_hook_runtime_state(
     return _hook_observation_record(db, event=event)
 
 
-class _FakeDispatcher:
-    def __init__(self):
+class _FakeControlDispatch:
+    def __init__(self, results: list[dict[str, object]] | None = None):
         self.calls: list[dict[str, object]] = []
-        self.results: deque[dict[str, object]] | None = None
+        self.results: deque[dict[str, object]] = deque(results or [])
 
-    async def dispatch_job(self, *, db, owner_id, runner_id, command, timeout_secs, commis_id, run_id):
-        self.calls.append(
-            {
-                "owner_id": owner_id,
-                "runner_id": runner_id,
-                "command": command,
-                "timeout_secs": timeout_secs,
-                "commis_id": commis_id,
-            }
-        )
+    async def __call__(self, **kwargs):
+        self.calls.append(kwargs)
         if self.results:
-            return self.results.popleft()
-        return {
-            "ok": True,
-            "data": {
+            return SimpleNamespace(**self.results.popleft())
+        return SimpleNamespace(
+            ok=True,
+            transport="engine_channel",
+            data={
                 "exit_code": 0,
                 "stdout": "",
                 "stderr": "",
             },
-        }
+            error=None,
+        )
+
+
+def _install_fake_control_dispatch(
+    monkeypatch,
+    *,
+    results: list[dict[str, object]] | None = None,
+) -> _FakeControlDispatch:
+    dispatcher = _FakeControlDispatch(results=results)
+    monkeypatch.setattr(
+        "zerg.services.managed_local_control._managed_control_transport_error",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "zerg.services.managed_local_control.dispatch_managed_control_command",
+        dispatcher,
+    )
+    return dispatcher
 
 
 def test_send_text_to_managed_local_session_returns_baseline_event_id_for_claude(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
-    dispatcher = _FakeDispatcher()
-    monkeypatch.setattr("zerg.services.managed_control_dispatcher.get_runner_job_dispatcher", lambda: dispatcher)
+    dispatcher = _install_fake_control_dispatch(monkeypatch)
 
     with SessionLocal() as db:
-        user, runner, session = _seed_user_runner_and_session(db, provider="claude")
+        user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
         existing_event = AgentEvent(
             session_id=session.id,
             role="assistant",
@@ -238,20 +246,17 @@ def test_send_text_to_managed_local_session_returns_baseline_event_id_for_claude
         assert result.baseline_event_id == existing_event.id
 
         assert len(dispatcher.calls) == 1
-        assert dispatcher.calls[0]["runner_id"] == runner.id
         assert dispatcher.calls[0]["commis_id"] == "managed-local-control-test"
-        command = str(dispatcher.calls[0]["command"])
-        assert "exec longhouse claude-channel send --session-id" in command
-        assert "--text continue" in command
+        assert dispatcher.calls[0]["command_type"] == "session.send_text"
+        assert dispatcher.calls[0]["payload"] == {"text": "continue"}
 
 
 def test_interrupt_managed_local_session_uses_claude_channel_command(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
-    dispatcher = _FakeDispatcher()
-    monkeypatch.setattr("zerg.services.managed_control_dispatcher.get_runner_job_dispatcher", lambda: dispatcher)
+    dispatcher = _install_fake_control_dispatch(monkeypatch)
 
     with SessionLocal() as db:
-        user, runner, session = _seed_user_runner_and_session(db, provider="claude")
+        user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
 
         result = asyncio.run(
             interrupt_managed_local_session(
@@ -265,20 +270,17 @@ def test_interrupt_managed_local_session_uses_claude_channel_command(monkeypatch
         assert result.ok is True
         assert result.exit_code == 0
         assert len(dispatcher.calls) == 1
-        assert dispatcher.calls[0]["runner_id"] == runner.id
         assert dispatcher.calls[0]["commis_id"] == "managed-local-interrupt-test"
-        command = str(dispatcher.calls[0]["command"])
-        assert "exec longhouse claude-channel interrupt --session-id" in command
-        assert str(session.id) in command
+        assert dispatcher.calls[0]["command_type"] == "session.interrupt"
+        assert dispatcher.calls[0]["payload"] == {}
 
 
 def test_interrupt_managed_local_session_uses_codex_bridge_command(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
-    dispatcher = _FakeDispatcher()
-    monkeypatch.setattr("zerg.services.managed_control_dispatcher.get_runner_job_dispatcher", lambda: dispatcher)
+    dispatcher = _install_fake_control_dispatch(monkeypatch)
 
     with SessionLocal() as db:
-        user, runner, session = _seed_user_runner_and_session(db, provider="codex")
+        user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
 
         result = asyncio.run(
             interrupt_managed_local_session(
@@ -292,19 +294,16 @@ def test_interrupt_managed_local_session_uses_codex_bridge_command(monkeypatch, 
         assert result.ok is True
         assert result.exit_code == 0
         assert len(dispatcher.calls) == 1
-        assert dispatcher.calls[0]["runner_id"] == runner.id
-        command = str(dispatcher.calls[0]["command"])
-        assert "codex-bridge interrupt --session-id" in command
-        assert str(session.id) in command
+        assert dispatcher.calls[0]["command_type"] == "session.interrupt"
+        assert dispatcher.calls[0]["payload"] == {}
 
 
 def test_steer_text_to_managed_local_session_uses_claude_channel_command(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
-    dispatcher = _FakeDispatcher()
-    monkeypatch.setattr("zerg.services.managed_control_dispatcher.get_runner_job_dispatcher", lambda: dispatcher)
+    dispatcher = _install_fake_control_dispatch(monkeypatch)
 
     with SessionLocal() as db:
-        user, runner, session = _seed_user_runner_and_session(db, provider="claude")
+        user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
 
         result = asyncio.run(
             steer_text_to_managed_local_session(
@@ -319,30 +318,24 @@ def test_steer_text_to_managed_local_session_uses_claude_channel_command(monkeyp
         assert result.ok is True
         assert result.exit_code == 0
         assert len(dispatcher.calls) == 1
-        assert dispatcher.calls[0]["runner_id"] == runner.id
         assert dispatcher.calls[0]["commis_id"] == "managed-local-steer-test"
-        command = str(dispatcher.calls[0]["command"])
-        assert "exec longhouse claude-channel send --session-id" in command
-        assert "--text redirect" in command
-        assert "--meta intent=steer" in command
+        assert dispatcher.calls[0]["command_type"] == "session.steer_text"
+        assert dispatcher.calls[0]["payload"] == {"text": "redirect", "intent": "steer"}
 
 
 def test_interrupt_managed_local_session_reports_nonzero_exit(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
-    dispatcher = _FakeDispatcher()
-    dispatcher.results = deque(
-        [
+    _install_fake_control_dispatch(
+        monkeypatch,
+        results=[
             {
                 "ok": True,
-                "data": {
-                    "exit_code": 7,
-                    "stdout": "",
-                    "stderr": "interrupt failed",
-                },
+                "transport": "engine_channel",
+                "data": {"exit_code": 7, "stdout": "", "stderr": "interrupt failed"},
+                "error": None,
             }
-        ]
+        ],
     )
-    monkeypatch.setattr("zerg.services.managed_control_dispatcher.get_runner_job_dispatcher", lambda: dispatcher)
 
     with SessionLocal() as db:
         user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
@@ -405,13 +398,12 @@ def test_await_managed_local_turn_events_returns_new_persisted_events(tmp_path):
         assert [event.content_text for event in events] == ["after"]
 
 
-def test_send_text_to_managed_local_session_uses_engine_bridge_for_codex(monkeypatch, tmp_path):
+def test_send_text_to_managed_local_session_uses_engine_payload_for_codex(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
-    dispatcher = _FakeDispatcher()
-    monkeypatch.setattr("zerg.services.managed_control_dispatcher.get_runner_job_dispatcher", lambda: dispatcher)
+    dispatcher = _install_fake_control_dispatch(monkeypatch)
 
     with SessionLocal() as db:
-        user, runner, session = _seed_user_runner_and_session(db, provider="codex")
+        user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
 
         result = asyncio.run(
             send_text_to_managed_local_session(
@@ -424,20 +416,74 @@ def test_send_text_to_managed_local_session_uses_engine_bridge_for_codex(monkeyp
 
         assert result.ok is True
         assert len(dispatcher.calls) == 1
-        assert dispatcher.calls[0]["runner_id"] == runner.id
-        command = str(dispatcher.calls[0]["command"])
-        assert 'engine="$(command -v longhouse-engine || true)"' in command
-        assert '"$engine" codex-bridge send --session-id' in command
-        assert "--text continue" in command
+        assert dispatcher.calls[0]["command_type"] == "session.send_text"
+        assert dispatcher.calls[0]["payload"] == {"text": "continue"}
+
+
+def test_send_text_to_managed_local_session_passes_codex_attachments_to_engine(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    dispatcher = _install_fake_control_dispatch(monkeypatch)
+    refs = [
+        {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "mime_type": "image/png",
+            "sha256": "a" * 64,
+            "blob_url": "/api/agents/sessions/session-123/inputs/1/attachments/11111111-1111-1111-1111-111111111111/blob",
+        }
+    ]
+
+    with SessionLocal() as db:
+        user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
+
+        result = asyncio.run(
+            send_text_to_managed_local_session(
+                db=db,
+                owner_id=user.id,
+                session=session,
+                text="continue",
+                attachments=refs,
+            )
+        )
+
+        assert result.ok is True
+        assert dispatcher.calls[0]["payload"] == {"text": "continue", "attachments": refs}
+
+
+def test_send_text_to_managed_local_session_rejects_attachments_for_claude(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    dispatcher = _install_fake_control_dispatch(monkeypatch)
+
+    with SessionLocal() as db:
+        user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
+
+        result = asyncio.run(
+            send_text_to_managed_local_session(
+                db=db,
+                owner_id=user.id,
+                session=session,
+                text="continue",
+                attachments=[
+                    {
+                        "id": "11111111-1111-1111-1111-111111111111",
+                        "mime_type": "image/png",
+                        "sha256": "a" * 64,
+                        "blob_url": "/api/agents/sessions/session-123/inputs/1/attachments/11111111-1111-1111-1111-111111111111/blob",
+                    }
+                ],
+            )
+        )
+
+        assert result.ok is False
+        assert result.error == "Attachments are only supported on codex managed sessions"
+        assert dispatcher.calls == []
 
 
 def test_send_text_to_managed_local_session_supports_repeated_claude_sends(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
-    dispatcher = _FakeDispatcher()
-    monkeypatch.setattr("zerg.services.managed_control_dispatcher.get_runner_job_dispatcher", lambda: dispatcher)
+    dispatcher = _install_fake_control_dispatch(monkeypatch)
 
     with SessionLocal() as db:
-        user, runner, session = _seed_user_runner_and_session(db, provider="claude")
+        user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
 
         first = asyncio.run(
             send_text_to_managed_local_session(
@@ -461,16 +507,10 @@ def test_send_text_to_managed_local_session_supports_repeated_claude_sends(monke
         assert first.ok is True
         assert second.ok is True
         assert len(dispatcher.calls) == 2
-        assert dispatcher.calls[0]["runner_id"] == runner.id
-        assert dispatcher.calls[1]["runner_id"] == runner.id
         assert dispatcher.calls[0]["commis_id"] == "managed-local-control-first"
         assert dispatcher.calls[1]["commis_id"] == "managed-local-control-second"
-        first_command = str(dispatcher.calls[0]["command"])
-        second_command = str(dispatcher.calls[1]["command"])
-        assert "exec longhouse claude-channel send --session-id" in first_command
-        assert "continue alpha" in first_command
-        assert "exec longhouse claude-channel send --session-id" in second_command
-        assert "status? [ok]" in second_command
+        assert dispatcher.calls[0]["payload"] == {"text": "continue alpha"}
+        assert dispatcher.calls[1]["payload"] == {"text": "status? [ok]"}
 
 
 def test_await_managed_local_hook_phase_update_ignores_stale_active_event_inserted_after_cursor(tmp_path):
@@ -563,13 +603,12 @@ def test_await_managed_local_hook_phase_update_accepts_codex_bridge_phase_source
         assert result.source == "codex_bridge"
 
 
-def test_send_text_to_managed_local_session_uses_claude_channel_bridge_command(monkeypatch, tmp_path):
+def test_send_text_to_managed_local_session_uses_claude_channel_bridge_payload(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
-    dispatcher = _FakeDispatcher()
-    monkeypatch.setattr("zerg.services.managed_control_dispatcher.get_runner_job_dispatcher", lambda: dispatcher)
+    dispatcher = _install_fake_control_dispatch(monkeypatch)
 
     with SessionLocal() as db:
-        user, runner, session = _seed_user_runner_and_session(db, provider="claude")
+        user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
         db.commit()
 
         result = asyncio.run(
@@ -584,12 +623,9 @@ def test_send_text_to_managed_local_session_uses_claude_channel_bridge_command(m
 
         assert result.ok is True
         assert len(dispatcher.calls) == 1
-        assert dispatcher.calls[0]["runner_id"] == runner.id
         assert dispatcher.calls[0]["commis_id"] == "managed-local-claude-channel"
-        command = str(dispatcher.calls[0]["command"])
-        assert "exec longhouse claude-channel send --session-id" in command
-        assert "--text" in command
-        assert "continue from loop" in command
+        assert dispatcher.calls[0]["command_type"] == "session.send_text"
+        assert dispatcher.calls[0]["payload"] == {"text": "continue from loop"}
 
 
 def test_send_text_to_managed_local_session_trusts_engine_turn_start_ack(monkeypatch, tmp_path):
@@ -705,8 +741,7 @@ def test_validate_managed_local_chat_done_payload_rejects_nonzero_exit_code():
 
 def test_send_text_to_managed_local_session_can_require_active_hook_phase_for_codex(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
-    dispatcher = _FakeDispatcher()
-    monkeypatch.setattr("zerg.services.managed_control_dispatcher.get_runner_job_dispatcher", lambda: dispatcher)
+    _install_fake_control_dispatch(monkeypatch)
 
     async def _fake_wait_for_hook_phase(
         *,
@@ -734,7 +769,7 @@ def test_send_text_to_managed_local_session_can_require_active_hook_phase_for_co
     )
 
     with SessionLocal() as db:
-        user, runner, session = _seed_user_runner_and_session(db, provider="codex")
+        user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
 
         result = asyncio.run(
             send_text_to_managed_local_session(
@@ -756,8 +791,7 @@ def test_send_text_to_managed_local_session_reports_codex_verification_failure_w
     monkeypatch, tmp_path
 ):
     SessionLocal = _make_db(tmp_path)
-    dispatcher = _FakeDispatcher()
-    monkeypatch.setattr("zerg.services.managed_control_dispatcher.get_runner_job_dispatcher", lambda: dispatcher)
+    _install_fake_control_dispatch(monkeypatch)
 
     async def _fake_wait_for_hook_phase(**_kwargs):
         return None
@@ -789,8 +823,7 @@ def test_send_text_to_managed_local_session_reports_codex_verification_failure_w
 
 def test_send_text_to_managed_local_session_verifies_codex_via_hook_activity(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
-    dispatcher = _FakeDispatcher()
-    monkeypatch.setattr("zerg.services.managed_control_dispatcher.get_runner_job_dispatcher", lambda: dispatcher)
+    _install_fake_control_dispatch(monkeypatch)
 
     async def _fake_wait_for_hook_phase(
         *,
@@ -838,8 +871,7 @@ def test_send_text_to_managed_local_session_verifies_codex_via_hook_activity(mon
 
 def test_send_text_to_managed_local_session_reports_codex_hook_verification_failure(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
-    dispatcher = _FakeDispatcher()
-    monkeypatch.setattr("zerg.services.managed_control_dispatcher.get_runner_job_dispatcher", lambda: dispatcher)
+    _install_fake_control_dispatch(monkeypatch)
 
     async def _fake_wait_for_hook_phase(**_kwargs):
         return None
@@ -1061,8 +1093,7 @@ def test_await_managed_local_turn_terminal_ignores_stale_terminal_inserted_after
 def test_send_text_to_managed_local_session_verifies_claude_channel_bridge_via_persisted_prompt(monkeypatch, tmp_path):
     """Native Claude channel sends verify against the persisted user prompt, not hook phases."""
     SessionLocal = _make_db(tmp_path)
-    dispatcher = _FakeDispatcher()
-    monkeypatch.setattr("zerg.services.managed_control_dispatcher.get_runner_job_dispatcher", lambda: dispatcher)
+    dispatcher = _install_fake_control_dispatch(monkeypatch)
     persisted_user_event = AgentEvent(
         id=123,
         session_id=uuid4(),
@@ -1082,7 +1113,7 @@ def test_send_text_to_managed_local_session_verifies_claude_channel_bridge_via_p
     )
 
     with SessionLocal() as db:
-        user, runner, session = _seed_user_runner_and_session(db, provider="claude")
+        user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
         session.managed_transport = ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
         # Session-identity-kernel cleanup: ``provider_session_id`` is no
         # longer settable on AgentSession; it derives from session.id.
@@ -1108,8 +1139,7 @@ def test_send_text_to_managed_local_session_verifies_claude_channel_bridge_via_p
 
 def test_send_text_to_managed_local_session_reports_claude_channel_verification_failure(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
-    dispatcher = _FakeDispatcher()
-    monkeypatch.setattr("zerg.services.managed_control_dispatcher.get_runner_job_dispatcher", lambda: dispatcher)
+    _install_fake_control_dispatch(monkeypatch)
     monkeypatch.setattr(
         "zerg.services.managed_local_control.await_managed_local_persisted_user_prompt",
         lambda **_kwargs: asyncio.sleep(0, result=None),

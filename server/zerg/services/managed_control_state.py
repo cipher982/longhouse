@@ -1,9 +1,8 @@
 """Managed-session control liveness projection.
 
-Post-kernel cleanup: the legacy ``ManagedSessionControlState`` table is
-gone. Control liveness is derived from ``SessionConnection`` rows owned by
-the kernel projection. This module keeps a small overlay shape so existing
-callers don't have to rewrite every projection at once.
+Control liveness is derived from ``SessionConnection`` rows owned by the
+kernel projection and exposed as the overlay shape consumed by session
+views.
 """
 
 from __future__ import annotations
@@ -29,7 +28,7 @@ from zerg.utils.time import normalize_utc
 
 CONTROL_SOURCE_HEARTBEAT = "machine_heartbeat"
 CONTROL_SOURCE_ENGINE_CHANNEL = "machine_control_ws"
-CONTROL_SOURCE_LEGACY_RUNNER = "legacy_runner"
+CONTROL_SOURCE_RUNNER_CONNECTION = "runner_connection"
 DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS = 15 * 60 * 1000
 DISABLE_MISSING_MANAGED_LEASE_DETACH_ENV = "LONGHOUSE_DISABLE_MISSING_MANAGED_LEASE_DETACH"
 _CONTROL_READY_BRIDGE_STATUSES = {"ready", "healthy", ""}

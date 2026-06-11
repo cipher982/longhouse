@@ -39,8 +39,6 @@ pub struct AttachmentRef {
 /// Outcome of fetching one attachment to disk.
 #[derive(Debug, Clone)]
 pub struct FetchedAttachment {
-    pub id: String,
-    pub mime_type: String,
     pub path: PathBuf,
     pub bytes: usize,
 }
@@ -218,8 +216,6 @@ pub async fn fetch_one(
     );
 
     Ok(FetchedAttachment {
-        id: attachment.id.clone(),
-        mime_type: attachment.mime_type.clone(),
         path,
         bytes: bytes.len(),
     })
@@ -496,14 +492,10 @@ mod tests {
     fn build_user_input_orders_images_before_text() {
         let fetched = vec![
             FetchedAttachment {
-                id: "1".into(),
-                mime_type: "image/png".into(),
                 path: PathBuf::from("/tmp/a.png"),
                 bytes: 10,
             },
             FetchedAttachment {
-                id: "2".into(),
-                mime_type: "image/jpeg".into(),
                 path: PathBuf::from("/tmp/b.jpg"),
                 bytes: 20,
             },
@@ -528,8 +520,6 @@ mod tests {
     #[test]
     fn build_user_input_emits_empty_text_when_only_images() {
         let fetched = vec![FetchedAttachment {
-            id: "1".into(),
-            mime_type: "image/png".into(),
             path: PathBuf::from("/tmp/a.png"),
             bytes: 10,
         }];

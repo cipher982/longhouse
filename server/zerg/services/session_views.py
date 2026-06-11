@@ -31,7 +31,7 @@ from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.agents_store import AgentsStore
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
-from zerg.services.managed_control_state import CONTROL_SOURCE_LEGACY_RUNNER
+from zerg.services.managed_control_state import CONTROL_SOURCE_RUNNER_CONNECTION
 from zerg.services.managed_control_state import engine_channel_control_overlay
 from zerg.services.managed_control_state import live_transport_control_overlay
 from zerg.services.managed_local_transport import build_managed_local_attach_command
@@ -1367,7 +1367,7 @@ def build_session_response(
         if binding_host_state == "online" and control_overlay is None:
             control_overlay = live_transport_control_overlay(
                 session,
-                source=CONTROL_SOURCE_LEGACY_RUNNER,
+                source=CONTROL_SOURCE_RUNNER_CONNECTION,
                 seen_at=current_now,
             )
     elif (
@@ -1375,7 +1375,7 @@ def build_session_response(
         and not binding_host_state
         and capability_flags.control_plane in _TRUSTED_NON_RUNNER_CONTROL_PLANES
     ):
-        # Kernel attests control is live on a non-Runner-backed control plane
+        # Kernel attests control is live on a direct machine control plane
         # (engine channel / direct process). There is no Runner row to consult,
         # so trust the kernel rather than letting an absent binding signal
         # demote the session to "unknown".
@@ -1411,8 +1411,7 @@ def build_session_response(
         binding_terminal_reason=binding_terminal_reason,
         control_overlay=control_overlay,
     )
-    # Session-identity-kernel cleanup: legacy capability re-projection was
-    # removed; the kernel ``capability_flags`` is already the truth.
+    # The kernel ``capability_flags`` is already the truth.
     effective_capability_flags = capability_flags
     effective_launch_attempt = _latest_launch_attempt(store.db, session.id) if launch_attempt is _LAUNCH_ATTEMPT_MISSING else launch_attempt
     launch_lifecycle = project_remote_launch_lifecycle(effective_launch_attempt)
@@ -1599,7 +1598,7 @@ def build_active_session_response(
         if binding_host_state == "online" and control_overlay is None:
             control_overlay = live_transport_control_overlay(
                 session,
-                source=CONTROL_SOURCE_LEGACY_RUNNER,
+                source=CONTROL_SOURCE_RUNNER_CONNECTION,
                 seen_at=current_now,
             )
     runtime_display = build_session_runtime_display_response(
@@ -1620,8 +1619,7 @@ def build_active_session_response(
         control_overlay=control_overlay,
         now=now,
     )
-    # Session-identity-kernel cleanup: legacy capability re-projection was
-    # removed; the kernel ``capability_flags`` is already the truth.
+    # The kernel ``capability_flags`` is already the truth.
     effective_capability_flags = capability_flags
     continue_target = _native_continue_target(store.db, session)
     continue_targets = [continue_target] if continue_target is not None else []

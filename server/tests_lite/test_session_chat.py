@@ -249,7 +249,7 @@ def _mark_runtime_live(db, session, *, phase: str = "idle") -> None:
 def _seed_kernel_session(session_local, *, provider: str, with_kernel_rows: bool, control_plane: str | None = None):
     """Create a real AgentSession with optional kernel rows.
 
-    The kernel projection — not legacy ``execution_home`` columns — drives the
+    The kernel projection — not raw ``execution_home`` columns — drives the
     launch-response gate, so these helper-built sessions exercise the same
     branches the SimpleNamespace placeholders used to.
     """
@@ -475,7 +475,7 @@ def test_managed_local_claude_live_send_requires_live_control(tmp_path):
                 id=source_session_id,
                 provider="claude",
                 environment="Cinder",
-                project="managed-local-fallback",
+                project="managed-local-offline",
                 device_id="cinder",
                 cwd="/tmp",
                 git_repo=None,
@@ -851,15 +851,6 @@ def test_browser_interrupt_live_route_uses_machine_control(
             device_id=device_id,
             supports=[support],
         )
-    )
-
-    class FailingRunnerDispatcher:
-        async def dispatch_job(self, **_kwargs):
-            raise AssertionError(f"{provider} interrupt must use Machine Agent control, not legacy runner dispatch")
-
-    monkeypatch.setattr(
-        "zerg.services.managed_control_dispatcher.get_runner_job_dispatcher",
-        lambda: FailingRunnerDispatcher(),
     )
 
     client, api_app_ref = _make_client(

@@ -1,10 +1,4 @@
-"""Managed-session control dispatch transports.
-
-This seam is intentionally small during the migration off Runner-backed
-control. Provider-specific command construction still lives in
-``managed_local_control``; this module only chooses and invokes the control
-delivery transport.
-"""
+"""Managed-session control dispatch through the Machine Agent channel."""
 
 from __future__ import annotations
 
@@ -18,7 +12,6 @@ from zerg.models.agents import AgentSession
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import machine_control_capability_for_command
-from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.session_execution_home import SessionExecutionHome
 
 MANAGED_CONTROL_COMMAND_INTERRUPT = "session.interrupt"
@@ -26,9 +19,8 @@ MANAGED_CONTROL_COMMAND_SEND_TEXT = "session.send_text"
 MANAGED_CONTROL_COMMAND_STEER_TEXT = "session.steer_text"
 MANAGED_CONTROL_COMMAND_ANSWER_PAUSE = "session.answer_pause"
 MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL = "engine_channel"
-MANAGED_CONTROL_TRANSPORT_LEGACY_RUNNER = "legacy_runner"
 MANAGED_CONTROL_TRANSPORT_NONE = "none"
-MISSING_LEGACY_RUNNER_METADATA_ERROR = "Managed local session is missing source runner metadata"
+MANAGED_CONTROL_UNAVAILABLE_ERROR = "Managed control channel is not connected or does not advertise this capability"
 
 
 @dataclass(frozen=True)
@@ -76,9 +68,8 @@ def select_managed_control_transport(
 ) -> str | None:
     """Return the explicit control transport for a managed session.
 
-    Phase 1 preserves existing behavior: sessions with legacy Runner metadata
-    use Runner-backed dispatch; sessions without it have no remote control
-    transport until the Machine Agent channel lands.
+    Managed-session live control is delivered only through the Machine Agent
+    engine channel. Runner metadata is not a managed-control transport.
     """
 
     if session is None:
@@ -87,20 +78,7 @@ def select_managed_control_transport(
         return None
     if _session_uses_engine_control(session, owner_id=owner_id, command_type=command_type):
         return MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
-    if command_type == MANAGED_CONTROL_COMMAND_ANSWER_PAUSE:
-        return None
-    if getattr(session, "source_runner_id", None) is not None:
-        return MANAGED_CONTROL_TRANSPORT_LEGACY_RUNNER
     return None
-
-
-def _runner_dispatch_error(result: Mapping[str, Any], fallback: str) -> str:
-    error = result.get("error")
-    if isinstance(error, Mapping):
-        return str(error.get("message") or fallback)
-    if error:
-        return str(error)
-    return fallback
 
 
 def _engine_command_id(
@@ -122,15 +100,14 @@ async def dispatch_managed_control_command(
     db: Session,
     owner_id: int,
     session: AgentSession,
-    command: str,
     timeout_secs: int,
     command_type: str | None = None,
     payload: Mapping[str, Any] | None = None,
     commis_id: str | None = None,
     run_id: str | None = None,
-    failure_message: str = "Failed to dispatch managed control command",
 ) -> ManagedControlDispatchResult:
-    """Dispatch one managed-control command through the selected transport."""
+    """Dispatch one managed-control command through the Machine Agent channel."""
+    del db
 
     transport = select_managed_control_transport(session, owner_id=owner_id, command_type=command_type)
     if transport == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL:
@@ -147,56 +124,21 @@ async def dispatch_managed_control_command(
                 run_id=run_id,
             ),
         )
-    if transport != MANAGED_CONTROL_TRANSPORT_LEGACY_RUNNER:
-        return ManagedControlDispatchResult(
-            ok=False,
-            transport=MANAGED_CONTROL_TRANSPORT_NONE,
-            error=MISSING_LEGACY_RUNNER_METADATA_ERROR,
-        )
-
-    runner_id = getattr(session, "source_runner_id", None)
-    if runner_id is None:
-        return ManagedControlDispatchResult(
-            ok=False,
-            transport=MANAGED_CONTROL_TRANSPORT_LEGACY_RUNNER,
-            error=MISSING_LEGACY_RUNNER_METADATA_ERROR,
-        )
-
-    dispatcher = get_runner_job_dispatcher()
-    result = await dispatcher.dispatch_job(
-        db=db,
-        owner_id=owner_id,
-        runner_id=int(runner_id),
-        command=command,
-        timeout_secs=timeout_secs,
-        commis_id=commis_id,
-        run_id=run_id,
-    )
-    if not result.get("ok"):
-        return ManagedControlDispatchResult(
-            ok=False,
-            transport=MANAGED_CONTROL_TRANSPORT_LEGACY_RUNNER,
-            error=_runner_dispatch_error(result, failure_message),
-        )
-
-    data = result.get("data", {})
-    if not isinstance(data, Mapping):
-        data = {}
     return ManagedControlDispatchResult(
-        ok=True,
-        transport=MANAGED_CONTROL_TRANSPORT_LEGACY_RUNNER,
-        data=data,
+        ok=False,
+        transport=MANAGED_CONTROL_TRANSPORT_NONE,
+        error=MANAGED_CONTROL_UNAVAILABLE_ERROR,
     )
 
 
-def _engine_error_message(error: Any, fallback: str) -> tuple[str | None, str]:
+def _engine_error_message(error: Any, default_message: str) -> tuple[str | None, str]:
     if isinstance(error, Mapping):
         code = str(error.get("code") or "").strip() or None
-        message = str(error.get("message") or "").strip() or fallback
+        message = str(error.get("message") or "").strip() or default_message
         return code, message
     if error:
         return None, str(error)
-    return None, fallback
+    return None, default_message
 
 
 def _engine_command_result_data(message: Mapping[str, Any]) -> Mapping[str, Any] | None:

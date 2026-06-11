@@ -459,14 +459,6 @@ def test_antigravity_auto_input_routes_through_machine_control(monkeypatch, tmp_
     session_id, user_id = _seed_antigravity_session(session_local)
     websocket = asyncio.run(_register_fake_machine_control(owner_id=user_id, supports=["antigravity.send"]))
 
-    class FailingRunnerDispatcher:
-        async def dispatch_job(self, **_kwargs):
-            raise AssertionError("Antigravity send must use Machine Agent control, not legacy runner dispatch")
-
-    monkeypatch.setattr(
-        "zerg.services.managed_control_dispatcher.get_runner_job_dispatcher",
-        lambda: FailingRunnerDispatcher(),
-    )
     monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_lock_release", lambda **_kwargs: None)
     monkeypatch.setattr(
         "zerg.services.session_chat_impl._schedule_managed_local_active_phase_observation",
@@ -536,14 +528,6 @@ def _assert_provider_auto_input_routes_through_machine_control(
     )
     websocket = asyncio.run(_register_fake_machine_control(owner_id=user_id, supports=[support], device_id=device_id))
 
-    class FailingRunnerDispatcher:
-        async def dispatch_job(self, **_kwargs):
-            raise AssertionError(f"{provider} send must use Machine Agent control, not legacy runner dispatch")
-
-    monkeypatch.setattr(
-        "zerg.services.managed_control_dispatcher.get_runner_job_dispatcher",
-        lambda: FailingRunnerDispatcher(),
-    )
     monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_lock_release", lambda **_kwargs: None)
     monkeypatch.setattr(
         "zerg.services.session_chat_impl._schedule_managed_local_active_phase_observation",
@@ -1336,15 +1320,6 @@ def test_codex_steer_intent_routes_through_machine_control(monkeypatch, tmp_path
             supports=["codex.steer"],
             device_id="codex-machine-control",
         )
-    )
-
-    class FailingRunnerDispatcher:
-        async def dispatch_job(self, **_kwargs):
-            raise AssertionError("Codex steer must use Machine Agent control, not legacy runner dispatch")
-
-    monkeypatch.setattr(
-        "zerg.services.managed_control_dispatcher.get_runner_job_dispatcher",
-        lambda: FailingRunnerDispatcher(),
     )
 
     client, api_app_ref = _make_client(

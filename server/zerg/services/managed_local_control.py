@@ -27,14 +27,9 @@ from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_INT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_STEER_TEXT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
-from zerg.services.managed_control_dispatcher import MISSING_LEGACY_RUNNER_METADATA_ERROR
+from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE_ERROR
 from zerg.services.managed_control_dispatcher import dispatch_managed_control_command
 from zerg.services.managed_control_dispatcher import select_managed_control_transport
-from zerg.services.managed_local_transport import ManagedLocalTransportError
-from zerg.services.managed_local_transport import build_managed_local_interrupt_command
-from zerg.services.managed_local_transport import build_managed_local_pause_response_command
-from zerg.services.managed_local_transport import build_managed_local_send_text_command
-from zerg.services.managed_local_transport import build_managed_local_steer_text_command
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_runtime import runtime_event_from_observation
@@ -120,8 +115,24 @@ def _managed_control_transport_error(
     command_type: str,
 ) -> str | None:
     if select_managed_control_transport(session, owner_id=owner_id, command_type=command_type) is None:
-        return MISSING_LEGACY_RUNNER_METADATA_ERROR
+        return MANAGED_CONTROL_UNAVAILABLE_ERROR
     return None
+
+
+def _provider_name(session: AgentSession) -> str:
+    return str(getattr(session, "provider", "") or "").strip().lower()
+
+
+def _codex_attachments_payload(
+    *,
+    session: AgentSession,
+    attachments: list[dict] | None,
+) -> dict[str, object]:
+    if not attachments:
+        return {}
+    if _provider_name(session) != "codex":
+        raise ValueError("Attachments are only supported on codex managed sessions")
+    return {"attachments": list(attachments)}
 
 
 def get_managed_local_control_status_for_phase(phase: str | None) -> str:
@@ -477,10 +488,7 @@ async def interrupt_managed_local_session(
 ) -> ManagedLocalInterruptResult:
     """Dispatch an interrupt request for the active managed-local turn.
 
-    This is an explicit operator recovery primitive. It dispatches through the
-    same runner/transport seam as live-send so callers do not need to know
-    whether the session is backed by Codex app-server or Claude channels. A
-    successful result means the interrupt command ran, not that the provider
+    A successful result means the interrupt command ran, not that the provider
     has confirmed the turn stopped.
     """
 
@@ -494,22 +502,15 @@ async def interrupt_managed_local_session(
     if transport_error is not None:
         return ManagedLocalInterruptResult(ok=False, error=transport_error)
 
-    try:
-        command = build_managed_local_interrupt_command(session=session)
-    except ManagedLocalTransportError as exc:
-        return ManagedLocalInterruptResult(ok=False, error=str(exc))
-
     result = await dispatch_managed_control_command(
         db=db,
         owner_id=owner_id,
         session=session,
-        command=command,
         timeout_secs=timeout_secs,
         command_type=MANAGED_CONTROL_COMMAND_INTERRUPT,
         payload={},
         commis_id=commis_id,
         run_id=None,
-        failure_message="Failed to dispatch interrupt command",
     )
     if not result.ok:
         return ManagedLocalInterruptResult(
@@ -545,11 +546,7 @@ async def send_text_to_managed_local_session(
     verification_timeout_secs: float | None = None,
     attachments: list[dict] | None = None,
 ) -> ManagedLocalSendResult:
-    """Send text into a managed-local session via its configured transport.
-
-    Returns a normalized result so callers do not need to know the runner
-    dispatch envelope details.
-    """
+    """Send text into a managed-local session through Machine Agent control."""
 
     if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
         return ManagedLocalSendResult(ok=False, error="Session is not managed_local")
@@ -571,24 +568,18 @@ async def send_text_to_managed_local_session(
         else 0
     )
     try:
-        command = build_managed_local_send_text_command(
-            session=session,
-            text=text,
-            attachments=attachments,
-        )
-    except ManagedLocalTransportError as exc:
-        return ManagedLocalSendResult(ok=False, error=str(exc))
+        payload = {"text": text, **_codex_attachments_payload(session=session, attachments=attachments)}
+    except ValueError as exc:
+        return ManagedLocalSendResult(ok=False, error=str(exc), baseline_event_id=baseline_event_id)
     result = await dispatch_managed_control_command(
         db=db,
         owner_id=owner_id,
         session=session,
-        command=command,
         timeout_secs=timeout_secs,
         command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
-        payload={"text": text},
+        payload=payload,
         commis_id=commis_id,
         run_id=None,
-        failure_message="Failed to send text to managed local session",
     )
 
     if not result.ok:
@@ -690,7 +681,7 @@ async def steer_text_to_managed_local_session(
     """Inject mid-turn steer text into the currently active managed turn.
 
     Codex app-server and Claude channel bridge both support live injection.
-    The transport helper raises for process-only observe transports. Callers
+    Machine Agent capability checks reject observe-only transports. Callers
     should gate on `can_steer_active_turn`.
 
     Turn-ended races (active turn ended between the UI's capability check
@@ -710,25 +701,23 @@ async def steer_text_to_managed_local_session(
         return ManagedLocalSendResult(ok=False, error=transport_error)
 
     try:
-        command = build_managed_local_steer_text_command(
-            session=session,
-            text=text,
-            attachments=attachments,
-        )
-    except ManagedLocalTransportError as exc:
+        payload = {
+            "text": text,
+            "intent": "steer",
+            **_codex_attachments_payload(session=session, attachments=attachments),
+        }
+    except ValueError as exc:
         return ManagedLocalSendResult(ok=False, error=str(exc))
 
     result = await dispatch_managed_control_command(
         db=db,
         owner_id=owner_id,
         session=session,
-        command=command,
         timeout_secs=timeout_secs,
         command_type=MANAGED_CONTROL_COMMAND_STEER_TEXT,
-        payload={"text": text, "intent": "steer"},
+        payload=payload,
         commis_id=commis_id,
         run_id=None,
-        failure_message="Failed to dispatch steer command",
     )
     if not result.ok:
         return ManagedLocalSendResult(
@@ -780,18 +769,6 @@ async def answer_pause_request_on_managed_local_session(
     if transport_error is not None:
         return ManagedLocalSendResult(ok=False, error=transport_error)
 
-    try:
-        command = build_managed_local_pause_response_command(
-            session=session,
-            request_key=request_key,
-            decision=decision,
-            answers=answers,
-            content=content,
-            message=message,
-        )
-    except ManagedLocalTransportError as exc:
-        return ManagedLocalSendResult(ok=False, error=str(exc))
-
     payload: dict[str, object] = {
         "provider": str(getattr(session, "provider", "") or "codex").strip() or "codex",
         "request_key": request_key,
@@ -808,13 +785,11 @@ async def answer_pause_request_on_managed_local_session(
         db=db,
         owner_id=owner_id,
         session=session,
-        command=command,
         timeout_secs=timeout_secs,
         command_type=MANAGED_CONTROL_COMMAND_ANSWER_PAUSE,
         payload=payload,
         commis_id=commis_id,
         run_id=None,
-        failure_message="Failed to dispatch pause response command",
     )
     if not result.ok:
         return ManagedLocalSendResult(
