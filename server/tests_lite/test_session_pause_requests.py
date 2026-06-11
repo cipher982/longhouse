@@ -490,6 +490,62 @@ def test_transcript_pause_request_supersedes_claude_hook_placeholder(tmp_path):
         db.close()
 
 
+def test_claude_hook_placeholder_resolves_when_provider_continues(tmp_path):
+    factory = _make_db(tmp_path, "pause_claude_hook_resolves.db")
+    now = datetime(2026, 6, 7, 12, 0, tzinfo=timezone.utc)
+    db = factory()
+    try:
+        session = _seed_session(db, provider="claude", started_at=now - timedelta(minutes=5))
+        runtime_key = f"claude:{session.id}"
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="phase_signal",
+                    phase="blocked",
+                    tool_name="AskUserQuestion",
+                    occurred_at=now,
+                    freshness_ms=10 * 60 * 1000,
+                    dedupe_key="claude-hook-blocked-question",
+                )
+            ],
+        )
+        assert load_active_pause_request_map(db, [session.id])
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="phase_signal",
+                    phase="running",
+                    tool_name=None,
+                    occurred_at=now + timedelta(seconds=10),
+                    freshness_ms=90_000,
+                    dedupe_key="claude-hook-running-after-question",
+                )
+            ],
+        )
+        db.commit()
+
+        assert load_active_pause_request_map(db, [session.id]) == {}
+        row = db.query(SessionPauseRequest).filter(SessionPauseRequest.runtime_key == runtime_key).one()
+        assert row.status == "resolved"
+        assert row.response_text == "Provider continued."
+    finally:
+        db.close()
+
+
 def test_terminal_signal_expires_pending_pause_requests(tmp_path):
     factory = _make_db(tmp_path, "pause_terminal_expiry.db")
     now = datetime(2026, 6, 7, 12, 0, tzinfo=timezone.utc)

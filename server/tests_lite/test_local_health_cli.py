@@ -1189,7 +1189,9 @@ def test_collect_local_health_degrades_for_concrete_provider_support_failure(mon
                     "claude.send",
                     "claude.interrupt",
                     "claude.steer",
+                    "claude.answer_pause",
                     "claude.launch",
+                    "claude.continue",
                 ],
             }
         },
@@ -1276,6 +1278,7 @@ def test_collect_local_health_keeps_release_coverage_gap_visible_when_live_proof
                     "claude.send",
                     "claude.interrupt",
                     "claude.steer",
+                    "claude.answer_pause",
                     "claude.launch",
                     "claude.continue",
                 ],
@@ -2948,7 +2951,7 @@ def test_local_health_render_prints_missing_provider_live_control(capsys):
                         "state": "live_control_partial",
                         "capabilities": {
                             "live_control_operations": ["launch"],
-                            "missing_live_control_operations": ["send", "interrupt", "steer"],
+                            "missing_live_control_operations": ["send", "interrupt", "steer", "answer_pause", "continue"],
                             "supported_operations": ["launch_local", "send_input", "interrupt", "steer_active_turn"],
                             "unsupported_operations": ["launch_remote", "reattach"],
                         },
@@ -2969,7 +2972,7 @@ def test_local_health_render_prints_missing_provider_live_control(capsys):
     assert "Provider Support" in output
     assert "  claude: live_control_partial" in output
     assert "    live: launch" in output
-    assert "    missing live: send, interrupt, steer" in output
+    assert "    missing live: send, interrupt, steer, answer_pause, continue" in output
     assert "    contract: launch_local, send_input, interrupt, steer_active_turn" in output
     assert "    unsupported: launch_remote, reattach" in output
 

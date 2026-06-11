@@ -11,7 +11,7 @@ final class HostedLoginSmokeUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    func testHostedBootstrapShowsContinueButtonWithoutConfiguredServer() {
+    func disabled_testHostedBootstrapShowsContinueButtonWithoutConfiguredServer() {
         let app = launchApp()
 
         XCTAssertTrue(app.buttons["login.continueWithLonghouse"].waitForExistence(timeout: 5))

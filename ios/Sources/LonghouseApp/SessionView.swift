@@ -726,7 +726,7 @@ private struct SessionAttentionFallbackCard: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(2)
-                    Text(detail.runtimeDetail ?? "Answer this in the original terminal.")
+                    Text(detail.runtimeDetail ?? "Check the original terminal for the next step.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(3)
@@ -1817,17 +1817,18 @@ final class SessionViewModel: ObservableObject {
         pollTask = Task { [weak self] in
             var ticks = 0
             while !Task.isCancelled {
+                guard let self = self else { break }
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
                 if Task.isCancelled { break }
                 ticks += 1
                 let (connected, hasRunningTool) = await MainActor.run {
                     (
-                        self?.streamConnected ?? false,
-                        self?.lastWorkspaceEvents.contains { $0.toolCallState == .running } ?? false,
+                        self.streamConnected,
+                        self.lastWorkspaceEvents.contains { $0.toolCallState == .running }
                     )
                 }
                 let managed = await MainActor.run {
-                    guard let caps = self?.detail?.capabilities else { return false }
+                    guard let caps = self.detail?.capabilities else { return false }
                     return caps.liveControlAvailable == true || caps.hostReattachAvailable == true
                 }
                 // Fast fallback when SSE is down. When SSE is up, the server
@@ -1836,15 +1837,28 @@ final class SessionViewModel: ObservableObject {
                 // tool_call_state honest if the stream stays quiet. Managed
                 // visible sessions also get a low-rate correctness poll because
                 // SSE is an invalidation path, not the transcript source of truth.
-                if !connected {
-                    await self?.pollTick(sessionId: sessionId, appState: appState)
-                } else if hasRunningTool, ticks % 12 == 0 {
-                    await self?.pollTick(sessionId: sessionId, appState: appState)
-                } else if managed, ticks % 3 == 0 {
-                    await self?.pollTick(sessionId: sessionId, appState: appState)
+                if Self.shouldPollVisibleSession(
+                    connected: connected,
+                    hasRunningTool: hasRunningTool,
+                    managed: managed,
+                    ticks: ticks
+                ) {
+                    await self.pollTick(sessionId: sessionId, appState: appState)
                 }
             }
         }
+    }
+
+    static func shouldPollVisibleSession(
+        connected: Bool,
+        hasRunningTool: Bool,
+        managed: Bool,
+        ticks: Int
+    ) -> Bool {
+        if !connected { return true }
+        if hasRunningTool, ticks % 12 == 0 { return true }
+        if managed, ticks % 3 == 0 { return true }
+        return false
     }
 
     private func startStream(sessionId: String, appState: AppState) {

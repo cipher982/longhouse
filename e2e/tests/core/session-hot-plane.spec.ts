@@ -251,9 +251,8 @@ test.describe("Session hot plane", () => {
     await page.waitForSelector('body[data-ready="true"]', { timeout: 15_000 });
 
     const strip = page.getByTestId("session-control-strip");
-    await expect(strip).toContainText("Needs permission", { timeout: 10_000 });
-    await expect(strip).toContainText("Approval needed", { timeout: 10_000 });
-    await expect(strip).toContainText("AskUserQuestion", { timeout: 10_000 });
+    await expect(strip).toContainText("Needs answer", { timeout: 10_000 });
+    await expect(strip).toContainText("Waiting for your answer.", { timeout: 10_000 });
 
     const blockedSession = await getSession(request, sessionId);
     expect(blockedSession.runtime_display?.state).toBe("blocked");
@@ -277,12 +276,12 @@ test.describe("Session hot plane", () => {
 
     await expect(
       page
-        .getByTestId("session-timeline-row")
+        .getByTestId("session-question-row")
         .filter({ hasText: "Use dnd-kit" })
         .last(),
     ).toBeVisible({ timeout: 5_000 });
-    await expect(strip).not.toContainText("Blocked", { timeout: 5_000 });
-    await expect(strip).not.toContainText("AskUserQuestion", { timeout: 5_000 });
+    await expect(strip).not.toContainText("Needs answer", { timeout: 5_000 });
+    await expect(strip).not.toContainText("original terminal", { timeout: 5_000 });
 
     await expect
       .poll(async () => {

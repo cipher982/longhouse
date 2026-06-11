@@ -147,7 +147,14 @@
           "next": "promote when Claude release-canary live transcript assertion exists"
         }
       },
-      "machine_control_supports": ["claude.send", "claude.interrupt", "claude.steer", "claude.launch", "claude.continue"]
+      "machine_control_supports": [
+        "claude.send",
+        "claude.interrupt",
+        "claude.steer",
+        "claude.answer_pause",
+        "claude.launch",
+        "claude.continue"
+      ]
     },
     {
       "provider": "opencode",

@@ -282,6 +282,43 @@ def test_answerable_pause_response_dispatches_and_resolves(monkeypatch, tmp_path
         api_app_ref.dependency_overrides = {}
 
 
+def test_pause_response_builds_message_from_structured_answers(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_codex_session(session_local)
+    pause_id = _seed_pause_request(session_local, session_id, can_respond=True)
+    calls: list[dict[str, object]] = []
+
+    async def fake_answer(**kwargs):
+        calls.append(kwargs)
+        return ManagedLocalSendResult(
+            ok=True,
+            exit_code=0,
+            response_data={
+                "status": "resolved",
+                "response_payload": {"source": "fake"},
+            },
+        )
+
+    monkeypatch.setattr(session_chat, "answer_pause_request_on_managed_local_session", fake_answer)
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="x@y", role=UserRole.USER.value),
+    )
+    try:
+        resp = client.post(
+            f"/api/sessions/{session_id}/pause-requests/{pause_id}/response",
+            json={"decision": "answer", "answers": {"storage": ["SQLite"]}},
+        )
+        assert resp.status_code == 200, resp.text
+        assert len(calls) == 1
+        assert calls[0]["message"] == "Storage: SQLite"
+        with session_local() as db:
+            row = db.query(SessionPauseRequest).filter(SessionPauseRequest.id == pause_id).one()
+            assert row.response_text == "Storage: SQLite"
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
 def test_route_response_converges_with_pause_resolution_event(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_codex_session(session_local)

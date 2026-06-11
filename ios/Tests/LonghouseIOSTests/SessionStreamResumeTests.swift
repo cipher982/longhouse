@@ -225,6 +225,16 @@ struct SessionStreamResumeTests {
         model.stop()
     }
 
+    @Test
+    func visiblePollPolicyCoversDisconnectedRunningToolAndManagedBackstop() {
+        #expect(SessionViewModel.shouldPollVisibleSession(connected: false, hasRunningTool: false, managed: false, ticks: 1))
+        #expect(SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: true, managed: false, ticks: 12))
+        #expect(SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: true, ticks: 3))
+        #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: false, ticks: 30))
+        #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: true, managed: false, ticks: 11))
+        #expect(!SessionViewModel.shouldPollVisibleSession(connected: true, hasRunningTool: false, managed: true, ticks: 2))
+    }
+
     private func waitForItemIds(_ model: SessionViewModel, _ expected: [String]) async {
         let deadline = Date().addingTimeInterval(2)
         while Date() < deadline {

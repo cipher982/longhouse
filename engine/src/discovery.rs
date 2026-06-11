@@ -234,7 +234,11 @@ mod tests {
             .join("workflows")
             .join(FIXTURE_RUN)
             .join("journal.jsonl");
-        assert!(journal.exists(), "fixture journal missing: {}", journal.display());
+        assert!(
+            journal.exists(),
+            "fixture journal missing: {}",
+            journal.display()
+        );
         assert_eq!(
             provider_for_path(&journal, &providers),
             None,
@@ -264,7 +268,11 @@ mod tests {
             .join("workflows")
             .join(FIXTURE_RUN)
             .join("agent-a049eaf15e4dbcae3.jsonl");
-        assert!(agent.exists(), "fixture agent file missing: {}", agent.display());
+        assert!(
+            agent.exists(),
+            "fixture agent file missing: {}",
+            agent.display()
+        );
         assert_eq!(provider_for_path(&agent, &providers), Some("claude"));
     }
 
@@ -272,7 +280,11 @@ mod tests {
     fn workflow_main_transcript_is_discovered() {
         let providers = vec![claude_provider_for(&workflow_fixture_root())];
         let main = workflow_fixture_root().join(format!("{FIXTURE_SID}.jsonl"));
-        assert!(main.exists(), "fixture main transcript missing: {}", main.display());
+        assert!(
+            main.exists(),
+            "fixture main transcript missing: {}",
+            main.display()
+        );
         assert_eq!(provider_for_path(&main, &providers), Some("claude"));
     }
 

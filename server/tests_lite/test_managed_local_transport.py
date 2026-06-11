@@ -272,16 +272,37 @@ def test_build_managed_local_pause_response_command_uses_engine_bridge_for_codex
     assert inner.endswith("--json")
 
 
-def test_build_managed_local_pause_response_command_rejects_non_codex_transport():
+def test_build_managed_local_pause_response_command_uses_claude_channel_send():
     session = SimpleNamespace(
         id="session-123",
         managed_transport=ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value,
     )
 
+    command = build_managed_local_pause_response_command(
+        session=session,
+        request_key="claude:session-123:req-1",
+        decision="answer",
+        answers={"success": ["Real users"]},
+        message="Success metric: Real users",
+    )
+    inner = _wrapped_inner(command)
+    assert "exec longhouse claude-channel send --session-id session-123" in inner
+    assert "--text 'Success metric: Real users'" in inner
+    assert "--meta intent=pause_response" in inner
+    assert "--meta request_key=claude:session-123:req-1" in inner
+    assert "--meta decision=answer" in inner
+
+
+def test_build_managed_local_pause_response_command_rejects_transport_without_pause_support():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.OPENCODE_SERVER_BRIDGE.value,
+    )
+
     with pytest.raises(ManagedLocalTransportError, match="Remote pause responses are not supported"):
         build_managed_local_pause_response_command(
             session=session,
-            request_key="claude:session-123:req-1",
+            request_key="opencode:session-123:req-1",
         )
 
 

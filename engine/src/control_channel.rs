@@ -1002,6 +1002,37 @@ async fn execute_command(
         COMMAND_ANSWER_PAUSE => {
             let provider = payload_optional_string(&payload, "provider")
                 .unwrap_or_else(|| "codex".to_string());
+            if provider == "claude" {
+                let request_key = payload_required_string(&payload, "request_key")?;
+                let decision = payload_optional_string(&payload, "decision")
+                    .unwrap_or_else(|| "answer".to_string());
+                let text = claude_pause_response_text(&payload)?;
+                let response_text = text.clone();
+                return run_claude_channel_command(
+                    claude_channel_pause_response_args(&session_id, text, &request_key, &decision),
+                    LAUNCH_START_TIMEOUT_SECS,
+                )
+                .await
+                .map(|output| {
+                    let mut result = cli_output_result(output, "claude", "claude_channel_bridge");
+                    if let Some(obj) = result.as_object_mut() {
+                        obj.insert(
+                            "pause_response".to_string(),
+                            json!({
+                                "status": "resolved",
+                                "response_text": response_text,
+                                "response_payload": {
+                                    "decision": decision,
+                                    "answers": payload.get("answers").cloned(),
+                                    "content": payload.get("content").cloned(),
+                                    "message": payload_optional_string(&payload, "message"),
+                                }
+                            }),
+                        );
+                    }
+                    result
+                });
+            }
             if provider != "codex" {
                 return Err(CommandError {
                     code: "unsupported_command".to_string(),
@@ -1129,6 +1160,109 @@ fn claude_channel_args(
             code: "unsupported_command".to_string(),
             message: format!("unsupported Claude channel command {command_type}"),
         }),
+    }
+}
+
+fn claude_channel_pause_response_args(
+    session_id: &str,
+    text: String,
+    request_key: &str,
+    decision: &str,
+) -> Vec<String> {
+    vec![
+        "claude-channel".to_string(),
+        "send".to_string(),
+        "--session-id".to_string(),
+        session_id.to_string(),
+        "--text".to_string(),
+        text,
+        "--meta".to_string(),
+        "intent=pause_response".to_string(),
+        "--meta".to_string(),
+        format!("request_key={}", request_key.trim()),
+        "--meta".to_string(),
+        format!("decision={}", decision.trim()),
+    ]
+}
+
+fn claude_pause_response_text(payload: &Value) -> std::result::Result<String, CommandError> {
+    let decision = payload_optional_string(payload, "decision")
+        .unwrap_or_else(|| "answer".to_string())
+        .to_ascii_lowercase();
+    if let Some(message) = payload_optional_string(payload, "message") {
+        if !message.trim().is_empty() {
+            return Ok(message);
+        }
+    }
+    if let Some(content) = payload.get("content") {
+        if let Some(text) = content.as_str() {
+            if !text.trim().is_empty() {
+                return Ok(text.trim().to_string());
+            }
+        } else if !content.is_null() {
+            let text = content.to_string();
+            if !text.trim().is_empty() {
+                return Ok(text.trim().to_string());
+            }
+        }
+    }
+    if let Some(answers) = payload.get("answers").and_then(Value::as_object) {
+        let mut entries: Vec<_> = answers.iter().collect();
+        entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+        let parts: Vec<String> = entries
+            .into_iter()
+            .filter_map(|(key, value)| {
+                let label = key.trim();
+                if label.is_empty() {
+                    return None;
+                }
+                let values = claude_pause_answer_values(value);
+                if values.is_empty() {
+                    return None;
+                }
+                Some(format!("{label}: {}", values.join(", ")))
+            })
+            .collect();
+        if !parts.is_empty() {
+            return Ok(parts.join("; "));
+        }
+    }
+    if decision == "cancel" || decision == "reject" {
+        return Ok("Cancelled in Longhouse.".to_string());
+    }
+    Err(CommandError {
+        code: "invalid_command".to_string(),
+        message: "Claude pause responses require a non-empty answer message".to_string(),
+    })
+}
+
+fn claude_pause_answer_values(value: &Value) -> Vec<String> {
+    match value {
+        Value::Null => Vec::new(),
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| {
+                let text = match item {
+                    Value::Null => return None,
+                    Value::String(text) => text.trim().to_string(),
+                    other => other.to_string(),
+                };
+                if text.trim().is_empty() {
+                    None
+                } else {
+                    Some(text)
+                }
+            })
+            .collect(),
+        Value::String(text) => {
+            let text = text.trim();
+            if text.is_empty() {
+                Vec::new()
+            } else {
+                vec![text.to_string()]
+            }
+        }
+        other => vec![other.to_string()],
     }
 }
 
@@ -2027,6 +2161,9 @@ mod tests {
         assert!(supports
             .iter()
             .any(|item| item.as_str() == Some("claude.continue")));
+        assert!(supports
+            .iter()
+            .any(|item| item.as_str() == Some("claude.answer_pause")));
         assert_eq!(
             claude_contract.get("can_resume").and_then(Value::as_bool),
             Some(true)
@@ -2805,6 +2942,47 @@ exit 1
                 "--meta",
                 "intent=steer",
             ]
+        );
+    }
+
+    #[test]
+    fn claude_pause_response_args_include_request_metadata() {
+        assert_eq!(
+            claude_channel_pause_response_args(
+                "11111111-1111-4111-8111-111111111111",
+                "Success metric: Real users".to_string(),
+                "claude-transcript:session:key",
+                "answer",
+            ),
+            vec![
+                "claude-channel",
+                "send",
+                "--session-id",
+                "11111111-1111-4111-8111-111111111111",
+                "--text",
+                "Success metric: Real users",
+                "--meta",
+                "intent=pause_response",
+                "--meta",
+                "request_key=claude-transcript:session:key",
+                "--meta",
+                "decision=answer",
+            ]
+        );
+    }
+
+    #[test]
+    fn claude_pause_response_text_derives_structured_answers() {
+        let payload = json!({
+            "answers": {
+                "timeline": ["Two weeks", "Show HN"],
+                "success_metric": "Real users + feedback",
+            },
+        });
+
+        assert_eq!(
+            claude_pause_response_text(&payload).unwrap(),
+            "success_metric: Real users + feedback; timeline: Two weeks, Show HN"
         );
     }
 

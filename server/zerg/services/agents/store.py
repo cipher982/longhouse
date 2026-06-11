@@ -40,6 +40,7 @@ from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
 from zerg.models.agents import TimelineCard
 from zerg.services.agents.compaction import classify_compaction_kind
+from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import ensure_subagent_thread
 from zerg.services.agents.kernel_writes import record_thread_alias
@@ -249,9 +250,9 @@ def _claude_transcript_pause_events(
                         "kind": "structured_question",
                         "tool_name": "AskUserQuestion",
                         "title": _claude_pause_title(payload),
-                        "summary": "Waiting for an answer in the original terminal.",
+                        "summary": "Waiting for your answer.",
                         "request_payload": payload,
-                        "can_respond": False,
+                        "can_respond": _claude_transcript_pause_can_respond(db, session_id),
                         "single_active": True,
                     },
                 )
@@ -290,6 +291,17 @@ def _claude_transcript_pause_events(
             )
 
     return runtime_events
+
+
+def _claude_transcript_pause_can_respond(db: Session, session_id: UUID) -> bool:
+    capabilities = project_session_capabilities(db, session_id=session_id)
+    managed_transport = capabilities.managed_transport
+    return bool(
+        capabilities.live_control_available
+        and capabilities.can_send_input
+        and managed_transport is not None
+        and managed_transport.value == "claude_channel_bridge"
+    )
 
 
 # `.../subagents/workflows/<run>/journal.jsonl` — a dynamic-workflow control

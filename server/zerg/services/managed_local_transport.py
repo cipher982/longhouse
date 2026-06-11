@@ -337,6 +337,30 @@ def build_managed_local_pause_response_command(
     session_id = str(getattr(session, "id", "") or "").strip()
     if not session_id:
         raise ManagedLocalTransportError("Managed local session is missing session ID")
+    if transport == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE:
+        response_text = _pause_response_text(
+            decision=decision,
+            answers=answers,
+            content=content,
+            message=message,
+        )
+        if not response_text:
+            raise ManagedLocalTransportError("Claude pause responses require a non-empty answer message")
+        return _build_longhouse_cli_shell_command(
+            subcommand="send",
+            args=(
+                "--session-id",
+                shlex.quote(session_id),
+                "--text",
+                shlex.quote(response_text),
+                "--meta",
+                "intent=pause_response",
+                "--meta",
+                f"request_key={shlex.quote(request_key)}",
+                "--meta",
+                f"decision={shlex.quote(decision or 'answer')}",
+            ),
+        )
     if transport != ManagedSessionTransport.CODEX_APP_SERVER:
         raise ManagedLocalTransportError(
             f"Remote pause responses are not supported on {transport.value} transports",
@@ -359,6 +383,37 @@ def build_managed_local_pause_response_command(
         subcommand="pause-response",
         args=tuple(args),
     )
+
+
+def _pause_response_text(
+    *,
+    decision: str,
+    answers: Mapping[str, Any] | None,
+    content: Any | None,
+    message: str | None,
+) -> str:
+    explicit = str(message or "").strip()
+    if explicit:
+        return explicit
+    if content is not None:
+        cleaned = str(content).strip()
+        if cleaned:
+            return cleaned
+    parts: list[str] = []
+    for key, value in dict(answers or {}).items():
+        label = str(key or "").strip()
+        if isinstance(value, (list, tuple, set)):
+            values = [str(item).strip() for item in value if str(item).strip()]
+        else:
+            values = [str(value).strip()] if str(value).strip() else []
+        if not label or not values:
+            continue
+        parts.append(f"{label}: {', '.join(values)}")
+    if parts:
+        return "; ".join(parts)
+    if str(decision or "").strip().lower() in {"cancel", "reject"}:
+        return "Cancelled in Longhouse."
+    return ""
 
 
 __all__ = [

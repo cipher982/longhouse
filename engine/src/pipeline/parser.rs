@@ -3923,7 +3923,11 @@ mod tests {
             .join("workflows")
             .join("wf_testrun01")
             .join("journal.jsonl");
-        assert!(journal.exists(), "fixture journal missing: {}", journal.display());
+        assert!(
+            journal.exists(),
+            "fixture journal missing: {}",
+            journal.display()
+        );
 
         let result = parse_session_file(&journal, 0).unwrap();
         assert_eq!(result.events.len(), 0, "journal has no role events");
@@ -3946,7 +3950,11 @@ mod tests {
             .join("workflows")
             .join("wf_testrun01")
             .join("agent-a049eaf15e4dbcae3.jsonl");
-        assert!(agent.exists(), "fixture agent file missing: {}", agent.display());
+        assert!(
+            agent.exists(),
+            "fixture agent file missing: {}",
+            agent.display()
+        );
 
         let result = parse_session_file(&agent, 0).unwrap();
         assert!(result.metadata.is_sidechain);
@@ -3976,9 +3984,18 @@ mod tests {
             .join("wf_testrun01")
             .join("agent-a049eaf15e4dbcae3.jsonl");
         let result = parse_session_file(&agent, 0).unwrap();
-        assert_eq!(result.metadata.workflow_run_id.as_deref(), Some("wf_testrun01"));
-        assert_eq!(result.metadata.attribution_agent.as_deref(), Some("workflow-subagent"));
-        assert_eq!(result.metadata.attribution_skill.as_deref(), Some("deep-research"));
+        assert_eq!(
+            result.metadata.workflow_run_id.as_deref(),
+            Some("wf_testrun01")
+        );
+        assert_eq!(
+            result.metadata.attribution_agent.as_deref(),
+            Some("workflow-subagent")
+        );
+        assert_eq!(
+            result.metadata.attribution_skill.as_deref(),
+            Some("deep-research")
+        );
     }
 
     #[test]
@@ -3987,7 +4004,9 @@ mod tests {
         let path = make_jsonl_file(
             dir.path(),
             "test-session.jsonl",
-            &[r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"content":"hi"}}"#],
+            &[
+                r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:00Z","message":{"content":"hi"}}"#,
+            ],
         );
         let result = parse_session_file(&path, 0).unwrap();
         assert!(result.metadata.workflow_run_id.is_none());

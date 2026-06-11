@@ -441,6 +441,8 @@ async def _respond_to_pause_request(
             detail="decision must be answer, reject, or cancel",
         )
 
+    response_message = _pause_response_message(row=row, body=body)
+
     result = await answer_pause_request_on_managed_local_session(
         db=db,
         owner_id=owner_id,
@@ -449,7 +451,7 @@ async def _respond_to_pause_request(
         decision=decision,
         answers=body.answers,
         content=body.content,
-        message=body.message,
+        message=response_message,
         commis_id=f"pause-{row.id}",
     )
     if not result.ok:
@@ -479,12 +481,12 @@ async def _respond_to_pause_request(
             "decision": decision,
             "answers": body.answers,
             "content": body.content,
-            "message": body.message,
+            "message": response_message,
             "dispatch_ok": result.ok,
             "exit_code": result.exit_code,
             "bridge_response": bridge_response or None,
         }
-    response_text = str(bridge_response.get("response_text") or body.message or "").strip() or None
+    response_text = str(bridge_response.get("response_text") or response_message or "").strip() or None
     resolved = resolve_pause_request(
         db,
         pause_request_id=row.id,
@@ -501,6 +503,49 @@ async def _respond_to_pause_request(
         status=status_value,
         pause_request=_pause_request_projection_or_empty(resolved),
     )
+
+
+def _pause_response_message(*, row, body: PauseRequestResponseRequest) -> str | None:
+    explicit = str(body.message or "").strip()
+    if explicit:
+        return explicit
+    if body.content is not None:
+        content_text = str(body.content).strip()
+        if content_text:
+            return content_text
+    answers = dict(body.answers or {})
+    if not answers:
+        return None
+    payload = row.request_payload_json if isinstance(row.request_payload_json, dict) else {}
+    labels = _pause_question_labels(payload)
+    parts: list[str] = []
+    for key, raw_value in answers.items():
+        answer_key = str(key or "").strip()
+        label = labels.get(answer_key) or answer_key
+        if isinstance(raw_value, (list, tuple, set)):
+            values = [str(item).strip() for item in raw_value if str(item).strip()]
+        else:
+            values = [str(raw_value).strip()] if str(raw_value).strip() else []
+        if label and values:
+            parts.append(f"{label}: {', '.join(values)}")
+    return "; ".join(parts) if parts else None
+
+
+def _pause_question_labels(payload: dict[str, Any]) -> dict[str, str]:
+    raw_questions = payload.get("questions")
+    if raw_questions is None and any(key in payload for key in ("question", "prompt", "options")):
+        raw_questions = [payload]
+    if not isinstance(raw_questions, list):
+        return {}
+    labels: dict[str, str] = {}
+    for index, item in enumerate(raw_questions):
+        if not isinstance(item, dict):
+            continue
+        question_id = str(item.get("id") or item.get("name") or item.get("key") or f"question_{index + 1}").strip()
+        label = str(item.get("header") or item.get("title") or item.get("question") or item.get("prompt") or question_id).strip()
+        if question_id and label:
+            labels[question_id] = label
+    return labels
 
 
 def _assert_no_answerable_pause_request_pending(*, db: Session, source_session) -> None:

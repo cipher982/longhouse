@@ -94,7 +94,9 @@ def test_support_state_keeps_claude_first_class_with_mixed_proof() -> None:
         provider_release_status={"statuses": {"claude": {"status": "no_artifact", "risk": "none"}}},
         control_channel={
             "status": "connected",
-            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "launch", "continue"]},
+            "control_operations_by_provider": {
+                "claude": ["send", "interrupt", "steer", "answer_pause", "launch", "continue"]
+            },
         },
     )
 
@@ -104,6 +106,7 @@ def test_support_state_keeps_claude_first_class_with_mixed_proof() -> None:
         "send",
         "interrupt",
         "steer",
+        "answer_pause",
         "launch",
         "continue",
     ]
@@ -150,6 +153,7 @@ def test_support_state_reports_partial_live_control_operations() -> None:
         "send",
         "interrupt",
         "steer",
+        "answer_pause",
         "continue",
     ]
 
@@ -189,7 +193,7 @@ def test_support_state_applies_release_operation_evidence_demotions() -> None:
         },
         control_channel={
             "status": "connected",
-            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "launch"]},
+            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "answer_pause", "launch", "continue"]},
         },
     )
 
@@ -253,7 +257,9 @@ def test_support_state_keeps_release_warning_advisory() -> None:
         },
         control_channel={
             "status": "connected",
-            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "launch", "continue"]},
+            "control_operations_by_provider": {
+                "claude": ["send", "interrupt", "steer", "answer_pause", "launch", "continue"]
+            },
         },
     )
 
@@ -284,7 +290,7 @@ def test_support_state_promotes_operation_proof_from_release_evidence() -> None:
         },
         control_channel={
             "status": "connected",
-            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "launch"]},
+            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "answer_pause", "launch", "continue"]},
         },
     )
 
@@ -319,7 +325,7 @@ def test_support_state_promotes_matching_local_live_proof_without_release_artifa
         },
         control_channel={
             "status": "connected",
-            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "launch"]},
+            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "answer_pause", "launch", "continue"]},
         },
     )
 
@@ -357,7 +363,7 @@ def test_support_state_does_not_promote_mismatched_local_live_proof() -> None:
         },
         control_channel={
             "status": "connected",
-            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "launch"]},
+            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "answer_pause", "launch", "continue"]},
         },
     )
 
@@ -405,7 +411,7 @@ def test_support_state_keeps_stronger_passing_release_proof_over_local_live_proo
         },
         control_channel={
             "status": "connected",
-            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "launch"]},
+            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "answer_pause", "launch", "continue"]},
         },
     )
 
@@ -527,7 +533,7 @@ def test_support_state_does_not_attach_global_live_failure_to_passing_operation(
         },
         control_channel={
             "status": "connected",
-            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "launch"]},
+            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "answer_pause", "launch", "continue"]},
         },
     )
 
@@ -557,7 +563,7 @@ def test_support_state_surfaces_red_matching_local_live_proof_without_operation_
         },
         control_channel={
             "status": "connected",
-            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "launch"]},
+            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "answer_pause", "launch", "continue"]},
         },
     )
 

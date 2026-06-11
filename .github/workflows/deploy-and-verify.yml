@@ -105,7 +105,7 @@ jobs:
           fi
 
       - name: Wait for full CI gate (optional)
-        if: ${{ github.event_name == 'push' && needs.changes.outputs.runtime_image == 'true' && vars.DEPLOY_WAIT_FULL_CI == 'true' }}
+        if: ${{ github.event_name == 'push' && needs.changes.outputs.runtime_image == 'true' && vars.DEPLOY_WAIT_FULL_CI != 'false' }}
         uses: ./.github/actions/wait-for-ci
         with:
           head_sha: ${{ steps.meta.outputs.head_sha }}

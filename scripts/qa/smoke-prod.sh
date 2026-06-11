@@ -383,6 +383,11 @@ run_auth_gate_checks() {
     run_test test_http "Users/me (no auth)" "$API_URL/api/users/me" "401"
     run_test test_http "Email contacts (no auth)" "$API_URL/api/user/contacts/email" "401"
     run_test test_http "Phone contacts (no auth)" "$API_URL/api/user/contacts/phone" "401"
+
+    # Core loop and machine search auth checks
+    run_test test_http "Ingest endpoint (no auth)" "$API_URL/api/agents/ingest" "401" "POST"
+    run_test test_http "Timeline sessions (no auth)" "$API_URL/api/timeline/sessions" "401"
+    run_test test_http "Agents semantic search (no auth)" "$API_URL/api/agents/sessions/semantic" "401"
 }
 
 run_contacts_crud() {

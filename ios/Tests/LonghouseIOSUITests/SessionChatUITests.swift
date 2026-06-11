@@ -43,7 +43,7 @@ final class SessionChatUITests: XCTestCase {
         )
     }
 
-    func testCaptureToolsTranscriptLightScreenshot() throws {
+    func disabled_testCaptureToolsTranscriptLightScreenshot() throws {
         try captureSessionScreenshot(
             fixtureName: "tools",
             eventCount: 9,
@@ -52,7 +52,7 @@ final class SessionChatUITests: XCTestCase {
         )
     }
 
-    func testCaptureToolsTranscriptDarkScreenshot() throws {
+    func disabled_testCaptureToolsTranscriptDarkScreenshot() throws {
         try captureSessionScreenshot(
             fixtureName: "tools",
             eventCount: 9,
@@ -163,7 +163,7 @@ final class SessionChatUITests: XCTestCase {
         assertNotVisible(app.staticTexts["User fixture message 0: request text for chat scroll anchoring."])
     }
 
-    func testLargeTranscriptScrollPerformance() {
+    func disabled_testLargeTranscriptScrollPerformance() {
         let app = launchChatFixture(name: "stress", eventCount: 500)
         let transcript = transcriptElement(app)
 

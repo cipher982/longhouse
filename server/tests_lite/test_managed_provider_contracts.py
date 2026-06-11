@@ -142,14 +142,14 @@ def test_codex_contract_is_current_remote_launch_engine_channel_provider():
     assert remote_launch_supported_providers() == frozenset({"codex", "claude", "opencode"})
 
 
-def test_only_codex_advertises_remote_pause_answering():
+def test_codex_and_managed_claude_advertise_remote_pause_answering():
     supports_by_provider = {
         contract.provider: set(contract.machine_control_supports)
         for contract in all_managed_provider_contracts()
     }
 
     assert "codex.answer_pause" in supports_by_provider["codex"]
-    assert "claude.answer_pause" not in supports_by_provider["claude"]
+    assert "claude.answer_pause" in supports_by_provider["claude"]
     assert "opencode.answer_pause" not in supports_by_provider["opencode"]
     assert "antigravity.answer_pause" not in supports_by_provider["antigravity"]
 
@@ -175,6 +175,7 @@ def test_claude_contract_is_first_class_channel_control_provider():
         "claude.send",
         "claude.interrupt",
         "claude.steer",
+        "claude.answer_pause",
         "claude.launch",
         "claude.continue",
     )
@@ -255,7 +256,7 @@ def test_control_plane_aliases_are_explicit_contract_not_scattered_literals():
         ("claude", "session.send_text", "claude.send"),
         ("claude", "session.interrupt", "claude.interrupt"),
         ("claude", "session.steer_text", "claude.steer"),
-        ("claude", "session.answer_pause", None),
+        ("claude", "session.answer_pause", "claude.answer_pause"),
         ("opencode", "session.send_text", "opencode.send"),
         ("opencode", "session.interrupt", "opencode.interrupt"),
         ("opencode", "session.steer_text", None),
@@ -286,12 +287,13 @@ def test_machine_control_operations_by_provider_projects_live_supports():
             "codex.send",
             "codex.answer_pause",
             "codex.launch",
+            "claude.answer_pause",
             "unknown.launch",
         ],
         connected=True,
     ) == {
         "codex": ("send", "answer_pause", "launch"),
-        "claude": ("steer", "launch"),
+        "claude": ("steer", "answer_pause", "launch"),
     }
 
 
