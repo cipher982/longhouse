@@ -101,14 +101,17 @@ enum PushNotificationStore {
     }
 
     static func storePendingSessionID(_ sessionID: String) {
-        defaults.set(sessionID, forKey: pendingSessionKey)
-        NotificationCenter.default.post(name: .longhouseOpenSessionFromPush, object: sessionID)
+        let trimmed = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        defaults.set(trimmed, forKey: pendingSessionKey)
+        NotificationCenter.default.post(name: .longhouseOpenSessionFromPush, object: trimmed)
     }
 
     static func consumePendingSessionID() -> String? {
-        let sessionID = defaults.string(forKey: pendingSessionKey)
+        let sessionID = defaults.string(forKey: pendingSessionKey)?.trimmingCharacters(in: .whitespacesAndNewlines)
         defaults.removeObject(forKey: pendingSessionKey)
-        return sessionID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let sessionID, !sessionID.isEmpty else { return nil }
+        return sessionID
     }
 
     static func clearPendingSessionID(_ sessionID: String) {

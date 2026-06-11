@@ -71,6 +71,22 @@ def _format_ms(value: object) -> str:
         return "-"
 
 
+def _format_live_runtime_ingest_health(health: dict) -> str:
+    parts = [
+        f"retries {health.get('retry_count', 0)}",
+        f"network {health.get('network_error_count', 0)}",
+        f"failed {health.get('failed_count', 0)}",
+        f"dropped {health.get('dropped_count', 0)}",
+        f"cf502 {health.get('cloudflare_502_count', 0)}",
+        f"slow {health.get('slow_count', 0)}",
+    ]
+    slow_elapsed = health.get("slow_max_elapsed_ms")
+    slow_queue = health.get("slow_max_queue_wait_ms")
+    if slow_elapsed is not None or slow_queue is not None:
+        parts.append("max " f"elapsed {_format_rate(slow_elapsed, 'ms')}, " f"queue {_format_rate(slow_queue, 'ms')}")
+    return ", ".join(parts)
+
+
 _ARCHIVE_SIZE_BUCKET_LABELS = {
     "tiny_lt_1kb": "tiny",
     "small_lt_1mb": "small",
@@ -414,6 +430,23 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
             last_error_code = control_channel.get("last_error_code") or "-"
             last_error_message = control_channel.get("last_error_message") or "-"
             typer.echo(f"  last error: {last_error_code} - {last_error_message}")
+
+    live_ingest_alerts = []
+    for raw_session in list(snapshot.get("managed_sessions") or []):
+        session = dict(raw_session or {})
+        health = dict(session.get("live_runtime_ingest_health") or {})
+        if health.get("status") not in {"broken", "degraded"}:
+            continue
+        live_ingest_alerts.append((session, health))
+    if live_ingest_alerts:
+        typer.echo("")
+        typer.echo("Managed Live Preview")
+        for session, health in live_ingest_alerts:
+            label = session.get("workspace_label") or session.get("session_id") or "-"
+            status = health.get("status") or "unknown"
+            typer.echo(f"  {label}: {status}; {_format_live_runtime_ingest_health(health)}")
+            if health.get("log_file"):
+                typer.echo(f"    log: {health.get('log_file')}")
 
     provider_clis = dict(snapshot.get("provider_clis") or {})
     if provider_clis:

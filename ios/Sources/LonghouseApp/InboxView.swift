@@ -114,6 +114,7 @@ struct TimelineView: View {
             .onAppear {
                 WebTranscriptWebViewPool.prewarm()
                 viewModel.resumeStream(using: appState)
+                consumePendingPushIfNeeded()
             }
             .onDisappear {
                 viewModel.stopStream()
@@ -123,6 +124,7 @@ struct TimelineView: View {
                     Task {
                         await viewModel.refresh(using: appState, reloadWidget: true)
                         viewModel.startStream(using: appState)
+                        consumePendingPushIfNeeded()
                     }
                 } else {
                     viewModel.stopStream()
@@ -208,8 +210,10 @@ struct TimelineView: View {
     }
 
     private func openSession(sessionID: String) {
-        PushNotificationStore.clearPendingSessionID(sessionID)
-        path = [SessionRoute(sessionId: sessionID, fallbackTitle: "Session")]
+        let trimmed = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        PushNotificationStore.clearPendingSessionID(trimmed)
+        path = [SessionRoute(sessionId: trimmed, fallbackTitle: "Session")]
     }
 }
 

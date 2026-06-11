@@ -78,6 +78,12 @@ ACTIVITY_RECENCY_BANDS = [
     ("1-6h", timedelta(hours=6)),
 ]
 RECENT_TOUCH_LIMIT = 4
+CODEX_BRIDGE_LOG_TAIL_BYTES = 128 * 1024
+CODEX_BRIDGE_LIVE_RETRY_MARKER = "live runtime ingest retrying"
+CODEX_BRIDGE_LIVE_SLOW_MARKER = "live runtime ingest slow"
+CODEX_BRIDGE_RUNTIME_NETWORK_ERROR_MARKER = "runtime ingest network error"
+CODEX_BRIDGE_RUNTIME_FAILED_MARKER = "runtime ingest failed"
+CODEX_BRIDGE_LIVE_DROPPED_MARKER = "live runtime ingest dropped"
 PROVIDER_HOOK_DIAGNOSTIC_WINDOW = timedelta(hours=24)
 PROVIDER_HOOK_DIAGNOSTIC_ACTIONABLE_WINDOW = timedelta(hours=1)
 PROVIDER_HOOK_DIAGNOSTIC_FILE_LIMIT = 24
@@ -1431,6 +1437,83 @@ def _codex_bridge_state_dir(base_dir: Path) -> Path:
     return get_managed_local_dir("codex-bridge", base_dir=base_dir)
 
 
+def _codex_bridge_live_runtime_ingest_health(log_file: str | None) -> dict[str, Any] | None:
+    path = Path(log_file) if log_file else None
+    if path is None:
+        return None
+
+    health: dict[str, Any] = {
+        "status": "unknown",
+        "log_file": str(path),
+        "exists": path.exists(),
+        "tail_bytes": 0,
+        "retry_count": 0,
+        "network_error_count": 0,
+        "failed_count": 0,
+        "dropped_count": 0,
+        "cloudflare_502_count": 0,
+        "slow_count": 0,
+        "slow_max_elapsed_ms": None,
+        "slow_max_queue_wait_ms": None,
+        "slow_max_exec_ms": None,
+    }
+    if not path.exists():
+        return health
+
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as fh:
+            if size > CODEX_BRIDGE_LOG_TAIL_BYTES:
+                fh.seek(size - CODEX_BRIDGE_LOG_TAIL_BYTES)
+            raw = fh.read(CODEX_BRIDGE_LOG_TAIL_BYTES)
+    except OSError as exc:
+        health["error"] = str(exc)
+        return health
+
+    health["tail_bytes"] = len(raw)
+    text = raw.decode("utf-8", errors="replace")
+    for line in text.splitlines():
+        if CODEX_BRIDGE_LIVE_RETRY_MARKER in line:
+            health["retry_count"] += 1
+        if CODEX_BRIDGE_RUNTIME_NETWORK_ERROR_MARKER in line:
+            health["network_error_count"] += 1
+        if CODEX_BRIDGE_RUNTIME_FAILED_MARKER in line:
+            health["failed_count"] += 1
+        if CODEX_BRIDGE_LIVE_DROPPED_MARKER in line:
+            health["dropped_count"] += 1
+        if "Error 502" in line or "Bad gateway" in line or "Cloudflare Ray ID" in line:
+            health["cloudflare_502_count"] += 1
+        if CODEX_BRIDGE_LIVE_SLOW_MARKER in line:
+            health["slow_count"] += 1
+            _update_max_health_number(health, "slow_max_elapsed_ms", _extract_log_number(line, "elapsed_ms"))
+            _update_max_health_number(health, "slow_max_queue_wait_ms", _extract_log_number(line, "queue_wait_ms"))
+            _update_max_health_number(health, "slow_max_exec_ms", _extract_log_number(line, "exec_ms"))
+
+    terminal_failures = health["network_error_count"] + health["failed_count"] + health["dropped_count"] + health["cloudflare_502_count"]
+    if terminal_failures:
+        health["status"] = "broken"
+    elif health["retry_count"] or health["slow_count"]:
+        health["status"] = "degraded"
+    else:
+        health["status"] = "healthy"
+    return health
+
+
+def _extract_log_number(line: str, name: str) -> float | None:
+    match = re.search(rf"{re.escape(name)}=(?:Some\()?([0-9]+(?:\.[0-9]+)?)", line)
+    if not match:
+        return None
+    return float(match.group(1))
+
+
+def _update_max_health_number(health: dict[str, Any], key: str, value: float | None) -> None:
+    if value is None:
+        return
+    current = health.get(key)
+    if current is None or value > float(current):
+        health[key] = value
+
+
 def _compute_process_snapshot() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     try:
         import psutil  # imported lazily to keep module import cheap
@@ -1918,6 +2001,7 @@ def _codex_managed_session_row(
     thread_subscription_status: str | None,
     thread_subscription_attempts: int,
     thread_subscription_last_error: str | None,
+    live_runtime_ingest_health: dict[str, Any] | None,
     reason_codes: list[str],
 ) -> dict[str, Any]:
     bridge_has_thread = _normalize_optional_string(state.get("thread_id")) is not None
@@ -1931,7 +2015,7 @@ def _codex_managed_session_row(
     phase_observed_at = phase_state.get("observed_at") if phase_state else None
     phase_last_activity_at = phase_state.get("last_activity_at") if phase_state else None
 
-    return {
+    row = {
         "session_id": session_id,
         "provider": "codex",
         "control_path": CONTROL_PATH_MANAGED,
@@ -1955,6 +2039,9 @@ def _codex_managed_session_row(
         "thread_subscription_last_error": thread_subscription_last_error,
         "reason_codes": reason_codes,
     }
+    if live_runtime_ingest_health is not None:
+        row["live_runtime_ingest_health"] = live_runtime_ingest_health
+    return row
 
 
 def _collect_managed_codex_sessions(
@@ -2012,6 +2099,8 @@ def _collect_managed_codex_sessions(
         thread_subscription_attempts = _normalize_optional_int(state.get("thread_subscription_attempts")) or 0
         thread_subscription_last_error = _normalize_optional_string(state.get("thread_subscription_last_error"))
         codex_bin = _normalize_optional_string(state.get("codex_bin"))
+        log_file = _normalize_optional_string(state.get("log_file"))
+        live_runtime_ingest_health = _codex_bridge_live_runtime_ingest_health(log_file)
         bridge_heartbeat_at = bridge_updated_at
         active_turn_id = _normalize_optional_string(state.get("active_turn_id"))
         last_turn_status = _normalize_optional_string(state.get("last_turn_status"))
@@ -2039,6 +2128,8 @@ def _collect_managed_codex_sessions(
             thread_subscription_last_error=thread_subscription_last_error,
             app_server=app_server,
         )
+        if live_runtime_ingest_health and live_runtime_ingest_health.get("status") in {"broken", "degraded"}:
+            reason_codes.append("live_runtime_ingest_degraded")
         phase_state = phase_overlay.get(session_id or "") if phase_overlay else None
 
         sessions.append(
@@ -2055,6 +2146,7 @@ def _collect_managed_codex_sessions(
                 thread_subscription_status=thread_subscription_status,
                 thread_subscription_attempts=thread_subscription_attempts,
                 thread_subscription_last_error=thread_subscription_last_error,
+                live_runtime_ingest_health=live_runtime_ingest_health,
                 reason_codes=reason_codes,
             )
         )

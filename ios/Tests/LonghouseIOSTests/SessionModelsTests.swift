@@ -144,6 +144,22 @@ struct SessionModelsTests {
     }
 
     @Test
+    func sessionDetailShowsAttentionFallbackWhenBlockedPauseRequestIsMissing() throws {
+        let json = apiSessionJSON()
+            .replacingOccurrences(of: #""state": "needs_user","#, with: #""state": "blocked","#)
+            .replacingOccurrences(of: #""tone": "idle","#, with: #""tone": "blocked","#)
+            .replacingOccurrences(of: #""headline": "Idle","#, with: #""headline": "Blocked","#)
+            .replacingOccurrences(of: #""detail": "Waiting for next prompt","#, with: #""detail": "Waiting for terminal approval.","#)
+            .replacingOccurrences(of: #""phase_label": "Idle","#, with: #""phase_label": "Blocked","#)
+            .replacingOccurrences(of: #""needs_attention": false,"#, with: #""needs_attention": true,"#)
+            .replacingOccurrences(of: #""is_idle": true,"#, with: #""is_idle": false,"#)
+        let decoded = try JSONDecoder.snakeCase.decode(APISessionResponse.self, from: Data(json.utf8)).sessionDetail
+
+        #expect(decoded.activePauseRequest == nil)
+        #expect(decoded.shouldShowAttentionFallback)
+    }
+
+    @Test
     func sessionWorkspaceDecodesThreadProjectionEventsAndSeams() throws {
         let json = """
         {

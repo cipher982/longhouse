@@ -378,6 +378,118 @@ def test_phase_signal_can_preserve_pending_pause_request(tmp_path):
         db.close()
 
 
+def test_claude_hook_blocked_signal_creates_terminal_only_pause_request(tmp_path):
+    factory = _make_db(tmp_path, "pause_claude_hook_blocked.db")
+    now = datetime(2026, 6, 7, 12, 0, tzinfo=timezone.utc)
+    db = factory()
+    try:
+        session = _seed_session(db, provider="claude", started_at=now - timedelta(minutes=5))
+        runtime_key = f"claude:{session.id}"
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="phase_signal",
+                    phase="blocked",
+                    tool_name="AskUserQuestion",
+                    occurred_at=now,
+                    freshness_ms=10 * 60 * 1000,
+                    dedupe_key="claude-hook-blocked-question",
+                )
+            ],
+        )
+        db.commit()
+
+        row = load_active_pause_request_map(db, [session.id])[session.id]
+        projection = serialize_pause_request_projection(row)
+        assert projection is not None
+        assert projection["provider"] == "claude"
+        assert projection["tool_name"] == "AskUserQuestion"
+        assert projection["title"] == "Claude needs an answer"
+        assert projection["can_respond"] is False
+        assert projection["questions"][0]["id"] == "terminal_answer"
+
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        assert state.phase == "blocked"
+        assert state.active_tool == "AskUserQuestion"
+    finally:
+        db.close()
+
+
+def test_transcript_pause_request_supersedes_claude_hook_placeholder(tmp_path):
+    factory = _make_db(tmp_path, "pause_claude_hook_superseded.db")
+    now = datetime(2026, 6, 7, 12, 0, tzinfo=timezone.utc)
+    db = factory()
+    try:
+        session = _seed_session(db, provider="claude", started_at=now - timedelta(minutes=5))
+        runtime_key = f"claude:{session.id}"
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="phase_signal",
+                    phase="blocked",
+                    tool_name="AskUserQuestion",
+                    occurred_at=now,
+                    freshness_ms=10 * 60 * 1000,
+                    dedupe_key="claude-hook-blocked-question",
+                ),
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="agents_ingest",
+                    kind="pause_request",
+                    tool_name="AskUserQuestion",
+                    occurred_at=now + timedelta(seconds=1),
+                    dedupe_key="claude-transcript-question",
+                    payload={
+                        "request_key": f"claude-transcript:{runtime_key}:toolu_1",
+                        "provider_request_id": "toolu_1",
+                        "kind": "structured_question",
+                        "tool_name": "AskUserQuestion",
+                        "title": "Success metric",
+                        "summary": "Waiting for an answer in the original terminal.",
+                        "request_payload": {
+                            "questions": [
+                                {
+                                    "id": "success",
+                                    "question": "What should the launch optimize for?",
+                                    "options": [{"label": "Real users"}, {"label": "GitHub stars"}],
+                                }
+                            ]
+                        },
+                        "can_respond": False,
+                        "single_active": True,
+                    },
+                ),
+            ],
+        )
+        db.commit()
+
+        rows = db.query(SessionPauseRequest).filter(SessionPauseRequest.runtime_key == runtime_key).all()
+        assert len(rows) == 2
+        active = load_active_pause_request_map(db, [session.id])[session.id]
+        assert active.title == "Success metric"
+        assert active.provider_request_id == "toolu_1"
+        assert any(row.request_key.startswith("claude-hook:") and row.status == "resolved" for row in rows)
+    finally:
+        db.close()
+
+
 def test_terminal_signal_expires_pending_pause_requests(tmp_path):
     factory = _make_db(tmp_path, "pause_terminal_expiry.db")
     now = datetime(2026, 6, 7, 12, 0, tzinfo=timezone.utc)

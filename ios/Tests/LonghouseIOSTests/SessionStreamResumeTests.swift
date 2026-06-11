@@ -190,6 +190,50 @@ struct SessionStreamResumeTests {
 
         model.stop()
     }
+
+    @Test
+    func streamChangedRetriesTailRefreshAfterTransientFailure() async throws {
+        let before = try TestWorkspaceFactory.make(eventId: 10, content: "Before stream wake")
+        let after = try TestWorkspaceFactory.make(eventId: 11, content: "Final durable message")
+        let api = FakeStreamResumeClient(workspaces: [before, after])
+        let recorder = StreamFactoryRecorder()
+        let appState = AppState()
+        appState.serverURL = serverURL
+        let model = SessionViewModel(
+            apiFactory: { _ in api },
+            streamFactory: { _, _, sinceSeq, fingerprint in
+                recorder.make(sinceSeq: sinceSeq, knownWorkspaceFingerprint: fingerprint)
+            },
+            enableRealtime: true,
+            transcriptCache: SessionTranscriptCache(maxBytes: 0),
+            snapshotStore: nil,
+            realtimeRefreshRetryDelaysNanoseconds: [20_000_000]
+        )
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await waitForItemIds(model, ["user:10"])
+        #expect(model.items.map(\.id) == ["user:10"])
+        await api.failNextTailRequests(1)
+
+        recorder.emitChanged(latestEventId: 11, pubsubSeq: 778)
+        await waitForItemIds(model, ["user:11"])
+
+        #expect(model.items.map(\.id) == ["user:11"])
+        #expect(await api.tailRequestCount() >= 3)
+        #expect(model.refreshErrorMessage == nil)
+
+        model.stop()
+    }
+
+    private func waitForItemIds(_ model: SessionViewModel, _ expected: [String]) async {
+        let deadline = Date().addingTimeInterval(2)
+        while Date() < deadline {
+            if model.items.map(\.id) == expected {
+                return
+            }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
 }
 
 /// Records stream factory invocations and lets a test drive the live stream.
@@ -255,17 +299,36 @@ private final class StreamFactoryRecorder: Sendable {
             reason: "buffer_unavailable"
         )))
     }
+
+    func emitChanged(latestEventId: Int, pubsubSeq: Int?) {
+        let c = state.withLock { $0.continuation }
+        c?.yield(.changed(SessionWorkspaceStream.WorkspaceChanged(
+            session_id: "session-1",
+            latest_event_id: latestEventId,
+            thread_session_count: 1,
+            latest_event_emitted_at_ms: nil,
+            server_fanout_at_ms: nil,
+            server_now_ms: nil,
+            pubsub_seq: pubsubSeq,
+            transcript_preview: nil
+        )))
+    }
 }
 
 private actor FakeStreamResumeClient: SessionWorkspaceClient {
     private var workspaces: [SessionWorkspaceResponse]
     private var tailRequests = 0
+    private var tailFailuresRemaining = 0
 
     init(workspaces: [SessionWorkspaceResponse]) {
         self.workspaces = workspaces
     }
 
     func tailRequestCount() -> Int { tailRequests }
+
+    func failNextTailRequests(_ count: Int) {
+        tailFailuresRemaining += max(0, count)
+    }
 
     func sessionWorkspace(id: String, limit: Int, branchMode: String) async throws -> SessionWorkspaceResponse {
         workspaces[0]
@@ -279,12 +342,24 @@ private actor FakeStreamResumeClient: SessionWorkspaceClient {
         snapshotEventId: Int?
     ) async throws -> SessionMobileTailResponse {
         tailRequests += 1
-        let workspace = workspaces[0]
+        if tailFailuresRemaining > 0 {
+            tailFailuresRemaining -= 1
+            throw URLError(.cannotConnectToHost)
+        }
+        let workspace = nextWorkspace()
         return SessionMobileTailResponse(
             session: workspace.session,
             projection: workspace.projection,
-            snapshotEventId: workspace.events.map(\.id).max()
+            snapshotEventId: workspace.events.map(\.id).max(),
+            workspaceRevision: workspace.workspaceRevision
         )
+    }
+
+    private func nextWorkspace() -> SessionWorkspaceResponse {
+        if workspaces.count > 1 {
+            return workspaces.removeFirst()
+        }
+        return workspaces[0]
     }
 
     func sendInput(id: String, text: String, intent: String, clientRequestId: String?) async throws -> SessionInputResponse {

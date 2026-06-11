@@ -653,6 +653,13 @@ struct SessionDetail: Codable, Identifiable, Sendable {
         return request
     }
 
+    var shouldShowAttentionFallback: Bool {
+        guard !isClosed, activePauseRequest == nil else { return false }
+        return runtimeDisplay.needsAttention
+            || runtimeDisplay.state == "blocked"
+            || runtimeDisplay.tone == "blocked"
+    }
+
     var canSendLive: Bool {
         if isClosed { return false }
         return capabilities.composerEnabled ?? (capabilities.liveControlAvailable || capabilities.replyToLiveSessionAvailable)

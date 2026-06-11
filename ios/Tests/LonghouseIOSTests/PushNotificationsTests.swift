@@ -47,6 +47,15 @@ struct PushNotificationsTests {
     }
 
     @Test
+    func pendingSessionStorageTrimsAndIgnoresEmptyIDs() throws {
+        PushNotificationStore.storePendingSessionID("  session-trimmed \n")
+        #expect(PushNotificationStore.consumePendingSessionID() == "session-trimmed")
+
+        PushNotificationStore.storePendingSessionID("   ")
+        #expect(PushNotificationStore.consumePendingSessionID() == nil)
+    }
+
+    @Test
     func pendingSessionCanBeClearedAfterLiveOpen() throws {
         PushNotificationStore.storePendingSessionID("session-123")
         PushNotificationStore.clearPendingSessionID("other-session")

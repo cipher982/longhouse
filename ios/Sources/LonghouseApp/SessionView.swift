@@ -430,6 +430,8 @@ struct SessionView: View {
                         )
                     }
                 )
+            } else if detail.shouldShowAttentionFallback {
+                SessionAttentionFallbackCard(detail: detail)
             }
 
             if detail.attachImagesEnabled && pauseRequest == nil {
@@ -701,6 +703,43 @@ struct SessionView: View {
         guard let draft = await viewModel.draftReply(sessionId: sessionId, appState: appState) else { return }
         composerText = draft
         composerFocused = true
+    }
+}
+
+private struct SessionAttentionFallbackCard: View {
+    let detail: SessionDetail
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider().opacity(0.4)
+
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "exclamationmark.bubble")
+                    .font(.subheadline)
+                    .foregroundStyle(.orange)
+                    .frame(width: 18, height: 18)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Needs attention")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.orange)
+                    Text(detail.runtimeHeadline)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(2)
+                    Text(detail.runtimeDetail ?? "Answer this in the original terminal.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                }
+                Spacer(minLength: 0)
+            }
+
+            Label("Waiting in terminal", systemImage: "terminal")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("session-attention-fallback")
     }
 }
 
@@ -1318,6 +1357,8 @@ final class SessionViewModel: ObservableObject {
 
     private var pollTask: Task<Void, Never>?
     private var prefetchTask: Task<Void, Never>?
+    private var realtimeRefreshRetryTask: Task<Void, Never>?
+    private var realtimeRefreshFailureCount = 0
     private var stream: SessionWorkspaceStreamSource?
     private var streamTask: Task<Void, Never>?
     private var streamConnected: Bool = false
@@ -1348,6 +1389,7 @@ final class SessionViewModel: ObservableObject {
     /// relaunch can hydrate before the network responds. The in-memory
     /// `transcriptCache` stays as the fast warm-resume path.
     private let snapshotStore: TranscriptSnapshotStore?
+    private let realtimeRefreshRetryDelaysNanoseconds: [UInt64]
     private var lastPubsubSeq: Int?
     private var lastWorkspaceRevisionFingerprint: String?
     private let initialTailLimit = 50
@@ -1364,13 +1406,20 @@ final class SessionViewModel: ObservableObject {
         },
         enableRealtime: Bool = true,
         transcriptCache: SessionTranscriptCache? = nil,
-        snapshotStore: TranscriptSnapshotStore? = nil
+        snapshotStore: TranscriptSnapshotStore? = nil,
+        realtimeRefreshRetryDelaysNanoseconds: [UInt64] = [
+            1_000_000_000,
+            2_000_000_000,
+            5_000_000_000,
+            10_000_000_000,
+        ]
     ) {
         self.apiFactory = apiFactory
         self.streamFactory = streamFactory
         self.enableRealtime = enableRealtime
         self.transcriptCache = transcriptCache ?? (enableRealtime ? .shared : nil)
         self.snapshotStore = snapshotStore ?? (enableRealtime ? .shared : nil)
+        self.realtimeRefreshRetryDelaysNanoseconds = realtimeRefreshRetryDelaysNanoseconds
     }
 
     func start(sessionId: String, appState: AppState) async {
@@ -1399,6 +1448,9 @@ final class SessionViewModel: ObservableObject {
             prefetchInFlightToken = nil
             prefetchTask?.cancel()
             prefetchTask = nil
+            realtimeRefreshRetryTask?.cancel()
+            realtimeRefreshRetryTask = nil
+            realtimeRefreshFailureCount = 0
             errorMessage = nil
             refreshErrorMessage = nil
             pauseResponseErrorMessage = nil
@@ -1483,6 +1535,9 @@ final class SessionViewModel: ObservableObject {
         pollTask = nil
         prefetchTask?.cancel()
         prefetchTask = nil
+        realtimeRefreshRetryTask?.cancel()
+        realtimeRefreshRetryTask = nil
+        realtimeRefreshFailureCount = 0
         prefetchInFlightOffset = nil
         prefetchInFlightSnapshotEventId = nil
         prefetchInFlightToken = nil
@@ -1771,13 +1826,21 @@ final class SessionViewModel: ObservableObject {
                         self?.lastWorkspaceEvents.contains { $0.toolCallState == .running } ?? false,
                     )
                 }
+                let managed = await MainActor.run {
+                    guard let caps = self?.detail?.capabilities else { return false }
+                    return caps.liveControlAvailable == true || caps.hostReattachAvailable == true
+                }
                 // Fast fallback when SSE is down. When SSE is up, the server
                 // flips unpaired tool calls to "dropped" lazily on read, so
                 // re-ask every ~60s while a running tool exists to keep
-                // tool_call_state honest if the stream stays quiet.
+                // tool_call_state honest if the stream stays quiet. Managed
+                // visible sessions also get a low-rate correctness poll because
+                // SSE is an invalidation path, not the transcript source of truth.
                 if !connected {
                     await self?.pollTick(sessionId: sessionId, appState: appState)
                 } else if hasRunningTool, ticks % 12 == 0 {
+                    await self?.pollTick(sessionId: sessionId, appState: appState)
+                } else if managed, ticks % 3 == 0 {
                     await self?.pollTick(sessionId: sessionId, appState: appState)
                 }
             }
@@ -1830,7 +1893,7 @@ final class SessionViewModel: ObservableObject {
                 lastPubsubSeq = gap.latest_seq > 0 ? gap.latest_seq : nil
             }
             guard let api = apiFactory(appState.serverURL) else { return }
-            try? await refreshTail(api: api, sessionId: sessionId, allowFailure: true)
+            await refreshTailAfterRealtimeWake(api: api, sessionId: sessionId)
         case .heartbeat:
             break
         case .changed(let change):
@@ -1855,7 +1918,7 @@ final class SessionViewModel: ObservableObject {
                 applyRealtimeTranscriptPreview(transcriptPreview, sessionId: sessionId)
             }
             guard let api = apiFactory(appState.serverURL) else { return }
-            try? await refreshTail(api: api, sessionId: sessionId, allowFailure: true)
+            await refreshTailAfterRealtimeWake(api: api, sessionId: sessionId)
         }
     }
 
@@ -1892,6 +1955,38 @@ final class SessionViewModel: ObservableObject {
     private func pollTick(sessionId: String, appState: AppState) async {
         guard let api = apiFactory(appState.serverURL) else { return }
         try? await refreshTail(api: api, sessionId: sessionId, allowFailure: true)
+    }
+
+    private func refreshTailAfterRealtimeWake(api: SessionWorkspaceClient, sessionId: String) async {
+        do {
+            try await refreshTail(api: api, sessionId: sessionId)
+            realtimeRefreshFailureCount = 0
+            realtimeRefreshRetryTask?.cancel()
+            realtimeRefreshRetryTask = nil
+            refreshErrorMessage = nil
+        } catch {
+            scheduleRealtimeRefreshRetry(api: api, sessionId: sessionId)
+        }
+    }
+
+    private func scheduleRealtimeRefreshRetry(api: SessionWorkspaceClient, sessionId: String) {
+        guard activeSessionId == sessionId else { return }
+        realtimeRefreshFailureCount += 1
+        refreshErrorMessage = "Live update delayed. Retrying..."
+        let delays = realtimeRefreshRetryDelaysNanoseconds.isEmpty
+            ? [1_000_000_000]
+            : realtimeRefreshRetryDelaysNanoseconds
+        let index = min(
+            max(0, realtimeRefreshFailureCount - 1),
+            delays.count - 1
+        )
+        let delay = delays[index]
+        realtimeRefreshRetryTask?.cancel()
+        realtimeRefreshRetryTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: delay)
+            if Task.isCancelled { return }
+            await self?.refreshTailAfterRealtimeWake(api: api, sessionId: sessionId)
+        }
     }
 
     private func applyRealtimeTranscriptPreview(_ preview: SessionTranscriptPreview, sessionId: String) {

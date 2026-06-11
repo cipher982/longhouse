@@ -228,6 +228,58 @@ def load_active_pause_request_for_session(db: Session, session_id: UUID) -> Sess
     return load_active_pause_request_map(db, [session_id]).get(session_id)
 
 
+def ensure_claude_hook_pause_request(
+    db: Session,
+    *,
+    session_id: UUID,
+    runtime_key: str,
+    provider: str,
+    occurred_at: datetime,
+    tool_name: str | None = None,
+) -> bool:
+    """Create a terminal-only Claude question placeholder from hook state.
+
+    Claude's hook can report that the terminal is blocked on AskUserQuestion
+    before the transcript-backed tool payload is available. The placeholder
+    makes mobile/web state visible without superseding a richer transcript row.
+    """
+
+    if db.query(AgentSession.id).filter(AgentSession.id == session_id).first() is None:
+        return False
+    active = load_active_pause_request_for_session(db, session_id)
+    if active is not None:
+        return False
+    request_key = f"claude-hook:{runtime_key}:AskUserQuestion"
+    _row, changed = upsert_pause_request(
+        db,
+        session_id=session_id,
+        runtime_key=runtime_key,
+        provider=_clean_str(provider) or "claude",
+        request_key=request_key,
+        provider_request_id="claude-hook-ask-user-question",
+        provider_ref={
+            "source": "claude_hook",
+            "tool_name": _clean_str(tool_name) or "AskUserQuestion",
+        },
+        kind=PAUSE_KIND_STRUCTURED_QUESTION,
+        tool_name=_clean_str(tool_name) or "AskUserQuestion",
+        title="Claude needs an answer",
+        summary="Answer this in the original terminal.",
+        request_payload={
+            "questions": [
+                {
+                    "id": "terminal_answer",
+                    "question": "Claude is waiting for an interactive answer in the terminal.",
+                    "options": [],
+                }
+            ],
+        },
+        can_respond=False,
+        occurred_at=occurred_at,
+    )
+    return changed
+
+
 def list_pause_requests_for_session(
     db: Session,
     session_id: UUID,

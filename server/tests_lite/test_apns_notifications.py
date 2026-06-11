@@ -1037,7 +1037,7 @@ def test_runtime_pause_request_sends_needs_answer_attention_and_resolves(tmp_pat
     engine.dispose()
 
 
-def test_runtime_blocked_attention_wins_over_pending_pause_request(tmp_path):
+def test_pending_pause_request_wins_over_blocked_attention(tmp_path):
     engine, SessionLocal = _make_db(tmp_path)
     session_id = str(uuid4())
     runtime_key = f"codex:{session_id}"
@@ -1158,28 +1158,23 @@ def test_runtime_blocked_attention_wins_over_pending_pause_request(tmp_path):
             )
             assert blocked.status_code == 200, blocked.text
 
-    assert send_mock.await_count == 2
+    assert send_mock.await_count == 1
     resolution_send_mock.assert_not_awaited()
     first_notification = send_mock.await_args_list[0].args[0]
-    second_notification = send_mock.await_args_list[1].args[0]
     assert first_notification.state == "needs_answer"
-    assert second_notification.state == "blocked"
-    assert second_notification.event_type == "session_blocked"
-    assert second_notification.alert_body == "zerg · Blocked · Runtime blocked after pause"
 
     with SessionLocal() as db:
         session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
         assert session is not None
-        assert session.last_attention_push_state == "blocked"
+        assert session.last_attention_push_state == f"needs_answer:{first_notification.pause_request_id}"
         events = (
             db.query(NotificationEvent)
             .filter(NotificationEvent.session_id == session_id)
             .order_by(NotificationEvent.event_started_at.asc())
             .all()
         )
-        assert [event.event_type for event in events] == ["session_needs_answer", "session_blocked"]
-        assert _db_utc(events[0].resolved_at) == t0 + timedelta(seconds=5)
-        assert events[1].resolved_at is None
+        assert [event.event_type for event in events] == ["session_needs_answer"]
+        assert events[0].resolved_at is None
 
     _cleanup_overrides()
     engine.dispose()

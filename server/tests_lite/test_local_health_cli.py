@@ -3908,6 +3908,73 @@ def test_collect_local_health_deep_falls_back_when_resolved_sessions_absent(monk
     assert snapshot["managed_sessions"][0]["liveness_model"] == "codex_bridge"
 
 
+def test_collect_local_health_surfaces_codex_bridge_live_runtime_ingest_health(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(tmp_path, age_seconds=1, payload={})
+
+    rollout_path = tmp_path / "sessions" / "2026" / "06" / "11" / "rollout-live.jsonl"
+    rollout_path.parent.mkdir(parents=True, exist_ok=True)
+    rollout_path.write_text("{}\n")
+    _write_session_binding_rows(
+        tmp_path,
+        [(str(rollout_path), "sess-live", "codex", "2026-06-11T18:00:00Z")],
+    )
+    state_dir = tmp_path / ".longhouse" / "managed-local" / "codex-bridge"
+    log_file = state_dir / "sess-live.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    log_file.write_text(
+        "\n".join(
+            [
+                "[codex-bridge] live runtime ingest slow elapsed_ms=1200 queue_wait_ms=Some(980.5) exec_ms=Some(8.0) event_count=1",
+                "[codex-bridge] live runtime ingest retrying after error: error sending request for url (https://example.longhouse.ai/api/agents/runtime/events/batch)",
+                "[codex-bridge] runtime ingest network error: error sending request for url (https://example.longhouse.ai/api/agents/runtime/events/batch)",
+            ]
+        )
+        + "\n"
+    )
+    _write_codex_bridge_state(
+        state_dir,
+        "sess-live",
+        {
+            "session_id": "sess-live",
+            "pid": 5501,
+            "app_server_pid": 5502,
+            "codex_bin": "/opt/homebrew/bin/codex",
+            "ws_url": "ws://127.0.0.1:50001",
+            "cwd": "/Users/test/git/zerg",
+            "status": "ready",
+            "thread_id": "thread-live",
+            "thread_path": str(rollout_path),
+            "log_file": str(log_file),
+            "updated_at": "2026-06-11T18:00:00Z",
+        },
+    )
+    monkeypatch.setattr(local_health_service, "_codex_bridge_state_dir", lambda base_dir: state_dir)
+    _stub_bridge_alive(monkeypatch)
+    monkeypatch.setattr(
+        local_health_service,
+        "_collect_process_rows",
+        lambda: [
+            {"pid": 5501, "ppid": 1, "command": "longhouse-engine codex-bridge run --session-id sess-live"},
+            {"pid": 5502, "ppid": 5501, "command": "/opt/homebrew/bin/codex app-server --listen ws://127.0.0.1:0"},
+        ],
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+    session = snapshot["managed_sessions"][0]
+    health = session["live_runtime_ingest_health"]
+
+    assert session["state"] == "degraded"
+    assert "live_runtime_ingest_degraded" in session["reason_codes"]
+    assert health["status"] == "broken"
+    assert health["retry_count"] == 1
+    assert health["network_error_count"] == 1
+    assert health["slow_count"] == 1
+    assert health["slow_max_elapsed_ms"] == 1200.0
+    assert health["slow_max_queue_wait_ms"] == 980.5
+
+
 def test_local_health_menubar_requires_installed_app(monkeypatch, tmp_path: Path):
     runner = CliRunner()
     calls: list[dict[str, object]] = []

@@ -147,6 +147,10 @@ def test_recall_hides_internal_canary_sessions(monkeypatch, tmp_path):
         def load_turn_embeddings(self, db, model, dims):
             return 0
 
+        @property
+        def turn_embedding_count(self):
+            return 1
+
         def search_turns(self, query_vec, limit, session_filter):
             return [(session_id, 0, 0.9, 0, 0) for session_id in sorted(session_filter)]
 

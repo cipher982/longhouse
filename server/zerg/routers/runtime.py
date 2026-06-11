@@ -210,9 +210,7 @@ async def ingest_runtime_observation_batch(
                     previous_attention_state = _previous_attention_state_from_session(session_row)
                     active_pause_request = pause_request_map.get(sid)
                     use_needs_answer = (
-                        active_pause_request is not None
-                        and canonical_state != "blocked"
-                        and str(active_pause_request.kind or "").strip() == PAUSE_KIND_STRUCTURED_QUESTION
+                        active_pause_request is not None and str(active_pause_request.kind or "").strip() == PAUSE_KIND_STRUCTURED_QUESTION
                     )
                     attention_state = "needs_answer" if use_needs_answer else canonical_state
                     if use_needs_answer:
