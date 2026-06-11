@@ -323,6 +323,44 @@ def test_steer_text_to_managed_local_session_uses_claude_channel_command(monkeyp
         assert dispatcher.calls[0]["payload"] == {"text": "redirect", "intent": "steer"}
 
 
+def test_steer_text_to_managed_local_session_passes_codex_attachments_to_engine(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    dispatcher = _install_fake_control_dispatch(monkeypatch)
+    refs = [
+        {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "mime_type": "image/png",
+            "sha256": "a" * 64,
+            "blob_url": "/api/agents/sessions/session-123/inputs/1/attachments/11111111-1111-1111-1111-111111111111/blob",
+        }
+    ]
+
+    with SessionLocal() as db:
+        user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
+
+        result = asyncio.run(
+            steer_text_to_managed_local_session(
+                db=db,
+                owner_id=user.id,
+                session=session,
+                text="redirect",
+                commis_id="managed-local-steer-test",
+                attachments=refs,
+            )
+        )
+
+        assert result.ok is True
+        assert result.exit_code == 0
+        assert len(dispatcher.calls) == 1
+        assert dispatcher.calls[0]["commis_id"] == "managed-local-steer-test"
+        assert dispatcher.calls[0]["command_type"] == "session.steer_text"
+        assert dispatcher.calls[0]["payload"] == {
+            "text": "redirect",
+            "intent": "steer",
+            "attachments": refs,
+        }
+
+
 def test_interrupt_managed_local_session_reports_nonzero_exit(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
     _install_fake_control_dispatch(

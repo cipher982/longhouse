@@ -6355,6 +6355,60 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[tokio::test]
+    async fn ipc_steer_serializes_attachments() {
+        let temp = tempfile::tempdir().unwrap();
+        let sock_path = temp.path().join("bridge.sock");
+        let listener = tokio::net::UnixListener::bind(&sock_path).unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request_buf = Vec::new();
+            stream.read_to_end(&mut request_buf).await.unwrap();
+            let request: Value = serde_json::from_slice(&request_buf).unwrap();
+
+            assert_eq!(request["kind"], "steer");
+            assert_eq!(request["text"], "redirect");
+            assert_eq!(request["thread_id"], "thread-1");
+            assert_eq!(request["expected_turn_id"], "turn-1");
+            assert_eq!(
+                request["attachments"][0]["id"],
+                "11111111-1111-1111-1111-111111111111"
+            );
+            assert_eq!(request["attachments"][0]["mime_type"], "image/png");
+            assert_eq!(
+                request["attachments"][0]["sha256"],
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            );
+            assert_eq!(
+                request["attachments"][0]["blob_url"],
+                "/api/agents/sessions/session-123/inputs/1/attachments/11111111-1111-1111-1111-111111111111/blob"
+            );
+
+            stream.write_all(b"{\"ok\":true}\n").await.unwrap();
+        });
+        let attachment = crate::codex_attachments::AttachmentRef {
+            id: "11111111-1111-1111-1111-111111111111".to_string(),
+            mime_type: "image/png".to_string(),
+            sha256: "a".repeat(64),
+            blob_url:
+                "/api/agents/sessions/session-123/inputs/1/attachments/11111111-1111-1111-1111-111111111111/blob"
+                    .to_string(),
+        };
+
+        send_via_ipc_steer_inner(
+            &sock_path,
+            "redirect",
+            "thread-1",
+            "turn-1",
+            std::slice::from_ref(&attachment),
+        )
+        .await
+        .unwrap();
+
+        server.await.unwrap();
+    }
+
+    #[cfg(unix)]
     async fn parse_stop_ipc_reason(request: Value) -> String {
         let (mut client, server) = tokio::net::UnixStream::pair().unwrap();
         let (tx, mut rx) = mpsc::unbounded_channel();
