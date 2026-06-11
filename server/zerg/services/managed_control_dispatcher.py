@@ -87,6 +87,8 @@ def select_managed_control_transport(
         return None
     if _session_uses_engine_control(session, owner_id=owner_id, command_type=command_type):
         return MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
+    if command_type == MANAGED_CONTROL_COMMAND_ANSWER_PAUSE:
+        return None
     if getattr(session, "source_runner_id", None) is not None:
         return MANAGED_CONTROL_TRANSPORT_LEGACY_RUNNER
     return None

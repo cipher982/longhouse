@@ -14,6 +14,7 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg.services.live_session_dispatch import supports_live_text_dispatch_metadata
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
+from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_ANSWER_PAUSE
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_INTERRUPT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_SEND_TEXT
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_STEER_TEXT
@@ -154,6 +155,40 @@ def test_select_managed_control_transport_supports_claude_engine_channel():
                     ),
                     owner_id=42,
                     command_type=MANAGED_CONTROL_COMMAND_SEND_TEXT,
+                )
+                == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
+            )
+        finally:
+            await _clear_machine_registry()
+
+    asyncio.run(_run())
+
+
+def test_select_managed_control_transport_requires_engine_channel_for_pause_answers():
+    assert (
+        select_managed_control_transport(
+            _session(provider="claude", managed_transport="claude_channel_bridge", source_runner_id=17),
+            owner_id=42,
+            command_type=MANAGED_CONTROL_COMMAND_ANSWER_PAUSE,
+        )
+        is None
+    )
+
+
+def test_select_managed_control_transport_supports_claude_pause_answer_engine_channel():
+    async def _run():
+        await _clear_machine_registry()
+        try:
+            await _connect_fake_engine(owner_id=42, supports=["claude.answer_pause"])
+            assert (
+                select_managed_control_transport(
+                    _session(
+                        provider="claude",
+                        managed_transport="claude_channel_bridge",
+                        source_runner_id=17,
+                    ),
+                    owner_id=42,
+                    command_type=MANAGED_CONTROL_COMMAND_ANSWER_PAUSE,
                 )
                 == MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL
             )
