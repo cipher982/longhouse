@@ -1,47 +1,48 @@
-interface ValueProp {
-  action: string;
-  title: string;
-  description: string;
-}
-
-const props: ValueProp[] = [
-  {
-    action: "It just syncs",
-    title: "Your sessions show up on their own",
-    description:
-      "Install Longhouse and every Claude Code, Codex, Antigravity, and OpenCode session flows into one searchable timeline — live. No import step, no setup.",
-  },
-  {
-    action: "Walk away",
-    title: "Pick up any session from your phone",
-    description:
-      "Continue a session you started at your desk from your phone or browser — message it, tail it, steer it. Or kick off a new one remotely and let it run.",
-  },
-  {
-    action: "Keep it running",
-    title: "Laptop to try, always-on box to keep",
-    description:
-      "Run it all on your laptop to start. Move the Runtime Host to a VPS, Mac mini, or homelab box so sessions stay live after you close the lid.",
-  },
-];
+/**
+ * The "what it actually does" beat. Deliberately NOT the kicker→punchline→
+ * three-cards template the rest of the page leans on — an asymmetric feature
+ * row that leads with the crux (continue your sessions on the go) and keeps the
+ * supporting facts subordinate, not co-equal boxes.
+ */
 
 export function KernelThesisSection() {
   return (
-    <section id="how-it-works" className="landing-value-props">
-      <div className="landing-section-inner">
-        <p className="landing-section-label">How It Works</p>
-        <h2 className="landing-section-title">
-          One session model. Three moves.
-        </h2>
+    <section id="how-it-works" className="landing-thesis">
+      <div className="landing-section-inner landing-thesis-inner">
+        <div className="landing-thesis-copy">
+          <h2 className="landing-thesis-title">
+            Leave your desk. Keep driving the session.
+          </h2>
+          <p className="landing-thesis-lead">
+            Start a session at your desk and pick it back up from your phone or
+            browser — read it, message it, steer it. Or launch a new one
+            remotely and let it run while you&rsquo;re away.
+          </p>
 
-        <div className="landing-value-grid">
-          {props.map((prop) => (
-            <article key={prop.title} className="landing-value-card">
-              <span className="landing-value-action">{prop.action}</span>
-              <h3>{prop.title}</h3>
-              <p>{prop.description}</p>
-            </article>
-          ))}
+          <ul className="landing-thesis-points">
+            <li>
+              <strong>It just syncs.</strong> Install Longhouse and every Claude
+              Code, Codex, Antigravity, and OpenCode session flows into one
+              searchable timeline — live. No import, no setup.
+            </li>
+            <li>
+              <strong>It stays on.</strong> Run it on your laptop to try it, then
+              move the Runtime Host to a VPS, Mac mini, or homelab box so sessions
+              keep running after you close the lid.
+            </li>
+          </ul>
+        </div>
+
+        <div className="landing-thesis-visual">
+          <img
+            src="/images/landing/phone-session.png"
+            alt="A coding session open on a phone, ready to steer"
+            className="landing-thesis-phone"
+            width={1206}
+            height={2622}
+            loading="lazy"
+            decoding="async"
+          />
         </div>
       </div>
     </section>

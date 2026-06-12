@@ -679,53 +679,84 @@
    VALUE PROPS (How It Works)
    -------------------------------------------------------- */
 
-  .landing-value-props {
-    padding: var(--space-16) 0 var(--space-8);
-    text-align: center;
+  .landing-thesis {
+    padding: var(--space-16) 0 var(--space-10);
   }
 
-  .landing-value-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: var(--space-5);
+  .landing-thesis-inner {
+    display: flex;
+    align-items: center;
+    gap: clamp(var(--space-6), 6vw, var(--space-12));
   }
 
-  .landing-value-card {
-    padding: var(--space-6);
-    background:
-      linear-gradient(180deg, rgba(32, 24, 20, 0.96), rgba(20, 16, 13, 0.98));
-    border: 1px solid rgba(201, 166, 107, 0.12);
-    border-radius: var(--radius-xl);
-    box-shadow: 0 16px 36px rgba(8, 7, 6, 0.2);
-    text-align: left;
+  .landing-thesis-copy {
+    flex: 1 1 0;
+    min-width: 0;
   }
 
-  .landing-value-action {
-    display: inline-block;
-    margin-bottom: var(--space-4);
-    padding: var(--space-1) var(--space-3);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-semibold);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--color-brand-primary);
-    background: rgba(201, 166, 107, 0.1);
-    border: 1px solid rgba(201, 166, 107, 0.18);
-    border-radius: var(--radius-full);
-  }
-
-  .landing-value-card h3 {
-    margin: 0 0 var(--space-3);
+  .landing-thesis-title {
+    margin: 0 0 var(--space-5);
     font-family: var(--font-family-display);
-    font-size: var(--font-size-xl);
+    font-size: clamp(2rem, 3.4vw, 3.1rem);
     font-weight: var(--font-weight-semibold);
-    line-height: 1.2;
+    line-height: 1.08;
+    letter-spacing: -0.01em;
   }
 
-  .landing-value-card p {
+  .landing-thesis-lead {
+    margin: 0 0 var(--space-6);
+    max-width: 38ch;
+    font-size: var(--font-size-lg);
+    line-height: var(--font-line-height-relaxed);
+    color: var(--color-text-secondary);
+  }
+
+  .landing-thesis-points {
     margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    border-top: 1px solid rgba(201, 166, 107, 0.14);
+    padding-top: var(--space-5);
+  }
+
+  .landing-thesis-points li {
+    max-width: 46ch;
     color: var(--color-text-secondary);
     line-height: var(--font-line-height-relaxed);
+  }
+
+  .landing-thesis-points strong {
+    color: var(--color-text-primary);
+    font-weight: var(--font-weight-semibold);
+  }
+
+  .landing-thesis-visual {
+    flex: 0 0 clamp(220px, 24vw, 300px);
+    display: flex;
+    justify-content: center;
+  }
+
+  .landing-thesis-phone {
+    width: 100%;
+    height: auto;
+    border-radius: clamp(28px, 3vw, 44px);
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 40px 100px rgba(0, 0, 0, 0.6);
+  }
+
+  @media (width <= 860px) {
+    .landing-thesis-inner {
+      flex-direction: column-reverse;
+      text-align: left;
+    }
+
+    .landing-thesis-visual {
+      flex: none;
+      max-width: 240px;
+    }
   }
 
   /* --------------------------------------------------------
@@ -1912,7 +1943,6 @@
 
     .landing-install-grid,
     .landing-install-paths,
-    .landing-value-grid,
     .landing-surface-grid,
     .landing-providers-grid,
     .landing-pricing-grid {
