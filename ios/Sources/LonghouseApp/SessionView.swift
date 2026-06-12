@@ -41,6 +41,7 @@ struct SessionView: View {
     @FocusState private var composerFocused: Bool
     @StateObject private var attachmentStore = ComposerAttachmentStore()
     @State private var pickerSelection: [PhotosPickerItem] = []
+    @State private var isShowingPhotoPicker: Bool = false
     @State private var isLoadingPickerItems: Bool = false
     /// DOM clearance (pt) needed for the last transcript row to rest above the
     /// floating controls while the WebKit transcript scrolls full-bleed behind
@@ -136,7 +137,8 @@ struct SessionView: View {
             .navigationTitle(viewModel.detail?.displayTitle ?? fallbackTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                loopModeToolbarButton
                 watchButton
             }
         }
@@ -243,25 +245,39 @@ struct SessionView: View {
                         isWatching ? "Updates On" : "Updates",
                         systemImage: isWatching ? "bell.fill" : "bell"
                     )
-                    .labelStyle(.titleAndIcon)
+                    .labelStyle(.iconOnly)
                 }
             }
             .disabled(liveActivityManager.isBusy)
+            .accessibilityLabel(isWatching ? "Lock Screen updates on" : "Lock Screen updates")
             .accessibilityHint("Opens Lock Screen update options")
+        }
+    }
+
+    @ViewBuilder
+    private var loopModeToolbarButton: some View {
+        if let detail = viewModel.detail {
+            if viewModel.isUpdatingLoopMode {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityLabel("Updating loop mode")
+            } else {
+                LoopModeButtons(
+                    currentMode: detail.effectiveLoopMode,
+                    disabled: false,
+                    onChange: { mode in
+                        Task { await viewModel.setLoopMode(sessionId: sessionId, mode: mode, appState: appState) }
+                    }
+                )
+                .accessibilityIdentifier("session-loop-mode-controls")
+            }
         }
     }
 
     @ViewBuilder
     private var runtimeDock: some View {
         if let detail = viewModel.detail {
-            SessionRuntimeDock(
-                detail: detail,
-                loopMode: detail.effectiveLoopMode,
-                isUpdatingLoopMode: viewModel.isUpdatingLoopMode,
-                onLoopModeChange: { mode in
-                    Task { await viewModel.setLoopMode(sessionId: sessionId, mode: mode, appState: appState) }
-                }
-            )
+            SessionRuntimeDock(detail: detail)
         }
     }
 
@@ -440,40 +456,7 @@ struct SessionView: View {
 
             if pauseRequest == nil {
                 HStack(alignment: .bottom, spacing: 8) {
-                    // Sparkle: AI draft, only when field is empty
-                    Button {
-                        Task { await draft() }
-                    } label: {
-                        if viewModel.isDrafting {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Image(systemName: "sparkles")
-                                .font(.title3)
-                                .foregroundStyle(composerHasText ? Color.secondary.opacity(0.3) : Color.secondary)
-                        }
-                    }
-                    .frame(width: 32, height: 32)
-                    .disabled(composerHasText || viewModel.isSending || viewModel.isDrafting)
-                    .accessibilityLabel("Draft reply")
-
-                    if detail.attachImagesEnabled {
-                        let attachmentSlotsLeft = attachmentStore.slotsLeft
-                        let attachmentIsProcessing = attachmentStore.isProcessing
-                        let canAttachImages = attachmentInputEnabled
-                        PhotosPicker(
-                            selection: $pickerSelection,
-                            maxSelectionCount: max(1, attachmentSlotsLeft),
-                            matching: .images
-                        ) {
-                            Image(systemName: attachmentIsProcessing ? "ellipsis.circle" : "paperclip")
-                                .font(.title3)
-                                .foregroundStyle(canAttachImages && attachmentSlotsLeft > 0 ? Color.accentColor : Color.secondary.opacity(0.3))
-                        }
-                        .frame(width: 32, height: 32)
-                        .disabled(!canAttachImages || attachmentSlotsLeft <= 0 || attachmentIsProcessing || isLoadingPickerItems || viewModel.isSending)
-                        .accessibilityLabel("Attach images")
-                        .accessibilityIdentifier("session-chat-attach")
-                    }
+                    composerActionMenu(detail: detail)
 
                     TextField(detail.composerPlaceholder, text: $composerText, axis: .vertical)
                         .lineLimit(1...6)
@@ -524,6 +507,12 @@ struct SessionView: View {
                 }
             }
         }
+        .photosPicker(
+            isPresented: $isShowingPhotoPicker,
+            selection: $pickerSelection,
+            maxSelectionCount: max(1, attachmentStore.slotsLeft),
+            matching: .images
+        )
         .onChange(of: pickerSelection) { _, items in
             guard !items.isEmpty else { return }
             Task {
@@ -555,6 +544,50 @@ struct SessionView: View {
                 }
             }
         }
+    }
+
+    private func composerActionMenu(detail: SessionDetail) -> some View {
+        let attachmentSlotsLeft = attachmentStore.slotsLeft
+        let attachmentIsProcessing = attachmentStore.isProcessing || isLoadingPickerItems
+        let canAttachImages = attachmentInputEnabled
+            && attachmentSlotsLeft > 0
+            && !attachmentIsProcessing
+            && !viewModel.isSending
+        let canDraft = !composerHasText && !viewModel.isSending && !viewModel.isDrafting
+
+        return Menu {
+            Button {
+                Task { await draft() }
+            } label: {
+                Label("Draft reply", systemImage: "sparkles")
+            }
+            .disabled(!canDraft)
+
+            if detail.attachImagesEnabled {
+                Button {
+                    isShowingPhotoPicker = true
+                } label: {
+                    Label("Attach images", systemImage: "paperclip")
+                }
+                .disabled(!canAttachImages)
+                .accessibilityIdentifier("session-chat-attach")
+            }
+        } label: {
+            Group {
+                if viewModel.isDrafting || attachmentIsProcessing {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "plus")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(width: 32, height: 32)
+            .contentShape(Rectangle())
+        }
+        .disabled(viewModel.isSending)
+        .accessibilityLabel("Message actions")
+        .accessibilityIdentifier("session-chat-compose-actions")
     }
 
     @ViewBuilder
@@ -1194,9 +1227,6 @@ private struct BottomChromeCardFrameKey: PreferenceKey {
 
 struct SessionRuntimeDock: View {
     let detail: SessionDetail
-    var loopMode: SessionLoopMode? = nil
-    var isUpdatingLoopMode: Bool = false
-    var onLoopModeChange: ((SessionLoopMode) -> Void)? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -1206,9 +1236,6 @@ struct SessionRuntimeDock: View {
         // headline/detail/capability are a flat type hierarchy. No background or
         // divider — the fused control card owns the surface.
         HStack(spacing: 7) {
-            if !typeSize.isAccessibilitySize {
-                ProviderGlyph(provider: detail.provider, size: 18, variant: .chip)
-            }
             indicator
             Text(detail.runtimeHeadline)
                 .font(.subheadline.weight(.semibold))
@@ -1223,18 +1250,6 @@ struct SessionRuntimeDock: View {
             }
             Spacer(minLength: 8)
             capabilityPill
-            if let loopMode, let onChange = onLoopModeChange {
-                if isUpdatingLoopMode {
-                    ProgressView().controlSize(.mini)
-                } else {
-                    LoopModeButtons(
-                        currentMode: loopMode,
-                        disabled: isUpdatingLoopMode,
-                        onChange: onChange
-                    )
-                    .accessibilityIdentifier("session-loop-mode-controls")
-                }
-            }
         }
         .padding(.horizontal, 4)
         .accessibilityElement(children: .contain)
@@ -1271,7 +1286,16 @@ struct SessionRuntimeDock: View {
     }
 
     private var capabilityLabel: String {
-        detail.runtimeCapabilityLabel
+        let label = detail.runtimeCapabilityLabel
+        let livePrefix = "Live on "
+        if label.range(of: livePrefix, options: [.anchored, .caseInsensitive]) != nil {
+            let hostStart = label.index(label.startIndex, offsetBy: livePrefix.count)
+            let host = label[hostStart...].trimmingCharacters(in: .whitespacesAndNewlines)
+            if !host.isEmpty {
+                return host
+            }
+        }
+        return label
     }
 
     private var accessibilityLabel: String {
@@ -1282,7 +1306,7 @@ struct SessionRuntimeDock: View {
 }
 
 
-private struct LoopModeButtons: View {
+struct LoopModeButtons: View {
     let currentMode: SessionLoopMode
     let disabled: Bool
     let onChange: (SessionLoopMode) -> Void
@@ -1306,8 +1330,12 @@ private struct LoopModeButtons: View {
                 if !typeSize.isAccessibilitySize {
                     Text(modeLabel)
                         .font(.caption2.weight(.medium))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
             }
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .foregroundStyle(.secondary)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)

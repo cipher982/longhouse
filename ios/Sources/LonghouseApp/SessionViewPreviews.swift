@@ -80,6 +80,8 @@ private struct ComposerPreviewChrome: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            navBar
+
             // Fake chat content above
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
@@ -91,22 +93,52 @@ private struct ComposerPreviewChrome: View {
             }
 
             // The actual chrome we're designing
-            SessionRuntimeDock(
-                detail: detail,
-                loopMode: detail.effectiveLoopMode,
-                isUpdatingLoopMode: false,
-                onLoopModeChange: { _ in }
-            )
+            SessionRuntimeDock(detail: detail)
             composerRow
         }
     }
 
+    private var navBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "chevron.left")
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 28, height: 28)
+            Text("Session")
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            LoopModeButtons(
+                currentMode: detail.effectiveLoopMode,
+                disabled: false,
+                onChange: { _ in }
+            )
+            Image(systemName: "bell.fill")
+                .font(.body)
+                .foregroundStyle(Color.white.opacity(0.72))
+                .frame(width: 28, height: 28)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.bar)
+    }
+
     private var composerRow: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            Image(systemName: "sparkles")
-                .font(.title3)
-                .foregroundStyle(text.isEmpty ? Color.secondary : Color.secondary.opacity(0.3))
-                .frame(width: 32, height: 32)
+            Menu {
+                Button {} label: {
+                    Label("Draft reply", systemImage: "sparkles")
+                }
+                Button {} label: {
+                    Label("Attach images", systemImage: "paperclip")
+                }
+            } label: {
+                Image(systemName: "plus")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 32, height: 32)
+            }
+            .accessibilityLabel("Message actions")
 
             TextField("Reply", text: $text, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
