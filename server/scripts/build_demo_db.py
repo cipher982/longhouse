@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 
 # Add backend to path
@@ -55,9 +57,23 @@ def main() -> int:
     parser.add_argument("--output", default=str(default_output), help="Output SQLite file path")
     parser.add_argument("--owner-email", default="dev@local", help="Owner email for seeded runs")
     parser.add_argument("--force", action="store_true", help="Overwrite existing DB if present")
+    parser.add_argument(
+        "--anchor",
+        default=None,
+        help=(
+            "ISO timestamp to anchor seeded session times to (e.g. 2026-01-15T09:41:00). "
+            "Fixing this makes captures byte-stable run-to-run; defaults to now."
+        ),
+    )
 
     args = parser.parse_args()
     output_path = Path(args.output).expanduser().resolve()
+
+    anchor: datetime | None = None
+    if args.anchor:
+        anchor = datetime.fromisoformat(args.anchor)
+        if anchor.tzinfo is None:
+            anchor = anchor.replace(tzinfo=timezone.utc)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if output_path.exists():
@@ -81,7 +97,7 @@ def main() -> int:
 
         # Seed demo agent sessions (AI session timeline)
         store = AgentsStore(db)
-        for session in build_demo_agent_sessions():
+        for session in build_demo_agent_sessions(now=anchor):
             store.ingest_session(session)
         db.commit()
 

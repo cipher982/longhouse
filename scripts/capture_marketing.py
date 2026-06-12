@@ -49,6 +49,28 @@ def load_timeline_sessions(api_url: str, limit: int) -> list[dict]:
     return sessions
 
 
+def _session_id(session: dict):
+    """Extract a session id, tolerant of payload field naming.
+
+    The timeline API keys sessions by `thread_id`; older callers assumed `id`.
+    """
+    for key in ("thread_id", "session_id", "id"):
+        value = session.get(key)
+        if value not in (None, ""):
+            return value
+    raise KeyError("no session id field (thread_id/session_id/id) in payload")
+
+
+def _tool_call_count(session: dict) -> int:
+    """Tool-call count whether the field is a list of calls or a number."""
+    value = session.get("tool_calls", 0)
+    if isinstance(value, list):
+        return len(value)
+    if isinstance(value, (int, float)):
+        return int(value)
+    return 0
+
+
 def resolve_url_templates(url: str, base_url: str) -> str:
     """Replace {featured_session_id} / {first_session_id} placeholders.
 
@@ -64,11 +86,11 @@ def resolve_url_templates(url: str, base_url: str) -> str:
             sessions = load_timeline_sessions(api_url, limit=50)
             best = max(
                 (s for s in sessions if s.get("ended_at")),
-                key=lambda s: s.get("tool_calls", 0),
+                key=_tool_call_count,
                 default=sessions[0] if sessions else None,
             )
             if best:
-                return url.replace("{featured_session_id}", best["id"])
+                return url.replace("{featured_session_id}", str(_session_id(best)))
         except Exception as e:
             print(f"  Warning: Could not resolve featured session ID: {e}")
         return url.replace("{featured_session_id}", "")
@@ -77,22 +99,84 @@ def resolve_url_templates(url: str, base_url: str) -> str:
         return url
     try:
         sessions = load_timeline_sessions(api_url, limit=1)
-        session_id = sessions[0]["id"]
-        return url.replace("{first_session_id}", session_id)
+        return url.replace("{first_session_id}", str(_session_id(sessions[0])))
     except Exception as e:
         print(f"  Warning: Could not resolve session ID: {e}")
         return url
+
+
+# CSS injected before capture to kill animations/transitions so screenshots are
+# deterministic regardless of when the ready signal fires (mirrors ui-capture.ts).
+_ANIMATION_KILL_CSS = """
+  *, *::before, *::after {
+    transition: none !important;
+    animation: none !important;
+    animation-delay: 0s !important;
+    animation-duration: 0s !important;
+    caret-color: transparent !important;
+  }
+"""
+
+# Default capture knobs — overridable per-entry in the manifest.
+DEFAULT_SCALE = 2  # retina; raw 1x output looked soft on the landing page
+DEFAULT_COLOR_SCHEME = "dark"
+
+
+def _append_query(path: str, extra: str) -> str:
+    """Append a query param to a path, respecting any existing query string."""
+    sep = "&" if "?" in path else "?"
+    return f"{path}{sep}{extra}"
+
+
+# Retina PNGs are large; the web/public image CI gate rejects files >2MB. Lossy-
+# quantize captures so they stay crisp but land well under the limit. No-op if
+# pngquant isn't installed (the file is still valid, just larger).
+_IMAGE_MAX_BYTES = 2_000_000
+
+
+def _optimize_png(path: Path) -> None:
+    import shutil  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+
+    pngquant = shutil.which("pngquant")
+    if not pngquant:
+        if path.stat().st_size > _IMAGE_MAX_BYTES:
+            kb = path.stat().st_size // 1024
+            print(f"  Warning: {path.name} is {kb}KB; pngquant not installed (CI gate is 2MB)")
+        return
+    try:
+        # --skip-if-larger keeps the original when quantization wouldn't help.
+        subprocess.run(
+            [pngquant, "--force", "--skip-if-larger", "--quality=70-95", "--output", str(path), str(path)],
+            check=True,
+            capture_output=True,
+        )
+    except subprocess.CalledProcessError:
+        # pngquant exits non-zero when it skips (e.g. --skip-if-larger); that's fine.
+        pass
 
 
 def capture_screenshot(browser, name: str, config: dict, base_url: str):
     """Capture a single screenshot."""
     from playwright.sync_api import TimeoutError as PlaywrightTimeout  # noqa: PLC0415
 
-    page = browser.new_page(
-        viewport={"width": config["viewport"]["width"], "height": config["viewport"]["height"]}
+    # Deterministic, launch-grade context: retina scale factor, frozen motion,
+    # fixed locale/timezone/theme so captures are byte-stable run-to-run.
+    context = browser.new_context(
+        viewport={"width": config["viewport"]["width"], "height": config["viewport"]["height"]},
+        device_scale_factor=config.get("scale", DEFAULT_SCALE),
+        color_scheme=config.get("color_scheme", DEFAULT_COLOR_SCHEME),
+        reduced_motion="reduce",
+        locale="en-US",
+        timezone_id="America/Los_Angeles",
     )
+    page = context.new_page()
 
     resolved_path = resolve_url_templates(config["url"], base_url)
+    # Freeze the in-app clock (Apple-style 9:41) unless the entry opts out, so
+    # relative timestamps ("2h ago") don't drift between runs.
+    if config.get("clock", "frozen") == "frozen" and "clock=" not in resolved_path:
+        resolved_path = _append_query(resolved_path, "clock=frozen")
     url = f"{base_url}{resolved_path}"
     print(f"  Navigating to {resolved_path}")
     page.goto(url)
@@ -103,6 +187,18 @@ def capture_screenshot(browser, name: str, config: dict, base_url: str):
     except PlaywrightTimeout:
         print(f"  Warning: Screenshot-ready signal not received for {name}, capturing anyway")
 
+    # Optionally assert the page reached a real (non-empty) marketing state.
+    expect_selector = config.get("expect_selector")
+    if expect_selector:
+        try:
+            page.wait_for_selector(expect_selector, timeout=READY_TIMEOUT)
+        except PlaywrightTimeout:
+            print(f"  Warning: expected selector '{expect_selector}' not found for {name}")
+
+    # Kill animations + settle briefly so transient motion never lands in a frame.
+    page.add_style_tag(content=_ANIMATION_KILL_CSS)
+    page.wait_for_timeout(150)
+
     # Build screenshot args
     output_path = FRONTEND_DIR / config["output"]
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -112,11 +208,12 @@ def capture_screenshot(browser, name: str, config: dict, base_url: str):
         screenshot_args["clip"] = config["crop"]
 
     page.screenshot(**screenshot_args)
+    _optimize_png(output_path)
 
     size_kb = output_path.stat().st_size / 1024
     print(f"  {name} ({size_kb:.0f} KB)")
 
-    page.close()
+    context.close()
 
 
 def capture_all(manifest: dict, names: list[str] | None = None):

@@ -48,10 +48,15 @@ if [ -z "$FERNET_SECRET" ]; then
 fi
 
 # --- Build demo DB ---
-echo "Building demo database..."
+# Default: anchor to build-time "now" so seeded sessions land inside the
+# timeline's recent-lookback window and the captures show a POPULATED timeline.
+# Set DEMO_ANCHOR=<ISO-ts> for byte-stable captures (the future visual-diff
+# gate) — but note a fixed past anchor older than the timeline window will
+# render an empty state, so the gate must also freeze the query window.
+echo "Building demo database${DEMO_ANCHOR:+ (anchor=$DEMO_ANCHOR)}..."
 rm -f "$DEMO_DB_PATH"
 mkdir -p "$(dirname "$DEMO_DB_PATH")"
-(cd server && uv run python scripts/build_demo_db.py --output "$DEMO_DB_PATH")
+(cd server && uv run python scripts/build_demo_db.py --output "$DEMO_DB_PATH" ${DEMO_ANCHOR:+--anchor "$DEMO_ANCHOR"})
 
 # --- Start backend ---
 echo "Starting backend on :$BACKEND_PORT..."

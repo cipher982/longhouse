@@ -4,22 +4,36 @@
 # NOTE: scenario-*.png files are AI-generated illustrations, not screenshots.
 # They live in public/images/landing/ but are NOT captured by this script.
 #
-# Usage: Run `make dev-demo` first to seed demo data, then:
-#   uv run scripts/capture_marketing.py
+# Capture knobs (per entry, all optional):
+#   scale          device_scale_factor (default 2 = retina)
+#   color_scheme   "dark" (default) | "light"
+#   clock          "frozen" (default, Apple 9:41) | "live"
+#   expect_selector  CSS/testid that must be present (guards empty/error states)
+#
+# Usage: the self-contained harness boots a frozen demo stack and overrides
+# base_url, so prefer it over running this script directly:
+#   ./scripts/marketing-screenshots.sh           # all
+#   ./scripts/marketing-screenshots.sh timeline-preview   # one
+# Or, against an already-running demo stack:
+#   make demo-db && longhouse serve --demo
+#   uv run scripts/capture_marketing.py --base-url http://localhost:8080
 
-base_url: http://localhost:30080
+# Fallback only — marketing-screenshots.sh passes the real port via --base-url.
+base_url: http://localhost:47398
 
 screenshots:
   timeline-preview:
     description: Timeline page with sessions from multiple providers
     url: /timeline?marketing=true
     viewport: { width: 1400, height: 900 }
+    expect_selector: '[data-testid="timeline-inbox"]'
     output: public/images/landing/timeline-preview.png
 
   search-preview:
     description: Timeline with search results showing FTS5 matches
     url: /timeline?query=file&marketing=true
     viewport: { width: 1400, height: 900 }
+    expect_selector: '[data-testid="timeline-inbox"]'
     output: public/images/landing/search-preview.png
 
   session-detail-preview:
