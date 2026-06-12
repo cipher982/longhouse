@@ -1166,6 +1166,9 @@ struct SessionRuntimeDock: View {
         // headline/detail/capability are a flat type hierarchy. No background or
         // divider — the fused control card owns the surface.
         HStack(spacing: 7) {
+            if !typeSize.isAccessibilitySize {
+                ProviderGlyph(provider: detail.provider, size: 18, variant: .chip)
+            }
             indicator
             Text(detail.runtimeHeadline)
                 .font(.subheadline.weight(.semibold))
@@ -1237,6 +1240,7 @@ struct SessionRuntimeDock: View {
             .joined(separator: ", ")
     }
 }
+
 
 private struct LoopModeButtons: View {
     let currentMode: SessionLoopMode
@@ -2091,12 +2095,13 @@ final class SessionViewModel: ObservableObject {
                     preview: tail.session.transcriptPreview
                 )
             )
-            // Reconcile before updating items so SwiftUI sees both state changes
-            // in the same render pass — prevents a one-frame duplicate where the
-            // durable event is visible but the optimistic submitted input hasn't
-            // been removed yet.
-            reconcileSubmittedInputs(with: mergedEvents)
-            self.items = builtItems
+            // Batch both mutations so SwiftUI coalesces them into one render pass,
+            // preventing the one-frame duplicate where the durable event is visible
+            // but the optimistic submitted input hasn't been removed yet.
+            withAnimation(nil) {
+                reconcileSubmittedInputs(with: mergedEvents)
+                self.items = builtItems
+            }
             let buildMs = Int(Date().timeIntervalSince(buildStartedAt) * 1000)
             openWaterfall?.mark(
                 "timeline_built",
