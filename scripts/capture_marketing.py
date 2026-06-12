@@ -147,32 +147,43 @@ def _append_query(path: str, extra: str) -> str:
     return f"{path}{sep}{extra}"
 
 
-# Retina PNGs are large; the web/public image CI gate rejects files >2MB. Lossy-
-# quantize captures so they stay crisp but land well under the limit. No-op if
-# pngquant isn't installed (the file is still valid, just larger).
+# Retina PNGs are large; the web/public image CI gate rejects files >2MB.
 _IMAGE_MAX_BYTES = 2_000_000
 
 
 def _optimize_png(path: Path) -> None:
+    """Quantize a PNG to satisfy the <2MB web/public CI gate.
+
+    Quantizes to a temp file and only replaces the original on success, so a
+    pngquant failure (or its non-zero --skip-if-larger exit) can never corrupt
+    or truncate the captured screenshot. Hard-fails if the final image still
+    exceeds the gate — an oversized asset must fail the run loudly, not ship
+    and break CI later.
+    """
     import shutil  # noqa: PLC0415
     import subprocess  # noqa: PLC0415
 
     pngquant = shutil.which("pngquant")
-    if not pngquant:
-        if path.stat().st_size > _IMAGE_MAX_BYTES:
-            kb = path.stat().st_size // 1024
-            print(f"  Warning: {path.name} is {kb}KB; pngquant not installed (CI gate is 2MB)")
-        return
-    try:
-        # --skip-if-larger keeps the original when quantization wouldn't help.
-        subprocess.run(
-            [pngquant, "--force", "--skip-if-larger", "--quality=70-95", "--output", str(path), str(path)],
-            check=True,
+    if pngquant:
+        tmp = path.with_name(path.name + ".opt")
+        result = subprocess.run(
+            [pngquant, "--force", "--skip-if-larger", "--quality=70-95", "--output", str(tmp), str(path)],
             capture_output=True,
         )
-    except subprocess.CalledProcessError:
-        # pngquant exits non-zero when it skips (e.g. --skip-if-larger); that's fine.
-        pass
+        # Exit 0 => a smaller PNG was written; adopt it. Any non-zero exit
+        # (--skip-if-larger skip, quality floor, or a real error) leaves the
+        # original untouched. Only trust a non-empty temp file.
+        if result.returncode == 0 and tmp.exists() and tmp.stat().st_size > 0:
+            tmp.replace(path)
+        else:
+            tmp.unlink(missing_ok=True)
+
+    size = path.stat().st_size
+    if size > _IMAGE_MAX_BYTES:
+        hint = "" if pngquant else " — install pngquant (`brew install pngquant`)"
+        raise RuntimeError(
+            f"{path.name} is {size // 1024}KB, over the {_IMAGE_MAX_BYTES // 1024}KB web/public image gate{hint}"
+        )
 
 
 def capture_screenshot(browser, name: str, config: dict, base_url: str):
@@ -189,50 +200,57 @@ def capture_screenshot(browser, name: str, config: dict, base_url: str):
         locale="en-US",
         timezone_id="America/Los_Angeles",
     )
-    page = context.new_page()
-
-    resolved_path = resolve_url_templates(config["url"], base_url)
-    # Freeze the in-app clock (Apple-style 9:41) unless the entry opts out, so
-    # relative timestamps ("2h ago") don't drift between runs.
-    if config.get("clock", "frozen") == "frozen" and "clock=" not in resolved_path:
-        resolved_path = _append_query(resolved_path, "clock=frozen")
-    url = f"{base_url}{resolved_path}"
-    print(f"  Navigating to {resolved_path}")
-    page.goto(url)
-
-    # Wait for app to signal screenshot readiness (content loaded, animations settled)
     try:
-        page.wait_for_selector("[data-screenshot-ready='true']", timeout=READY_TIMEOUT)
-    except PlaywrightTimeout:
-        print(f"  Warning: Screenshot-ready signal not received for {name}, capturing anyway")
+        page = context.new_page()
 
-    # Optionally assert the page reached a real (non-empty) marketing state.
-    expect_selector = config.get("expect_selector")
-    if expect_selector:
+        resolved_path = resolve_url_templates(config["url"], base_url)
+        # Freeze the in-app clock (Apple-style 9:41) unless the entry opts out, so
+        # relative timestamps ("2h ago") don't drift between runs.
+        if config.get("clock", "frozen") == "frozen" and "clock=" not in resolved_path:
+            resolved_path = _append_query(resolved_path, "clock=frozen")
+        url = f"{base_url}{resolved_path}"
+        print(f"  Navigating to {resolved_path}")
+        page.goto(url)
+
+        # Wait for app to signal screenshot readiness (content loaded, animations settled)
         try:
-            page.wait_for_selector(expect_selector, timeout=READY_TIMEOUT)
+            page.wait_for_selector("[data-screenshot-ready='true']", timeout=READY_TIMEOUT)
         except PlaywrightTimeout:
-            print(f"  Warning: expected selector '{expect_selector}' not found for {name}")
+            print(f"  Warning: Screenshot-ready signal not received for {name}, capturing anyway")
 
-    # Kill animations + settle briefly so transient motion never lands in a frame.
-    page.add_style_tag(content=_ANIMATION_KILL_CSS)
-    page.wait_for_timeout(150)
+        # Assert the page reached a real (non-empty) marketing state. This is a
+        # HARD gate: capturing an empty-state or error page that merely renders is
+        # the worst failure for a marketing pipeline, so a missing expect_selector
+        # fails the run instead of silently shipping a wrong-but-non-empty image.
+        expect_selector = config.get("expect_selector")
+        if expect_selector:
+            try:
+                page.wait_for_selector(expect_selector, timeout=READY_TIMEOUT)
+            except PlaywrightTimeout as exc:
+                raise RuntimeError(
+                    f"{name}: expected selector '{expect_selector}' never appeared at {resolved_path} "
+                    f"— refusing to capture a wrong/empty page"
+                ) from exc
 
-    # Build screenshot args
-    output_path = FRONTEND_DIR / config["output"]
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+        # Kill animations + settle briefly so transient motion never lands in a frame.
+        page.add_style_tag(content=_ANIMATION_KILL_CSS)
+        page.wait_for_timeout(150)
 
-    screenshot_args = {"path": str(output_path)}
-    if "crop" in config:
-        screenshot_args["clip"] = config["crop"]
+        # Build screenshot args
+        output_path = FRONTEND_DIR / config["output"]
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    page.screenshot(**screenshot_args)
-    _optimize_png(output_path)
+        screenshot_args = {"path": str(output_path)}
+        if "crop" in config:
+            screenshot_args["clip"] = config["crop"]
 
-    size_kb = output_path.stat().st_size / 1024
-    print(f"  {name} ({size_kb:.0f} KB)")
+        page.screenshot(**screenshot_args)
+        _optimize_png(output_path)
 
-    context.close()
+        size_kb = output_path.stat().st_size / 1024
+        print(f"  {name} ({size_kb:.0f} KB)")
+    finally:
+        context.close()
 
 
 def capture_all(manifest: dict, names: list[str] | None = None):
