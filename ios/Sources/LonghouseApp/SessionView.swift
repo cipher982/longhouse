@@ -515,14 +515,22 @@ struct SessionView: View {
         )
         .onChange(of: pickerSelection) { _, items in
             guard !items.isEmpty else { return }
+            let slotsLeftAtSelection = attachmentStore.slotsLeft
+            guard slotsLeftAtSelection > 0 else {
+                attachmentStore.errorMessage = "Max \(ComposerAttachmentLimits.maxAttachments) attachments."
+                pickerSelection = []
+                return
+            }
+            let itemsToLoad = Array(items.prefix(slotsLeftAtSelection))
+            let skippedSelectionCount = items.count - itemsToLoad.count
             Task {
                 await MainActor.run { isLoadingPickerItems = true }
                 var raw: [(filename: String, data: Data)] = []
                 var loadFailures = 0
-                for _ in items.indices {
+                for _ in itemsToLoad.indices {
                     raw.append((filename: "", data: Data()))
                 }
-                for (idx, item) in items.enumerated() {
+                for (idx, item) in itemsToLoad.enumerated() {
                     do {
                         if let data = try await item.loadTransferable(type: Data.self) {
                             raw[idx] = (filename: "image-\(UUID().uuidString).jpg", data: data)
@@ -538,6 +546,9 @@ struct SessionView: View {
                 await MainActor.run {
                     if loadFailures > 0 && loaded.isEmpty {
                         attachmentStore.errorMessage = "Could not load selected image."
+                    } else if skippedSelectionCount > 0 {
+                        let slotNoun = slotsLeftAtSelection == 1 ? "slot" : "slots"
+                        attachmentStore.errorMessage = "Only \(slotsLeftAtSelection) attachment \(slotNoun) left."
                     }
                     pickerSelection = []
                     isLoadingPickerItems = false
