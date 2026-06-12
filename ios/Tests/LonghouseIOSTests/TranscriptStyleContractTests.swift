@@ -83,6 +83,32 @@ final class TranscriptStyleContractTests: XCTestCase {
         XCTAssertTrue(css.contains(".tool-meta.orphan"), "Orphan results must share the attention treatment, not render grey")
     }
 
+    // MARK: Table rendering — CSS tokens and JS helpers
+
+    func testTableCSSPresent() {
+        XCTAssertTrue(css.contains(".table-wrap {"), "Scrollable table wrapper CSS must exist")
+        XCTAssertTrue(css.contains("border-collapse: collapse;"), "Table must collapse borders")
+        XCTAssertTrue(css.contains("var(--rule)"), "Table borders must use the --rule palette token")
+    }
+
+    func testH3StylePresent() {
+        XCTAssertTrue(css.contains("h3 {"), "h3 CSS rule must exist")
+        XCTAssertTrue(css.contains("font-size: 15px;"), "h3 must have a distinct font size")
+    }
+
+    func testTableJSHelpersPresent() {
+        XCTAssertTrue(css.contains("function isTableSeparator"), "isTableSeparator JS helper must be present")
+        XCTAssertTrue(css.contains("function isTableRow"), "isTableRow JS helper must be present")
+        XCTAssertTrue(css.contains("function tableToHtml"), "tableToHtml JS helper must be present")
+        XCTAssertTrue(css.contains("function splitCells"), "splitCells JS helper must be present")
+    }
+
+    func testMarkdownToHtmlHandlesTableAndH3() {
+        // Verify the JS function body references table state and h3
+        XCTAssertTrue(css.contains("tableRows"), "markdownToHtml must accumulate table rows")
+        XCTAssertTrue(css.contains("### "), "markdownToHtml must handle h3 prefix")
+    }
+
     // MARK: Bottom-inset hook for the floating control surface is wired
 
     func testBottomInsetVariableDrivesRootPadding() {

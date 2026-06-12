@@ -1043,7 +1043,7 @@ private extension WebTranscriptView {
       margin-bottom: 0;
     }
 
-    h1, h2 {
+    h1, h2, h3 {
       margin: 0.35em 0 0.45em;
       line-height: 1.18;
     }
@@ -1055,6 +1055,45 @@ private extension WebTranscriptView {
     h2 {
       font-size: 17px;
     }
+
+    h3 {
+      font-size: 15px;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      margin: 0.5em 0 0.75em;
+      border-radius: 7px;
+      border: 1px solid var(--rule);
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      font-size: 0.9em;
+    }
+
+    th, td {
+      padding: 6px 10px;
+      text-align: left;
+      border-bottom: 1px solid var(--rule);
+      white-space: normal;
+      vertical-align: top;
+    }
+
+    th {
+      font-weight: 650;
+      background: var(--code);
+      white-space: nowrap;
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    td[align="center"], th[align="center"] { text-align: center; }
+    td[align="right"],  th[align="right"]  { text-align: right; }
 
     ul {
       margin: 0.25em 0 0.75em 1.25em;
@@ -1312,11 +1351,66 @@ private extension WebTranscriptView {
       return '<p>' + inlineMarkdown(lines.join('\n')).replace(/\n/g, '<br>') + '</p>';
     }
 
+    // Returns true when line looks like a GFM table separator (|---|---|).
+    // Uses * (not +) for the inner group so single-column |---| also matches.
+    function isTableSeparator(line) {
+      return /^\|?[\s\-:]+(\|[\s\-:]+)*\|?$/.test(line.trim());
+    }
+
+    // Returns true when line looks like a GFM table data row (starts/ends with |,
+    // or contains at least one | surrounded by non-pipe content).
+    function isTableRow(line) {
+      const t = line.trim();
+      return t.startsWith('|') || /\S\|\S/.test(t) || (t.endsWith('|') && t.includes('|'));
+    }
+
+    // Split a pipe-delimited row into trimmed cell strings.
+    function splitCells(line) {
+      const t = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+      return t.split('|').map(c => c.trim());
+    }
+
+    // Parse alignment hints from a separator row.
+    function parseAligns(sepLine) {
+      return splitCells(sepLine).map(cell => {
+        if (cell.startsWith(':') && cell.endsWith(':')) return 'center';
+        if (cell.endsWith(':')) return 'right';
+        return '';
+      });
+    }
+
+    // Render accumulated table rows (first is header, second is separator) to HTML.
+    function tableToHtml(rows) {
+      // Need at least header + separator; separator must actually look like one.
+      if (rows.length < 2 || !isTableSeparator(rows[1])) {
+        return rows.map(r => paragraphHtml([r])).join('');
+      }
+      const aligns = parseAligns(rows[1]);
+      const alignAttr = (i) => aligns[i] ? ` align="${aligns[i]}"` : '';
+
+      const header = splitCells(rows[0]);
+      let h = '<thead><tr>' + header.map((c, i) =>
+        `<th${alignAttr(i)}>${inlineMarkdown(c)}</th>`
+      ).join('') + '</tr></thead>';
+
+      let b = '<tbody>';
+      for (let ri = 2; ri < rows.length; ri++) {
+        const cells = splitCells(rows[ri]);
+        b += '<tr>' + header.map((_, i) =>
+          `<td${alignAttr(i)}>${inlineMarkdown(cells[i] ?? '')}</td>`
+        ).join('') + '</tr>';
+      }
+      b += '</tbody>';
+
+      return '<div class="table-wrap"><table>' + h + b + '</table></div>';
+    }
+
     function markdownToHtml(value) {
       const lines = String(value ?? '').split(/\r?\n/);
       let html = '';
       let paragraph = [];
       let code = null;
+      let tableRows = null;   // null = not in table; array = accumulating rows
 
       function flushParagraph() {
         html += paragraphHtml(paragraph);
@@ -1330,12 +1424,21 @@ private extension WebTranscriptView {
         }
       }
 
+      function flushTable() {
+        if (tableRows !== null) {
+          html += tableToHtml(tableRows);
+          tableRows = null;
+        }
+      }
+
       for (const line of lines) {
         const trimmed = line.trim();
 
+        // Code fence — highest priority, swallows everything inside.
         if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
           if (code === null) {
             flushParagraph();
+            flushTable();
             code = [];
           } else {
             flushCode();
@@ -1348,8 +1451,38 @@ private extension WebTranscriptView {
           continue;
         }
 
+        // Table accumulation: start on any pipe row, continue until a
+        // non-pipe line (blank or block-level element) breaks the sequence.
+        if (isTableRow(line)) {
+          // A separator-only line with no prior rows is not a table header —
+          // treat as paragraph content.
+          if (tableRows === null) {
+            if (!isTableSeparator(line)) {
+              // Opening row — flush prior paragraph and start table.
+              flushParagraph();
+              tableRows = [line];
+            } else {
+              paragraph.push(line);
+            }
+          } else {
+            tableRows.push(line);
+          }
+          continue;
+        }
+
+        // Any non-pipe line breaks an in-progress table.
+        if (tableRows !== null) {
+          flushTable();
+        }
+
         if (trimmed === '') {
           flushParagraph();
+          continue;
+        }
+
+        if (trimmed.startsWith('### ')) {
+          flushParagraph();
+          html += '<h3>' + inlineMarkdown(trimmed.slice(4)) + '</h3>';
           continue;
         }
 
@@ -1376,6 +1509,7 @@ private extension WebTranscriptView {
 
       flushParagraph();
       flushCode();
+      flushTable();
       return html;
     }
 
