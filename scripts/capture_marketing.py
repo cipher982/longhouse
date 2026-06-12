@@ -50,25 +50,44 @@ def load_timeline_sessions(api_url: str, limit: int) -> list[dict]:
 
 
 def _session_id(session: dict):
-    """Extract a session id, tolerant of payload field naming.
+    """Extract the id that the /timeline/:sessionId detail route expects.
 
-    The timeline API keys sessions by `thread_id`; older callers assumed `id`.
+    A timeline card's `thread_id` is the THREAD id, not the session id the
+    detail page loads by. The frontend navigates with `detail.id` (the head
+    session of the thread) — mirror that, then fall back to flatter shapes.
     """
-    for key in ("thread_id", "session_id", "id"):
+    detail = session.get("detail")
+    if isinstance(detail, dict) and detail.get("id") not in (None, ""):
+        return detail["id"]
+    for key in ("head_session_id", "session_id", "id", "thread_id"):
         value = session.get(key)
         if value not in (None, ""):
             return value
-    raise KeyError("no session id field (thread_id/session_id/id) in payload")
+    raise KeyError("no session id field (detail.id/head_session_id/session_id/id) in payload")
 
 
 def _tool_call_count(session: dict) -> int:
-    """Tool-call count whether the field is a list of calls or a number."""
-    value = session.get("tool_calls", 0)
+    """Tool-call count whether the field is a list of calls or a number.
+
+    Looks at the card's `detail` (an AgentSession) first, then the card itself.
+    """
+    detail = session.get("detail")
+    value = (detail or {}).get("tool_calls") if isinstance(detail, dict) else None
+    if value is None:
+        value = session.get("tool_calls", 0)
     if isinstance(value, list):
         return len(value)
     if isinstance(value, (int, float)):
         return int(value)
     return 0
+
+
+def _is_ended(session: dict) -> bool:
+    """True if the session is completed (ended_at set), tolerant of card shape."""
+    detail = session.get("detail")
+    if isinstance(detail, dict) and detail.get("ended_at"):
+        return True
+    return bool(session.get("ended_at"))
 
 
 def resolve_url_templates(url: str, base_url: str) -> str:
@@ -85,7 +104,7 @@ def resolve_url_templates(url: str, base_url: str) -> str:
         try:
             sessions = load_timeline_sessions(api_url, limit=50)
             best = max(
-                (s for s in sessions if s.get("ended_at")),
+                (s for s in sessions if _is_ended(s)),
                 key=_tool_call_count,
                 default=sessions[0] if sessions else None,
             )
