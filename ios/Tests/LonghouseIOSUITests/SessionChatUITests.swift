@@ -43,7 +43,7 @@ final class SessionChatUITests: XCTestCase {
         )
     }
 
-    func disabled_testCaptureToolsTranscriptLightScreenshot() throws {
+    func testCaptureToolsTranscriptLightScreenshot() throws {
         try captureSessionScreenshot(
             fixtureName: "tools",
             eventCount: 9,
@@ -52,7 +52,7 @@ final class SessionChatUITests: XCTestCase {
         )
     }
 
-    func disabled_testCaptureToolsTranscriptDarkScreenshot() throws {
+    func testCaptureToolsTranscriptDarkScreenshot() throws {
         try captureSessionScreenshot(
             fixtureName: "tools",
             eventCount: 9,

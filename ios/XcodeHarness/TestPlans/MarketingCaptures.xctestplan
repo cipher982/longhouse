@@ -1,7 +1,7 @@
 {
   "configurations" : [
     {
-      "id" : "7D0B1461-F512-4A5D-A323-D47A0DA3452F",
+      "id" : "5A2C08D0-1B87-4F6D-B3A4-E8D45E9F7B01",
       "name" : "Default",
       "options" : {
         "language" : "en",
@@ -15,7 +15,7 @@
   "testTargets" : [
     {
       "parallelizable" : false,
-      "skippedTests" : [
+      "selectedTests" : [
         "SessionChatUITests\/testCaptureToolsTranscriptLightScreenshot",
         "SessionChatUITests\/testCaptureToolsTranscriptDarkScreenshot"
       ],

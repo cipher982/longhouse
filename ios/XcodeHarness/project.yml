@@ -227,3 +227,18 @@ schemes:
       config: Debug
       targets:
         - LonghouseChatStressUITests
+
+  LonghouseMarketingCaptures:
+    build:
+      targets:
+        Longhouse: all
+        LonghouseWidgetExtension: all
+        LonghouseIOSUITests: [test]
+    run:
+      config: Debug
+      executable: Longhouse
+    test:
+      config: Debug
+      testPlans:
+        - path: TestPlans/MarketingCaptures.xctestplan
+          defaultPlan: true
