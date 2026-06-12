@@ -91,6 +91,12 @@ ios-marketing: ## Capture iOS marketing screenshots to /tmp/lh-shots/ (session-l
 	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
 	@DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj LonghouseMarketingCaptures)"; \
 	rm -rf /tmp/lh-shots; \
+	UDID="$$(printf '%s' "$$DESTINATION" | sed -n 's/.*id=\([0-9A-Fa-f-]*\).*/\1/p')"; \
+	if [ -n "$$UDID" ]; then \
+		xcrun simctl boot "$$UDID" 2>/dev/null || true; \
+		xcrun simctl bootstatus "$$UDID" -b 2>/dev/null || true; \
+		xcrun simctl status_bar "$$UDID" override --time "9:41" --batteryState charged --batteryLevel 100 --wifiBars 3 --cellularBars 4 2>/dev/null || true; \
+	fi; \
 	xcodebuild \
 		-project ios/XcodeHarness/LonghouseIOS.xcodeproj \
 		-scheme LonghouseMarketingCaptures \
@@ -98,6 +104,7 @@ ios-marketing: ## Capture iOS marketing screenshots to /tmp/lh-shots/ (session-l
 		-derivedDataPath "$$(mktemp -d)" \
 		-testPlan MarketingCaptures \
 		test; \
+	[ -n "$$UDID" ] && xcrun simctl status_bar "$$UDID" clear 2>/dev/null || true; \
 	echo "Captures written to /tmp/lh-shots/"; \
 	ls -lh /tmp/lh-shots/
 

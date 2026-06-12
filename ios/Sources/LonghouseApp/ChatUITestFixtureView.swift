@@ -267,6 +267,7 @@ private struct ChatUITestFixture: Sendable {
 
 private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
     let sessionID: String
+    private let fixtureName: String
     private var nextEventID = 1
     private var events: [SessionEvent]
     private var realtimeContinuation: AsyncStream<SessionWorkspaceStream.Event>.Continuation?
@@ -274,6 +275,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
 
     init(fixture: ChatUITestFixture, sessionID: String = "ui-test-chat-session") {
         self.sessionID = sessionID
+        self.fixtureName = fixture.name
         var seedEvents: [SessionEvent] = []
         if let replayPath = fixture.replayPath {
             // A replay run must exercise the actual exported transcript. If the
@@ -292,6 +294,8 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             }
         } else if fixture.name == "tools" {
             seedEvents = Self.toolFixtureEvents()
+        } else if fixture.name == "marketing" {
+            seedEvents = Self.marketingFixtureEvents()
         } else {
             for index in 0..<fixture.eventCount {
                 let role = index.isMultiple(of: 2) ? "user" : "assistant"
@@ -308,7 +312,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
     }
 
     func sessionWorkspace(id: String, limit: Int, branchMode: String) async throws -> SessionWorkspaceResponse {
-        Self.makeWorkspace(sessionID: sessionID, events: events)
+        Self.makeWorkspace(sessionID: sessionID, events: events, title: Self.titleForFixture(fixtureName))
     }
 
     func sessionMobileTail(
@@ -327,7 +331,8 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
             events: page.events,
             total: events.count,
             pageOffset: page.pageOffset,
-            snapshotEventId: events.map(\.id).max()
+            snapshotEventId: events.map(\.id).max(),
+            title: Self.titleForFixture(fixtureName)
         )
     }
 
@@ -472,8 +477,12 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         )))
     }
 
-    private static func makeWorkspace(sessionID: String, events: [SessionEvent]) -> SessionWorkspaceResponse {
-        let detail = makeDetail(sessionID: sessionID, events: events)
+    private static func makeWorkspace(
+        sessionID: String,
+        events: [SessionEvent],
+        title: String = "Chat UI Fixture"
+    ) -> SessionWorkspaceResponse {
+        let detail = makeDetail(sessionID: sessionID, events: events, title: title)
         let projectionItems = events.map { event in
             SessionProjectionItem(
                 kind: "event",
@@ -514,9 +523,10 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         events: [SessionEvent],
         total: Int,
         pageOffset: Int,
-        snapshotEventId: Int?
+        snapshotEventId: Int?,
+        title: String = "Chat UI Fixture"
     ) -> SessionMobileTailResponse {
-        let detail = makeDetail(sessionID: sessionID, events: events)
+        let detail = makeDetail(sessionID: sessionID, events: events, title: title)
         let projectionItems = events.map { event in
             SessionProjectionItem(
                 kind: "event",
@@ -558,15 +568,25 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         return (Array(events[pageOffset..<end]), pageOffset)
     }
 
-    private static func makeDetail(sessionID: String, events: [SessionEvent]) -> SessionDetail {
+    /// Session header title for a given fixture. Marketing captures want a
+    /// realistic session title, not the test-harness label.
+    static func titleForFixture(_ fixtureName: String) -> String {
+        fixtureName == "marketing" ? "Wire up OAuth refresh flow" : "Chat UI Fixture"
+    }
+
+    private static func makeDetail(
+        sessionID: String,
+        events: [SessionEvent],
+        title: String = "Chat UI Fixture"
+    ) -> SessionDetail {
         let detail = SessionDetail(
             id: sessionID,
             provider: "codex",
             project: "longhouse",
             cwd: "/Users/example/git/zerg/longhouse",
             gitBranch: "main",
-            summary: "Chat UI fixture",
-            summaryTitle: "Chat UI Fixture",
+            summary: title,
+            summaryTitle: title,
             presenceState: "idle",
             presenceTool: nil,
             userState: "active",
@@ -702,6 +722,76 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         events.append(SessionEvent(
             id: next(), role: "assistant",
             contentText: "The MR was renamed by Alex at 18:42, then moved back to In Review.",
+            toolName: nil, toolInputJSON: nil, toolOutputText: nil, toolCallId: nil,
+            toolCallState: nil, timestamp: ts(), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+        ))
+        return events
+    }
+
+    /// A realistic CODING session for marketing captures: a real-feeling task
+    /// (OAuth refresh), paired Read/Edit/Bash tool calls, and a clean result.
+    /// On-message for the launch wedge (a coding agent you steer), unlike the
+    /// Jira `tools` fixture which exists to exercise the dropped-tool case.
+    private static func marketingFixtureEvents() -> [SessionEvent] {
+        var events: [SessionEvent] = []
+        var id = 0
+        func next() -> Int { id += 1; return id }
+        func ts() -> String { fixedTimestamp(offset: id) }
+
+        events.append(SessionEvent(
+            id: next(), role: "user",
+            contentText: "The access token expires mid-session and users get logged out. Add silent refresh before it expires.",
+            toolName: nil, toolInputJSON: nil, toolOutputText: nil, toolCallId: nil,
+            toolCallState: nil, timestamp: ts(), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+        ))
+        events.append(SessionEvent(
+            id: next(), role: "assistant",
+            contentText: "Found it — the client only refreshes on a 401. I'll add a timer that refreshes ~60s before expiry so a request never races the token.",
+            toolName: nil, toolInputJSON: nil, toolOutputText: nil, toolCallId: nil,
+            toolCallState: nil, timestamp: ts(), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+        ))
+        let readId = "call-read-1"
+        events.append(SessionEvent(
+            id: next(), role: "assistant", contentText: nil,
+            toolName: "Read", toolInputJSON: nil, toolOutputText: nil, toolCallId: readId,
+            toolCallState: .completed, timestamp: ts(), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+        ))
+        events.append(SessionEvent(
+            id: next(), role: "tool", contentText: nil,
+            toolName: "Read", toolInputJSON: nil,
+            toolOutputText: "src/lib/auth-refresh.ts — single-flight 401 retry, no proactive refresh.",
+            toolCallId: readId, toolCallState: .completed, timestamp: ts(),
+            inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+        ))
+        let editId = "call-edit-1"
+        events.append(SessionEvent(
+            id: next(), role: "assistant", contentText: nil,
+            toolName: "Edit", toolInputJSON: nil, toolOutputText: nil, toolCallId: editId,
+            toolCallState: .completed, timestamp: ts(), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+        ))
+        events.append(SessionEvent(
+            id: next(), role: "tool", contentText: nil,
+            toolName: "Edit", toolInputJSON: nil,
+            toolOutputText: "scheduleRefresh() armed on token issue; cleared on logout.",
+            toolCallId: editId, toolCallState: .completed, timestamp: ts(),
+            inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+        ))
+        let bashId = "call-bash-1"
+        events.append(SessionEvent(
+            id: next(), role: "assistant", contentText: nil,
+            toolName: "Bash", toolInputJSON: nil, toolOutputText: nil, toolCallId: bashId,
+            toolCallState: .completed, timestamp: ts(), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+        ))
+        events.append(SessionEvent(
+            id: next(), role: "tool", contentText: nil,
+            toolName: "Bash", toolInputJSON: nil,
+            toolOutputText: "✓ auth.test.ts (14 passed) — refreshes 60s pre-expiry, no logout",
+            toolCallId: bashId, toolCallState: .completed, timestamp: ts(),
+            inActiveContext: true, isHeadBranch: true, inputOrigin: nil
+        ))
+        events.append(SessionEvent(
+            id: next(), role: "assistant",
+            contentText: "Done. Tokens now refresh silently a minute before expiry and tests pass. Want me to rebase onto main and open the PR?",
             toolName: nil, toolInputJSON: nil, toolOutputText: nil, toolCallId: nil,
             toolCallState: nil, timestamp: ts(), inActiveContext: true, isHeadBranch: true, inputOrigin: nil
         ))

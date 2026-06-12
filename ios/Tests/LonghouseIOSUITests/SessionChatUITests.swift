@@ -43,21 +43,26 @@ final class SessionChatUITests: XCTestCase {
         )
     }
 
+    private static let marketingClosingLine =
+        "Done. Tokens now refresh silently a minute before expiry and tests pass. Want me to rebase onto main and open the PR?"
+
     func testCaptureToolsTranscriptLightScreenshot() throws {
         try captureSessionScreenshot(
-            fixtureName: "tools",
-            eventCount: 9,
+            fixtureName: "marketing",
+            eventCount: 10,
             appearance: .light,
-            outputName: "session-light.png"
+            outputName: "session-light.png",
+            expectText: Self.marketingClosingLine
         )
     }
 
     func testCaptureToolsTranscriptDarkScreenshot() throws {
         try captureSessionScreenshot(
-            fixtureName: "tools",
-            eventCount: 9,
+            fixtureName: "marketing",
+            eventCount: 10,
             appearance: .dark,
-            outputName: "session-dark.png"
+            outputName: "session-dark.png",
+            expectText: Self.marketingClosingLine
         )
     }
 
@@ -204,6 +209,7 @@ final class SessionChatUITests: XCTestCase {
         eventCount: Int,
         appearance: Appearance,
         outputName: String,
+        expectText: String,
         file: StaticString = #filePath,
         line: UInt = #line
     ) throws {
@@ -211,8 +217,7 @@ final class SessionChatUITests: XCTestCase {
 
         XCTAssertTrue(transcriptElement(app).waitForExistence(timeout: 8), file: file, line: line)
         XCTAssertTrue(
-            app.staticTexts["The MR was renamed by Alex at 18:42, then moved back to In Review."]
-                .waitForExistence(timeout: 6),
+            app.staticTexts[expectText].waitForExistence(timeout: 6),
             file: file,
             line: line
         )
