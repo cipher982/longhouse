@@ -1,0 +1,30 @@
+# gitleaks config for Longhouse.
+#
+# Extends the built-in default ruleset (do NOT loosen detection) and adds a
+# scoped allowlist for the handful of intentionally secret-SHAPED strings that
+# live in the tree: redaction-test fixtures and example/placeholder tokens.
+#
+# Referenced by .pre-commit-config.yaml and the secret-scan CI job.
+# If a real secret fires, fix the source — do not add it here.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures and example placeholders — not real secrets"
+
+# Files that are entirely fixtures/examples.
+paths = [
+  '''.*\.env.*\.example$''',
+  '''server/tests_lite/test_session_processing\.py''',
+  '''server/tests_lite/test_embeddings\.py''',
+  '''server/tests_lite/test_write_serializer\.py''',
+  '''server/zerg/tools/tests/test_github_tools\.py''',
+]
+
+# Well-known example values that gitleaks' default rules flag.
+# AKIAIOSFODNN7EXAMPLE is AWS's own documented example access key id.
+regexes = [
+  '''AKIAIOSFODNN7EXAMPLE''',
+  '''sk-abc123def456ghi789jkl012mno345''',
+]

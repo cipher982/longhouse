@@ -1,8 +1,22 @@
 # Longhouse
 
-Mission control for CLI agent sessions running on machines you own. One searchable timeline for Claude Code, Codex, Antigravity, and OpenCode sessions, with live control where the provider CLI supports it. Legacy Gemini sessions remain searchable.
+Self-hosted mission control for the CLI coding agents you already run. One searchable timeline for every Claude Code, Codex, Antigravity, and OpenCode session across the machines you own — with live remote control where the provider CLI supports it.
+
+Not sandboxed cloud agents. Not a single-vendor dashboard. Yours.
 
 Works on your laptop. Shines on a machine that stays on.
+
+![Longhouse timeline — one searchable view of your coding-agent sessions across providers and machines](web/public/images/landing/timeline-preview.png)
+
+## Why
+
+If you run coding agents seriously, you run a lot of them — across a laptop and maybe an always-on box. Today that history is scattered across `~/.claude`, terminal scrollback, and one local log dir per tool, and a session dies when the laptop sleeps.
+
+Longhouse fixes that:
+
+- **Find any past session in seconds** — one timeline + full-text search across every provider and machine.
+- **Steer live work remotely** — launch a session through Longhouse and send to it later from the web or your phone.
+- **Own your history** — runs on machines you control, SQLite at the core, nothing uploaded to a vendor cloud.
 
 ## Install
 
@@ -12,17 +26,17 @@ Works on your laptop. Shines on a machine that stays on.
 
 ```bash
 curl -fsSL https://get.longhouse.ai/install.sh | bash
-longhouse onboard
+longhouse onboard            # Linux/WSL. On macOS, open Longhouse.app instead — it owns first-run setup.
 ```
 
-**Power users:**
+**Power users / agents:**
 
 ```bash
 uv tool install longhouse
 longhouse onboard
 ```
 
-All three install the same product. The shell installer also drops `Longhouse.app` into `/Applications` on macOS.
+All three install the same product. On macOS the shell installer also drops `Longhouse.app` into `/Applications` — open it to finish setup rather than running `longhouse onboard`.
 
 ## First Session
 
@@ -39,7 +53,7 @@ The web UI lives at `http://localhost:8080`. The same surface is scriptable:
 
 ```bash
 longhouse wall --json
-longhouse recall "that bug with the flock"
+longhouse recall "that auth refresh bug from last week"
 longhouse tail <session-id>
 ```
 
@@ -87,6 +101,26 @@ Two public components, one product:
 
 On a laptop both run together for trial use. For durability, separate them. See `VISION.md` for the full product thesis.
 
+## How It Compares
+
+There are great tools for spinning up sandboxed cloud agents, and the model labs now ship their own single-vendor dashboards. Longhouse sits in a different spot: the sessions you *already run*, on hardware you own, across every provider.
+
+| | Longhouse | Lab dashboards (Agent View, Codex, Antigravity) | Cloud agents (Devin, Cursor, Jules) |
+|---|:---:|:---:|:---:|
+| Cross-provider (Claude Code + Codex + more) | ✅ | ❌ single vendor | ❌ |
+| Runs on machines you own | ✅ | ⚠️ cloud-tethered | ❌ cloud VM |
+| Live remote control of real sessions | ✅ managed | ✅ own provider only | n/a |
+| Self-hostable | ✅ | ❌ | ❌ |
+| You own & can export the raw history | ✅ | ❌ | ❌ |
+
+Honest scope today: managed live control is solid for **Claude Code and Codex**; **Antigravity and OpenCode are observe-only** at the control layer; bare CLI runs are imported and searchable but not steerable. See **Managed vs Unmanaged** in the docs.
+
+## Self-host (free) vs Hosted (paid)
+
+The Apache-2.0 core in this repo is fully usable on your own machines — no account, no control plane, no time limit. Self-host is the default truth, not a crippled tier.
+
+Hosted (<https://control.longhouse.ai/signup>) exists for people who don't want to run an always-on box. We run the Runtime Host for you: always-on durability, zero-setup multi-machine sync, and iOS push when a session needs you — the things a sleeping laptop can't do. Same product, we just operate the box.
+
 ## Open Core
 
 This repository is the Apache-2.0 Longhouse core: CLI, Machine Agent, Runtime Host, web UI, self-hosting, and client surfaces over the same machine contracts.
@@ -104,6 +138,8 @@ make dev        # backend + frontend with hot reload
 make test       # unit tests
 make test-e2e   # end-to-end
 ```
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for dev setup, test tiers, and the codegen flow, and [`ARCHITECTURE.md`](ARCHITECTURE.md) for the system map and a glossary of the project's nouns (managed vs unmanaged, Machine Agent vs Runtime Host, wall, recall, …).
 
 Issues: <https://github.com/cipher982/longhouse/issues>
 
