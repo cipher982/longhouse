@@ -42,16 +42,17 @@ export function HeroSection() {
   return (
     <section className="landing-hero" id="landing-install">
       <div className="landing-hero-content">
-        <p className="landing-hero-kicker">Self-hosted session control</p>
+        <p className="landing-hero-kicker">Self-hosted · cross-provider · yours</p>
 
         <h1 className="landing-hero-headline">
-          One timeline for every{" "}
-          <span className="gradient-text">AI coding session.</span>
+          Start a coding agent. Walk away.{" "}
+          <span className="gradient-text">Steer it from your phone.</span>
         </h1>
 
         <p className="landing-hero-subhead">
-          Longhouse captures every Claude, Codex, Antigravity, and OpenCode session from your
-          machines — searchable on the web, one glance away on your phone.
+          Longhouse runs on a machine you own and keeps a live control path to every Claude,
+          Codex, Antigravity, and OpenCode session. Launch on your desk, find it later from
+          anywhere, send it the next instruction — without uploading your work to anyone's cloud.
         </p>
 
         {/* ── Install paths ── */}

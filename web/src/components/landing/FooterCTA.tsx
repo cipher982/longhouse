@@ -28,7 +28,7 @@ export function FooterCTA() {
         {/* Final CTA */}
         <div className="landing-footer-cta">
           <blockquote className="landing-footer-quote">
-            Find the session. Ask it. Continue it.
+            Launch it. Walk away. Steer it from anywhere.
           </blockquote>
           <div className="landing-footer-cta-buttons">
             <Button variant="primary" size="lg" onClick={handleSelfHost}>
