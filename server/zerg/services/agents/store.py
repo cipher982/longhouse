@@ -295,13 +295,9 @@ def _claude_transcript_pause_events(
 
 def _claude_transcript_pause_can_respond(db: Session, session_id: UUID) -> bool:
     capabilities = project_session_capabilities(db, session_id=session_id)
-    managed_transport = capabilities.managed_transport
-    return bool(
-        capabilities.live_control_available
-        and capabilities.can_send_input
-        and managed_transport is not None
-        and managed_transport.value == "claude_channel_bridge"
-    )
+    # Any live-steerable session can answer — Runner-backed steer works as well
+    # as the channel bridge, so don't gate on transport type.
+    return bool(capabilities.live_control_available and capabilities.can_send_input)
 
 
 # `.../subagents/workflows/<run>/journal.jsonl` — a dynamic-workflow control

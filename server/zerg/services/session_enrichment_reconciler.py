@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 SUMMARY_RECONCILER_POLL_SECONDS = float(os.getenv("SESSION_SUMMARY_POLL_SECONDS", "5"))
 SUMMARY_RECONCILER_BATCH_SIZE = int(os.getenv("SESSION_SUMMARY_BATCH_SIZE", "50"))
 SUMMARY_SELECT_TIMEOUT_SECONDS = float(os.getenv("SESSION_SUMMARY_SELECT_TIMEOUT_SECONDS", "2"))
-SESSION_SUMMARY_CONCURRENCY = int(os.getenv("SESSION_SUMMARY_CONCURRENCY", "0"))
+SESSION_SUMMARY_CONCURRENCY = int(os.getenv("SESSION_SUMMARY_CONCURRENCY", "2"))
 
 _active_summary_session_ids: set[str] = set()
 _active_summary_lock = asyncio.Lock()

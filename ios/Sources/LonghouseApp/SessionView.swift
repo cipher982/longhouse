@@ -2091,13 +2091,17 @@ final class SessionViewModel: ObservableObject {
                     preview: tail.session.transcriptPreview
                 )
             )
+            // Reconcile before updating items so SwiftUI sees both state changes
+            // in the same render pass — prevents a one-frame duplicate where the
+            // durable event is visible but the optimistic submitted input hasn't
+            // been removed yet.
+            reconcileSubmittedInputs(with: mergedEvents)
             self.items = builtItems
             let buildMs = Int(Date().timeIntervalSince(buildStartedAt) * 1000)
             openWaterfall?.mark(
                 "timeline_built",
                 "events=\(mergedEvents.count) items=\(builtItems.count) elapsed_ms=\(buildMs)"
             )
-            reconcileSubmittedInputs(with: mergedEvents)
             saveCurrentCache()
             scheduleOlderPrefetch(api: api, sessionId: sessionId)
         } catch {
