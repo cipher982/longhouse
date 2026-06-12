@@ -129,6 +129,12 @@ class AgentSession(AgentsBase):
     # plain column so PATCH /loop-mode survives restart and refresh.
     loop_mode = Column(String(32), nullable=False, default="assist", server_default=text("'assist'"))
 
+    # Summary reconciler distributed lock: prevents multiple Runtime Host
+    # replicas from concurrently calling the LLM for the same session.
+    # See generate_summary_impl in services/session_summaries.py.
+    summary_lock_instance = Column(String(64), nullable=True)
+    summary_lock_at = Column(DateTime(timezone=True), nullable=True)
+
     # Relationships
     branches = relationship("AgentSessionBranch", back_populates="session", cascade="all, delete-orphan")
     events = relationship("AgentEvent", back_populates="session", cascade="all, delete-orphan")

@@ -2,6 +2,7 @@
 
 import os
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -665,3 +666,160 @@ async def test_generate_embeddings_impl_raises_when_reconcile_makes_no_progress(
 
     assert refreshed.needs_embedding == 1
     assert refreshed.embedding_revision == 0
+
+
+# ---------------------------------------------------------------------------
+# Distributed summary lock
+
+
+@pytest.mark.asyncio
+async def test_summary_lock_prevents_duplicate_llm_call(tmp_path, monkeypatch):
+    """When another replica holds the lock, generate_summary_impl skips the LLM call."""
+    import zerg.services.session_summaries as summaries
+
+    factory = _make_db(tmp_path, "summary_lock_skip.db")
+
+    db = factory()
+    session = AgentSession(
+        provider="claude",
+        environment="test",
+        project="zerg",
+        started_at=datetime.now(timezone.utc),
+        transcript_revision=5,
+        summary_revision=0,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    for idx in range(4):
+        db.add(
+            AgentEvent(
+                session_id=session.id,
+                role="user" if idx % 2 == 0 else "assistant",
+                content_text=f"Message {idx}",
+                timestamp=datetime.now(timezone.utc),
+            )
+        )
+    db.commit()
+    session_id = str(session.id)
+
+    # Pre-claim the lock as a different replica
+    from sqlalchemy import update
+
+    db.execute(
+        update(AgentSession)
+        .where(AgentSession.id == session_id)
+        .values(
+            summary_lock_instance="other-replica:999",
+            summary_lock_at=datetime.now(timezone.utc),
+        )
+    )
+    db.commit()
+    db.close()
+
+    captured = []
+
+    async def _fake_incremental(**kwargs):
+        captured.append(kwargs)
+
+    client = SimpleNamespace(close=AsyncMock())
+    settings = SimpleNamespace(testing=False, llm_disabled=False)
+
+    monkeypatch.setattr("zerg.services.session_processing.incremental_summary", _fake_incremental)
+
+    with (
+        patch("zerg.database.get_session_factory", return_value=factory),
+        patch("zerg.services.session_summaries.get_settings", return_value=settings),
+        patch(
+            "zerg.models_config.get_llm_client_for_use_case",
+            return_value=(client, "test-model", "test-provider"),
+        ),
+    ):
+        await summaries.generate_summary_impl(session_id)
+
+    assert captured == []  # LLM was never reached
+    client.close.assert_awaited_once()  # cleaned up in finally
+
+    verify_db = factory()
+    session_after = verify_db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    verify_db.close()
+    assert session_after.summary_lock_instance == "other-replica:999"  # lock untouched
+    assert session_after.summary_revision == 0  # no progress
+
+
+@pytest.mark.asyncio
+async def test_summary_lock_stale_lock_is_broken(tmp_path, monkeypatch):
+    """A stale lock (>5 min) is broken and the LLM call proceeds."""
+    import zerg.services.session_summaries as summaries
+
+    factory = _make_db(tmp_path, "summary_lock_stale.db")
+
+    db = factory()
+    session = AgentSession(
+        provider="codex",
+        environment="test",
+        project="zerg",
+        started_at=datetime.now(timezone.utc),
+        transcript_revision=5,
+        summary_revision=0,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    for idx in range(4):
+        db.add(
+            AgentEvent(
+                session_id=session.id,
+                role="user" if idx % 2 == 0 else "assistant",
+                content_text=f"Message {idx}",
+                timestamp=datetime.now(timezone.utc),
+            )
+        )
+    db.commit()
+    session_id = str(session.id)
+
+    # Pre-claim with a stale timestamp (>5 min ago)
+    stale_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+    from sqlalchemy import update
+
+    db.execute(
+        update(AgentSession)
+        .where(AgentSession.id == session_id)
+        .values(
+            summary_lock_instance="crashed-replica:1",
+            summary_lock_at=stale_time,
+        )
+    )
+    db.commit()
+    db.close()
+
+    captured = []
+
+    async def _fake_incremental(**kwargs):
+        captured.append(kwargs)
+        return SimpleNamespace(summary="Fresh summary", title="Fresh Title")
+
+    client = SimpleNamespace(close=AsyncMock())
+    settings = SimpleNamespace(testing=False, llm_disabled=False)
+
+    monkeypatch.setattr("zerg.services.session_processing.incremental_summary", _fake_incremental)
+
+    with (
+        patch("zerg.database.get_session_factory", return_value=factory),
+        patch("zerg.services.session_summaries.get_settings", return_value=settings),
+        patch(
+            "zerg.models_config.get_llm_client_for_use_case",
+            return_value=(client, "test-model", "test-provider"),
+        ),
+    ):
+        await summaries.generate_summary_impl(session_id)
+
+    assert len(captured) == 1  # LLM was called
+    client.close.assert_awaited_once()
+
+    verify_db = factory()
+    session_after = verify_db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    verify_db.close()
+    assert session_after.summary_lock_instance is None  # lock released
+    assert session_after.summary_lock_at is None
+    assert session_after.summary_revision == 5  # progress made

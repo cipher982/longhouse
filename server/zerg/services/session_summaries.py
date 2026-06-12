@@ -9,12 +9,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import socket
 from dataclasses import dataclass
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from typing import Any
 
 from sqlalchemy import func
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
@@ -28,6 +31,37 @@ logger = logging.getLogger(__name__)
 # Semaphore gates concurrent background embedding calls during bulk ingest.
 _embedding_semaphore = asyncio.Semaphore(5)
 _PLACEHOLDER_TITLE = "Untitled Session"
+
+# Distributed lock for summary generation — prevents multiple Runtime Host
+# replicas from concurrently calling the LLM for the same session.
+_summary_lock_instance = f"{socket.gethostname()}:{os.getpid()}"
+_SUMMARY_LOCK_STALE_SECONDS = 300  # 5 min: stale locks auto-expire
+
+
+def _claim_summary_lock(db: Session, session_id: str) -> bool:
+    now = datetime.now(timezone.utc)
+    stale_threshold = now - timedelta(seconds=_SUMMARY_LOCK_STALE_SECONDS)
+    result = (
+        db.query(AgentSession)
+        .filter(AgentSession.id == session_id)
+        .filter(
+            or_(
+                AgentSession.summary_lock_instance.is_(None),
+                AgentSession.summary_lock_at < stale_threshold,
+            )
+        )
+        .update(
+            {
+                "summary_lock_instance": _summary_lock_instance,
+                "summary_lock_at": now,
+            },
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    return int(result or 0) > 0
+
+
 _PLACEHOLDER_SUMMARY = "No summary generated."
 SUMMARY_EVENT_LOAD_LIMIT = int(os.getenv("SESSION_SUMMARY_EVENT_LOAD_LIMIT", "200"))
 SUMMARY_EVENT_TEXT_MAX_CHARS = int(os.getenv("SESSION_SUMMARY_EVENT_TEXT_MAX_CHARS", "4000"))
@@ -384,6 +418,13 @@ async def generate_summary_impl(session_id: str) -> None:
                 )
                 return
 
+        # Claim a distributed lock before the LLM call so multiple Runtime
+        # Host replicas do not both call the provider for the same session.
+        if not _claim_summary_lock(db, session_id):
+            logger.debug("Session %s summary lock held by another replica", session_id)
+            db.close()
+            return
+
         # Release the read connection before the LLM call. Summary generation is
         # best-effort background work and must not occupy the SQLite pool while
         # realtime ingest/presence/lifecycle requests are waiting.
@@ -404,6 +445,8 @@ async def generate_summary_impl(session_id: str) -> None:
             values: dict = {
                 "last_summarized_event_id": new_last_event_id,
                 "summary_revision": transcript_revision if not new_chunk.has_more else summary_revision,
+                "summary_lock_instance": None,
+                "summary_lock_at": None,
             }
             if summary:
                 content_values = _summary_content_values(summary)

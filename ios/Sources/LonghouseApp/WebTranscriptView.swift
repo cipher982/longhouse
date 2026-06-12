@@ -1411,6 +1411,7 @@ private extension WebTranscriptView {
       let paragraph = [];
       let code = null;
       let tableRows = null;   // null = not in table; array = accumulating rows
+      let pendingTableLine = null;  // one-line buffer: potential header row
 
       function flushParagraph() {
         html += paragraphHtml(paragraph);
@@ -1437,6 +1438,10 @@ private extension WebTranscriptView {
         // Code fence — highest priority, swallows everything inside.
         if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
           if (code === null) {
+            if (pendingTableLine !== null) {
+              paragraph.push(pendingTableLine);
+              pendingTableLine = null;
+            }
             flushParagraph();
             flushTable();
             code = [];
@@ -1451,23 +1456,46 @@ private extension WebTranscriptView {
           continue;
         }
 
-        // Table accumulation: start on any pipe row, continue until a
-        // non-pipe line (blank or block-level element) breaks the sequence.
+        // Table accumulation: require header+separator before committing
+        // to table mode. Single pipe lines (shell commands, file paths, prose)
+        // are buffered for one line and flushed as paragraph text unless a
+        // separator immediately follows.
         if (isTableRow(line)) {
-          // A separator-only line with no prior rows is not a table header —
-          // treat as paragraph content.
-          if (tableRows === null) {
-            if (!isTableSeparator(line)) {
-              // Opening row — flush prior paragraph and start table.
-              flushParagraph();
-              tableRows = [line];
-            } else {
-              paragraph.push(line);
-            }
-          } else {
+          if (tableRows !== null) {
+            // Already inside a table — accumulate.
             tableRows.push(line);
+            continue;
+          }
+          // Not yet in a table.
+          if (pendingTableLine !== null) {
+            // Second pipe line in a row.
+            if (isTableSeparator(line)) {
+              // Header (buffered) + separator = valid GFM table start.
+              flushParagraph();
+              tableRows = [pendingTableLine, line];
+              pendingTableLine = null;
+            } else {
+              // Two data rows with no separator — not a table.
+              // The buffered line was prose; push it and re-buffer.
+              paragraph.push(pendingTableLine);
+              pendingTableLine = line;
+            }
+            continue;
+          }
+          // First pipe line — buffer as potential header.
+          // A separator-only first line is not a valid header; treat as prose.
+          if (isTableSeparator(line)) {
+            paragraph.push(line);
+          } else {
+            pendingTableLine = line;
           }
           continue;
+        }
+
+        // Non-pipe line: any buffered potential header is prose text.
+        if (pendingTableLine !== null) {
+          paragraph.push(pendingTableLine);
+          pendingTableLine = null;
         }
 
         // Any non-pipe line breaks an in-progress table.
@@ -1505,6 +1533,12 @@ private extension WebTranscriptView {
         }
 
         paragraph.push(line);
+      }
+
+      // Flush any buffered pipe line that was never followed by a separator.
+      if (pendingTableLine !== null) {
+        paragraph.push(pendingTableLine);
+        pendingTableLine = null;
       }
 
       flushParagraph();
