@@ -22,6 +22,7 @@ export interface ClientRenderWebKitDiagnostics {
   payload_byte_size?: number | null;
   row_count?: number | null;
   latest_item_id?: string | null;
+  payload_fingerprint?: string | null;
   render_duration_ms?: number | null;
   render_sequence?: number | null;
   js_failure_count?: number | null;

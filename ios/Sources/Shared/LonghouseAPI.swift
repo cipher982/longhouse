@@ -14,6 +14,7 @@ actor RenderBeaconReporter {
         let payload_byte_size: Int
         let row_count: Int
         let latest_item_id: String?
+        let payload_fingerprint: String?
         let render_sequence: Int
         let js_failure_count: Int
         let should_stick_to_bottom: Bool
@@ -26,6 +27,7 @@ actor RenderBeaconReporter {
             payload_byte_size: Int,
             row_count: Int,
             latest_item_id: String?,
+            payload_fingerprint: String? = nil,
             render_sequence: Int,
             js_failure_count: Int,
             should_stick_to_bottom: Bool,
@@ -37,6 +39,7 @@ actor RenderBeaconReporter {
             self.payload_byte_size = payload_byte_size
             self.row_count = row_count
             self.latest_item_id = latest_item_id
+            self.payload_fingerprint = payload_fingerprint
             self.render_sequence = render_sequence
             self.js_failure_count = js_failure_count
             self.should_stick_to_bottom = should_stick_to_bottom

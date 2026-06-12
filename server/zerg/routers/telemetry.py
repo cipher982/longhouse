@@ -99,6 +99,7 @@ class WebKitRenderDiagnostics(BaseModel):
     payload_byte_size: int = Field(..., ge=0, le=5_000_000)
     row_count: int = Field(..., ge=0, le=50_000)
     latest_item_id: str | None = Field(None, max_length=128)
+    payload_fingerprint: str | None = Field(None, max_length=32)
     render_duration_ms: int | None = Field(None, ge=0, le=60_000)
     render_sequence: int = Field(..., ge=0, le=10_000_000)
     js_failure_count: int = Field(..., ge=0, le=10_000_000)

@@ -50,7 +50,6 @@ struct SessionView: View {
     @State private var transcriptViewportFrame: CGRect = .null
     @State private var bottomChromeSurfaceFrame: CGRect = .null
     @State private var bottomChromeCardFrame: CGRect = .null
-    @State private var keyboardPresented: Bool = false
     private static let minimumTranscriptBottomInset = SessionBottomInsetCalculator.minimumTranscriptBottomInset
 
     init(
@@ -85,9 +84,8 @@ struct SessionView: View {
     var body: some View {
         // Scroll-under-glass: the transcript and floating control card are
         // measured in the same global coordinate space. The DOM bottom padding
-        // is exactly the overlap between the transcript viewport and the card's
-        // visual top edge, so keyboard movement cannot introduce a second
-        // inferred safe-area offset.
+        // is the obstruction inside the WebView's actual scroll viewport; it
+        // must not infer extra screen or tab-bar space outside that viewport.
         transcript
             .ignoresSafeArea(.container, edges: .bottom)
             .background(
@@ -120,18 +118,6 @@ struct SessionView: View {
             }
             .onPreferenceChange(BottomChromeCardFrameKey.self) { frame in
                 bottomChromeCardFrame = frame
-                recalculateTranscriptBottomInset()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-                keyboardPresented = true
-                recalculateTranscriptBottomInset()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillChangeFrameNotification)) { _ in
-                keyboardPresented = true
-                recalculateTranscriptBottomInset()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in
-                keyboardPresented = false
                 recalculateTranscriptBottomInset()
             }
             .navigationTitle(viewModel.detail?.displayTitle ?? fallbackTitle)
@@ -215,9 +201,7 @@ struct SessionView: View {
         guard let inset = SessionBottomInsetCalculator.bottomInset(
             viewportFrame: transcriptViewportFrame,
             surfaceFrame: bottomChromeSurfaceFrame,
-            cardFrame: bottomChromeCardFrame,
-            keyboardPresented: keyboardPresented,
-            screenMaxY: UIScreen.main.bounds.maxY
+            cardFrame: bottomChromeCardFrame
         ) else {
             return
         }
@@ -1180,22 +1164,17 @@ struct SessionBottomInsetCalculator {
     private static let bottomChromeShadowRadius: CGFloat = 16
     private static let bottomChromeShadowYOffset: CGFloat = 5
     private static let bottomChromeVisualBleedAbove: CGFloat = max(0, bottomChromeShadowRadius - bottomChromeShadowYOffset)
-    private static let transcriptBottomComfortGap: CGFloat = 16
+    private static let transcriptBottomComfortGap: CGFloat = 24
 
     static func bottomInset(
         viewportFrame: CGRect,
         surfaceFrame: CGRect,
-        cardFrame: CGRect,
-        keyboardPresented: Bool,
-        screenMaxY: CGFloat
+        cardFrame: CGRect
     ) -> CGFloat? {
         guard !viewportFrame.isNull, !surfaceFrame.isNull, !cardFrame.isNull else { return nil }
 
         let visualObstructionTop = min(cardFrame.minY, surfaceFrame.minY) - bottomChromeVisualBleedAbove
-        let measuredViewportBottom = keyboardPresented
-            ? viewportFrame.maxY
-            : max(viewportFrame.maxY, screenMaxY)
-        let measuredViewportOverlap = max(0, measuredViewportBottom - visualObstructionTop)
+        let measuredViewportOverlap = max(0, viewportFrame.maxY - visualObstructionTop)
         let measuredChromeFloor = surfaceFrame.height + bottomChromeVisualBleedAbove
         let obstruction = max(measuredViewportOverlap, measuredChromeFloor)
 

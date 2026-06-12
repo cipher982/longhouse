@@ -182,7 +182,7 @@ private struct TimelineOpenFixtureSession: Identifiable {
 
 @MainActor
 private final class ChatUITestProbe: ObservableObject {
-    private(set) var statusLine = "renders=0 duplicates=0 repeats=0 rows=0 bytes=0 latest=none stage=none stick=0 render_ms=0 max_render_ms=0 tick=0"
+    private(set) var statusLine = "renders=0 duplicates=0 repeats=0 rows=0 bytes=0 latest=none fingerprint=none stage=none stick=0 render_ms=0 max_render_ms=0 tick=0"
 
     private let path: String?
     private var renderCount = 0
@@ -199,7 +199,8 @@ private final class ChatUITestProbe: ObservableObject {
 
     func record(_ diagnostics: RenderBeaconReporter.WebKitDiagnostics) {
         let latest = diagnostics.latest_item_id ?? "none"
-        let key = "\(diagnostics.row_count)|\(diagnostics.payload_byte_size)|\(latest)"
+        let fingerprint = diagnostics.payload_fingerprint ?? "\(diagnostics.row_count)|\(diagnostics.payload_byte_size)|\(latest)"
+        let key = fingerprint
         if diagnostics.stage == "rendered" {
             if key == lastRenderedKey {
                 repeatRenderCount += 1
@@ -218,6 +219,7 @@ private final class ChatUITestProbe: ObservableObject {
             "rows=\(diagnostics.row_count)",
             "bytes=\(diagnostics.payload_byte_size)",
             "latest=\(latest)",
+            "fingerprint=\(fingerprint)",
             "stage=\(diagnostics.stage)",
             "stick=\(diagnostics.should_stick_to_bottom ? 1 : 0)",
             "render_ms=\(diagnostics.render_duration_ms ?? 0)",

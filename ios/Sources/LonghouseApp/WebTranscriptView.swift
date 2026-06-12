@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import WebKit
 import OSLog
@@ -107,8 +108,18 @@ struct WebTranscriptView: UIViewRepresentable {
             base64: data.base64EncodedString(),
             payloadByteSize: data.count,
             rowCount: payload.items.count,
-            latestItemId: payload.items.last?.id
+            latestItemId: payload.items.last?.id,
+            payloadFingerprint: Self.payloadFingerprint(data)
         )
+    }
+
+    private nonisolated static func payloadFingerprint(_ data: Data) -> String {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in data {
+            hash ^= UInt64(byte)
+            hash &*= 0x100000001b3
+        }
+        return String(format: "%016llx", hash)
     }
 
     nonisolated static func payloadItems(
@@ -727,6 +738,7 @@ struct WebTranscriptView: UIViewRepresentable {
                 payload_byte_size: payload.payloadByteSize,
                 row_count: payload.rowCount,
                 latest_item_id: payload.latestItemId,
+                payload_fingerprint: payload.payloadFingerprint,
                 render_sequence: sequence,
                 js_failure_count: jsFailureCount,
                 should_stick_to_bottom: shouldStickToBottom,
@@ -764,6 +776,7 @@ struct WebTranscriptPreparedPayload: Equatable {
     let payloadByteSize: Int
     let rowCount: Int
     let latestItemId: String?
+    let payloadFingerprint: String
 }
 
 @MainActor
