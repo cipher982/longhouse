@@ -1,57 +1,43 @@
+/**
+ * Provider truth. Distinct shape: a left-aligned honest "what works on each
+ * provider" table-ish strip, not a centered punchline + card grid. The honesty
+ * IS the design here — say plainly where each control path stands today.
+ */
+
 import { getLaunchProviderSupportList } from "../../lib/providers";
 import { ProviderGlyph } from "../ProviderGlyph";
 
-interface Provider {
-  id: string;
-  name: string;
-  status: "live" | "coming";
-  description: string;
-  statusLabel: string;
-}
-
 export function IntegrationsSection() {
-  const providers: Provider[] = getLaunchProviderSupportList().map((provider) => ({
-    id: provider.id,
-    name: provider.marketingName,
-    status: "live" as const,
-    description: provider.cardDescription,
-    statusLabel: provider.statusLabel,
-  }));
+  const providers = getLaunchProviderSupportList();
 
   return (
-    <section id="providers" className="landing-integrations">
+    <section id="providers" className="landing-providers">
       <div className="landing-section-inner">
-        <p className="landing-section-label">Provider Truth</p>
-        <h2 className="landing-section-title">Claude is strongest today. Antigravity and OpenCode round out the lineup.</h2>
-        <p className="landing-section-subtitle">
-          Claude, Codex, Antigravity, and OpenCode all land in the same timeline. Capability after launch depends
-          on how mature each control path is today, and the page should say that plainly.
+        <h2 className="landing-providers-title">
+          What works on each provider, honestly.
+        </h2>
+        <p className="landing-providers-lead">
+          Every provider lands in the same timeline and search. Live control depends
+          on how mature each path is today — so here&rsquo;s the plain truth.
         </p>
 
-        <div className="landing-providers-grid">
-          {providers.map((provider, index) => (
-            <div
-              key={index}
-              className={`landing-provider-card ${provider.status === "coming" ? "coming-soon" : ""}`}
-              style={{ animationDelay: `${index * 100}ms` }}
-            >
-              <span className="landing-provider-icon">
-                <ProviderGlyph provider={provider.id} size={44} />
+        <ul className="landing-providers-rows">
+          {providers.map((p) => (
+            <li key={p.id} className="landing-provider-row">
+              <span className="landing-provider-row-glyph">
+                <ProviderGlyph provider={p.id} size={34} />
               </span>
-              <div className="landing-provider-info">
-                <span className="landing-provider-name">{provider.name}</span>
-                <span className="landing-provider-desc">{provider.description}</span>
-              </div>
-              <span className={`landing-provider-status ${provider.status}`}>
-                {provider.statusLabel}
-              </span>
-            </div>
+              <span className="landing-provider-row-name">{p.marketingName}</span>
+              <span className="landing-provider-row-desc">{p.cardDescription}</span>
+              <span className="landing-provider-row-status">{p.statusLabel}</span>
+            </li>
           ))}
-        </div>
+        </ul>
 
-        <p className="landing-providers-tagline">
-          Codex launch-through-Longhouse is supported; Antigravity and OpenCode are managed observe-only today.
-          Claude is still the strongest continuation path. Existing Gemini sessions stay searchable as legacy imports.
+        <p className="landing-providers-foot">
+          Codex launch-through-Longhouse is supported; Antigravity and OpenCode are
+          managed observe-only today. Claude is still the strongest continuation path.
+          Legacy Gemini sessions stay searchable as imports.
         </p>
       </div>
     </section>

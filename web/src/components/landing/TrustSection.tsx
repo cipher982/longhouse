@@ -48,8 +48,7 @@ export function TrustSection() {
   return (
     <section className="landing-trust">
       <div className="landing-section-inner">
-        <p className="landing-section-label">FAQ</p>
-        <h2 className="landing-section-title">Common questions.</h2>
+        <h2 className="landing-faq-heading">Questions you&rsquo;re probably asking</h2>
 
         <div className="landing-faq-list">
           {faqs.map((faq, index) => (

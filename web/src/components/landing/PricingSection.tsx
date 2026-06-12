@@ -66,10 +66,12 @@ export function PricingSection() {
   return (
     <section id="pricing" className="landing-pricing">
       <div className="landing-section-inner">
-        <p className="landing-section-label">Deployment</p>
-        <h2 className="landing-section-title">Two ways in.</h2>
-        <p className="landing-section-subtitle">
-          Run it yourself for free, or pay $5/month and we run it for you. Same product either way.
+        <h2 className="landing-pricing-heading">
+          Run it yourself, or let us run it.
+        </h2>
+        <p className="landing-pricing-subhead">
+          Free and open source when you self-host. $5/month if you&rsquo;d rather we keep the
+          always-on box up. Same product either way — move between them whenever.
         </p>
 
         <div className="landing-pricing-grid">

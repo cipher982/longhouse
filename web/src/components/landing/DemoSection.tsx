@@ -8,11 +8,10 @@ export function DemoSection({ screenshotTheme }: DemoSectionProps) {
   return (
     <section className="landing-demo">
       <div className="landing-section-inner">
-        <span className="landing-section-label">Bundled Browser View</span>
-        <h2 className="landing-section-title">Timeline, search, and raw session detail.</h2>
-        <p className="landing-section-subtitle">
-          The browser is the main workspace over the same session model. Open any session,
-          inspect the raw transcript, and continue from the exact context that matters.
+        <h2 className="landing-demo-heading">Find any past session in seconds.</h2>
+        <p className="landing-demo-subhead">
+          One timeline across every machine and provider. Search it, open the raw transcript,
+          and pick up exactly where it left off.
         </p>
 
         <ProductShowcase screenshotTheme={screenshotTheme} />

@@ -324,6 +324,44 @@
     margin: 0 auto var(--space-12);
   }
 
+  /* Plain de-templated section headings (no kicker chip, no serif punchline) */
+  .landing-demo-heading,
+  .landing-faq-heading {
+    margin: 0 0 var(--space-3);
+    font-family: var(--font-family-display);
+    font-size: clamp(1.8rem, 2.8vw, 2.6rem);
+    font-weight: var(--font-weight-semibold);
+    line-height: 1.1;
+    text-align: left;
+  }
+
+  .landing-demo-subhead {
+    margin: 0 0 var(--space-8);
+    max-width: 56ch;
+    text-align: left;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-lg);
+    line-height: var(--font-line-height-relaxed);
+  }
+
+  .landing-pricing-heading {
+    margin: 0 0 var(--space-3);
+    font-family: var(--font-family-display);
+    font-size: clamp(1.8rem, 2.8vw, 2.6rem);
+    font-weight: var(--font-weight-semibold);
+    line-height: 1.1;
+    text-align: center;
+  }
+
+  .landing-pricing-subhead {
+    margin: 0 auto var(--space-10);
+    max-width: 58ch;
+    text-align: center;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-lg);
+    line-height: var(--font-line-height-relaxed);
+  }
+
   /* --------------------------------------------------------
    HERO SECTION - Split Layout
    -------------------------------------------------------- */
@@ -779,184 +817,194 @@
    MACHINE SURFACE
    -------------------------------------------------------- */
 
-  .landing-machine-surface {
+  /* Machine surface — terminal left, copy right (alternates the page rhythm) */
+  .landing-surface {
     padding: var(--space-16) 0;
-    text-align: left;
   }
 
-  .landing-machine-surface .landing-section-subtitle {
-    max-width: 820px;
-    margin: 0 0 var(--space-10);
-  }
-
-  .landing-machine-surface .landing-section-subtitle code {
-    font-family: var(--font-family-mono);
-    color: var(--color-brand-primary);
-  }
-
-  .landing-surface-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: var(--space-4);
-  }
-
-  .landing-surface-card {
-    padding: var(--space-6);
-    background: linear-gradient(180deg, rgba(26, 20, 17, 0.96), rgba(17, 14, 12, 0.98));
-    border: 1px solid rgba(201, 166, 107, 0.12);
-    border-radius: var(--radius-xl);
-    text-align: left;
-    box-shadow: 0 14px 30px rgba(8, 7, 6, 0.2);
-  }
-
-  .landing-surface-card h3 {
-    margin: 0 0 var(--space-2);
-    font-family: var(--font-family-display);
-    font-size: var(--font-size-xl);
-    font-weight: var(--font-weight-semibold);
-  }
-
-  .landing-surface-card p {
-    margin: 0 0 var(--space-4);
-    color: var(--color-text-secondary);
-    line-height: var(--font-line-height-relaxed);
-  }
-
-  .landing-surface-note {
-    max-width: 760px;
-    margin: var(--space-8) auto 0;
-    padding: var(--space-5) var(--space-6);
-    background: rgba(201, 166, 107, 0.08);
-    border: 1px solid rgba(201, 166, 107, 0.14);
-    border-radius: var(--radius-xl);
-    text-align: left;
-  }
-
-  .landing-surface-note p {
-    margin: 0;
-    line-height: var(--font-line-height-relaxed);
-  }
-
-  .landing-surface-note p + p {
-    margin-top: var(--space-2);
-    color: var(--color-text-secondary);
-  }
-
-  .landing-surface-note a {
-    color: var(--color-brand-primary);
-    text-decoration: underline;
-    text-decoration-thickness: 0.08em;
-    text-underline-offset: 0.18em;
-  }
-
-  .landing-surface-note a:hover {
-    color: var(--color-brand-primary-strong);
-  }
-
-
-  /* Provider Grid (for session sources) */
-  .landing-providers-grid {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: var(--space-4);
-    margin: 0 0 var(--space-8);
-  }
-
-  .landing-provider-card {
+  .landing-surface-inner {
     display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--space-4);
-    padding: var(--space-5);
-    min-height: 100%;
-    background: linear-gradient(180deg, rgba(26, 20, 17, 0.96), rgba(17, 14, 12, 0.98));
-    border: 1px solid rgba(201, 166, 107, 0.12);
+    align-items: center;
+    gap: clamp(var(--space-6), 6vw, var(--space-12));
+  }
+
+  .landing-surface-terminal {
+    flex: 1 1 0;
+    min-width: 0;
     border-radius: var(--radius-xl);
-    transition: border-color var(--motion-duration-fast),
-                transform var(--motion-duration-fast);
-    animation: landing-fadeInUp 0.4s ease-out backwards;
-    box-shadow: 0 14px 30px rgba(8, 7, 6, 0.2);
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: #0d0b0a;
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.5);
   }
 
-  .landing-provider-card:hover {
-    border-color: var(--color-brand-primary);
-    transform: translateY(-2px);
+  .landing-surface-terminal-bar {
+    display: flex;
+    gap: 8px;
+    padding: 12px 16px;
+    background: #18130f;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   }
 
-  .landing-provider-card.coming-soon {
-    opacity: 0.6;
+  .landing-surface-terminal-bar .dot {
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.18);
   }
 
-  .landing-provider-card.coming-soon:hover {
+  .landing-surface-terminal-body {
+    margin: 0;
+    padding: var(--space-5) var(--space-6);
+    font-family: var(--font-family-mono);
+    font-size: 14px;
+    line-height: 1.9;
+    color: var(--color-text-secondary);
+    white-space: pre-wrap;
+  }
+
+  .landing-surface-terminal-body .tline.dim {
+    color: rgba(231, 220, 201, 0.5);
+  }
+
+  .landing-surface-terminal-body .tline.gold {
+    color: var(--color-brand-primary);
+  }
+
+  .landing-surface-terminal-body .tprompt {
+    color: var(--color-brand-primary);
     opacity: 0.8;
   }
 
-  .landing-provider-icon {
-    flex-shrink: 0;
-    color: var(--color-brand-primary);
-  }
-
-  .landing-provider-info {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
+  .landing-surface-copy {
+    flex: 1 1 0;
     min-width: 0;
   }
 
-  .landing-provider-name {
-    font-size: var(--font-size-base);
+  .landing-surface-title {
+    margin: 0 0 var(--space-4);
+    font-family: var(--font-family-display);
+    font-size: clamp(1.8rem, 2.8vw, 2.6rem);
+    font-weight: var(--font-weight-semibold);
+    line-height: 1.1;
+  }
+
+  .landing-surface-lead {
+    margin: 0 0 var(--space-5);
+    max-width: 44ch;
+    color: var(--color-text-secondary);
+    line-height: var(--font-line-height-relaxed);
+  }
+
+  .landing-surface-lead code,
+  .landing-surface-links code {
+    font-family: var(--font-family-mono);
+    color: var(--color-brand-primary);
+    font-size: 0.92em;
+  }
+
+  .landing-surface-links a {
+    color: var(--color-brand-primary);
+    text-decoration: underline;
+    text-underline-offset: 0.18em;
+  }
+
+  .landing-surface-links a:hover {
+    color: var(--color-brand-primary-strong);
+  }
+
+  @media (width <= 860px) {
+    .landing-surface-inner {
+      flex-direction: column;
+    }
+  }
+
+
+  /* Providers — left-aligned honest comparison rows (not a card grid) */
+  .landing-providers {
+    padding: var(--space-16) 0;
+  }
+
+  .landing-providers-title {
+    margin: 0 0 var(--space-3);
+    font-family: var(--font-family-display);
+    font-size: clamp(1.8rem, 2.8vw, 2.6rem);
+    font-weight: var(--font-weight-semibold);
+    line-height: 1.1;
+  }
+
+  .landing-providers-lead {
+    margin: 0 0 var(--space-8);
+    max-width: 56ch;
+    color: var(--color-text-secondary);
+    line-height: var(--font-line-height-relaxed);
+  }
+
+  .landing-providers-rows {
+    list-style: none;
+    margin: 0 0 var(--space-6);
+    padding: 0;
+    border-top: 1px solid rgba(201, 166, 107, 0.12);
+  }
+
+  .landing-provider-row {
+    display: grid;
+    grid-template-columns: 44px 160px 1fr auto;
+    align-items: center;
+    gap: var(--space-4);
+    padding: var(--space-4) var(--space-2);
+    border-bottom: 1px solid rgba(201, 166, 107, 0.12);
+  }
+
+  .landing-provider-row-glyph {
+    color: var(--color-brand-primary);
+    display: flex;
+  }
+
+  .landing-provider-row-name {
     font-weight: var(--font-weight-semibold);
     color: var(--color-text-primary);
   }
 
-  .landing-provider-desc {
-    font-size: var(--font-size-sm);
-    /* Bumped from muted to secondary for WCAG AA at small size */
+  .landing-provider-row-desc {
     color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    line-height: 1.5;
   }
 
-  .landing-provider-status {
+  .landing-provider-row-status {
+    justify-self: end;
+    white-space: nowrap;
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-semibold);
-    padding: var(--space-1) var(--space-3);
-    border-radius: var(--radius-full);
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    align-self: flex-start;
-  }
-
-  .landing-provider-status.live {
+    padding: var(--space-1) var(--space-3);
+    border-radius: var(--radius-full);
     background: rgba(201, 166, 107, 0.14);
     color: var(--color-brand-primary);
   }
 
-  .landing-provider-status.coming {
-    background: #1F1912;
-    /* Bumped from muted to secondary for WCAG AA at xs size */
+  .landing-providers-foot {
+    max-width: 64ch;
     color: var(--color-text-secondary);
-  }
-
-  .landing-providers-tagline {
-    font-size: var(--font-size-lg);
-    color: var(--color-text-secondary);
-    text-align: left;
-    margin: var(--space-8) 0 var(--space-12);
-    max-width: 760px;
-  }
-
-  .landing-providers-tagline--subtle {
     font-size: var(--font-size-sm);
-    font-style: normal;
     line-height: 1.6;
-    margin-top: calc(var(--space-8) * -1);
-    max-width: 720px;
   }
 
-  @media (width <= 600px) {
-    .landing-providers-grid {
-      grid-template-columns: 1fr;
+  @media (width <= 700px) {
+    .landing-provider-row {
+      grid-template-columns: 34px 1fr;
+      grid-template-areas:
+        "glyph name"
+        "desc desc"
+        "status status";
+      gap: var(--space-2);
     }
+    .landing-provider-row-glyph { grid-area: glyph; }
+    .landing-provider-row-name { grid-area: name; }
+    .landing-provider-row-desc { grid-area: desc; }
+    .landing-provider-row-status { grid-area: status; justify-self: start; }
   }
 
   /* --------------------------------------------------------
