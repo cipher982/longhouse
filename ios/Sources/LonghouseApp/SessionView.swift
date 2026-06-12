@@ -882,15 +882,17 @@ private struct SessionPauseRequestCard: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             if question.options.isEmpty {
-                TextField("Answer", text: Binding(
-                    get: { answers[key]?.first ?? "" },
-                    set: { answers[key] = [$0] }
-                ), axis: .vertical)
-                .lineLimit(1...3)
-                .disabled(isDisabled)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                if pauseRequest.canRespond {
+                    TextField("Answer", text: Binding(
+                        get: { answers[key]?.first ?? "" },
+                        set: { answers[key] = [$0] }
+                    ), axis: .vertical)
+                    .lineLimit(1...3)
+                    .disabled(isDisabled)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
             } else {
                 VStack(alignment: .leading, spacing: 4) {
                     ForEach(Array(question.options.enumerated()), id: \.offset) { optionIndex, option in
@@ -1074,6 +1076,44 @@ private extension String {
                             SessionPauseQuestionOption(label: "SQLite", description: "Keep it local and simple.", value: "sqlite"),
                             SessionPauseQuestionOption(label: "Postgres", description: "Use managed database features.", value: "postgres"),
                         ]
+                    )
+                ],
+                occurredAt: nil,
+                lastSeenAt: nil,
+                resolvedAt: nil,
+                expiresAt: nil
+            ),
+            isResponding: false,
+            errorMessage: nil,
+            onRespond: { _, _, _, _ in true }
+        )
+    }
+    .padding()
+    .background(Color(.systemBackground))
+    .preferredColorScheme(.dark)
+}
+
+#Preview("Session pause request · terminal only") {
+    VStack(alignment: .leading, spacing: 12) {
+        SessionPauseRequestCard(
+            pauseRequest: SessionPauseRequest(
+                id: "pause-terminal-preview",
+                sessionId: "session-preview",
+                runtimeKey: "claude:session-preview",
+                kind: "structured_question",
+                status: "pending",
+                provider: "claude",
+                canRespond: false,
+                title: "Claude needs an answer",
+                summary: "Answer this in the original terminal.",
+                toolName: "AskUserQuestion",
+                questions: [
+                    SessionPauseQuestion(
+                        id: "terminal_answer",
+                        header: nil,
+                        question: "Claude is waiting for an interactive answer in the terminal.",
+                        multiSelect: false,
+                        options: []
                     )
                 ],
                 occurredAt: nil,

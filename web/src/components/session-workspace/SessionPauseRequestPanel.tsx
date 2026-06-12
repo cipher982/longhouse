@@ -219,7 +219,7 @@ export function SessionPauseRequestPanel({
                       );
                     })}
                   </div>
-                ) : (
+                ) : pauseRequest.can_respond ? (
                   <textarea
                     className="session-pause-freeform"
                     value={typeof currentValue === "string" ? currentValue : ""}
@@ -227,7 +227,7 @@ export function SessionPauseRequestPanel({
                     onChange={(event) => setQuestionAnswer(key, event.currentTarget.value)}
                     rows={2}
                   />
-                )}
+                ) : null}
               </fieldset>
             );
           })}

@@ -220,6 +220,110 @@ struct SessionViewModelTests {
     }
 
     @Test
+    func cachedHookPlaceholderIsReplacedByStructuredPauseRequestOnRefresh() async throws {
+        let cachedPauseRequestJSON = """
+        {
+          "id": "pause-hook-placeholder",
+          "session_id": "session-1",
+          "runtime_key": "claude:session-1",
+          "kind": "structured_question",
+          "status": "pending",
+          "provider": "claude",
+          "can_respond": false,
+          "title": "Claude needs an answer",
+          "summary": "Answer this in the original terminal.",
+          "tool_name": "AskUserQuestion",
+          "questions": [
+            {
+              "id": "terminal_answer",
+              "header": null,
+              "question": "Claude is waiting for an interactive answer in the terminal.",
+              "multi_select": false,
+              "options": []
+            }
+          ],
+          "occurred_at": "2026-06-09T19:14:30Z",
+          "last_seen_at": "2026-06-09T19:14:30Z",
+          "resolved_at": null,
+          "expires_at": null
+        }
+        """
+        let structuredPauseRequestJSON = """
+        {
+          "id": "pause-scope",
+          "session_id": "session-1",
+          "runtime_key": "claude:session-1",
+          "kind": "structured_question",
+          "status": "pending",
+          "provider": "claude",
+          "can_respond": true,
+          "title": "Scope",
+          "summary": "Waiting for your answer.",
+          "tool_name": "AskUserQuestion",
+          "questions": [
+            {
+              "id": "scope",
+              "header": "Scope",
+              "question": "What's the scope of the system to build now?",
+              "multi_select": false,
+              "options": [
+                {
+                  "label": "Full auth-broker login orchestrator",
+                  "description": "Build reusable iMessage-code retrieval and challenge orchestration.",
+                  "value": "full_orchestrator"
+                },
+                {
+                  "label": "iMessage code reader first",
+                  "description": "Build the SMS-code retrieval primitive before wiring orchestration.",
+                  "value": "code_reader"
+                }
+              ]
+            }
+          ],
+          "occurred_at": "2026-06-09T19:14:31Z",
+          "last_seen_at": "2026-06-09T19:14:31Z",
+          "resolved_at": null,
+          "expires_at": null
+        }
+        """
+        let cached = try makeWorkspace(eventId: 20, content: "Cached placeholder", pauseRequestJSON: cachedPauseRequestJSON)
+        let fresh = try makeWorkspace(eventId: 21, content: "Network structured question", pauseRequestJSON: structuredPauseRequestJSON)
+        let cache = SessionTranscriptCache()
+        cache.store(
+            serverURL: "https://example.longhouse.ai",
+            sessionId: "session-1",
+            detail: cached.session,
+            events: cached.events,
+            loadedProjectionItemCount: cached.events.count,
+            totalProjectionItemCount: cached.projection.total,
+            tailSnapshotEventId: cached.events.map(\.id).max()
+        )
+        let api = FakeSessionWorkspaceClient(workspaces: [fresh])
+        await api.pauseNextTailResponse(offset: 0)
+        let appState = AppState()
+        appState.serverURL = "https://example.longhouse.ai"
+        let model = SessionViewModel(apiFactory: { _ in api }, enableRealtime: false, transcriptCache: cache)
+
+        await model.start(sessionId: "session-1", appState: appState)
+        await waitForTailRequestCount(api, atLeast: 1)
+        #expect(model.detail?.activePauseRequest?.id == "pause-hook-placeholder")
+        #expect(model.detail?.activePauseRequest?.questions.first?.id == "terminal_answer")
+
+        await api.resumePausedTailResponses()
+        await waitForTailResponseCount(api, atLeast: 1)
+
+        #expect(model.items.map(\.id) == ["user:21"])
+        let request = try #require(model.detail?.activePauseRequest)
+        #expect(request.id == "pause-scope")
+        #expect(request.canRespond)
+        #expect(request.questions.first?.id == "scope")
+        #expect(request.questions.first?.options.map(\.label) == [
+            "Full auth-broker login orchestrator",
+            "iMessage code reader first"
+        ])
+    }
+
+    @Test
     func cachePreservesLoadedOlderPagesAcrossViewModels() async throws {
         let tail = try makeWorkspace(eventId: 51, content: "Recent tail", total: 100, pageOffset: 50)
         let older = try makeWorkspace(eventId: 1, content: "Older page", total: 100, pageOffset: 0)

@@ -378,7 +378,7 @@ def test_phase_signal_can_preserve_pending_pause_request(tmp_path):
         db.close()
 
 
-def test_claude_hook_blocked_signal_creates_terminal_only_pause_request(tmp_path):
+def test_claude_hook_blocked_signal_does_not_create_question_payload(tmp_path):
     factory = _make_db(tmp_path, "pause_claude_hook_blocked.db")
     now = datetime(2026, 6, 7, 12, 0, tzinfo=timezone.utc)
     db = factory()
@@ -406,14 +406,7 @@ def test_claude_hook_blocked_signal_creates_terminal_only_pause_request(tmp_path
         )
         db.commit()
 
-        row = load_active_pause_request_map(db, [session.id])[session.id]
-        projection = serialize_pause_request_projection(row)
-        assert projection is not None
-        assert projection["provider"] == "claude"
-        assert projection["tool_name"] == "AskUserQuestion"
-        assert projection["title"] == "Claude needs an answer"
-        assert projection["can_respond"] is False
-        assert projection["questions"][0]["id"] == "terminal_answer"
+        assert load_active_pause_request_map(db, [session.id]) == {}
 
         state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
         assert state.phase == "blocked"
@@ -422,7 +415,44 @@ def test_claude_hook_blocked_signal_creates_terminal_only_pause_request(tmp_path
         db.close()
 
 
-def test_transcript_pause_request_supersedes_claude_hook_placeholder(tmp_path):
+def test_legacy_claude_hook_placeholder_is_not_user_facing(tmp_path):
+    factory = _make_db(tmp_path, "pause_legacy_claude_hook_hidden.db")
+    now = datetime(2026, 6, 7, 12, 0, tzinfo=timezone.utc)
+    db = factory()
+    try:
+        session = _seed_session(db, provider="claude", started_at=now - timedelta(minutes=5))
+        runtime_key = f"claude:{session.id}"
+        upsert_pause_request(
+            db,
+            session_id=session.id,
+            runtime_key=runtime_key,
+            provider="claude",
+            request_key=f"claude-hook:{runtime_key}:AskUserQuestion",
+            provider_request_id="claude-hook-ask-user-question",
+            provider_ref={"source": "claude_hook"},
+            kind=PAUSE_KIND_STRUCTURED_QUESTION,
+            tool_name="AskUserQuestion",
+            title="Claude needs an answer",
+            summary="Answer this in the original terminal.",
+            request_payload={
+                "questions": [
+                    {
+                        "id": "terminal_answer",
+                        "question": "Claude is waiting for an interactive answer in the terminal.",
+                    }
+                ]
+            },
+            can_respond=False,
+            occurred_at=now,
+        )
+        db.commit()
+
+        assert load_active_pause_request_map(db, [session.id]) == {}
+    finally:
+        db.close()
+
+
+def test_transcript_pause_request_is_the_only_user_facing_claude_question(tmp_path):
     factory = _make_db(tmp_path, "pause_claude_hook_superseded.db")
     now = datetime(2026, 6, 7, 12, 0, tzinfo=timezone.utc)
     db = factory()
@@ -481,16 +511,15 @@ def test_transcript_pause_request_supersedes_claude_hook_placeholder(tmp_path):
         db.commit()
 
         rows = db.query(SessionPauseRequest).filter(SessionPauseRequest.runtime_key == runtime_key).all()
-        assert len(rows) == 2
+        assert len(rows) == 1
         active = load_active_pause_request_map(db, [session.id])[session.id]
         assert active.title == "Success metric"
         assert active.provider_request_id == "toolu_1"
-        assert any(row.request_key.startswith("claude-hook:") and row.status == "resolved" for row in rows)
     finally:
         db.close()
 
 
-def test_claude_hook_placeholder_resolves_when_provider_continues(tmp_path):
+def test_claude_hook_blocked_signal_clears_without_question_payload(tmp_path):
     factory = _make_db(tmp_path, "pause_claude_hook_resolves.db")
     now = datetime(2026, 6, 7, 12, 0, tzinfo=timezone.utc)
     db = factory()
@@ -516,7 +545,7 @@ def test_claude_hook_placeholder_resolves_when_provider_continues(tmp_path):
                 )
             ],
         )
-        assert load_active_pause_request_map(db, [session.id])
+        assert load_active_pause_request_map(db, [session.id]) == {}
 
         ingest_runtime_events(
             db,
@@ -539,9 +568,7 @@ def test_claude_hook_placeholder_resolves_when_provider_continues(tmp_path):
         db.commit()
 
         assert load_active_pause_request_map(db, [session.id]) == {}
-        row = db.query(SessionPauseRequest).filter(SessionPauseRequest.runtime_key == runtime_key).one()
-        assert row.status == "resolved"
-        assert row.response_text == "Provider continued."
+        assert db.query(SessionPauseRequest).filter(SessionPauseRequest.runtime_key == runtime_key).count() == 0
     finally:
         db.close()
 

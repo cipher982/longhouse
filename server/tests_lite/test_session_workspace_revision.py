@@ -114,6 +114,40 @@ def test_workspace_revision_tracks_pause_request_create_and_resolve(tmp_path):
         assert resolved.fingerprint != pending.fingerprint
 
 
+def test_workspace_revision_ignores_legacy_hook_placeholders(tmp_path):
+    sf = _make_db(tmp_path, name="session_workspace_revision_hook_placeholder.db")
+    now = datetime.now(timezone.utc)
+
+    with sf() as db:
+        session = _seed_session(db)
+        db.commit()
+        session_id = session.id
+
+        initial = load_session_workspace_revision(db, session_id)
+        assert initial is not None
+
+        upsert_pause_request(
+            db,
+            session_id=session_id,
+            runtime_key=f"claude:{session_id}",
+            provider="claude",
+            request_key=f"claude-hook:claude:{session_id}:AskUserQuestion",
+            provider_request_id="claude-hook-ask-user-question",
+            provider_ref={"source": "claude_hook"},
+            title="Claude needs an answer",
+            request_payload={"questions": [{"id": "terminal_answer", "question": "Claude is waiting."}]},
+            can_respond=False,
+            occurred_at=now,
+        )
+        db.commit()
+
+        with_placeholder = load_session_workspace_revision(db, session_id)
+        assert with_placeholder is not None
+        assert with_placeholder.pause_request_count == 0
+        assert with_placeholder.pause_request_fingerprint is None
+        assert with_placeholder.fingerprint == initial.fingerprint
+
+
 def test_workspace_revision_tracks_managed_control_changes(tmp_path):
     sf = _make_db(tmp_path, name="session_workspace_revision_control.db")
 

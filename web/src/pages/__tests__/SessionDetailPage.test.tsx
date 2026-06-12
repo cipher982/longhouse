@@ -1263,6 +1263,44 @@ describe("SessionDetailPage", () => {
     );
   });
 
+  it("does not render a disabled freeform field for read-only optionless questions", () => {
+    const pauseRequest = makePauseRequest({
+      can_respond: false,
+      title: "Claude needs an answer",
+      summary: "Answer this in the original terminal.",
+      questions: [
+        {
+          id: "terminal_answer",
+          header: null,
+          question: "Claude is waiting for an interactive answer in the terminal.",
+          multi_select: false,
+          options: [],
+        },
+      ],
+    });
+    const session = makeSession({
+      ended_at: null,
+      runtime_display: makeRuntimeDisplay({
+        state: "needs_user",
+        tone: "blocked",
+        headline: "Needs answer",
+        detail: "Answer this in the original terminal.",
+        phase_label: "Needs answer",
+        needs_attention: true,
+        pause_request: pauseRequest,
+      }),
+    });
+
+    mockWorkspaceState({ session, model: buildTimelineModel([]) });
+    renderSessionDetailPage();
+
+    const panel = screen.getByTestId("session-pause-panel");
+    expect(panel).toHaveTextContent("Claude is waiting for an interactive answer in the terminal.");
+    expect(panel).toHaveTextContent("Waiting in terminal");
+    expect(panel.querySelector(".session-pause-freeform")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox", { name: /Answer/ })).not.toBeInTheDocument();
+  });
+
   it("uses explicit runtime facts for the dock presence marker", () => {
     const session = makeSession({
       ended_at: null,

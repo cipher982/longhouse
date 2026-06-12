@@ -220,64 +220,14 @@ def load_active_pause_request_map(db: Session, session_ids: list[UUID]) -> dict[
     )
     by_session: dict[UUID, SessionPauseRequest] = {}
     for row in rows:
+        if not is_user_facing_pause_request(row):
+            continue
         by_session.setdefault(row.session_id, row)
     return by_session
 
 
 def load_active_pause_request_for_session(db: Session, session_id: UUID) -> SessionPauseRequest | None:
     return load_active_pause_request_map(db, [session_id]).get(session_id)
-
-
-def ensure_claude_hook_pause_request(
-    db: Session,
-    *,
-    session_id: UUID,
-    runtime_key: str,
-    provider: str,
-    occurred_at: datetime,
-    tool_name: str | None = None,
-) -> bool:
-    """Create a terminal-only Claude question placeholder from hook state.
-
-    Claude's hook can report that the terminal is blocked on AskUserQuestion
-    before the transcript-backed tool payload is available. The placeholder
-    makes mobile/web state visible without superseding a richer transcript row.
-    """
-
-    if db.query(AgentSession.id).filter(AgentSession.id == session_id).first() is None:
-        return False
-    active = load_active_pause_request_for_session(db, session_id)
-    if active is not None:
-        return False
-    request_key = f"claude-hook:{runtime_key}:AskUserQuestion"
-    _row, changed = upsert_pause_request(
-        db,
-        session_id=session_id,
-        runtime_key=runtime_key,
-        provider=_clean_str(provider) or "claude",
-        request_key=request_key,
-        provider_request_id="claude-hook-ask-user-question",
-        provider_ref={
-            "source": "claude_hook",
-            "tool_name": _clean_str(tool_name) or "AskUserQuestion",
-        },
-        kind=PAUSE_KIND_STRUCTURED_QUESTION,
-        tool_name=_clean_str(tool_name) or "AskUserQuestion",
-        title="Claude needs an answer",
-        summary="Answer this in the original terminal.",
-        request_payload={
-            "questions": [
-                {
-                    "id": "terminal_answer",
-                    "question": "Claude is waiting for an interactive answer in the terminal.",
-                    "options": [],
-                }
-            ],
-        },
-        can_respond=False,
-        occurred_at=occurred_at,
-    )
-    return changed
 
 
 def list_pause_requests_for_session(
@@ -290,12 +240,13 @@ def list_pause_requests_for_session(
     cleaned_status = _clean_str(status)
     if cleaned_status:
         query = query.filter(SessionPauseRequest.status == cleaned_status)
-    return query.order_by(
+    rows = query.order_by(
         SessionPauseRequest.status.asc(),
         SessionPauseRequest.last_seen_at.desc(),
         SessionPauseRequest.occurred_at.desc(),
         SessionPauseRequest.created_at.desc(),
     ).all()
+    return [row for row in rows if is_user_facing_pause_request(row)]
 
 
 def get_pause_request_for_session(
@@ -448,6 +399,17 @@ def _request_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         if key in payload:
             out[key] = payload[key]
     return out
+
+
+def is_user_facing_pause_request(row: SessionPauseRequest) -> bool:
+    """Hide legacy hook-only placeholders from user-facing question surfaces."""
+
+    ref = _mapping(row.provider_ref_json)
+    if _clean_str(ref.get("source")) == "claude_hook":
+        return False
+    request_key = _clean_str(row.request_key) or ""
+    provider_request_id = _clean_str(row.provider_request_id) or ""
+    return not (request_key.startswith("claude-hook:") or provider_request_id == "claude-hook-ask-user-question")
 
 
 def _normalize_questions(payload: Mapping[str, Any]) -> list[dict[str, Any]]:

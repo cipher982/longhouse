@@ -896,23 +896,6 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         state.terminal_reason = None
         state.terminal_source = None
         state.terminal_at = None
-        if (
-            event.session_id is not None
-            and next_phase == "blocked"
-            and str(event.provider or "").strip().lower() == "claude"
-            and str(event.source or "").strip() == "claude_hook"
-            and str(next_active_tool or "").strip() == "AskUserQuestion"
-        ):
-            from zerg.services.session_pause_requests import ensure_claude_hook_pause_request
-
-            pause_changed = ensure_claude_hook_pause_request(
-                db,
-                session_id=event.session_id,
-                runtime_key=event.runtime_key,
-                provider=event.provider,
-                tool_name=next_active_tool,
-                occurred_at=occurred_at,
-            )
         # Event-driven provider phases can close a pending question once the
         # provider continues. Do not replace this with heartbeat-style signals
         # without preserving transcript-derived AskUserQuestion waits.
