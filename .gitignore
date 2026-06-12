@@ -225,6 +225,7 @@ videos/
 # Exception: web-ready compressed video served by the marketing site
 !web/public/videos/
 !web/public/videos/timeline-demo.mp4
+!web/public/videos/wedge-demo.mp4
 .claude/
 
 # Generated local artifacts

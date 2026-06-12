@@ -142,27 +142,18 @@ export function HeroSection() {
         </div>
       </div>
 
-      {/* ── Hero device showcase ── */}
+      {/* ── Hero demo: launch → walk away → steer, in one loop ── */}
       <div className="landing-hero-devices">
-        <img
-          src="/images/landing/device-laptop.webp?v=4"
-          alt="Longhouse timeline on a MacBook"
-          className="landing-hero-device landing-hero-device--laptop"
-          width={1400}
-          height={871}
-          loading="eager"
-          fetchPriority="high"
-          decoding="async"
-        />
-        <img
-          src="/images/landing/device-iphone.webp?v=5"
-          alt="Longhouse iOS widget on iPhone"
-          className="landing-hero-device landing-hero-device--iphone"
-          width={1024}
-          height={1526}
-          loading="eager"
-          fetchPriority="high"
-          decoding="async"
+        <video
+          className="landing-hero-video"
+          src="/videos/wedge-demo.mp4"
+          poster="/images/landing/wedge-poster.png"
+          autoPlay
+          muted
+          loop
+          playsInline
+          preload="metadata"
+          aria-label="Longhouse demo: launch a coding agent, walk away, and steer it from your phone"
         />
         <div className="landing-hero-glow" aria-hidden="true" />
       </div>
