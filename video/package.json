@@ -8,6 +8,8 @@
     "studio": "remotion studio",
     "render": "remotion render",
     "render:timeline-demo": "remotion render TimelineDemo out/timeline-demo.mp4",
+    "render:wedge": "remotion render SteerLoop out/wedge-demo.mp4 --props=specs/wedge-demo.json",
+    "render:wedge-poster": "remotion still SteerLoop out/wedge-poster.png --props=specs/wedge-demo.json --frame=270",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -1,0 +1,9 @@
+{
+  "background": "#0a0a0f",
+  "scenes": [
+    { "kind": "hook", "seconds": 3.5, "headline": "Start a coding agent. Walk away." },
+    { "kind": "screenshot", "seconds": 4, "shot": "timeline-preview.png", "frame": "browser", "caption": "Every session, one timeline — on machines you own." },
+    { "kind": "steer", "seconds": 5, "phoneShot": "session-dark.png", "message": "rebase onto main and rerun the tests", "caption": "Steer it from your phone." },
+    { "kind": "cta", "seconds": 3.5, "headline": "Longhouse", "subhead": "Self-hosted · cross-provider · yours" }
+  ]
+}

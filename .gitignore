@@ -259,3 +259,4 @@ video/public/audio/
 .build/
 ios/Resources/build-identity.json
 server/zerg/build_identity.json
+video/public/shots/
