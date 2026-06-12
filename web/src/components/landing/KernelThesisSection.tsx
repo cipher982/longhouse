@@ -6,22 +6,22 @@ interface ValueProp {
 
 const props: ValueProp[] = [
   {
-    action: "Import once",
-    title: "Every session lands in one timeline",
+    action: "It just syncs",
+    title: "Your sessions show up on their own",
     description:
-      "Bring Claude, Codex, Antigravity, and OpenCode sessions into a searchable archive immediately. Legacy Gemini imports remain searchable.",
+      "Install Longhouse and every Claude Code, Codex, Antigravity, and OpenCode session flows into one searchable timeline — live. No import step, no setup.",
   },
   {
-    action: "Launch through Longhouse",
-    title: "Keep a control path attached",
+    action: "Walk away",
+    title: "Pick up any session from your phone",
     description:
-      "Start sessions through Longhouse when you want to message, tail, or continue them later from browser, CLI, or API.",
+      "Continue a session you started at your desk from your phone or browser — message it, tail it, steer it. Or kick off a new one remotely and let it run.",
   },
   {
-    action: "Move when ready",
+    action: "Keep it running",
     title: "Laptop to try, always-on box to keep",
     description:
-      "Run everything locally to prove it. Move the Runtime Host to a VPS, Mac mini, or homelab box when you want it to stay on.",
+      "Run it all on your laptop to start. Move the Runtime Host to a VPS, Mac mini, or homelab box so sessions stay live after you close the lid.",
   },
 ];
 
