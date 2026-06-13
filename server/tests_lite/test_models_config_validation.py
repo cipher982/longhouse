@@ -142,7 +142,14 @@ def test_lifespan_model_validation_skips_when_llm_disabled(monkeypatch):
     lifespan._validate_models_config_startup()
 
 
-def test_lifespan_model_validation_raises_even_when_no_llm_keys(tmp_path, monkeypatch):
+def test_lifespan_model_validation_warns_and_boots_when_no_llm_keys(tmp_path, monkeypatch, caplog):
+    """True first-run (no provider keys at all) boots with a visible banner.
+
+    Honors the Settings.llm_available contract: 'UI boots without API keys,
+    but chat features prompt for configuration.' Operators see a multi-line
+    warning naming the disabled capabilities and how to enable them.
+    """
+    import logging
     from types import SimpleNamespace
 
     monkeypatch.setenv("TESTING", "1")
@@ -158,8 +165,13 @@ def test_lifespan_model_validation_raises_even_when_no_llm_keys(tmp_path, monkey
         SimpleNamespace(testing=False, llm_disabled=False, demo_mode=False, llm_available=False),
     )
 
-    with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
-        lifespan._validate_models_config_startup()
+    with caplog.at_level(logging.WARNING, logger="zerg.lifespan"):
+        lifespan._validate_models_config_startup()  # must not raise
+
+    banner = "\n".join(rec.getMessage() for rec in caplog.records)
+    assert "LIMITED MODE" in banner
+    assert "LLM_DISABLED=1" in banner
+    assert "summarization" in banner
 
 
 def test_lifespan_model_validation_raises_when_enabled(tmp_path, monkeypatch):

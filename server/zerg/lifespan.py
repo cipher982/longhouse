@@ -72,12 +72,42 @@ def _enforce_single_tenant_startup(app: FastAPI) -> None:
 
 
 def _validate_models_config_startup() -> None:
-    """Fail fast when configured model providers are missing required keys."""
+    """Validate configured providers at boot.
+
+    Three cases:
+      - testing / llm_disabled / demo_mode: skip silently (operator opted out).
+      - No LLM keys at all (`llm_available=False`): true first-run. Emit a
+        prominent banner naming the degraded capabilities and how to enable
+        them, then boot. This preserves the "UI boots without API keys"
+        contract documented on Settings.llm_available.
+      - Some keys configured (`llm_available=True`) but a specific declared
+        provider is missing its key: hard-fail with the actionable error from
+        models_config so operators catch misconfiguration immediately.
+    """
     if _settings.testing or _settings.llm_disabled or _settings.demo_mode:
         return
 
     from zerg.models_config import iter_required_provider_keys
     from zerg.models_config import validate_startup_config
+
+    if not _settings.llm_available:
+        missing_scopes = sorted({scope for _env, scope, _model, _provider in iter_required_provider_keys()})
+        scope_lines = "\n".join(f"      - {scope}" for scope in missing_scopes) or "      - (none declared)"
+        banner = (
+            "\n"
+            "================================================================\n"
+            "  Longhouse is running in LIMITED MODE (no LLM provider keys)\n"
+            "\n"
+            "  Disabled until you configure a provider key:\n"
+            f"{scope_lines}\n"
+            "\n"
+            "  To enable: set one of OPENROUTER_API_KEY, OPENAI_API_KEY,\n"
+            "    GROQ_API_KEY, XAI_API_KEY (matching config/models.json).\n"
+            "  To suppress this banner: set LLM_DISABLED=1\n"
+            "================================================================"
+        )
+        logger.warning(banner)
+        return
 
     validate_startup_config()
     for env_var, scope, model_id, provider in iter_required_provider_keys():
