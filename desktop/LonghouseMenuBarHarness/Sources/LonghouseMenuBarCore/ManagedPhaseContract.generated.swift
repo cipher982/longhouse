@@ -9,6 +9,7 @@ enum ManagedPhaseContract {
         "running": .working,
         "needs permission": .blocked,
         "ready": .idle,
+        "stalled": .idle,
         "idle": .idle,
         "working": .working,
         "completed": .idle,

@@ -23,6 +23,11 @@
       "attention": "idle"
     },
     {
+      "raw_phase": "stalled",
+      "display_label": "stalled",
+      "attention": "idle"
+    },
+    {
       "raw_phase": "idle",
       "display_label": "idle",
       "attention": "idle"
