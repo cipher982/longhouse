@@ -21,7 +21,7 @@ struct LonghouseApp: App {
                         GIDSignIn.sharedInstance.handle(url)
                     }
                 }
-                .onReceive(NotificationCenter.default.publisher(for: .longhouseAPNSDeviceTokenUpdated)) { _ in
+                .onReceive(NotificationCenter.default.publisher(for: .longhouseAPNSDeviceTokenUpdated).receive(on: DispatchQueue.main)) { _ in
                     Task {
                         await appState.syncStoredAPNSTokenIfPossible()
                     }

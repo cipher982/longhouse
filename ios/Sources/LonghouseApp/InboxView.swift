@@ -130,7 +130,10 @@ struct TimelineView: View {
                     viewModel.stopStream()
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .longhouseOpenSessionFromPush)) { note in
+            // Push payloads are posted from nonisolated APNs delegate code;
+            // NotificationCenter delivers on the posting thread, so hop to main
+            // before mutating SwiftUI state.
+            .onReceive(NotificationCenter.default.publisher(for: .longhouseOpenSessionFromPush).receive(on: DispatchQueue.main)) { note in
                 if let sessionID = note.object as? String {
                     openSession(sessionID: sessionID)
                 }

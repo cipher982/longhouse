@@ -66,7 +66,11 @@ private struct AuthenticatedPager: View {
                     Label("Settings", systemImage: "gearshape")
                 }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .longhouseOpenSessionFromPush)) { _ in
+        // NotificationCenter delivers on the posting thread, and push payloads
+        // are posted from nonisolated APNs delegate code — hop to main before
+        // touching SwiftUI state or it crashes with "Publishing changes from
+        // background threads is not allowed".
+        .onReceive(NotificationCenter.default.publisher(for: .longhouseOpenSessionFromPush).receive(on: DispatchQueue.main)) { _ in
             selectedTab = .timeline
         }
     }
