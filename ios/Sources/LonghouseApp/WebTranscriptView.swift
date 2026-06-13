@@ -47,10 +47,11 @@ struct WebTranscriptView: UIViewRepresentable {
         webView.scrollView.keyboardDismissMode = .interactive
         webView.scrollView.alwaysBounceVertical = true
         // Bottom clearance has exactly ONE owner: the `--native-bottom-inset`
-        // DOM padding (fed the floating card height + bottom safe area). Disable
-        // the scroll view's automatic safe-area inset so it can't double-count
-        // or fight the DOM padding — the SwiftUI side takes the WebView
-        // full-bleed via .ignoresSafeArea(.container, .bottom).
+        // DOM padding, fed the SwiftUI-computed bottom safe area (card + tab bar
+        // + keyboard/home indicator). Disable the scroll view's automatic
+        // safe-area inset so it can't double-count or fight the DOM padding — the
+        // SwiftUI side takes the WebView full-bleed via
+        // .ignoresSafeArea([.container, .keyboard], edges: .bottom).
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.isOpaque = false
         webView.backgroundColor = .clear

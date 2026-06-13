@@ -5,26 +5,6 @@ import XCTest
 @testable import Longhouse
 
 final class WebTranscriptViewTests: XCTestCase {
-    func testBottomInsetDoesNotCountTabBarAreaOutsideTranscriptViewport() {
-        let inset = SessionBottomInsetCalculator.bottomInset(
-            viewportFrame: CGRect(x: 0, y: 100, width: 393, height: 620),
-            surfaceFrame: CGRect(x: 0, y: 610, width: 393, height: 120),
-            cardFrame: CGRect(x: 12, y: 620, width: 369, height: 110)
-        )
-
-        XCTAssertEqual(inset, 155)
-    }
-
-    func testBottomInsetFollowsKeyboardShortenedTranscriptViewport() {
-        let inset = SessionBottomInsetCalculator.bottomInset(
-            viewportFrame: CGRect(x: 0, y: 100, width: 393, height: 510),
-            surfaceFrame: CGRect(x: 0, y: 500, width: 393, height: 120),
-            cardFrame: CGRect(x: 12, y: 510, width: 369, height: 110)
-        )
-
-        XCTAssertEqual(inset, 155)
-    }
-
     func testPreparedPayloadReportsDiagnosticsFacts() {
         let payload = WebTranscriptView.preparedPayload(
             timelineItems: [

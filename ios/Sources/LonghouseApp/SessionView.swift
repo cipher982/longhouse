@@ -43,14 +43,10 @@ struct SessionView: View {
     @State private var pickerSelection: [PhotosPickerItem] = []
     @State private var isShowingPhotoPicker: Bool = false
     @State private var isLoadingPickerItems: Bool = false
-    /// DOM clearance (pt) needed for the last transcript row to rest above the
-    /// floating controls while the WebKit transcript scrolls full-bleed behind
-    /// them.
-    @State private var transcriptBottomInset: CGFloat = Self.minimumTranscriptBottomInset
-    @State private var transcriptViewportFrame: CGRect = .null
-    @State private var bottomChromeSurfaceFrame: CGRect = .null
-    @State private var bottomChromeCardFrame: CGRect = .null
-    private static let minimumTranscriptBottomInset = SessionBottomInsetCalculator.minimumTranscriptBottomInset
+    /// Breathing room (pt) above the floating control card, added on top of the
+    /// SwiftUI-computed bottom safe area so the last transcript row never butts
+    /// directly against the chrome.
+    private static let transcriptComfortGap: CGFloat = 24
 
     init(
         sessionId: String,
@@ -82,45 +78,33 @@ struct SessionView: View {
     }
 
     var body: some View {
-        // Scroll-under-glass: the transcript and floating control card are
-        // measured in the same global coordinate space. The DOM bottom padding
-        // is the obstruction inside the WebView's actual scroll viewport; it
-        // must not infer extra screen or tab-bar space outside that viewport.
-        transcript
-            .ignoresSafeArea(.container, edges: .bottom)
-            .background(
-                GeometryReader { proxy in
-                    Color.clear.preference(
-                        key: TranscriptViewportFrameKey.self,
-                        value: proxy.frame(in: .global)
-                    )
-                }
-            )
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                bottomChrome
-                    .background(
-                        GeometryReader { proxy in
-                            Color.clear.preference(
-                                key: BottomChromeSurfaceFrameKey.self,
-                                value: proxy.frame(in: .global)
-                            )
-                        }
-                    )
-                    .frame(maxWidth: .infinity)
-            }
-            .onPreferenceChange(TranscriptViewportFrameKey.self) { frame in
-                transcriptViewportFrame = frame
-                recalculateTranscriptBottomInset()
-            }
-            .onPreferenceChange(BottomChromeSurfaceFrameKey.self) { frame in
-                bottomChromeSurfaceFrame = frame
-                recalculateTranscriptBottomInset()
-            }
-            .onPreferenceChange(BottomChromeCardFrameKey.self) { frame in
-                bottomChromeCardFrame = frame
-                recalculateTranscriptBottomInset()
-            }
-            .navigationTitle(viewModel.detail?.displayTitle ?? fallbackTitle)
+        // Scroll-under-glass: the WKWebView transcript renders full-bleed so the
+        // glass blur shows content scrolling under the floating control card and
+        // the tab bar. SwiftUI already sums the entire bottom obstruction — the
+        // .safeAreaInset chrome + the TabView tab bar + the home indicator — into
+        // safeAreaInsets.bottom. We read that single value and feed it to the DOM
+        // padding, so there are no hand-reconstructed global frames or magic
+        // offsets to drift out of sync when the keyboard, Dynamic Type, or chrome
+        // height changes. The GeometryReader is the view .safeAreaInset is applied
+        // to, so its proxy reports the *increased* bottom inset; the transcript
+        // child then ignores that area only for drawing.
+        GeometryReader { proxy in
+            // Ignore BOTH .container and .keyboard so the WebView frame is fully
+            // stable — it never shrinks when the keyboard opens. The control card
+            // (a .safeAreaInset, below) still rises above the keyboard on its own.
+            // Because the frame is stable, proxy.safeAreaInsets.bottom is the
+            // single, correct clearance: keyboard + card when the keyboard is up,
+            // tab bar + card + home indicator when it's down. Feeding that to the
+            // DOM padding avoids the double-count we'd get if the frame shrank for
+            // the keyboard AND we padded for it too.
+            transcript(bottomInset: proxy.safeAreaInsets.bottom + Self.transcriptComfortGap)
+                .ignoresSafeArea([.container, .keyboard], edges: .bottom)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            bottomChrome
+                .frame(maxWidth: .infinity)
+        }
+        .navigationTitle(viewModel.detail?.displayTitle ?? fallbackTitle)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
@@ -181,31 +165,12 @@ struct SessionView: View {
                         )
                 )
                 .shadow(color: .black.opacity(0.28), radius: 16, y: 5)
-                .background(
-                    GeometryReader { proxy in
-                        Color.clear.preference(
-                            key: BottomChromeCardFrameKey.self,
-                            value: proxy.frame(in: .global)
-                        )
-                    }
-                )
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("session-chat-bottom-chrome-card")
             }
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 10)
-    }
-
-    private func recalculateTranscriptBottomInset() {
-        guard let inset = SessionBottomInsetCalculator.bottomInset(
-            viewportFrame: transcriptViewportFrame,
-            surfaceFrame: bottomChromeSurfaceFrame,
-            cardFrame: bottomChromeCardFrame
-        ) else {
-            return
-        }
-        transcriptBottomInset = inset
     }
 
     @ViewBuilder
@@ -296,7 +261,7 @@ struct SessionView: View {
         )
     }
 
-    private var transcript: some View {
+    private func transcript(bottomInset: CGFloat) -> some View {
         let state = transcriptState
         let showTranscript = state.showsTranscript
 
@@ -305,7 +270,7 @@ struct SessionView: View {
                 items: viewModel.items,
                 submittedInputs: viewModel.submittedInputs,
                 errorMessage: viewModel.errorMessage,
-                bottomInset: transcriptBottomInset,
+                bottomInset: bottomInset,
                 onNearTop: {
                     Task { await viewModel.loadOlder(sessionId: sessionId, appState: appState) }
                 },
@@ -1355,62 +1320,6 @@ private struct PauseRequestPreviewChrome<Content: View>: View {
             errorMessage: nil,
             onRespond: { _, _, _, _ in true }
         )
-    }
-}
-
-struct SessionBottomInsetCalculator {
-    static let minimumTranscriptBottomInset: CGFloat = 18
-    private static let bottomChromeShadowRadius: CGFloat = 16
-    private static let bottomChromeShadowYOffset: CGFloat = 5
-    private static let bottomChromeVisualBleedAbove: CGFloat = max(0, bottomChromeShadowRadius - bottomChromeShadowYOffset)
-    private static let transcriptBottomComfortGap: CGFloat = 24
-
-    static func bottomInset(
-        viewportFrame: CGRect,
-        surfaceFrame: CGRect,
-        cardFrame: CGRect
-    ) -> CGFloat? {
-        guard !viewportFrame.isNull, !surfaceFrame.isNull, !cardFrame.isNull else { return nil }
-
-        let visualObstructionTop = min(cardFrame.minY, surfaceFrame.minY) - bottomChromeVisualBleedAbove
-        let measuredViewportOverlap = max(0, viewportFrame.maxY - visualObstructionTop)
-        let measuredChromeFloor = surfaceFrame.height + bottomChromeVisualBleedAbove
-        let obstruction = max(measuredViewportOverlap, measuredChromeFloor)
-
-        return max(
-            minimumTranscriptBottomInset,
-            obstruction + transcriptBottomComfortGap
-        )
-    }
-}
-
-private struct TranscriptViewportFrameKey: PreferenceKey {
-    static let defaultValue = CGRect.null
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
-        let next = nextValue()
-        if !next.isNull {
-            value = next
-        }
-    }
-}
-
-private struct BottomChromeSurfaceFrameKey: PreferenceKey {
-    static let defaultValue = CGRect.null
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
-        let next = nextValue()
-        if !next.isNull {
-            value = next
-        }
-    }
-}
-
-private struct BottomChromeCardFrameKey: PreferenceKey {
-    static let defaultValue = CGRect.null
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
-        let next = nextValue()
-        if !next.isNull {
-            value = next
-        }
     }
 }
 
