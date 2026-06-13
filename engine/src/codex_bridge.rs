@@ -28,6 +28,7 @@ const DEFAULT_PROGRESS_THROTTLE_MS: u64 = 1500;
 const LIVE_RUNTIME_EVENT_TIMEOUT: Duration = Duration::from_millis(1500);
 const LIVE_RUNTIME_EVENT_SLOW_LOG_MS: u128 = 500;
 const ACTIVE_PHASE_KEEPALIVE_MS: u64 = 30_000;
+const QUIET_ACTIVE_TURN_STALL_MS: u64 = 120_000;
 const THREAD_SUBSCRIBE_BACKGROUND_RETRY_MS: u64 = 500;
 const THREAD_SUBSCRIBE_RETRY_ATTEMPTS: usize = 8;
 const THREAD_SUBSCRIBE_RETRY_DELAY_MS: u64 = 250;
@@ -357,6 +358,9 @@ struct ResolvedBridgePaths {
 #[derive(Debug, Default)]
 struct CodexRuntimeTracker {
     active_turn_id: Option<String>,
+    active_turn_started_at: Option<Instant>,
+    last_active_turn_activity_at: Option<Instant>,
+    stalled_turn_id: Option<String>,
     attention_state: Option<CodexAttentionState>,
     active_items: BTreeMap<String, ActiveCodexItem>,
     next_item_sequence: u64,
@@ -1368,7 +1372,9 @@ async fn handle_ipc_turn_start(
         extract_string(&response, &["turn", "status"]).unwrap_or_else(|| "inProgress".to_string());
     context.state.active_turn_id = Some(turn_id.clone());
     context.state.last_turn_status = Some(turn_status.clone());
-    context.runtime_tracker.active_turn_id = Some(turn_id.clone());
+    context
+        .runtime_tracker
+        .mark_turn_started(Some(turn_id.clone()));
     write_state_file(&context.state_file, &context.state)?;
     if let Some(path) = context.state.thread_path.as_deref() {
         wake_daemon_for_transcript(config, path, "running", "turn_started", Some(&turn_id));
@@ -3513,7 +3519,7 @@ fn mark_provider_thread_switched(
             .to_string(),
     );
     context.state.thread_subscription_last_error = Some(message);
-    context.runtime_tracker.active_turn_id = None;
+    context.runtime_tracker.clear_active_turn();
     reset_live_transcript_turn(context);
     if let Some(path) = next_path.as_deref() {
         clear_binding_if_points_to_session(config, path, &context.state.session_id);
@@ -3615,11 +3621,33 @@ fn adopt_thread_identity(
 }
 
 impl CodexRuntimeTracker {
+    fn mark_turn_started(&mut self, turn_id: Option<String>) {
+        self.active_turn_id = turn_id;
+        self.active_turn_started_at = Some(Instant::now());
+        self.last_active_turn_activity_at = self.active_turn_started_at;
+        self.stalled_turn_id = None;
+    }
+
+    fn clear_active_turn(&mut self) {
+        self.active_turn_id = None;
+        self.active_turn_started_at = None;
+        self.last_active_turn_activity_at = None;
+        self.stalled_turn_id = None;
+    }
+
+    fn note_active_turn_activity(&mut self) {
+        if self.active_turn_id.is_some() {
+            self.last_active_turn_activity_at = Some(Instant::now());
+            self.stalled_turn_id = None;
+        }
+    }
+
     fn handle_server_request(
         &mut self,
         method: &str,
         _params: &Value,
     ) -> Option<BridgeRuntimeUpdate> {
+        self.note_active_turn_activity();
         self.attention_state = match method {
             "item/commandExecution/requestApproval" | "execCommandApproval" => {
                 Some(CodexAttentionState::Approval {
@@ -3645,13 +3673,13 @@ impl CodexRuntimeTracker {
     fn handle_notification(&mut self, method: &str, params: &Value) -> Vec<BridgeRuntimeUpdate> {
         match method {
             "turn/started" => {
-                self.active_turn_id = extract_string(params, &["turn", "id"]);
+                self.mark_turn_started(extract_string(params, &["turn", "id"]));
                 self.attention_state = None;
                 self.active_items.clear();
                 vec![self.current_phase_update()]
             }
             "turn/completed" => {
-                self.active_turn_id = None;
+                self.clear_active_turn();
                 self.attention_state = None;
                 self.active_items.clear();
                 vec![self.current_phase_update()]
@@ -3672,7 +3700,10 @@ impl CodexRuntimeTracker {
             | "item/commandExecution/outputDelta"
             | "command/exec/outputDelta"
             | "item/fileChange/outputDelta"
-            | "item/mcpToolCall/progress" => vec![BridgeRuntimeUpdate::Progress],
+            | "item/mcpToolCall/progress" => {
+                self.note_active_turn_activity();
+                vec![BridgeRuntimeUpdate::Progress]
+            }
             _ => Vec::new(),
         }
     }
@@ -3681,6 +3712,7 @@ impl CodexRuntimeTracker {
         let item = params.get("item")?;
         let item_id = item.get("id").and_then(Value::as_str)?.to_string();
         let item_type = item.get("type").and_then(Value::as_str)?.to_string();
+        self.note_active_turn_activity();
         if !item_supports_runtime_tracking(item_type.as_str(), item) {
             return None;
         }
@@ -3701,6 +3733,7 @@ impl CodexRuntimeTracker {
     fn track_completed_item(&mut self, params: &Value) -> Option<BridgeRuntimeUpdate> {
         let item = params.get("item")?;
         let item_id = item.get("id").and_then(Value::as_str)?;
+        self.note_active_turn_activity();
         if self.active_items.remove(item_id).is_none() {
             return None;
         }
@@ -3710,12 +3743,13 @@ impl CodexRuntimeTracker {
     fn track_thread_status(&mut self, params: &Value) -> Option<BridgeRuntimeUpdate> {
         match extract_thread_status_type(params)?.as_str() {
             "idle" => {
-                self.active_turn_id = None;
+                self.clear_active_turn();
                 self.attention_state = None;
                 self.active_items.clear();
                 Some(self.current_phase_update())
             }
             "active" => {
+                self.note_active_turn_activity();
                 let flags = extract_thread_active_flags(params);
                 if flags.iter().any(|flag| flag == "waitingOnApproval") {
                     let existing_tool = match self.attention_state.as_ref() {
@@ -3737,6 +3771,12 @@ impl CodexRuntimeTracker {
     }
 
     fn current_phase_update(&self) -> BridgeRuntimeUpdate {
+        if self.active_turn_id.is_some() && self.stalled_turn_id == self.active_turn_id {
+            return BridgeRuntimeUpdate::Phase {
+                phase: "stalled",
+                tool_name: None,
+            };
+        }
         if let Some(attention_state) = self.attention_state.as_ref() {
             return match attention_state {
                 CodexAttentionState::Approval { tool_name } => BridgeRuntimeUpdate::Phase {
@@ -3767,14 +3807,35 @@ impl CodexRuntimeTracker {
         }
     }
 
-    fn keepalive_update(&self) -> Option<BridgeRuntimeUpdate> {
+    fn keepalive_update(&mut self) -> Option<BridgeRuntimeUpdate> {
+        self.refresh_stall_state();
         match self.current_phase_update() {
             BridgeRuntimeUpdate::Phase { phase, tool_name }
-                if matches!(phase, "thinking" | "running") =>
+                if matches!(phase, "thinking" | "running" | "stalled") =>
             {
                 Some(BridgeRuntimeUpdate::Phase { phase, tool_name })
             }
             _ => None,
+        }
+    }
+
+    fn refresh_stall_state(&mut self) {
+        let Some(turn_id) = self.active_turn_id.clone() else {
+            self.stalled_turn_id = None;
+            return;
+        };
+        if self.attention_state.is_some() || !self.active_items.is_empty() {
+            self.stalled_turn_id = None;
+            return;
+        }
+        let Some(last_activity) = self
+            .last_active_turn_activity_at
+            .or(self.active_turn_started_at)
+        else {
+            return;
+        };
+        if last_activity.elapsed() >= Duration::from_millis(QUIET_ACTIVE_TURN_STALL_MS) {
+            self.stalled_turn_id = Some(turn_id);
         }
     }
 
@@ -4896,7 +4957,13 @@ async fn apply_thread_resume_snapshot(
     context.state.last_turn_status = resumed_active_turn
         .and_then(|turn| extract_string(turn, &["status"]))
         .or_else(|| context.state.last_turn_status.clone());
-    context.runtime_tracker.active_turn_id = context.state.active_turn_id.clone();
+    if context.state.active_turn_id.is_some() {
+        context
+            .runtime_tracker
+            .mark_turn_started(context.state.active_turn_id.clone());
+    } else {
+        context.runtime_tracker.clear_active_turn();
+    }
     write_state_file(&context.state_file, &context.state)?;
     emit_runtime_updates(
         config,
@@ -6785,6 +6852,68 @@ mod tests {
     }
 
     #[test]
+    fn codex_runtime_tracker_marks_quiet_thinking_turn_stalled() {
+        let mut tracker = CodexRuntimeTracker::default();
+        tracker.handle_notification(
+            "turn/started",
+            &json!({
+                "turn": {"id": "turn-1", "status": "inProgress"}
+            }),
+        );
+        tracker.last_active_turn_activity_at = Some(
+            Instant::now()
+                .checked_sub(Duration::from_millis(QUIET_ACTIVE_TURN_STALL_MS + 1_000))
+                .unwrap(),
+        );
+
+        assert_phase_update(
+            tracker.keepalive_update().expect("stalled keepalive"),
+            "stalled",
+            None,
+        );
+
+        tracker.handle_notification("item/agentMessage/delta", &json!({}));
+        assert_phase_update(
+            tracker.keepalive_update().expect("thinking after progress"),
+            "thinking",
+            None,
+        );
+    }
+
+    #[test]
+    fn codex_runtime_tracker_does_not_mark_running_tool_stalled() {
+        let mut tracker = CodexRuntimeTracker::default();
+        tracker.handle_notification(
+            "turn/started",
+            &json!({
+                "turn": {"id": "turn-1", "status": "inProgress"}
+            }),
+        );
+        tracker.handle_notification(
+            "item/started",
+            &json!({
+                "item": {
+                    "id": "cmd-1",
+                    "type": "commandExecution",
+                    "status": "inProgress",
+                    "command": "sleep 300"
+                }
+            }),
+        );
+        tracker.last_active_turn_activity_at = Some(
+            Instant::now()
+                .checked_sub(Duration::from_millis(QUIET_ACTIVE_TURN_STALL_MS + 1_000))
+                .unwrap(),
+        );
+
+        assert_phase_update(
+            tracker.keepalive_update().expect("running keepalive"),
+            "running",
+            Some("shell"),
+        );
+    }
+
+    #[test]
     fn keepalive_interval_fits_within_thinking_freshness_budget() {
         // Backend PHASE_FRESHNESS["thinking"] = 90s is the shortest TTL.
         // Keepalive must fire before it expires so the phase stays live.
@@ -7131,7 +7260,9 @@ mod tests {
         context.state.thread_path = Some("/tmp/thread-live.jsonl".to_string());
         context.state.active_turn_id = Some("turn-live".to_string());
         context.runtime.thread_id = Some("thr-live".to_string());
-        context.runtime_tracker.active_turn_id = Some("turn-live".to_string());
+        context
+            .runtime_tracker
+            .mark_turn_started(Some("turn-live".to_string()));
 
         let followup = process_notification(
             &json!({

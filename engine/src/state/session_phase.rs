@@ -44,6 +44,7 @@ pub const KNOWN_PHASES: &[&str] = &[
     "thinking",
     "running",
     "blocked",
+    "stalled",
     "needs_user",
     "idle",
     "finished",
@@ -56,6 +57,7 @@ pub const KNOWN_PHASES: &[&str] = &[
 pub const PHASE_FRESHNESS_SECONDS: &[(&str, i64)] = &[
     ("thinking", 90),
     ("running", 10 * 60),
+    ("stalled", 10 * 60),
     ("idle", 10 * 60),
     ("blocked", 24 * 60 * 60),
     ("needs_user", 10 * 60),

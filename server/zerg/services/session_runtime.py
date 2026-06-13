@@ -45,6 +45,7 @@ RuntimeEventApplyOutcome = Literal["applied", "ignored", "protected_session_ende
 PHASE_FRESHNESS = {
     "thinking": timedelta(seconds=90),
     "running": timedelta(minutes=10),
+    "stalled": timedelta(minutes=10),
     "idle": timedelta(minutes=10),
     "blocked": timedelta(hours=24),
     # `needs_user` is often the provider's normal prompt after a response.
@@ -58,7 +59,7 @@ EXPLICIT_CLOSED_TERMINAL_STATES = {"session_ended", "user_closed", "process_gone
 UNVERIFIED_TERMINAL_STATES = {"host_expired"}
 LIVE_EXECUTION_PHASES = {"thinking", "running"}
 ATTENTION_PHASES = {"blocked"}
-KNOWN_PHASES = {"thinking", "running", "blocked", "needs_user", "idle", "finished", "syncing_transcript"}
+KNOWN_PHASES = {"thinking", "running", "blocked", "stalled", "needs_user", "idle", "finished", "syncing_transcript"}
 MANAGED_SESSION_LEASE_SOURCE = "engine_attached_lease"
 MANAGED_CODEX_RUNTIME_SOURCES = {MANAGED_SESSION_LEASE_SOURCE, "codex_bridge", "codex_bridge_live"}
 MANAGED_CODEX_INVARIANTS = ("ended_without_session_ended", "short_freshness")
@@ -237,6 +238,8 @@ def _display_phase_for_state(
         return "Idle"
     if phase == "blocked":
         return f"Blocked on {active_tool}" if active_tool else "Needs permission"
+    if phase == "stalled":
+        return "Stalled"
     if phase == "idle":
         return "Idle"
     return "Inactive"

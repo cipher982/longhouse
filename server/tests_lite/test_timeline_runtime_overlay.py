@@ -364,6 +364,52 @@ def test_progress_after_host_expired_reopens_runtime_projection(tmp_path):
         assert row["timeline_card"]["status"]["label"] == "No live signal"
 
 
+def test_sessions_list_preserves_ingested_stalled_runtime_phase(tmp_path):
+    factory = _make_db(tmp_path, "stalled_runtime_phase.db")
+    now = datetime.now(timezone.utc)
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            provider="codex",
+            started_at=now - timedelta(minutes=5),
+            project="stalled-codex",
+            execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
+            managed_transport="codex_app_server",
+        )
+        session_id = str(session.id)
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=f"codex:{session_id}",
+                    session_id=session.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_bridge",
+                    kind="phase_signal",
+                    phase="stalled",
+                    occurred_at=now,
+                    freshness_ms=10 * 60 * 1000,
+                    dedupe_key=f"stalled:{session_id}",
+                    payload={"managed_transport": "codex_app_server"},
+                )
+            ],
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        resp = client.get("/agents/sessions?days_back=1&limit=10", headers={"X-Agents-Token": "dev"})
+        assert resp.status_code == 200, resp.text
+        row = next(item for item in resp.json()["sessions"] if item["id"] == session_id)
+        assert row["presence_state"] == "stalled"
+        assert row["runtime_display"]["state"] == "stalled"
+        assert row["runtime_display"]["tone"] == "stalled"
+        assert row["runtime_display"]["is_stalled"] is True
+
+
 def test_sessions_list_uses_recent_activity_anchor_for_old_live_session(tmp_path):
     factory = _make_db(tmp_path, "recent_anchor.db")
     now = datetime.now(timezone.utc)

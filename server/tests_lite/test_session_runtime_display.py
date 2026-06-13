@@ -705,6 +705,47 @@ def test_real_stale_runtime_view_without_presence_is_stalled():
     assert display.needs_attention is False
 
 
+def test_explicit_stalled_runtime_view_surfaces_stall_recovery_state():
+    now = datetime(2026, 4, 26, 12, 0, tzinfo=timezone.utc)
+    state = SessionRuntimeState(
+        runtime_key="codex:stalled-runtime-view",
+        provider="codex",
+        device_id="agent-device",
+        phase="stalled",
+        phase_source="codex_bridge",
+        active_tool=None,
+        phase_started_at=now - timedelta(minutes=2),
+        last_runtime_signal_at=now,
+        last_progress_at=None,
+        last_live_at=now,
+        timeline_anchor_at=now - timedelta(minutes=2),
+        freshness_expires_at=now + timedelta(minutes=10),
+        terminal_state=None,
+        runtime_version=3,
+    )
+    runtime_view = build_runtime_view(
+        state=state,
+        session=SimpleNamespace(started_at=now - timedelta(hours=1), ended_at=None),
+        now=now,
+    )
+
+    assert runtime_view.runtime_phase == "stalled"
+    assert runtime_view.presence_state == "stalled"
+    assert runtime_view.display_phase == "Stalled"
+
+    display = build_session_runtime_display(
+        runtime_view=runtime_view,
+        capabilities=_capabilities(managed=True),
+        ended_at=None,
+    )
+
+    assert display.is_stalled is True
+    assert display.state == "stalled"
+    assert display.tone == "stalled"
+    assert display.headline == "Stalled"
+    assert display.phase_label == "Stalled"
+
+
 def test_managed_live_control_with_offline_host_is_not_ready():
     display = build_session_runtime_display(
         runtime_view=_runtime_view(
