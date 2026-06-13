@@ -879,6 +879,8 @@ def antigravity(
     `agy` executable.
     """
 
+    launch_ui.quiet_diagnostic_logs(verbose)
+
     resolved_config_dir = Path(config_dir) if config_dir else None
     resolved_url, resolved_token = _load_api_credentials(
         url=url,

@@ -651,14 +651,7 @@ def claude(
 ) -> None:
     """Launch a Longhouse Claude Code session on this machine via the Longhouse API."""
 
-    # Keep the happy path clean: hook-install and httpx INFO logs are diagnostic
-    # noise for users. connect.py installs a root INFO handler at import time, so
-    # quiet those loggers unless the user asked for --verbose.
-    if not verbose:
-        import logging as _logging
-
-        for _name in ("zerg.services.shipper.hooks", "httpx", "httpcore"):
-            _logging.getLogger(_name).setLevel(_logging.WARNING)
+    launch_ui.quiet_diagnostic_logs(verbose)
 
     resolved_config_dir = Path(config_dir) if config_dir else None
     resolved_url, resolved_token = _load_api_credentials(

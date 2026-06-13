@@ -66,6 +66,25 @@ def test_launch_panel_verbose_appends_full_detail(capsys):
     assert "Attach: zsh -lc 'exec claude ...'" in out
 
 
+def test_quiet_diagnostic_logs_silences_noisy_loggers_unless_verbose():
+    import logging
+
+    names = ("zerg.services.shipper.hooks", "httpx", "httpcore")
+    for name in names:
+        logging.getLogger(name).setLevel(logging.INFO)
+
+    launch_ui.quiet_diagnostic_logs(verbose=False)
+    for name in names:
+        assert logging.getLogger(name).level == logging.WARNING
+
+    # --verbose leaves the loggers untouched so diagnostics still flow.
+    for name in names:
+        logging.getLogger(name).setLevel(logging.INFO)
+    launch_ui.quiet_diagnostic_logs(verbose=True)
+    for name in names:
+        assert logging.getLogger(name).level == logging.INFO
+
+
 def test_exit_bookend_clean_exit_banks_the_hearth(capsys):
     launch_ui.exit_bookend(exit_code=0, machine_name="cinder")
     out = capsys.readouterr().out

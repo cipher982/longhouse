@@ -40,6 +40,21 @@ def display_host(url: str) -> str:
     return host.rstrip("/")
 
 
+def quiet_diagnostic_logs(verbose: bool) -> None:
+    """Keep the happy path clean for every provider launcher.
+
+    connect.py installs a root INFO handler at import time, so hook-install and
+    httpx request lines leak into the terminal as `[INFO] ...` noise. Quiet those
+    loggers unless the user asked for --verbose. Call this at the top of each
+    provider's launch command so all four behave the same."""
+    if verbose:
+        return
+    import logging
+
+    for name in ("zerg.services.shipper.hooks", "httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
 def progress(message: str) -> None:
     """Low-key progress line. Stays visible (not verbose-gated) — bridge startup
     can take a few seconds and silence reads as a hang."""
