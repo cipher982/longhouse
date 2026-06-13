@@ -771,6 +771,15 @@ private struct SessionAttentionFallbackCard: View {
     }
 }
 
+// Per-page natural content height, keyed by question index, so the pause card
+// can hug short questions and only scroll when one genuinely overflows.
+private struct PauseQuestionHeightKey: PreferenceKey {
+    static let defaultValue: [Int: CGFloat] = [:]
+    static func reduce(value: inout [Int: CGFloat], nextValue: () -> [Int: CGFloat]) {
+        value.merge(nextValue(), uniquingKeysWith: { max($0, $1) })
+    }
+}
+
 private struct SessionPauseRequestCard: View {
     let pauseRequest: SessionPauseRequest
     let isResponding: Bool
@@ -785,6 +794,8 @@ private struct SessionPauseRequestCard: View {
     @State private var answers: [String: [String]]
     @State private var fallbackText: String
     @State private var submitted = false
+    @State private var currentPage = 0
+    @State private var measuredHeights: [Int: CGFloat] = [:]
 
     init(
         pauseRequest: SessionPauseRequest,
@@ -828,22 +839,39 @@ private struct SessionPauseRequestCard: View {
                         .lineLimit(3)
                 }
                 Spacer(minLength: 0)
+                if pageCount > 1 {
+                    pageDots
+                }
             }
 
-            if !pauseRequest.questions.isEmpty {
-                VStack(alignment: .leading, spacing: 10) {
+            if pauseRequest.questions.isEmpty {
+                if pauseRequest.canRespond {
+                    TextField("Answer", text: $fallbackText, axis: .vertical)
+                        .lineLimit(1...4)
+                        .disabled(isDisabled)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .accessibilityIdentifier("session-pause-freeform")
+                }
+            } else if pageCount > 1 {
+                // One question per page. Each page scrolls only when its content
+                // is taller than the cap; otherwise the region hugs the content
+                // so there's no dead space between the question and the footer.
+                TabView(selection: $currentPage) {
                     ForEach(Array(pauseRequest.questions.enumerated()), id: \.offset) { index, question in
-                        questionView(question: question, index: index)
+                        questionPage(question: question, index: index)
+                            .tag(index)
                     }
                 }
-            } else if pauseRequest.canRespond {
-                TextField("Answer", text: $fallbackText, axis: .vertical)
-                    .lineLimit(1...4)
-                    .disabled(isDisabled)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    .accessibilityIdentifier("session-pause-freeform")
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .frame(height: resolvedPageHeight)
+                .animation(.easeInOut(duration: 0.22), value: currentPage)
+                .animation(.easeInOut(duration: 0.22), value: resolvedPageHeight)
+                .accessibilityIdentifier("session-pause-pager")
+            } else if let question = pauseRequest.questions.first {
+                questionPage(question: question, index: 0)
+                    .frame(height: resolvedPageHeight)
             }
 
             if let errorMessage {
@@ -853,8 +881,101 @@ private struct SessionPauseRequestCard: View {
                     .accessibilityIdentifier("session-pause-error")
             }
 
-            HStack(spacing: 8) {
-                if pauseRequest.canRespond {
+            footer
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("session-pause-card")
+        .onChange(of: pauseRequest.id) { _, _ in
+            answers = Self.initialAnswers(for: pauseRequest.questions)
+            fallbackText = ""
+            submitted = false
+            currentPage = 0
+            // Drop stale heights so a new, shorter request doesn't briefly
+            // inherit the previous card's height (reintroducing dead space).
+            measuredHeights = [:]
+        }
+    }
+
+    private var pageCount: Int { pauseRequest.questions.count }
+
+    private var isLastPage: Bool { currentPage >= pageCount - 1 }
+
+    // Upper bound so the pinned footer stays on screen regardless of how many
+    // long-description options a single question carries. Below this the region
+    // hugs the measured content height instead of reserving the full cap.
+    private var pageMaxHeight: CGFloat { 340 }
+
+    // Size the question region to the current page's actual content, clamped to
+    // the cap. Falls back to the cap until the page reports its height so the
+    // footer never jumps off-screen on first layout.
+    private var resolvedPageHeight: CGFloat {
+        guard let measured = measuredHeights[currentPage] else { return pageMaxHeight }
+        return min(measured, pageMaxHeight)
+    }
+
+    // A single question, scrollable only when it overflows the cap, reporting
+    // its natural content height back up for the hug-to-content sizing.
+    @ViewBuilder
+    private func questionPage(question: SessionPauseQuestion, index: Int) -> some View {
+        ScrollView {
+            questionView(question: question, index: index)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(
+                    GeometryReader { proxy in
+                        Color.clear.preference(
+                            key: PauseQuestionHeightKey.self,
+                            value: [index: proxy.size.height]
+                        )
+                    }
+                )
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .onPreferenceChange(PauseQuestionHeightKey.self) { heights in
+            for (key, value) in heights {
+                measuredHeights[key] = value
+            }
+        }
+    }
+
+    private var pageDots: some View {
+        HStack(spacing: 5) {
+            ForEach(0..<pageCount, id: \.self) { index in
+                Circle()
+                    .fill(index == currentPage ? Color.accentColor : Color.secondary.opacity(0.4))
+                    .frame(width: 6, height: 6)
+            }
+        }
+        .accessibilityLabel("Question \(currentPage + 1) of \(pageCount)")
+    }
+
+    @ViewBuilder
+    private var footer: some View {
+        HStack(spacing: 8) {
+            if pauseRequest.canRespond {
+                if pageCount > 1 && currentPage > 0 {
+                    Button {
+                        withAnimation { currentPage -= 1 }
+                    } label: {
+                        Label("Back", systemImage: "chevron.left")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(isDisabled)
+                    .accessibilityIdentifier("session-pause-back")
+                }
+
+                if pageCount > 1 && !isLastPage {
+                    Button {
+                        withAnimation { currentPage += 1 }
+                    } label: {
+                        Label("Next", systemImage: "chevron.right")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(isDisabled || !currentPageAnswered)
+                    .accessibilityHint(currentPageAnswered ? "" : "Select an option to continue")
+                    .accessibilityIdentifier("session-pause-next")
+                } else {
                     Button {
                         Task { await submitAnswer() }
                     } label: {
@@ -868,31 +989,31 @@ private struct SessionPauseRequestCard: View {
                     .controlSize(.small)
                     .disabled(!canSubmitAnswer || isDisabled)
                     .accessibilityIdentifier("session-pause-send")
-
-                    Button {
-                        Task { await cancelRequest() }
-                    } label: {
-                        Label("Cancel", systemImage: "xmark.circle")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .disabled(isDisabled)
-                    .accessibilityIdentifier("session-pause-cancel")
-                } else {
-                    Label("Waiting in terminal", systemImage: "terminal")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
                 }
-                Spacer(minLength: 0)
+
+                Button {
+                    Task { await cancelRequest() }
+                } label: {
+                    Label("Cancel", systemImage: "xmark.circle")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(isDisabled)
+                .accessibilityIdentifier("session-pause-cancel")
+            } else {
+                Label("Waiting in terminal", systemImage: "terminal")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
             }
+            Spacer(minLength: 0)
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("session-pause-card")
-        .onChange(of: pauseRequest.id) { _, _ in
-            answers = Self.initialAnswers(for: pauseRequest.questions)
-            fallbackText = ""
-            submitted = false
-        }
+    }
+
+    private var currentPageAnswered: Bool {
+        guard pauseRequest.questions.indices.contains(currentPage) else { return true }
+        let question = pauseRequest.questions[currentPage]
+        let key = Self.questionKey(question, index: currentPage)
+        return answers[key, default: []].contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 
     @ViewBuilder
@@ -969,6 +1090,8 @@ private struct SessionPauseRequestCard: View {
         }
         .buttonStyle(.plain)
         .disabled(isDisabled)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityIdentifier("session-pause-option-\(key)-\(optionIndex)")
     }
 
@@ -1080,8 +1203,40 @@ private extension String {
     }
 }
 
+// Mirrors `bottomChrome`: the card rides in a translucent rounded surface
+// pinned to the bottom with transcript space above, so previews read the way
+// the screen actually looks instead of floating in black.
+private struct PauseRequestPreviewChrome<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            VStack(alignment: .leading, spacing: 8) {
+                content
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(.ultraThinMaterial)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 24, style: .continuous)
+                            .strokeBorder(.white.opacity(0.10), lineWidth: 0.75)
+                    )
+            )
+            .shadow(color: .black.opacity(0.28), radius: 16, y: 5)
+            .padding(.horizontal, 12)
+            .padding(.bottom, 10)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(.systemBackground))
+        .preferredColorScheme(.dark)
+    }
+}
+
 #Preview("Session pause request") {
-    VStack(alignment: .leading, spacing: 12) {
+    PauseRequestPreviewChrome {
         SessionPauseRequestCard(
             pauseRequest: SessionPauseRequest(
                 id: "pause-preview",
@@ -1116,13 +1271,60 @@ private extension String {
             onRespond: { _, _, _, _ in true }
         )
     }
-    .padding()
-    .background(Color(.systemBackground))
-    .preferredColorScheme(.dark)
+}
+
+#Preview("Session pause request · multi-question pager") {
+    PauseRequestPreviewChrome {
+        SessionPauseRequestCard(
+            pauseRequest: SessionPauseRequest(
+                id: "pause-multi-preview",
+                sessionId: "session-preview",
+                runtimeKey: "claude:session-preview",
+                kind: "structured_question",
+                status: "pending",
+                provider: "claude",
+                canRespond: true,
+                title: "Wait model",
+                summary: "Waiting for your answer.",
+                toolName: "AskUserQuestion",
+                questions: [
+                    SessionPauseQuestion(
+                        id: "wait_model",
+                        header: "Wait model",
+                        question: "Your phone's in your pocket — replies can lag 30-60 min, well past a sane block window. How should the agent behave when it asks for approval?",
+                        multiSelect: false,
+                        options: [
+                            SessionPauseQuestionOption(label: "Async grant: request, don't block, resume on reply", description: "Agent sends the SMS and returns 'pending' immediately (no long block). Your YES — whenever it lands — creates a standing time-boxed grant. The agent checks back and proceeds the moment the grant exists.", value: "async"),
+                            SessionPauseQuestionOption(label: "Long block with grace, then convert to async", description: "Block for a modest window (e.g. 10 min) for the common quick-reply case; if it times out, DON'T discard — leave the request standing so a later reply still grants access.", value: "grace"),
+                            SessionPauseQuestionOption(label: "Approve-ahead / batch", description: "Agent lists everything it'll need up front, sends ONE approval, you reply once, and it proceeds through all of them. Fewer texts, front-loads the wait.", value: "batch"),
+                        ]
+                    ),
+                    SessionPauseQuestion(
+                        id: "late_reply",
+                        header: "Late reply",
+                        question: "When a YES finally lands after the agent moved on, what should happen?",
+                        multiSelect: false,
+                        options: [
+                            SessionPauseQuestionOption(label: "Stand as a grant for a window", description: "A late YES creates a time-boxed grant (e.g. valid 1h). Next time anything needs that cred within the window, it proceeds with NO new SMS. (Recommended)", value: "grant"),
+                            SessionPauseQuestionOption(label: "Notify + resume the paused task", description: "A late YES actively pings the waiting agent/task to wake up and continue right then. More 'live' but needs a running listener + task-resume plumbing.", value: "resume"),
+                            SessionPauseQuestionOption(label: "Just record it, require fresh request", description: "Late YES is logged but does nothing on its own; the agent must re-request next time. Simplest, but wastes your reply.", value: "record"),
+                        ]
+                    ),
+                ],
+                occurredAt: nil,
+                lastSeenAt: nil,
+                resolvedAt: nil,
+                expiresAt: nil
+            ),
+            isResponding: false,
+            errorMessage: nil,
+            onRespond: { _, _, _, _ in true }
+        )
+    }
 }
 
 #Preview("Session pause request · terminal only") {
-    VStack(alignment: .leading, spacing: 12) {
+    PauseRequestPreviewChrome {
         SessionPauseRequestCard(
             pauseRequest: SessionPauseRequest(
                 id: "pause-terminal-preview",
@@ -1154,9 +1356,6 @@ private extension String {
             onRespond: { _, _, _, _ in true }
         )
     }
-    .padding()
-    .background(Color(.systemBackground))
-    .preferredColorScheme(.dark)
 }
 
 struct SessionBottomInsetCalculator {
