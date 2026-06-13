@@ -134,7 +134,7 @@ struct LaunchSessionSheet: View {
                     workspaceError = nil
                     submitError = nil
                     showManualPath = false
-                    selectedProvider = selectedMachine?.defaultProvider ?? ""
+                    selectedProvider = selectedMachine?.isLaunchable == true ? (selectedMachine?.defaultProvider ?? "") : ""
                 }
             }
 

@@ -3635,11 +3635,14 @@ impl CodexRuntimeTracker {
         self.stalled_turn_id = None;
     }
 
-    fn note_active_turn_activity(&mut self) {
+    fn note_active_turn_activity(&mut self) -> bool {
+        let was_stalled =
+            self.active_turn_id.is_some() && self.stalled_turn_id == self.active_turn_id;
         if self.active_turn_id.is_some() {
             self.last_active_turn_activity_at = Some(Instant::now());
             self.stalled_turn_id = None;
         }
+        was_stalled
     }
 
     fn handle_server_request(
@@ -3701,7 +3704,9 @@ impl CodexRuntimeTracker {
             | "command/exec/outputDelta"
             | "item/fileChange/outputDelta"
             | "item/mcpToolCall/progress" => {
-                self.note_active_turn_activity();
+                if self.note_active_turn_activity() {
+                    return vec![BridgeRuntimeUpdate::Progress, self.current_phase_update()];
+                }
                 vec![BridgeRuntimeUpdate::Progress]
             }
             _ => Vec::new(),
@@ -6872,7 +6877,16 @@ mod tests {
             None,
         );
 
-        tracker.handle_notification("item/agentMessage/delta", &json!({}));
+        assert_eq!(
+            tracker.handle_notification("item/agentMessage/delta", &json!({})),
+            vec![
+                BridgeRuntimeUpdate::Progress,
+                BridgeRuntimeUpdate::Phase {
+                    phase: "thinking",
+                    tool_name: None,
+                },
+            ]
+        );
         assert_phase_update(
             tracker.keepalive_update().expect("thinking after progress"),
             "thinking",
