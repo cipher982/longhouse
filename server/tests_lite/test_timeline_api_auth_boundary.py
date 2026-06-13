@@ -40,6 +40,7 @@ from zerg.models.agents import SessionTurn
 from zerg.services.agents.store import AgentsStore
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 from zerg.services.managed_local_transport import build_managed_local_attach_command
+from zerg.services.session_turns import hash_user_text
 
 
 def _make_db(tmp_path):
@@ -775,6 +776,223 @@ def test_timeline_session_workspace_projects_longhouse_input_origin(tmp_path):
             "client_request_id": "ios-origin-1",
         }
         assert events[1]["input_origin"] is None
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
+
+
+def test_timeline_session_workspace_projects_pending_longhouse_input_origin(tmp_path):
+    session_local = _make_db(tmp_path)
+    submitted_at = datetime.now(timezone.utc)
+    with session_local() as db:
+        _seed_user(db)
+        session_id = _seed_session(db)
+        baseline = AgentEvent(
+            session_id=session_id,
+            role="assistant",
+            content_text="previous turn",
+            timestamp=submitted_at - timedelta(seconds=1),
+        )
+        event = AgentEvent(
+            session_id=session_id,
+            role="user",
+            content_text="sent from phone",
+            timestamp=submitted_at,
+        )
+        db.add_all([baseline, event])
+        db.flush()
+        session_input = SessionInput(
+            session_id=session_id,
+            body="sent from phone",
+            owner_id=1,
+            intent="auto",
+            status="delivered",
+            client_request_id="ios-pending-origin-1",
+            delivery_request_id="delivery-pending-origin-1",
+            delivered_at=submitted_at,
+        )
+        db.add(session_input)
+        db.flush()
+        db.add(
+            SessionTurn(
+                session_id=session_id,
+                request_id="delivery-pending-origin-1",
+                session_input_id=session_input.id,
+                state="created",
+                expected_user_text_hash=hash_user_text("sent from phone"),
+                baseline_event_id=baseline.id,
+                user_event_id=None,
+                user_submitted_at=submitted_at,
+            )
+        )
+        event_id = int(event.id)
+        input_id = int(session_input.id)
+        db.commit()
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            response = client.get(f"/timeline/sessions/{session_id}/workspace?limit=50")
+
+        assert response.status_code == 200
+        events = [item["event"] for item in response.json()["projection"]["items"] if item["kind"] == "event"]
+        user_event = next(event for event in events if event["id"] == event_id)
+        assert user_event["input_origin"] == {
+            "authored_via": "longhouse",
+            "session_input_id": input_id,
+            "client_request_id": "ios-pending-origin-1",
+        }
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
+
+
+def test_timeline_session_workspace_keeps_ambiguous_pending_input_origin_terminal(tmp_path):
+    session_local = _make_db(tmp_path)
+    submitted_at = datetime.now(timezone.utc)
+    with session_local() as db:
+        _seed_user(db)
+        session_id = _seed_session(db)
+        baseline = AgentEvent(
+            session_id=session_id,
+            role="assistant",
+            content_text="previous turn",
+            timestamp=submitted_at - timedelta(seconds=1),
+        )
+        first_event = AgentEvent(
+            session_id=session_id,
+            role="user",
+            content_text="repeat this",
+            timestamp=submitted_at,
+        )
+        second_event = AgentEvent(
+            session_id=session_id,
+            role="user",
+            content_text="repeat this",
+            timestamp=submitted_at + timedelta(seconds=1),
+        )
+        db.add_all([baseline, first_event, second_event])
+        db.flush()
+        for index in (1, 2):
+            session_input = SessionInput(
+                session_id=session_id,
+                body="repeat this",
+                owner_id=1,
+                intent="auto",
+                status="delivered",
+                client_request_id=f"ios-ambiguous-origin-{index}",
+                delivery_request_id=f"delivery-ambiguous-origin-{index}",
+                delivered_at=submitted_at,
+            )
+            db.add(session_input)
+            db.flush()
+            db.add(
+                SessionTurn(
+                    session_id=session_id,
+                    request_id=f"delivery-ambiguous-origin-{index}",
+                    session_input_id=session_input.id,
+                    state="created",
+                    expected_user_text_hash=hash_user_text("repeat this"),
+                    baseline_event_id=baseline.id,
+                    user_event_id=None,
+                    user_submitted_at=submitted_at + timedelta(milliseconds=index),
+                )
+            )
+        first_event_id = int(first_event.id)
+        second_event_id = int(second_event.id)
+        db.commit()
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            response = client.get(f"/timeline/sessions/{session_id}/workspace?limit=50")
+
+        assert response.status_code == 200
+        events = [item["event"] for item in response.json()["projection"]["items"] if item["kind"] == "event"]
+        for event_id in (first_event_id, second_event_id):
+            user_event = next(event for event in events if event["id"] == event_id)
+            assert user_event["input_origin"] == {
+                "authored_via": "terminal",
+                "session_input_id": None,
+                "client_request_id": None,
+            }
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
+
+
+def test_timeline_session_workspace_suppresses_pending_origin_identity_off_head(tmp_path):
+    session_local = _make_db(tmp_path)
+    submitted_at = datetime.now(timezone.utc)
+    with session_local() as db:
+        _seed_user(db)
+        session_id = _seed_session(db)
+        old_branch = AgentSessionBranch(session_id=session_id, branch_reason="root", is_head=0)
+        head_branch = AgentSessionBranch(session_id=session_id, branch_reason="rewrite", is_head=1)
+        db.add_all([old_branch, head_branch])
+        db.flush()
+        old_event = AgentEvent(
+            session_id=session_id,
+            branch_id=old_branch.id,
+            role="user",
+            content_text="sent from phone",
+            timestamp=submitted_at,
+        )
+        head_event = AgentEvent(
+            session_id=session_id,
+            branch_id=head_branch.id,
+            role="assistant",
+            content_text="new head",
+            timestamp=submitted_at + timedelta(seconds=1),
+        )
+        db.add_all([old_event, head_event])
+        db.flush()
+        session_input = SessionInput(
+            session_id=session_id,
+            body="sent from phone",
+            owner_id=1,
+            intent="auto",
+            status="delivered",
+            client_request_id="ios-pending-off-head-1",
+            delivery_request_id="delivery-pending-off-head-1",
+            delivered_at=submitted_at,
+        )
+        db.add(session_input)
+        db.flush()
+        db.add(
+            SessionTurn(
+                session_id=session_id,
+                request_id="delivery-pending-off-head-1",
+                session_input_id=session_input.id,
+                state="created",
+                expected_user_text_hash=hash_user_text("sent from phone"),
+                baseline_event_id=0,
+                user_event_id=None,
+                user_submitted_at=submitted_at,
+            )
+        )
+        old_event_id = int(old_event.id)
+        head_event_id = int(head_event.id)
+        db.commit()
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            response = client.get(f"/timeline/sessions/{session_id}/workspace?branch_mode=all&limit=50")
+
+        assert response.status_code == 200
+        events = [item["event"] for item in response.json()["projection"]["items"] if item["kind"] == "event"]
+        old = next(event for event in events if event["id"] == old_event_id)
+        head = next(event for event in events if event["id"] == head_event_id)
+        assert old["is_head_branch"] is False
+        assert old["input_origin"] is None
+        assert head["is_head_branch"] is True
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()

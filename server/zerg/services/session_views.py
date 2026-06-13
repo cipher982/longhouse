@@ -65,6 +65,7 @@ from zerg.services.session_runtime_display import Tone
 from zerg.services.session_runtime_display import TruthTier
 from zerg.services.session_runtime_display import build_session_runtime_display
 from zerg.services.session_title import resolve_timeline_title
+from zerg.services.session_turns import hash_user_text
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.session_loop_mode import coerce_session_loop_mode
 from zerg.utils.time import UTCBaseModel
@@ -1815,6 +1816,7 @@ def build_event_input_origin_map(store: AgentsStore, events: list[AgentEvent]) -
     if not user_events:
         return origins
 
+    session_ids = {event.session_id for event in user_events.values()}
     turns = (
         store.db.query(SessionTurn, SessionInput)
         .outerjoin(
@@ -1848,6 +1850,70 @@ def build_event_input_origin_map(store: AgentsStore, events: list[AgentEvent]) -
             )
             continue
         origins[user_event_id] = InputOriginResponse(
+            authored_via="longhouse",
+            session_input_id=int(session_input.id),
+            client_request_id=session_input.client_request_id,
+        )
+
+    unclaimed_user_events = {event_id: event for event_id, event in user_events.items() if event_id not in seen_event_ids}
+    if not unclaimed_user_events:
+        return origins
+
+    pending_turns = (
+        store.db.query(SessionTurn, SessionInput)
+        .join(
+            SessionInput,
+            and_(
+                SessionInput.id == SessionTurn.session_input_id,
+                SessionInput.session_id == SessionTurn.session_id,
+            ),
+        )
+        .filter(
+            SessionTurn.session_id.in_(session_ids),
+            SessionTurn.user_event_id.is_(None),
+            SessionTurn.session_input_id.isnot(None),
+            SessionTurn.expected_user_text_hash.isnot(None),
+            SessionTurn.state != "failed",
+        )
+        .order_by(SessionTurn.id.asc())
+        .all()
+    )
+    if not pending_turns:
+        return origins
+
+    matches_by_turn_id: dict[int, list[int]] = {}
+    turn_rows: dict[int, tuple[SessionTurn, SessionInput]] = {}
+    matched_turns_by_event_id: dict[int, list[int]] = {}
+    for turn, session_input in pending_turns:
+        turn_id = int(getattr(turn, "id", 0) or 0)
+        expected_hash = str(getattr(turn, "expected_user_text_hash", "") or "")
+        if turn_id <= 0 or not expected_hash:
+            continue
+        baseline_event_id = int(getattr(turn, "baseline_event_id", 0) or 0)
+        candidate_ids: list[int] = []
+        for event_id, event in unclaimed_user_events.items():
+            if event.session_id != turn.session_id:
+                continue
+            if baseline_event_id > 0 and event_id <= baseline_event_id:
+                continue
+            content_text = str(getattr(event, "content_text", "") or "")
+            normalized_user_text = strip_claude_channel_wrapper(content_text)
+            if hash_user_text(normalized_user_text) != expected_hash:
+                continue
+            candidate_ids.append(event_id)
+            matched_turns_by_event_id.setdefault(event_id, []).append(turn_id)
+        if candidate_ids:
+            matches_by_turn_id[turn_id] = candidate_ids
+            turn_rows[turn_id] = (turn, session_input)
+
+    for turn_id, candidate_ids in matches_by_turn_id.items():
+        if len(candidate_ids) != 1:
+            continue
+        event_id = candidate_ids[0]
+        if len(matched_turns_by_event_id.get(event_id, [])) != 1:
+            continue
+        _, session_input = turn_rows[turn_id]
+        origins[event_id] = InputOriginResponse(
             authored_via="longhouse",
             session_input_id=int(session_input.id),
             client_request_id=session_input.client_request_id,
