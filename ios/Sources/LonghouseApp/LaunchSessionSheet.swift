@@ -38,6 +38,8 @@ struct LaunchSessionSheet: View {
         if let first = previewMachines?.first(where: { $0.isLaunchable }) {
             _selectedDeviceId = State(initialValue: first.deviceId)
             _selectedProvider = State(initialValue: first.defaultProvider ?? "")
+        } else if let first = previewMachines?.first {
+            _selectedDeviceId = State(initialValue: first.deviceId)
         }
         if let firstPath = previewWorkspaces?.first?.path {
             _cwd = State(initialValue: firstPath)
@@ -47,12 +49,8 @@ struct LaunchSessionSheet: View {
         }
     }
 
-    private var launchable: [MachineDirectoryEntry] {
-        machines.filter { $0.isLaunchable }
-    }
-
     private var selectedMachine: MachineDirectoryEntry? {
-        launchable.first { $0.deviceId == selectedDeviceId }
+        machines.first { $0.deviceId == selectedDeviceId }
     }
 
     private var normalizedCwd: String {
@@ -60,7 +58,10 @@ struct LaunchSessionSheet: View {
     }
 
     private var canSubmit: Bool {
-        !submitting && selectedMachine != nil && !selectedProvider.isEmpty && normalizedCwd.starts(with: "/")
+        !submitting
+            && (selectedMachine?.isLaunchable ?? false)
+            && !selectedProvider.isEmpty
+            && normalizedCwd.starts(with: "/")
     }
 
     private var filteredWorkspaces: [WorkspaceSuggestion] {
@@ -93,7 +94,7 @@ struct LaunchSessionSheet: View {
                     ProgressView("Loading machines...")
                 } else if let loadError {
                     errorView(loadError)
-                } else if launchable.isEmpty {
+                } else if machines.isEmpty {
                     emptyView
                 } else {
                     formView
@@ -117,8 +118,14 @@ struct LaunchSessionSheet: View {
         Form {
             Section("Machine") {
                 Picker("Target", selection: $selectedDeviceId) {
-                    ForEach(launchable, id: \.deviceId) { machine in
-                        Text(machineLabel(machine)).tag(machine.deviceId)
+                    ForEach(machines, id: \.deviceId) { machine in
+                        Label {
+                            Text(machineLabel(machine))
+                        } icon: {
+                            Image(systemName: machine.isLaunchable ? "circle.fill" : "xmark.circle.fill")
+                                .foregroundStyle(machine.isLaunchable ? .green : .red)
+                        }
+                        .tag(machine.deviceId)
                     }
                 }
                 .onChange(of: selectedDeviceId) { _, _ in
@@ -131,76 +138,83 @@ struct LaunchSessionSheet: View {
                 }
             }
 
-            Section("Coding agent") {
-                if let machine = selectedMachine, machine.launchableProviders.count > 1 {
-                    Picker("Provider", selection: $selectedProvider) {
-                        ForEach(machine.launchableProviders, id: \.self) { provider in
-                            Text(provider).tag(provider)
+            if let machine = selectedMachine, !machine.isLaunchable {
+                Section("Status") {
+                    Label(launchBlockedLabel(machine), systemImage: "xmark.circle.fill")
+                        .foregroundStyle(.red)
+                }
+            } else {
+                Section("Coding agent") {
+                    if let machine = selectedMachine, machine.launchableProviders.count > 1 {
+                        Picker("Provider", selection: $selectedProvider) {
+                            ForEach(machine.launchableProviders, id: \.self) { provider in
+                                Text(provider).tag(provider)
+                            }
+                        }
+                    } else {
+                        HStack(spacing: 10) {
+                            Image(systemName: "terminal")
+                                .foregroundStyle(.secondary)
+                            Text(selectedProvider.isEmpty ? "codex" : selectedProvider)
                         }
                     }
-                } else {
-                    HStack(spacing: 10) {
-                        Image(systemName: "terminal")
+                }
+
+                Section("Recent workspaces") {
+                    if loadingWorkspaces {
+                        ProgressView("Loading recent workspaces...")
+                    }
+
+                    if !workspaces.isEmpty {
+                        TextField("Filter workspaces", text: $workspaceSearch)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled(true)
+                        WorkspaceSuggestionList(workspaces: filteredWorkspaces, selectedPath: normalizedCwd) { path in
+                            cwd = path
+                            showManualPath = false
+                            submitError = nil
+                        }
+                    } else if !loadingWorkspaces {
+                        Text(workspaceError ?? "No recent workspaces found for this machine.")
+                            .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text(selectedProvider.isEmpty ? "codex" : selectedProvider)
                     }
                 }
-            }
 
-            Section("Recent workspaces") {
-                if loadingWorkspaces {
-                    ProgressView("Loading recent workspaces...")
-                }
+                Section("Manual path") {
+                    DisclosureGroup(isExpanded: $showManualPath) {
+                        TextField("Absolute path", text: $cwd)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled(true)
 
-                if !workspaces.isEmpty {
-                    TextField("Filter workspaces", text: $workspaceSearch)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled(true)
-                    WorkspaceSuggestionList(workspaces: filteredWorkspaces, selectedPath: normalizedCwd) { path in
-                        cwd = path
-                        showManualPath = false
+                        if let pathValidationMessage {
+                            Text(pathValidationMessage)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        } else {
+                            Text("Existing absolute directory on the target machine.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } label: {
+                        Label("Use a different path", systemImage: "keyboard")
+                    }
+                    .onChange(of: cwd) { _, _ in
                         submitError = nil
                     }
-                } else if !loadingWorkspaces {
-                    Text(workspaceError ?? "No recent workspaces found for this machine.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
 
-            Section("Manual path") {
-                DisclosureGroup(isExpanded: $showManualPath) {
-                    TextField("Absolute path", text: $cwd)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled(true)
-
-                    if let pathValidationMessage {
-                        Text(pathValidationMessage)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    } else {
-                        Text("Existing absolute directory on the target machine.")
+                    if !hasWorkspaceSuggestions && !loadingWorkspaces {
+                        Text("Use this when the workspace has not appeared in recent sessions yet.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                } label: {
-                    Label("Use a different path", systemImage: "keyboard")
-                }
-                .onChange(of: cwd) { _, _ in
-                    submitError = nil
                 }
 
-                if !hasWorkspaceSuggestions && !loadingWorkspaces {
-                    Text("Use this when the workspace has not appeared in recent sessions yet.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                Section("Optional") {
+                    TextField("Display name", text: $displayName)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled(true)
                 }
-            }
-
-            Section("Optional") {
-                TextField("Display name", text: $displayName)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled(true)
             }
 
             if let submitError {
@@ -286,9 +300,11 @@ struct LaunchSessionSheet: View {
         do {
             let result = try await api.listMachines()
             machines = result
-            if selectedDeviceId.isEmpty, let first = result.first(where: { $0.isLaunchable }) {
+            let selectedStillExists = result.contains { $0.deviceId == selectedDeviceId }
+            if (selectedDeviceId.isEmpty || !selectedStillExists),
+               let first = result.first(where: { $0.isLaunchable }) ?? result.first {
                 selectedDeviceId = first.deviceId
-                selectedProvider = first.defaultProvider ?? ""
+                selectedProvider = first.isLaunchable ? (first.defaultProvider ?? "") : ""
             }
         } catch {
             loadError = (error as? LocalizedError)?.errorDescription ?? "Could not load machines."
@@ -298,6 +314,14 @@ struct LaunchSessionSheet: View {
 
     private func loadWorkspaceSuggestions(for deviceId: String) async {
         guard !usesPreviewData, !deviceId.isEmpty, let api = LonghouseAPI(host: appState.serverURL) else {
+            return
+        }
+        guard machines.first(where: { $0.deviceId == deviceId })?.isLaunchable == true else {
+            workspaces = []
+            cwd = ""
+            workspaceSearch = ""
+            workspaceError = nil
+            showManualPath = false
             return
         }
         // Render cached workspaces instantly, then revalidate.
@@ -356,10 +380,19 @@ struct LaunchSessionSheet: View {
     }
 
     private func machineLabel(_ machine: MachineDirectoryEntry) -> String {
-        if let engineBuild = machine.engineBuild, !engineBuild.isEmpty {
-            return "\(machine.machineName) (\(engineBuild))"
+        let suffix: String
+        if machine.isLaunchable {
+            suffix = ""
+        } else if machine.launchBlockedBy == "control_down" || !machine.online {
+            suffix = " - offline"
+        } else {
+            suffix = " - unavailable"
         }
-        return machine.machineName
+
+        if let engineBuild = machine.engineBuild, !engineBuild.isEmpty {
+            return "\(machine.machineName) (\(engineBuild))\(suffix)"
+        }
+        return "\(machine.machineName)\(suffix)"
     }
 
     private func launchBlockedLabel(_ machine: MachineDirectoryEntry) -> String {
@@ -506,16 +539,21 @@ private struct WorkspaceSuggestionList: View {
     }
 }
 
-private func previewMachine(providers: [String] = ["claude", "codex", "opencode"]) -> MachineDirectoryEntry {
+private func previewMachine(
+    online: Bool = true,
+    controlChannelStatus: String? = "connected",
+    providers: [String] = ["claude", "codex", "opencode"],
+    launchBlockedBy: String? = nil
+) -> MachineDirectoryEntry {
     MachineDirectoryEntry(
         deviceId: "cinder",
         machineName: "cinder",
-        online: true,
-        controlChannelStatus: "connected",
+        online: online,
+        controlChannelStatus: controlChannelStatus,
         supports: ["codex.launch", "codex.send", "claude.launch"],
         canLaunchCodex: true,
         launchableProviders: providers,
-        launchBlockedBy: nil,
+        launchBlockedBy: launchBlockedBy,
         lastSeenAt: "2026-05-24T00:00:00Z",
         engineBuild: "dev"
     )
@@ -551,6 +589,21 @@ private func previewMachine(providers: [String] = ["claude", "codex", "opencode"
 #Preview("Launch session without recent workspaces") {
     LaunchSessionSheet(
         previewMachines: [previewMachine(providers: ["codex"])],
+        previewWorkspaces: []
+    ) { _ in }
+    .environmentObject(AppState())
+}
+
+#Preview("Launch session offline machine") {
+    LaunchSessionSheet(
+        previewMachines: [
+            previewMachine(
+                online: false,
+                controlChannelStatus: "disconnected",
+                providers: ["codex"],
+                launchBlockedBy: "control_down"
+            )
+        ],
         previewWorkspaces: []
     ) { _ in }
     .environmentObject(AppState())
