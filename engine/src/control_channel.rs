@@ -39,8 +39,10 @@ const COMMAND_PROVIDER_LIVE_PROOF: &str = "provider.live_proof";
 const COMMAND_ARCHIVE_BACKLOG_CONTROL: &str = "archive.backlog_control";
 const DEFAULT_CODEX_BIN: &str = "codex";
 const DEFAULT_LONGHOUSE_BIN: &str = "longhouse";
-const REMOTE_CODEX_APPROVAL_POLICY: &str = "on-request";
-const REMOTE_CODEX_SANDBOX: &str = "workspace-write";
+// Remote detached-UI Codex launches run without the user's shell wrapper, so
+// the engine owns the managed zero-prompt contract explicitly.
+const REMOTE_CODEX_APPROVAL_POLICY: &str = "never";
+const REMOTE_CODEX_SANDBOX: &str = "danger-full-access";
 // Engine is built from the monorepo. Keep this path beside the Python reader so
 // advertised supports[] and server-side contracts cannot drift silently.
 const MANAGED_PROVIDER_CONTRACTS_JSON: &str =
@@ -2175,11 +2177,11 @@ mod tests {
     }
 
     #[test]
-    fn remote_codex_launch_uses_interactive_managed_defaults() {
+    fn remote_codex_launch_uses_zero_prompt_managed_defaults() {
         let (approval_policy, sandbox) = remote_codex_bridge_defaults();
 
-        assert_eq!(approval_policy.as_deref(), Some("on-request"));
-        assert_eq!(sandbox.as_deref(), Some("workspace-write"));
+        assert_eq!(approval_policy.as_deref(), Some("never"));
+        assert_eq!(sandbox.as_deref(), Some("danger-full-access"));
     }
 
     #[test]

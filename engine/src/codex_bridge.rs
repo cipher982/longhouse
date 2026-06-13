@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -2244,34 +2245,7 @@ fn read_log_tail(path: &Path, max_chars: usize) -> String {
 
 async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> {
     let mut command = Command::new(&config.codex_bin);
-    command.arg("-c").arg(CODEX_DISABLE_UPDATE_CHECK_CONFIG);
-    if let Some(effort) = config.model_reasoning_effort.as_deref() {
-        command
-            .arg("-c")
-            .arg(format!("model_reasoning_effort={effort}"));
-    }
-    if let Some(model) = config.model.as_deref() {
-        command.arg("--model").arg(model);
-    }
-    if let Some(policy) = config.approval_policy.as_deref() {
-        command.arg("--ask-for-approval").arg(policy);
-    }
-    if let Some(sandbox) = config.sandbox.as_deref() {
-        command.arg("--sandbox").arg(sandbox);
-    }
-    command
-        .arg("app-server")
-        .arg("--listen")
-        .arg("ws://127.0.0.1:0")
-        .arg("--enable")
-        .arg("hooks")
-        .arg("--enable")
-        .arg("exec_permission_approvals")
-        .arg("--enable")
-        .arg("request_permissions_tool");
-    if let Some(src) = config.session_source.as_deref() {
-        command.arg("--session-source").arg(src);
-    }
+    command.args(codex_app_server_args(config));
     command
         .env("LONGHOUSE_MANAGED_SESSION_ID", &config.session_id)
         .env("LONGHOUSE_HOOK_URL", &config.api_url)
@@ -2403,6 +2377,45 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
         next_request_id: 1,
         ws_url,
     })
+}
+
+fn codex_app_server_args(config: &BridgeRunConfig) -> Vec<OsString> {
+    let mut args = vec![
+        OsString::from("-c"),
+        OsString::from(CODEX_DISABLE_UPDATE_CHECK_CONFIG),
+    ];
+    if let Some(effort) = config.model_reasoning_effort.as_deref() {
+        args.push(OsString::from("-c"));
+        args.push(OsString::from(format!("model_reasoning_effort={effort}")));
+    }
+    if let Some(model) = config.model.as_deref() {
+        args.push(OsString::from("--model"));
+        args.push(OsString::from(model));
+    }
+    if let Some(policy) = config.approval_policy.as_deref() {
+        args.push(OsString::from("--ask-for-approval"));
+        args.push(OsString::from(policy));
+    }
+    if let Some(sandbox) = config.sandbox.as_deref() {
+        args.push(OsString::from("--sandbox"));
+        args.push(OsString::from(sandbox));
+    }
+    args.extend([
+        OsString::from("app-server"),
+        OsString::from("--listen"),
+        OsString::from("ws://127.0.0.1:0"),
+        OsString::from("--enable"),
+        OsString::from("hooks"),
+        OsString::from("--enable"),
+        OsString::from("exec_permission_approvals"),
+        OsString::from("--enable"),
+        OsString::from("request_permissions_tool"),
+    ]);
+    if let Some(src) = config.session_source.as_deref() {
+        args.push(OsString::from("--session-source"));
+        args.push(OsString::from(src));
+    }
+    args
 }
 
 async fn connect_remote_client(ws_url: &str) -> Result<RpcClient> {
@@ -5360,6 +5373,40 @@ mod tests {
             resume_thread_path: None,
             launch_mode: BridgeLaunchMode::Tui,
         }
+    }
+
+    #[test]
+    fn codex_app_server_args_carry_zero_prompt_permissions() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut config = make_test_run_config(&temp);
+        config.approval_policy = Some("never".to_string());
+        config.sandbox = Some("danger-full-access".to_string());
+
+        let args = codex_app_server_args(&config)
+            .into_iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            args,
+            vec![
+                "-c",
+                CODEX_DISABLE_UPDATE_CHECK_CONFIG,
+                "--ask-for-approval",
+                "never",
+                "--sandbox",
+                "danger-full-access",
+                "app-server",
+                "--listen",
+                "ws://127.0.0.1:0",
+                "--enable",
+                "hooks",
+                "--enable",
+                "exec_permission_approvals",
+                "--enable",
+                "request_permissions_tool",
+            ]
+        );
     }
 
     async fn recv_runtime_event_kind(
