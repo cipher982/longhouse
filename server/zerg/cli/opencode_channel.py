@@ -445,7 +445,7 @@ def send_opencode_text(
         method="POST",
         path=f"/session/{quote(state.provider_session_id, safe='')}/prompt_async",
         query={"directory": state.cwd},
-        payload={"parts": [{"type": "text", "text": text}]},
+        payload={"noReply": True, "parts": [{"type": "text", "text": text}]},
     )
     return {
         "exit_code": 0,

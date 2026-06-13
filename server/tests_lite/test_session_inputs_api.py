@@ -19,6 +19,8 @@ os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-1234")
 os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id")
 os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-google-client-secret")
 
+import pytest
+
 from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 from zerg.database import get_db
 from zerg.database import initialize_database
@@ -32,6 +34,8 @@ from zerg.models.agents import SessionTurn
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
+from zerg.routers.session_chat import SessionInputRequest
+from zerg.routers.session_chat import _create_session_input_response
 from zerg.services.agents import AgentsStore
 from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
@@ -415,6 +419,38 @@ def test_client_request_id_dedupes_delivered_auto(monkeypatch, tmp_path):
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
         api_app_ref.dependency_overrides = {}
+
+
+def test_cancelled_auto_input_marks_failed_and_releases_lock(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+
+    async def cancelled_dispatch(**_kwargs):
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr("zerg.routers.session_chat._build_managed_local_chat_response", cancelled_dispatch)
+
+    with session_local() as db:
+        source_session = AgentsStore(db).get_session(session_id)
+        assert source_session is not None
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(
+                _create_session_input_response(
+                    source_session=source_session,
+                    owner_id=user_id,
+                    body=SessionInputRequest(
+                        text="will timeout",
+                        intent="auto",
+                        client_request_id="ios-timeout-regression",
+                    ),
+                    db=db,
+                )
+            )
+
+        row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
+        assert row.status == INPUT_STATUS_FAILED
+        assert row.last_error == "request timed out"
+        assert asyncio.run(session_lock_manager.is_locked(str(session_id))) is False
 
 
 def test_auto_input_links_session_turn_to_verified_user_event(monkeypatch, tmp_path):

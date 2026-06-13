@@ -168,6 +168,7 @@ def test_send_opencode_text_posts_prompt_async(monkeypatch, tmp_path):
     assert "directory=" in request.full_url
     assert request.get_header("Authorization").startswith("Basic ")
     assert json.loads(request.data.decode("utf-8")) == {
+        "noReply": True,
         "parts": [{"type": "text", "text": "continue"}],
     }
     assert result["transport"] == "opencode_server_bridge"

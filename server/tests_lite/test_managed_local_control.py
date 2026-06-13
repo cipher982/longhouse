@@ -48,6 +48,8 @@ def _make_db(tmp_path):
 def _managed_transport_for_provider(provider: str) -> str:
     if provider == "codex":
         return ManagedSessionTransport.CODEX_APP_SERVER.value
+    if provider == "opencode":
+        return ManagedSessionTransport.OPENCODE_SERVER_BRIDGE.value
     return ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
 
 
@@ -674,6 +676,50 @@ def test_await_managed_local_hook_phase_update_accepts_codex_bridge_phase_source
         assert result is not None
         assert result.phase == "thinking"
         assert result.source == "codex_bridge"
+
+
+def test_await_managed_local_hook_phase_update_accepts_opencode_event_phase_source(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        _user, _runner, session = _seed_user_runner_and_session(db, provider="opencode")
+        baseline_event = _materialize_hook_runtime_state(
+            db,
+            session=session,
+            phase="idle",
+            source="opencode_event",
+            occurred_at=datetime.now(timezone.utc),
+        )
+        db.commit()
+        baseline_observation_id = get_managed_local_latest_hook_observation_id(
+            db=db,
+            session_id=session.id,
+        )
+        assert baseline_observation_id == baseline_event.id
+
+        _materialize_hook_runtime_state(
+            db,
+            session=session,
+            phase="running",
+            source="opencode_event",
+            occurred_at=datetime.now(timezone.utc),
+        )
+        db.commit()
+
+        result = asyncio.run(
+            await_managed_local_hook_phase_update(
+                db_bind=db.get_bind(),
+                session_id=session.id,
+                after_observation_id=baseline_observation_id,
+                phases={"thinking", "running"},
+                timeout_secs=0.2,
+                poll_interval_secs=0.02,
+            )
+        )
+
+        assert result is not None
+        assert result.phase == "running"
+        assert result.source == "opencode_event"
 
 
 def test_send_text_to_managed_local_session_uses_claude_channel_bridge_payload(monkeypatch, tmp_path):

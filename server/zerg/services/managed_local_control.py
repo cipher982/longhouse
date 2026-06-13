@@ -54,6 +54,7 @@ _MANAGED_LOCAL_RUNTIME_PHASE_SOURCES = frozenset(
     {
         _MANAGED_LOCAL_HOOK_RUNTIME_SOURCE,
         "codex_bridge",
+        "opencode_event",
     }
 )
 _MANAGED_LOCAL_ACTIVE_HOOK_PHASES = frozenset({"thinking", "running"})

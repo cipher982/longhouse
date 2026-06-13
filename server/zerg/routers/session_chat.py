@@ -1509,6 +1509,15 @@ async def _create_session_input_response(
             db=db,
             session_input_id=int(row.id),
         )
+    except asyncio.CancelledError:
+        await session_lock_manager.release(lock_scope_id, delivery_request_id)
+        _mark_input_failed(db, int(row.id), error="request timed out")
+        logger.warning(
+            "[%s] Session input dispatch cancelled for %s; marked input failed and released lock",
+            delivery_request_id,
+            source_session.id,
+        )
+        raise
     except HTTPException:
         await session_lock_manager.release(lock_scope_id, delivery_request_id)
         _mark_input_failed(db, int(row.id), error="dispatch rejected")
