@@ -85,7 +85,7 @@ export default function PrivacyPage() {
 
           <h2>Contact</h2>
           <p>
-            Questions? Join our <a href="https://discord.gg/h2CWBUrj" target="_blank" rel="noopener noreferrer">Discord</a> or
+            Questions? Join our <a href="https://discord.gg/mekG4Pp5q" target="_blank" rel="noopener noreferrer">Discord</a> or
             email <a href="mailto:support@longhouse.ai">support@longhouse.ai</a>
           </p>
         </div>

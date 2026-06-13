@@ -53,7 +53,7 @@ export default function DocsLayout() {
               GitHub
             </a>
             <a
-              href="https://discord.gg/h2CWBUrj"
+              href="https://discord.gg/mekG4Pp5q"
               target="_blank"
               rel="noopener noreferrer"
               className="docs-header-link"

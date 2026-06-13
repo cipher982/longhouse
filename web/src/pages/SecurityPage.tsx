@@ -103,7 +103,7 @@ export default function SecurityPage() {
           <div className="security-contact">
             <h3>Questions?</h3>
             <p>
-              For security questions, join our <a href="https://discord.gg/h2CWBUrj" target="_blank" rel="noopener noreferrer">Discord</a> or
+              For security questions, join our <a href="https://discord.gg/mekG4Pp5q" target="_blank" rel="noopener noreferrer">Discord</a> or
               email <a href="mailto:support@longhouse.ai">support@longhouse.ai</a>
             </p>
             <p>
