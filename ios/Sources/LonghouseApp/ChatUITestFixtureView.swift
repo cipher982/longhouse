@@ -579,6 +579,12 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
         events: [SessionEvent],
         title: String = "Chat UI Fixture"
     ) -> SessionDetail {
+        // Marketing captures must not leak test-harness copy into the chrome.
+        let isMarketing = title == titleForFixture("marketing")
+        let composerPlaceholder = isMarketing
+            ? "Send a message to the live session…"
+            : "Send a message to the live Codex session..."
+        let idleDetail = isMarketing ? "Ready" : "Ready for UI test input"
         let detail = SessionDetail(
             id: sessionID,
             provider: "codex",
@@ -608,7 +614,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 inputMode: "live",
                 defaultInputIntent: "auto",
                 composerEnabled: true,
-                composerPlaceholder: "Send a message to the live Codex session...",
+                composerPlaceholder: composerPlaceholder,
                 composerDisabledReason: nil,
                 sendDisabledReason: nil,
                 attachImages: false
@@ -619,7 +625,7 @@ private actor ChatUITestWorkspaceClient: SessionWorkspaceClient {
                 state: "idle",
                 tone: "idle",
                 headline: "Idle",
-                detail: "Ready for UI test input",
+                detail: idleDetail,
                 phaseLabel: "Idle",
                 compactToolLabel: nil,
                 isLive: true,
