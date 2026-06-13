@@ -53,6 +53,7 @@ def test_handle_install_delegates_to_shared_runtime_installer(monkeypatch, capsy
             "runtime_url": "https://example.com",
             "machine_name": "test-box",
             "menubar": True,
+            "prevent_sleep": False,
         }
     ]
     assert "Machine: test-box" in output
@@ -99,6 +100,7 @@ def test_handle_install_prompts_for_machine_name_when_missing(monkeypatch):
             "runtime_url": "https://example.com",
             "machine_name": "fallback-box",
             "menubar": False,
+            "prevent_sleep": False,
         }
     ]
 
@@ -172,6 +174,7 @@ def test_connect_install_skips_auto_auth_when_no_token(monkeypatch):
         status=False,
         machine_name="test-box",
         menubar=False,
+        prevent_sleep=False,
     )
 
     assert calls == [
@@ -184,6 +187,7 @@ def test_connect_install_skips_auto_auth_when_no_token(monkeypatch):
                 "interval": 300,
                 "machine_name": "test-box",
                 "menubar": False,
+                "prevent_sleep": False,
             },
         )
     ]
@@ -212,6 +216,7 @@ def test_connect_install_uses_stored_url_when_called_directly_without_url(monkey
         status=False,
         machine_name="test-box",
         menubar=False,
+        prevent_sleep=False,
     )
 
     assert calls == [
@@ -224,6 +229,7 @@ def test_connect_install_uses_stored_url_when_called_directly_without_url(monkey
                 "interval": 300,
                 "machine_name": "test-box",
                 "menubar": False,
+                "prevent_sleep": False,
             },
         )
     ]

@@ -579,6 +579,7 @@ def test_apply_machine_state_update_reconciles_existing_service(tmp_path, monkey
             "machine_name": "test-box",
             "machine_config_generation": result.machine_state.config_generation,
             "machine_state_hash": installer.machine_state_source_hash(result.machine_state),
+            "prevent_sleep": False,
         }
     ]
     assert hook_calls == [
@@ -695,6 +696,7 @@ def test_apply_machine_state_update_reconciles_symlinked_state_root(tmp_path, mo
             "machine_name": "test-box",
             "machine_config_generation": result.machine_state.config_generation,
             "machine_state_hash": installer.machine_state_source_hash(result.machine_state),
+            "prevent_sleep": False,
         }
     ]
 
