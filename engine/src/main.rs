@@ -269,7 +269,7 @@ enum Commands {
         machine_name: Option<String>,
 
         /// Prevent system sleep (including lid-close) while the daemon runs.
-        /// On macOS, spawns caffeinate -s as a child process.
+        /// On macOS, spawns caffeinate -s -w <pid>. Only effective on AC power.
         #[arg(long)]
         prevent_sleep: bool,
     },

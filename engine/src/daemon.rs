@@ -420,18 +420,18 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
     // 6b. Prevent system sleep if configured. On macOS this prevents
     // lid-close sleep by holding a PreventUserIdleSystemSleep assertion
-    // via caffeinate -s. The child is killed when the daemon exits.
+    // via caffeinate -s. caffeinate -w <pid> exits when the daemon PID
+    // disappears, so SIGKILL/abort/launchd restart all clean up cleanly.
     let _caffeinate = if config.prevent_sleep {
+        let pid = std::process::id();
         match tokio::process::Command::new("caffeinate")
             .arg("-s")
-            .kill_on_drop(true)
+            .arg("-w")
+            .arg(pid.to_string())
             .spawn()
         {
             Ok(child) => {
-                tracing::info!(
-                    "Sleep prevention active (caffeinate -s PID {})",
-                    child.id().unwrap_or(0)
-                );
+                tracing::info!("Sleep prevention active (caffeinate -s -w {})", pid);
                 Some(child)
             }
             Err(e) => {

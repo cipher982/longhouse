@@ -625,6 +625,8 @@ def connect(
     engine_args = [engine, "connect"]
     if interval != 300:
         engine_args += ["--fallback-scan-secs", str(interval)]
+    if prevent_sleep:
+        engine_args.append("--prevent-sleep")
 
     env = os.environ.copy()
     if verbose:
