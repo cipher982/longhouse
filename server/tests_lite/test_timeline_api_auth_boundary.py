@@ -849,6 +849,74 @@ def test_timeline_session_workspace_projects_pending_longhouse_input_origin(tmp_
         api_app.dependency_overrides.clear()
 
 
+def test_timeline_session_mobile_tail_projects_pending_longhouse_input_origin(tmp_path):
+    session_local = _make_db(tmp_path)
+    submitted_at = datetime.now(timezone.utc)
+    with session_local() as db:
+        _seed_user(db)
+        session_id = _seed_session(db)
+        baseline = AgentEvent(
+            session_id=session_id,
+            role="assistant",
+            content_text="previous turn",
+            timestamp=submitted_at - timedelta(seconds=1),
+        )
+        event = AgentEvent(
+            session_id=session_id,
+            role="user",
+            content_text="sent from phone",
+            timestamp=submitted_at,
+        )
+        db.add_all([baseline, event])
+        db.flush()
+        session_input = SessionInput(
+            session_id=session_id,
+            body="sent from phone",
+            owner_id=1,
+            intent="auto",
+            status="delivered",
+            client_request_id="ios-pending-tail-origin-1",
+            delivery_request_id="delivery-pending-tail-origin-1",
+            delivered_at=submitted_at,
+        )
+        db.add(session_input)
+        db.flush()
+        db.add(
+            SessionTurn(
+                session_id=session_id,
+                request_id="delivery-pending-tail-origin-1",
+                session_input_id=session_input.id,
+                state="created",
+                expected_user_text_hash=hash_user_text("sent from phone"),
+                baseline_event_id=baseline.id,
+                user_event_id=None,
+                user_submitted_at=submitted_at,
+            )
+        )
+        event_id = int(event.id)
+        input_id = int(session_input.id)
+        db.commit()
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            response = client.get(f"/timeline/sessions/{session_id}/mobile-tail?limit=2")
+
+        assert response.status_code == 200
+        events = [item["event"] for item in response.json()["projection"]["items"] if item["kind"] == "event"]
+        user_event = next(event for event in events if event["id"] == event_id)
+        assert user_event["input_origin"] == {
+            "authored_via": "longhouse",
+            "session_input_id": input_id,
+            "client_request_id": "ios-pending-tail-origin-1",
+        }
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
+
+
 def test_timeline_session_workspace_keeps_ambiguous_pending_input_origin_terminal(tmp_path):
     session_local = _make_db(tmp_path)
     submitted_at = datetime.now(timezone.utc)
