@@ -38,6 +38,7 @@ dependencies = [
     "edge-tts>=7.0.0",
     "python-telegram-bot>=21.0",
     "typer>=0.9.0",
+    "rich>=13.0.0",
     "watchdog>=6.0.0",
     "tiktoken>=0.7.0",
     "mcp>=1.0",

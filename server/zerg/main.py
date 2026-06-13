@@ -381,6 +381,38 @@ async def download_macos_desktop_app():
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+@app.get("/s/{prefix}", include_in_schema=False)
+async def short_session_link(prefix: str):
+    """Resolve a short session link (/s/<id-prefix>) to the full timeline URL.
+
+    Lets the CLI print a clean `https://host/s/111a5a5d` instead of the full
+    UUID. Session ids are hyphenated CHAR(36) strings, so a left-anchored prefix
+    match is exact for the launch case (first 8 hex chars). On an ambiguous or
+    missing prefix we fall back to the timeline home rather than guessing.
+    """
+    from fastapi.responses import RedirectResponse
+
+    from zerg.database import db_session
+    from zerg.models.agents import AgentSession
+
+    cleaned = (prefix or "").strip().lower()
+    if not cleaned or any(ch not in "0123456789abcdef-" for ch in cleaned):
+        return RedirectResponse(url="/timeline", status_code=302)
+
+    with db_session() as db:
+        matches = (
+            db.query(AgentSession.id)
+            .filter(AgentSession.id.like(f"{cleaned}%"))
+            .limit(2)
+            .all()
+        )
+
+    if len(matches) == 1:
+        return RedirectResponse(url=f"/timeline/{matches[0][0]}", status_code=302)
+    # zero matches or an ambiguous prefix -> timeline home, no guessing
+    return RedirectResponse(url="/timeline", status_code=302)
+
+
 # ---------------------------------------------------------------------------
 # Frontend static serving (MUST be last - catch-all route)
 # ---------------------------------------------------------------------------

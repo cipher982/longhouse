@@ -19,6 +19,7 @@ from urllib.request import urlopen
 
 import typer
 
+from zerg.cli import _launch_ui as launch_ui
 from zerg.cli import claude as managed_local_cli
 from zerg.cli._common import ManagedLocalLaunchResponse
 from zerg.cli._common import build_session_url as _build_session_url
@@ -715,6 +716,12 @@ def opencode(
         "--opencode-bin",
         help=_OPENCODE_BIN_OPTION_HELP,
     ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose/--quiet",
+        "-v",
+        help="Show full session id, timeline URL, and attach command.",
+    ),
 ) -> None:
     """Launch a Longhouse OpenCode session on this machine.
 
@@ -750,7 +757,9 @@ def opencode(
         config_dir_is_provider_home=False,
         exit_code=managed_local_cli.EXIT_SETUP_FAILED,
     )
-    typer.echo(f"Longhouse: {resolved_url}")
+    launch_ui.progress("Preparing your session…")
+    if verbose:
+        typer.echo(f"Longhouse: {resolved_url}")
     result = _launch_managed_local_from_api(
         url=resolved_url,
         token=resolved_token,
@@ -761,17 +770,10 @@ def opencode(
         machine_name=machine_name,
     )
     session_url = _build_session_url(resolved_url, result.session_id)
-    typer.secho("Longhouse OpenCode session launched on this machine.", fg=typer.colors.GREEN)
-    typer.echo(f"Session ID: {result.session_id}")
-    typer.echo(f"Session URL: {session_url}")
-
-    if open_browser:
-        typer.echo("Opening session in browser...")
-        if not _open_session_url(session_url):
-            typer.secho(f"Could not open browser automatically. Visit: {session_url}", fg=typer.colors.YELLOW)
 
     opencode_args = tuple(str(arg) for arg in (ctx.args or ()))
     is_interactive = _interactive_stdio()
+    launch_ui.progress("Starting native OpenCode bridge…")
     try:
         from zerg.cli.opencode_channel import OpenCodeServerBridgeError
         from zerg.cli.opencode_channel import launch_opencode_server_bridge
@@ -792,6 +794,21 @@ def opencode(
         raise typer.Exit(code=1) from exc
 
     attach_command = f"longhouse opencode-channel attach --session-id {result.session_id}"
+    # Bridge is up (it waits for health) — only now is the session steerable.
+    launch_ui.launch_panel(
+        provider_label=launch_ui.PROVIDER_LABELS["opencode"],
+        base_url=resolved_url,
+        machine_name=machine_name,
+        session_id=result.session_id,
+        verbose=verbose,
+        attach_command=attach_command,
+    )
+
+    if open_browser:
+        typer.echo("Opening session in browser...")
+        if not _open_session_url(session_url):
+            typer.secho(f"Could not open browser automatically. Visit: {session_url}", fg=typer.colors.YELLOW)
+
     if not attach:
         typer.echo(f"Run: {attach_command}")
         return
@@ -800,13 +817,17 @@ def opencode(
         typer.echo(f"Run: {attach_command}")
         return
 
-    typer.echo("Attaching OpenCode...")
+    launch_ui.progress("Attaching OpenCode…")
     exit_code = run_opencode_attach(
         session_id=result.session_id,
         opencode_bin=resolved_opencode_bin,
         config_dir=resolved_config_dir,
         extra_args=opencode_args,
     )
+    launch_ui.exit_bookend(
+        exit_code=exit_code,
+        machine_name=machine_name,
+        reattach_command=attach_command,
+    )
     if exit_code != 0:
-        typer.secho(f"OpenCode exited with code {exit_code}.", fg=typer.colors.YELLOW)
         raise typer.Exit(code=exit_code)

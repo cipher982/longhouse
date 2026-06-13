@@ -588,19 +588,22 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
             "--name",
             "Demo session",
             "--open",
+            "--verbose",
         ],
     )
 
     assert result.exit_code == 0, result.output
     assert "Longhouse: https://longhouse.test" in result.output
-    assert "Longhouse Codex session launched on this machine." in result.output
+    assert "The hearth is lit" in result.output
     assert "Session ID: session-123" in result.output
     assert "Session URL: https://longhouse.test/timeline/session-123" in result.output
-    assert "Starting native Codex bridge..." in result.output
+    assert "Starting native Codex bridge…" in result.output
     assert "Codex thread:" not in result.output
     assert "Remote target: ws://127.0.0.1:4800" in result.output
     assert "Opening session in browser..." in result.output
-    assert "Attaching..." in result.output
+    assert "Attaching…" in result.output
+    # Clean exit (mocked TUI returns 0 + cleanup ok) banks the hearth.
+    assert "The hearth banked" in result.output
     assert open_calls == ["https://longhouse.test/timeline/session-123"]
     assert bridge_calls == [
         {
@@ -745,9 +748,11 @@ def test_codex_command_preserves_bridge_when_auto_attach_exits_nonzero(monkeypat
     result = runner.invoke(app, ["codex", "--cwd", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
-    assert "Auto-attach exited with code 7" in result.output
-    assert "still running and reattachable" in result.output
-    assert "Attach: LONGHOUSE_MANAGED_SESSION_ID=session-123" in result.output
+    # Codex leaves the bridge running on nonzero exit — must not claim the fire scattered.
+    assert "still burns" in result.output
+    assert "(exit 7)" in result.output
+    assert "scattered" not in result.output
+    assert "Rejoin: LONGHOUSE_MANAGED_SESSION_ID=session-123" in result.output
     assert stop_calls == []
     contracts = list_managed_session_contracts(tmp_path / ".longhouse")
     assert contracts[0]["provider"] == "codex"

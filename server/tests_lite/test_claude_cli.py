@@ -160,6 +160,7 @@ def test_launch_managed_local_from_api_timeout_says_no_provider_started(monkeypa
             name=None,
             machine_name="work-laptop",
             provider="codex",
+            verbose=True,
         )
 
     output = capsys.readouterr().out
@@ -367,18 +368,21 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
             "--name",
             "Demo session",
             "--open",
+            "--verbose",
         ],
     )
 
     assert result.exit_code == 0, result.output
-    assert "Longhouse Claude session launched on this machine." in result.output
+    assert "The hearth is lit" in result.output
     assert (
         "Attach: zsh -lc 'exec claude --dangerously-skip-permissions --session-id provider-123 "
         "--dangerously-load-development-channels server:longhouse-channel'" in result.output
     )
-    assert "Preparing native Claude bridge..." in result.output
+    assert "Preparing your session" in result.output
     assert "Opening session in browser..." in result.output
-    assert "Launching native Claude..." in result.output
+    assert "Launching Claude" in result.output
+    # Clean exit (mocked TUI returns 0) prints the honest closing bookend.
+    assert "The hearth banked" in result.output
     assert prepare_calls == [("https://longhouse.test", "zdt_test_token", str(tmp_path), str(provider_home))]
     assert native_launch_calls == [
         ("session-123", "provider-123", str(tmp_path), "https://longhouse.test", "zdt_test_token")
@@ -848,7 +852,7 @@ def test_claude_command_force_native_channels_bypasses_bedrock_gate(monkeypatch,
         lambda **kwargs: native_finalize_calls.append(kwargs),
     )
 
-    result = runner.invoke(app, ["claude", "--cwd", str(tmp_path)])
+    result = runner.invoke(app, ["claude", "--cwd", str(tmp_path), "--verbose"])
 
     assert result.exit_code == 0, result.output
     assert f"Forcing native Claude channels via {claude_cli._FORCE_NATIVE_CLAUDE_CHANNELS_ENV}=1." in result.output

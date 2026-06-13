@@ -16,6 +16,7 @@ from pathlib import Path
 import httpx
 import typer
 
+from zerg.cli import _launch_ui as launch_ui
 from zerg.cli._common import ManagedLocalLaunchResponse
 from zerg.cli._common import build_session_url as _build_session_url
 from zerg.cli._common import ensure_managed_launch_preflight as _ensure_managed_launch_preflight
@@ -220,6 +221,7 @@ def _launch_managed_local_from_api(
     native_claude_channels_available: bool | None = None,
     claude_launch_env: dict[str, str] | None = None,
     provider: str = "claude",
+    verbose: bool = False,
 ) -> ManagedLocalLaunchResponse:
     payload = build_managed_local_launch_payload(
         cwd=cwd,
@@ -233,7 +235,8 @@ def _launch_managed_local_from_api(
     )
 
     launch_url = f"{url.rstrip('/')}/api/sessions/managed-local/this-device"
-    typer.echo(f"Creating Longhouse managed {provider} session: POST {launch_url}")
+    if verbose:
+        typer.echo(f"Creating Longhouse managed {provider} session: POST {launch_url}")
     try:
         with httpx.Client(timeout=30) as client:
             response = client.post(
@@ -529,13 +532,18 @@ def _finalize_native_claude_launch(
     config_dir: Path | None,
     open_browser: bool,
     attach: bool,
+    machine_name: str,
+    verbose: bool,
 ) -> None:
     session_url = _build_session_url(base_url, result.session_id)
-    typer.secho("Longhouse Claude session launched on this machine.", fg=typer.colors.GREEN)
-    typer.echo(f"Session ID: {result.session_id}")
-    typer.echo(f"Provider session ID: {result.provider_session_id}")
-    typer.echo(f"Session URL: {session_url}")
-    typer.echo(f"Attach: {result.attach_command}")
+    launch_ui.launch_panel(
+        provider_label=launch_ui.PROVIDER_LABELS["claude"],
+        base_url=base_url,
+        machine_name=machine_name,
+        session_id=result.session_id,
+        verbose=verbose,
+        attach_command=result.attach_command,
+    )
 
     if open_browser:
         typer.echo("Opening session in browser...")
@@ -548,7 +556,7 @@ def _finalize_native_claude_launch(
         typer.secho("Skipping native launch because stdin/stdout are not TTYs.", fg=typer.colors.YELLOW)
         return
 
-    typer.echo("Launching native Claude...")
+    launch_ui.progress("Launching Claude…")
     try:
         record_managed_provider_contract(
             provider="claude",
@@ -582,11 +590,11 @@ def _finalize_native_claude_launch(
             config_dir=config_dir,
             config_dir_is_provider_home=True,
         )
-    if exit_code != 0:
-        typer.secho(
-            f"Native Claude exited with code {exit_code}. Run the printed attach command manually.",
-            fg=typer.colors.YELLOW,
-        )
+    launch_ui.exit_bookend(
+        exit_code=exit_code,
+        machine_name=machine_name,
+        reattach_command=f'longhouse continue {result.session_id} "<your next message>"',
+    )
 
 
 def claude(
@@ -634,8 +642,23 @@ def claude(
         "--claude-dir",
         help="Longhouse config directory (default: ~/.claude).",
     ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose/--quiet",
+        "-v",
+        help="Show full session id, timeline URL, and attach command on launch.",
+    ),
 ) -> None:
     """Launch a Longhouse Claude Code session on this machine via the Longhouse API."""
+
+    # Keep the happy path clean: hook-install and httpx INFO logs are diagnostic
+    # noise for users. connect.py installs a root INFO handler at import time, so
+    # quiet those loggers unless the user asked for --verbose.
+    if not verbose:
+        import logging as _logging
+
+        for _name in ("zerg.services.shipper.hooks", "httpx", "httpcore"):
+            _logging.getLogger(_name).setLevel(_logging.WARNING)
 
     resolved_config_dir = Path(config_dir) if config_dir else None
     resolved_url, resolved_token = _load_api_credentials(
@@ -653,8 +676,9 @@ def claude(
         native_claude_channels_available = True
         native_claude_channels_detail = f"forced by {_FORCE_NATIVE_CLAUDE_CHANNELS_ENV}"
         force_flag_capable_path = False
-        message = f"Forcing native Claude channels via {_FORCE_NATIVE_CLAUDE_CHANNELS_ENV}=1."
-        typer.secho(f"{message} This is a private unsupported local experiment.", fg=typer.colors.YELLOW)
+        if verbose:
+            message = f"Forcing native Claude channels via {_FORCE_NATIVE_CLAUDE_CHANNELS_ENV}=1."
+            typer.secho(f"{message} This is a private unsupported local experiment.", fg=typer.colors.YELLOW)
     elif force_flag_capable_path:
         native_claude_channels_available = False
         native_claude_channels_detail = "disabled by Claude launch env"
@@ -671,7 +695,9 @@ def claude(
         config_dir=resolved_config_dir,
         exit_code=EXIT_SETUP_FAILED,
     )
-    typer.echo("Preparing native Claude bridge...")
+    launch_ui.progress("Preparing your session…")
+    if verbose:
+        typer.echo(f"Longhouse: {resolved_url}")
     try:
         _ensure_native_claude_prereqs(
             base_url=resolved_url,
@@ -682,7 +708,6 @@ def claude(
     except _NativeClaudeError as exc:
         typer.secho(f"Claude bridge setup failed: {exc}", fg=typer.colors.RED)
         raise typer.Exit(code=EXIT_SETUP_FAILED)
-    typer.echo(f"Longhouse: {resolved_url}")
     result = _launch_managed_local_from_api(
         url=resolved_url,
         token=resolved_token,
@@ -694,6 +719,7 @@ def claude(
         native_claude_channels_available=native_claude_channels_available,
         claude_launch_env=claude_launch_env,
         provider="claude",
+        verbose=verbose,
     )
     if force_flag_capable_path and _result_uses_native_claude_bridge(result):
         typer.secho(
@@ -716,4 +742,6 @@ def claude(
         config_dir=resolved_claude_dir,
         open_browser=open_browser,
         attach=attach,
+        machine_name=machine_name,
+        verbose=verbose,
     )

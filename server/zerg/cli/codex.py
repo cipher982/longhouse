@@ -20,6 +20,7 @@ from urllib.request import urlopen
 
 import typer
 
+from zerg.cli import _launch_ui as launch_ui
 from zerg.cli import claude as managed_local_cli
 from zerg.cli._common import ManagedLocalLaunchResponse
 from zerg.cli._common import build_session_url as _build_session_url
@@ -775,6 +776,12 @@ def codex(
         "--dangerously-bypass-approvals-and-sandbox",
         help="Pass --dangerously-bypass-approvals-and-sandbox to the Codex TUI. Opt-in only.",
     ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose/--quiet",
+        "-v",
+        help="Show full session id, timeline URL, bridge target, and attach command.",
+    ),
 ) -> None:
     """Launch a Longhouse Codex session on this machine via the Longhouse API."""
 
@@ -805,7 +812,9 @@ def codex(
         config_dir=resolved_config_dir,
         exit_code=managed_local_cli.EXIT_SETUP_FAILED,
     )
-    typer.echo(f"Longhouse: {resolved_url}")
+    launch_ui.progress("Preparing your session…")
+    if verbose:
+        typer.echo(f"Longhouse: {resolved_url}")
     result = _launch_managed_local_from_api(
         url=resolved_url,
         token=resolved_token,
@@ -816,9 +825,6 @@ def codex(
         machine_name=machine_name,
     )
     session_url = _build_session_url(resolved_url, result.session_id)
-    typer.secho("Longhouse Codex session launched on this machine.", fg=typer.colors.GREEN)
-    typer.echo(f"Session ID: {result.session_id}")
-    typer.echo(f"Session URL: {session_url}")
     _emit_warp_cli_agent_event(
         event="session_start",
         session_id=result.session_id,
@@ -828,7 +834,7 @@ def codex(
     is_interactive = _interactive_stdio()
     launch_mode = "tui" if attach and is_interactive else "detached_ui"
     create_initial_thread = launch_mode != "tui"
-    typer.echo("Starting native Codex bridge...")
+    launch_ui.progress("Starting native Codex bridge…")
     try:
         thread_id, ws_url, state_file = _start_native_codex_bridge(
             session_id=result.session_id,
@@ -844,9 +850,18 @@ def codex(
     except _NativeBridgeError as exc:
         typer.secho(f"Codex bridge failed: {exc}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
-    if thread_id:
-        typer.echo(f"Codex thread: {thread_id}")
-    typer.echo(f"Remote target: {ws_url}")
+    # Bridge is up — only now is the session genuinely steerable, so print the panel here.
+    launch_ui.launch_panel(
+        provider_label=launch_ui.PROVIDER_LABELS["codex"],
+        base_url=resolved_url,
+        machine_name=machine_name,
+        session_id=result.session_id,
+        verbose=verbose,
+    )
+    if verbose:
+        if thread_id:
+            typer.echo(f"  Codex thread: {thread_id}")
+        typer.echo(f"  Remote target: {ws_url}")
     try:
         record_managed_provider_contract(
             provider="codex",
@@ -889,7 +904,7 @@ def codex(
         typer.echo(f"Attach: {attach_cmd}")
         return
 
-    typer.echo("Attaching...")
+    launch_ui.progress("Attaching…")
     bridge_stopper = _CodexBridgeStopper(result.session_id, state_file=state_file)
     previous_handlers = _install_codex_signal_cleanup(bridge_stopper)
     try:
@@ -926,11 +941,12 @@ def codex(
             project=project,
             response=(f"Managed Codex auto-attach exited with code {exit_code}; " "bridge left running for reattach."),
         )
-        typer.secho(
-            f"Auto-attach exited with code {exit_code}. " "Managed Codex session is still running and reattachable.",
-            fg=typer.colors.YELLOW,
+        launch_ui.exit_bookend(
+            exit_code=exit_code,
+            machine_name=machine_name,
+            reattach_command=attach_cmd,
+            reattachable_on_nonzero_exit=True,
         )
-        typer.echo(f"Attach: {attach_cmd}")
         return
 
     stop_error = bridge_stopper.stop(reason=_CODEX_STOP_REASON_TERMINAL_DISCONNECTED)
@@ -953,6 +969,8 @@ def codex(
             fg=typer.colors.YELLOW,
         )
     else:
+        # Only claim the hearth was cleanly banked if bridge cleanup actually succeeded.
+        launch_ui.exit_bookend(exit_code=0, machine_name=machine_name)
         _emit_warp_cli_agent_event(
             event="stop",
             session_id=result.session_id,

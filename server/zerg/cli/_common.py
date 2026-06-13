@@ -133,6 +133,16 @@ def build_session_url(url: str, session_id: str) -> str:
     return f"{url.rstrip('/')}/timeline/{session_id}"
 
 
+def build_short_session_url(url: str, session_id: str) -> str:
+    """Short, human-pasteable link that the server redirects to /timeline/<id>.
+
+    Uses the first 8 chars of the session UUID (unique in practice for a single
+    instance). Resolved by the `GET /s/{prefix}` route in main.py.
+    """
+    prefix = str(session_id).split("-", 1)[0][:8] or str(session_id)
+    return f"{url.rstrip('/')}/s/{prefix}"
+
+
 def open_session_url(session_url: str) -> bool:
     try:
         return bool(webbrowser.open(session_url))

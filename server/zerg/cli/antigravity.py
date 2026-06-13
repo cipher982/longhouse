@@ -19,6 +19,7 @@ from urllib.request import urlopen
 
 import typer
 
+from zerg.cli import _launch_ui as launch_ui
 from zerg.cli import claude as managed_local_cli
 from zerg.cli._common import ManagedLocalLaunchResponse
 from zerg.cli._common import build_session_url as _build_session_url
@@ -865,6 +866,12 @@ def antigravity(
         "--antigravity-bin",
         help=_ANTIGRAVITY_BIN_OPTION_HELP,
     ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose/--quiet",
+        "-v",
+        help="Show full session id, timeline URL, and launch command.",
+    ),
 ) -> None:
     """Launch a Longhouse-managed agy session on this machine.
 
@@ -900,7 +907,9 @@ def antigravity(
         config_dir_is_provider_home=False,
         exit_code=managed_local_cli.EXIT_SETUP_FAILED,
     )
-    typer.echo(f"Longhouse: {resolved_url}")
+    launch_ui.progress("Preparing your session…")
+    if verbose:
+        typer.echo(f"Longhouse: {resolved_url}")
     result = _launch_managed_local_from_api(
         url=resolved_url,
         token=resolved_token,
@@ -911,14 +920,6 @@ def antigravity(
         machine_name=machine_name,
     )
     session_url = _build_session_url(resolved_url, result.session_id)
-    typer.secho("Longhouse agy session launched on this machine.", fg=typer.colors.GREEN)
-    typer.echo(f"Session ID: {result.session_id}")
-    typer.echo(f"Session URL: {session_url}")
-
-    if open_browser:
-        typer.echo("Opening session in browser...")
-        if not _open_session_url(session_url):
-            typer.secho(f"Could not open browser automatically. Visit: {session_url}", fg=typer.colors.YELLOW)
 
     antigravity_args = tuple(str(arg) for arg in (ctx.args or ()))
     is_interactive = _interactive_stdio()
@@ -945,6 +946,23 @@ def antigravity(
         antigravity_args=antigravity_args,
         launch_script_path=command_launch_script_path,
     )
+    # Antigravity has no proven live steer/reattach surface at launch (and --no-attach
+    # only writes a launch script), so claim watch-only rather than steerability.
+    launch_ui.launch_panel(
+        provider_label=launch_ui.PROVIDER_LABELS["antigravity"],
+        base_url=resolved_url,
+        machine_name=machine_name,
+        session_id=result.session_id,
+        verbose=verbose,
+        steerable=False,
+        attach_command=command,
+    )
+
+    if open_browser:
+        typer.echo("Opening session in browser...")
+        if not _open_session_url(session_url):
+            typer.secho(f"Could not open browser automatically. Visit: {session_url}", fg=typer.colors.YELLOW)
+
     if not attach:
         typer.echo(f"Run: {command}")
         return
@@ -953,7 +971,7 @@ def antigravity(
         typer.echo(f"Run: {command}")
         return
 
-    typer.echo("Launching Antigravity...")
+    launch_ui.progress("Launching Antigravity…")
     try:
         record_managed_provider_contract(
             provider="antigravity",
@@ -988,6 +1006,10 @@ def antigravity(
             session_id=result.session_id,
             config_dir=resolved_config_dir,
         )
+    launch_ui.exit_bookend(
+        exit_code=exit_code,
+        machine_name=machine_name,
+        reattach_command=command,
+    )
     if exit_code != 0:
-        typer.secho(f"Antigravity exited with code {exit_code}.", fg=typer.colors.YELLOW)
         raise typer.Exit(code=exit_code)
