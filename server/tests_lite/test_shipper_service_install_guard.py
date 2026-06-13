@@ -215,3 +215,38 @@ def test_install_service_reuses_legacy_shipper_db_on_reinstall_before_guard(tmp_
     assert install_calls == [migrated_db_path]
     assert migrated_db_path.read_text(encoding="utf-8") == "legacy-db"
     assert stop_calls == [["launchctl", "unload", str(launchd_path)]]
+
+
+def test_launchd_plist_includes_prevent_sleep_when_enabled(monkeypatch):
+    monkeypatch.setattr(shipper_service, "get_engine_executable", lambda: "/usr/local/bin/longhouse-engine")
+    monkeypatch.setattr(shipper_service, "_resolve_log_dir", lambda config: Path("/tmp/logs"))
+    monkeypatch.setattr(
+        shipper_service,
+        "resolve_longhouse_home_from_provider_home",
+        lambda _: Path("/tmp/.longhouse"),
+    )
+
+    config = shipper_service.ServiceConfig(
+        url="https://example.com",
+        prevent_sleep=True,
+    )
+    plist = shipper_service._generate_launchd_plist(config)
+
+    assert "--prevent-sleep" in plist
+
+
+def test_launchd_plist_omits_prevent_sleep_by_default(monkeypatch):
+    monkeypatch.setattr(shipper_service, "get_engine_executable", lambda: "/usr/local/bin/longhouse-engine")
+    monkeypatch.setattr(shipper_service, "_resolve_log_dir", lambda config: Path("/tmp/logs"))
+    monkeypatch.setattr(
+        shipper_service,
+        "resolve_longhouse_home_from_provider_home",
+        lambda _: Path("/tmp/.longhouse"),
+    )
+
+    config = shipper_service.ServiceConfig(
+        url="https://example.com",
+    )
+    plist = shipper_service._generate_launchd_plist(config)
+
+    assert "--prevent-sleep" not in plist

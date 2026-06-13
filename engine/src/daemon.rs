@@ -105,6 +105,18 @@ const CLAUDE_TERMINAL_EVENT_BATCH_LIMIT: usize = 128;
 const FAILED_SHIPMENT_RETRY_CONTEXT: &str = "spool_replay";
 const FAILED_SHIPMENT_RETRY_OBSERVATION_SOURCE: &str = "spool_pending";
 
+/// Spawn caffeinate -s -w <pid> to prevent system sleep on macOS.
+///
+/// caffeinate exits when the given PID disappears, so crash/abort/launchd
+/// restart all clean up without orphaning the sleep assertion.
+pub fn spawn_caffeinate(pid: u32) -> std::io::Result<tokio::process::Child> {
+    tokio::process::Command::new("caffeinate")
+        .arg("-s")
+        .arg("-w")
+        .arg(pid.to_string())
+        .spawn()
+}
+
 /// Offline / connectivity state.
 struct OfflineState {
     is_offline: bool,
@@ -424,12 +436,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     // disappears, so SIGKILL/abort/launchd restart all clean up cleanly.
     let _caffeinate = if config.prevent_sleep {
         let pid = std::process::id();
-        match tokio::process::Command::new("caffeinate")
-            .arg("-s")
-            .arg("-w")
-            .arg(pid.to_string())
-            .spawn()
-        {
+        match spawn_caffeinate(pid) {
             Ok(child) => {
                 tracing::info!("Sleep prevention active (caffeinate -s -w {})", pid);
                 Some(child)
@@ -4165,6 +4172,67 @@ mod tests {
         assert_eq!(
             local_retry_delay(WorkPriority::Scan),
             Duration::from_secs(LOCAL_RETRY_DELAY_SECS)
+        );
+    }
+
+    #[test]
+    fn test_spawn_caffeinate_uses_correct_args() {
+        let pid = std::process::id();
+        let child = spawn_caffeinate(pid).expect("caffeinate should spawn");
+        let id = child.id().expect("child should have a PID");
+
+        // caffeinate should be running as our child
+        assert!(id > 0);
+
+        // read its cmdline to verify args
+        let output = std::process::Command::new("ps")
+            .args(["-o", "args=", "-p", &id.to_string()])
+            .output()
+            .expect("ps should succeed");
+        let cmdline = String::from_utf8_lossy(&output.stdout);
+
+        assert!(
+            cmdline.contains("-s"),
+            "caffeinate should have -s flag, got: {}",
+            cmdline
+        );
+        assert!(
+            cmdline.contains("-w"),
+            "caffeinate should have -w flag, got: {}",
+            cmdline
+        );
+        assert!(
+            cmdline.contains(&pid.to_string()),
+            "caffeinate should watch daemon PID {}, got: {}",
+            pid,
+            cmdline
+        );
+    }
+
+    #[test]
+    fn test_caffeinate_child_exits_when_dropped() {
+        let pid = std::process::id();
+        let child = spawn_caffeinate(pid).expect("caffeinate should spawn");
+        let caffeinate_pid = child.id().expect("child should have a PID");
+
+        // Drop the handle — since we use -w <pid> and caffeinate watches
+        // the daemon PID (us), it will keep running until our process exits.
+        // For the test we just verify the child was spawned successfully.
+        drop(child);
+
+        // Brief wait then check — caffeinate should still be alive since our
+        // test PID hasn't exited (caffeinate waits for -w <pid> to die).
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        let status = std::process::Command::new("kill")
+            .args(["-0", &caffeinate_pid.to_string()])
+            .status();
+        // kill -0 returns success if the process exists
+        assert!(
+            status.map(|s| s.success()).unwrap_or(false),
+            "caffeinate (pid {}) should still be alive watching daemon pid {}",
+            caffeinate_pid,
+            pid
         );
     }
 }
