@@ -220,6 +220,7 @@ def _reconcile_launch_artifacts(
     machine_config_generation: str | None,
     machine_state_hash: str | None,
     engine_path: str | None = None,
+    prevent_sleep: bool = False,
 ) -> tuple[dict[str, str], HookInstallResult, dict[str, str] | None]:
     service_result = install_service(
         url=url,
@@ -228,6 +229,7 @@ def _reconcile_launch_artifacts(
         machine_name=machine_name,
         machine_config_generation=machine_config_generation,
         machine_state_hash=machine_state_hash,
+        prevent_sleep=prevent_sleep,
     )
 
     try:
@@ -267,6 +269,7 @@ def _install_local_runtime_artifacts(
     menubar: bool,
     machine_config_generation: str | None = None,
     machine_state_hash: str | None = None,
+    prevent_sleep: bool = False,
 ) -> LocalRuntimeInstallResult:
     config_dir = resolve_longhouse_home_from_provider_home(claude_dir)
     resolved_name = sanitize_machine_name(machine_name)
@@ -312,6 +315,7 @@ def _install_local_runtime_artifacts(
         machine_config_generation=machine_config_generation,
         machine_state_hash=machine_state_hash,
         engine_path=engine_runtime.path,
+        prevent_sleep=prevent_sleep,
     )
 
     return LocalRuntimeInstallResult(
@@ -332,6 +336,7 @@ def install_local_runtime(
     menubar: bool,
     written_by: str = "connect-install",
     topology_intent: str | None = None,
+    prevent_sleep: bool = False,
 ) -> LocalRuntimeInstallResult:
     """Install the machine agent, CLI hooks, and optional desktop app."""
 
@@ -360,6 +365,7 @@ def install_local_runtime(
         menubar=menubar,
         machine_config_generation=machine_state.config_generation,
         machine_state_hash=machine_state_source_hash(machine_state),
+        prevent_sleep=prevent_sleep,
     )
 
 
@@ -441,6 +447,7 @@ def reconcile_local_runtime(
     machine_name: str | None = None,
     menubar: bool | None = None,
     topology_intent: str | None = None,
+    prevent_sleep: bool = False,
 ) -> LocalRuntimeReconcileResult:
     """Regenerate runtime artifacts from canonical machine state.
 
@@ -503,5 +510,6 @@ def reconcile_local_runtime(
         menubar=bool(machine_state.desktop_app_enabled),
         machine_config_generation=machine_state.config_generation,
         machine_state_hash=machine_state_source_hash(machine_state),
+        prevent_sleep=prevent_sleep,
     )
     return LocalRuntimeReconcileResult(machine_state=machine_state, install_result=install_result)

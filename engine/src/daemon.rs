@@ -51,6 +51,7 @@ pub struct ConnectConfig {
     pub fallback_scan_secs: u64,
     pub spool_replay_secs: u64,
     pub flight_recorder_dir: Option<PathBuf>,
+    pub prevent_sleep: bool,
 }
 
 /// How long to coalesce a burst of filesystem events before scheduling work.
@@ -416,6 +417,31 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
         "Daemon ready — watching for file changes (flush interval: {:?})",
         WATCHER_FLUSH_INTERVAL
     );
+
+    // 6b. Prevent system sleep if configured. On macOS this prevents
+    // lid-close sleep by holding a PreventUserIdleSystemSleep assertion
+    // via caffeinate -s. The child is killed when the daemon exits.
+    let _caffeinate = if config.prevent_sleep {
+        match tokio::process::Command::new("caffeinate")
+            .arg("-s")
+            .kill_on_drop(true)
+            .spawn()
+        {
+            Ok(child) => {
+                tracing::info!(
+                    "Sleep prevention active (caffeinate -s PID {})",
+                    child.id().unwrap_or(0)
+                );
+                Some(child)
+            }
+            Err(e) => {
+                tracing::warn!("Failed to start caffeinate for sleep prevention: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // 7. Build bounded per-path scheduler and queue startup work.
     // Total breadth comes from `config.workers` (num_cpus by default); the

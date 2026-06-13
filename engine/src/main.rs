@@ -267,6 +267,11 @@ enum Commands {
         /// Human-readable name for this machine (default: from ~/.longhouse/machine/state.json or hostname)
         #[arg(long)]
         machine_name: Option<String>,
+
+        /// Prevent system sleep (including lid-close) while the daemon runs.
+        /// On macOS, spawns caffeinate -s as a child process.
+        #[arg(long)]
+        prevent_sleep: bool,
     },
 
     /// One-shot: scan all provider sessions and ship new events
@@ -885,6 +890,7 @@ fn main() -> anyhow::Result<()> {
             max_batch_bytes,
             log_dir: _,
             machine_name,
+            prevent_sleep,
         } => {
             let algo = parse_compression_algo(&compression)?;
             let shipper_config = ShipperConfig::from_env()?.with_overrides(
@@ -907,6 +913,7 @@ fn main() -> anyhow::Result<()> {
                 } else {
                     None
                 },
+                prevent_sleep,
             };
 
             // Keep LocalSet-based transcript jobs available while letting Send

@@ -527,6 +527,11 @@ def connect(
         "--menubar/--no-menubar",
         help="Install Longhouse.app in the macOS menu bar when available.",
     ),
+    prevent_sleep: bool = typer.Option(
+        False,
+        "--prevent-sleep",
+        help="Prevent system sleep (including lid-close) while the background agent runs. On macOS, uses caffeinate -s.",
+    ),
 ) -> None:
     """Continuous: run the machine agent to watch and ship sessions via the Rust engine.
 
@@ -583,6 +588,7 @@ def connect(
             interval=interval,
             machine_name=machine_name,
             menubar=menubar,
+            prevent_sleep=prevent_sleep,
         )
         return
 
@@ -850,7 +856,7 @@ def _handle_status() -> None:
                     detail = f"{detail} ({version})"
                 typer.echo(detail)
             elif runtime_mode == "broken-install":
-                typer.echo("Desktop App runtime: install is missing, broken, or unsupported " "(run: longhouse machine repair)")
+                typer.echo("Desktop App runtime: install is missing, broken, or unsupported (run: longhouse machine repair)")
 
 
 def _handle_uninstall() -> None:
@@ -874,6 +880,7 @@ def _handle_install(
     interval: int,
     machine_name: str | None = None,
     menubar: bool = False,
+    prevent_sleep: bool = False,
 ) -> None:
     """Handle --install flag."""
     # Determine machine name — prompt interactively unless already provided.
@@ -892,6 +899,8 @@ def _handle_install(
     typer.echo(f"  URL: {url}")
     if menubar:
         typer.echo("  Desktop App: enabled")
+    if prevent_sleep:
+        typer.echo("  Prevent sleep: enabled")
 
     try:
         reconcile_result = reconcile_local_runtime(
@@ -901,6 +910,7 @@ def _handle_install(
             runtime_url=url,
             machine_name=resolved_name,
             menubar=menubar,
+            prevent_sleep=prevent_sleep,
         )
     except RuntimeError as e:
         typer.secho(f"[ERROR] {e}", fg=typer.colors.RED)
@@ -955,7 +965,7 @@ def _handle_install(
             "binary_path",
             "N/A",
         )
-        typer.echo("  Launch: " f"{launch_path}")
+        typer.echo(f"  Launch: {launch_path}")
 
     # Verify PATH in a fresh shell
     _verify_and_warn_path()

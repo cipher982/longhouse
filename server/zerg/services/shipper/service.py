@@ -91,10 +91,7 @@ def _get_legacy_systemd_unit_path() -> Path:
 
 def _common_service_path() -> str:
     home = Path.home()
-    parts = [
-        str(home / suffix) if not suffix.startswith("/") else suffix
-        for suffix in COMMON_SERVICE_PATH_SUFFIXES
-    ]
+    parts = [str(home / suffix) if not suffix.startswith("/") else suffix for suffix in COMMON_SERVICE_PATH_SUFFIXES]
     return ":".join(parts)
 
 
@@ -112,6 +109,7 @@ class ServiceConfig:
     machine_name: str | None = None
     machine_config_generation: str | None = None
     machine_state_hash: str | None = None
+    prevent_sleep: bool = False
 
 
 def detect_platform() -> Platform:
@@ -319,6 +317,8 @@ def _generate_launchd_plist(config: ServiceConfig) -> str:
     ]
     if config.machine_name:
         args += ["--machine-name", config.machine_name]
+    if config.prevent_sleep:
+        args.append("--prevent-sleep")
 
     program_args = "\n".join(f"        <string>{saxutils.escape(str(arg))}</string>" for arg in args)
     environment = {
@@ -426,6 +426,7 @@ def install_service(
     machine_name: str | None = None,
     machine_config_generation: str | None = None,
     machine_state_hash: str | None = None,
+    prevent_sleep: bool = False,
     # Legacy params accepted but ignored (kept for backwards compat during transition)
     _poll_mode: bool = False,
     _interval: int = 30,
@@ -455,6 +456,7 @@ def install_service(
         machine_name=machine_name,
         machine_config_generation=machine_config_generation,
         machine_state_hash=machine_state_hash,
+        prevent_sleep=prevent_sleep,
     )
 
     _migrate_legacy_shipper_state_if_needed(platform, config)
