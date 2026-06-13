@@ -159,7 +159,7 @@ def test_managed_claude_ask_user_question_transcript_creates_answerable_pause_re
             cwd="/Users/davidrose/git/g55",
             started_at=datetime(2026, 6, 9, 19, 0, tzinfo=timezone.utc),
         )
-        record_connection(
+        conn = record_connection(
             db,
             run=run,
             control_plane="claude_channel_bridge",
@@ -171,6 +171,9 @@ def test_managed_claude_ask_user_question_transcript_creates_answerable_pause_re
             can_tail_output=1,
             can_resume=1,
         )
+        # Fresh health: the engine just observed this bridge ready, so the
+        # capability projection's freshness clamp keeps it live.
+        conn.last_health_at = datetime.now(timezone.utc)
         db.commit()
 
         store = AgentsStore(db)
@@ -250,7 +253,7 @@ def test_claude_hook_then_transcript_mobile_tail_exposes_structured_question(tmp
             cwd="/Users/davidrose/git/spacex",
             started_at=started_at,
         )
-        record_connection(
+        conn = record_connection(
             db,
             run=run,
             control_plane="claude_channel_bridge",
@@ -262,6 +265,9 @@ def test_claude_hook_then_transcript_mobile_tail_exposes_structured_question(tmp
             can_tail_output=1,
             can_resume=1,
         )
+        # Fresh health: the engine just observed this bridge ready, so the
+        # capability projection's freshness clamp keeps it live.
+        conn.last_health_at = datetime.now(timezone.utc)
         db.commit()
 
         runtime_key = runtime_key_for_session("claude", str(session_id))

@@ -195,7 +195,7 @@ def _attach_live_launch_run(
     )
     contract = require_contract_for_provider(session.provider)
     connection_capabilities = contract.connection_capabilities
-    upsert_connection_for_run(
+    conn = upsert_connection_for_run(
         db,
         run=run,
         control_plane=contract.control_plane,
@@ -208,6 +208,10 @@ def _attach_live_launch_run(
         can_tail_output=connection_capabilities["can_tail_output"],
         can_resume=connection_capabilities["can_resume"],
     )
+    # The engine ack IS the readiness observation, so stamp health now. This
+    # keeps the connection inside the lease freshness window the capability
+    # projection enforces; the insert path of upsert leaves last_health_at NULL.
+    conn.last_health_at = now
     if session.ended_at is not None:
         session.ended_at = None
     update_launch_attempt(

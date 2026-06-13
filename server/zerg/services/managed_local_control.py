@@ -478,6 +478,67 @@ async def await_managed_local_persisted_user_prompt(
     return None
 
 
+@dataclass(frozen=True)
+class _ManagedLocalPromptVerification:
+    ok: bool
+    verified_turn_started: bool = False
+    verified_user_event_id: int | None = None
+    error: str | None = None
+
+
+async def _verify_managed_local_prompt_landed(
+    *,
+    db: Session,
+    session: AgentSession,
+    text: str,
+    transport: str,
+    baseline_event_id: int,
+    baseline_hook_observation_id: int,
+    verification_timeout: float,
+) -> _ManagedLocalPromptVerification:
+    """Confirm a dispatched prompt actually persisted, mirroring the send path.
+
+    Returns ``ok=False`` with an error message when neither the durable user
+    event (Claude channel bridge) nor an active hook phase (other transports)
+    appears within ``verification_timeout``. Callers must already have handled
+    the engine-channel ``turn_id`` fast path and any provider-specific
+    early-return branches.
+    """
+
+    if transport == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value:
+        persisted_prompt = await await_managed_local_persisted_user_prompt(
+            db_bind=db.get_bind(),
+            session_id=session.id,
+            after_event_id=baseline_event_id,
+            expected_user_text=text,
+            timeout_secs=verification_timeout,
+        )
+        if persisted_prompt is None:
+            return _ManagedLocalPromptVerification(
+                ok=False,
+                error="Managed local session did not acknowledge the prompt after send",
+            )
+        return _ManagedLocalPromptVerification(
+            ok=True,
+            verified_turn_started=True,
+            verified_user_event_id=int(getattr(persisted_prompt, "id", 0) or 0) or None,
+        )
+
+    hook_event = await await_managed_local_hook_phase_update(
+        db_bind=db.get_bind(),
+        session_id=session.id,
+        after_observation_id=baseline_hook_observation_id,
+        phases=set(_MANAGED_LOCAL_ACTIVE_HOOK_PHASES),
+        timeout_secs=verification_timeout,
+    )
+    if hook_event is None:
+        return _ManagedLocalPromptVerification(
+            ok=False,
+            error="Managed local session did not acknowledge the prompt after send",
+        )
+    return _ManagedLocalPromptVerification(ok=True, verified_turn_started=True)
+
+
 async def interrupt_managed_local_session(
     *,
     db: Session,
@@ -613,45 +674,30 @@ async def send_text_to_managed_local_session(
         verification_timeout = float(
             verification_timeout_secs if verification_timeout_secs is not None else MANAGED_LOCAL_EVENT_TIMEOUT_SECS
         )
-        if transport == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value:
-            persisted_prompt = await await_managed_local_persisted_user_prompt(
-                db_bind=db.get_bind(),
-                session_id=session.id,
-                after_event_id=baseline_event_id,
-                expected_user_text=text,
-                timeout_secs=verification_timeout,
-            )
-            if persisted_prompt is None:
-                return ManagedLocalSendResult(
-                    ok=False,
-                    exit_code=0,
-                    baseline_event_id=baseline_event_id,
-                    error="Managed local session did not acknowledge the prompt after send",
-                    verified_turn_started=False,
-                )
+        verification = await _verify_managed_local_prompt_landed(
+            db=db,
+            session=session,
+            text=text,
+            transport=transport,
+            baseline_event_id=baseline_event_id,
+            baseline_hook_observation_id=baseline_hook_observation_id,
+            verification_timeout=verification_timeout,
+        )
+        if not verification.ok:
             return ManagedLocalSendResult(
-                ok=True,
+                ok=False,
                 exit_code=0,
                 baseline_event_id=baseline_event_id,
-                verified_turn_started=True,
-                verified_user_event_id=int(getattr(persisted_prompt, "id", 0) or 0) or None,
+                error=verification.error,
+                verified_turn_started=False,
             )
-        else:
-            hook_event = await await_managed_local_hook_phase_update(
-                db_bind=db.get_bind(),
-                session_id=session.id,
-                after_observation_id=baseline_hook_observation_id,
-                phases=set(_MANAGED_LOCAL_ACTIVE_HOOK_PHASES),
-                timeout_secs=verification_timeout,
-            )
-            if hook_event is None:
-                return ManagedLocalSendResult(
-                    ok=False,
-                    exit_code=0,
-                    baseline_event_id=baseline_event_id,
-                    error="Managed local session did not acknowledge the prompt after send",
-                    verified_turn_started=False,
-                )
+        return ManagedLocalSendResult(
+            ok=True,
+            exit_code=0,
+            baseline_event_id=baseline_event_id,
+            verified_turn_started=True,
+            verified_user_event_id=verification.verified_user_event_id,
+        )
 
     return ManagedLocalSendResult(
         ok=True,
@@ -741,6 +787,13 @@ async def steer_text_to_managed_local_session(
             exit_code=exit_code,
             error=detail or "Managed local steer command failed",
         )
+    # NOTE: steer success is gated on the provider's own turn-state check
+    # (turn_ended -> 409) plus exit code. Unlike send, a mid-turn steer does
+    # not reliably produce a fresh persisted user event or a new active hook
+    # phase (Codex app-server steer returns no turn_id; Claude channel steer
+    # injects into an already-running turn), so persisted-prompt verification
+    # here would manufacture false failures. See engine control_channel.rs
+    # COMMAND_STEER_TEXT.
     return ManagedLocalSendResult(ok=True, exit_code=0)
 
 

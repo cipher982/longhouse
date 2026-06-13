@@ -361,6 +361,41 @@ def test_steer_text_to_managed_local_session_passes_codex_attachments_to_engine(
         }
 
 
+def test_steer_text_turn_ended_maps_to_turn_ended_sentinel(monkeypatch, tmp_path):
+    """The turn_ended race branch surfaces the sentinel so the router maps
+    Codex/Claude steer races to a structured 409 (preserved by the fix)."""
+
+    SessionLocal = _make_db(tmp_path)
+    _install_fake_control_dispatch(
+        monkeypatch,
+        results=[
+            {
+                "ok": True,
+                "transport": "engine_channel",
+                "data": {"exit_code": 2, "stdout": "", "stderr": "error_code: turn_ended"},
+                "error": None,
+            }
+        ],
+    )
+
+    with SessionLocal() as db:
+        user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
+        from zerg.services.managed_local_control import MANAGED_LOCAL_STEER_TURN_ENDED
+
+        result = asyncio.run(
+            steer_text_to_managed_local_session(
+                db=db,
+                owner_id=user.id,
+                session=session,
+                text="redirect",
+                commis_id="managed-local-steer-test",
+            )
+        )
+
+        assert result.ok is False
+        assert result.error == MANAGED_LOCAL_STEER_TURN_ENDED
+
+
 def test_interrupt_managed_local_session_reports_nonzero_exit(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
     _install_fake_control_dispatch(

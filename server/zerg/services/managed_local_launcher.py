@@ -29,6 +29,20 @@ _VALID_PROVIDERS = managed_provider_names()
 _MANAGED_LOCAL_NAME_SAFE_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
 _MANAGED_LOCAL_NAME_MAX = 64
 
+# Providers whose Machine Agent emits managed-control lease snapshots in the
+# heartbeat, so the server reconciler observes channel readiness and promotes
+# the launcher's birth connection detached -> attached once the bridge is up.
+# Engine truth: only codex and claude leases are shipped (see
+# engine/src/daemon.rs payload.managed_sessions = leases_from_observations
+# (codex) + leases_from_claude_channel_observations (claude)). For these, the
+# launcher births the connection ``detached`` so liveness reflects an observed
+# ready channel, not a birth-time assertion. Providers WITHOUT a lease observer
+# (opencode, antigravity) have no promotion path, so they must be born
+# ``attached`` with a fresh health stamp — there is no later signal to flip
+# them live, and the read-time freshness clamp still degrades them after the
+# lease TTL if no further evidence arrives.
+_HEARTBEAT_LEASE_OBSERVED_PROVIDERS = frozenset({"claude", "codex"})
+
 
 class ManagedLocalLaunchError(RuntimeError):
     """Expected managed-local launch failure with user-facing detail."""
@@ -224,19 +238,44 @@ def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchPar
         launch_origin="longhouse_spawned",
     )
     connection_capabilities = contract.connection_capabilities
-    record_connection(
+    # Liveness honesty: ``live_control_available`` must mean an observer
+    # measured a ready control channel recently, not that the launcher
+    # asserted it at row birth.
+    #
+    # For lease-observed providers (claude/codex) the connection is born
+    # ``detached`` (reattach-available, not live). The heartbeat reconciler
+    # (``upsert_managed_control_leases`` -> ``_mirror_connection_state``)
+    # promotes THIS connection to ``attached`` ~1-2s later once it observes
+    # the bridge ready, flipping ``live_control_available`` to true. Matching
+    # on (run_id, control_plane) keeps promotion on this same row.
+    #
+    # For providers with no lease observer (opencode/antigravity) there is no
+    # later promotion signal, so the launch IS the only readiness evidence we
+    # get; birth ``attached`` with a fresh health stamp, and let the read-time
+    # freshness clamp degrade it after the lease TTL if nothing else arrives.
+    #
+    # ``device_id`` is stamped to ``source_name`` (== the device-token id the
+    # heartbeat reconciler uses) so both promotion and
+    # ``mark_missing_managed_control_leases`` target this row instead of
+    # leaving a NULL-device, durably-false-live orphan.
+    lease_observed = provider in _HEARTBEAT_LEASE_OBSERVED_PROVIDERS
+    birth_state = "detached" if lease_observed else "attached"
+    connection = record_connection(
         db,
         run=run,
         control_plane=contract.control_plane,
         acquisition_kind="spawned_control",
-        state="attached",
+        state=birth_state,
         external_name=session.managed_session_name,
+        device_id=source_name or None,
         can_send_input=connection_capabilities["can_send_input"],
         can_interrupt=connection_capabilities["can_interrupt"],
         can_terminate=connection_capabilities["can_terminate"],
         can_tail_output=connection_capabilities["can_tail_output"],
         can_resume=connection_capabilities["can_resume"],
     )
+    if not lease_observed:
+        connection.last_health_at = datetime.now(timezone.utc)
 
     mark_managed_local_session_launched(db, session=session)
     attach_command = str(build_managed_local_attach_command(session=session) or "")

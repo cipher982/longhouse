@@ -18,6 +18,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from typing import Optional
 
@@ -26,6 +27,7 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
+from zerg.services.managed_control_state import DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS
 from zerg.services.managed_provider_contracts import managed_transport_for_control_plane
 from zerg.services.managed_provider_contracts import steer_control_planes
 
@@ -40,6 +42,36 @@ _STATE_PRIORITY = {
 _STEER_CONTROL_PLANES = steer_control_planes()
 
 _CONTROL_ACQUISITION_KINDS = ("spawned_control", "adopted_control")
+
+_MANAGED_CONTROL_LEASE_TTL = timedelta(milliseconds=DEFAULT_MANAGED_CONTROL_LEASE_TTL_MS)
+
+
+def _effective_connection_state(best: Optional[SessionConnection], now: datetime) -> str:
+    """Return the freshness-clamped connection state for ``best``.
+
+    ``live_control_available`` must mean "an observer wrote attached/degraded
+    from a ready lease within the lease TTL". The launcher and reconciler
+    stamp ``last_health_at`` whenever they observe a live channel, so a stale
+    or NULL ``last_health_at`` on an ``attached``/``degraded`` row means no
+    observer has confirmed readiness recently (slept laptop, dead engine,
+    or a legacy birth-time optimistic row that was never promoted). Demote it
+    to ``detached`` at read time so the badge degrades without a background
+    job. Non-live states pass through unchanged.
+    """
+
+    if best is None:
+        return ""
+    state = (best.state or "").strip()
+    if state not in ("attached", "degraded"):
+        return state
+    last_health = best.last_health_at
+    if last_health is None:
+        return "detached"
+    if last_health.tzinfo is None:
+        last_health = last_health.replace(tzinfo=timezone.utc)
+    if now - last_health > _MANAGED_CONTROL_LEASE_TTL:
+        return "detached"
+    return state
 
 
 def thread_ever_had_managed_control(db: Session, *, thread_id) -> bool:
@@ -142,8 +174,11 @@ def _connection_capability_count(conn: SessionConnection) -> int:
     return sum(1 for capability in capabilities if capability)
 
 
-def _connection_sort_key(conn: SessionConnection) -> tuple:
-    state = (conn.state or "").strip()
+def _connection_sort_key(conn: SessionConnection, now: datetime) -> tuple:
+    # Rank on the freshness-clamped state so a stale/NULL-health attached row
+    # does not outrank a genuinely-fresh degraded/detached row and then get
+    # demoted after selection (which would mask the better connection).
+    state = _effective_connection_state(conn, now)
     state_priority = _STATE_PRIORITY.get(state, 0)
     cap_count = _connection_capability_count(conn)
     last_health = conn.last_health_at or datetime.min.replace(tzinfo=timezone.utc)
@@ -152,10 +187,11 @@ def _connection_sort_key(conn: SessionConnection) -> tuple:
     return (state_priority, cap_count, last_health, conn.id)
 
 
-def _select_best_connection(connections: list[SessionConnection]) -> Optional[SessionConnection]:
+def _select_best_connection(connections: list[SessionConnection], now: datetime) -> Optional[SessionConnection]:
     """Pick the best connection per spec rules.
 
-    1. State priority: attached > degraded > detached > released > ended.
+    1. State priority (freshness-clamped): attached > degraded > detached >
+       released > ended.
     2. Capability priority: highest count of granted flags wins.
     3. Recency: greater last_health_at wins.
     4. Final tiebreak: greater id wins.
@@ -163,7 +199,7 @@ def _select_best_connection(connections: list[SessionConnection]) -> Optional[Se
 
     if not connections:
         return None
-    return sorted(connections, key=_connection_sort_key)[-1]
+    return sorted(connections, key=lambda conn: _connection_sort_key(conn, now))[-1]
 
 
 def _label_for(
@@ -172,6 +208,7 @@ def _label_for(
     has_run: bool,
     run_ended: bool,
     best: Optional[SessionConnection],
+    now: datetime,
 ) -> tuple[str, bool, bool, bool, bool, Optional[str]]:
     """Compute (control_label, live, reattach, observe_only, search_only, staleness_reason).
 
@@ -193,14 +230,21 @@ def _label_for(
     if best is None:
         return ("imported", False, False, False, True, "no_connection")
 
-    state = (best.state or "").strip()
-    if state == "" or state == "ended":
+    raw_state = (best.state or "").strip()
+    if raw_state == "" or raw_state == "ended":
         # Treat unknown/empty state the same as ended: no recent control
         # truth, no live affordance.
         return ("imported", False, False, False, True, "process_ended")
     if run_ended:
         # Process is gone — even an apparently-attached row is stale.
         return ("imported", False, False, False, True, "process_ended")
+
+    # Read-time freshness clamp: an attached/degraded row whose health
+    # timestamp is missing or older than the lease TTL has not been confirmed
+    # ready by any observer recently, so it is demoted to detached here. This
+    # makes ``live_control_available`` mean "observed ready within the TTL".
+    state = _effective_connection_state(best, now)
+    stale_clamped = state != raw_state
 
     acquisition = (best.acquisition_kind or "").strip()
     is_steerable_kind = acquisition in ("spawned_control", "adopted_control")
@@ -212,8 +256,10 @@ def _label_for(
         return ("live", True, True, False, False, None)
 
     if is_steerable_kind and state in ("detached", "released"):
-        # Process owner is gone but the control plane could be reattached.
-        return ("reattach", False, True, False, False, "connection_released")
+        # Process owner is gone (or freshness lapsed) but the control plane
+        # could be reattached.
+        reason = "control_stale" if stale_clamped else "connection_released"
+        return ("reattach", False, True, False, False, reason)
 
     if can_tail and state in ("attached", "degraded"):
         return ("search-only", False, False, True, False, "observe_only")
@@ -254,7 +300,13 @@ def project_session_capabilities(db: Session, *, session_id) -> KernelSessionCap
         )
         if latest_run is not None:
             connections = db.query(SessionConnection).filter(SessionConnection.run_id == latest_run.id).all()
-    return _payload_from_rows(sid=sid, thread=thread, latest_run=latest_run, connections=connections)
+    return _payload_from_rows(
+        sid=sid,
+        thread=thread,
+        latest_run=latest_run,
+        connections=connections,
+        now=datetime.now(timezone.utc),
+    )
 
 
 def _imported_payload(
@@ -266,12 +318,14 @@ def _imported_payload(
     has_run: bool,
     run_ended: bool,
     best: Optional[SessionConnection],
+    now: datetime,
 ) -> KernelSessionCapabilities:
     label, live, reattach, observe, search, reason = _label_for(
         has_thread=has_thread,
         has_run=has_run,
         run_ended=run_ended,
         best=best,
+        now=now,
     )
     return KernelSessionCapabilities(
         session_id=sid,
@@ -300,9 +354,10 @@ def _payload_from_rows(
     thread: Optional[SessionThread],
     latest_run: Optional[SessionRun],
     connections: list[SessionConnection],
+    now: datetime,
 ) -> KernelSessionCapabilities:
     if thread is None:
-        return _imported_payload(sid=sid, has_thread=False, has_run=False, run_ended=False, best=None)
+        return _imported_payload(sid=sid, has_thread=False, has_run=False, run_ended=False, best=None, now=now)
     if latest_run is None:
         return _imported_payload(
             sid=sid,
@@ -311,14 +366,16 @@ def _payload_from_rows(
             has_run=False,
             run_ended=False,
             best=None,
+            now=now,
         )
-    best = _select_best_connection(connections)
+    best = _select_best_connection(connections, now)
     run_ended = latest_run.ended_at is not None
     label, live, reattach, observe, search, reason = _label_for(
         has_thread=True,
         has_run=True,
         run_ended=run_ended,
         best=best,
+        now=now,
     )
     if best is None:
         return KernelSessionCapabilities(
@@ -408,11 +465,18 @@ def project_capabilities_bulk(db: Session, *, session_ids: list) -> dict:
         for c in conns:
             conns_by_run[c.run_id].append(c)
 
+    now = datetime.now(timezone.utc)
     for sid in session_ids:
         thread = thread_by_session.get(sid)
         latest_run = runs_by_thread.get(thread.id) if thread is not None else None
         connections = conns_by_run.get(latest_run.id, []) if latest_run is not None else []
-        out[sid] = _payload_from_rows(sid=str(sid), thread=thread, latest_run=latest_run, connections=connections)
+        out[sid] = _payload_from_rows(
+            sid=str(sid),
+            thread=thread,
+            latest_run=latest_run,
+            connections=connections,
+            now=now,
+        )
     return out
 
 

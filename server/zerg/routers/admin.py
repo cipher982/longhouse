@@ -633,7 +633,7 @@ async def configure_test_session_runtime(
         from zerg.services.agents.kernel_writes import upsert_connection_for_run
 
         run = ensure_open_run_for_session(db, session, launch_origin="longhouse_spawned")
-        upsert_connection_for_run(
+        conn = upsert_connection_for_run(
             db,
             run=run,
             control_plane="codex_app_server",
@@ -646,6 +646,9 @@ async def configure_test_session_runtime(
             can_tail_output=1,
             can_resume=1,
         )
+        # Stamp health so the capability projection's freshness clamp treats
+        # this admin/test-configured runtime as live without a heartbeat.
+        conn.last_health_at = datetime.now(timezone.utc)
     else:
         session.managed_transport = request.managed_transport
         session.source_runner_id = request.source_runner_id
