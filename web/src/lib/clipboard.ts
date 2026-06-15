@@ -37,6 +37,10 @@ export async function copyToClipboard(text: string): Promise<boolean> {
   textarea.select();
   try {
     return document.execCommand("copy");
+  } catch {
+    // execCommand can throw in hardened contexts (e.g. some embedded
+    // webviews). Treat as failure and let the caller surface an error.
+    return false;
   } finally {
     document.body.removeChild(textarea);
   }

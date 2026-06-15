@@ -219,3 +219,21 @@ def test_workspace_sharer_rejects_non_positive_param(tmp_path):
         assert response.status_code == 422
     finally:
         api_app.dependency_overrides.clear()
+
+
+def test_workspace_sharer_rejects_non_integer_param(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db, user_id=1, email="viewer@example.com", display_name="Viewer")
+        session_id = _seed_session(db)
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie(user_id=1))
+            response = client.get(f"/timeline/sessions/{session_id}/workspace?limit=10&shared_by=not-a-number")
+
+        # FastAPI validates Optional[int] and rejects non-integers with 422.
+        assert response.status_code == 422
+    finally:
+        api_app.dependency_overrides.clear()
