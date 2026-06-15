@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_RETURN_TO, sanitizeReturnTo, buildLoginUrl } from "../loginRedirect";
+import {
+  DEFAULT_RETURN_TO,
+  sanitizeReturnTo,
+  buildLoginUrl,
+  extractTimelineSessionId,
+  shortSessionPrefix,
+} from "../loginRedirect";
 
 describe("sanitizeReturnTo", () => {
   it("returns DEFAULT_RETURN_TO for null", () => {
@@ -71,5 +77,63 @@ describe("buildLoginUrl", () => {
     expect(buildLoginUrl("//evil.com")).toBe(
       `/login?return_to=${encodeURIComponent(DEFAULT_RETURN_TO)}`,
     );
+  });
+});
+
+describe("extractTimelineSessionId", () => {
+  const valid = "111a5a5d-9c4e-4f3a-b7d2-0e8a3f5b1c2d";
+
+  it("returns the UUID from a /timeline/<uuid> returnTo", () => {
+    expect(extractTimelineSessionId(`/timeline/${valid}`)).toBe(valid);
+  });
+
+  it("accepts a trailing slash", () => {
+    expect(extractTimelineSessionId(`/timeline/${valid}/`)).toBe(valid);
+  });
+
+  it("ignores search params and hash", () => {
+    expect(extractTimelineSessionId(`/timeline/${valid}?view=compact#notes`)).toBe(valid);
+  });
+
+  it("lower-cases the returned id", () => {
+    expect(extractTimelineSessionId(`/timeline/${valid.toUpperCase()}`)).toBe(valid);
+  });
+
+  it("returns null for a non-timeline path", () => {
+    expect(extractTimelineSessionId("/timeline")).toBeNull();
+    expect(extractTimelineSessionId("/sessions/abc-123")).toBeNull();
+    expect(extractTimelineSessionId("/")).toBeNull();
+  });
+
+  it("returns null for a malformed UUID", () => {
+    expect(extractTimelineSessionId("/timeline/not-a-uuid")).toBeNull();
+    expect(extractTimelineSessionId("/timeline/111a5a5d-9c4e-4f3a")).toBeNull();
+  });
+
+  it("returns null for empty or unsafe input", () => {
+    expect(extractTimelineSessionId("")).toBeNull();
+    expect(extractTimelineSessionId("evil.com/timeline/abc")).toBeNull();
+    expect(extractTimelineSessionId("//timeline/abc")).toBeNull();
+  });
+});
+
+describe("shortSessionPrefix", () => {
+  const valid = "111a5a5d-9c4e-4f3a-b7d2-0e8a3f5b1c2d";
+
+  it("returns the 8-hex-char prefix", () => {
+    expect(shortSessionPrefix(valid)).toBe("111a5a5d");
+  });
+
+  it("lower-cases the prefix", () => {
+    expect(shortSessionPrefix(valid.toUpperCase())).toBe("111a5a5d");
+  });
+
+  it("returns null for an empty id", () => {
+    expect(shortSessionPrefix("")).toBeNull();
+  });
+
+  it("returns null when the head is not 8 hex chars", () => {
+    expect(shortSessionPrefix("xyz-not-hex-rest")).toBeNull();
+    expect(shortSessionPrefix("111a5a-9c4e-4f3a-b7d2-0e8a3f5b1c2d")).toBeNull();
   });
 });

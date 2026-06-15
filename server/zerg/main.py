@@ -413,6 +413,75 @@ async def short_session_link(prefix: str):
     return RedirectResponse(url="/timeline", status_code=302)
 
 
+@app.get("/s/{prefix}/preview", include_in_schema=False)
+async def short_session_link_preview(prefix: str):
+    """Public-safe metadata for a short-link session preview.
+
+    Lets the login page tell a logged-out visitor whose session they were
+    trying to reach before they sign in. Returns only the provider, device
+    label, timing, and owner display info — never transcript, project, cwd,
+    summary, or any content-derived field.
+
+    Same prefix resolution rules as /s/{prefix}: zero or ambiguous matches
+    return 404 (don't guess, don't leak existence).
+    """
+    from fastapi.responses import JSONResponse
+
+    from zerg.database import db_session
+    from zerg.models.agents import AgentSession
+    from zerg.models.user import User
+
+    cleaned = (prefix or "").strip().lower()
+    if not cleaned or any(ch not in "0123456789abcdef-" for ch in cleaned):
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    with db_session() as db:
+        row = (
+            db.query(
+                AgentSession.id,
+                AgentSession.provider,
+                AgentSession.device_name,
+                AgentSession.started_at,
+                AgentSession.ended_at,
+            )
+            .filter(AgentSession.id.like(f"{cleaned}%"))
+            .limit(2)
+            .all()
+        )
+        if len(row) != 1:
+            raise HTTPException(status_code=404, detail="Session not found")
+        session_row = row[0]
+        # Single-tenant model: the one configured user is the owner of every
+        # session. Multi-tenant ownership lives in the control plane and is
+        # out of scope for the public preview surface.
+        owner = (
+            db.query(User.display_name, User.email)
+            .order_by(User.id.asc())
+            .first()
+        )
+
+    owner_display_name: str | None = None
+    owner_email_local: str | None = None
+    if owner is not None:
+        owner_display_name = (owner[0] or "").strip() or None
+        email = (owner[1] or "").strip()
+        if email and "@" in email:
+            owner_email_local = email.split("@", 1)[0] or None
+
+    return JSONResponse(
+        content={
+            "session_id": str(session_row.id),
+            "provider": session_row.provider,
+            "device_name": session_row.device_name,
+            "started_at": session_row.started_at.isoformat() if session_row.started_at else None,
+            "ended_at": session_row.ended_at.isoformat() if session_row.ended_at else None,
+            "owner_display_name": owner_display_name,
+            "owner_email_local": owner_email_local,
+        },
+        headers={"Cache-Control": "public, max-age=60"},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Frontend static serving (MUST be last - catch-all route)
 # ---------------------------------------------------------------------------

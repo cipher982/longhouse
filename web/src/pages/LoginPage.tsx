@@ -2,13 +2,29 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import { useAuth, useAuthMethods } from '../lib/auth';
-import { sanitizeReturnTo } from '../lib/loginRedirect';
+import {
+  extractTimelineSessionId,
+  sanitizeReturnTo,
+  shortSessionPrefix,
+} from '../lib/loginRedirect';
 import { loginWithPassword, loginWithDevAccount } from '../lib/authApi';
+import { getProviderLabel } from '../lib/providers';
+import { formatRelativeTime } from '../lib/sessionUtils';
 import config from '../lib/config';
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+interface SessionPreview {
+  session_id: string;
+  provider: string;
+  device_name: string | null;
+  started_at: string;
+  ended_at: string | null;
+  owner_display_name: string | null;
+  owner_email_local: string | null;
+}
 
 function buildHostedLoginRedirectUrl(
   baseUrl: string | null | undefined,
@@ -103,6 +119,42 @@ export default function LoginPage() {
   const [isPasswordLoading, setIsPasswordLoading] = useState(false);
   const [isDevLoginLoading, setIsDevLoginLoading] = useState(false);
   const [ssoRedirecting, setSsoRedirecting] = useState(false);
+  const [sessionPreview, setSessionPreview] = useState<SessionPreview | null>(null);
+
+  // If the visitor was bounced to /login from /timeline/<uuid>, surface whose
+  // session they were trying to reach. Pure context — failure is silent so the
+  // sign-in form still works when the session is gone or the network is flaky.
+  useEffect(() => {
+    // Drop any prior preview so a returnTo change (or a failed fetch) doesn't
+    // leave stale attribution on screen for a different destination.
+    setSessionPreview(null);
+    if (authLoading || isAuthenticated) return;
+    const sessionId = extractTimelineSessionId(returnTo);
+    const prefix = sessionId ? shortSessionPrefix(sessionId) : null;
+    if (!prefix) return;
+    const controller = new AbortController();
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/s/${prefix}/preview`, { signal: controller.signal });
+        if (!res.ok) return;
+        const data = (await res.json()) as SessionPreview;
+        // Only render if the resolved session matches the URL the visitor was
+        // bounced from — a crafted return_to could otherwise surface
+        // attribution for a different session than the one post-login
+        // navigation will actually land on.
+        if (!cancelled && sessionId && data.session_id === sessionId) {
+          setSessionPreview(data);
+        }
+      } catch {
+        // AbortError or network failure — render the login form without context.
+      }
+    })();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [authLoading, isAuthenticated, returnTo]);
 
   // Already authenticated — go to return_to destination
   useEffect(() => {
@@ -219,6 +271,49 @@ export default function LoginPage() {
         maxWidth: '400px',
         width: '100%',
       }}>
+        {sessionPreview && (
+          <div
+            data-testid="login-session-preview"
+            style={{
+              background: 'rgba(201, 166, 107, 0.08)',
+              border: '1px solid rgba(201, 166, 107, 0.22)',
+              borderRadius: '10px',
+              padding: '0.75rem 1rem',
+              marginBottom: '1.25rem',
+              textAlign: 'left',
+            }}
+          >
+            <div style={{
+              fontSize: '10px',
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              color: 'rgba(201, 166, 107, 0.75)',
+              marginBottom: '0.3rem',
+              fontWeight: 600,
+            }}>
+              Trying to view
+            </div>
+            <div style={{
+              color: 'rgba(243, 234, 217, 0.92)',
+              fontSize: '14px',
+              lineHeight: 1.4,
+            }}>
+              {sessionPreview.owner_display_name || sessionPreview.owner_email_local || 'Someone'}
+              {"'s "}
+              <span style={{ color: '#C9A66B', fontWeight: 600 }}>
+                {getProviderLabel(sessionPreview.provider)}
+              </span>
+              {' session'}
+              {sessionPreview.device_name ? ` on ${sessionPreview.device_name}` : ''}
+              <span style={{ color: 'rgba(181, 164, 142, 0.65)', fontSize: '12px' }}>
+                {sessionPreview.ended_at
+                  ? ` · ended ${formatRelativeTime(sessionPreview.ended_at)}`
+                  : ` · started ${formatRelativeTime(sessionPreview.started_at)}`}
+              </span>
+            </div>
+          </div>
+        )}
+
         <h2 style={{ marginBottom: '1.5rem', color: 'rgba(243, 234, 217, 0.95)', fontSize: '20px', fontWeight: 600 }}>
           Sign in to Longhouse
         </h2>
