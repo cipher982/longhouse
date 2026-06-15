@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import secrets
 import time
+import urllib.parse
 from collections import defaultdict
 from collections import deque
 from datetime import timedelta
@@ -20,6 +21,7 @@ from fastapi import HTTPException
 from fastapi import Request
 from fastapi import Response
 from fastapi import status
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -456,7 +458,10 @@ def get_auth_methods():
         "password": bool(settings.longhouse_password or settings.longhouse_password_hash),
         "sso": bool(settings.control_plane_url),
         "sso_url": sso_base,
-        "sso_login_url": f"{sso_base}/dashboard/open-instance" if sso_base else None,
+        # Hosted tenants send the browser to /auth/start, which renders a
+        # tenant-aware login page. Self-host tenants still have their own
+        # login surface and ignore this URL.
+        "sso_login_url": f"{sso_base}/auth/start" if sso_base else None,
         "gmail_ready": gmail_ready,
         "gmail_setup_message": gmail_setup_message,
     }
@@ -585,6 +590,61 @@ def cli_login(
         expires_delta=timedelta(minutes=5),
     )
     return {"token": access_token}
+
+
+@router.get("/start-handoff")
+def start_handoff(
+    request: Request,
+    tenant: str | None = None,
+    return_to: str | None = None,
+) -> RedirectResponse:
+    """Browser entry point for hosted login.
+
+    302s to the control plane `/auth/start?tenant=...&return_to=...`.
+    The CP renders a tenant-aware login page; after auth the CP
+    mints an HS256 bridge token and 302s to the tenant's
+    `/api/auth/accept-token`.
+
+    Self-host tenants (no CONTROL_PLANE_URL) get a redirect to the
+    local `/login` React route instead, which renders the tenant's
+    own login form.
+
+    Phase 1 will add a `tenant_state` CSRF cookie bound to the
+    `accept-handoff` route; in Phase 0 the existing HS256 bridge
+    is the only auth path, so the cookie would be orphaned.
+    """
+    settings = get_settings()
+    if not settings.control_plane_url:
+        safe_return_to = return_to or "/timeline"
+        return RedirectResponse(
+            f"/login?return_to={urllib.parse.quote(safe_return_to, safe='')}",
+            status_code=302,
+        )
+
+    # Derive the tenant from the request host if not explicitly given.
+    # This makes the React LoginPage simpler — it doesn't have to know
+    # its own subdomain.
+    resolved_tenant = (tenant or "").strip().lower()
+    if not resolved_tenant:
+        host = (request.url.hostname or "").lower()
+        # Strip the root domain suffix (longhouse.ai or localhost).
+        # The tenant subdomain is everything before the first dot.
+        if host.endswith(".longhouse.ai"):
+            resolved_tenant = host[: -len(".longhouse.ai")]
+        elif host.endswith(".localhost"):
+            resolved_tenant = host[: -len(".localhost")]
+        # else: leave empty; CP will reject unknown tenant.
+
+    safe_return_to = return_to or "/timeline"
+
+    cp_base = settings.control_plane_url.rstrip("/")
+    target = f"{cp_base}/auth/start"
+    params: list[tuple[str, str]] = [("return_to", safe_return_to)]
+    if resolved_tenant:
+        params.append(("tenant", resolved_tenant))
+    target += "?" + urllib.parse.urlencode(params)
+
+    return RedirectResponse(target, status_code=302)
 
 
 __all__ = [

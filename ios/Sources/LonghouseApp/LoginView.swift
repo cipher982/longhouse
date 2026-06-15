@@ -115,7 +115,12 @@ struct LoginView: View {
 
     @ViewBuilder
     private func authControls(for methods: AuthMethods) -> some View {
-        // SSO takes the top slot when available.
+        // Hosted tenants: one button, one path. The CP /auth/start
+        // route (or /auth/native/open-instance for the iOS deep-link
+        // flow) handles Google / GitHub / email. Local Google and
+        // password branches are removed for Phase 0; the
+        // /api/auth/methods response no longer advertises them on
+        // hosted tenants.
         if methods.sso {
             Button(action: { startHostedSignIn(methods) }) {
                 HStack(spacing: 10) {
@@ -140,11 +145,17 @@ struct LoginView: View {
                 .font(.caption)
                 .foregroundStyle(.white.opacity(0.45))
                 .multilineTextAlignment(.center)
+        } else {
+            // Self-host fallback: legacy Google + password form, kept
+            // bit-for-bit unchanged. This path is exercised only on
+            // tenant installs with no CONTROL_PLANE_URL set.
+            legacyAuthControls(for: methods)
         }
+    }
 
-        // Google is shown on non-SSO servers. On SSO servers it is usually absent,
-        // but render it if the server explicitly advertises it.
-        if methods.google && !methods.sso {
+    @ViewBuilder
+    private func legacyAuthControls(for methods: AuthMethods) -> some View {
+        if methods.google {
             Button(action: signInWithGoogle) {
                 HStack(spacing: 10) {
                     Image(systemName: "g.circle.fill")
@@ -164,9 +175,8 @@ struct LoginView: View {
             }
         }
 
-        // Password is always shown when advertised, regardless of SSO.
         if methods.password {
-            if methods.sso || methods.google {
+            if methods.google {
                 Divider()
                     .background(.white.opacity(0.15))
             }

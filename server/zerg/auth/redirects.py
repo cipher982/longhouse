@@ -15,4 +15,9 @@ def normalize_local_return_to(return_to: str | None) -> str | None:
         return None
     if not return_to.startswith("/") or return_to.startswith("//"):
         return None
+    # Reject backslash-prefixed values; some browsers/proxies normalize
+    # them to forward slashes, turning a local-looking path into a
+    # scheme-relative URL (open-redirect trick).
+    if "\\" in return_to:
+        return None
     return return_to

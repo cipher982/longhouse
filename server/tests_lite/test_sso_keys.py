@@ -517,7 +517,7 @@ def test_auth_methods_returns_sso_when_cp_url_set():
     data = resp.json()
     assert data["sso"] is True
     assert data["sso_url"] == "https://control.longhouse.ai"
-    assert data["sso_login_url"] == "https://control.longhouse.ai/dashboard/open-instance"
+    assert data["sso_login_url"] == "https://control.longhouse.ai/auth/start"
     assert data["google"] is False
     assert data["password"] is False
     assert data["gmail_ready"] is False
@@ -544,7 +544,7 @@ def test_auth_methods_hide_google_when_control_plane_is_enabled():
     assert resp.status_code == 200
     data = resp.json()
     assert data["sso"] is True
-    assert data["sso_login_url"] == "https://control.longhouse.ai/dashboard/open-instance"
+    assert data["sso_login_url"] == "https://control.longhouse.ai/auth/start"
     assert data["google"] is False
     assert data["gmail_ready"] is True
     assert data["gmail_setup_message"] is None
