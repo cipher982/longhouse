@@ -68,6 +68,7 @@ from zerg.services.session_views import SessionTurnsListResponse
 from zerg.services.session_views import SessionWorkspaceResponse
 from zerg.services.session_workspace import build_session_mobile_tail
 from zerg.services.session_workspace import build_session_workspace
+from zerg.services.session_workspace import resolve_session_sharer
 from zerg.services.session_workspace_revision import load_session_workspace_revision
 from zerg.services.timeline_session_listing import TimelineSessionListParams
 from zerg.services.timeline_session_listing import TimelineSessionsListResponse
@@ -627,11 +628,25 @@ def get_timeline_session_workspace(
     response: Response,
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
+    shared_by: Optional[int] = Query(
+        None,
+        ge=1,
+        description=(
+            "User id who shared this link. When set, the response includes a "
+            "``sharer`` block with their display name for the 'Shared by' "
+            "header pill. Ignored when the user no longer exists."
+        ),
+    ),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_browser_user),
 ):
     timing = ServerTimingRecorder()
     response.headers["Cache-Control"] = "no-store"
+    sharer = resolve_session_sharer(db, shared_by) if shared_by is not None else None
+    # If the sharer resolves to the current viewer, hide the attribution
+    # (their own copy of their own link does not need a "Shared by" pill).
+    if sharer is not None and int(current_user.id) == sharer.id:
+        sharer = None
     result = build_session_workspace(
         db=db,
         session_id=session_id,
@@ -639,6 +654,7 @@ def get_timeline_session_workspace(
         limit=limit,
         timing=timing,
         owner_id=int(current_user.id),
+        sharer=sharer,
     )
     timing.apply(response)
     return result

@@ -58,6 +58,7 @@ function workspaceHasRunningTool(
 
 interface UseSessionWorkspaceOptions {
   highlightEventId?: number | null;
+  shared_by?: number | null;
 }
 
 interface PendingRenderBeacon {
@@ -125,6 +126,7 @@ export function useSessionWorkspace(
   options: UseSessionWorkspaceOptions = {},
 ) {
   const highlightEventId = options.highlightEventId ?? null;
+  const sharedBy = options.shared_by ?? null;
   const documentVisible = useDocumentVisible();
   const onlineEpoch = useOnlineEpoch();
   const queryClient = useQueryClient();
@@ -147,6 +149,7 @@ export function useSessionWorkspace(
   } = useAgentSessionWorkspace(sessionId, {
     limit: INITIAL_EVENTS_PAGE_SIZE,
     branch_mode: branchMode,
+    shared_by: sharedBy,
     refetchInterval: (query) => {
       if (!documentVisible) {
         return false;

@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "react-hot-toast";
 import { buildTimelineModel } from "../../lib/sessionWorkspace";
 import type {
   AgentSession,
@@ -28,6 +29,13 @@ const launchApiMocks = vi.hoisted(() => ({
 const agentApiMocks = vi.hoisted(() => ({
   respondToPauseRequest: vi.fn(),
 }));
+const authMocks = vi.hoisted(() => ({
+  useAuth: vi.fn(),
+}));
+const clipboardMocks = vi.hoisted(() => ({
+  copyToClipboard: vi.fn(),
+  buildShareableSessionUrl: vi.fn(),
+}));
 
 vi.mock("../../hooks/useSessionWorkspace", () => ({
   useSessionWorkspace: workspaceMocks.useSessionWorkspace,
@@ -39,6 +47,35 @@ vi.mock("../../hooks/useSecondClock", () => ({
 vi.mock("../../lib/readiness-contract", () => ({
   useReadinessFlag: vi.fn(),
 }));
+
+vi.mock("../../lib/auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../lib/auth")>();
+  return {
+    ...actual,
+    useAuth: authMocks.useAuth,
+  };
+});
+
+vi.mock("../../lib/clipboard", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../lib/clipboard")>();
+  return {
+    ...actual,
+    copyToClipboard: clipboardMocks.copyToClipboard,
+    buildShareableSessionUrl: clipboardMocks.buildShareableSessionUrl,
+  };
+});
+
+vi.mock("react-hot-toast", () => {
+  const toastFn = vi.fn();
+  const toast = Object.assign(toastFn, {
+    success: vi.fn(),
+    error: vi.fn(),
+  });
+  return {
+    toast,
+    default: toast,
+  };
+});
 
 vi.mock("../../services/api/launch", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../services/api/launch")>();
@@ -309,6 +346,26 @@ describe("SessionDetailPage", () => {
     });
     secondClockMocks.useSecondClock.mockReturnValue(
       Date.parse("2026-03-22T22:04:30Z"),
+    );
+    // Default: no authenticated user (dev / auth-disabled). Individual tests
+    // override with `authMocks.useAuth.mockReturnValue(...)` to opt in to a
+    // real user and exercise the Copy link / Shared by surfaces.
+    authMocks.useAuth.mockReturnValue({
+      user: null,
+      isAuthenticated: false,
+      isLoading: false,
+      login: vi.fn(),
+      logout: vi.fn(),
+      refreshAuth: vi.fn(),
+    });
+    clipboardMocks.copyToClipboard.mockResolvedValue(true);
+    clipboardMocks.buildShareableSessionUrl.mockImplementation(
+      (baseUrl, sessionId, currentUserId) => {
+        if (currentUserId === null || currentUserId === undefined) {
+          return `${baseUrl.replace(/\/+$/, "")}/timeline/${sessionId}`;
+        }
+        return `${baseUrl.replace(/\/+$/, "")}/timeline/${sessionId}?shared_by=${encodeURIComponent(String(currentUserId))}`;
+      },
     );
 
     const session = makeSession({
@@ -1595,6 +1652,177 @@ describe("SessionDetailPage", () => {
     );
     expect(
       screen.queryByTestId("session-continuation-unavailable"),
+    ).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Copy link + Shared by pill (B2)
+// ---------------------------------------------------------------------------
+
+function renderSessionDetailPageAt(
+  initialEntry: string,
+  options: {
+    session?: AgentSession;
+    /** Override the default return value of useAuth for this test. */
+    user?: { id: number; email: string; display_name?: string | null } | null;
+  } = {},
+) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+
+  authMocks.useAuth.mockReturnValue({
+    user: options.user === undefined
+      ? null
+      : options.user === null
+        ? null
+        : {
+            id: options.user.id,
+            email: options.user.email,
+            display_name: options.user.display_name ?? null,
+            avatar_url: null,
+            is_active: true,
+            created_at: "2026-01-01T00:00:00Z",
+            last_login: null,
+            role: "USER",
+          },
+    isAuthenticated: options.user !== null && options.user !== undefined,
+    isLoading: false,
+    login: vi.fn(),
+    logout: vi.fn(),
+    refreshAuth: vi.fn(),
+  });
+
+  const session = options.session ?? makeSession();
+  const model = buildTimelineModel([]);
+  mockWorkspaceState({ session, model });
+
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <TestRouter initialEntries={[initialEntry]}>
+        <Routes>
+          <Route path="/timeline/:sessionId" element={<SessionDetailPage />} />
+          <Route path="/timeline" element={<div>Timeline</div>} />
+        </Routes>
+      </TestRouter>
+    </QueryClientProvider>,
+  );
+}
+
+describe("SessionDetailPage — copy link + shared_by pill (B2)", () => {
+  it("hides the Copy link button when there is no authenticated user", () => {
+    renderSessionDetailPageAt("/timeline/session-codex", { user: null });
+    expect(
+      screen.queryByTestId("session-copy-link-button"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("hides the Copy link button in dev mode (user is null)", () => {
+    // Same path as the null-user case — dev / auth-disabled should not show
+    // a Copy link button, since there is no real user id to encode.
+    renderSessionDetailPageAt("/timeline/session-codex", { user: null });
+    expect(
+      screen.queryByTestId("session-copy-link-button"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders the Copy link button when a user is signed in", () => {
+    renderSessionDetailPageAt("/timeline/session-codex", {
+      user: { id: 1, email: "david@example.com", display_name: "David Rose" },
+    });
+    expect(
+      screen.getByTestId("session-copy-link-button"),
+    ).toBeInTheDocument();
+  });
+
+  it("copies a share URL with the current user id and shows a success toast", async () => {
+    const user = userEvent.setup();
+    renderSessionDetailPageAt("/timeline/session-codex", {
+      user: { id: 7, email: "tester@example.com", display_name: "Tester" },
+    });
+
+    await user.click(screen.getByTestId("session-copy-link-button"));
+
+    expect(clipboardMocks.copyToClipboard).toHaveBeenCalledTimes(1);
+    const copiedText = clipboardMocks.copyToClipboard.mock.calls[0]?.[0] as string;
+    expect(copiedText).toMatch(
+      /^https?:\/\/[^/]+\/timeline\/session-codex\?shared_by=7$/,
+    );
+    expect(toast.success).toHaveBeenCalledWith("Link copied");
+  });
+
+  it("shows an error toast when clipboard write fails", async () => {
+    const user = userEvent.setup();
+    clipboardMocks.copyToClipboard.mockResolvedValueOnce(false);
+    renderSessionDetailPageAt("/timeline/session-codex", {
+      user: { id: 1, email: "david@example.com", display_name: "David Rose" },
+    });
+
+    await user.click(screen.getByTestId("session-copy-link-button"));
+
+    expect(toast.error).toHaveBeenCalledWith(
+      expect.stringContaining("Couldn't copy link"),
+    );
+  });
+
+  it("does not render the Shared by pill when ?shared_by is absent", () => {
+    renderSessionDetailPageAt("/timeline/session-codex", {
+      user: { id: 1, email: "david@example.com", display_name: "David Rose" },
+    });
+    expect(
+      screen.queryByTestId("session-shared-by-pill"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders the Shared by pill when ?shared_by resolves to another user", () => {
+    renderSessionDetailPageAt("/timeline/session-codex?shared_by=8", {
+      user: { id: 1, email: "david@example.com", display_name: "David Rose" },
+      session: makeSession({
+        sharer: { id: 8, display_name: "Casey" },
+      }),
+    });
+    const pill = screen.getByTestId("session-shared-by-pill");
+    expect(pill).toHaveTextContent("Shared by");
+    expect(pill).toHaveTextContent("Casey");
+  });
+
+  it("hides the Shared by pill when the session sharer matches the current user (defense in depth)", () => {
+    renderSessionDetailPageAt("/timeline/session-codex?shared_by=1", {
+      user: { id: 1, email: "david@example.com", display_name: "David Rose" },
+      // The server already strips self-share, but a stale cached response
+      // could still carry the field. The client must also gate the pill.
+      session: makeSession({
+        sharer: { id: 1, display_name: "David Rose" },
+      }),
+    });
+    expect(
+      screen.queryByTestId("session-shared-by-pill"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("falls back to 'a teammate' when the sharer's display_name is null", () => {
+    renderSessionDetailPageAt("/timeline/session-codex?shared_by=8", {
+      user: { id: 1, email: "david@example.com", display_name: "David Rose" },
+      session: makeSession({
+        sharer: { id: 8, display_name: null },
+      }),
+    });
+    const pill = screen.getByTestId("session-shared-by-pill");
+    expect(pill).toHaveTextContent("Shared by");
+    expect(pill).toHaveTextContent("a teammate");
+  });
+
+  it("ignores a non-positive shared_by param (e.g. shared_by=0)", () => {
+    renderSessionDetailPageAt("/timeline/session-codex?shared_by=0", {
+      user: { id: 1, email: "david@example.com", display_name: "David Rose" },
+    });
+    // No pill — the page treats shared_by=0 as if it were absent.
+    expect(
+      screen.queryByTestId("session-shared-by-pill"),
     ).not.toBeInTheDocument();
   });
 });

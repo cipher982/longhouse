@@ -33,9 +33,11 @@ import { TimelinePane } from "../components/session-workspace/TimelinePane";
 import { useLoopModeChange } from "../hooks/useLoopModeChange";
 import { useSecondClock } from "../hooks/useSecondClock";
 import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
+import { useAuth } from "../lib/auth";
 import { config } from "../lib/config";
 import { useReadinessFlag } from "../lib/readiness-contract";
 import { getRuntimeElapsedLabel } from "../lib/sessionTiming";
+import { buildShareableSessionUrl, copyToClipboard } from "../lib/clipboard";
 import {
   respondToPauseRequest,
   setSessionAction,
@@ -64,14 +66,20 @@ function SessionDetailWorkspaceRoute({
   returnTo,
   sessionId,
   debugTelemetry,
+  sharedByUserId,
 }: {
   highlightEventId: number | null;
   returnTo: string;
   sessionId: string | null;
   debugTelemetry: boolean;
+  sharedByUserId: number | null;
 }) {
   const navigate = useNavigate();
-  const workspace = useSessionWorkspace(sessionId, { highlightEventId });
+  const { user: currentUser } = useAuth();
+  const workspace = useSessionWorkspace(sessionId, {
+    highlightEventId,
+    shared_by: sharedByUserId,
+  });
 
   const {
     session,
@@ -141,6 +149,21 @@ function SessionDetailWorkspaceRoute({
       toast.error("Failed to archive session");
     }
   }, [session, queryClient, handleBack]);
+
+  const handleCopyShareLink = useCallback(async () => {
+    if (!session) return;
+    const currentUserId = currentUser?.id ?? null;
+    if (currentUserId === null || currentUserId === undefined) {
+      return;
+    }
+    const url = buildShareableSessionUrl(window.location.origin, session.id, currentUserId);
+    const ok = await copyToClipboard(url);
+    if (ok) {
+      toast.success("Link copied");
+    } else {
+      toast.error("Couldn't copy link — copy it from the address bar");
+    }
+  }, [session, currentUser]);
 
   const continuationSession = currentThreadSession || session;
   const continueTarget =
@@ -274,6 +297,20 @@ function SessionDetailWorkspaceRoute({
       ? session
       : { ...session, loop_mode: effectiveLoopMode };
 
+  // Shared-by pill render conditions and the copy-link button availability.
+  // These depend on `displaySession` (declared just above) and the current viewer.
+  const sessionSharer = displaySession.sharer ?? null;
+  const currentUserId = currentUser?.id ?? null;
+  // Defense in depth: the server already hides self-share, but if the cached
+  // session response ever disagrees with the current viewer (e.g. a stale
+  // query after logout/login in another tab), still skip the pill.
+  const shouldShowSharedByPill =
+    sessionSharer !== null &&
+    sessionSharer !== undefined &&
+    (currentUserId === null || sessionSharer.id !== currentUserId);
+  const shouldShowCopyLinkButton = currentUserId !== null && currentUserId !== undefined;
+  const sharedByDisplayName = sessionSharer?.display_name?.trim() || "a teammate";
+
   const branchSourceSession = currentThreadSession || session;
   const interaction = getSessionInteractionCapabilities({
     session: branchSourceSession,
@@ -353,6 +390,16 @@ function SessionDetailWorkspaceRoute({
         <span className="session-workspace-header__name" title={title}>
           {title}
         </span>
+        {shouldShowSharedByPill ? (
+          <span
+            data-testid="session-shared-by-pill"
+            className="session-shared-by-pill"
+            title={`Shared by ${sharedByDisplayName}`}
+          >
+            <span className="session-shared-by-pill__label">Shared by</span>
+            <span className="session-shared-by-pill__name">{sharedByDisplayName}</span>
+          </span>
+        ) : null}
       </div>
     </div>
   );
@@ -371,6 +418,18 @@ function SessionDetailWorkspaceRoute({
         >
           {continuingSession || continueLaunchInProgress ? <Spinner size="sm" /> : <PlayIcon width={13} height={13} />}
           <span>{continuingSession || continueLaunchInProgress ? "Continuing" : continueIdleLabel}</span>
+        </Button>
+      ) : null}
+      {shouldShowCopyLinkButton ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => void handleCopyShareLink()}
+          title="Copy a link to this session"
+          aria-label="Copy link to this session"
+          data-testid="session-copy-link-button"
+        >
+          Copy link
         </Button>
       ) : null}
       <Button
@@ -581,6 +640,15 @@ export default function SessionDetailPage() {
 
   const debugTelemetry = searchParams.get("debug") === "telemetry";
   const shouldAutoResume = searchParams.get("resume") === "1";
+  const sharedByUserId = useMemo(() => {
+    const raw = searchParams.get("shared_by");
+    if (!raw) return null;
+    const parsed = Number(raw);
+    // Server already enforces ge=1; keep the client permissive so a stale
+    // param or a manually-typed value does not crash the page.
+    if (!Number.isFinite(parsed) || parsed < 1) return null;
+    return Math.trunc(parsed);
+  }, [searchParams]);
   const returnTo =
     (location.state as { from?: string } | null)?.from ?? "/timeline";
 
@@ -608,6 +676,7 @@ export default function SessionDetailPage() {
       highlightEventId={highlightEventId}
       returnTo={returnTo}
       debugTelemetry={debugTelemetry}
+      sharedByUserId={sharedByUserId}
     />
   );
 }

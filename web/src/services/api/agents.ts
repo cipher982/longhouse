@@ -78,6 +78,17 @@ export interface AgentSession {
   launch_state?: "launching" | "live" | "launching_unknown" | "launch_failed" | "launch_orphaned" | null;
   launch_error_code?: RemoteLaunchErrorCode | null;
   launch_error_message?: string | null;
+  /**
+   * Attribution for the user whose `?shared_by=<id>` link surfaced this
+   * session. Populated only when the page was reached via a share URL. The
+   * server hides this when the sharer is the current viewer (self-share).
+   */
+  sharer?: SessionSharer | null;
+}
+
+export interface SessionSharer {
+  id: number;
+  display_name: string | null;
 }
 
 export interface SessionTranscriptPreview {
@@ -863,12 +874,16 @@ export async function fetchAgentSessionWorkspace(
   options: {
     limit?: number;
     branch_mode?: "head" | "all";
+    shared_by?: number | null;
   } = {},
 ): Promise<AgentSessionWorkspaceResponse> {
   const params = new URLSearchParams();
 
   if (options.limit) params.set("limit", String(options.limit));
   if (options.branch_mode) params.set("branch_mode", options.branch_mode);
+  if (options.shared_by !== undefined && options.shared_by !== null) {
+    params.set("shared_by", String(options.shared_by));
+  }
 
   const queryString = params.toString();
   const path = `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/workspace${queryString ? `?${queryString}` : ""}`;

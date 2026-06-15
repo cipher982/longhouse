@@ -681,6 +681,18 @@ class TimelineCardPresentationResponse(UTCBaseModel):
     border_tone: str = Field("inactive", description="Stable tone token for the card edge/outline")
 
 
+class SessionSharerResponse(UTCBaseModel):
+    """Public-safe attribution for the user who shared this session link.
+
+    Resolved server-side from a ``?shared_by=<user_id>`` query param. The pill
+    on the session header is the only consumer; the same field doubles as
+    "who is the owner of this session" in single-tenant deployments.
+    """
+
+    id: int = Field(..., description="Sharing user id")
+    display_name: Optional[str] = Field(None, description="Display name (null falls back to email local on the client)")
+
+
 class SessionResponse(UTCBaseModel):
     """Response for a single session."""
 
@@ -773,6 +785,14 @@ class SessionResponse(UTCBaseModel):
     )
     launch_error_message: Optional[str] = Field(
         None, description="Remote-launch error message when launch_state=launch_failed/launch_orphaned"
+    )
+    sharer: Optional[SessionSharerResponse] = Field(
+        None,
+        description=(
+            "Attribution for the user whose ?shared_by=<id> link surfaced this "
+            "session. Null when the param is absent, the user is gone, or the "
+            "sharer is the current viewer (the pill is hidden in that case)."
+        ),
     )
 
 
@@ -1332,6 +1352,7 @@ def build_session_response(
     has_pending_response_turn: bool = False,
     pause_request: dict[str, Any] | None = None,
     launch_attempt: SessionLaunchAttempt | None | object = _LAUNCH_ATTEMPT_MISSING,
+    sharer: SessionSharerResponse | None = None,
 ) -> SessionResponse:
     cache = thread_cache if thread_cache is not None else {}
     thread_head_session_id, thread_continuation_count = get_thread_meta(store, session, cache)
@@ -1496,6 +1517,7 @@ def build_session_response(
         launch_state=launch_lifecycle.state if launch_lifecycle is not None else None,
         launch_error_code=launch_lifecycle.error_code if launch_lifecycle is not None else None,
         launch_error_message=launch_lifecycle.error_message if launch_lifecycle is not None else None,
+        sharer=sharer,
     )
 
 

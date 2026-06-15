@@ -122,21 +122,24 @@ export function useAgentSessionWorkspace(
   options: AgentSessionWorkspaceQueryOptions & {
     limit?: number;
     branch_mode?: "head" | "all";
+    shared_by?: number | null;
   } = {},
 ) {
   const {
     limit = 200,
     branch_mode = "head",
+    shared_by,
     enabled,
     refetchInterval,
   } = options;
 
   return useQuery<AgentSessionWorkspaceResponse>({
-    queryKey: ["agent-session-workspace", sessionId, { limit, branch_mode }],
+    queryKey: ["agent-session-workspace", sessionId, { limit, branch_mode, shared_by }],
     queryFn: () =>
       fetchAgentSessionWorkspace(sessionId!, {
         limit,
         branch_mode,
+        shared_by,
       }),
     enabled: enabled ?? !!sessionId,
     refetchInterval,

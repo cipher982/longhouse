@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from fastapi import status
 from sqlalchemy.orm import Session
 
+from zerg.models.user import User
 from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
 from zerg.services.managed_control_state import load_managed_control_state_map
@@ -22,6 +23,7 @@ from zerg.services.session_turns import load_pending_response_turn_map
 from zerg.services.session_views import SessionMobileTailResponse
 from zerg.services.session_views import SessionProjectionItemResponse
 from zerg.services.session_views import SessionProjectionResponse
+from zerg.services.session_views import SessionSharerResponse
 from zerg.services.session_views import SessionThreadResponse
 from zerg.services.session_views import SessionWorkspaceResponse
 from zerg.services.session_views import SessionWorkspaceRevisionResponse
@@ -36,6 +38,20 @@ from zerg.utils.server_timing import ServerTimingRecorder
 from zerg.utils.time import normalize_utc
 
 
+def resolve_session_sharer(db: Session, user_id: int) -> SessionSharerResponse | None:
+    """Look up a user by id and project them to a SessionSharerResponse.
+
+    Returns None when the user no longer exists — the pill on the client is
+    gated on sharer being non-null, so a deleted sharer silently hides the
+    attribution rather than 500ing or showing a stale name.
+    """
+    user = db.query(User).filter(User.id == user_id).first()
+    if user is None:
+        return None
+    display_name = (getattr(user, "display_name", None) or "").strip() or None
+    return SessionSharerResponse(id=int(user.id), display_name=display_name)
+
+
 def build_session_workspace(
     *,
     db: Session,
@@ -44,6 +60,7 @@ def build_session_workspace(
     limit: int = 100,
     timing: ServerTimingRecorder | None = None,
     owner_id: int | None = None,
+    sharer: SessionSharerResponse | None = None,
 ) -> SessionWorkspaceResponse:
     """Build the focused session, thread, and initial projected transcript page."""
     store = AgentsStore(db)
@@ -133,6 +150,7 @@ def build_session_workspace(
                 kernel_capabilities=kernel_capabilities_map.get(item.id),
                 has_pending_response_turn=bool(pending_response_turn_map.get(item.id)),
                 pause_request=serialize_pause_request_projection(pause_request_map.get(item.id)),
+                sharer=sharer,
             )
             for item in thread_sessions
         }
@@ -157,6 +175,7 @@ def build_session_workspace(
             kernel_capabilities=kernel_capabilities_map.get(session.id),
             has_pending_response_turn=bool(pending_response_turn_map.get(session.id)),
             pause_request=serialize_pause_request_projection(pause_request_map.get(session.id)),
+            sharer=sharer,
         )
 
     with timing.span("build_projection"):

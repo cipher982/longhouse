@@ -17,6 +17,7 @@ description = "Test fixtures and example placeholders — not real secrets"
 paths = [
   '''.*\.env.*\.example$''',
   '''server/tests_lite/test_session_processing\.py''',
+  '''server/tests_lite/test_session_workspace_sharer\.py''',
   '''server/tests_lite/test_embeddings\.py''',
   '''server/tests_lite/test_write_serializer\.py''',
   '''server/zerg/tools/tests/test_github_tools\.py''',
