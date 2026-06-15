@@ -220,18 +220,24 @@ function WelcomeHeader() {
             <button type="button" className="user-menu-item" onClick={handleOpenSettings}>
               Settings
             </button>
-            <button type="button" className="user-menu-item" onClick={handleLogout}>
+            {/*
+              For hosted tenants, the single "Log out" button clears both
+              the tenant session and the CP session in one shot, so the
+              SSO bridge can't silently re-sign the user in. For self-host
+              tenants there is no CP, so we use the same handler without
+              the CP-clearing step.
+            */}
+            <button
+              type="button"
+              className="user-menu-item"
+              onClick={controlPlaneBase ? handleLogoutEverywhere : handleLogout}
+            >
               Log out
             </button>
             {controlPlaneBase && (
-              <>
-                <button type="button" className="user-menu-item" onClick={handleLogoutEverywhere}>
-                  Log out everywhere
-                </button>
-                <button type="button" className="user-menu-item" onClick={handleSwitchAccount}>
-                  Switch account
-                </button>
-              </>
+              <button type="button" className="user-menu-item" onClick={handleSwitchAccount}>
+                Switch account
+              </button>
             )}
           </div>
         </div>
@@ -315,34 +321,26 @@ function WelcomeHeader() {
             className="mobile-nav-logout"
             onClick={async () => {
               closeMobileNav();
-              await handleLogout();
+              if (controlPlaneBase) {
+                await handleLogoutEverywhere();
+              } else {
+                await handleLogout();
+              }
             }}
           >
             Log out
           </button>
           {controlPlaneBase && (
-            <>
-              <button
-                type="button"
-                className="mobile-nav-logout"
-                onClick={async () => {
-                  closeMobileNav();
-                  await handleLogoutEverywhere();
-                }}
-              >
-                Log out everywhere
-              </button>
-              <button
-                type="button"
-                className="mobile-nav-logout"
-                onClick={async () => {
-                  closeMobileNav();
-                  await handleSwitchAccount();
-                }}
-              >
-                Switch account
-              </button>
-            </>
+            <button
+              type="button"
+              className="mobile-nav-logout"
+              onClick={async () => {
+                closeMobileNav();
+                await handleSwitchAccount();
+              }}
+            >
+              Switch account
+            </button>
           )}
         </div>
       )}

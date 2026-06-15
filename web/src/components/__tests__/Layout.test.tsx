@@ -100,3 +100,64 @@ describe("Layout mobile navigation", () => {
     expect(scrim).not.toHaveClass("visible");
   });
 });
+
+describe("Layout user menu logout", () => {
+  it("shows one Log out button on hosted tenants (no separate 'Log out everywhere')", () => {
+    authMocks.useAuth.mockReturnValue({
+      user: {
+        email: "david010@gmail.com",
+        display_name: "David",
+        role: "ADMIN",
+      },
+      logout: vi.fn(),
+    });
+    authMocks.useAuthMethods.mockReturnValue({
+      data: {
+        sso_url: "https://control.longhouse.ai",
+        sso_login_url: "https://control.longhouse.ai/auth/start",
+      },
+    });
+
+    renderLayout();
+    // Open the user dropdown
+    const avatar = screen.getByTitle("Account menu");
+    avatar.click();
+
+    const logoutButtons = screen.getAllByRole("button", { name: /^Log out$/ });
+    expect(logoutButtons).toHaveLength(1);
+
+    // No "Log out everywhere" — the single button does both jobs
+    expect(screen.queryByRole("button", { name: "Log out everywhere" })).not.toBeInTheDocument();
+
+    // Switch account is still there for explicit re-login
+    expect(screen.getByRole("button", { name: "Switch account" })).toBeInTheDocument();
+  });
+
+  it("shows one Log out button on self-host tenants (no CP at all)", () => {
+    authMocks.useAuth.mockReturnValue({
+      user: {
+        email: "selfhost@gmail.com",
+        display_name: "Self Host",
+        role: "ADMIN",
+      },
+      logout: vi.fn(),
+    });
+    authMocks.useAuthMethods.mockReturnValue({
+      data: {
+        sso_url: null,
+        sso_login_url: null,
+      },
+    });
+
+    renderLayout();
+    const avatar = screen.getByTitle("Account menu");
+    avatar.click();
+
+    const logoutButtons = screen.getAllByRole("button", { name: /^Log out$/ });
+    expect(logoutButtons).toHaveLength(1);
+
+    // No CP-only buttons on self-host
+    expect(screen.queryByRole("button", { name: "Log out everywhere" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Switch account" })).not.toBeInTheDocument();
+  });
+});
