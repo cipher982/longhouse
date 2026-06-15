@@ -179,6 +179,11 @@ struct APISessionRuntimeDisplayResponse: Codable, Hashable, Sendable {
     let pauseRequest: APISessionPauseRequestProjectionResponse?
 }
 
+struct APISessionSharerResponse: Codable, Hashable, Sendable {
+    let id: Int
+    let displayName: String?
+}
+
 struct APISessionTranscriptPreviewResponse: Codable, Hashable, Sendable {
     let eventId: Int
     let text: String
@@ -269,6 +274,7 @@ struct APISessionResponse: Codable, Hashable, Sendable {
     let launchState: String?
     let launchErrorCode: String?
     let launchErrorMessage: String?
+    let sharer: APISessionSharerResponse?
 }
 
 struct APITimelineSessionCardResponse: Codable, Hashable, Sendable {

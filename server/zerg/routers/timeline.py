@@ -48,6 +48,8 @@ from zerg.schemas.machines import WorkspaceSuggestionsResponse
 from zerg.services.agents import AgentsStore
 from zerg.services.machines_directory import build_machines_directory
 from zerg.services.session_listing import SessionListingError
+from zerg.services.session_shares import SessionShareError
+from zerg.services.session_shares import resolve_session_share
 from zerg.services.session_views import DemoSeedResponse
 from zerg.services.session_views import EventsListResponse
 from zerg.services.session_views import FiltersResponse
@@ -637,12 +639,30 @@ def get_timeline_session_workspace(
             "header pill. Ignored when the user no longer exists."
         ),
     ),
+    share_token: Optional[str] = Query(
+        None,
+        description="Signed share token. When valid, this supersedes unsigned shared_by attribution.",
+    ),
     db: Session = Depends(get_db),
     current_user=Depends(get_current_browser_user),
 ):
     timing = ServerTimingRecorder()
     response.headers["Cache-Control"] = "no-store"
-    sharer = resolve_session_sharer(db, shared_by) if shared_by is not None else None
+    sharer = None
+    if share_token:
+        try:
+            resolved_share = resolve_session_share(
+                db,
+                token=share_token,
+                actor_user_id=int(current_user.id),
+                expected_session_id=session_id,
+                record_access=False,
+            )
+        except SessionShareError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        sharer = resolved_share.sharer
+    elif shared_by is not None:
+        sharer = resolve_session_sharer(db, shared_by)
     # If the sharer resolves to the current viewer, hide the attribution
     # (their own copy of their own link does not need a "Shared by" pill).
     if sharer is not None and int(current_user.id) == sharer.id:

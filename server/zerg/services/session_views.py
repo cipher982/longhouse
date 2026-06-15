@@ -789,9 +789,9 @@ class SessionResponse(UTCBaseModel):
     sharer: Optional[SessionSharerResponse] = Field(
         None,
         description=(
-            "Attribution for the user whose ?shared_by=<id> link surfaced this "
-            "session. Null when the param is absent, the user is gone, or the "
-            "sharer is the current viewer (the pill is hidden in that case)."
+            "Attribution for the user whose signed share token or legacy "
+            "?shared_by=<id> link surfaced this session. Null when attribution "
+            "is absent, the user is gone, or the sharer is the current viewer."
         ),
     )
 

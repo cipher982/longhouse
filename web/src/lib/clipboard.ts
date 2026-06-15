@@ -46,22 +46,12 @@ export async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
-/**
- * Build the shareable session URL for the given base and current viewer.
- * Encodes the viewer's user id as `?shared_by=<id>` so the recipient sees a
- * "Shared by <name>" pill. The launch URL and the explicit share URL are the
- * same shape — this is the same bearer capability the CLI splash prints, just
- * with the sharer attribution surfaced.
- */
-export function buildShareableSessionUrl(
-  baseUrl: string,
-  sessionId: string,
-  currentUserId: number | null | undefined,
-): string {
+export function buildSessionShareUrl(baseUrl: string, shareUrlOrToken: string): string {
   const cleanBase = baseUrl.replace(/\/+$/, "");
-  const path = `${cleanBase}/timeline/${sessionId}`;
-  if (currentUserId === null || currentUserId === undefined) {
-    return path;
+  const raw = shareUrlOrToken.trim();
+  if (/^https?:\/\//i.test(raw)) {
+    return raw;
   }
-  return `${path}?shared_by=${encodeURIComponent(String(currentUserId))}`;
+  const path = raw.startsWith("/") ? raw : `/share/${encodeURIComponent(raw)}`;
+  return `${cleanBase}${path}`;
 }

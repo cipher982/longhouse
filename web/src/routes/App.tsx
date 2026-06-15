@@ -24,6 +24,7 @@ import RunnersPage from "../pages/RunnersPage";
 import RunnerDetailPage from "../pages/RunnerDetailPage";
 import SessionsPage from "../pages/SessionsPage";
 import SessionDetailPage from "../pages/SessionDetailPage";
+import ShareLandingPage from "../pages/ShareLandingPage";
 import DemoBanner from "../components/DemoBanner";
 import { AuthGuard } from "../lib/auth";
 import { ErrorBoundary } from "../components/ErrorBoundary";
@@ -74,6 +75,14 @@ export function buildAppRoutes({ demoMode, singleTenant: _singleTenant }: Routin
       element: (
         <ErrorBoundary>
           <LoginPage />
+        </ErrorBoundary>
+      ),
+    },
+    {
+      path: "/share/:token",
+      element: (
+        <ErrorBoundary>
+          <ShareLandingPage />
         </ErrorBoundary>
       ),
     },

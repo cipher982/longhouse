@@ -27,6 +27,7 @@ const launchApiMocks = vi.hoisted(() => ({
   continueRemoteSession: vi.fn(),
 }));
 const agentApiMocks = vi.hoisted(() => ({
+  createSessionShare: vi.fn(),
   respondToPauseRequest: vi.fn(),
 }));
 const authMocks = vi.hoisted(() => ({
@@ -34,7 +35,7 @@ const authMocks = vi.hoisted(() => ({
 }));
 const clipboardMocks = vi.hoisted(() => ({
   copyToClipboard: vi.fn(),
-  buildShareableSessionUrl: vi.fn(),
+  buildSessionShareUrl: vi.fn(),
 }));
 
 vi.mock("../../hooks/useSessionWorkspace", () => ({
@@ -61,7 +62,7 @@ vi.mock("../../lib/clipboard", async (importOriginal) => {
   return {
     ...actual,
     copyToClipboard: clipboardMocks.copyToClipboard,
-    buildShareableSessionUrl: clipboardMocks.buildShareableSessionUrl,
+    buildSessionShareUrl: clipboardMocks.buildSessionShareUrl,
   };
 });
 
@@ -89,6 +90,7 @@ vi.mock("../../services/api/agents", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../services/api/agents")>();
   return {
     ...actual,
+    createSessionShare: agentApiMocks.createSessionShare,
     respondToPauseRequest: agentApiMocks.respondToPauseRequest,
   };
 });
@@ -344,6 +346,15 @@ describe("SessionDetailPage", () => {
       status: "resolved",
       pause_request: makePauseRequest({ status: "resolved" }),
     });
+    agentApiMocks.createSessionShare.mockResolvedValue({
+      id: 101,
+      session_id: "session-codex",
+      token: "lhshr_test_token",
+      share_url: "/share/lhshr_test_token",
+      expires_at: "2026-04-21T00:00:00Z",
+      revoked_at: null,
+      sharer: { id: 7, display_name: "Tester" },
+    });
     secondClockMocks.useSecondClock.mockReturnValue(
       Date.parse("2026-03-22T22:04:30Z"),
     );
@@ -359,12 +370,11 @@ describe("SessionDetailPage", () => {
       refreshAuth: vi.fn(),
     });
     clipboardMocks.copyToClipboard.mockResolvedValue(true);
-    clipboardMocks.buildShareableSessionUrl.mockImplementation(
-      (baseUrl, sessionId, currentUserId) => {
-        if (currentUserId === null || currentUserId === undefined) {
-          return `${baseUrl.replace(/\/+$/, "")}/timeline/${sessionId}`;
-        }
-        return `${baseUrl.replace(/\/+$/, "")}/timeline/${sessionId}?shared_by=${encodeURIComponent(String(currentUserId))}`;
+    clipboardMocks.buildSessionShareUrl.mockImplementation(
+      (baseUrl, shareUrlOrToken) => {
+        const cleanBase = baseUrl.replace(/\/+$/, "");
+        const raw = String(shareUrlOrToken);
+        return raw.startsWith("/") ? `${cleanBase}${raw}` : `${cleanBase}/share/${raw}`;
       },
     );
 
@@ -1713,7 +1723,28 @@ function renderSessionDetailPageAt(
   );
 }
 
-describe("SessionDetailPage — copy link + shared_by pill (B2)", () => {
+describe("SessionDetailPage — signed copy link + shared attribution", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    agentApiMocks.createSessionShare.mockResolvedValue({
+      id: 101,
+      session_id: "session-codex",
+      token: "lhshr_test_token",
+      share_url: "/share/lhshr_test_token",
+      expires_at: "2026-04-21T00:00:00Z",
+      revoked_at: null,
+      sharer: { id: 7, display_name: "Tester" },
+    });
+    clipboardMocks.copyToClipboard.mockResolvedValue(true);
+    clipboardMocks.buildSessionShareUrl.mockImplementation(
+      (baseUrl, shareUrlOrToken) => {
+        const cleanBase = baseUrl.replace(/\/+$/, "");
+        const raw = String(shareUrlOrToken);
+        return raw.startsWith("/") ? `${cleanBase}${raw}` : `${cleanBase}/share/${raw}`;
+      },
+    );
+  });
+
   it("hides the Copy link button when there is no authenticated user", () => {
     renderSessionDetailPageAt("/timeline/session-codex", { user: null });
     expect(
@@ -1739,7 +1770,7 @@ describe("SessionDetailPage — copy link + shared_by pill (B2)", () => {
     ).toBeInTheDocument();
   });
 
-  it("copies a share URL with the current user id and shows a success toast", async () => {
+  it("creates a signed share URL and shows a success toast", async () => {
     const user = userEvent.setup();
     renderSessionDetailPageAt("/timeline/session-codex", {
       user: { id: 7, email: "tester@example.com", display_name: "Tester" },
@@ -1747,11 +1778,14 @@ describe("SessionDetailPage — copy link + shared_by pill (B2)", () => {
 
     await user.click(screen.getByTestId("session-copy-link-button"));
 
+    expect(agentApiMocks.createSessionShare).toHaveBeenCalledWith("session-codex", {});
+    expect(clipboardMocks.buildSessionShareUrl).toHaveBeenCalledWith(
+      expect.stringMatching(/^https?:\/\/[^/]+$/),
+      "/share/lhshr_test_token",
+    );
     expect(clipboardMocks.copyToClipboard).toHaveBeenCalledTimes(1);
     const copiedText = clipboardMocks.copyToClipboard.mock.calls[0]?.[0] as string;
-    expect(copiedText).toMatch(
-      /^https?:\/\/[^/]+\/timeline\/session-codex\?shared_by=7$/,
-    );
+    expect(copiedText).toMatch(/^https?:\/\/[^/]+\/share\/lhshr_test_token$/);
     expect(toast.success).toHaveBeenCalledWith("Link copied");
   });
 
@@ -1766,6 +1800,32 @@ describe("SessionDetailPage — copy link + shared_by pill (B2)", () => {
 
     expect(toast.error).toHaveBeenCalledWith(
       expect.stringContaining("Couldn't copy link"),
+    );
+  });
+
+  it("shows an error toast when the share endpoint fails", async () => {
+    const user = userEvent.setup();
+    agentApiMocks.createSessionShare.mockRejectedValueOnce(new Error("share failed"));
+    renderSessionDetailPageAt("/timeline/session-codex", {
+      user: { id: 1, email: "david@example.com", display_name: "David Rose" },
+    });
+
+    await user.click(screen.getByTestId("session-copy-link-button"));
+
+    expect(clipboardMocks.copyToClipboard).not.toHaveBeenCalled();
+    expect(toast.error).toHaveBeenCalledWith("Couldn't create share link");
+  });
+
+  it("passes share_token to the workspace hook", () => {
+    renderSessionDetailPageAt("/timeline/session-codex?share_token=lhshr_shared", {
+      user: { id: 1, email: "david@example.com", display_name: "David Rose" },
+    });
+
+    expect(workspaceMocks.useSessionWorkspace).toHaveBeenCalledWith(
+      "session-codex",
+      expect.objectContaining({
+        share_token: "lhshr_shared",
+      }),
     );
   });
 

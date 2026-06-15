@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildShareableSessionUrl, copyToClipboard } from "../clipboard";
+import { buildSessionShareUrl, copyToClipboard } from "../clipboard";
 
 describe("copyToClipboard", () => {
   let originalClipboard: PropertyDescriptor | undefined;
@@ -77,26 +77,20 @@ describe("copyToClipboard", () => {
   });
 });
 
-describe("buildShareableSessionUrl", () => {
+describe("buildSessionShareUrl", () => {
   it("strips a trailing slash from the base URL", () => {
-    const url = buildShareableSessionUrl("https://david010.longhouse.ai/", "abc-123", 7);
-    expect(url).toBe("https://david010.longhouse.ai/timeline/abc-123?shared_by=7");
+    const url = buildSessionShareUrl("https://david010.longhouse.ai/", "/share/lhshr_abc");
+    expect(url).toBe("https://david010.longhouse.ai/share/lhshr_abc");
   });
 
-  it("returns the bare timeline URL when no current user is given", () => {
-    const url = buildShareableSessionUrl("https://david010.longhouse.ai", "abc-123", null);
-    expect(url).toBe("https://david010.longhouse.ai/timeline/abc-123");
-    const urlUndef = buildShareableSessionUrl(
-      "https://david010.longhouse.ai",
-      "abc-123",
-      undefined,
-    );
-    expect(urlUndef).toBe("https://david010.longhouse.ai/timeline/abc-123");
+  it("treats a bare token as a /share route", () => {
+    const url = buildSessionShareUrl("https://david010.longhouse.ai", "lhshr_token");
+    expect(url).toBe("https://david010.longhouse.ai/share/lhshr_token");
   });
 
-  it("encodes the user id as the shared_by query param", () => {
-    expect(buildShareableSessionUrl("https://h.example", "s1", 42)).toBe(
-      "https://h.example/timeline/s1?shared_by=42",
+  it("keeps absolute share URLs unchanged", () => {
+    expect(buildSessionShareUrl("https://h.example", "https://other.example/share/lhshr_token")).toBe(
+      "https://other.example/share/lhshr_token",
     );
   });
 });

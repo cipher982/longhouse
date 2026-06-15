@@ -79,9 +79,9 @@ export interface AgentSession {
   launch_error_code?: RemoteLaunchErrorCode | null;
   launch_error_message?: string | null;
   /**
-   * Attribution for the user whose `?shared_by=<id>` link surfaced this
-   * session. Populated only when the page was reached via a share URL. The
-   * server hides this when the sharer is the current viewer (self-share).
+   * Attribution for the user whose signed share link or legacy
+   * `?shared_by=<id>` URL surfaced this session. The server hides this when
+   * the sharer is the current viewer (self-share).
    */
   sharer?: SessionSharer | null;
 }
@@ -89,6 +89,39 @@ export interface AgentSession {
 export interface SessionSharer {
   id: number;
   display_name: string | null;
+}
+
+export interface CreateSessionShareRequest {
+  expires_in_days?: number | null;
+  note?: string | null;
+}
+
+export interface SessionShareResponse {
+  id: number;
+  session_id: string;
+  token: string;
+  share_url: string;
+  expires_at: string | null;
+  revoked_at: string | null;
+  sharer: SessionSharer | null;
+}
+
+export interface SessionSharePreviewResponse {
+  provider: string;
+  device_name: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  expires_at: string | null;
+  note: string | null;
+  sharer: SessionSharer | null;
+}
+
+export interface SessionShareResolveResponse {
+  session_id: string;
+  share_id: number;
+  expires_at: string | null;
+  note: string | null;
+  sharer: SessionSharer | null;
 }
 
 export interface SessionTranscriptPreview {
@@ -875,6 +908,7 @@ export async function fetchAgentSessionWorkspace(
     limit?: number;
     branch_mode?: "head" | "all";
     shared_by?: number | null;
+    share_token?: string | null;
   } = {},
 ): Promise<AgentSessionWorkspaceResponse> {
   const params = new URLSearchParams();
@@ -884,6 +918,9 @@ export async function fetchAgentSessionWorkspace(
   if (options.shared_by !== undefined && options.shared_by !== null) {
     params.set("shared_by", String(options.shared_by));
   }
+  if (options.share_token) {
+    params.set("share_token", options.share_token);
+  }
 
   const queryString = params.toString();
   const path = `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/workspace${queryString ? `?${queryString}` : ""}`;
@@ -892,6 +929,46 @@ export async function fetchAgentSessionWorkspace(
     method: "GET",
     cache: "no-store",
   });
+}
+
+export async function createSessionShare(
+  sessionId: string,
+  body: CreateSessionShareRequest = {},
+): Promise<SessionShareResponse> {
+  return request<SessionShareResponse>(
+    `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/shares`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+export async function revokeSessionShare(shareId: number): Promise<SessionShareResolveResponse> {
+  return request<SessionShareResolveResponse>(
+    `${TIMELINE_API_PREFIX}/session-shares/${shareId}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function resolveSessionShare(token: string): Promise<SessionShareResolveResponse> {
+  return request<SessionShareResolveResponse>(
+    `${TIMELINE_API_PREFIX}/session-shares/${encodeURIComponent(token)}/resolve`,
+    {
+      method: "GET",
+      cache: "no-store",
+    },
+  );
+}
+
+export async function fetchSessionSharePreview(token: string): Promise<SessionSharePreviewResponse> {
+  return request<SessionSharePreviewResponse>(
+    `/public/session-shares/${encodeURIComponent(token)}/preview`,
+    {
+      method: "GET",
+      cache: "no-store",
+    },
+  );
 }
 
 export async function respondToPauseRequest(

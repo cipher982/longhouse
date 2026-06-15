@@ -37,6 +37,8 @@ from .notification_event import NotificationEvent
 from .refresh_session import RefreshSession
 from .run import Run
 from .run_event import RunEvent
+from .session_share import SessionShare
+from .session_share import SessionShareEvent
 from .surface_ingress import SurfaceIngressClaim
 
 # Re-export from other modules
@@ -76,6 +78,8 @@ __all__ = [
     "User",
     "CommisBarrier",
     "RefreshSession",
+    "SessionShare",
+    "SessionShareEvent",
     # Remaining models (still in models.py)
     "AccountConnectorCredential",
     "ConnectorCredential",

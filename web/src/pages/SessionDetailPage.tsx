@@ -37,8 +37,9 @@ import { useAuth } from "../lib/auth";
 import { config } from "../lib/config";
 import { useReadinessFlag } from "../lib/readiness-contract";
 import { getRuntimeElapsedLabel } from "../lib/sessionTiming";
-import { buildShareableSessionUrl, copyToClipboard } from "../lib/clipboard";
+import { buildSessionShareUrl, copyToClipboard } from "../lib/clipboard";
 import {
+  createSessionShare,
   respondToPauseRequest,
   setSessionAction,
   type PauseRequestResponseRequest,
@@ -67,18 +68,21 @@ function SessionDetailWorkspaceRoute({
   sessionId,
   debugTelemetry,
   sharedByUserId,
+  shareToken,
 }: {
   highlightEventId: number | null;
   returnTo: string;
   sessionId: string | null;
   debugTelemetry: boolean;
   sharedByUserId: number | null;
+  shareToken: string | null;
 }) {
   const navigate = useNavigate();
   const { user: currentUser } = useAuth();
   const workspace = useSessionWorkspace(sessionId, {
     highlightEventId,
     shared_by: sharedByUserId,
+    share_token: shareToken,
   });
 
   const {
@@ -128,6 +132,7 @@ function SessionDetailWorkspaceRoute({
   const queryClient = useQueryClient();
   const [confirmingArchive, setConfirmingArchive] = useState(false);
   const [continuingSession, setContinuingSession] = useState(false);
+  const [copyingShareLink, setCopyingShareLink] = useState(false);
   const [continueLaunchState, setContinueLaunchState] =
     useState<LocalContinueLaunchState | null>(null);
 
@@ -156,12 +161,24 @@ function SessionDetailWorkspaceRoute({
     if (currentUserId === null || currentUserId === undefined) {
       return;
     }
-    const url = buildShareableSessionUrl(window.location.origin, session.id, currentUserId);
-    const ok = await copyToClipboard(url);
-    if (ok) {
-      toast.success("Link copied");
-    } else {
-      toast.error("Couldn't copy link — copy it from the address bar");
+    if (config.demoMode) {
+      toast(DEMO_READ_ONLY_MESSAGE);
+      return;
+    }
+    setCopyingShareLink(true);
+    try {
+      const share = await createSessionShare(session.id, {});
+      const url = buildSessionShareUrl(window.location.origin, share.share_url || share.token);
+      const ok = await copyToClipboard(url);
+      if (ok) {
+        toast.success("Link copied");
+      } else {
+        toast.error("Couldn't copy link — copy it from the address bar");
+      }
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Couldn't create share link");
+    } finally {
+      setCopyingShareLink(false);
     }
   }, [session, currentUser]);
 
@@ -425,11 +442,12 @@ function SessionDetailWorkspaceRoute({
           variant="ghost"
           size="sm"
           onClick={() => void handleCopyShareLink()}
+          disabled={copyingShareLink}
           title="Copy a link to this session"
           aria-label="Copy link to this session"
           data-testid="session-copy-link-button"
         >
-          Copy link
+          {copyingShareLink ? "Copying" : "Copy link"}
         </Button>
       ) : null}
       <Button
@@ -649,6 +667,7 @@ export default function SessionDetailPage() {
     if (!Number.isFinite(parsed) || parsed < 1) return null;
     return Math.trunc(parsed);
   }, [searchParams]);
+  const shareToken = searchParams.get("share_token") || null;
   const returnTo =
     (location.state as { from?: string } | null)?.from ?? "/timeline";
 
@@ -677,6 +696,7 @@ export default function SessionDetailPage() {
       returnTo={returnTo}
       debugTelemetry={debugTelemetry}
       sharedByUserId={sharedByUserId}
+      shareToken={shareToken}
     />
   );
 }

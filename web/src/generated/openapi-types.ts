@@ -1520,6 +1520,39 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/start-handoff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Start Handoff
+         * @description Browser entry point for hosted login.
+         *
+         *     302s to the control plane `/auth/start?tenant=...&return_to=...`.
+         *     The CP renders a tenant-aware login page; after auth the CP
+         *     mints an HS256 bridge token and 302s to the tenant's
+         *     `/api/auth/accept-token`.
+         *
+         *     Self-host tenants (no CONTROL_PLANE_URL) get a redirect to the
+         *     local `/login` React route instead, which renders the tenant's
+         *     own login form.
+         *
+         *     Phase 1 will add a `tenant_state` CSRF cookie bound to the
+         *     `accept-handoff` route; in Phase 0 the existing HS256 bridge
+         *     is the only auth path, so the cookie would be orphaned.
+         */
+        get: operations["start_handoff_auth_start_handoff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/accept-token": {
         parameters: {
             query?: never;
@@ -3124,6 +3157,74 @@ export interface paths {
          * @description Machine-facing continuation surface for existing durable sessions.
          */
         post: operations["continue_remote_session_agents_agents_sessions__session_id__continue_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/sessions/{session_id}/shares": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Timeline Session Share */
+        post: operations["create_timeline_session_share_timeline_sessions__session_id__shares_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/session-shares/{share_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke Timeline Session Share */
+        delete: operations["revoke_timeline_session_share_timeline_session_shares__share_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/session-shares/{token}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Resolve Timeline Session Share */
+        get: operations["resolve_timeline_session_share_timeline_session_shares__token__resolve_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/public/session-shares/{token}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Preview Public Session Share */
+        get: operations["preview_public_session_share_public_session_shares__token__preview_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5840,6 +5941,20 @@ export interface components {
          * @enum {string}
          */
         ControlPath: "managed" | "unmanaged";
+        /** CreateSessionShareRequest */
+        CreateSessionShareRequest: {
+            /**
+             * Expires In Days
+             * @description Optional TTL for the share link. Defaults to 30 days.
+             * @default 30
+             */
+            expires_in_days: number | null;
+            /**
+             * Note
+             * @description Optional short note shown on the share landing page.
+             */
+            note?: string | null;
+        };
         /**
          * CreateTokenRequest
          * @description Request to create a new device token.
@@ -10029,6 +10144,8 @@ export interface components {
              * @description Remote-launch error message when launch_state=launch_failed/launch_orphaned
              */
             launch_error_message?: string | null;
+            /** @description Attribution for the user whose signed share token or legacy ?shared_by=<id> link surfaced this session. Null when attribution is absent, the user is gone, or the sharer is the current viewer. */
+            sharer?: components["schemas"]["SessionSharerResponse"] | null;
         };
         /** SessionRuntimeDisplayResponse */
         SessionRuntimeDisplayResponse: {
@@ -10107,6 +10224,70 @@ export interface components {
             terminal_reason: components["schemas"]["TerminalReason"] | null;
             /** @description Active structured provider question, when the runtime is waiting for an answer. */
             pause_request?: components["schemas"]["SessionPauseRequestProjectionResponse"] | null;
+        };
+        /** SessionSharePreviewResponse */
+        SessionSharePreviewResponse: {
+            /** Provider */
+            provider: string;
+            /** Device Name */
+            device_name: string | null;
+            /** Started At */
+            started_at: string | null;
+            /** Ended At */
+            ended_at: string | null;
+            /** Expires At */
+            expires_at: string | null;
+            /** Note */
+            note: string | null;
+            sharer: components["schemas"]["SessionSharerResponse"] | null;
+        };
+        /** SessionShareResolveResponse */
+        SessionShareResolveResponse: {
+            /** Session Id */
+            session_id: string;
+            /** Share Id */
+            share_id: number;
+            /** Expires At */
+            expires_at: string | null;
+            /** Note */
+            note: string | null;
+            sharer: components["schemas"]["SessionSharerResponse"] | null;
+        };
+        /** SessionShareResponse */
+        SessionShareResponse: {
+            /** Id */
+            id: number;
+            /** Session Id */
+            session_id: string;
+            /** Token */
+            token: string;
+            /** Share Url */
+            share_url: string;
+            /** Expires At */
+            expires_at: string | null;
+            /** Revoked At */
+            revoked_at: string | null;
+            sharer: components["schemas"]["SessionSharerResponse"] | null;
+        };
+        /**
+         * SessionSharerResponse
+         * @description Public-safe attribution for the user who shared this session link.
+         *
+         *     Resolved server-side from a ``?shared_by=<user_id>`` query param. The pill
+         *     on the session header is the only consumer; the same field doubles as
+         *     "who is the owner of this session" in single-tenant deployments.
+         */
+        SessionSharerResponse: {
+            /**
+             * Id
+             * @description Sharing user id
+             */
+            id: number;
+            /**
+             * Display Name
+             * @description Display name (null falls back to email local on the client)
+             */
+            display_name?: string | null;
         };
         /**
          * SessionSummaryResponse
@@ -14221,6 +14402,38 @@ export interface operations {
             };
         };
     };
+    start_handoff_auth_start_handoff_get: {
+        parameters: {
+            query?: {
+                tenant?: string | null;
+                return_to?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     accept_token_redirect_auth_accept_token_get: {
         parameters: {
             query: {
@@ -16997,6 +17210,134 @@ export interface operations {
             };
         };
     };
+    create_timeline_session_share_timeline_sessions__session_id__shares_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CreateSessionShareRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionShareResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_timeline_session_share_timeline_session_shares__share_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                share_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionShareResolveResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resolve_timeline_session_share_timeline_session_shares__token__resolve_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionShareResolveResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_public_session_share_public_session_shares__token__preview_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionSharePreviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     create_session_input_with_attachments_sessions__session_id__inputs_multipart_post: {
         parameters: {
             query?: {
@@ -17877,6 +18218,10 @@ export interface operations {
                 branch_mode?: string;
                 /** @description Max projected items */
                 limit?: number;
+                /** @description User id who shared this link. When set, the response includes a ``sharer`` block with their display name for the 'Shared by' header pill. Ignored when the user no longer exists. */
+                shared_by?: number | null;
+                /** @description Signed share token. When valid, this supersedes unsigned shared_by attribution. */
+                share_token?: string | null;
             };
             header?: never;
             path: {

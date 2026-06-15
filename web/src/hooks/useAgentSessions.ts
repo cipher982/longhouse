@@ -123,23 +123,26 @@ export function useAgentSessionWorkspace(
     limit?: number;
     branch_mode?: "head" | "all";
     shared_by?: number | null;
+    share_token?: string | null;
   } = {},
 ) {
   const {
     limit = 200,
     branch_mode = "head",
     shared_by,
+    share_token,
     enabled,
     refetchInterval,
   } = options;
 
   return useQuery<AgentSessionWorkspaceResponse>({
-    queryKey: ["agent-session-workspace", sessionId, { limit, branch_mode, shared_by }],
+    queryKey: ["agent-session-workspace", sessionId, { limit, branch_mode, shared_by, share_token }],
     queryFn: () =>
       fetchAgentSessionWorkspace(sessionId!, {
         limit,
         branch_mode,
         shared_by,
+        share_token,
       }),
     enabled: enabled ?? !!sessionId,
     refetchInterval,
