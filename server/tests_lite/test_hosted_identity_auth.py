@@ -16,6 +16,7 @@ from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from starlette.requests import Request
+from starlette.responses import Response
 
 from zerg.auth.cp_jwks import CPTokenClaims
 from zerg.auth.session_tokens import _encode_jwt
@@ -26,6 +27,7 @@ from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.models import User
 from zerg.routers.auth_sso import NativeHandoffRequest
+from zerg.routers.auth_sso import accept_handoff_request
 from zerg.routers.auth_sso import accept_native_handoff
 
 
@@ -163,6 +165,83 @@ def test_hosted_browser_auth_rejects_legacy_jwt_bearer(monkeypatch, db_session):
         get_current_browser_user(request, db_session)
 
     assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_accept_handoff_allows_code_only_control_plane_open_instance(monkeypatch, db_session):
+    user = User(email="david010@gmail.com")
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+
+    calls = {}
+
+    def exchange(**kwargs):
+        calls.update(kwargs)
+        return ("cp.runtime.jwt", 3600)
+
+    class Strategy:
+        def validate_ws_token(self, token, db):
+            assert token == "cp.runtime.jwt"
+            return user
+
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso.get_settings",
+        lambda: SimpleNamespace(
+            control_plane_url="https://control.longhouse.ai",
+            internal_api_secret="secret",
+            auth_disabled=False,
+            testing=False,
+        ),
+    )
+    monkeypatch.setattr("zerg.routers.auth_sso._hosted_instance_id", lambda: "david010")
+    monkeypatch.setattr("zerg.routers.auth_sso._exchange_handoff_code", exchange)
+    monkeypatch.setattr("zerg.dependencies.auth._get_strategy", lambda: Strategy())
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/auth/accept-handoff",
+            "headers": [],
+            "query_string": b"code=one-use-code",
+        }
+    )
+
+    redirect = await accept_handoff_request(request, "one-use-code", Response(), db=db_session)
+
+    assert redirect.status_code == 302
+    assert redirect.headers["location"] == "/timeline"
+    assert calls == {
+        "control_plane_url": "https://control.longhouse.ai",
+        "internal_api_secret": "secret",
+        "code": "one-use-code",
+        "tenant": "david010",
+        "tenant_state": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_accept_handoff_requires_cookie_for_tenant_state(monkeypatch, db_session):
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso.get_settings",
+        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai"),
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/auth/accept-handoff",
+            "headers": [],
+            "query_string": b"code=one-use-code&tenant_state=state-1",
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await accept_handoff_request(request, "one-use-code", Response(), tenant_state="state-1", db=db_session)
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Missing login state"
 
 
 @pytest.mark.asyncio

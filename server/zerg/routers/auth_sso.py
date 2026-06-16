@@ -241,11 +241,12 @@ async def accept_handoff_request(
     if not control_plane_url:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Hosted handoff is not configured")
 
-    expected_state = request.cookies.get(TENANT_LOGIN_STATE_COOKIE)
-    if not expected_state:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Missing login state")
-    if not tenant_state or not hmac.compare_digest(expected_state, tenant_state):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Login state mismatch")
+    if tenant_state:
+        expected_state = request.cookies.get(TENANT_LOGIN_STATE_COOKIE)
+        if not expected_state:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Missing login state")
+        if not hmac.compare_digest(expected_state, tenant_state):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Login state mismatch")
 
     tenant = _hosted_instance_id()
     runtime_token, expires_in = _exchange_handoff_code(
