@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from types import SimpleNamespace
 
 os.environ.setdefault("AUTH_DISABLED", "1")
@@ -15,6 +18,7 @@ from sqlalchemy.orm import sessionmaker
 from starlette.requests import Request
 
 from zerg.auth.cp_jwks import CPTokenClaims
+from zerg.auth.session_tokens import _encode_jwt
 from zerg.auth.strategy import HostedCPAuthStrategy
 from zerg.database import Base
 from zerg.dependencies import browser_auth
@@ -127,6 +131,40 @@ def test_hosted_browser_auth_accepts_runtime_bearer(monkeypatch, db_session):
     assert get_current_browser_user(request, db_session).id == user.id
 
 
+def test_hosted_browser_auth_rejects_legacy_jwt_bearer(monkeypatch, db_session):
+    monkeypatch.setenv("INSTANCE_ID", "david010")
+    user = User(email="david010@gmail.com")
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    legacy_token = _encode_jwt(
+        {
+            "sub": str(user.id),
+            "email": user.email,
+            "exp": int((datetime.now(timezone.utc) + timedelta(minutes=5)).timestamp()),
+        },
+        "test-jwt-secret-1234",
+    )
+
+    monkeypatch.setattr(browser_auth, "get_settings", lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai"))
+    monkeypatch.setattr(browser_auth.auth_deps, "AUTH_DISABLED", False)
+    monkeypatch.setattr(browser_auth.auth_deps, "_get_strategy", lambda: HostedCPAuthStrategy())
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/auth/verify",
+            "headers": [(b"authorization", f"Bearer {legacy_token}".encode())],
+            "query_string": b"",
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        get_current_browser_user(request, db_session)
+
+    assert exc.value.status_code == 401
+
+
 @pytest.mark.asyncio
 async def test_accept_native_handoff_exchanges_one_use_code(monkeypatch, db_session):
     user = User(email="david010@gmail.com")
@@ -153,7 +191,7 @@ async def test_accept_native_handoff_exchanges_one_use_code(monkeypatch, db_sess
     monkeypatch.setattr("zerg.routers.auth_sso._exchange_handoff_code", exchange)
     monkeypatch.setattr("zerg.dependencies.auth._get_strategy", lambda: Strategy())
 
-    result = await accept_native_handoff(NativeHandoffRequest(code="one-use-code"), db_session)
+    result = await accept_native_handoff(NativeHandoffRequest(code="one-use-code", tenant_state="verifier"), db_session)
 
     assert result == {"runtime_token": "cp.runtime.jwt", "expires_in": 3600}
     assert calls == {
@@ -161,4 +199,5 @@ async def test_accept_native_handoff_exchanges_one_use_code(monkeypatch, db_sess
         "internal_api_secret": "secret",
         "code": "one-use-code",
         "tenant": "david010",
+        "tenant_state": "verifier",
     }

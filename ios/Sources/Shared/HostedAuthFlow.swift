@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 struct HostedAuthCallbackPayload: Equatable {
     let tenant: String?
@@ -10,19 +11,39 @@ struct HostedAuthCallbackPayload: Equatable {
 }
 
 enum HostedAuthFlow {
-    static func openInstanceURL(tenant: String? = nil) -> URL? {
+    static func makeHandoffVerifier() -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        if status != errSecSuccess {
+            return "\(UUID().uuidString)-\(UUID().uuidString)"
+        }
+        return Data(bytes)
+            .base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    static func openInstanceURL(tenant: String? = nil, handoffVerifier: String? = nil) -> URL? {
         guard var components = URLComponents(
             string: "\(LonghouseAuthConfig.hostedControlPlaneURL)/auth/native/open-instance"
         ) else {
             return nil
         }
 
+        var queryItems: [URLQueryItem] = []
         let normalizedTenant = tenant?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         if let normalizedTenant, !normalizedTenant.isEmpty {
-            components.queryItems = [URLQueryItem(name: "tenant", value: normalizedTenant)]
+            queryItems.append(URLQueryItem(name: "tenant", value: normalizedTenant))
         }
+        let verifier = handoffVerifier?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let verifier, !verifier.isEmpty {
+            queryItems.append(URLQueryItem(name: "tenant_state", value: verifier))
+        }
+        components.queryItems = queryItems.isEmpty ? nil : queryItems
         return components.url
     }
 

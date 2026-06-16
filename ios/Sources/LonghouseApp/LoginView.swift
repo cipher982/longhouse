@@ -34,6 +34,7 @@ struct LoginView: View {
     @StateObject private var authPresentationContext = AuthPresentationContextProvider()
     @State private var authMethods: AuthMethods?
     @State private var hostedAuthSession: ASWebAuthenticationSession?
+    @State private var hostedHandoffVerifier: String?
     @State private var isLoadingAuthMethods = false
     @State private var isSigningIn = false
     @State private var localErrorMessage: String?
@@ -340,26 +341,29 @@ struct LoginView: View {
             return
         }
 
-        guard let authURL = HostedAuthFlow.openInstanceURL(tenant: tenant) else {
+        let verifier = HostedAuthFlow.makeHandoffVerifier()
+        guard let authURL = HostedAuthFlow.openInstanceURL(tenant: tenant, handoffVerifier: verifier) else {
             localErrorMessage = "Hosted sign-in is not configured"
             return
         }
 
-        startHostedAuthSession(authURL)
+        startHostedAuthSession(authURL, handoffVerifier: verifier)
     }
 
     private func startHostedBootstrapSignIn() {
-        guard let authURL = HostedAuthFlow.openInstanceURL() else {
+        let verifier = HostedAuthFlow.makeHandoffVerifier()
+        guard let authURL = HostedAuthFlow.openInstanceURL(handoffVerifier: verifier) else {
             localErrorMessage = "Hosted sign-in is not configured"
             return
         }
 
-        startHostedAuthSession(authURL)
+        startHostedAuthSession(authURL, handoffVerifier: verifier)
     }
 
-    private func startHostedAuthSession(_ authURL: URL) {
+    private func startHostedAuthSession(_ authURL: URL, handoffVerifier: String) {
         appState.clearAuthError()
         localErrorMessage = nil
+        hostedHandoffVerifier = handoffVerifier
 
         if UITestHooks.shouldCaptureHostedAuthAttempt {
             appState.recordHostedAuthAttempt(authURL)
@@ -377,6 +381,7 @@ struct LoginView: View {
                 defer { isSigningIn = false }
 
                 if let error {
+                    hostedHandoffVerifier = nil
                     if (error as NSError).code == ASWebAuthenticationSessionError.canceledLogin.rawValue {
                         return
                     }
@@ -385,6 +390,7 @@ struct LoginView: View {
                 }
 
                 guard let callbackURL else {
+                    hostedHandoffVerifier = nil
                     localErrorMessage = "Hosted sign-in did not return to the app"
                     return
                 }
@@ -399,6 +405,7 @@ struct LoginView: View {
 
         if !session.start() {
             hostedAuthSession = nil
+            hostedHandoffVerifier = nil
             isSigningIn = false
             localErrorMessage = "Failed to start hosted sign-in"
         }
@@ -406,11 +413,13 @@ struct LoginView: View {
 
     private func handleHostedAuthCallback(_ callbackURL: URL) async {
         guard let payload = HostedAuthFlow.callbackPayload(from: callbackURL) else {
+            hostedHandoffVerifier = nil
             localErrorMessage = "Hosted sign-in returned an invalid callback"
             return
         }
 
         if let error = payload.error {
+            hostedHandoffVerifier = nil
             localErrorMessage = friendlyHostedError(error)
             return
         }
@@ -422,13 +431,19 @@ struct LoginView: View {
 
         let sessionEstablished: Bool
         if let code = payload.code {
-            sessionEstablished = await appState.exchangeHostedHandoffCode(code)
+            guard let verifier = hostedHandoffVerifier else {
+                hostedHandoffVerifier = nil
+                localErrorMessage = "Hosted sign-in returned without a verifier"
+                return
+            }
+            sessionEstablished = await appState.exchangeHostedHandoffCode(code, handoffVerifier: verifier)
         } else if let runtimeToken = payload.runtimeToken {
             sessionEstablished = await appState.finishHostedRuntimeToken(runtimeToken)
         } else {
             localErrorMessage = "Hosted sign-in returned without a session token"
             return
         }
+        hostedHandoffVerifier = nil
         if !sessionEstablished {
             localErrorMessage = appState.authError ?? "Hosted sign-in failed"
         }

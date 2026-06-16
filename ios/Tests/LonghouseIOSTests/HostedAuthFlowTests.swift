@@ -23,6 +23,17 @@ struct HostedAuthFlowTests {
     }
 
     @Test
+    func openInstanceURLIncludesHandoffVerifier() throws {
+        let url = try #require(HostedAuthFlow.openInstanceURL(tenant: "Demo", handoffVerifier: " verifier-123 "))
+        let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
+
+        #expect(components.queryItems == [
+            URLQueryItem(name: "tenant", value: "demo"),
+            URLQueryItem(name: "tenant_state", value: "verifier-123"),
+        ])
+    }
+
+    @Test
     func callbackPayloadExtractsInstanceURLAndRuntimeToken() throws {
         let callbackURL = try #require(URL(
             string: "ai.longhouse.ios://auth-callback?tenant=testuser&instance_url=https%3A%2F%2Ftestuser.longhouse.ai&runtime_token=abc123&tenant_state=state123"

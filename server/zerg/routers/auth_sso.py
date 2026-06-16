@@ -42,6 +42,7 @@ TENANT_LOGIN_STATE_COOKIE = "tenant_login_state"
 
 class NativeHandoffRequest(BaseModel):
     code: str
+    tenant_state: str
 
 
 def _hosted_instance_id() -> str:
@@ -291,6 +292,7 @@ async def accept_native_handoff(body: NativeHandoffRequest, db: Session = Depend
         internal_api_secret=settings.internal_api_secret,
         code=body.code,
         tenant=tenant,
+        tenant_state=body.tenant_state,
     )
 
     from zerg.dependencies.auth import _get_strategy

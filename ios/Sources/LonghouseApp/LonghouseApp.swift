@@ -264,10 +264,15 @@ final class AppState: ObservableObject {
         SharedAuthStore.primeSharedCookieStorage(for: trimmed)
     }
 
-    func exchangeHostedHandoffCode(_ code: String) async -> Bool {
+    func exchangeHostedHandoffCode(_ code: String, handoffVerifier: String) async -> Bool {
         let trimmedCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedVerifier = handoffVerifier.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedCode.isEmpty else {
             authError = "Hosted sign-in returned without a handoff code"
+            return false
+        }
+        guard !trimmedVerifier.isEmpty else {
+            authError = "Hosted sign-in returned without a handoff verifier"
             return false
         }
         guard let url = URL(string: "\(serverURL)/api/auth/accept-native-handoff") else {
@@ -281,7 +286,9 @@ final class AppState: ObservableObject {
         request.timeoutInterval = 10
 
         do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: ["code": trimmedCode])
+            request.httpBody = try JSONSerialization.data(
+                withJSONObject: ["code": trimmedCode, "tenant_state": trimmedVerifier]
+            )
             let (data, response) = try await URLSession.shared.data(for: request)
             guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
                 authError = Self.apiErrorMessage(from: data) ?? "Hosted sign-in failed"

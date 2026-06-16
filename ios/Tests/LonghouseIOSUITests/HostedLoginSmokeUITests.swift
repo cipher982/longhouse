@@ -18,7 +18,7 @@ final class HostedLoginSmokeUITests: XCTestCase {
         XCTAssertTrue(app.buttons["login.serverConfig"].exists)
     }
 
-    func testHostedBootstrapStartsFromControlPlaneOpenInstanceURL() {
+    func testHostedBootstrapStartsFromControlPlaneOpenInstanceURL() throws {
         let app = launchApp()
         let continueButton = app.buttons["login.continueWithLonghouse"]
 
@@ -27,10 +27,12 @@ final class HostedLoginSmokeUITests: XCTestCase {
 
         let attemptedURLLabel = app.staticTexts["login.hostedAuthAttemptURL"]
         XCTAssertTrue(attemptedURLLabel.waitForExistence(timeout: 5))
-        XCTAssertEqual(
-            attemptedURLLabel.label,
-            "https://control.longhouse.ai/auth/native/open-instance"
-        )
+        let attemptedURL = URL(string: attemptedURLLabel.label)
+        let components = URLComponents(url: try XCTUnwrap(attemptedURL), resolvingAgainstBaseURL: false)
+        XCTAssertEqual(components?.scheme, "https")
+        XCTAssertEqual(components?.host, "control.longhouse.ai")
+        XCTAssertEqual(components?.path, "/auth/native/open-instance")
+        XCTAssertNotNil(components?.queryItems?.first(where: { $0.name == "tenant_state" })?.value)
     }
 
     private func launchApp() -> XCUIApplication {
