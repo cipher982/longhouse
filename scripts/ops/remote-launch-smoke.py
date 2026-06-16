@@ -5,12 +5,12 @@ This deliberately exercises the public browser-authenticated API:
 
 1. wait for /api/health to report the expected build commit
 2. mint a browser session cookie from the hosted tenant container
-3. pick an online machine that advertises codex.launch
-4. POST /api/sessions/launch
-5. wait longer than the launch lease
-6. POST /api/sessions/{id}/input with a nonce prompt
+3. pick an online machine that advertises the matching Codex capability
+4. POST /api/sessions/launch in one-shot or live-control mode
+5. one-shot: require the launch prompt to produce an assistant nonce and exit
+6. live-control: POST /api/sessions/{id}/input with a nonce prompt
 7. query hosted SQLite and require an assistant-role event containing the nonce
-8. best-effort stop the Codex bridge process when the smoke is done
+8. best-effort stop any Codex bridge process when the smoke is done
 
 The final assertion is DB-backed because timeline previews can include user
 echoes; launch readiness needs to prove the provider answered, not just that
@@ -46,6 +46,7 @@ DEFAULT_ASSISTANT_TIMEOUT_SECS = 240
 DEFAULT_POLL_INTERVAL_SECS = 5
 COOKIE_NAME = "longhouse_session"
 CODEX_LAUNCH_CAPABILITY = "codex.launch"
+CODEX_RUN_ONCE_CAPABILITY = "codex.run_once"
 SMOKE_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/605.1.15 (KHTML, like Gecko) "
@@ -204,7 +205,22 @@ with db_session() as db:
     return token
 
 
-def discover_machine(base_url: str, cookie: str, *, requested_device_id: str | None = None) -> dict[str, Any]:
+def machine_supports(machine: dict[str, Any], capability: str) -> bool:
+    supports = machine.get("supports")
+    if isinstance(supports, list) and capability in {str(item) for item in supports}:
+        return True
+    if capability == CODEX_LAUNCH_CAPABILITY and machine.get("can_launch_codex") is True:
+        return True
+    return False
+
+
+def discover_machine(
+    base_url: str,
+    cookie: str,
+    *,
+    requested_device_id: str | None = None,
+    required_capability: str = CODEX_LAUNCH_CAPABILITY,
+) -> dict[str, Any]:
     result = _http_json("GET", f"{base_url.rstrip('/')}/api/timeline/machines", cookie=cookie, timeout=20)
     payload = _require_json_object(result, context="GET /api/timeline/machines")
     machines = payload.get("machines")
@@ -216,14 +232,16 @@ def discover_machine(base_url: str, cookie: str, *, requested_device_id: str | N
         for machine in machines
         if isinstance(machine, dict)
         and machine.get("online") is True
-        and machine.get("can_launch_codex") is True
+        and machine_supports(machine, required_capability)
     ]
     if requested_device_id:
         for machine in eligible:
             if str(machine.get("device_id") or "") == requested_device_id:
                 return machine
         visible = [str(machine.get("device_id") or "") for machine in machines if isinstance(machine, dict)]
-        raise SmokeError(f"requested device_id={requested_device_id!r} is not online with codex.launch; visible={visible}")
+        raise SmokeError(
+            f"requested device_id={requested_device_id!r} is not online with {required_capability}; visible={visible}"
+        )
     if not eligible:
         visible = [
             {
@@ -235,7 +253,7 @@ def discover_machine(base_url: str, cookie: str, *, requested_device_id: str | N
             for machine in machines
             if isinstance(machine, dict)
         ]
-        raise SmokeError(f"no online codex-launch-capable machine found; visible={visible}")
+        raise SmokeError(f"no online machine found with {required_capability}; visible={visible}")
     return eligible[0]
 
 
@@ -248,6 +266,8 @@ def launch_session(
     project: str,
     display_name: str,
     client_request_id: str,
+    execution_lifetime: str,
+    initial_prompt: str | None = None,
 ) -> dict[str, Any]:
     payload = {
         "device_id": device_id,
@@ -256,7 +276,10 @@ def launch_session(
         "project": project,
         "display_name": display_name,
         "client_request_id": client_request_id,
+        "execution_lifetime": execution_lifetime,
     }
+    if initial_prompt is not None:
+        payload["initial_prompt"] = initial_prompt
     result = _http_json("POST", f"{base_url.rstrip('/')}/api/sessions/launch", body=payload, cookie=cookie, timeout=60)
     data = _require_json_object(result, context="POST /api/sessions/launch")
     session_id = str(data.get("session_id") or "")
@@ -265,6 +288,9 @@ def launch_session(
     state = str(data.get("launch_state") or "")
     if state != "live":
         raise SmokeError(f"launch failed state={state} code={data.get('launch_error_code')} message={data.get('launch_error_message')}")
+    observed_lifetime = str(data.get("execution_lifetime") or "")
+    if observed_lifetime != execution_lifetime:
+        raise SmokeError(f"launch response execution_lifetime={observed_lifetime!r}, expected {execution_lifetime!r}: {data}")
     return data
 
 
@@ -437,6 +463,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--cwd", default=os.environ.get("REMOTE_LAUNCH_SMOKE_CWD"))
     parser.add_argument("--project", default=os.environ.get("REMOTE_LAUNCH_SMOKE_PROJECT", DEFAULT_PROJECT))
     parser.add_argument("--expected-commit", default=os.environ.get("REMOTE_LAUNCH_SMOKE_EXPECTED_COMMIT") or os.environ.get("GITHUB_SHA"))
+    parser.add_argument(
+        "--execution-lifetime",
+        choices=("one_shot", "live_control"),
+        default=os.environ.get("REMOTE_LAUNCH_SMOKE_EXECUTION_LIFETIME", "one_shot"),
+    )
+    parser.add_argument("--initial-prompt", default=os.environ.get("REMOTE_LAUNCH_SMOKE_INITIAL_PROMPT"))
     parser.add_argument("--health-timeout-secs", type=int, default=int(os.environ.get("REMOTE_LAUNCH_SMOKE_HEALTH_TIMEOUT_SECS", "600")))
     parser.add_argument("--wait-after-launch-secs", type=int, default=int(os.environ.get("REMOTE_LAUNCH_SMOKE_WAIT_AFTER_LAUNCH_SECS", str(DEFAULT_WAIT_AFTER_LAUNCH_SECS))))
     parser.add_argument("--assistant-timeout-secs", type=int, default=int(os.environ.get("REMOTE_LAUNCH_SMOKE_ASSISTANT_TIMEOUT_SECS", str(DEFAULT_ASSISTANT_TIMEOUT_SECS))))
@@ -476,6 +508,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "project": args.project,
         "cwd": cwd,
         "expected_commit": args.expected_commit,
+        "execution_lifetime": args.execution_lifetime,
         "nonce": nonce,
         "hostname": socket.gethostname(),
     }
@@ -487,15 +520,30 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         cookie = mint_browser_cookie(ssh_target=args.ssh_target, container=container)
         result["auth"] = {"browser_cookie_minted": True}
 
-        machine = discover_machine(base_url, cookie, requested_device_id=args.device_id)
+        required_capability = CODEX_RUN_ONCE_CAPABILITY if args.execution_lifetime == "one_shot" else CODEX_LAUNCH_CAPABILITY
+        machine = discover_machine(
+            base_url,
+            cookie,
+            requested_device_id=args.device_id,
+            required_capability=required_capability,
+        )
         result["machine"] = {
             "device_id": machine.get("device_id"),
             "machine_name": machine.get("machine_name"),
             "engine_build": machine.get("engine_build"),
             "supports": machine.get("supports"),
+            "required_capability": required_capability,
         }
 
         display_name = f"remote-smoke-{run_id}"
+        initial_prompt = None
+        if args.execution_lifetime == "one_shot":
+            initial_prompt = (
+                str(args.initial_prompt).strip()
+                if args.initial_prompt
+                else "Remote launch one-shot smoke check. Reply with exactly this token and no extra analysis: "
+                f"{nonce}"
+            )
         launch_response = launch_session(
             base_url,
             cookie,
@@ -504,28 +552,31 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             project=args.project,
             display_name=display_name,
             client_request_id=f"{client_prefix}-launch",
+            execution_lifetime=args.execution_lifetime,
+            initial_prompt=initial_prompt,
         )
         session_id = str(launch_response["session_id"])
         result["session_id"] = session_id
         result["launch_response"] = launch_response
         result["launch"] = hosted_session_debug(ssh_target=args.ssh_target, container=container, session_id=session_id)
 
-        time.sleep(args.wait_after_launch_secs)
-        send_response = send_nonce_prompt(
-            base_url,
-            cookie,
-            session_id=session_id,
-            nonce=nonce,
-            client_request_id=f"{client_prefix}-input",
-        )
-        result["send"] = send_response
-        result["second_send"] = send_second_input_probe(
-            base_url,
-            cookie,
-            session_id=session_id,
-            nonce=nonce,
-            client_request_id=f"{client_prefix}-second",
-        )
+        if args.execution_lifetime == "live_control":
+            time.sleep(args.wait_after_launch_secs)
+            send_response = send_nonce_prompt(
+                base_url,
+                cookie,
+                session_id=session_id,
+                nonce=nonce,
+                client_request_id=f"{client_prefix}-input",
+            )
+            result["send"] = send_response
+            result["second_send"] = send_second_input_probe(
+                base_url,
+                cookie,
+                session_id=session_id,
+                nonce=nonce,
+                client_request_id=f"{client_prefix}-second",
+            )
 
         observed = poll_for_assistant_nonce(
             ssh_target=args.ssh_target,

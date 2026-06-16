@@ -93,6 +93,40 @@ def test_discover_machine_picks_online_codex_capable_machine(monkeypatch) -> Non
     assert machine["device_id"] == "demo-machine"
 
 
+def test_discover_machine_can_require_run_once_capability(monkeypatch) -> None:
+    def fake_http_json(method, url, **kwargs):
+        return smoke.HttpResult(
+            200,
+            "{}",
+            {
+                "machines": [
+                    {
+                        "device_id": "live-only",
+                        "online": True,
+                        "supports": ["codex.launch"],
+                        "can_launch_codex": True,
+                    },
+                    {
+                        "device_id": "run-once",
+                        "online": True,
+                        "supports": ["codex.run_once"],
+                        "can_launch_codex": False,
+                    },
+                ]
+            },
+        )
+
+    monkeypatch.setattr(smoke, "_http_json", fake_http_json)
+
+    machine = smoke.discover_machine(
+        "https://demo.longhouse.ai",
+        "cookie",
+        required_capability="codex.run_once",
+    )
+
+    assert machine["device_id"] == "run-once"
+
+
 def test_parse_last_json_line_skips_logs() -> None:
     parsed = smoke._parse_last_json_line("startup log\nnot json\n{\"ok\": true}\n")
 
@@ -173,8 +207,77 @@ def test_launch_session_rejects_non_live_state(monkeypatch) -> None:
             project="zerg",
             display_name="smoke",
             client_request_id="rid",
+            execution_lifetime="live_control",
         )
     except smoke.SmokeError as exc:
         assert "launching_unknown" in str(exc)
     else:
         raise AssertionError("launch_session should reject launching_unknown")
+
+
+def test_launch_session_sends_one_shot_prompt_payload(monkeypatch) -> None:
+    captured = {}
+
+    def fake_http_json(method, url, **kwargs):
+        captured["method"] = method
+        captured["url"] = url
+        captured["body"] = kwargs["body"]
+        return smoke.HttpResult(
+            200,
+            "{}",
+            {
+                "session_id": "sess-1",
+                "launch_state": "live",
+                "execution_lifetime": "one_shot",
+            },
+        )
+
+    monkeypatch.setattr(smoke, "_http_json", fake_http_json)
+
+    result = smoke.launch_session(
+        "https://demo.longhouse.ai",
+        "cookie",
+        device_id="demo-machine",
+        cwd="/Users/example/git/zerg/longhouse",
+        project="zerg",
+        display_name="smoke",
+        client_request_id="rid",
+        execution_lifetime="one_shot",
+        initial_prompt="reply with TOKEN",
+    )
+
+    assert result["session_id"] == "sess-1"
+    assert captured["body"]["execution_lifetime"] == "one_shot"
+    assert captured["body"]["initial_prompt"] == "reply with TOKEN"
+
+
+def test_launch_session_sends_explicit_live_control_payload(monkeypatch) -> None:
+    captured = {}
+
+    def fake_http_json(method, url, **kwargs):
+        captured["body"] = kwargs["body"]
+        return smoke.HttpResult(
+            200,
+            "{}",
+            {
+                "session_id": "sess-1",
+                "launch_state": "live",
+                "execution_lifetime": "live_control",
+            },
+        )
+
+    monkeypatch.setattr(smoke, "_http_json", fake_http_json)
+
+    smoke.launch_session(
+        "https://demo.longhouse.ai",
+        "cookie",
+        device_id="demo-machine",
+        cwd="/Users/example/git/zerg/longhouse",
+        project="zerg",
+        display_name="smoke",
+        client_request_id="rid",
+        execution_lifetime="live_control",
+    )
+
+    assert captured["body"]["execution_lifetime"] == "live_control"
+    assert "initial_prompt" not in captured["body"]
