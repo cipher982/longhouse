@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 
@@ -281,3 +282,71 @@ def test_launch_session_sends_explicit_live_control_payload(monkeypatch) -> None
 
     assert captured["body"]["execution_lifetime"] == "live_control"
     assert "initial_prompt" not in captured["body"]
+
+
+def test_run_one_shot_wires_run_once_capability_and_nonce_prompt(monkeypatch) -> None:
+    captured = {}
+
+    monkeypatch.setenv("GITHUB_RUN_ID", "unit")
+    monkeypatch.setattr(smoke, "wait_for_health_commit", lambda *args, **kwargs: {"status": "ok", "build": {"commit": "live"}})
+    monkeypatch.setattr(smoke, "mint_browser_cookie", lambda **kwargs: "cookie")
+    monkeypatch.setattr(smoke, "hosted_session_debug", lambda **kwargs: {"assistant_events": []})
+    monkeypatch.setattr(smoke, "stop_codex_bridge", lambda *args, **kwargs: {"ok": True})
+
+    def fake_discover_machine(base_url, cookie, **kwargs):
+        captured["required_capability"] = kwargs["required_capability"]
+        return {
+            "device_id": "demo-machine",
+            "machine_name": "demo-machine",
+            "engine_build": "test",
+            "supports": ["codex.run_once"],
+        }
+
+    def fake_launch_session(*args, **kwargs):
+        captured["execution_lifetime"] = kwargs["execution_lifetime"]
+        captured["initial_prompt"] = kwargs["initial_prompt"]
+        return {
+            "session_id": "sess-1",
+            "launch_state": "live",
+            "execution_lifetime": kwargs["execution_lifetime"],
+        }
+
+    def fake_poll_for_assistant_nonce(**kwargs):
+        captured["nonce"] = kwargs["nonce"]
+        return {"assistant_events": [{"role": "assistant", "text": kwargs["nonce"]}]}
+
+    def unexpected_send(*args, **kwargs):
+        raise AssertionError("one-shot smoke should not use the live-control input endpoint")
+
+    monkeypatch.setattr(smoke, "discover_machine", fake_discover_machine)
+    monkeypatch.setattr(smoke, "launch_session", fake_launch_session)
+    monkeypatch.setattr(smoke, "poll_for_assistant_nonce", fake_poll_for_assistant_nonce)
+    monkeypatch.setattr(smoke, "send_nonce_prompt", unexpected_send)
+    monkeypatch.setattr(smoke, "send_second_input_probe", unexpected_send)
+
+    result = smoke.run(
+        SimpleNamespace(
+            base_url="https://demo.longhouse.ai",
+            subdomain="demo",
+            container="longhouse-demo",
+            ssh_target="runtime-host",
+            bridge_stop_ssh_target=None,
+            device_id=None,
+            cwd="/Users/example/git/zerg/longhouse",
+            project="zerg",
+            expected_commit="live",
+            execution_lifetime="one_shot",
+            initial_prompt=None,
+            health_timeout_secs=1,
+            wait_after_launch_secs=0,
+            assistant_timeout_secs=1,
+            poll_interval_secs=0,
+            output_json=None,
+            skip_stop=True,
+        )
+    )
+
+    assert result["ok"] is True
+    assert captured["required_capability"] == "codex.run_once"
+    assert captured["execution_lifetime"] == "one_shot"
+    assert captured["nonce"] in captured["initial_prompt"]
