@@ -695,6 +695,7 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
     public let online: Bool
     public let controlChannelStatus: String?
     public let supports: [String]
+    public let controlOperationsByProvider: [String: [String]]
     public let canLaunchCodex: Bool?
     public let launchableProviders: [String]
     public let launchBlockedBy: String?
@@ -707,6 +708,7 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
         online: Bool,
         controlChannelStatus: String?,
         supports: [String],
+        controlOperationsByProvider: [String: [String]] = [:],
         canLaunchCodex: Bool?,
         launchableProviders: [String] = [],
         launchBlockedBy: String?,
@@ -718,6 +720,7 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
         self.online = online
         self.controlChannelStatus = controlChannelStatus
         self.supports = supports
+        self.controlOperationsByProvider = controlOperationsByProvider
         self.canLaunchCodex = canLaunchCodex
         self.launchableProviders = launchableProviders
         self.launchBlockedBy = launchBlockedBy
@@ -727,7 +730,7 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
 
     private enum CodingKeys: String, CodingKey {
         case deviceId, machineName, online, controlChannelStatus, supports
-        case canLaunchCodex, launchableProviders, launchBlockedBy, lastSeenAt, engineBuild
+        case controlOperationsByProvider, canLaunchCodex, launchableProviders, launchBlockedBy, lastSeenAt, engineBuild
     }
 
     public init(from decoder: Decoder) throws {
@@ -737,6 +740,7 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
         online = try c.decode(Bool.self, forKey: .online)
         controlChannelStatus = try c.decodeIfPresent(String.self, forKey: .controlChannelStatus)
         supports = try c.decodeIfPresent([String].self, forKey: .supports) ?? []
+        controlOperationsByProvider = try c.decodeIfPresent([String: [String]].self, forKey: .controlOperationsByProvider) ?? [:]
         canLaunchCodex = try c.decodeIfPresent(Bool.self, forKey: .canLaunchCodex)
         launchableProviders = try c.decodeIfPresent([String].self, forKey: .launchableProviders) ?? []
         launchBlockedBy = try c.decodeIfPresent(String.self, forKey: .launchBlockedBy)
@@ -745,9 +749,19 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
     }
 
     public var supportsCodexLaunch: Bool { canLaunchCodex ?? supports.contains("codex.launch") }
+    public var remoteLaunchProviders: [String] {
+        var providers = Set(launchableProviders)
+        for (provider, operations) in controlOperationsByProvider {
+            if operations.contains("launch") || operations.contains("run_once") {
+                providers.insert(provider)
+            }
+        }
+        return providers.sorted()
+    }
+
     public var isLaunchable: Bool {
         let controlConnected = controlChannelStatus.map { $0 == "connected" } ?? online
-        if !launchableProviders.isEmpty {
+        if !remoteLaunchProviders.isEmpty {
             return controlConnected
         }
         return controlConnected && supportsCodexLaunch
@@ -755,8 +769,17 @@ public struct MachineDirectoryEntry: Decodable, Sendable, Hashable {
 
     /// Provider to default to (codex for continuity, else the first advertised).
     public var defaultProvider: String? {
-        if launchableProviders.contains("codex") { return "codex" }
-        return launchableProviders.first ?? (supportsCodexLaunch ? "codex" : nil)
+        let providers = remoteLaunchProviders
+        if providers.contains("codex") { return "codex" }
+        return providers.first ?? (supportsCodexLaunch ? "codex" : nil)
+    }
+
+    public func supportsRunOnce(provider: String) -> Bool {
+        controlOperationsByProvider[provider]?.contains("run_once") == true || supports.contains("\(provider).run_once")
+    }
+
+    public func supportsLiveControlLaunch(provider: String) -> Bool {
+        controlOperationsByProvider[provider]?.contains("launch") == true || launchableProviders.contains(provider)
     }
 }
 
@@ -813,10 +836,15 @@ public enum RemoteLaunchState: String, Decodable, Sendable {
     }
 }
 
+public enum RemoteExecutionLifetime: String, Codable, Sendable, Hashable, CaseIterable {
+    case oneShot = "one_shot"
+    case liveControl = "live_control"
+}
+
 public struct RemoteSessionLaunchResponse: Decodable, Sendable {
     public let sessionId: String
     public let launchState: RemoteLaunchState
-    public let executionLifetime: String?
+    public let executionLifetime: RemoteExecutionLifetime?
     public let launchErrorCode: String?
     public let launchErrorMessage: String?
 }
@@ -863,6 +891,8 @@ extension LonghouseAPI {
         deviceId: String,
         provider: String = "codex",
         cwd: String,
+        initialPrompt: String? = nil,
+        executionLifetime: RemoteExecutionLifetime = .liveControl,
         displayName: String? = nil,
         clientRequestId: String? = nil
     ) async throws -> RemoteSessionLaunchResponse {
@@ -874,7 +904,9 @@ extension LonghouseAPI {
             "device_id": deviceId,
             "provider": provider,
             "cwd": cwd,
+            "execution_lifetime": executionLifetime.rawValue,
         ]
+        if let initialPrompt, !initialPrompt.isEmpty { body["initial_prompt"] = initialPrompt }
         if let displayName, !displayName.isEmpty { body["display_name"] = displayName }
         if let clientRequestId, !clientRequestId.isEmpty { body["client_request_id"] = clientRequestId }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)

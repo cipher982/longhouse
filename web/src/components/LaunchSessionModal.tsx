@@ -6,6 +6,7 @@ import {
   fetchWorkspaceSuggestions,
   launchRemoteSession,
   listMachines,
+  type ExecutionLifetime,
   type MachineDirectoryEntry,
 } from "../services/api";
 import { Button, Spinner } from "./ui";
@@ -20,13 +21,42 @@ interface LaunchSessionModalProps {
 const WORKSPACE_LIMIT = 12;
 
 function machineCanLaunch(m: MachineDirectoryEntry): boolean {
-  return m.launchable_providers.length > 0;
+  return launchProvidersForMachine(m).length > 0;
 }
 
 // Prefer codex for launch-default continuity, else the first advertised provider.
 function defaultProvider(m: MachineDirectoryEntry | undefined): string {
-  if (!m || m.launchable_providers.length === 0) return "";
-  return m.launchable_providers.includes("codex") ? "codex" : m.launchable_providers[0];
+  if (!m) return "";
+  const providers = launchProvidersForMachine(m);
+  if (providers.length === 0) return "";
+  return providers.includes("codex") ? "codex" : providers[0];
+}
+
+function launchProvidersForMachine(m: MachineDirectoryEntry): string[] {
+  const providers = new Set<string>(m.launchable_providers);
+  for (const [provider, operations] of Object.entries(m.control_operations_by_provider ?? {})) {
+    if (operations.includes("launch") || operations.includes("run_once")) {
+      providers.add(provider);
+    }
+  }
+  return [...providers].sort();
+}
+
+function providerOperations(m: MachineDirectoryEntry | undefined, provider: string): string[] {
+  if (!m || !provider) return [];
+  return m.control_operations_by_provider?.[provider] ?? [];
+}
+
+function supportsRunOnce(m: MachineDirectoryEntry | undefined, provider: string): boolean {
+  return providerOperations(m, provider).includes("run_once") || Boolean(m?.supports.includes(`${provider}.run_once`));
+}
+
+function supportsLiveControl(m: MachineDirectoryEntry | undefined, provider: string): boolean {
+  return providerOperations(m, provider).includes("launch") || Boolean(m?.launchable_providers.includes(provider));
+}
+
+function defaultExecutionLifetime(m: MachineDirectoryEntry | undefined, provider: string): ExecutionLifetime {
+  return supportsRunOnce(m, provider) ? "one_shot" : "live_control";
 }
 
 export default function LaunchSessionModal({
@@ -47,6 +77,8 @@ export default function LaunchSessionModal({
   const [provider, setProvider] = useState<string>("");
   const [cwd, setCwd] = useState<string>("");
   const [workspaceSearch, setWorkspaceSearch] = useState<string>("");
+  const [executionLifetime, setExecutionLifetime] = useState<ExecutionLifetime>("one_shot");
+  const [initialPrompt, setInitialPrompt] = useState<string>("");
   const [displayName, setDisplayName] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -57,6 +89,18 @@ export default function LaunchSessionModal({
   );
 
   const selectedMachine = launchable.find((m) => m.device_id === deviceId);
+  const selectedCanRunOnce = supportsRunOnce(selectedMachine, provider);
+  const selectedCanLiveControl = supportsLiveControl(selectedMachine, provider);
+  const selectedModeSupported =
+    executionLifetime === "one_shot" ? selectedCanRunOnce : selectedCanLiveControl;
+  const promptRequired = executionLifetime === "one_shot";
+  const canSubmit =
+    !submitting &&
+    !!deviceId &&
+    !!provider &&
+    !!cwd.trim() &&
+    selectedModeSupported &&
+    (!promptRequired || !!initialPrompt.trim());
 
   const workspacesQuery = useQuery({
     queryKey: ["launch-workspaces", deviceId],
@@ -88,10 +132,22 @@ export default function LaunchSessionModal({
   // Keep the provider valid for the selected machine.
   useEffect(() => {
     if (!isOpen || !selectedMachine) return;
-    if (!provider || !selectedMachine.launchable_providers.includes(provider)) {
+    const providers = launchProvidersForMachine(selectedMachine);
+    if (!provider || !providers.includes(provider)) {
       setProvider(defaultProvider(selectedMachine));
     }
   }, [isOpen, selectedMachine, provider]);
+
+  // Keep the execution lifetime valid for the selected machine/provider.
+  useEffect(() => {
+    if (!isOpen || !selectedMachine || !provider) return;
+    if (
+      (executionLifetime === "one_shot" && !selectedCanRunOnce) ||
+      (executionLifetime === "live_control" && !selectedCanLiveControl)
+    ) {
+      setExecutionLifetime(defaultExecutionLifetime(selectedMachine, provider));
+    }
+  }, [isOpen, selectedMachine, provider, executionLifetime, selectedCanRunOnce, selectedCanLiveControl]);
 
   // Start with the top-ranked workspace the user has actually used on this machine.
   useEffect(() => {
@@ -106,6 +162,8 @@ export default function LaunchSessionModal({
     setProvider("");
     setCwd("");
     setWorkspaceSearch("");
+    setExecutionLifetime("one_shot");
+    setInitialPrompt("");
     setDisplayName("");
     setSubmitting(false);
     setError(null);
@@ -131,7 +189,7 @@ export default function LaunchSessionModal({
   }, [isOpen, deviceId]);
 
   const handleSubmit = useCallback(async () => {
-    if (!deviceId || !provider || !cwd.trim()) return;
+    if (!canSubmit) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -139,6 +197,8 @@ export default function LaunchSessionModal({
         device_id: deviceId,
         provider,
         cwd: cwd.trim(),
+        initial_prompt: executionLifetime === "one_shot" ? initialPrompt.trim() : null,
+        execution_lifetime: executionLifetime,
         display_name: displayName.trim() || null,
         client_request_id: `launch-${crypto.randomUUID()}`,
       });
@@ -156,7 +216,7 @@ export default function LaunchSessionModal({
     } finally {
       setSubmitting(false);
     }
-  }, [deviceId, provider, cwd, displayName, onLaunched]);
+  }, [canSubmit, deviceId, provider, cwd, executionLifetime, initialPrompt, displayName, onLaunched]);
 
   if (!isOpen) return null;
 
@@ -217,7 +277,7 @@ export default function LaunchSessionModal({
                 </select>
               </label>
 
-              {selectedMachine && selectedMachine.launchable_providers.length > 1 && (
+              {selectedMachine && launchProvidersForMachine(selectedMachine).length > 1 && (
                 <label className="form-field">
                   <span>Coding agent</span>
                   <select
@@ -228,7 +288,7 @@ export default function LaunchSessionModal({
                     }}
                     data-testid="launch-provider-select"
                   >
-                    {selectedMachine.launchable_providers.map((p) => (
+                    {launchProvidersForMachine(selectedMachine).map((p) => (
                       <option key={p} value={p}>
                         {getProviderLabel(p)}
                       </option>
@@ -283,6 +343,52 @@ export default function LaunchSessionModal({
                 <small>Must be an existing absolute directory on the target machine.</small>
               </label>
 
+              <div className="form-field">
+                <span>Mode</span>
+                <div className="launch-mode-segment" role="radiogroup" aria-label="Launch mode">
+                  <button
+                    type="button"
+                    className={`launch-mode-option${executionLifetime === "one_shot" ? " is-selected" : ""}`}
+                    aria-pressed={executionLifetime === "one_shot"}
+                    disabled={!selectedCanRunOnce}
+                    onClick={() => {
+                      setExecutionLifetime("one_shot");
+                      setError(null);
+                    }}
+                  >
+                    Run once
+                  </button>
+                  <button
+                    type="button"
+                    className={`launch-mode-option${executionLifetime === "live_control" ? " is-selected" : ""}`}
+                    aria-pressed={executionLifetime === "live_control"}
+                    disabled={!selectedCanLiveControl}
+                    onClick={() => {
+                      setExecutionLifetime("live_control");
+                      setError(null);
+                    }}
+                  >
+                    Keep live
+                  </button>
+                </div>
+              </div>
+
+              {executionLifetime === "one_shot" && (
+                <label className="form-field">
+                  <span>Prompt</span>
+                  <textarea
+                    value={initialPrompt}
+                    onChange={(e) => {
+                      setInitialPrompt(e.target.value);
+                      setError(null);
+                    }}
+                    placeholder="What should the agent do?"
+                    rows={4}
+                    data-testid="launch-initial-prompt"
+                  />
+                </label>
+              )}
+
               <label className="form-field">
                 <span>Display name (optional)</span>
                 <input
@@ -307,7 +413,7 @@ export default function LaunchSessionModal({
                 <Button
                   variant="primary"
                   type="submit"
-                  disabled={submitting || !deviceId || !provider || !cwd.trim()}
+                  disabled={!canSubmit}
                   data-testid="launch-submit"
                 >
                   {submitting ? "Starting…" : "Start"}

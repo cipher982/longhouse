@@ -17,6 +17,8 @@ struct LaunchSessionSheet: View {
 
     @State private var selectedDeviceId: String = ""
     @State private var selectedProvider: String = ""
+    @State private var executionLifetime: RemoteExecutionLifetime = .oneShot
+    @State private var initialPrompt: String = ""
     @State private var workspaces: [WorkspaceSuggestion]
     @State private var workspaceSearch: String = ""
     @State private var loadingWorkspaces = false
@@ -36,8 +38,10 @@ struct LaunchSessionSheet: View {
         _machines = State(initialValue: previewMachines ?? [])
         _workspaces = State(initialValue: previewWorkspaces ?? [])
         if let first = previewMachines?.first(where: { $0.isLaunchable }) {
+            let provider = first.defaultProvider ?? ""
             _selectedDeviceId = State(initialValue: first.deviceId)
-            _selectedProvider = State(initialValue: first.defaultProvider ?? "")
+            _selectedProvider = State(initialValue: provider)
+            _executionLifetime = State(initialValue: first.supportsRunOnce(provider: provider) ? .oneShot : .liveControl)
         } else if let first = previewMachines?.first {
             _selectedDeviceId = State(initialValue: first.deviceId)
         }
@@ -57,11 +61,34 @@ struct LaunchSessionSheet: View {
         cwd.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    private var normalizedPrompt: String {
+        initialPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var selectedCanRunOnce: Bool {
+        selectedMachine?.supportsRunOnce(provider: selectedProvider) ?? false
+    }
+
+    private var selectedCanLiveControl: Bool {
+        selectedMachine?.supportsLiveControlLaunch(provider: selectedProvider) ?? false
+    }
+
+    private var selectedModeSupported: Bool {
+        switch executionLifetime {
+        case .oneShot:
+            return selectedCanRunOnce
+        case .liveControl:
+            return selectedCanLiveControl
+        }
+    }
+
     private var canSubmit: Bool {
         !submitting
             && (selectedMachine?.isLaunchable ?? false)
             && !selectedProvider.isEmpty
             && normalizedCwd.starts(with: "/")
+            && selectedModeSupported
+            && (executionLifetime != .oneShot || !normalizedPrompt.isEmpty)
     }
 
     private var filteredWorkspaces: [WorkspaceSuggestion] {
@@ -134,7 +161,10 @@ struct LaunchSessionSheet: View {
                     workspaceError = nil
                     submitError = nil
                     showManualPath = false
-                    selectedProvider = selectedMachine?.isLaunchable == true ? (selectedMachine?.defaultProvider ?? "") : ""
+                    let nextMachine = selectedMachine
+                    let nextProvider = nextMachine?.isLaunchable == true ? (nextMachine?.defaultProvider ?? "") : ""
+                    selectedProvider = nextProvider
+                    resetExecutionLifetime(machine: nextMachine, provider: nextProvider)
                 }
             }
 
@@ -145,11 +175,15 @@ struct LaunchSessionSheet: View {
                 }
             } else {
                 Section("Coding agent") {
-                    if let machine = selectedMachine, machine.launchableProviders.count > 1 {
+                    if let machine = selectedMachine, machine.remoteLaunchProviders.count > 1 {
                         Picker("Provider", selection: $selectedProvider) {
-                            ForEach(machine.launchableProviders, id: \.self) { provider in
+                            ForEach(machine.remoteLaunchProviders, id: \.self) { provider in
                                 Text(provider).tag(provider)
                             }
+                        }
+                        .onChange(of: selectedProvider) { _, _ in
+                            resetExecutionLifetime(machine: selectedMachine, provider: selectedProvider)
+                            submitError = nil
                         }
                     } else {
                         HStack(spacing: 10) {
@@ -157,6 +191,28 @@ struct LaunchSessionSheet: View {
                                 .foregroundStyle(.secondary)
                             Text(selectedProvider.isEmpty ? "codex" : selectedProvider)
                         }
+                    }
+                }
+
+                Section("Mode") {
+                    Picker("Mode", selection: $executionLifetime) {
+                        Text("Run once").tag(RemoteExecutionLifetime.oneShot)
+                            .disabled(!selectedCanRunOnce)
+                        Text("Keep live").tag(RemoteExecutionLifetime.liveControl)
+                            .disabled(!selectedCanLiveControl)
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                if executionLifetime == .oneShot {
+                    Section("Prompt") {
+                        TextField("What should the agent do?", text: $initialPrompt, axis: .vertical)
+                            .lineLimit(3...8)
+                            .textInputAutocapitalization(.sentences)
+                            .autocorrectionDisabled(false)
+                            .onChange(of: initialPrompt) { _, _ in
+                                submitError = nil
+                            }
                     }
                 }
 
@@ -304,7 +360,9 @@ struct LaunchSessionSheet: View {
             if (selectedDeviceId.isEmpty || !selectedStillExists),
                let first = result.first(where: { $0.isLaunchable }) ?? result.first {
                 selectedDeviceId = first.deviceId
-                selectedProvider = first.isLaunchable ? (first.defaultProvider ?? "") : ""
+                let nextProvider = first.isLaunchable ? (first.defaultProvider ?? "") : ""
+                selectedProvider = nextProvider
+                resetExecutionLifetime(machine: first, provider: nextProvider)
             }
         } catch {
             loadError = (error as? LocalizedError)?.errorDescription ?? "Could not load machines."
@@ -364,6 +422,8 @@ struct LaunchSessionSheet: View {
                 deviceId: selectedDeviceId,
                 provider: selectedProvider,
                 cwd: normalizedCwd,
+                initialPrompt: executionLifetime == .oneShot ? normalizedPrompt : nil,
+                executionLifetime: executionLifetime,
                 displayName: trimmedDisplayName.isEmpty ? nil : trimmedDisplayName,
                 clientRequestId: "launch-\(UUID().uuidString)"
             )
@@ -376,6 +436,14 @@ struct LaunchSessionSheet: View {
             submitError = message.isEmpty ? "Launch failed." : message
         } catch {
             submitError = (error as? LocalizedError)?.errorDescription ?? "Launch failed."
+        }
+    }
+
+    private func resetExecutionLifetime(machine: MachineDirectoryEntry?, provider: String) {
+        if machine?.supportsRunOnce(provider: provider) == true {
+            executionLifetime = .oneShot
+        } else if machine?.supportsLiveControlLaunch(provider: provider) == true {
+            executionLifetime = .liveControl
         }
     }
 
@@ -550,7 +618,8 @@ private func previewMachine(
         machineName: "cinder",
         online: online,
         controlChannelStatus: controlChannelStatus,
-        supports: ["codex.launch", "codex.send", "claude.launch"],
+        supports: ["codex.launch", "codex.run_once", "codex.send", "claude.launch"],
+        controlOperationsByProvider: ["codex": ["launch", "run_once", "send"], "claude": ["launch"]],
         canLaunchCodex: true,
         launchableProviders: providers,
         launchBlockedBy: launchBlockedBy,

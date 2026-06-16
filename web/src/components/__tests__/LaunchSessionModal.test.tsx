@@ -50,8 +50,8 @@ function machine(overrides: Partial<MachineDirectoryEntry> = {}): MachineDirecto
     machine_name: "cinder",
     online,
     control_channel_status: controlChannelStatus,
-    supports: canLaunch ? ["codex.launch"] : [],
-    control_operations_by_provider: canLaunch ? { codex: ["launch"] } : {},
+    supports: canLaunch ? ["codex.launch", "codex.run_once"] : [],
+    control_operations_by_provider: canLaunch ? { codex: ["launch", "run_once"] } : {},
     can_launch_codex: canLaunch,
     launchable_providers: canLaunch ? ["codex"] : [],
     launch_blocked_by: launchBlockedBy,
@@ -190,7 +190,8 @@ describe("LaunchSessionModal", () => {
           machine_name: "cinder",
           online: true,
           control_channel_status: "connected",
-          supports: ["codex.launch"],
+          supports: ["codex.launch", "codex.run_once"],
+          control_operations_by_provider: { codex: ["launch", "run_once"] },
           can_launch_codex: true,
           launch_blocked_by: null,
           last_seen_at: "2026-05-12T13:00:00Z",
@@ -201,7 +202,7 @@ describe("LaunchSessionModal", () => {
     apiMocks.launchRemoteSession.mockResolvedValue({
       session_id: "new-session-id",
       launch_state: "live",
-      execution_lifetime: "live_control",
+      execution_lifetime: "one_shot",
       launch_error_code: null,
       launch_error_message: null,
     });
@@ -212,6 +213,8 @@ describe("LaunchSessionModal", () => {
 
     const cwdInput = await screen.findByTestId("launch-cwd-input");
     await user.type(cwdInput, "/Users/me/repo");
+    expect(screen.getByTestId("launch-submit")).toBeDisabled();
+    await user.type(screen.getByTestId("launch-initial-prompt"), "Fix the telemetry test");
     await user.click(screen.getByTestId("launch-submit"));
 
     await waitFor(() => expect(onLaunched).toHaveBeenCalledWith("new-session-id"));
@@ -220,6 +223,48 @@ describe("LaunchSessionModal", () => {
         device_id: "cinder",
         provider: "codex",
         cwd: "/Users/me/repo",
+        initial_prompt: "Fix the telemetry test",
+        execution_lifetime: "one_shot",
+      }),
+    );
+  });
+
+  it("falls back to live-control launch when run-once is not advertised", async () => {
+    apiMocks.listMachines.mockResolvedValue({
+      machines: [
+        machine({
+          device_id: "old-cinder",
+          machine_name: "old-cinder",
+          supports: ["codex.launch"],
+          control_operations_by_provider: { codex: ["launch"] },
+          launchable_providers: ["codex"],
+        }),
+      ],
+    });
+    apiMocks.launchRemoteSession.mockResolvedValue({
+      session_id: "live-session-id",
+      launch_state: "live",
+      execution_lifetime: "live_control",
+      launch_error_code: null,
+      launch_error_message: null,
+    });
+
+    const user = userEvent.setup();
+    renderModal();
+
+    await user.type(await screen.findByTestId("launch-cwd-input"), "/Users/me/repo");
+    expect(screen.queryByTestId("launch-initial-prompt")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Keep live" })).toHaveAttribute("aria-pressed", "true");
+    await user.click(screen.getByTestId("launch-submit"));
+
+    await waitFor(() => expect(apiMocks.launchRemoteSession).toHaveBeenCalled());
+    expect(apiMocks.launchRemoteSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        device_id: "old-cinder",
+        provider: "codex",
+        cwd: "/Users/me/repo",
+        initial_prompt: null,
+        execution_lifetime: "live_control",
       }),
     );
   });
@@ -277,7 +322,7 @@ describe("LaunchSessionModal", () => {
     apiMocks.launchRemoteSession.mockResolvedValue({
       session_id: "failed-session-id",
       launch_state: "launch_failed",
-      execution_lifetime: "live_control",
+      execution_lifetime: "one_shot",
       launch_error_code: "cwd_not_allowed",
       launch_error_message: "Check the workspace path: cwd must be absolute",
     });
@@ -288,6 +333,7 @@ describe("LaunchSessionModal", () => {
 
     const cwdInput = await screen.findByTestId("launch-cwd-input");
     await user.type(cwdInput, "/Users/example/git/zerg");
+    await user.type(screen.getByTestId("launch-initial-prompt"), "Start and fail");
     await user.click(screen.getByTestId("launch-submit"));
 
     expect(await screen.findByTestId("launch-error")).toHaveTextContent(

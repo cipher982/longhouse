@@ -212,6 +212,7 @@ struct LonghouseAPITests {
             {
               "session_id": "abc",
               "launch_state": "\(rawState)",
+              "execution_lifetime": "one_shot",
               "launch_error_code": null,
               "launch_error_message": null
             }
@@ -219,6 +220,7 @@ struct LonghouseAPITests {
 
             let decoded = try JSONDecoder.snakeCase.decode(RemoteSessionLaunchResponse.self, from: data)
             #expect(decoded.launchState == expected)
+            #expect(decoded.executionLifetime == .oneShot)
         }
     }
 
@@ -316,7 +318,11 @@ struct LonghouseAPITests {
           "machine_name": "cinder",
           "online": true,
           "control_channel_status": "connected",
-          "supports": ["codex.launch", "claude.launch"],
+          "supports": ["codex.launch", "codex.run_once", "claude.launch"],
+          "control_operations_by_provider": {
+            "codex": ["launch", "run_once"],
+            "claude": ["launch"]
+          },
           "can_launch_codex": true,
           "launchable_providers": ["claude", "codex", "opencode"],
           "launch_blocked_by": null,
@@ -326,8 +332,38 @@ struct LonghouseAPITests {
         """
         let entry = try JSONDecoder.snakeCase.decode(MachineDirectoryEntry.self, from: Data(json.utf8))
         #expect(entry.launchableProviders == ["claude", "codex", "opencode"])
+        #expect(entry.controlOperationsByProvider["codex"] == ["launch", "run_once"])
         #expect(entry.defaultProvider == "codex")
         #expect(entry.isLaunchable)
+        #expect(entry.supportsRunOnce(provider: "codex"))
+        #expect(entry.supportsLiveControlLaunch(provider: "codex"))
+    }
+
+    @Test
+    func machineDirectoryEntryTreatsRunOnceAsRemoteLaunchable() throws {
+        let json = """
+        {
+          "device_id": "cinder",
+          "machine_name": "cinder",
+          "online": true,
+          "control_channel_status": "connected",
+          "supports": ["codex.run_once"],
+          "control_operations_by_provider": {
+            "codex": ["run_once"]
+          },
+          "can_launch_codex": false,
+          "launchable_providers": [],
+          "launch_blocked_by": null,
+          "last_seen_at": null,
+          "engine_build": "dev"
+        }
+        """
+        let entry = try JSONDecoder.snakeCase.decode(MachineDirectoryEntry.self, from: Data(json.utf8))
+        #expect(entry.remoteLaunchProviders == ["codex"])
+        #expect(entry.defaultProvider == "codex")
+        #expect(entry.isLaunchable)
+        #expect(entry.supportsRunOnce(provider: "codex"))
+        #expect(!entry.supportsLiveControlLaunch(provider: "codex"))
     }
 
     @Test
