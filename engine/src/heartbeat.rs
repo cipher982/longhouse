@@ -211,6 +211,12 @@ pub struct ResolvedBridge {
     pub status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_subscription_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launch_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_attached: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui_presence: Option<String>,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq, Eq, Default)]
@@ -350,7 +356,7 @@ pub fn session_snapshot_digest(payload: &HeartbeatPayload) -> String {
             let mut reason_codes = session.reason_codes.clone();
             reason_codes.sort();
             format!(
-                "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+                "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
                 session.provider,
                 session.session_id.as_deref().unwrap_or(""),
                 session.provider_session_id.as_deref().unwrap_or(""),
@@ -385,6 +391,13 @@ pub fn session_snapshot_digest(payload: &HeartbeatPayload) -> String {
                     .thread_subscription_status
                     .as_deref()
                     .unwrap_or(""),
+                session.bridge.launch_mode.as_deref().unwrap_or(""),
+                session
+                    .bridge
+                    .ui_attached
+                    .map(|attached| attached.to_string())
+                    .unwrap_or_default(),
+                session.bridge.ui_presence.as_deref().unwrap_or(""),
                 session.evidence.process_observed,
                 session.evidence.transcript_observed,
                 session.evidence.bridge_state.as_deref().unwrap_or(""),
@@ -654,6 +667,9 @@ fn resolved_managed_codex_session(
             heartbeat_at: obs.map(|obs| obs.updated_at.clone()),
             status: obs.map(|obs| obs.status.clone()),
             thread_subscription_status: obs.and_then(|obs| obs.thread_subscription_status.clone()),
+            launch_mode: obs.and_then(|obs| obs.launch_mode.clone()),
+            ui_attached: obs.map(|obs| obs.has_tui_attachment),
+            ui_presence: codex_ui_presence(&lease.state, obs).map(str::to_string),
         },
         evidence: ResolvedEvidence {
             process_observed: obs.is_some_and(|obs| obs.app_server_alive || obs.has_tui_attachment),
@@ -663,6 +679,24 @@ fn resolved_managed_codex_session(
             join_keys,
         },
         reason_codes: Vec::new(),
+    }
+}
+
+fn codex_ui_presence(
+    lease_state: &str,
+    obs: Option<&CodexBridgeObservation>,
+) -> Option<&'static str> {
+    match lease_state {
+        "detached" => return Some("detached"),
+        "degraded" => return Some("degraded"),
+        _ => {}
+    }
+
+    let obs = obs?;
+    match obs.launch_mode.as_deref().map(str::trim) {
+        Some("tui") if obs.has_tui_attachment => Some("foreground_tui"),
+        Some("detached_ui") if lease_state == "attached" => Some("background"),
+        _ => None,
     }
 }
 
@@ -706,6 +740,9 @@ fn resolved_managed_claude_session(
             heartbeat_at: obs.map(|obs| obs.updated_at.clone()),
             status: lease.bridge_status.clone(),
             thread_subscription_status: None,
+            launch_mode: None,
+            ui_attached: None,
+            ui_presence: None,
         },
         evidence: ResolvedEvidence {
             process_observed: obs.is_some_and(|obs| obs.claude_alive),
@@ -1401,6 +1438,7 @@ mod tests {
             "59612f92-0e4c-4031-b236-c4091f13da40",
             "ws://127.0.0.1:45679/session",
         );
+        obs.launch_mode = Some("detached_ui".to_string());
         obs.has_tui_attachment = false;
         obs.app_server_alive = true;
         obs.thread_id = Some("thread-detached-ui".to_string());
@@ -1410,6 +1448,57 @@ mod tests {
         assert_eq!(leases.len(), 1);
         assert_eq!(leases[0].state, "attached");
         assert_eq!(leases[0].phase.as_deref(), Some("idle"));
+    }
+
+    #[test]
+    fn resolved_sessions_project_codex_ui_presence_without_changing_lease_state() {
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let now = Utc::now();
+
+        let mut foreground = test_observation("foreground-codex", "ws://127.0.0.1:45681/session");
+        foreground.launch_mode = Some("tui".to_string());
+        foreground.has_tui_attachment = true;
+
+        let mut background = test_observation("background-codex", "ws://127.0.0.1:45682/session");
+        background.launch_mode = Some("detached_ui".to_string());
+        background.has_tui_attachment = false;
+        background.app_server_alive = true;
+        background.thread_id = Some("thread-background".to_string());
+
+        let observations = vec![foreground, background];
+        let leases = leases_from_observations(&conn, "cinder", &observations, now);
+        let sessions = resolved_sessions_from_observations(&leases, &[], &observations, &[]);
+
+        let foreground_session = sessions
+            .iter()
+            .find(|session| session.session_id.as_deref() == Some("foreground-codex"))
+            .unwrap();
+        assert_eq!(foreground_session.state, "attached");
+        assert_eq!(
+            foreground_session.bridge.launch_mode.as_deref(),
+            Some("tui")
+        );
+        assert_eq!(foreground_session.bridge.ui_attached, Some(true));
+        assert_eq!(
+            foreground_session.bridge.ui_presence.as_deref(),
+            Some("foreground_tui")
+        );
+
+        let background_session = sessions
+            .iter()
+            .find(|session| session.session_id.as_deref() == Some("background-codex"))
+            .unwrap();
+        assert_eq!(background_session.state, "attached");
+        assert_eq!(
+            background_session.bridge.launch_mode.as_deref(),
+            Some("detached_ui")
+        );
+        assert_eq!(background_session.bridge.ui_attached, Some(false));
+        assert_eq!(
+            background_session.bridge.ui_presence.as_deref(),
+            Some("background")
+        );
     }
 
     #[test]

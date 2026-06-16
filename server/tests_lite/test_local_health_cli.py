@@ -112,6 +112,9 @@ def _fast_local_health_contract_projection(snapshot: dict) -> dict:
             "bridge_status": row.get("bridge_status"),
             "bridge_pid": row.get("bridge_pid"),
             "app_server_pid": row.get("app_server_pid"),
+            "launch_mode": row.get("launch_mode"),
+            "ui_attached": row.get("ui_attached"),
+            "ui_presence": row.get("ui_presence"),
             "thread_subscription_status": row.get("thread_subscription_status"),
             "reason_codes": row.get("reason_codes"),
             "evidence": row.get("evidence"),
@@ -1846,6 +1849,9 @@ def test_collect_local_health_flags_detached_managed_session(monkeypatch, tmp_pa
             "last_activity_at": "2026-04-17T17:31:00Z",
             "bridge_status": "ready",
             "bridge_pid": 7771,
+            "launch_mode": None,
+            "ui_attached": False,
+            "ui_presence": "detached",
             "bridge_heartbeat_at": "2026-04-17T17:31:00Z",
             "thread_subscription_status": None,
             "thread_subscription_attempts": 0,
@@ -1906,6 +1912,9 @@ def test_collect_local_health_treats_detached_ui_ready_codex_bridge_as_attached(
     assert snapshot["orphan_bridges"] == []
     assert snapshot["managed_sessions"][0]["session_id"] == "sess-detached-ui"
     assert snapshot["managed_sessions"][0]["state"] == "attached"
+    assert snapshot["managed_sessions"][0]["launch_mode"] == "detached_ui"
+    assert snapshot["managed_sessions"][0]["ui_attached"] is False
+    assert snapshot["managed_sessions"][0]["ui_presence"] == "background"
 
 
 def test_collect_local_health_flags_orphaned_managed_bridge(monkeypatch, tmp_path: Path):
@@ -2951,7 +2960,13 @@ def test_local_health_render_prints_missing_provider_live_control(capsys):
                         "state": "live_control_partial",
                         "capabilities": {
                             "live_control_operations": ["launch"],
-                            "missing_live_control_operations": ["send", "interrupt", "steer", "answer_pause", "continue"],
+                            "missing_live_control_operations": [
+                                "send",
+                                "interrupt",
+                                "steer",
+                                "answer_pause",
+                                "continue",
+                            ],
                             "supported_operations": ["launch_local", "send_input", "interrupt", "steer_active_turn"],
                             "unsupported_operations": ["launch_remote", "reattach"],
                         },
@@ -3531,6 +3546,9 @@ def test_collect_local_health_fast_uses_resolved_sessions_without_process_scan(m
     assert snapshot["managed_sessions"][0]["provider"] == "codex"
     assert snapshot["managed_sessions"][0]["liveness_model"] == "engine_status"
     assert snapshot["managed_sessions"][0]["phase"] == "thinking"
+    assert snapshot["managed_sessions"][0]["launch_mode"] is None
+    assert snapshot["managed_sessions"][0]["ui_attached"] is None
+    assert snapshot["managed_sessions"][0]["ui_presence"] is None
     assert snapshot["unmanaged_processes"][0]["provider"] == "claude"
     assert snapshot["unmanaged_processes"][0]["pid"] == 48145
     assert snapshot["unmanaged_processes"][0]["workspace_label"] == "zerg"
@@ -3727,6 +3745,9 @@ def test_collect_local_health_fast_prefers_resolved_engine_sessions(monkeypatch,
                         "heartbeat_at": "2026-05-05T11:59:58Z",
                         "status": "ready",
                         "thread_subscription_status": "subscribed",
+                        "launch_mode": "detached_ui",
+                        "ui_attached": False,
+                        "ui_presence": "background",
                     },
                     "evidence": {
                         "process_observed": True,
@@ -3798,6 +3819,9 @@ def test_collect_local_health_fast_prefers_resolved_engine_sessions(monkeypatch,
     assert managed["phase"] == "thinking"
     assert managed["bridge_pid"] == 4202
     assert managed["app_server_pid"] == 4203
+    assert managed["launch_mode"] == "detached_ui"
+    assert managed["ui_attached"] is False
+    assert managed["ui_presence"] == "background"
     assert managed["thread_subscription_status"] == "subscribed"
     assert managed["evidence"]["join_keys"] == [
         "provider_session_id=thread-codex",

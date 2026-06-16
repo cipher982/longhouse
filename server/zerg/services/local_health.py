@@ -1987,6 +1987,24 @@ def _codex_bridge_reason_codes(
     return reason_codes
 
 
+def _codex_ui_presence(
+    *,
+    state: str,
+    launch_mode: str | None,
+    ui_attached: bool,
+    detached_ui_control_ready: bool,
+) -> str | None:
+    if state == "detached":
+        return "detached"
+    if state == "degraded":
+        return "degraded"
+    if launch_mode == "tui" and ui_attached:
+        return "foreground_tui"
+    if launch_mode == "detached_ui" and detached_ui_control_ready:
+        return "background"
+    return None
+
+
 def _codex_managed_session_row(
     *,
     state: dict[str, Any],
@@ -2009,6 +2027,14 @@ def _codex_managed_session_row(
     normalized_state = "attached" if attached_process is not None or detached_ui_control_ready else "detached"
     if reason_codes:
         normalized_state = "degraded"
+    launch_mode = _normalize_optional_string(state.get("launch_mode"))
+    ui_attached = attached_process is not None
+    ui_presence = _codex_ui_presence(
+        state=normalized_state,
+        launch_mode=launch_mode,
+        ui_attached=ui_attached,
+        detached_ui_control_ready=detached_ui_control_ready,
+    )
     workspace_label = _normalize_optional_string(phase_state.get("workspace_label")) if phase_state else None
     if workspace_label is None:
         workspace_label = Path(str(state.get("cwd") or "")).name or None
@@ -2033,6 +2059,9 @@ def _codex_managed_session_row(
         "last_activity_at": _max_rfc3339(bridge_heartbeat_at, phase_last_activity_at, phase_observed_at),
         "bridge_status": bridge_status,
         "bridge_pid": bridge_pid,
+        "launch_mode": launch_mode,
+        "ui_attached": ui_attached,
+        "ui_presence": ui_presence,
         "bridge_heartbeat_at": bridge_heartbeat_at,
         "thread_subscription_status": thread_subscription_status,
         "thread_subscription_attempts": thread_subscription_attempts,
@@ -2528,6 +2557,9 @@ def _resolved_engine_managed_session_row(
         "bridge_status": _normalize_optional_string(bridge.get("status")),
         "bridge_pid": _normalize_optional_int(bridge.get("bridge_pid")),
         "app_server_pid": _normalize_optional_int(bridge.get("app_server_pid")),
+        "launch_mode": _normalize_optional_string(bridge.get("launch_mode")),
+        "ui_attached": bridge.get("ui_attached") if isinstance(bridge.get("ui_attached"), bool) else None,
+        "ui_presence": _normalize_optional_string(bridge.get("ui_presence")),
         "bridge_heartbeat_at": bridge_heartbeat_at,
         "thread_subscription_status": _normalize_optional_string(bridge.get("thread_subscription_status")),
         "reason_codes": reason_codes,

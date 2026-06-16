@@ -128,6 +128,9 @@ class ResolvedBridgeIn(UTCBaseModel):
     heartbeat_at: datetime | None = None
     status: str | None = Field(None, max_length=64)
     thread_subscription_status: str | None = Field(None, max_length=64)
+    launch_mode: str | None = Field(None, max_length=64)
+    ui_attached: bool | None = None
+    ui_presence: str | None = Field(None, max_length=64)
 
 
 class ResolvedEvidenceIn(UTCBaseModel):

@@ -53,7 +53,10 @@
         "app_server_pid": 4203,
         "heartbeat_at": "2026-05-05T11:59:58Z",
         "status": "ready",
-        "thread_subscription_status": "subscribed"
+        "thread_subscription_status": "subscribed",
+        "launch_mode": "detached_ui",
+        "ui_attached": false,
+        "ui_presence": "background"
       },
       "evidence": {
         "process_observed": true,
