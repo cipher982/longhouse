@@ -1849,7 +1849,7 @@ def test_collect_local_health_flags_detached_managed_session(monkeypatch, tmp_pa
             "last_activity_at": "2026-04-17T17:31:00Z",
             "bridge_status": "ready",
             "bridge_pid": 7771,
-            "launch_mode": None,
+            "launch_mode": "detached_ui",
             "ui_attached": False,
             "ui_presence": "detached",
             "bridge_heartbeat_at": "2026-04-17T17:31:00Z",
