@@ -1332,6 +1332,69 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func managedUIPresenceSeparatesBackgroundFromRuntimeAttached() throws {
+        let data = Data("""
+        {
+          "health_state": "healthy",
+          "severity": "green",
+          "headline": "Longhouse shipping healthy",
+          "reasons": [],
+          "suggested_actions": [],
+          "managed_summary": {
+            "attached_count": 2,
+            "detached_count": 0,
+            "degraded_count": 0,
+            "orphan_bridge_count": 0,
+            "latest_activity_at": "2026-05-13T23:59:39Z"
+          },
+          "managed_sessions": [
+            {
+              "session_id": "sess-terminal",
+              "provider": "codex",
+              "workspace_label": "zerg",
+              "state": "attached",
+              "phase": "idle",
+              "last_activity_at": "2026-05-13T23:59:39Z",
+              "launch_mode": "tui",
+              "ui_attached": true,
+              "ui_presence": "foreground_tui"
+            },
+            {
+              "session_id": "sess-background",
+              "provider": "codex",
+              "workspace_label": "zerg",
+              "state": "attached",
+              "phase": "idle",
+              "last_activity_at": "2026-05-13T23:59:39Z",
+              "launch_mode": "detached_ui",
+              "ui_attached": false,
+              "ui_presence": "background"
+            }
+          ]
+        }
+        """.utf8)
+
+        let snapshot = try HealthSnapshotDecoder.decode(data: data)
+        let terminal = try #require(snapshot.currentManagedSessions.first)
+        let background = try #require(snapshot.currentManagedSessions.last)
+
+        #expect(snapshot.attachedManagedCount == 2)
+        #expect(snapshot.foregroundManagedCount == 1)
+        #expect(snapshot.backgroundManagedCount == 1)
+        #expect(snapshot.managedSummaryLabel == "1 terminal · 1 background")
+        #expect(terminal.launchMode == "tui")
+        #expect(terminal.uiAttached == true)
+        #expect(terminal.normalizedUIPresence == "foreground_tui")
+        #expect(terminal.isBackgroundManagedSession == false)
+        #expect(terminal.canStopFromMenuBar == false)
+        #expect(background.launchMode == "detached_ui")
+        #expect(background.uiAttached == false)
+        #expect(background.normalizedUIPresence == "background")
+        #expect(background.isBackgroundManagedSession == true)
+        #expect(background.canStopFromMenuBar == true)
+    }
+
+    @Test
     func decodesManagedUnknownPhaseFixture() throws {
         let fixtureURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -1432,6 +1495,8 @@ struct LonghouseMenuBarCoreTests {
         )
 
         #expect(session.menuBarAttentionKind == .idle)
+        #expect(session.normalizedUIPresence == nil)
+        #expect(session.canStopFromMenuBar == false)
     }
 
     @Test

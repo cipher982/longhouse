@@ -474,6 +474,22 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         managedSummary?.degradedCount ?? currentManagedSessions.filter { $0.normalizedState == "degraded" }.count
     }
 
+    public var hasManagedUIPresence: Bool {
+        currentManagedSessions.contains { $0.normalizedUIPresence != nil }
+    }
+
+    public var foregroundManagedCount: Int {
+        currentManagedSessions.filter { $0.normalizedUIPresence == "foreground_tui" }.count
+    }
+
+    public var backgroundManagedCount: Int {
+        currentManagedSessions.filter { $0.normalizedUIPresence == "background" }.count
+    }
+
+    public var legacyAttachedManagedCount: Int {
+        currentManagedSessions.filter { $0.normalizedUIPresence == nil && $0.normalizedState == "attached" }.count
+    }
+
     public var orphanBridgeCount: Int {
         managedSummary?.orphanBridgeCount ?? currentOrphanBridges.count
     }
@@ -509,6 +525,29 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             return "No managed sessions"
         }
 
+        if hasManagedUIPresence {
+            var parts: [String] = []
+            if foregroundManagedCount > 0 {
+                parts.append(Self.countLabel(foregroundManagedCount, singular: "terminal", plural: "terminal"))
+            }
+            if legacyAttachedManagedCount > 0 {
+                parts.append(Self.countLabel(legacyAttachedManagedCount, singular: "attached", plural: "attached"))
+            }
+            if backgroundManagedCount > 0 {
+                parts.append(Self.countLabel(backgroundManagedCount, singular: "background", plural: "background"))
+            }
+            if detachedManagedCount > 0 {
+                parts.append(Self.countLabel(detachedManagedCount, singular: "detached", plural: "detached"))
+            }
+            if degradedManagedCount > 0 {
+                parts.append(Self.countLabel(degradedManagedCount, singular: "degraded", plural: "degraded"))
+            }
+            if orphanBridgeCount > 0 {
+                parts.append(Self.countLabel(orphanBridgeCount, singular: "orphan bridge", plural: "orphan bridges"))
+            }
+            return parts.isEmpty ? "No managed sessions" : parts.joined(separator: " · ")
+        }
+
         var parts: [String] = []
         if attachedManagedCount > 0 {
             parts.append(Self.countLabel(attachedManagedCount, singular: "attached", plural: "attached"))
@@ -537,6 +576,17 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         }
         if detachedManagedCount > 0 {
             return Self.countLabel(detachedManagedCount, singular: "detached", plural: "detached").uppercased()
+        }
+        if hasManagedUIPresence {
+            if backgroundManagedCount > 0 {
+                return Self.countLabel(backgroundManagedCount, singular: "background", plural: "background").uppercased()
+            }
+            if foregroundManagedCount > 0 {
+                return Self.countLabel(foregroundManagedCount, singular: "terminal", plural: "terminal").uppercased()
+            }
+            if legacyAttachedManagedCount > 0 {
+                return Self.countLabel(legacyAttachedManagedCount, singular: "attached", plural: "attached").uppercased()
+            }
         }
         if attachedManagedCount > 0 {
             return Self.countLabel(attachedManagedCount, singular: "attached", plural: "attached").uppercased()
@@ -1325,6 +1375,9 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
     public let bridgeStatus: String?
     public let bridgePid: Int?
     public let bridgeHeartbeatAt: String?
+    public let launchMode: String?
+    public let uiAttached: Bool?
+    public let uiPresence: String?
     public let reasonCodes: [String]?
 
     public init(
@@ -1340,6 +1393,9 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
         bridgeStatus: String?,
         bridgePid: Int?,
         bridgeHeartbeatAt: String?,
+        launchMode: String? = nil,
+        uiAttached: Bool? = nil,
+        uiPresence: String? = nil,
         reasonCodes: [String]?
     ) {
         self.sessionId = sessionId
@@ -1354,6 +1410,9 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
         self.bridgeStatus = bridgeStatus
         self.bridgePid = bridgePid
         self.bridgeHeartbeatAt = bridgeHeartbeatAt
+        self.launchMode = launchMode
+        self.uiAttached = uiAttached
+        self.uiPresence = uiPresence
         self.reasonCodes = reasonCodes
     }
 
@@ -1367,6 +1426,26 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
             return normalized
         }
         return "unknown"
+    }
+
+    public var normalizedUIPresence: String? {
+        let normalized = uiPresence?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let normalized, !normalized.isEmpty else {
+            return nil
+        }
+        return normalized
+    }
+
+    public var isForegroundTerminalSession: Bool {
+        normalizedUIPresence == "foreground_tui"
+    }
+
+    public var isBackgroundManagedSession: Bool {
+        normalizedUIPresence == "background" || normalizedState == "detached" || normalizedState == "degraded"
+    }
+
+    public var canStopFromMenuBar: Bool {
+        normalizedUIPresence == "background" || normalizedState == "detached" || normalizedState == "degraded"
     }
 
     var menuBarAttentionKind: ManagedAttentionKind {

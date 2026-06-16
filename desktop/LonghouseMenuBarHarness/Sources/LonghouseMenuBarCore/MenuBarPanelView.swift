@@ -449,13 +449,23 @@ public struct MenuBarPanelView: View {
 
     private var managedRuntimeSurface: some View {
         VStack(alignment: .leading, spacing: 0) {
-            PanelSection(title: "Managed now", trailing: snapshot.managedSummaryLabel) {
-                if managedSessionEntries.isEmpty {
-                    Text("No managed Claude or Codex sessions are running on this Mac.")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color.secondary)
-                } else {
-                    ManagedSessionList(entries: managedSessionEntries)
+            if !foregroundManagedSessionEntries.isEmpty || (backgroundManagedSessionEntries.isEmpty && backgroundBridgeEntries.isEmpty) {
+                PanelSection(title: "Managed now", trailing: snapshot.managedSummaryLabel) {
+                    if foregroundManagedSessionEntries.isEmpty {
+                        Text("No managed Claude or Codex sessions are running on this Mac.")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(Color.secondary)
+                    } else {
+                        ManagedSessionList(entries: foregroundManagedSessionEntries)
+                    }
+                }
+            }
+
+            if !backgroundManagedSessionEntries.isEmpty {
+                sectionDivider.padding(.horizontal, 4)
+
+                PanelSection(title: "Background managed", trailing: "\(backgroundManagedSessionEntries.count)") {
+                    ManagedSessionList(entries: backgroundManagedSessionEntries)
                 }
             }
 
@@ -542,23 +552,33 @@ public struct MenuBarPanelView: View {
         }
     }
 
-    private var managedSessionEntries: [ManagedSessionEntry] {
-        snapshot.currentManagedSessions.map { session in
-            let workspace = (session.workspaceLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let provider = (session.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    private var foregroundManagedSessionEntries: [ManagedSessionEntry] {
+        snapshot.currentManagedSessions
+            .filter { !$0.isBackgroundManagedSession }
+            .map { managedSessionEntry(for: $0) }
+    }
 
-            return ManagedSessionEntry(
-                id: session.id,
-                sessionID: session.sessionId,
-                provider: provider.isEmpty ? "unknown" : provider,
-                workspace: workspace.isEmpty ? HealthSnapshot.providerDisplayName(provider.isEmpty ? "unknown" : provider) : workspace,
-                branch: (session.branch ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : session.branch,
-                attention: session.menuBarAttentionKind,
-                ageLabel: snapshot.compactTimestampLabel(session.lastActivityAt, relativeTo: presentationDate),
-                detail: managedSessionDetail(session),
-                stopAction: managedStopAction(for: session)
-            )
-        }
+    private var backgroundManagedSessionEntries: [ManagedSessionEntry] {
+        snapshot.currentManagedSessions
+            .filter { $0.isBackgroundManagedSession }
+            .map { managedSessionEntry(for: $0) }
+    }
+
+    private func managedSessionEntry(for session: ManagedSessionSnapshot) -> ManagedSessionEntry {
+        let workspace = (session.workspaceLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let provider = (session.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return ManagedSessionEntry(
+            id: session.id,
+            sessionID: session.sessionId,
+            provider: provider.isEmpty ? "unknown" : provider,
+            workspace: workspace.isEmpty ? HealthSnapshot.providerDisplayName(provider.isEmpty ? "unknown" : provider) : workspace,
+            branch: (session.branch ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : session.branch,
+            attention: session.menuBarAttentionKind,
+            ageLabel: snapshot.compactTimestampLabel(session.lastActivityAt, relativeTo: presentationDate),
+            detail: managedSessionDetail(session),
+            stopAction: managedStopAction(for: session)
+        )
     }
 
     private var backgroundBridgeEntries: [BackgroundBridgeEntry] {
@@ -581,7 +601,7 @@ public struct MenuBarPanelView: View {
     }
 
     private func managedStopAction(for session: ManagedSessionSnapshot) -> (() -> Void)? {
-        guard session.normalizedState != "attached",
+        guard session.canStopFromMenuBar,
               let sessionID = session.sessionId,
               !sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {
@@ -636,6 +656,15 @@ public struct MenuBarPanelView: View {
                 return "Unexpected local phase label: \(phase)"
             }
             return "Longhouse cannot classify this managed phase yet."
+        }
+
+        switch session.normalizedUIPresence {
+        case "foreground_tui":
+            return "Terminal attached."
+        case "background":
+            return "Running in background."
+        default:
+            break
         }
 
         switch session.normalizedState {
