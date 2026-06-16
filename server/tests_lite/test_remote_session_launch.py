@@ -1152,6 +1152,59 @@ def test_engine_error_maps_to_launch_failed(tmp_path):
         assert row.ended_at is not None
 
 
+def test_one_shot_engine_error_closes_reserved_run(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+
+    class _EngineErrorRegistry(_StubRegistry):
+        async def send_command(self, **kwargs):
+            self.sent.append(kwargs)
+            return MachineControlCommandResponse(
+                transport_ok=True,
+                message={
+                    "type": "command_result",
+                    "ok": False,
+                    "error": {"code": "cwd_not_found", "message": "nope"},
+                },
+            )
+
+    registry = _EngineErrorRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.run_once",))
+
+    with SessionLocal() as db:
+        result = asyncio.run(
+            launch_remote_session(
+                db,
+                RemoteLaunchParams(
+                    owner_id=OWNER_ID,
+                    device_id="cinder",
+                    provider="codex",
+                    cwd="/Users/me/missing-repo",
+                    initial_prompt="Do one bounded turn",
+                    execution_lifetime="one_shot",
+                ),
+                registry=registry,
+            )
+        )
+
+    assert result.launch_state == "launch_failed"
+    assert result.launch_error_code == "cwd_not_found"
+    assert len(registry.sent) == 1
+    assert registry.sent[0]["command_type"] == "session.run_once"
+    with SessionLocal() as db:
+        row = db.get(AgentSession, result.session_id)
+        attempt = _latest_attempt(db, result.session_id)
+        run = db.get(SessionRun, attempt.run_id)
+        assert attempt.state == "failed"
+        assert attempt.error_code == "cwd_not_found"
+        assert attempt.execution_lifetime == "one_shot"
+        assert row.ended_at is not None
+        assert run is not None
+        assert run.ended_at is not None
+        assert run.exit_status == "cwd_not_found"
+        assert db.query(SessionConnection).filter(SessionConnection.run_id == run.id).count() == 0
+
+
 def test_transport_timeout_leaves_unknown(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)
