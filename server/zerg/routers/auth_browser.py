@@ -48,10 +48,16 @@ from zerg.schemas.schemas import TokenOut
 from zerg.services.write_serializer import get_write_serializer
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+TENANT_LOGIN_STATE_COOKIE = "tenant_login_state"
 
 # Refresh token cookie max-age: 90 days (matches absolute lifetime in refresh_tokens module).
 _REFRESH_COOKIE_MAX_AGE = 90 * 24 * 60 * 60
 _RefreshWriteResult = TypeVar("_RefreshWriteResult")
+
+
+def _control_plane_url(settings: Any | None = None) -> str | None:
+    settings = settings or get_settings()
+    return getattr(settings, "control_plane_url", None) or None
 
 
 async def _run_refresh_session_write(
@@ -242,6 +248,8 @@ async def dev_login(response: Response, db: Session = Depends(get_db)) -> TokenO
 @router.post("/service-login", response_model=TokenOut, include_in_schema=False)
 async def service_login(request: Request, response: Response, db: Session = Depends(get_db)) -> TokenOut:
     settings = get_settings()
+    if _control_plane_url(settings):
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Hosted local service login is disabled")
     secret = request.headers.get("X-Service-Secret") or ""
     expected = settings.smoke_test_secret or ""
     run_id = (request.headers.get("X-Smoke-Run-Id") or "").strip()
@@ -278,6 +286,9 @@ async def service_login(request: Request, response: Response, db: Session = Depe
 
 @router.post("/google", response_model=TokenOut)
 async def google_sign_in(response: Response, body: dict[str, str], db: Session = Depends(get_db)) -> TokenOut:
+    if _control_plane_url():
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Hosted local Google login is disabled")
+
     raw_token = body.get("id_token")
     if not raw_token or not isinstance(raw_token, str):
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="id_token must be provided")
@@ -375,6 +386,7 @@ def auth_status(request: Request, db: Session = Depends(get_db)):
             "display_name": getattr(user, "display_name", None),
             "avatar_url": getattr(user, "avatar_url", None),
             "is_active": getattr(user, "is_active", True),
+            "email_verified": getattr(user, "email_verified", True),
             "created_at": getattr(user, "created_at", None),
             "last_login": getattr(user, "last_login", None),
             "prefs": getattr(user, "prefs", None),
@@ -412,6 +424,11 @@ async def refresh_session(request: Request, response: Response, db: Session = De
 
     This is the silent-refresh endpoint called by the frontend on 401.
     """
+    if _control_plane_url():
+        _clear_session_cookie(response)
+        _clear_refresh_cookie(response)
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Hosted refresh is not available")
+
     raw_rt = request.cookies.get(REFRESH_COOKIE_NAME)
     if not raw_rt:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No refresh token")
@@ -452,11 +469,12 @@ async def refresh_session(request: Request, response: Response, db: Session = De
 def get_auth_methods():
     settings = get_settings()
     gmail_ready, gmail_setup_message = _gmail_setup_state(settings)
-    sso_base = settings.control_plane_url.rstrip("/") if settings.control_plane_url else None
+    control_plane_url = _control_plane_url(settings)
+    sso_base = control_plane_url.rstrip("/") if control_plane_url else None
     return {
-        "google": bool(settings.google_client_id) and not bool(settings.control_plane_url),
-        "password": bool(settings.longhouse_password or settings.longhouse_password_hash),
-        "sso": bool(settings.control_plane_url),
+        "google": bool(settings.google_client_id) and not bool(control_plane_url),
+        "password": bool(settings.longhouse_password or settings.longhouse_password_hash) and not bool(control_plane_url),
+        "sso": bool(control_plane_url),
         "sso_url": sso_base,
         # Hosted tenants send the browser to /auth/start, which renders a
         # tenant-aware login page. Self-host tenants still have their own
@@ -523,6 +541,8 @@ async def password_login(
     db: Session = Depends(get_db),
 ) -> TokenOut:
     settings = get_settings()
+    if _control_plane_url(settings):
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Hosted local password login is disabled")
     if not settings.longhouse_password and not settings.longhouse_password_hash:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password auth not configured")
 
@@ -561,6 +581,8 @@ def cli_login(
     db: Session = Depends(get_db),
 ) -> dict[str, str]:
     settings = get_settings()
+    if _control_plane_url(settings):
+        raise HTTPException(status_code=status.HTTP_410_GONE, detail="Hosted local CLI login is disabled")
     if not settings.longhouse_password and not settings.longhouse_password_hash:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Password auth not configured")
 
@@ -600,21 +622,19 @@ def start_handoff(
 ) -> RedirectResponse:
     """Browser entry point for hosted login.
 
-    302s to the control plane `/auth/start?tenant=...&return_to=...`.
-    The CP renders a tenant-aware login page; after auth the CP
-    mints an HS256 bridge token and 302s to the tenant's
-    `/api/auth/accept-token`.
+    302s to the control plane `/auth/start?tenant=...&return_to=...`
+    after setting a tenant-side CSRF cookie. The CP renders a
+    tenant-aware login page; after auth the CP mints a one-use handoff
+    code and 302s to the tenant's `/api/auth/accept-handoff`.
 
     Self-host tenants (no CONTROL_PLANE_URL) get a redirect to the
     local `/login` React route instead, which renders the tenant's
     own login form.
 
-    Phase 1 will add a `tenant_state` CSRF cookie bound to the
-    `accept-handoff` route; in Phase 0 the existing HS256 bridge
-    is the only auth path, so the cookie would be orphaned.
     """
     settings = get_settings()
-    if not settings.control_plane_url:
+    control_plane_url = _control_plane_url(settings)
+    if not control_plane_url:
         safe_return_to = return_to or "/timeline"
         return RedirectResponse(
             f"/login?return_to={urllib.parse.quote(safe_return_to, safe='')}",
@@ -636,15 +656,26 @@ def start_handoff(
         # else: leave empty; CP will reject unknown tenant.
 
     safe_return_to = return_to or "/timeline"
+    tenant_state = secrets.token_urlsafe(32)
 
-    cp_base = settings.control_plane_url.rstrip("/")
+    cp_base = control_plane_url.rstrip("/")
     target = f"{cp_base}/auth/start"
-    params: list[tuple[str, str]] = [("return_to", safe_return_to)]
+    params: list[tuple[str, str]] = [("return_to", safe_return_to), ("tenant_state", tenant_state)]
     if resolved_tenant:
         params.append(("tenant", resolved_tenant))
     target += "?" + urllib.parse.urlencode(params)
 
-    return RedirectResponse(target, status_code=302)
+    redirect = RedirectResponse(target, status_code=302)
+    redirect.set_cookie(
+        TENANT_LOGIN_STATE_COOKIE,
+        tenant_state,
+        max_age=600,
+        path="/",
+        httponly=True,
+        secure=not settings.auth_disabled and not settings.testing,
+        samesite="lax",
+    )
+    return redirect
 
 
 __all__ = [

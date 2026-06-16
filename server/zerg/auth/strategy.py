@@ -20,15 +20,21 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
+import os
 from abc import ABC
 from abc import abstractmethod
 from typing import Any
 from typing import Optional
+from urllib.parse import urlparse
 
 from fastapi import HTTPException
 from fastapi import Request
 from fastapi import status
 from sqlalchemy.orm import Session
+from zerg.auth.cp_jwks import CPTokenClaims
+from zerg.auth.cp_jwks import CPTokenError
+from zerg.auth.cp_jwks import verify_runtime_token
 from zerg.config import get_settings
 from zerg.crud import count_users
 from zerg.crud import create_user
@@ -39,6 +45,7 @@ from zerg.utils.time import utc_now_naive
 
 # Cookie name for browser-based auth (must match routers/auth.py)
 SESSION_COOKIE_NAME = "longhouse_session"
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Minimal HS256 JWT decoding fallback (keeps CI lightweight)
@@ -271,7 +278,10 @@ class JWTAuthStrategy(AuthStrategy):
     def get_current_user(self, request: Request, db: Session):  # noqa: D401 – impl
         token = self._extract_token(request)
         if not token:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token or session cookie")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Missing bearer token or session cookie",
+            )
 
         if token.startswith("zdt_"):
             user = _resolve_device_token_user(token, db)
@@ -323,6 +333,109 @@ class JWTAuthStrategy(AuthStrategy):
         return user
 
 
+class HostedCPAuthStrategy(AuthStrategy):
+    """Hosted strategy that validates CP-issued RS256 runtime tokens."""
+
+    def __init__(self):
+        self._settings = get_settings()
+        self._audience = _hosted_audience(self._settings)
+
+    def _extract_token(self, request: Request) -> str | None:
+        auth_header: str | None = request.headers.get("Authorization")
+        if auth_header and auth_header.lower().startswith("bearer "):
+            token = auth_header[7:].strip()
+            if token:
+                return token
+        return request.cookies.get(SESSION_COOKIE_NAME)
+
+    def _resolve_claims_user(self, db: Session, claims: CPTokenClaims):
+        from zerg.models.models import User
+
+        user = db.query(User).filter(User.cp_user_id == claims.cp_user_id).first()
+        if user is None:
+            existing = get_user_by_email(db, claims.email)
+            if existing is not None:
+                if not claims.email_verified:
+                    logger.warning(
+                        "Refusing to link unverified CP user %s to existing tenant email %s",
+                        claims.cp_user_id,
+                        claims.email,
+                    )
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Email must be verified")
+                if getattr(existing, "cp_user_id", None) not in (None, claims.cp_user_id):
+                    logger.warning(
+                        "account_link_conflict: CP user %s email %s maps to local user %s already linked to CP %s",
+                        claims.cp_user_id,
+                        claims.email,
+                        existing.id,
+                        existing.cp_user_id,
+                    )
+                    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Account link conflict")
+                user = existing
+            else:
+                user = create_user(
+                    db,
+                    email=claims.email,
+                    provider="control-plane",
+                    provider_user_id=f"cp:{claims.cp_user_id}",
+                    skip_notification=True,
+                )
+
+            user.cp_user_id = claims.cp_user_id
+            user.provider = "control-plane"
+            user.provider_user_id = f"cp:{claims.cp_user_id}"
+
+        if user.email != claims.email:
+            other = get_user_by_email(db, claims.email)
+            if other is not None and int(other.id) != int(user.id):
+                logger.warning(
+                    "account_link_conflict: CP user %s email update %s collides with local user %s",
+                    claims.cp_user_id,
+                    claims.email,
+                    other.id,
+                )
+            else:
+                user.email = claims.email
+
+        user.display_name = claims.display_name or user.display_name
+        user.avatar_url = claims.avatar_url or user.avatar_url
+        user.email_verified = claims.email_verified
+        user.is_active = True
+        user.last_login = utc_now_naive()
+        db.commit()
+        db.refresh(user)
+        return user
+
+    def _user_from_token(self, token: str, db: Session):
+        if token.startswith("zdt_"):
+            user = _resolve_device_token_user(token, db)
+            if user is None:
+                raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or revoked device token")
+            return user
+        try:
+            claims = verify_runtime_token(token, audience=self._audience)
+        except CPTokenError:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+        return self._resolve_claims_user(db, claims)
+
+    def get_current_user(self, request: Request, db: Session):  # noqa: D401 – impl
+        token = self._extract_token(request)
+        if not token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Missing bearer token or session cookie",
+            )
+        return self._user_from_token(token, db)
+
+    def validate_ws_token(self, token: str | None, db: Session):  # noqa: D401 – impl
+        if not token:
+            return None
+        try:
+            return self._user_from_token(token, db)
+        except HTTPException:
+            return None
+
+
 def _resolve_device_token_user(token: str, db: Session):
     """Resolve a `zdt_...` device token to its owner User row, or None.
 
@@ -340,11 +453,23 @@ def _resolve_device_token_user(token: str, db: Session):
     return user
 
 
+def _hosted_audience(settings) -> str:
+    instance_id = os.getenv("INSTANCE_ID", "").strip()
+    if instance_id:
+        return instance_id
+    public_url = settings.app_public_url or settings.public_site_url or ""
+    host = urlparse(public_url).hostname or ""
+    if host:
+        return host.split(".")[0]
+    raise RuntimeError("Hosted auth requires INSTANCE_ID or APP_PUBLIC_URL")
+
+
 # Public re-exports ---------------------------------------------------------
 
 
 __all__ = [
     "AuthStrategy",
     "DevAuthStrategy",
+    "HostedCPAuthStrategy",
     "JWTAuthStrategy",
 ]

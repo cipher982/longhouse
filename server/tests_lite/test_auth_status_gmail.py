@@ -80,6 +80,7 @@ def test_auth_status_reports_real_gmail_connector_health(tmp_path):
             "display_name": None,
             "avatar_url": None,
             "is_active": True,
+            "email_verified": True,
             "created_at": response.json()["user"]["created_at"],
             "last_login": None,
             "prefs": {},

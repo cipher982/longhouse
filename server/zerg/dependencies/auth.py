@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from zerg.auth.strategy import SESSION_COOKIE_NAME
 from zerg.auth.strategy import DevAuthStrategy
+from zerg.auth.strategy import HostedCPAuthStrategy
 from zerg.auth.strategy import JWTAuthStrategy
 from zerg.auth.strategy import _decode_jwt_fallback as _decode_jwt_fallback  # type: ignore
 from zerg.config import get_settings
@@ -66,6 +67,11 @@ def _get_strategy():  # noqa: D401 – internal helper
         if "dev" not in _strategy_cache:
             _strategy_cache["dev"] = DevAuthStrategy()
         return _strategy_cache["dev"]  # type: ignore[return-value]
+
+    if getattr(_settings, "control_plane_url", None):
+        if "hosted-cp" not in _strategy_cache:
+            _strategy_cache["hosted-cp"] = HostedCPAuthStrategy()
+        return _strategy_cache["hosted-cp"]  # type: ignore[return-value]
 
     if "jwt" not in _strategy_cache:
         _strategy_cache["jwt"] = JWTAuthStrategy()
@@ -168,7 +174,10 @@ def require_internal_call(request: Request):
 
     if not expected_token:
         # INTERNAL_API_SECRET not configured - fail secure
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal API secret not configured")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal API secret not configured",
+        )
 
     if internal_token and hmac.compare_digest(internal_token, expected_token):
         return True

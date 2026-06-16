@@ -31,6 +31,8 @@ class User(Base):
 
     # Core identity ----------------------------------------------------------
     email = Column(String, unique=True, nullable=False, index=True)
+    cp_user_id = Column(Integer, nullable=True, index=True)
+    email_verified = Column(Boolean, default=True, server_default="1", nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
 
     # Role / permission level – backed by :class:`zerg.models.enums.UserRole`.

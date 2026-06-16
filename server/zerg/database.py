@@ -758,6 +758,20 @@ def _migrate_agents_columns(engine: Engine) -> None:
 
     try:
         with engine.begin() as conn:
+            user_table_exists = conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='users'")).fetchone()
+            if user_table_exists:
+                user_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(users)"))}
+                if "cp_user_id" in user_columns:
+                    conn.execute(
+                        text(
+                            """
+                            CREATE UNIQUE INDEX IF NOT EXISTS uq_users_cp_user_id
+                            ON users(cp_user_id)
+                            WHERE cp_user_id IS NOT NULL
+                            """
+                        )
+                    )
+
             columns = {row[1] for row in conn.execute(text("PRAGMA table_info(sessions)"))}
             # Pure additive ALTER ADDs (summary, summary_title, needs_embedding,
             # summary_event_count, last_summarized_event_id,

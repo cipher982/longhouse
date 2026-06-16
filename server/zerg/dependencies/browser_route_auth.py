@@ -9,6 +9,7 @@ from fastapi import Request
 from fastapi import status
 from sqlalchemy.orm import Session
 
+from zerg.config import get_settings
 from zerg.database import get_db
 from zerg.dependencies.auth import _get_strategy
 from zerg.dependencies.browser_auth import get_current_browser_user
@@ -24,6 +25,11 @@ def get_current_browser_route_user(
 ):
     """Resolve the authenticated browser user for routes that also support SSE tokens."""
     if token:
+        if getattr(get_settings(), "control_plane_url", None) and not token.startswith("zdt_"):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Query tokens are not valid for hosted user auth",
+            )
         user = _get_strategy().validate_ws_token(token, db)
         if user is not None:
             return user
