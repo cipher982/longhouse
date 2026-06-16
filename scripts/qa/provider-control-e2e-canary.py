@@ -553,7 +553,10 @@ def run_opencode_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
                 events=events,
             )
         prompt_event = _first_event(events, "prompt_async") or {}
-        if prompt_event.get("payload") != {"parts": [{"type": "text", "text": "hello"}]}:
+        if prompt_event.get("payload") != {
+            "noReply": True,
+            "parts": [{"type": "text", "text": "hello"}],
+        }:
             return _fail(
                 "opencode_prompt_payload_mismatch",
                 "OpenCode prompt_async payload did not match the managed send contract",
