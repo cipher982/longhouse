@@ -37,16 +37,13 @@ cleanup_ephemeral_device_token() {
 }
 
 if [[ -z "${LONGHOUSE_DEVICE_TOKEN:-}" ]]; then
-  if [[ -z "${CONTROL_PLANE_ADMIN_TOKEN:-${ADMIN_TOKEN:-}}" ]]; then
-    echo "Set LONGHOUSE_DEVICE_TOKEN or CONTROL_PLANE_ADMIN_TOKEN before hosted shipper bench." >&2
+  if [[ -z "${SMOKE_RUNTIME_TOKEN:-}" ]]; then
+    echo "Set LONGHOUSE_DEVICE_TOKEN or SMOKE_RUNTIME_TOKEN before hosted shipper bench." >&2
     exit 1
-  fi
-  if [[ -z "${LH_INSTANCE_ID:-}" || "${LH_INSTANCE_SUBDOMAIN:-}" != "$INSTANCE_SUBDOMAIN" ]]; then
-    lh_hosted_resolve_instance "$INSTANCE_SUBDOMAIN"
   fi
 
   echo "Provisioning ephemeral hosted shipper bench device token for $INSTANCE_SUBDOMAIN..." >&2
-  LH_BENCH_ACCESS_TOKEN="$(lh_hosted_exchange_login_token "$(lh_hosted_issue_login_token "$LH_INSTANCE_ID")" "$API_URL")"
+  LH_BENCH_ACCESS_TOKEN="$SMOKE_RUNTIME_TOKEN"
   IFS=$'\t' read -r LH_BENCH_DEVICE_TOKEN_ID LONGHOUSE_DEVICE_TOKEN <<< \
     "$(lh_hosted_create_device_token "$LH_BENCH_ACCESS_TOKEN" "$API_URL" "hosted-shipper-bench-${INSTANCE_SUBDOMAIN}-${RANDOM}")"
   export LONGHOUSE_DEVICE_TOKEN

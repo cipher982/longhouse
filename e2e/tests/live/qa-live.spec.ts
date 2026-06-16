@@ -218,7 +218,7 @@ test("auth + timeline loads with session rows", async ({ context }) => {
     await failWithScreenshot(
       page,
       "timeline-auth",
-      "Auth failure: /api/timeline/sessions returned 401. Check SMOKE_LOGIN_TOKEN.",
+      "Auth failure: /api/timeline/sessions returned 401. Check SMOKE_RUNTIME_TOKEN.",
     );
   }
 
@@ -259,9 +259,8 @@ test("removed loop login handoff resolves to timeline", async ({
   test.setTimeout(30_000);
 
   const runtimeToken = normalizeToken(process.env.SMOKE_RUNTIME_TOKEN);
-  const loginToken = normalizeToken(process.env.SMOKE_LOGIN_TOKEN);
-  if (!runtimeToken && !loginToken) {
-    test.skip(true, "SMOKE_RUNTIME_TOKEN or SMOKE_LOGIN_TOKEN not set");
+  if (!runtimeToken) {
+    test.skip(true, "SMOKE_RUNTIME_TOKEN not set");
     return;
   }
 
@@ -300,16 +299,9 @@ test("removed loop login handoff resolves to timeline", async ({
     await page.unroute("**/*");
 
     // --- Part 2: authenticated removed /loop route lands on the supported home route ---
-    if (runtimeToken) {
-      const state = buildRuntimeTokenStorageState(baseOrigin, runtimeToken);
-      await context.addCookies(state.cookies);
-      await page.goto(`${baseOrigin}/loop`, { waitUntil: "domcontentloaded" });
-    } else {
-      await page.goto(
-        `${baseOrigin}/api/auth/accept-token?token=${encodeURIComponent(loginToken!)}&return_to=%2Floop`,
-        { waitUntil: "domcontentloaded" },
-      );
-    }
+    const state = buildRuntimeTokenStorageState(baseOrigin, runtimeToken);
+    await context.addCookies(state.cookies);
+    await page.goto(`${baseOrigin}/loop`, { waitUntil: "domcontentloaded" });
     await page.waitForURL((url) => url.pathname === "/timeline", {
       timeout: 20_000,
     });
@@ -726,48 +718,4 @@ test("recall panel opens and shows search input", async ({ context }) => {
   await expect(input).toBeEnabled();
 
   await page.close();
-});
-
-// ---------------------------------------------------------------------------
-// Test 8: Auth refresh endpoint works (token rotation)
-// ---------------------------------------------------------------------------
-
-test("auth refresh endpoint rotates tokens", async ({ playwright, apiBaseUrl }) => {
-  test.setTimeout(10_000);
-
-  if (normalizeToken(process.env.SMOKE_RUNTIME_TOKEN)) {
-    test.skip(true, "Hosted runtime-token browser auth does not issue tenant refresh cookies");
-    return;
-  }
-
-  const loginToken = process.env.SMOKE_LOGIN_TOKEN?.trim();
-  if (!loginToken) {
-    test.skip(true, "SMOKE_LOGIN_TOKEN not set");
-    return;
-  }
-
-  // Create a fresh request context and login through accept-token to get both cookies
-  const ctx = await playwright.request.newContext({
-    baseURL: apiBaseUrl,
-  });
-
-  const loginRes = await ctx.post("/api/auth/accept-token", {
-    data: { token: loginToken },
-  });
-  expect(
-    loginRes.ok(),
-    `accept-token returned ${loginRes.status()} — cannot test refresh`,
-  ).toBe(true);
-
-  // Now call refresh — the context has both AT and RT cookies from accept-token
-  const res = await ctx.post("/api/auth/refresh");
-  expect(
-    res.ok(),
-    `POST /api/auth/refresh returned ${res.status()} — refresh token rotation may be broken`,
-  ).toBe(true);
-
-  const body = await res.json();
-  expect(body.expires_in, "Expected expires_in in refresh response").toBe(600);
-
-  await ctx.dispose();
 });

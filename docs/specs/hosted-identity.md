@@ -16,7 +16,7 @@ Related:
 - `server/zerg/dependencies/auth.py` (machine-side `get_current_user`)
 - `server/zerg/dependencies/browser_auth.py` (browser cookie / `zdt_*` device-token)
 - `server/zerg/dependencies/browser_route_auth.py` (browser query-token / WS)
-- `server/zerg/services/sso_keys.py` (existing CP key fetch; not `auth/sso_keys.py`)
+- `server/zerg/auth/cp_jwks.py` (CP JWKS fetch + runtime-token verification)
 - `server/zerg/models/user.py` (tenant `User` model; `email` is unique)
 - `server/zerg/database.py` (imperative `_migrate_*` + `_auto_add_missing_columns`)
 - `web/src/pages/LoginPage.tsx` (current tenant login UI)
@@ -175,13 +175,12 @@ Concretely:
 - Tenant gets a new module `server/zerg/auth/cp_jwks.py` that fetches
   and caches the CP's JWKS, verifies tokens, and exposes
   `verify_runtime_token(token, audience=INSTANCE_ID) -> TokenClaims`.
-- The existing cross-server SSO bridge at
-  `server/zerg/routers/auth_sso.py:37-156` (`_accept_token` core at
-  37-128, `POST /accept-token` at 131, `GET /accept-token` redirect
-  at 143-156) is replaced for hosted tenants by a one-use handoff-code
-  exchange. Hosted tenants set the CP runtime JWT directly as
-  `longhouse_session`. Legacy HS256 bridge token acceptance is removed
-  for hosted tenants instead of kept behind a long dual-verify window.
+- The old cross-server SSO bridge at
+  `server/zerg/routers/auth_sso.py` was replaced for hosted tenants by
+  a one-use handoff-code exchange. Hosted tenants set the CP runtime
+  JWT directly as `longhouse_session`. Legacy HS256 browser bridge
+  token acceptance is removed for hosted tenants instead of kept behind
+  a long dual-verify window.
 - The existing tenant login routes in
   `server/zerg/routers/auth_browser.py` stay for self-host, but hosted
   mode disables local login routes and keeps only CP SSO, status,
@@ -329,7 +328,7 @@ iOS:
   and verifies via tenant `/api/auth/status` (which in hosted mode
   validates the CP JWT and returns the local `AuthenticatedUser`).
 - `exchangeHostedSSOToken` stores the runtime bearer directly; it
-  no longer depends on the cookie path through `/api/auth/accept-token`.
+  no longer depends on the removed cookie-token bridge.
 - `SessionWorkspaceStream.swift:209-217` and
   `TimelineSessionsStream.swift:123-135` both attach
   `Authorization: Bearer` to their request headers. Widgets and push
@@ -554,8 +553,6 @@ ordering, not compatibility phases.
     <instance_internal_api_secret>` (the same scheme as the
     existing Gmail handoff). Returns the runtime JWT plus the
     standard claim set.
-  - `POST /api/identity/runtime-token` — CP-internal/test-only helper
-    for minting a runtime JWT directly.
 - Add `display_name` and `avatar_url` columns to CP `User` model in
   `control-plane/control_plane/models.py`. Populate from
   Google/GitHub userinfo in the OAuth callbacks. Make them optional
@@ -599,10 +596,10 @@ and the JWT verifies against the JWKS.
   `longhouse_session` to the CP JWT, clears any stale
   `longhouse_refresh` cookie and the CSRF cookie, and redirects to the
   tenant-local `return_to`.
-- Hosted `GET/POST /api/auth/accept-token` returns 410 Gone. It is
-  not a compatibility bridge. If any self-host-only local SSO use
-  remains, keep it explicitly selected by the local strategy and
-  unreachable in hosted mode.
+- Hosted `GET/POST /api/auth/accept-token` is removed. It is not a
+  compatibility bridge. If any self-host-only local SSO use remains,
+  keep it explicitly selected by the local strategy and unreachable in
+  hosted mode.
 - Hosted `/api/auth/methods` advertises only CP SSO. Hosted
   `/api/auth/google`, `/api/auth/password`, `/api/auth/dev-login`,
   and `/api/auth/refresh` return 410 Gone. `/api/auth/logout`,
@@ -668,11 +665,11 @@ Done when: iOS can sign in, navigate, see live SSE updates, register
 for push, and stay signed in across app restarts using only the hosted
 bearer token. Self-host builds such as `localhost` still use cookies.
 
-The runtime deploy is a flag day for hosted iOS: once hosted
-`accept-token` and `/api/auth/refresh` return 410, any iOS build still
-using the cookie path can no longer sign in or refresh. That is
-acceptable only because there are zero external users and David can
-install the bearer build in lockstep.
+The runtime deploy is a flag day for hosted iOS: once the hosted
+`accept-token` bridge is absent and `/api/auth/refresh` returns 410,
+any iOS build still using the cookie path can no longer sign in or
+refresh. That is acceptable only because there are zero external users
+and David can install the bearer build in lockstep.
 
 ### Chunk D — Delete dead hosted auth and provisioning behavior
 
@@ -731,7 +728,7 @@ Tenant:
   `longhouse_session`, links the local user by `cp_user_id` on
   first SSO, sets `cp_user_id` if missing on subsequent SSO for
   the same email, and does not change `users.id`.
-- Hosted `accept-token` returns 410 Gone for HS256 bridge tokens.
+- Hosted `accept-token` is absent and cannot accept HS256 bridge tokens.
 - `accept-handoff` account-link conflict: a new `email` claim
   collides with another local user's email — keep the old
   cached email and emit an `account_link_conflict` log event.
@@ -773,10 +770,10 @@ Tenant:
 - Tenant runtime has no RS256 private key material in settings or env;
   tests assert the hosted verifier is configured from JWKS/public keys
   only.
-- **`POST /api/identity/runtime-token` (CP-internal mint) is not
-  exposed publicly** — it requires the CP admin/internal auth.
-  Verified by integration test that an unauthenticated request
-  gets 401/403.
+- **`POST /api/identity/runtime-token` (the former CP-internal mint) is
+  not exposed.** Runtime tokens are minted only by first-party CP flows
+  such as handoff exchange, native open-instance, and hosted Gmail
+  callback.
 - **Anti-CSRF: tenant `accept-handoff` rejects requests where
   the `tenant_state` parameter does not match the
   `tenant_login_state` cookie, or where the cookie is missing.**

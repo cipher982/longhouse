@@ -36,7 +36,6 @@ _STREAMING_FRAGMENTS = ("/stream", "/chat", "/branch", "/ws")
 
 # Route-specific timeout overrides for legitimate long-running requests.
 _TIMEOUT_OVERRIDES = {
-    "/auth/accept-token": INTERACTIVE_AUTH_TIMEOUT_SECONDS,
     "/devices/tokens": INTERACTIVE_AUTH_TIMEOUT_SECONDS,
     "/agents/ingest": INGEST_TIMEOUT_SECONDS,
     "/sessions/launch": MANAGED_LOCAL_LAUNCH_TIMEOUT_SECONDS,

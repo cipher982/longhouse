@@ -26,6 +26,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from zerg.auth import refresh_tokens
+from zerg.auth.hosted import TENANT_LOGIN_STATE_COOKIE
 from zerg.auth.session_tokens import ACCESS_TOKEN_LIFETIME
 from zerg.auth.session_tokens import REFRESH_COOKIE_NAME
 from zerg.auth.session_tokens import _clear_refresh_cookie
@@ -48,7 +49,6 @@ from zerg.schemas.schemas import TokenOut
 from zerg.services.write_serializer import get_write_serializer
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-TENANT_LOGIN_STATE_COOKIE = "tenant_login_state"
 
 # Refresh token cookie max-age: 90 days (matches absolute lifetime in refresh_tokens module).
 _REFRESH_COOKIE_MAX_AGE = 90 * 24 * 60 * 60

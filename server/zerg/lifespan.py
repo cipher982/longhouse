@@ -215,13 +215,6 @@ async def lifespan(app: FastAPI):
         with _timed_startup_step("single_tenant_startup"):
             _enforce_single_tenant_startup(app)
 
-        # Prefetch SSO signing keys
-        if not _settings.testing:
-            from zerg.services.sso_keys import prefetch_sso_keys
-
-            with _timed_startup_step("prefetch_sso_keys"):
-                prefetch_sso_keys()
-
         # Auto-seed
         if not _settings.testing:
             try:

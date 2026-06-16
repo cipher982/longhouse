@@ -194,7 +194,7 @@ async def test_accept_handoff_allows_code_only_control_plane_open_instance(monke
             testing=False,
         ),
     )
-    monkeypatch.setattr("zerg.routers.auth_sso._hosted_instance_id", lambda: "david010")
+    monkeypatch.setattr("zerg.routers.auth_sso.hosted_instance_id", lambda: "david010")
     monkeypatch.setattr("zerg.routers.auth_sso._exchange_handoff_code", exchange)
     monkeypatch.setattr("zerg.dependencies.auth._get_strategy", lambda: Strategy())
 
@@ -266,7 +266,7 @@ async def test_accept_native_handoff_exchanges_one_use_code(monkeypatch, db_sess
         "zerg.routers.auth_sso.get_settings",
         lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
     )
-    monkeypatch.setattr("zerg.routers.auth_sso._hosted_instance_id", lambda: "david010")
+    monkeypatch.setattr("zerg.routers.auth_sso.hosted_instance_id", lambda: "david010")
     monkeypatch.setattr("zerg.routers.auth_sso._exchange_handoff_code", exchange)
     monkeypatch.setattr("zerg.dependencies.auth._get_strategy", lambda: Strategy())
 

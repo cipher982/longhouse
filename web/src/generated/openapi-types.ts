@@ -1549,30 +1549,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/auth/accept-token": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Accept Token Redirect
-         * @description Accept a hosted login token, set the cookie, and continue to the app.
-         */
-        get: operations["accept_token_redirect_auth_accept_token_get"];
-        put?: never;
-        /**
-         * Accept Token
-         * @description Accept a JWT token from cross-subdomain auth redirect.
-         */
-        post: operations["accept_token_auth_accept_token_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/auth/accept-handoff": {
         parameters: {
             query?: never;
@@ -6647,10 +6623,12 @@ export interface components {
          * @description Payload the control plane sends after Gmail OAuth succeeds.
          */
         HostedGmailConnectHandoffPayload: {
-            /** Handoff Token */
-            handoff_token: string;
             /** Refresh Token */
             refresh_token: string;
+            /** Runtime Token */
+            runtime_token?: string | null;
+            /** Handoff Token */
+            handoff_token?: string | null;
         };
         /**
          * HostedGmailConnectStartResponse
@@ -14496,73 +14474,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    accept_token_redirect_auth_accept_token_get: {
-        parameters: {
-            query: {
-                token: string;
-                return_to?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    accept_token_auth_accept_token_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    [key: string]: string;
-                };
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TokenOut"];
                 };
             };
             /** @description Validation Error */

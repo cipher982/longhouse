@@ -196,6 +196,33 @@ test_http_auth() {
     fi
 }
 
+# Test HTTP with bearer auth
+test_http_bearer() {
+    local name="$1"
+    local url="$2"
+    local expected="$3"
+    local token="$4"
+    local method="${5:-GET}"
+    local data="${6:-}"
+
+    local args="-s --connect-timeout 5 --max-time $SMOKE_CURL_MAX_TIME -o /dev/null -w %{http_code} -H 'Authorization: Bearer $token'"
+    [[ "$method" != "GET" ]] && args="$args -X $method"
+    [[ -n "$data" ]] && args="$args -H 'Content-Type: application/json' -d '$data'"
+
+    local status
+    if ! status=$(eval "curl $args '$url'" 2>/dev/null); then
+        status="000"
+    fi
+
+    if [[ "$status" == "$expected" ]]; then
+        pass "$name ($status)"
+        return 0
+    else
+        fail "$name (expected $expected, got $status)"
+        return 1
+    fi
+}
+
 # Test JSON field
 test_json() {
     local name="$1"
@@ -588,13 +615,12 @@ if [[ "$INSTANCE_AUTH_ENABLED" == "true" ]]; then
         warn "Auth enabled but INSTANCE_SUBDOMAIN is not set - skipping authenticated + LLM tests"
     else
         section "Authenticated"
-        COOKIE_JAR=$(mktemp)
 
-        if lh_hosted_authenticate_cookie_jar "$INSTANCE_SUBDOMAIN" "$COOKIE_JAR"; then
-            pass "Hosted login token accepted"
-            run_test test_http_auth "User profile (authed)" "$API_URL/api/users/me" "200" "$COOKIE_JAR"
+        if [[ -n "${SMOKE_RUNTIME_TOKEN:-}" ]]; then
+            pass "Hosted runtime token configured"
+            run_test test_http_bearer "User profile (authed)" "$API_URL/api/users/me" "200" "$SMOKE_RUNTIME_TOKEN"
             # Browser-auth smoke must stay on the browser-owned timeline API.
-            run_test test_http_auth "Timeline sessions (authed)" "$API_URL$BROWSER_TIMELINE_SESSIONS_PATH" "200" "$COOKIE_JAR"
+            run_test test_http_bearer "Timeline sessions (authed)" "$API_URL$BROWSER_TIMELINE_SESSIONS_PATH" "200" "$SMOKE_RUNTIME_TOKEN"
 
             if [[ $RUN_LLM -eq 1 ]]; then
                 llm_available=$(curl -s --connect-timeout 5 --max-time "$SMOKE_CURL_MAX_TIME" "$API_URL/api/system/capabilities" 2>/dev/null | jq -r '.llm_available // "unknown"' 2>/dev/null)
@@ -609,17 +635,15 @@ if [[ "$INSTANCE_AUTH_ENABLED" == "true" ]]; then
 
             if [[ "$MODE" == "full" ]]; then
                 section "Contacts CRUD"
-                run_contacts_crud "$COOKIE_JAR"
+                warn "Contacts CRUD smoke requires browser refresh cookies and is skipped for hosted runtime-token auth"
 
                 info "Email/Gmail canaries removed with the legacy chat path"
             else
                 info "Full tests skipped (pass --full to enable CRUD/infra)"
             fi
         else
-            fail "Hosted login token auth failed"
+            warn "SMOKE_RUNTIME_TOKEN unavailable - skipping authenticated + LLM tests"
         fi
-
-        rm -f "$COOKIE_JAR"
     fi
 elif [[ "$INSTANCE_AUTH_ENABLED" == "false" ]]; then
     echo ""

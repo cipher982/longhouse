@@ -3,7 +3,6 @@ import { homedir } from 'node:os';
 import { test as base, expect, type APIRequestContext, type BrowserContext, type StorageState } from '@playwright/test';
 
 type RequestFactory = { newContext: (options?: { baseURL?: string; timeout?: number }) => Promise<APIRequestContext> };
-const RETRYABLE_AUTH_STATUSES = new Set([408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526]);
 
 export function isIgnorablePlaywrightArtifactError(error: unknown): boolean {
   return (
@@ -88,83 +87,6 @@ export function readDeviceToken(): string {
   }
 }
 
-async function buildBrowserStorageState(
-  requestFactory: RequestFactory,
-  apiBaseUrl: string,
-  loginToken: string,
-): Promise<StorageState> {
-  let lastError = 'browser auth bootstrap failed';
-
-  for (let attempt = 1; attempt <= 5; attempt++) {
-    const authRequest = await requestFactory.newContext({
-      baseURL: apiBaseUrl,
-      timeout: 30_000,
-    });
-
-    try {
-      const response = await authRequest.post('/api/auth/accept-token', {
-        data: { token: loginToken },
-      });
-
-      if (!response.ok()) {
-        const body = await response.text();
-        lastError = `browser auth bootstrap failed: ${response.status()} ${body}`;
-        if (attempt < 5 && RETRYABLE_AUTH_STATUSES.has(response.status())) {
-          const delayMs = attempt * 1_500;
-          console.warn(
-            `[auth] transient browser accept-token ${response.status()} on attempt ${attempt}/5; retrying in ${delayMs}ms`,
-          );
-          await new Promise((r) => setTimeout(r, delayMs));
-          continue;
-        }
-        throw new Error(lastError);
-      }
-
-      const verifyResponse = await authRequest.get('/api/auth/verify');
-      if (verifyResponse.status() !== 204) {
-        lastError = `browser auth verification failed with status ${verifyResponse.status()}`;
-        if (attempt < 5 && RETRYABLE_AUTH_STATUSES.has(verifyResponse.status())) {
-          const delayMs = attempt * 1_500;
-          console.warn(
-            `[auth] transient browser auth verify ${verifyResponse.status()} on attempt ${attempt}/5; retrying in ${delayMs}ms`,
-          );
-          await new Promise((r) => setTimeout(r, delayMs));
-          continue;
-        }
-        throw new Error(lastError);
-      }
-
-      const storageState = await authRequest.storageState();
-      const sessionCookie = storageState.cookies.find((cookie) => cookie.name === 'longhouse_session');
-      const refreshCookie = storageState.cookies.find((cookie) => cookie.name === 'longhouse_refresh');
-      if (!sessionCookie || !refreshCookie) {
-        throw new Error(
-          `browser auth bootstrap missing required cookies (session=${!!sessionCookie}, refresh=${!!refreshCookie})`,
-        );
-      }
-
-      return storageState;
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
-      if (attempt < 5) {
-        const delayMs = attempt * 1_500;
-        console.warn(`[auth] browser auth bootstrap attempt ${attempt}/5 failed; retrying in ${delayMs}ms: ${lastError}`);
-        await new Promise((r) => setTimeout(r, delayMs));
-        continue;
-      }
-      throw new Error(lastError);
-    } finally {
-      await authRequest.dispose().catch((error) => {
-        if (!isIgnorablePlaywrightArtifactError(error)) {
-          throw error;
-        }
-      });
-    }
-  }
-
-  throw new Error(lastError);
-}
-
 export function buildRuntimeTokenStorageState(baseUrl: string, runtimeToken: string): StorageState {
   const parsed = new URL(baseUrl);
   return {
@@ -182,63 +104,6 @@ export function buildRuntimeTokenStorageState(baseUrl: string, runtimeToken: str
     ],
     origins: [],
   };
-}
-
-export async function exchangeLoginToken(
-  requestFactory: RequestFactory,
-  apiBaseUrl: string,
-  loginToken: string
-): Promise<string> {
-  const authRequest = await requestFactory.newContext({
-    baseURL: apiBaseUrl,
-    timeout: 30_000,
-  });
-
-  try {
-    let lastError = 'accept-token failed';
-    for (let attempt = 1; attempt <= 5; attempt++) {
-      try {
-        const response = await authRequest.post('/api/auth/accept-token', {
-          data: { token: loginToken },
-        });
-
-        if (!response.ok()) {
-          const body = await response.text();
-          lastError = `accept-token failed: ${response.status()} ${body}`;
-          if (attempt < 5 && RETRYABLE_AUTH_STATUSES.has(response.status())) {
-            const delayMs = attempt * 1_500;
-            console.warn(`[auth] transient accept-token ${response.status()} on attempt ${attempt}/5; retrying in ${delayMs}ms`);
-            await new Promise((r) => setTimeout(r, delayMs));
-            continue;
-          }
-          throw new Error(lastError);
-        }
-
-        const payload = await response.json();
-        if (!payload?.access_token) {
-          throw new Error(`accept-token missing access_token: ${JSON.stringify(payload)}`);
-        }
-
-        return payload.access_token;
-      } catch (error) {
-        lastError = error instanceof Error ? error.message : String(error);
-        if (attempt < 5) {
-          const delayMs = attempt * 1_500;
-          console.warn(`[auth] accept-token attempt ${attempt}/5 failed; retrying in ${delayMs}ms: ${lastError}`);
-          await new Promise((r) => setTimeout(r, delayMs));
-          continue;
-        }
-        throw new Error(lastError);
-      }
-    }
-    throw new Error(lastError);
-  } finally {
-    await authRequest.dispose().catch((error) => {
-      if (!isIgnorablePlaywrightArtifactError(error)) {
-        throw error;
-      }
-    });
-  }
 }
 
 type LiveFixtures = {
@@ -271,13 +136,7 @@ export const test = base.extend<LiveFixtures>({
       return;
     }
 
-    const loginToken = normalizeToken(process.env.SMOKE_LOGIN_TOKEN);
-    if (!loginToken) {
-      test.skip(true, 'SMOKE_RUNTIME_TOKEN or SMOKE_LOGIN_TOKEN not set; skipping live prod E2E');
-    }
-
-    const storageState = await buildBrowserStorageState(playwright.request, apiBaseUrl, loginToken);
-    await use(storageState);
+    test.skip(true, 'SMOKE_RUNTIME_TOKEN not set; skipping live prod E2E');
   }, { scope: 'worker' }],
 
   authToken: [async ({ apiBaseUrl, playwright }, use) => {
@@ -296,14 +155,7 @@ export const test = base.extend<LiveFixtures>({
       return;
     }
 
-    const loginToken = normalizeToken(process.env.SMOKE_LOGIN_TOKEN);
-    if (!loginToken) {
-      test.skip(true, 'SMOKE_RUNTIME_TOKEN or SMOKE_LOGIN_TOKEN not set; skipping live prod E2E');
-    }
-
-    await waitForHealthy(playwright.request, apiBaseUrl);
-    const accessToken = await exchangeLoginToken(playwright.request, apiBaseUrl, loginToken);
-    await use(accessToken);
+    test.skip(true, 'SMOKE_RUNTIME_TOKEN not set; skipping live prod E2E');
   }, { scope: 'worker' }],
 
   deviceToken: [async ({}, use) => {

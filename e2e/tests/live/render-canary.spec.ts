@@ -18,7 +18,7 @@
  *   6. Assert p95 < 500ms (SLA target). Fail the deploy otherwise.
  *
  * Env required:
- *   - SMOKE_LOGIN_TOKEN (via the existing live fixtures harness)
+ *   - SMOKE_RUNTIME_TOKEN (via the existing live fixtures harness)
  *   - LONGHOUSE_CANARY_TOKEN (shared secret for observation POST)
  *
  * Env optional:
