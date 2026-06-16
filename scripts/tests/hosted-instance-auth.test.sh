@@ -55,6 +55,37 @@ if [[ "$(_lh_hosted_parse_access_token "$temp_json")" != "access-123" ]]; then
 fi
 
 cat >"$temp_json" <<'JSON'
+{"runtime_token":"runtime-123","expires_in":3600}
+JSON
+
+if [[ "$(_lh_hosted_parse_runtime_token "$temp_json")" != "runtime-123" ]]; then
+  echo "Expected runtime-token parser to read runtime_token payload"
+  exit 1
+fi
+
+sample_python_bin="$(_lh_hosted_python_bin)"
+sample_login_token="$("$sample_python_bin" <<'PY'
+import base64
+import json
+
+def part(payload):
+    raw = json.dumps(payload, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+print(f"{part({'alg': 'none'})}.{part({'sub': '42', 'instance': 'demo'})}.sig")
+PY
+)"
+if [[ "$(_lh_hosted_parse_jwt_claim "$sample_login_token" sub)" != "42" ]]; then
+  echo "Expected JWT claim parser to read sub"
+  exit 1
+fi
+
+if [[ "$(_lh_hosted_parse_jwt_claim "$sample_login_token" instance)" != "demo" ]]; then
+  echo "Expected JWT claim parser to read instance"
+  exit 1
+fi
+
+cat >"$temp_json" <<'JSON'
 {"id":"device-token-id","token":"zdt_smoke"}
 JSON
 
@@ -121,6 +152,60 @@ fi
 
 if [[ "$(cat "$temp_json.request")" != 'https://demo.longhouse.ai/api/auth/accept-token?token=tok%2B%2F%3D&return_to=%2Floop%3Fview%3Dcompact' ]]; then
   echo "Expected redirect helper to call accept-token with encoded return_to"
+  exit 1
+fi
+
+curl() {
+  local data=""
+  local output_file=""
+  local request_url=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -d)
+        data="$2"
+        shift 2
+        ;;
+      -o)
+        output_file="$2"
+        shift 2
+        ;;
+      -w|-H|-X|--connect-timeout|--max-time)
+        shift 2
+        ;;
+      *)
+        request_url="$1"
+        shift
+        ;;
+    esac
+  done
+
+  case "$request_url" in
+    */api/identity/runtime-token)
+      printf '%s' "$request_url" >"$temp_json.request"
+      printf '%s' "$data" >"$temp_json.body"
+      printf '{"runtime_token":"runtime-token-123","expires_in":3600}' >"$output_file"
+      printf '200'
+      ;;
+    *)
+      echo "Unexpected curl URL in runtime-token exchange test: $request_url" >&2
+      return 1
+      ;;
+  esac
+}
+
+runtime_token="$(lh_hosted_exchange_login_token "$sample_login_token" 'https://demo.longhouse.ai')"
+if [[ "$runtime_token" != "runtime-token-123" ]]; then
+  echo "Expected login-token exchange helper to return runtime token"
+  exit 1
+fi
+
+if [[ "$(cat "$temp_json.request")" != 'https://control.longhouse.ai/api/identity/runtime-token' ]]; then
+  echo "Expected exchange helper to call control-plane runtime-token endpoint"
+  exit 1
+fi
+
+if [[ "$(cat "$temp_json.body")" != '{"user_id":42,"audience":"demo"}' ]]; then
+  echo "Expected exchange helper to request runtime token for login-token subject/audience"
   exit 1
 fi
 

@@ -165,6 +165,25 @@ async function buildBrowserStorageState(
   throw new Error(lastError);
 }
 
+export function buildRuntimeTokenStorageState(baseUrl: string, runtimeToken: string): StorageState {
+  const parsed = new URL(baseUrl);
+  return {
+    cookies: [
+      {
+        name: 'longhouse_session',
+        value: runtimeToken,
+        domain: parsed.hostname,
+        path: '/',
+        expires: Math.floor(Date.now() / 1000) + 3600,
+        httpOnly: true,
+        secure: parsed.protocol === 'https:',
+        sameSite: 'Lax',
+      },
+    ],
+    origins: [],
+  };
+}
+
 export async function exchangeLoginToken(
   requestFactory: RequestFactory,
   apiBaseUrl: string,
@@ -245,9 +264,16 @@ export const test = base.extend<LiveFixtures>({
   }, { scope: 'worker' }],
 
   browserStorageState: [async ({ apiBaseUrl, playwright }, use) => {
+    const runtimeToken = normalizeToken(process.env.SMOKE_RUNTIME_TOKEN);
+    if (runtimeToken) {
+      await waitForHealthy(playwright.request, apiBaseUrl);
+      await use(buildRuntimeTokenStorageState(apiBaseUrl, runtimeToken));
+      return;
+    }
+
     const loginToken = normalizeToken(process.env.SMOKE_LOGIN_TOKEN);
     if (!loginToken) {
-      test.skip(true, 'SMOKE_LOGIN_TOKEN not set; skipping live prod E2E');
+      test.skip(true, 'SMOKE_RUNTIME_TOKEN or SMOKE_LOGIN_TOKEN not set; skipping live prod E2E');
     }
 
     const storageState = await buildBrowserStorageState(playwright.request, apiBaseUrl, loginToken);
@@ -263,9 +289,16 @@ export const test = base.extend<LiveFixtures>({
       test.skip(true, 'API_URL or PLAYWRIGHT_API_BASE_URL required; skipping live prod E2E');
     }
 
+    const runtimeToken = normalizeToken(process.env.SMOKE_RUNTIME_TOKEN);
+    if (runtimeToken) {
+      await waitForHealthy(playwright.request, apiBaseUrl);
+      await use(runtimeToken);
+      return;
+    }
+
     const loginToken = normalizeToken(process.env.SMOKE_LOGIN_TOKEN);
     if (!loginToken) {
-      test.skip(true, 'SMOKE_LOGIN_TOKEN not set; skipping live prod E2E');
+      test.skip(true, 'SMOKE_RUNTIME_TOKEN or SMOKE_LOGIN_TOKEN not set; skipping live prod E2E');
     }
 
     await waitForHealthy(playwright.request, apiBaseUrl);

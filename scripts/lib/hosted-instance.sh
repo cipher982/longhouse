@@ -574,6 +574,33 @@ print(token)
 PY
 }
 
+_lh_hosted_parse_jwt_claim() {
+  local token="$1"
+  local claim="$2"
+  local python_bin
+  python_bin="$(_lh_hosted_python_bin)" || return 1
+
+  "$python_bin" - "$token" "$claim" <<'PY'
+import base64
+import json
+import sys
+
+token = sys.argv[1]
+claim = sys.argv[2]
+try:
+    _header, payload_b64, _signature = token.split(".", 2)
+    payload_b64 += "=" * (-len(payload_b64) % 4)
+    payload = json.loads(base64.urlsafe_b64decode(payload_b64.encode("ascii")))
+except Exception:
+    sys.exit(1)
+
+value = payload.get(claim)
+if value is None or value == "":
+    sys.exit(1)
+print(value)
+PY
+}
+
 _lh_hosted_parse_access_token() {
   local response_file="$1"
   local python_bin
@@ -587,6 +614,25 @@ with open(sys.argv[1], encoding="utf-8") as handle:
     payload = json.load(handle)
 
 token = payload.get("access_token")
+if not token:
+    sys.exit(1)
+print(token)
+PY
+}
+
+_lh_hosted_parse_runtime_token() {
+  local response_file="$1"
+  local python_bin
+  python_bin="$(_lh_hosted_python_bin)" || return 1
+
+  "$python_bin" - "$response_file" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+token = payload.get("runtime_token") or payload.get("token")
 if not token:
     sys.exit(1)
 print(token)
@@ -670,8 +716,11 @@ lh_hosted_exchange_login_token() {
   local instance_url="${2:-${LH_INSTANCE_URL:-}}"
   local response_file=""
   local http_code=""
-  local access_token=""
+  local runtime_token=""
   local payload=""
+  local user_id=""
+  local audience=""
+  local python_bin=""
   local attempt=1
   local max_attempts=5
 
@@ -680,14 +729,37 @@ lh_hosted_exchange_login_token() {
     return 1
   fi
 
-  payload="$(_lh_hosted_json_object token "$token")" || return 1
+  lh_hosted_prepare_control_plane_auth || return 1
+
+  user_id="$(_lh_hosted_parse_jwt_claim "$token" sub)" || {
+    echo "Login-token payload missing user subject" >&2
+    return 1
+  }
+  audience="$(_lh_hosted_parse_jwt_claim "$token" instance)" || {
+    echo "Login-token payload missing instance audience" >&2
+    return 1
+  }
+  python_bin="$(_lh_hosted_python_bin)" || return 1
+  payload="$("$python_bin" - "$user_id" "$audience" <<'PY'
+import json
+import sys
+
+print(
+    json.dumps({"user_id": int(sys.argv[1]), "audience": sys.argv[2]}, separators=(",", ":")),
+    end="",
+)
+PY
+)" || return 1
+
   while [[ "$attempt" -le "$max_attempts" ]]; do
     response_file="$(mktemp)"
     if ! http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
       --connect-timeout 10 --max-time 30 \
+      -X POST \
+      -H "X-Admin-Token: ${CONTROL_PLANE_ADMIN_TOKEN}" \
       -H "Content-Type: application/json" \
       -d "$payload" \
-      "${instance_url%/}/api/auth/accept-token")"; then
+      "${CONTROL_PLANE_URL%/}/api/identity/runtime-token")"; then
       http_code="000"
     fi
 
@@ -696,27 +768,27 @@ lh_hosted_exchange_login_token() {
     fi
 
     if [[ "$attempt" -lt "$max_attempts" ]] && _lh_hosted_is_retryable_http_code "$http_code"; then
-      echo "Transient accept-token failure at ${instance_url} (HTTP ${http_code}); retrying (${attempt}/${max_attempts})..." >&2
+      echo "Transient runtime-token failure for ${audience} (HTTP ${http_code}); retrying (${attempt}/${max_attempts})..." >&2
       rm -f "$response_file"
       _lh_hosted_retry_sleep "$attempt"
       attempt=$((attempt + 1))
       continue
     fi
 
-    echo "Instance rejected login token at ${instance_url} (HTTP ${http_code})" >&2
+    echo "Control plane rejected runtime-token request for ${audience} (HTTP ${http_code})" >&2
     cat "$response_file" >&2
     rm -f "$response_file"
     return 1
   done
 
-  access_token="$(_lh_hosted_parse_access_token "$response_file")" || {
-    echo "Accept-token response missing access_token for instance ${instance_url}" >&2
+  runtime_token="$(_lh_hosted_parse_runtime_token "$response_file")" || {
+    echo "Runtime-token response missing runtime_token for instance ${audience}" >&2
     rm -f "$response_file"
     return 1
   }
 
   rm -f "$response_file"
-  printf '%s\n' "$access_token"
+  printf '%s\n' "$runtime_token"
 }
 
 lh_hosted_create_device_token() {

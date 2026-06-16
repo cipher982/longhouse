@@ -50,13 +50,17 @@ if [[ -z "${LONGHOUSE_DEVICE_TOKEN:-}" && -n "${CONTROL_PLANE_ADMIN_TOKEN:-${ADM
 
   echo "Provisioning ephemeral hosted QA device token for $INSTANCE_SUBDOMAIN..." >&2
   LH_SMOKE_DEVICE_ACCESS_TOKEN="$(lh_hosted_exchange_login_token "$(lh_hosted_issue_login_token "$LH_INSTANCE_ID")" "$API_URL")"
+  export SMOKE_RUNTIME_TOKEN="${SMOKE_RUNTIME_TOKEN:-$LH_SMOKE_DEVICE_ACCESS_TOKEN}"
   IFS=$'\t' read -r LH_SMOKE_DEVICE_TOKEN_ID LONGHOUSE_DEVICE_TOKEN <<< \
     "$(lh_hosted_create_device_token "$LH_SMOKE_DEVICE_ACCESS_TOKEN" "$API_URL" "qa-live-${INSTANCE_SUBDOMAIN}-${RANDOM}")"
   export LONGHOUSE_DEVICE_TOKEN
   trap cleanup_ephemeral_device_token EXIT
 fi
 
-SMOKE_LOGIN_TOKEN="${SMOKE_LOGIN_TOKEN:-$(lh_hosted_resolved_login_token "$INSTANCE_SUBDOMAIN")}"
+if [[ -z "${SMOKE_RUNTIME_TOKEN:-}" ]]; then
+  SMOKE_LOGIN_TOKEN="${SMOKE_LOGIN_TOKEN:-$(lh_hosted_resolved_login_token "$INSTANCE_SUBDOMAIN")}"
+  export SMOKE_LOGIN_TOKEN
+fi
 
 export PLAYWRIGHT_BASE_URL="$FRONTEND_URL"
 export PLAYWRIGHT_API_BASE_URL="$API_URL"
@@ -65,7 +69,7 @@ export PLAYWRIGHT_BACKEND_URL="$API_URL"
 export FRONTEND_URL="$FRONTEND_URL"
 export API_URL="$API_URL"
 export RUN_LIVE_E2E="1"
-export SMOKE_LOGIN_TOKEN
+export SMOKE_RUNTIME_TOKEN="${SMOKE_RUNTIME_TOKEN:-}"
 
 cd "$ROOT_DIR/e2e"
 

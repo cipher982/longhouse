@@ -2,13 +2,13 @@
  * Live QA harness for the Longhouse production instance.
  *
  * Designed to run after every deploy — headless, ~60s, exit 0=pass exit 1=fail.
- * Uses the hosted login-token -> accept-token flow shared by the other live suites.
+ * Uses the hosted runtime-token/device-token flow shared by the other live suites.
  *
  * Run via: ./scripts/qa-live.sh
  * Or:      make qa-live
  */
 
-import { test, expect, isIgnorablePlaywrightArtifactError, normalizeToken } from "./fixtures";
+import { test, expect, isIgnorablePlaywrightArtifactError, normalizeToken, buildRuntimeTokenStorageState } from "./fixtures";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { waitForPageReady } from "../helpers/ready-signals";
 
@@ -258,9 +258,10 @@ test("removed loop login handoff resolves to timeline", async ({
 }) => {
   test.setTimeout(30_000);
 
+  const runtimeToken = normalizeToken(process.env.SMOKE_RUNTIME_TOKEN);
   const loginToken = normalizeToken(process.env.SMOKE_LOGIN_TOKEN);
-  if (!loginToken) {
-    test.skip(true, "SMOKE_LOGIN_TOKEN not set");
+  if (!runtimeToken && !loginToken) {
+    test.skip(true, "SMOKE_RUNTIME_TOKEN or SMOKE_LOGIN_TOKEN not set");
     return;
   }
 
@@ -269,16 +270,8 @@ test("removed loop login handoff resolves to timeline", async ({
   const page = await context.newPage();
 
   try {
-    // --- Part 1: Unauthenticated /loop shows login with SSO CTA ---
-    await page.goto(`${baseOrigin}/loop`, { waitUntil: "domcontentloaded" });
-    const loginButton = page.getByRole("button", {
-      name: /continue to your longhouse account/i,
-    });
-    await loginButton.waitFor({ timeout: 15_000 });
-
+    // --- Part 1: Unauthenticated /loop starts hosted SSO on the control plane ---
     // Intercept the navigation instead of actually going to control.longhouse.ai.
-    // The old test clicked the button and waited for the external domain to load,
-    // which was the sole source of flakiness (network, Cloudflare, DNS).
     await page.route("**/*", (route) => {
       const url = new URL(route.request().url());
       if (url.host === "control.longhouse.ai") {
@@ -293,23 +286,30 @@ test("removed loop login handoff resolves to timeline", async ({
         (req) => new URL(req.url()).host === "control.longhouse.ai",
         { timeout: 15_000 },
       ),
-      loginButton.click(),
+      page.goto(`${baseOrigin}/loop`, { waitUntil: "domcontentloaded" }),
     ]);
 
     const redirectParsed = new URL(interceptedRequest.url());
     expect(
       redirectParsed.host,
-      "Login CTA should redirect to control.longhouse.ai",
+      "Unauthenticated /loop should redirect to control.longhouse.ai",
     ).toBe("control.longhouse.ai");
+    expect(redirectParsed.pathname).toBe("/auth/start");
 
     // Clean up route handler before continuing
     await page.unroute("**/*");
 
-    // --- Part 2: accept-token with return_to=/loop lands on the supported home route ---
-    await page.goto(
-      `${baseOrigin}/api/auth/accept-token?token=${encodeURIComponent(loginToken)}&return_to=%2Floop`,
-      { waitUntil: "domcontentloaded" },
-    );
+    // --- Part 2: authenticated removed /loop route lands on the supported home route ---
+    if (runtimeToken) {
+      const state = buildRuntimeTokenStorageState(baseOrigin, runtimeToken);
+      await context.addCookies(state.cookies);
+      await page.goto(`${baseOrigin}/loop`, { waitUntil: "domcontentloaded" });
+    } else {
+      await page.goto(
+        `${baseOrigin}/api/auth/accept-token?token=${encodeURIComponent(loginToken!)}&return_to=%2Floop`,
+        { waitUntil: "domcontentloaded" },
+      );
+    }
     await page.waitForURL((url) => url.pathname === "/timeline", {
       timeout: 20_000,
     });
@@ -734,6 +734,11 @@ test("recall panel opens and shows search input", async ({ context }) => {
 
 test("auth refresh endpoint rotates tokens", async ({ playwright, apiBaseUrl }) => {
   test.setTimeout(10_000);
+
+  if (normalizeToken(process.env.SMOKE_RUNTIME_TOKEN)) {
+    test.skip(true, "Hosted runtime-token browser auth does not issue tenant refresh cookies");
+    return;
+  }
 
   const loginToken = process.env.SMOKE_LOGIN_TOKEN?.trim();
   if (!loginToken) {
