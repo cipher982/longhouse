@@ -25,6 +25,8 @@ jobs:
     timeout-minutes: 25
     env:
       CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
+      LONGHOUSE_DEVICE_TOKEN: ${{ secrets.LONGHOUSE_DEVICE_TOKEN }}
+      SMOKE_RUNTIME_TOKEN: ${{ secrets.SMOKE_RUNTIME_TOKEN }}
       QA_INSTANCE_SUBDOMAIN: ${{ vars.HOSTED_CANARY_SUBDOMAIN || 'demo' }}
       QA_HOME: /tmp/hosted-live-qa-${{ github.run_id }}-${{ github.run_attempt }}
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
@@ -110,7 +112,7 @@ jobs:
 
       - name: Run hosted mixed live/archive shipper bench
         id: hosted_shipper_bench
-        if: always() && steps.qa_live.outcome == 'success'
+        if: always() && steps.qa_live.outcome == 'success' && (env.LONGHOUSE_DEVICE_TOKEN != '' || env.SMOKE_RUNTIME_TOKEN != '')
         env:
           HOME: ${{ env.QA_HOME }}
           CARGO_PROFILE: ci
@@ -118,7 +120,7 @@ jobs:
 
       - name: Run render-canary SLA check
         id: render_canary
-        if: always() && steps.qa_live.outcome == 'success'
+        if: always() && steps.qa_live.outcome == 'success' && (env.LONGHOUSE_DEVICE_TOKEN != '' || env.SMOKE_RUNTIME_TOKEN != '')
         env:
           HOME: ${{ env.QA_HOME }}
           LONGHOUSE_CANARY_TOKEN: ${{ secrets.LONGHOUSE_CANARY_TOKEN }}

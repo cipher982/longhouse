@@ -58,8 +58,8 @@ if [[ -z "${LONGHOUSE_DEVICE_TOKEN:-}" && -n "${SMOKE_RUNTIME_TOKEN:-}" ]]; then
 fi
 
 if [[ -z "${LONGHOUSE_DEVICE_TOKEN:-}" && -z "${SMOKE_RUNTIME_TOKEN:-}" ]]; then
-  echo "Set SMOKE_RUNTIME_TOKEN or LONGHOUSE_DEVICE_TOKEN before hosted live E2E." >&2
-  exit 1
+  echo "Skipping hosted live E2E: set SMOKE_RUNTIME_TOKEN or LONGHOUSE_DEVICE_TOKEN to enable browser-auth coverage." >&2
+  exit 0
 fi
 
 export PLAYWRIGHT_BASE_URL="$FRONTEND_URL"
