@@ -891,16 +891,16 @@ async def continue_remote_session(
         db.refresh(session)
         return _launch_result_for_attempt(launch_attempt)
 
-    message = response.message or {}
-    if message.get("ok"):
+    response_message = response.message or {}
+    if response_message.get("ok"):
         if execution_lifetime == "one_shot":
             _attach_one_shot_launch_run(
                 db,
                 session=session,
                 attempt=launch_attempt,
                 external_name=info.machine_name or device_id,
-                pid=_result_pid(message),
-                argv=_result_argv(message),
+                pid=_result_pid(response_message),
+                argv=_result_argv(response_message),
                 cwd=cwd,
             )
         else:
@@ -910,8 +910,8 @@ async def continue_remote_session(
                 attempt=launch_attempt,
                 external_name=info.machine_name or device_id,
                 force_new_run=True,
-                provider_thread_id=_result_resume_thread_id(message) or provider_thread_id,
-                thread_path=_result_resume_thread_path(message) or thread_path,
+                provider_thread_id=_result_resume_thread_id(response_message) or provider_thread_id,
+                thread_path=_result_resume_thread_path(response_message) or thread_path,
                 cwd=cwd,
             )
         db.commit()
@@ -926,7 +926,7 @@ async def continue_remote_session(
         )
         return _launch_result_for_attempt(launch_attempt)
 
-    error = message.get("error") or {}
+    error = response_message.get("error") or {}
     code = normalize_remote_launch_error_code(error.get("code"))
     err_msg = str(error.get("message") or "unknown error")
     if execution_lifetime == "one_shot":
