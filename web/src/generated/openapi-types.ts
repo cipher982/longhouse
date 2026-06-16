@@ -1531,18 +1531,14 @@ export interface paths {
          * Start Handoff
          * @description Browser entry point for hosted login.
          *
-         *     302s to the control plane `/auth/start?tenant=...&return_to=...`.
-         *     The CP renders a tenant-aware login page; after auth the CP
-         *     mints an HS256 bridge token and 302s to the tenant's
-         *     `/api/auth/accept-token`.
+         *     302s to the control plane `/auth/start?tenant=...&return_to=...`
+         *     after setting a tenant-side CSRF cookie. The CP renders a
+         *     tenant-aware login page; after auth the CP mints a one-use handoff
+         *     code and 302s to the tenant's `/api/auth/accept-handoff`.
          *
          *     Self-host tenants (no CONTROL_PLANE_URL) get a redirect to the
          *     local `/login` React route instead, which renders the tenant's
          *     own login form.
-         *
-         *     Phase 1 will add a `tenant_state` CSRF cookie bound to the
-         *     `accept-handoff` route; in Phase 0 the existing HS256 bridge
-         *     is the only auth path, so the cookie would be orphaned.
          */
         get: operations["start_handoff_auth_start_handoff_get"];
         put?: never;
@@ -1571,6 +1567,40 @@ export interface paths {
          * @description Accept a JWT token from cross-subdomain auth redirect.
          */
         post: operations["accept_token_auth_accept_token_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/accept-handoff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Accept Handoff Request */
+        get: operations["accept_handoff_request_auth_accept_handoff_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/auth/accept-native-handoff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Accept Native Handoff */
+        post: operations["accept_native_handoff_auth_accept_native_handoff_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7421,6 +7451,13 @@ export interface components {
             /** Config */
             config?: string[];
         };
+        /** NativeHandoffRequest */
+        NativeHandoffRequest: {
+            /** Code */
+            code: string;
+            /** Tenant State */
+            tenant_state: string;
+        };
         /** ObservabilityOverviewResponse */
         ObservabilityOverviewResponse: {
             /**
@@ -8242,6 +8279,16 @@ export interface components {
              */
             display_name?: string | null;
             /**
+             * Initial Prompt
+             * @description Initial one-shot prompt
+             */
+            initial_prompt?: string | null;
+            /**
+             * Execution Lifetime
+             * @description Remote launch execution lifetime: one_shot|live_control. Omitted preserves legacy live_control.
+             */
+            execution_lifetime?: ("one_shot" | "live_control") | null;
+            /**
              * Client Request Id
              * @description Optional idempotency key; repeated calls with the same value return the same session
              */
@@ -8259,6 +8306,11 @@ export interface components {
              * @enum {string}
              */
             launch_state: "launching" | "live" | "launching_unknown" | "launch_failed" | "launch_orphaned";
+            /**
+             * Execution Lifetime
+             * @enum {string}
+             */
+            execution_lifetime: "one_shot" | "live_control";
             /** Launch Error Code */
             launch_error_code?: ("invalid_request" | "device_not_enrolled" | "provider_unsupported" | "cwd_not_allowed" | "cwd_not_found" | "machine_offline" | "provider_launch_failed" | "transcript_not_found" | "launch_timeout") | null;
             /** Launch Error Message */
@@ -8284,6 +8336,12 @@ export interface components {
             status?: string | null;
             /** Thread Subscription Status */
             thread_subscription_status?: string | null;
+            /** Launch Mode */
+            launch_mode?: string | null;
+            /** Ui Attached */
+            ui_attached?: boolean | null;
+            /** Ui Presence */
+            ui_presence?: string | null;
         };
         /** ResolvedEvidenceIn */
         ResolvedEvidenceIn: {
@@ -8888,6 +8946,8 @@ export interface components {
             session_id?: string | null;
             /** Thread Id */
             thread_id?: string | null;
+            /** Run Id */
+            run_id?: string | null;
             /** Provider */
             provider: string;
             /** Device Id */
@@ -10134,6 +10194,11 @@ export interface components {
              * @description Remote-launch lifecycle: launching|live|launching_unknown|launch_failed|launch_orphaned; null when there is no launch attempt
              */
             launch_state?: ("launching" | "live" | "launching_unknown" | "launch_failed" | "launch_orphaned") | null;
+            /**
+             * Execution Lifetime
+             * @description Remote launch execution lifetime: one_shot|live_control; null when there is no launch attempt
+             */
+            execution_lifetime?: ("one_shot" | "live_control") | null;
             /**
              * Launch Error Code
              * @description Remote-launch error code when launch_state=launch_failed/launch_orphaned
@@ -14488,6 +14553,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TokenOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accept_handoff_request_auth_accept_handoff_get: {
+        parameters: {
+            query: {
+                code: string;
+                return_to?: string | null;
+                tenant_state?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accept_native_handoff_auth_accept_native_handoff_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NativeHandoffRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
