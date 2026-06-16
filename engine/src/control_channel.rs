@@ -771,6 +771,7 @@ async fn execute_command(
             }
             let initial_prompt = payload_required_string(&payload, "initial_prompt")?;
             let run_id = payload_required_string(&payload, "run_id")?;
+            let resume_target = payload_resume_target(&payload)?;
             let api_token = config.api_token.clone().ok_or_else(|| CommandError {
                 code: "provider_launch_failed".to_string(),
                 message: "Machine Agent has no device token configured".to_string(),
@@ -789,6 +790,9 @@ async fn execute_command(
                 approval_policy: Some(REMOTE_CODEX_EXEC_APPROVAL_POLICY.to_string()),
                 sandbox: Some(REMOTE_CODEX_EXEC_SANDBOX.to_string()),
                 prompt: initial_prompt,
+                resume_thread_id: resume_target
+                    .as_ref()
+                    .map(|target| target.thread_id.clone()),
                 machine_name: config.machine_name.clone(),
                 local_db_path,
             })
@@ -2180,6 +2184,9 @@ mod tests {
         assert!(supports
             .iter()
             .any(|item| item.as_str() == Some("codex.run_once")));
+        assert!(supports
+            .iter()
+            .any(|item| item.as_str() == Some("codex.resume_run_once")));
     }
 
     #[test]
@@ -2403,6 +2410,7 @@ mod tests {
         assert!(supports.contains(&"codex.launch".to_string()));
         assert!(supports.contains(&"codex.continue".to_string()));
         assert!(supports.contains(&"codex.run_once".to_string()));
+        assert!(supports.contains(&"codex.resume_run_once".to_string()));
         assert!(!supports.contains(&"codex.live_proof".to_string()));
 
         write_executable(&dir, "codex");
@@ -2412,6 +2420,7 @@ mod tests {
         assert!(supports.contains(&"codex.launch".to_string()));
         assert!(supports.contains(&"codex.continue".to_string()));
         assert!(supports.contains(&"codex.run_once".to_string()));
+        assert!(supports.contains(&"codex.resume_run_once".to_string()));
         assert!(supports.contains(&"claude.launch".to_string()));
         // claude.continue must survive the installed-binary gating path, not
         // just exist in the raw manifest — this is the surface the server's
@@ -2925,6 +2934,39 @@ exit 1
 
         assert_eq!(result["ok"], false);
         assert_eq!(result["error"]["code"], "provider_unsupported");
+    }
+
+    #[tokio::test]
+    async fn run_once_resume_rejects_missing_thread_id() {
+        let mut cache = command_cache();
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-run-once-resume-no-thread",
+                "session_id": "00000000-0000-0000-0000-000000000103",
+                "command_type": COMMAND_RUN_ONCE,
+                "payload": {
+                    "provider": "codex",
+                    "cwd": "/tmp",
+                    "run_id": "00000000-0000-0000-0000-000000000203",
+                    "initial_prompt": "continue it",
+                    "mode": "continue",
+                    "resume": {
+                        "thread_path": "/tmp/thread.jsonl"
+                    }
+                },
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"]["code"], "invalid_command");
+        assert!(result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("thread_id"));
     }
 
     #[tokio::test]

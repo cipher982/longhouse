@@ -8233,6 +8233,16 @@ export interface components {
              */
             cwd?: string | null;
             /**
+             * Message
+             * @description Optional follow-up prompt for bounded one-shot continuation
+             */
+            message?: string | null;
+            /**
+             * Execution Lifetime
+             * @description Continuation execution lifetime: one_shot|live_control. Message-bearing browser/iOS requests default to one_shot.
+             */
+            execution_lifetime?: ("one_shot" | "live_control") | null;
+            /**
              * Client Request Id
              * @description Required idempotency key; repeated calls with the same value return the same attempt
              */

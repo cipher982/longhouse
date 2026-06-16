@@ -83,7 +83,8 @@
         "codex.answer_pause",
         "codex.launch",
         "codex.continue",
-        "codex.run_once"
+        "codex.run_once",
+        "codex.resume_run_once"
       ]
     },
     {

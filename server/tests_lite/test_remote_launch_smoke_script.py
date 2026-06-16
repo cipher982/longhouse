@@ -364,13 +364,17 @@ def test_run_one_shot_wires_run_once_capability_and_nonce_prompt(monkeypatch) ->
             "device_id": "demo-machine",
             "machine_name": "demo-machine",
             "engine_build": "test",
-            "supports": ["codex.run_once"],
+            "supports": ["codex.run_once", "codex.resume_run_once"],
         }
 
     def fake_launch_session(*args, **kwargs):
         captured["launch_bearer_token"] = kwargs["bearer_token"]
         captured["execution_lifetime"] = kwargs["execution_lifetime"]
         captured["initial_prompt"] = kwargs["initial_prompt"]
+        for token in str(kwargs["initial_prompt"]).replace(".", " ").split():
+            if token.startswith("LH_REMOTE_CONTEXT_"):
+                captured["context_secret"] = token
+                break
         return {
             "session_id": "sess-1",
             "launch_state": "live",
@@ -378,14 +382,28 @@ def test_run_one_shot_wires_run_once_capability_and_nonce_prompt(monkeypatch) ->
         }
 
     def fake_poll_for_assistant_nonce(**kwargs):
-        captured["nonce"] = kwargs["nonce"]
-        return {"assistant_events": [{"role": "assistant", "text": kwargs["nonce"]}]}
+        captured.setdefault("polled_nonces", []).append(kwargs["nonce"])
+        text = kwargs["nonce"]
+        if kwargs["nonce"].startswith("LH_REMOTE_CONTINUE_SMOKE_"):
+            text = f"{kwargs['nonce']} {captured['context_secret']}"
+        return {"assistant_events": [{"role": "assistant", "text": text}]}
+
+    def fake_continue_session(*args, **kwargs):
+        captured["continue_bearer_token"] = kwargs["bearer_token"]
+        captured["continue_message"] = kwargs["message"]
+        captured["continue_lifetime"] = kwargs["execution_lifetime"]
+        return {
+            "session_id": kwargs["session_id"],
+            "launch_state": "live",
+            "execution_lifetime": kwargs["execution_lifetime"],
+        }
 
     def unexpected_send(*args, **kwargs):
         raise AssertionError("one-shot smoke should not use the live-control input endpoint")
 
     monkeypatch.setattr(smoke, "discover_machine", fake_discover_machine)
     monkeypatch.setattr(smoke, "launch_session", fake_launch_session)
+    monkeypatch.setattr(smoke, "continue_session", fake_continue_session)
     monkeypatch.setattr(smoke, "poll_for_assistant_nonce", fake_poll_for_assistant_nonce)
     monkeypatch.setattr(smoke, "send_nonce_prompt", unexpected_send)
     monkeypatch.setattr(smoke, "send_second_input_probe", unexpected_send)
@@ -420,4 +438,11 @@ def test_run_one_shot_wires_run_once_capability_and_nonce_prompt(monkeypatch) ->
     assert captured["launch_bearer_token"] == "zdt_test"
     assert captured["required_capability"] == "codex.run_once"
     assert captured["execution_lifetime"] == "one_shot"
-    assert captured["nonce"] in captured["initial_prompt"]
+    assert result["nonce"] in captured["initial_prompt"]
+    assert result["context_secret"] in captured["initial_prompt"]
+    assert captured["continue_bearer_token"] == "zdt_test"
+    assert captured["continue_lifetime"] == "one_shot"
+    assert result["continue_nonce"] in captured["continue_message"]
+    assert result["context_secret"] not in captured["continue_message"]
+    assert captured["polled_nonces"] == [result["nonce"], result["continue_nonce"]]
+    assert result["cleanup"]["reason"] == "one_shot_has_no_bridge_to_stop"

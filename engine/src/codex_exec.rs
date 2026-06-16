@@ -27,6 +27,7 @@ pub struct CodexExecRunConfig {
     pub approval_policy: Option<String>,
     pub sandbox: Option<String>,
     pub prompt: String,
+    pub resume_thread_id: Option<String>,
     pub machine_name: String,
     pub local_db_path: Option<PathBuf>,
 }
@@ -72,6 +73,10 @@ pub fn codex_exec_args(config: &CodexExecRunConfig) -> Vec<OsString> {
     args.push(OsString::from("-C"));
     args.push(config.cwd.as_os_str().to_os_string());
     args.push(OsString::from("--skip-git-repo-check"));
+    if let Some(thread_id) = normalized_optional(&config.resume_thread_id) {
+        args.push(OsString::from("resume"));
+        args.push(OsString::from(thread_id));
+    }
     args.push(OsString::from(config.prompt.clone()));
     args
 }
@@ -423,6 +428,7 @@ mod tests {
             approval_policy: Some("never".to_string()),
             sandbox: Some("workspace-write".to_string()),
             prompt: "Do one bounded turn".to_string(),
+            resume_thread_id: None,
             machine_name: "cinder".to_string(),
             local_db_path: None,
         }
@@ -450,6 +456,38 @@ mod tests {
                 "/tmp/project",
                 "--skip-git-repo-check",
                 "Do one bounded turn",
+            ]
+        );
+    }
+
+    #[test]
+    fn codex_exec_args_resume_previous_thread_and_still_exit() {
+        let mut config = config();
+        config.resume_thread_id = Some("33333333-3333-4333-8333-333333333333".to_string());
+        config.prompt = "Continue with one bounded follow-up".to_string();
+
+        let args = codex_exec_args(&config)
+            .into_iter()
+            .map(|value| value.to_string_lossy().to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            args,
+            vec![
+                "exec",
+                "--json",
+                "-c",
+                "check_for_update_on_startup=false",
+                "-c",
+                "approval_policy=\"never\"",
+                "-s",
+                "workspace-write",
+                "-C",
+                "/tmp/project",
+                "--skip-git-repo-check",
+                "resume",
+                "33333333-3333-4333-8333-333333333333",
+                "Continue with one bounded follow-up",
             ]
         );
     }

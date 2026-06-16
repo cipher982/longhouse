@@ -46,6 +46,7 @@ DEFAULT_POLL_INTERVAL_SECS = 5
 COOKIE_NAME = "longhouse_session"
 CODEX_LAUNCH_CAPABILITY = "codex.launch"
 CODEX_RUN_ONCE_CAPABILITY = "codex.run_once"
+CODEX_RESUME_RUN_ONCE_CAPABILITY = "codex.resume_run_once"
 SMOKE_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/605.1.15 (KHTML, like Gecko) "
@@ -395,6 +396,39 @@ def send_session_input(
     return _require_json_object(result, context=f"POST /api/sessions/{session_id}/input")
 
 
+def continue_session(
+    base_url: str,
+    cookie: str | None = None,
+    *,
+    bearer_token: str | None = None,
+    session_id: str,
+    message: str,
+    client_request_id: str,
+    execution_lifetime: str,
+) -> dict[str, Any]:
+    payload = {
+        "message": message,
+        "client_request_id": client_request_id,
+        "execution_lifetime": execution_lifetime,
+    }
+    result = _http_json(
+        "POST",
+        f"{base_url.rstrip('/')}/api/sessions/{session_id}/continue",
+        body=payload,
+        cookie=cookie,
+        bearer_token=bearer_token,
+        timeout=60,
+    )
+    data = _require_json_object(result, context=f"POST /api/sessions/{session_id}/continue")
+    state = str(data.get("launch_state") or "")
+    if state != "live":
+        raise SmokeError(f"continue failed state={state} code={data.get('launch_error_code')} message={data.get('launch_error_message')}")
+    observed_lifetime = str(data.get("execution_lifetime") or "")
+    if observed_lifetime != execution_lifetime:
+        raise SmokeError(f"continue response execution_lifetime={observed_lifetime!r}, expected {execution_lifetime!r}: {data}")
+    return data
+
+
 def send_nonce_prompt(
     base_url: str,
     cookie: str | None = None,
@@ -621,6 +655,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise SmokeError(f"cwd must be absolute on the target machine: {cwd!r}")
     run_id = os.environ.get("GITHUB_RUN_ID") or time.strftime("%Y%m%d%H%M%S")
     nonce = f"LH_REMOTE_LAUNCH_SMOKE_{run_id}_{uuid.uuid4().hex[:8]}"
+    context_secret = f"LH_REMOTE_CONTEXT_{run_id}_{uuid.uuid4().hex[:8]}"
+    continue_nonce = f"LH_REMOTE_CONTINUE_SMOKE_{run_id}_{uuid.uuid4().hex[:8]}"
     client_prefix = re.sub(r"[^a-zA-Z0-9_.:-]", "-", f"remote-smoke-{run_id}-{uuid.uuid4().hex[:8]}")[:48]
     session_id: str | None = None
     device_auth: DeviceTokenAuth | None = None
@@ -636,6 +672,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "expected_commit": args.expected_commit,
         "execution_lifetime": args.execution_lifetime,
         "nonce": nonce,
+        "context_secret": context_secret,
+        "continue_nonce": continue_nonce,
         "hostname": socket.gethostname(),
     }
 
@@ -664,6 +702,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "supports": machine.get("supports"),
             "required_capability": required_capability,
         }
+        supports = {str(item) for item in (machine.get("supports") or [])}
+        if args.execution_lifetime == "one_shot" and CODEX_RESUME_RUN_ONCE_CAPABILITY not in supports:
+            raise SmokeError(
+                f"machine {machine.get('device_id')} supports one-shot launch but not bounded resume capability "
+                f"{CODEX_RESUME_RUN_ONCE_CAPABILITY}; supports={sorted(supports)}"
+            )
 
         display_name = f"remote-smoke-{run_id}"
         initial_prompt = None
@@ -671,8 +715,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             initial_prompt = (
                 str(args.initial_prompt).strip()
                 if args.initial_prompt
-                else "Remote launch one-shot smoke check. Reply with exactly this token and no extra analysis: "
-                f"{nonce}"
+                else "Remote launch one-shot smoke check. Remember this context secret for a later follow-up: "
+                f"{context_secret}. Reply with exactly this token and no extra analysis: {nonce}"
             )
         launch_response = launch_session(
             base_url,
@@ -717,12 +761,43 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             interval_secs=args.poll_interval_secs,
         )
         result["observed"] = observed
+        if args.execution_lifetime == "one_shot" and not args.initial_prompt:
+            continue_message = (
+                "Remote continue one-shot smoke check. Reply with exactly this token, a space, "
+                f"and the context secret from the previous turn: {continue_nonce}"
+            )
+            continue_response = continue_session(
+                base_url,
+                bearer_token=device_auth.token,
+                session_id=session_id,
+                message=continue_message,
+                client_request_id=f"{client_prefix}-continue",
+                execution_lifetime="one_shot",
+            )
+            result["continue_response"] = continue_response
+            continued = poll_for_assistant_nonce(
+                ssh_target=args.ssh_target,
+                container=container,
+                session_id=session_id,
+                nonce=continue_nonce,
+                timeout_secs=args.assistant_timeout_secs,
+                interval_secs=args.poll_interval_secs,
+            )
+            if not assistant_events_contain(continued, context_secret):
+                recent = continued.get("assistant_events") or continued.get("recent_events") or []
+                raise SmokeError(
+                    "bounded continue answered the follow-up nonce but did not recall the prior context secret; "
+                    f"recent_events={recent[:5]}"
+                )
+            result["continued_observed"] = continued
         result["ok"] = True
     except SmokeError as exc:
         result["error"] = str(exc)
     finally:
-        if session_id and not args.skip_stop:
+        if session_id and not args.skip_stop and args.execution_lifetime == "live_control":
             result["cleanup"] = stop_codex_bridge(session_id, target_ssh=args.bridge_stop_ssh_target)
+        elif session_id and args.execution_lifetime == "one_shot":
+            result["cleanup"] = {"ok": True, "skipped": True, "reason": "one_shot_has_no_bridge_to_stop"}
         if device_auth is not None:
             result["auth_cleanup"] = revoke_device_token(
                 device_auth,

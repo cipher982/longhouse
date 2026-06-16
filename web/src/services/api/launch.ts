@@ -100,6 +100,8 @@ export type RemoteSessionLaunchResponse = {
 export type RemoteSessionContinueRequest = {
   device_id?: string | null;
   cwd?: string | null;
+  message?: string | null;
+  execution_lifetime?: ExecutionLifetime | null;
   client_request_id: string;
 };
 

@@ -143,6 +143,7 @@ def test_codex_contract_is_current_remote_launch_engine_channel_provider():
         "codex.launch",
         "codex.continue",
         "codex.run_once",
+        "codex.resume_run_once",
     )
     assert remote_launch_supported_providers() == frozenset({"codex", "claude", "opencode"})
     assert run_once_supported_providers() == frozenset({"codex"})

@@ -1432,6 +1432,95 @@ def test_http_continue_endpoint_happy_path(tmp_path):
     assert registry.sent[0]["payload"]["mode"] == "continue"
 
 
+def test_http_continue_endpoint_message_defaults_to_one_shot(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.resume_run_once",))
+    with SessionLocal() as db:
+        session_id = _seed_continuable_codex_session(db)
+
+    original, module = _patch_registry(registry)
+    try:
+        client, api_app = _make_browser_client(SessionLocal)
+        try:
+            resp = client.post(
+                f"/api/sessions/{session_id}/continue",
+                json={
+                    "client_request_id": "tap-continue-with-message",
+                    "message": "Please continue with a bounded follow-up.",
+                },
+            )
+        finally:
+            api_app.dependency_overrides.clear()
+    finally:
+        module.get_machine_control_channel_registry = original
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["session_id"] == str(session_id)
+    assert body["launch_state"] == "live"
+    assert body["execution_lifetime"] == "one_shot"
+    assert len(registry.sent) == 1
+    sent = registry.sent[0]
+    assert sent["command_type"] == "session.run_once"
+    assert sent["payload"]["mode"] == "continue"
+    assert sent["payload"]["resume"] == {
+        "thread_id": "thread-abc",
+        "thread_path": "/Users/me/.codex/sessions/thread-abc.jsonl",
+    }
+    assert sent["payload"]["initial_prompt"] == "Please continue with a bounded follow-up."
+    assert sent["payload"]["execution_lifetime"] == "one_shot"
+    assert sent["payload"]["run_id"]
+
+    with SessionLocal() as db:
+        attempt = _latest_attempt(db, session_id)
+        assert attempt.execution_lifetime == "one_shot"
+        assert attempt.run_id is not None
+        run = db.get(SessionRun, attempt.run_id)
+        assert run is not None
+        assert run.launch_origin == "longhouse_continued"
+        conn = (
+            db.query(SessionConnection)
+            .filter(SessionConnection.run_id == run.id)
+            .one()
+        )
+        assert conn.control_plane == "codex_exec"
+        assert conn.can_send_input == 0
+        assert conn.can_resume == 0
+
+
+def test_http_continue_endpoint_message_requires_bounded_resume_support(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    # Older engines advertise codex.run_once but cannot safely resume through it.
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.run_once", "codex.continue"))
+    with SessionLocal() as db:
+        session_id = _seed_continuable_codex_session(db)
+
+    original, module = _patch_registry(registry)
+    try:
+        client, api_app = _make_browser_client(SessionLocal)
+        try:
+            resp = client.post(
+                f"/api/sessions/{session_id}/continue",
+                json={
+                    "client_request_id": "tap-continue-old-engine",
+                    "message": "Do not silently resume fresh.",
+                },
+            )
+        finally:
+            api_app.dependency_overrides.clear()
+    finally:
+        module.get_machine_control_channel_registry = original
+
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"]["code"] == "provider_unsupported"
+    assert "codex.resume_run_once" in resp.json()["detail"]["message"]
+    assert registry.sent == []
+
+
 def test_agents_continue_endpoint_happy_path(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)

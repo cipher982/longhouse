@@ -20,6 +20,9 @@ RemoteExecutionLifetime = Literal["one_shot", "live_control"]
 DEFAULT_REMOTE_EXECUTION_LIFETIME: RemoteExecutionLifetime = "live_control"
 # Browser/iOS "launch new session" requests default to bounded one-shot execution.
 DEFAULT_REMOTE_SESSION_LAUNCH_LIFETIME: RemoteExecutionLifetime = "one_shot"
+# Browser/iOS continuation requests that carry a follow-up prompt should also
+# be bounded; prompt-less continuation remains live-control for attach-style UI.
+DEFAULT_REMOTE_CONTINUE_MESSAGE_LIFETIME: RemoteExecutionLifetime = "one_shot"
 RemoteLaunchLifecycleState = Literal[
     "launching",
     "live",
@@ -132,6 +135,7 @@ __all__ = [
     "RemoteLaunchLifecycleState",
     "DEFAULT_REMOTE_EXECUTION_LIFETIME",
     "DEFAULT_REMOTE_SESSION_LAUNCH_LIFETIME",
+    "DEFAULT_REMOTE_CONTINUE_MESSAGE_LIFETIME",
     "format_remote_launch_error_message",
     "normalize_remote_execution_lifetime",
     "normalize_remote_launch_error_code",

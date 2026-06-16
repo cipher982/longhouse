@@ -100,6 +100,8 @@ class RemoteContinueParams:
     client_request_id: str
     device_id: str | None = None
     cwd: str | None = None
+    message: str | None = None
+    execution_lifetime: RemoteExecutionLifetime = DEFAULT_REMOTE_EXECUTION_LIFETIME
 
 
 @dataclass(frozen=True)
@@ -715,11 +717,25 @@ async def continue_remote_session(
             code="cwd_not_allowed",
             status_code=400,
         )
+    execution_lifetime = normalize_remote_execution_lifetime(params.execution_lifetime)
+    message = (params.message or "").strip()
+    if execution_lifetime == "one_shot" and not message:
+        raise RemoteLaunchError(
+            "message is required for one-shot session continuation",
+            code="invalid_request",
+            status_code=400,
+        )
 
     provider = (session.provider or "").strip().lower()
     if provider not in continue_supported_providers():
         raise RemoteLaunchError(
             f"provider {provider!r} is not supported for session continuation in v1",
+            code="provider_unsupported",
+            status_code=400,
+        )
+    if execution_lifetime == "one_shot" and provider not in RUN_ONCE_SUPPORTED_PROVIDERS:
+        raise RemoteLaunchError(
+            f"provider {provider!r} is not supported for one-shot session continuation",
             code="provider_unsupported",
             status_code=400,
         )
@@ -744,10 +760,16 @@ async def continue_remote_session(
 
     caps = project_session_capabilities(db, session_id=session.id)
     if caps.live_control_available and caps.can_send_input:
-        return RemoteLaunchResult(
-            session_id=UUID(str(session.id)),
-            launch_state="live",
-            execution_lifetime=DEFAULT_REMOTE_EXECUTION_LIFETIME,
+        if execution_lifetime == "live_control":
+            return RemoteLaunchResult(
+                session_id=UUID(str(session.id)),
+                launch_state="live",
+                execution_lifetime=DEFAULT_REMOTE_EXECUTION_LIFETIME,
+            )
+        raise RemoteLaunchError(
+            "Session is already live; send input to the live session instead",
+            code="invalid_request",
+            status_code=409,
         )
 
     thread, provider_thread_id, thread_path = _resolve_continue_target(db, session=session)
@@ -786,7 +808,7 @@ async def continue_remote_session(
             code="machine_offline",
             status_code=409,
         )
-    continue_cap = f"{provider}.continue"
+    continue_cap = f"{provider}.resume_run_once" if execution_lifetime == "one_shot" else f"{provider}.continue"
     if continue_cap not in info.supports:
         raise RemoteLaunchError(
             f"Machine {device_id!r} does not support {continue_cap}",
@@ -804,12 +826,24 @@ async def continue_remote_session(
         provider=provider,
         host_id=device_id,
         owner_id=params.owner_id,
-        execution_lifetime=DEFAULT_REMOTE_EXECUTION_LIFETIME,
+        execution_lifetime=execution_lifetime,
         client_request_id=client_request_id,
         command_id=command_id,
         state="pending",
         expires_at=lease_until,
     )
+    one_shot_run: SessionRun | None = None
+    if execution_lifetime == "one_shot":
+        _release_open_runs_for_thread(db, thread=thread, now=now)
+        one_shot_run = record_run(
+            db,
+            thread=thread,
+            provider=provider,
+            host_id=device_id,
+            cwd=cwd,
+            launch_origin="longhouse_continued",
+        )
+        launch_attempt.run_id = one_shot_run.id
     session.device_id = device_id
     session.device_name = info.machine_name or device_id
     session.cwd = cwd
@@ -831,11 +865,16 @@ async def continue_remote_session(
             "thread_path": thread_path,
         },
     }
+    if execution_lifetime == "one_shot":
+        payload["execution_lifetime"] = execution_lifetime
+        payload["initial_prompt"] = message
+        if one_shot_run is not None:
+            payload["run_id"] = str(one_shot_run.id)
     response: MachineControlCommandResponse = await reg.send_command(
         owner_id=params.owner_id,
         device_id=device_id,
         session_id=str(session.id),
-        command_type="session.launch",
+        command_type="session.run_once" if execution_lifetime == "one_shot" else "session.launch",
         payload=payload,
         timeout_secs=LAUNCH_COMMAND_TIMEOUT_SECS,
         command_id=command_id,
@@ -854,16 +893,27 @@ async def continue_remote_session(
 
     message = response.message or {}
     if message.get("ok"):
-        _attach_live_launch_run(
-            db,
-            session=session,
-            attempt=launch_attempt,
-            external_name=info.machine_name or device_id,
-            force_new_run=True,
-            provider_thread_id=_result_resume_thread_id(message) or provider_thread_id,
-            thread_path=_result_resume_thread_path(message) or thread_path,
-            cwd=cwd,
-        )
+        if execution_lifetime == "one_shot":
+            _attach_one_shot_launch_run(
+                db,
+                session=session,
+                attempt=launch_attempt,
+                external_name=info.machine_name or device_id,
+                pid=_result_pid(message),
+                argv=_result_argv(message),
+                cwd=cwd,
+            )
+        else:
+            _attach_live_launch_run(
+                db,
+                session=session,
+                attempt=launch_attempt,
+                external_name=info.machine_name or device_id,
+                force_new_run=True,
+                provider_thread_id=_result_resume_thread_id(message) or provider_thread_id,
+                thread_path=_result_resume_thread_path(message) or thread_path,
+                cwd=cwd,
+            )
         db.commit()
         db.refresh(session)
         elapsed_ms = int((datetime.now(timezone.utc) - now).total_seconds() * 1000)
@@ -879,6 +929,8 @@ async def continue_remote_session(
     error = message.get("error") or {}
     code = normalize_remote_launch_error_code(error.get("code"))
     err_msg = str(error.get("message") or "unknown error")
+    if execution_lifetime == "one_shot":
+        _mark_one_shot_launch_run_failed(db, attempt=launch_attempt, error_code=code)
     update_launch_attempt(
         db,
         launch_attempt,

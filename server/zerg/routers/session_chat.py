@@ -78,6 +78,7 @@ from zerg.services.session_inputs import get_session_input
 from zerg.services.session_inputs import list_recent_inputs
 from zerg.services.session_inputs import mark_failed as _mark_input_failed
 from zerg.services.session_inputs import retry_failed_input
+from zerg.services.session_launch_lifecycle import DEFAULT_REMOTE_CONTINUE_MESSAGE_LIFETIME
 from zerg.services.session_launch_lifecycle import DEFAULT_REMOTE_SESSION_LAUNCH_LIFETIME
 from zerg.services.session_launch_lifecycle import RemoteExecutionLifetime
 from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
@@ -193,6 +194,16 @@ class RemoteSessionContinueRequest(BaseModel):
         description="Target enrolled device id; defaults to the session host",
     )
     cwd: str | None = Field(None, min_length=1, description="Absolute working directory; defaults to the session cwd")
+    message: str | None = Field(
+        None,
+        min_length=1,
+        max_length=20000,
+        description="Optional follow-up prompt for bounded one-shot continuation",
+    )
+    execution_lifetime: RemoteExecutionLifetime | None = Field(
+        None,
+        description="Continuation execution lifetime: one_shot|live_control. Message-bearing browser/iOS requests default to one_shot.",
+    )
     client_request_id: str = Field(
         ...,
         min_length=1,
@@ -874,6 +885,8 @@ async def continue_remote_session_agents(
                 device_id=body.device_id,
                 cwd=body.cwd,
                 client_request_id=body.client_request_id,
+                message=body.message,
+                execution_lifetime=body.execution_lifetime or "live_control",
             ),
         )
     except RemoteLaunchError as exc:
@@ -1018,6 +1031,9 @@ async def continue_remote_session_endpoint(
                 device_id=body.device_id,
                 cwd=body.cwd,
                 client_request_id=body.client_request_id,
+                message=body.message,
+                execution_lifetime=body.execution_lifetime
+                or (DEFAULT_REMOTE_CONTINUE_MESSAGE_LIFETIME if body.message else "live_control"),
             ),
         )
     except RemoteLaunchError as exc:
