@@ -580,13 +580,13 @@ _lh_hosted_parse_jwt_claim() {
   local python_bin
   python_bin="$(_lh_hosted_python_bin)" || return 1
 
-  "$python_bin" - "$token" "$claim" <<'PY'
+  "$python_bin" -c '
 import base64
 import json
 import sys
 
-token = sys.argv[1]
-claim = sys.argv[2]
+claim = sys.argv[1]
+token = sys.stdin.read().strip()
 try:
     _header, payload_b64, _signature = token.split(".", 2)
     payload_b64 += "=" * (-len(payload_b64) % 4)
@@ -598,7 +598,7 @@ value = payload.get(claim)
 if value is None or value == "":
     sys.exit(1)
 print(value)
-PY
+' "$claim" <<<"$token"
 }
 
 _lh_hosted_parse_access_token() {
@@ -744,8 +744,13 @@ lh_hosted_exchange_login_token() {
 import json
 import sys
 
+try:
+    user_id = int(sys.argv[1])
+except ValueError:
+    raise SystemExit("login-token subject must be numeric")
+
 print(
-    json.dumps({"user_id": int(sys.argv[1]), "audience": sys.argv[2]}, separators=(",", ":")),
+    json.dumps({"user_id": user_id, "audience": sys.argv[2]}, separators=(",", ":")),
     end="",
 )
 PY
