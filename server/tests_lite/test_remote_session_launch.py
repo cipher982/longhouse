@@ -1371,6 +1371,38 @@ def test_http_endpoint_omitted_lifetime_without_prompt_rejects(tmp_path):
     assert registry.sent == []
 
 
+def test_http_endpoint_explicit_live_control_survives_one_shot_default(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.launch",))
+
+    original, module = _patch_registry(registry)
+    try:
+        client, api_app = _make_browser_client(SessionLocal)
+        try:
+            resp = client.post(
+                "/api/sessions/launch",
+                json={
+                    "device_id": "cinder",
+                    "provider": "codex",
+                    "cwd": "/Users/me/repo",
+                    "execution_lifetime": "live_control",
+                },
+            )
+        finally:
+            api_app.dependency_overrides.clear()
+    finally:
+        module.get_machine_control_channel_registry = original
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["execution_lifetime"] == "live_control"
+    assert registry.sent[0]["command_type"] == "session.launch"
+    assert registry.sent[0]["payload"]["execution_lifetime"] == "live_control"
+    assert "initial_prompt" not in registry.sent[0]["payload"]
+
+
 def test_http_continue_endpoint_happy_path(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)

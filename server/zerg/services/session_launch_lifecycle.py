@@ -16,7 +16,9 @@ from typing import get_args
 from zerg.models.agents import SessionLaunchAttempt
 
 RemoteExecutionLifetime = Literal["one_shot", "live_control"]
+# Service normalization keeps the historical/live-control default for continuations and stored rows.
 DEFAULT_REMOTE_EXECUTION_LIFETIME: RemoteExecutionLifetime = "live_control"
+# Browser/iOS "launch new session" requests default to bounded one-shot execution.
 DEFAULT_REMOTE_SESSION_LAUNCH_LIFETIME: RemoteExecutionLifetime = "one_shot"
 RemoteLaunchLifecycleState = Literal[
     "launching",
