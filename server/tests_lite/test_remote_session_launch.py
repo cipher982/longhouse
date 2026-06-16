@@ -680,6 +680,164 @@ def test_one_shot_late_success_preserves_terminal_closed_run(tmp_path):
         assert connection.released_at == ended_at
 
 
+def test_one_shot_late_failure_preserves_terminal_exit_status(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+
+    class _TimeoutRegistry(_StubRegistry):
+        async def send_command(self, **kwargs):
+            self.sent.append(kwargs)
+            return MachineControlCommandResponse(transport_ok=False, error="timed out")
+
+    registry = _TimeoutRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.run_once",))
+
+    with SessionLocal() as db:
+        result = asyncio.run(
+            launch_remote_session(
+                db,
+                RemoteLaunchParams(
+                    owner_id=OWNER_ID,
+                    device_id="cinder",
+                    provider="codex",
+                    cwd="/Users/me/repo",
+                    initial_prompt="Do one bounded turn",
+                    execution_lifetime="one_shot",
+                ),
+                registry=registry,
+            )
+        )
+
+    command_id = registry.sent[-1]["command_id"]
+    with SessionLocal() as db:
+        attempt = _latest_attempt(db, result.session_id)
+        run = db.get(SessionRun, attempt.run_id)
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=f"codex:{result.session_id}",
+                    session_id=result.session_id,
+                    thread_id=attempt.thread_id,
+                    run_id=run.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_exec",
+                    kind="terminal_signal",
+                    occurred_at=datetime.now(timezone.utc),
+                    dedupe_key=f"codex-exec:{run.id}:terminal",
+                    payload={"terminal_state": "run_completed", "exit_code": 0},
+                )
+            ],
+        )
+        db.commit()
+        db.refresh(run)
+        ended_at = run.ended_at
+        assert run.exit_status == "exit_0"
+
+    with SessionLocal() as db:
+        reconciled = reconcile_launch_from_command_result(
+            db,
+            {
+                "type": "command_result",
+                "command_id": command_id,
+                "ok": False,
+                "error": {"code": "provider_launch_failed", "message": "provider failed after exit"},
+            },
+        )
+
+    assert reconciled is True
+    with SessionLocal() as db:
+        attempt = _latest_attempt(db, result.session_id)
+        run = db.get(SessionRun, attempt.run_id)
+        assert attempt.state == "failed"
+        assert run.ended_at == ended_at
+        assert run.exit_status == "exit_0"
+
+
+def test_one_shot_run_terminal_after_session_ended_closes_run_connection(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.run_once",))
+
+    with SessionLocal() as db:
+        result = asyncio.run(
+            launch_remote_session(
+                db,
+                RemoteLaunchParams(
+                    owner_id=OWNER_ID,
+                    device_id="cinder",
+                    provider="codex",
+                    cwd="/Users/me/repo",
+                    initial_prompt="Do one bounded turn",
+                    execution_lifetime="one_shot",
+                ),
+                registry=registry,
+            )
+        )
+
+    with SessionLocal() as db:
+        attempt = _latest_attempt(db, result.session_id)
+        run = db.get(SessionRun, attempt.run_id)
+        connection = db.query(SessionConnection).filter(SessionConnection.run_id == run.id).one()
+        assert connection.state == "attached"
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=f"codex:{result.session_id}",
+                    session_id=result.session_id,
+                    thread_id=attempt.thread_id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_bridge",
+                    kind="terminal_signal",
+                    occurred_at=datetime.now(timezone.utc),
+                    dedupe_key=f"codex:{result.session_id}:session-ended",
+                    payload={"terminal_state": "session_ended"},
+                )
+            ],
+        )
+        db.commit()
+
+    with SessionLocal() as db:
+        attempt = _latest_attempt(db, result.session_id)
+        run = db.get(SessionRun, attempt.run_id)
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=f"codex:{result.session_id}",
+                    session_id=result.session_id,
+                    thread_id=attempt.thread_id,
+                    run_id=run.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_exec",
+                    kind="terminal_signal",
+                    occurred_at=datetime.now(timezone.utc),
+                    dedupe_key=f"codex-exec:{run.id}:terminal",
+                    payload={"terminal_state": "run_completed", "exit_code": 0},
+                )
+            ],
+        )
+        db.commit()
+
+    with SessionLocal() as db:
+        row = db.get(AgentSession, result.session_id)
+        attempt = _latest_attempt(db, result.session_id)
+        run = db.get(SessionRun, attempt.run_id)
+        connection = db.query(SessionConnection).filter(SessionConnection.run_id == run.id).one()
+        assert row.ended_at is not None
+        assert run.ended_at is not None
+        assert run.exit_status == "exit_0"
+        assert connection.state == "ended"
+        assert connection.released_at == run.ended_at
+
+
 def test_one_shot_reaper_closes_reserved_run_without_connection(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)

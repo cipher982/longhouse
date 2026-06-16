@@ -750,13 +750,13 @@ def _apply_run_terminal_event(
     event: RuntimeEventIngest,
     state: SessionRuntimeState,
     occurred_at: datetime,
-) -> None:
+) -> bool:
     run_id = event.run_id or state.run_id
     if run_id is None:
-        return
+        return False
     run = db.query(SessionRun).filter(SessionRun.id == run_id).first()
     if run is None:
-        return
+        return False
     if event.session_id is not None:
         from zerg.models.agents import SessionThread
 
@@ -767,13 +767,15 @@ def _apply_run_terminal_event(
             .first()
         )
         if owned is None:
-            return
+            return False
     terminal_state = str((event.payload or {}).get("terminal_state") or "finished").strip() or "finished"
     run_ended_at = normalize_utc(run.ended_at)
+    changed = False
     if run_ended_at is None:
         run.ended_at = occurred_at
         run.exit_status = _exit_status_for_terminal(terminal_state, event.payload or {})
         connection_released_at = occurred_at
+        changed = True
     else:
         connection_released_at = run_ended_at
     for conn in (
@@ -782,6 +784,7 @@ def _apply_run_terminal_event(
         .filter(SessionConnection.state.in_(("attached", "degraded", "detached")))
         .all()
     ):
+        changed = True
         conn.state = "ended"
         conn.released_at = connection_released_at
         conn.last_health_at = connection_released_at
@@ -790,6 +793,7 @@ def _apply_run_terminal_event(
         conn.can_terminate = 0
         conn.can_tail_output = 0
         conn.can_resume = 0
+    return changed
 
 
 def _state_snapshot(state: SessionRuntimeState | None) -> tuple[Any, ...] | None:
@@ -876,6 +880,12 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
 
     if state.terminal_state == "session_ended":
         incoming_terminal_state = str((event.payload or {}).get("terminal_state") or "").strip()
+        if event.kind == "terminal_signal" and incoming_terminal_state in RUN_TERMINAL_STATES:
+            changed = _apply_run_terminal_event(db, event=event, state=state, occurred_at=occurred_at)
+            if changed:
+                db.flush()
+                return "applied"
+            return "protected_session_ended"
         if event.kind != "terminal_signal" or incoming_terminal_state != "session_ended":
             return "protected_session_ended"
 
@@ -1028,8 +1038,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
             and (event.run_id is None or event.run_id == state.run_id)
         )
         if same_run_terminal_replay:
-            _apply_run_terminal_event(db, event=event, state=state, occurred_at=occurred_at)
-            return "ignored"
+            return "applied" if _apply_run_terminal_event(db, event=event, state=state, occurred_at=occurred_at) else "ignored"
         latest_terminal_related_at = _latest_timestamp(
             state.last_runtime_signal_at,
             state.last_progress_at,

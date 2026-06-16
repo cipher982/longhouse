@@ -297,9 +297,15 @@ def _mark_one_shot_launch_run_failed(db: Session, *, attempt: SessionLaunchAttem
     if run is None:
         return
     now = datetime.now(timezone.utc)
-    if run.ended_at is None:
+    run_ended_at = run.ended_at
+    if run_ended_at is None:
         run.ended_at = now
-    run.exit_status = (error_code or "provider_launch_failed")[:64]
+        run.exit_status = (error_code or "provider_launch_failed")[:64]
+        connection_released_at = now
+    else:
+        connection_released_at = run_ended_at
+        if not run.exit_status:
+            run.exit_status = (error_code or "provider_launch_failed")[:64]
     for conn in (
         db.query(SessionConnection)
         .filter(SessionConnection.run_id == run.id)
@@ -307,8 +313,8 @@ def _mark_one_shot_launch_run_failed(db: Session, *, attempt: SessionLaunchAttem
         .all()
     ):
         conn.state = "ended"
-        conn.released_at = now
-        conn.last_health_at = now
+        conn.released_at = connection_released_at
+        conn.last_health_at = connection_released_at
         conn.can_send_input = 0
         conn.can_interrupt = 0
         conn.can_terminate = 0
