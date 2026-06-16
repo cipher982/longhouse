@@ -769,9 +769,13 @@ def _apply_run_terminal_event(
         if owned is None:
             return
     terminal_state = str((event.payload or {}).get("terminal_state") or "finished").strip() or "finished"
-    if run.ended_at is None:
+    run_ended_at = normalize_utc(run.ended_at)
+    if run_ended_at is None:
         run.ended_at = occurred_at
-    run.exit_status = _exit_status_for_terminal(terminal_state, event.payload or {})
+        run.exit_status = _exit_status_for_terminal(terminal_state, event.payload or {})
+        connection_released_at = occurred_at
+    else:
+        connection_released_at = run_ended_at
     for conn in (
         db.query(SessionConnection)
         .filter(SessionConnection.run_id == run.id)
@@ -779,8 +783,8 @@ def _apply_run_terminal_event(
         .all()
     ):
         conn.state = "ended"
-        conn.released_at = occurred_at
-        conn.last_health_at = occurred_at
+        conn.released_at = connection_released_at
+        conn.last_health_at = connection_released_at
         conn.can_send_input = 0
         conn.can_interrupt = 0
         conn.can_terminate = 0
@@ -1016,6 +1020,16 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
 
     elif event.kind == "terminal_signal":
         terminal_state = str((event.payload or {}).get("terminal_state") or "finished").strip() or "finished"
+        existing_terminal_state = str(state.terminal_state or "").strip()
+        same_run_terminal_replay = (
+            terminal_state in RUN_TERMINAL_STATES
+            and existing_terminal_state in RUN_TERMINAL_STATES
+            and state.run_id is not None
+            and (event.run_id is None or event.run_id == state.run_id)
+        )
+        if same_run_terminal_replay:
+            _apply_run_terminal_event(db, event=event, state=state, occurred_at=occurred_at)
+            return "ignored"
         latest_terminal_related_at = _latest_timestamp(
             state.last_runtime_signal_at,
             state.last_progress_at,

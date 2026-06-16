@@ -258,15 +258,14 @@ def _attach_one_shot_launch_run(
         run.pid = pid
     if argv:
         run.argv_redacted_json = argv
-    if run.ended_at is not None:
-        run.ended_at = None
-        run.exit_status = None
+    run_ended_at = run.ended_at
+    connection_state = "ended" if run_ended_at is not None else "attached"
     conn = upsert_connection_for_run(
         db,
         run=run,
         control_plane="codex_exec",
         acquisition_kind="spawned_control",
-        state="attached",
+        state=connection_state,
         external_name=external_name or session.device_id,
         device_id=session.device_id,
         can_send_input=0,
@@ -275,7 +274,11 @@ def _attach_one_shot_launch_run(
         can_tail_output=0,
         can_resume=0,
     )
-    conn.last_health_at = now
+    if run_ended_at is not None:
+        conn.released_at = run_ended_at
+        conn.last_health_at = run_ended_at
+    else:
+        conn.last_health_at = now
     if session.ended_at is not None:
         session.ended_at = None
     update_launch_attempt(

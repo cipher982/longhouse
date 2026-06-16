@@ -596,6 +596,90 @@ def test_one_shot_timeout_late_success_adopts_reserved_run(tmp_path):
         assert connection.state == "attached"
 
 
+def test_one_shot_late_success_preserves_terminal_closed_run(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+
+    class _TimeoutRegistry(_StubRegistry):
+        async def send_command(self, **kwargs):
+            self.sent.append(kwargs)
+            return MachineControlCommandResponse(transport_ok=False, error="timed out")
+
+    registry = _TimeoutRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.run_once",))
+
+    with SessionLocal() as db:
+        result = asyncio.run(
+            launch_remote_session(
+                db,
+                RemoteLaunchParams(
+                    owner_id=OWNER_ID,
+                    device_id="cinder",
+                    provider="codex",
+                    cwd="/Users/me/repo",
+                    initial_prompt="Do one bounded turn",
+                    execution_lifetime="one_shot",
+                ),
+                registry=registry,
+            )
+        )
+
+    command_id = registry.sent[-1]["command_id"]
+    with SessionLocal() as db:
+        attempt = _latest_attempt(db, result.session_id)
+        run = db.get(SessionRun, attempt.run_id)
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=f"codex:{result.session_id}",
+                    session_id=result.session_id,
+                    thread_id=attempt.thread_id,
+                    run_id=run.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_exec",
+                    kind="terminal_signal",
+                    occurred_at=datetime.now(timezone.utc),
+                    dedupe_key=f"codex-exec:{run.id}:terminal",
+                    payload={"terminal_state": "run_completed", "exit_code": 0},
+                )
+            ],
+        )
+        db.commit()
+        db.refresh(run)
+        ended_at = run.ended_at
+        assert run.exit_status == "exit_0"
+        assert db.query(SessionConnection).count() == 0
+
+    with SessionLocal() as db:
+        reconciled = reconcile_launch_from_command_result(
+            db,
+            {
+                "type": "command_result",
+                "command_id": command_id,
+                "ok": True,
+                "result": {
+                    "session_id": str(result.session_id),
+                    "pid": 4242,
+                    "argv": ["codex", "exec", "--json", "Do one bounded turn"],
+                },
+            },
+        )
+
+    assert reconciled is True
+    with SessionLocal() as db:
+        attempt = _latest_attempt(db, result.session_id)
+        run = db.get(SessionRun, attempt.run_id)
+        connection = db.query(SessionConnection).filter(SessionConnection.run_id == run.id).one()
+        assert attempt.state == "adopted"
+        assert run.ended_at == ended_at
+        assert run.exit_status == "exit_0"
+        assert connection.control_plane == "codex_exec"
+        assert connection.state == "ended"
+        assert connection.released_at == ended_at
+
+
 def test_one_shot_reaper_closes_reserved_run_without_connection(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)

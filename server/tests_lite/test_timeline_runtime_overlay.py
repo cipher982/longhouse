@@ -381,6 +381,79 @@ def test_run_terminal_signal_closes_run_connection_not_session(tmp_path):
         db.close()
 
 
+def test_run_terminal_signal_does_not_overwrite_existing_run_outcome(tmp_path):
+    factory = _make_db(tmp_path, "run_terminal_idempotent.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        from zerg.services.agents.kernel_writes import ensure_primary_thread
+        from zerg.services.agents.kernel_writes import record_run
+        from zerg.services.agents.kernel_writes import upsert_connection_for_run
+
+        session = _seed_session(db, started_at=now - timedelta(minutes=30), ended_at=None, provider="codex")
+        thread = ensure_primary_thread(db, session)
+        run = record_run(
+            db,
+            thread=thread,
+            provider="codex",
+            host_id="cinder",
+            cwd="/Users/me/repo",
+            launch_origin="longhouse_spawned",
+        )
+        conn = upsert_connection_for_run(
+            db,
+            run=run,
+            control_plane="codex_exec",
+            acquisition_kind="spawned_control",
+            state="attached",
+            external_name="cinder",
+        )
+        db.commit()
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=f"codex:{session.id}",
+                    session_id=session.id,
+                    thread_id=thread.id,
+                    run_id=run.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_exec",
+                    kind="terminal_signal",
+                    occurred_at=now,
+                    dedupe_key=f"codex-exec:{run.id}:terminal:complete",
+                    payload={"terminal_state": "run_completed", "exit_code": 0},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=f"codex:{session.id}",
+                    session_id=session.id,
+                    thread_id=thread.id,
+                    run_id=run.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_exec",
+                    kind="terminal_signal",
+                    occurred_at=now + timedelta(seconds=1),
+                    dedupe_key=f"codex-exec:{run.id}:terminal:failed-replay",
+                    payload={"terminal_state": "run_failed", "exit_code": 1},
+                ),
+            ],
+        )
+        db.commit()
+        refreshed_run = db.get(SessionRun, run.id)
+        refreshed_conn = db.get(SessionConnection, conn.id)
+        runtime = db.get(SessionRuntimeState, f"codex:{session.id}")
+
+        assert refreshed_run.ended_at is not None
+        assert refreshed_run.exit_status == "exit_0"
+        assert refreshed_conn.state == "ended"
+        assert runtime.terminal_state == "run_completed"
+    finally:
+        db.close()
+
+
 def test_progress_after_host_expired_reopens_runtime_projection(tmp_path):
     factory = _make_db(tmp_path, "host_expired_then_progress.db")
     now = datetime.now(timezone.utc)
