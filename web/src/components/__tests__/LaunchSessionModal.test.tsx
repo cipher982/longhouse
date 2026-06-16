@@ -263,10 +263,10 @@ describe("LaunchSessionModal", () => {
         device_id: "old-cinder",
         provider: "codex",
         cwd: "/Users/me/repo",
-        initial_prompt: null,
         execution_lifetime: "live_control",
       }),
     );
+    expect(apiMocks.launchRemoteSession.mock.calls[0][0]).not.toHaveProperty("initial_prompt");
   });
 
   it("prefills the top-ranked workspace and lets you pick another by label", async () => {

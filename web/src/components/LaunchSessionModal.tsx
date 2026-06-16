@@ -8,6 +8,7 @@ import {
   listMachines,
   type ExecutionLifetime,
   type MachineDirectoryEntry,
+  type RemoteSessionLaunchRequest,
 } from "../services/api";
 import { Button, Spinner } from "./ui";
 import { getProviderLabel } from "../lib/providers";
@@ -193,15 +194,18 @@ export default function LaunchSessionModal({
     setSubmitting(true);
     setError(null);
     try {
-      const result = await launchRemoteSession({
+      const payload: RemoteSessionLaunchRequest = {
         device_id: deviceId,
         provider,
         cwd: cwd.trim(),
-        initial_prompt: executionLifetime === "one_shot" ? initialPrompt.trim() : null,
         execution_lifetime: executionLifetime,
         display_name: displayName.trim() || null,
         client_request_id: `launch-${crypto.randomUUID()}`,
-      });
+      };
+      if (executionLifetime === "one_shot") {
+        payload.initial_prompt = initialPrompt.trim();
+      }
+      const result = await launchRemoteSession(payload);
       if (result.launch_state === "launch_failed" || result.launch_state === "launch_orphaned") {
         setError(formatLaunchFailure(result));
         return;
