@@ -59,8 +59,11 @@ pub fn codex_exec_args(config: &CodexExecRunConfig) -> Vec<OsString> {
         OsString::from(CODEX_DISABLE_UPDATE_CHECK_CONFIG),
     ];
     if let Some(approval_policy) = normalized_optional(&config.approval_policy) {
-        args.push(OsString::from("-a"));
-        args.push(OsString::from(approval_policy));
+        args.push(OsString::from("-c"));
+        args.push(OsString::from(format!(
+            "approval_policy={}",
+            toml_quote_string(&approval_policy)
+        )));
     }
     if let Some(sandbox) = normalized_optional(&config.sandbox) {
         args.push(OsString::from("-s"));
@@ -71,6 +74,11 @@ pub fn codex_exec_args(config: &CodexExecRunConfig) -> Vec<OsString> {
     args.push(OsString::from("--skip-git-repo-check"));
     args.push(OsString::from(config.prompt.clone()));
     args
+}
+
+fn toml_quote_string(value: &str) -> String {
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
 }
 
 pub async fn start_codex_exec_once(config: CodexExecRunConfig) -> Result<CodexExecRunSummary> {
@@ -434,8 +442,8 @@ mod tests {
                 "--json",
                 "-c",
                 "check_for_update_on_startup=false",
-                "-a",
-                "never",
+                "-c",
+                "approval_policy=\"never\"",
                 "-s",
                 "workspace-write",
                 "-C",
