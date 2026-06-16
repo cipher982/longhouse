@@ -1,6 +1,6 @@
 # Hosted Identity: One Longhouse Account
 
-Status: revised after Codex architecture review (2026-06-15); ready for Phase 0 build
+Status: Phase 0 dogfooded; revised for clean-break prelaunch implementation
 Owner: David
 Related:
 - `VISION.md`
@@ -62,6 +62,13 @@ authority for hosted tenants. The tenant is a resource server that
 verifies CP-issued tokens. Self-host mode keeps its existing local
 identity system unchanged.**
 
+Phase 0 already fixed the visible hosted login funnel by routing tenant
+login through the CP. David dogfooded that flow successfully. The
+remaining work should not preserve a long hosted compatibility window:
+there are no external users, and this is the cheapest moment to make the
+final shape clean. Preserve hosted product data; do not preserve legacy
+hosted auth behavior.
+
 ## Scope
 
 In scope:
@@ -100,14 +107,15 @@ Explicitly deferred (not in this epic):
   `zdt_*` device tokens must not be parsed as CP JWTs.
 - iOS keychain rotation, push-notification-bound sessions. These ride
   on top of the bearer token; they don't need to land in this epic.
-- Refresh-token rotation on the CP. Access tokens first. Refresh comes
-  after dogfood.
+- Refresh-token rotation on the CP. Access tokens first. Until CP
+  refresh exists, hosted `/api/auth/refresh` returns 410 Gone and
+  clients reauthenticate through the CP.
 - Multi-tenant per CP user. CP `Instance.user_id` is unique today; one
   CP user has exactly one hosted instance. Multi-instance per user
   requires a CP schema change and is out of scope.
 - Durable global revocation. v1 runtime JWTs are valid until `exp`
-  even after the CP-side session is cleared. Real revocation is
-  Phase 5+ with a shared durable store.
+  even after the CP-side session is cleared. Real revocation is a
+  later shared durable-store design.
 
 ## The decision: Path 3A
 
@@ -139,7 +147,13 @@ Four things the architecture must guarantee after this ships:
    Bearer`. Web and iOS converge on the same wire format, so the auth
    path looks identical regardless of client.
 
-4. **Handoff is a code, not a token.** The cross-server browser
+4. **Only the CP can sign hosted runtime identity.** The RS256
+   private key never ships to a tenant runtime, tenant env var, native
+   client, or build artifact. Tenants receive public JWKS material
+   only. `aud == INSTANCE_ID` is an authorization-scope check; the
+   cryptographic boundary is that only the CP holds signing keys.
+
+5. **Handoff is a code, not a token.** The cross-server browser
    handoff uses a one-use short-lived opaque handoff code. The
    CP stores the handoff state (the profile snapshot, tenant
    binding, `tenant_state` CSRF nonce, return_to, 60-second
@@ -164,16 +178,16 @@ Concretely:
 - The existing cross-server SSO bridge at
   `server/zerg/routers/auth_sso.py:37-156` (`_accept_token` core at
   37-128, `POST /accept-token` at 131, `GET /accept-token` redirect
-  at 143-156) is repurposed: it accepts either an HS256 legacy
-  bridge token (Phase 0/1 transition) or a one-use handoff code
-  (Phase 2+), and either sets the runtime JWT directly as
-  `longhouse_session` (hosted + `control_plane_identity: true`) or
-  mints a local HS256 token (self-host or legacy).
-- The existing tenant login routes at
-  `server/zerg/routers/auth_browser.py` shrink to one route:
-  `GET /api/auth/methods`. Hosted tenants respond with `{sso_url}` or
-  redirect to `/auth/start` on the CP. Self-host tenants keep
-  `{google, password}`.
+  at 143-156) is replaced for hosted tenants by a one-use handoff-code
+  exchange. Hosted tenants set the CP runtime JWT directly as
+  `longhouse_session`. Legacy HS256 bridge token acceptance is removed
+  for hosted tenants instead of kept behind a long dual-verify window.
+- The existing tenant login routes in
+  `server/zerg/routers/auth_browser.py` stay for self-host, but hosted
+  mode disables local login routes and keeps only CP SSO, status,
+  logout, and transport-auth helpers. Hosted tenants respond from
+  `GET /api/auth/methods` with `{sso_url}` or redirect to `/auth/start`
+  on the CP. Self-host tenants keep `{google, password}`.
 
 ## FK separation in detail
 
@@ -188,11 +202,11 @@ After this spec:
   machines, comments, etc. continue to FK `users.id` like they do
   today.
 - Add `users.cp_user_id: integer, nullable=True, index=True`. The
-  bridge populates this on first SSO login. It is the link back to
-  the CP identity. It is **not** `unique=True` on the column itself
-  because the runtime's `_auto_add_missing_columns` skips `unique=True`
-  columns; the uniqueness is enforced by a partial index added by an
-  imperative migration (see "DB migration reality").
+  handoff flow populates this on first CP SSO login. It is the link
+  back to the CP identity. It is **not** `unique=True` on the column
+  itself because the runtime's `_auto_add_missing_columns` skips
+  `unique=True` columns; the uniqueness is enforced by a partial index
+  added by an imperative migration (see "DB migration reality").
 - Keep `users.email`, `users.display_name`, `users.avatar_url`. Treat
   them as a local cache populated from the CP JWT. They are not the
   source of truth — the CP is. On cache update, if the new email is
@@ -203,11 +217,17 @@ After this spec:
 - If `users.is_active` has other meanings in the codebase, keep it
   but in hosted mode it is always true and write-locked.
 
-The bridge code in `server/zerg/routers/auth_sso.py:62-100` currently
-upserts by email. After this spec, the priority is: if the JWT carries
-a `sub`, look up `users.cp_user_id = sub` first. Only fall back to
-email lookup if `sub` is absent (legacy bridge tokens, self-host). The
-new order is the rule, the old order is the back-compat path.
+The current bridge code in `server/zerg/routers/auth_sso.py:62-100`
+upserts by email. After this spec, hosted auth no longer uses that
+bridge. The CP handoff path always carries a `sub`, so hosted lookup is
+`users.cp_user_id = int(sub)` first. Email fallback is a one-time
+linking aid for David's existing hosted tenant user and is allowed only
+when the CP runtime JWT has `email_verified=true`. An unverified CP user
+with an email matching an existing local tenant user must not adopt that
+local user; create a fresh local user or reject with a logged
+`account_link_conflict`. If a verified email maps to a different local
+user during profile refresh, keep the old cached value and log
+`account_link_conflict`.
 
 ## Token shape
 
@@ -257,8 +277,10 @@ Rules:
   session invalidation does not invalidate already-minted
   runtime JWTs. Durable global revocation is deferred to a
   follow-up spec.
-- Lifetime: 1 hour access, 24 hour refresh (refresh is phase
-  5, not shipped in the first vertical slice).
+- Lifetime: 1 hour access. CP refresh is not part of this clean-break
+  slice. Until CP refresh exists, hosted users whose runtime JWT expires
+  are sent back through CP SSO; if the CP `cp_session` cookie is still
+  valid this should usually be a quick redirect, not a visible login.
 - Signing: RS256. The CP holds a shared keyset (current key +
   previous key) loaded from a single CP secret/config source,
   not generated per process. JWKS publishes all currently
@@ -270,6 +292,9 @@ Rules:
 - `control-plane/pyproject.toml` must add `PyJWT[crypto]` (or
   `cryptography` + the existing hand-written encoder) — it
   has neither today.
+- `settings.identity_signing_keys` is a JSON config/secret value:
+  `{"active_kid":"2026-06-a","keys":[{"kid":"2026-06-a","status":"active","private_pem":"...","public_pem":"..."},{"kid":"2026-05-a","status":"accepted","public_pem":"..."}]}`.
+  Only the CP reads `private_pem`. JWKS is derived from public keys.
 
 ## Cookie + bearer
 
@@ -293,12 +318,10 @@ iOS:
 
 - The CP runtime token goes into the iOS Keychain via
   `ios/Sources/Shared/KeychainHelper.swift`, keyed by normalized
-  server host (currently a single global key; Phase 4 moves to
-  per-host). Each hosted tenant gets its own keychain entry.
+  server host. Each hosted tenant gets its own keychain entry.
 - Every API call sends `Authorization: Bearer <token>` from the
-  Keychain. The cookie jar still exists for backwards-compatible
-  legacy code paths during transition, but the source of truth on
-  iOS is the bearer token.
+  Keychain. Self-host can keep the existing cookie path behind the
+  shared auth-store abstraction, but hosted iOS is bearer-only.
 - `SharedAuthStore` is repurposed from cookie-jar to bearer-token
   storage. `LonghouseAPI.data()` swaps from injecting `cookieHeader`
   to injecting `Authorization: Bearer` for the iOS path.
@@ -323,11 +346,10 @@ Self-host:
   fields) is the token shape self-host uses after this spec
   ships. The runtime check at startup selects between the local
   strategy and the CP JWKS verifier:
-  `if settings.control_plane_url and settings.control_plane_identity: hosted else: self_host`.
+  `if settings.control_plane_url: hosted else: self_host`.
 - The `cp_jwks` module is selected only for hosted tenants with
-  `CONTROL_PLANE_URL` set and `control_plane_identity: true`. The
-  hosted/runtime token shape defined in this spec does not apply
-  to self-host.
+  `CONTROL_PLANE_URL` set. The hosted/runtime token shape defined in
+  this spec does not apply to self-host.
 - iOS self-host builds continue to use the cookie path. The
   bearer-Keychain path is hosted-only.
 
@@ -343,12 +365,12 @@ exchanges the code.
 ### Handoff code (opaque handle, server-side state)
 
 The `code` URL parameter is a 256-bit cryptographically random value,
-base64url-encoded. The CP stores the handoff state server-side
-keyed by this code, in a small in-process table (with disk-backed
-recovery to survive CP restart — see Phase 1 implementation note).
+base64url-encoded. The CP stores only `code_hash` in a durable CP table,
+using the same posture as refresh-token hashing. A CP database read must
+not reveal live handoff codes.
 The table row carries:
 
-- `code` (the handle itself, also indexed)
+- `code_hash` (indexed)
 - `cp_user_id` (the CP identity that completed login)
 - `email`, `email_verified`, `display_name`, `avatar_url`
   (the profile snapshot to put into the runtime JWT)
@@ -366,6 +388,13 @@ The CP exposes a small server-to-server API over the existing
 (the same scheme used today for the Gmail handoff, see
 `control_plane/routers/auth.py:432`). No public mint endpoint.
 
+Current hosted tenants share the same instance-internal secret. That
+secret is a coarse internal gate, not a per-tenant proof. The one-use
+256-bit code, 60-second expiry, bound tenant/instance fields, and
+server-side consumption are the real handoff protections. The exchange
+request includes the caller's tenant subdomain or instance id; CP
+verifies it matches the handoff row before returning a runtime JWT.
+
 ### Anti-CSRF binding (tenant-side state)
 
 To prevent a third-party site from initiating a CP login that
@@ -374,17 +403,21 @@ session, the tenant mints its own CSRF nonce before redirecting
 the user to the CP. The cookie must be set by a server route
 (browsers cannot set `HttpOnly` from JS), so the flow is:
 
-1. Browser hits `GET /api/auth/start-handoff?tenant=...&return_to=...`
-   on the tenant.
+1. Browser hits the existing
+   `GET /api/auth/start-handoff?tenant=...&return_to=...` route on the
+   tenant. Phase 0 created this route without CSRF state; this
+   implementation modifies it.
 2. The server route generates `tenant_state` (256-bit random),
    stores it in a short-lived `tenant_login_state` cookie scoped
    to the tenant domain, `HttpOnly; Secure; SameSite=Lax;
    Max-Age=600`, and 302s to
    `https://control.longhouse.ai/auth/start?tenant=...&return_to=...&tenant_state=...`.
-3. CP `/auth/start` round-trips `tenant_state` through the OAuth
-   state JWT and back to the tenant. The CP does not need to
-   validate it (the CP doesn't know about the tenant's cookies);
-   the tenant validates it on the final `accept-handoff` return.
+3. CP `/auth/start`, `_issue_login_return_state`,
+   `_decode_login_return_state`, and all OAuth callbacks round-trip
+   `tenant_state` through the OAuth state JWT and back to the tenant.
+   The CP does not need to validate it (the CP doesn't know about the
+   tenant's cookies); the tenant validates it on the final
+   `accept-handoff` return.
 4. Tenant `accept-handoff` compares the returned `tenant_state` to
    the cookie. Mismatch → 403 Forbidden, do not set the session
    cookie, log `tenant_login_csrf_mismatch`. Missing cookie →
@@ -449,22 +482,26 @@ that ephemeral web context), so the browser's
 `tenant_login_state` cookie CSRF binding does not apply to
 iOS. Instead, iOS uses its own local CSRF binding:
 
-1. iOS generates `tenant_state` (256-bit random) in the app
-   process and stores it in `UserDefaults` (or a transient
-   `KeychainHelper` entry) before opening the
-   `ASWebAuthenticationSession`.
+1. iOS generates `tenant_state` (256-bit random) in the app process
+   and stores it in a transient `KeychainHelper` entry before opening
+   the `ASWebAuthenticationSession`. `UserDefaults` is acceptable only
+   for non-secret fallback flow state if the Keychain path becomes
+   awkward; Keychain is the default.
 2. iOS opens `https://control.longhouse.ai/auth/native/open-instance?tenant=...&return_to=...&tenant_state=...`.
 3. CP `/auth/native/open-instance` round-trips `tenant_state`
    through the OAuth state and includes it in the iOS deep
-   link callback: `ai.longhouse.ios://auth-callback?tenant_state=...&sso_token=...`.
+   link callback:
+   `ai.longhouse.ios://auth-callback?instance_url=...&tenant_state=...&sso_token=...`.
+   The `sso_token` value becomes the CP runtime JWT. Keep
+   `instance_url` in the callback so iOS can key the bearer by host.
 4. iOS compares the returned `tenant_state` to the locally
    stored value. Mismatch → discard the JWT, surface a login
    error. Missing local value → same.
 
-This is the same CSRF shape as the browser, just with
-`UserDefaults` as the storage instead of a cookie. An attacker
-who tricks the user into a forged `auth-callback` URL has the
-wrong `tenant_state` and is rejected.
+This is the same CSRF shape as the browser, just with a transient
+Keychain entry instead of a cookie. An attacker who tricks the user
+into a forged `auth-callback` URL has the wrong `tenant_state` and is
+rejected.
 
 **Do not** put the instance-internal secret in any native
 app. Native apps are public clients. The browser tenant holds
@@ -477,53 +514,19 @@ the iOS code.
 ### Handoff secret logging
 
 Any CP or tenant log line that captures URL query strings must
-redact the `code` parameter. Add a `redact_url()` helper used by
-all request log lines. (The existing `cp_session` cookie is
-already treated as sensitive; treat handoff codes the same way.)
+redact `code`, `token`, `sso_token`, and `state` parameters. Add a
+`redact_url()` helper used by all request log lines. The existing
+`cp_session` cookie is already treated as sensitive; treat handoff codes
+and runtime tokens the same way.
 
-## The six phases
+## Clean-break implementation plan
 
-### Phase 0 — Front-funnel SSO (2-4 days)
+Phase 0 is historical and accepted: tenant login now funnels through a
+single CP login page. The remaining rollout is a clean break for hosted
+identity, implemented in repo-sized chunks with short-lived deploy
+ordering, not compatibility phases.
 
-The vertical slice. Ships end-to-end with the **existing HS256 bridge
-still in use**. No new token shape. No JWKS. Just the bounce UX.
-
-- Add CP `GET /auth/start?tenant=...&return_to=...` route in
-  `control_plane/routers/ui.py`. Renders a tenant-aware login page
-  (header reads "Sign in to {tenant}.longhouse.ai"). Reuses the
-  existing Google/GitHub/email Jinja from `ui.py:151` with `tenant`
-  injected into the OAuth state.
-- CP OAuth callbacks (`routers/auth.py:601`, `routers/auth.py:680`)
-  read `tenant` from the decoded state. If present and the tenant
-  belongs to the signed-in user, after auth, call a new
-  `_finish_tenant_sso(user, instance, return_to)` helper that 302s to
-  `https://{tenant}.longhouse.ai/dashboard/open-instance?return_to=...`
-  — *the same endpoint that already works today*. This is the existing
-  HS256 bridge, not a new token.
-- Tenant `GET /api/auth/methods` returns
-  `{sso: true, sso_url: "https://control.longhouse.ai",
-   sso_login_url: "https://control.longhouse.ai/auth/start"}` for
-  hosted tenants. Self-host tenants get `{google, password}` like
-  today.
-- Tenant `GET /login` React page becomes a one-effect interstitial
-  that 302s to the CP `/auth/start` URL with the current `return_to`.
-  (`web/src/pages/LoginPage.tsx` body collapses to ~15 lines.)
-- iOS `LoginView` deletes the Google and password branches. Just one
-  "Continue with Longhouse" button that calls the existing
-  `startHostedSignIn` / `startHostedBootstrapSignIn` flow (which
-  already hits `/auth/native/open-instance` and gets back the
-  iOS-callback deep link).
-- **Old `/dashboard/open-instance` bridge stays as the single auth
-  path.** No new token format. No `CONTROL_PLANE_IDENTITY` flag yet.
-- The CP adds no new columns to `cp_users` in this phase.
-
-Done when: David can land on `david010.longhouse.ai`, click sign in,
-see a single CP login page branded with the tenant name, and end up
-signed in via the existing HS256 bridge. No more "two logins"
-feeling. Token shapes and verification paths are unchanged from
-today.
-
-### Phase 1 — CP as IdP (1 week)
+### Chunk A — CP becomes the hosted identity provider
 
 - New `control_plane/services/identity_provider.py`:
   - Loads the shared RS256 keyset from `settings.identity_signing_keys`
@@ -538,35 +541,38 @@ today.
     `consumed=true`).
   - Keyset rotation helper that promotes a new key to "active" and
     keeps the previous "accepted" for the max token lifetime.
+- New durable CP `HandoffCode` model/table. It stores the opaque code
+  hash, CP user id, instance id, tenant subdomain, profile snapshot,
+  return target, tenant CSRF state, expiry, and consumed timestamp.
 - New `control_plane/routers/identity_api.py`. Routes under
   `/api/identity/*`:
   - `GET /api/identity/jwks.json` — public JWKS, returns all accepted
     public keys.
   - `POST /api/identity/exchange-handoff` — tenant server-to-server
     call to swap a handoff code for a runtime JWT. Marks the
-    handoff row `consumed=true`. Requires `X-Internal-Token:
+    handoff row consumed. Requires `X-Internal-Token:
     <instance_internal_api_secret>` (the same scheme as the
     existing Gmail handoff). Returns the runtime JWT plus the
     standard claim set.
-  - `POST /api/identity/runtime-token` (CP-internal) — for tests and
-    internal CP services that need to mint a runtime JWT directly.
-- New `control_plane/routers/api_auth.py` (optional, for hosted
-  `/api/auth/*` consumers) — only if we want programmatic hosted
-  login. The default path remains the existing browser `/auth/*`
-  routes.
+  - `POST /api/identity/runtime-token` — CP-internal/test-only helper
+    for minting a runtime JWT directly.
 - Add `display_name` and `avatar_url` columns to CP `User` model in
   `control-plane/control_plane/models.py`. Populate from
   Google/GitHub userinfo in the OAuth callbacks. Make them optional
-  and nullable. Add an imperative migration alongside.
-- `LonghouseAuthConfig.hostedControlPlaneURL` is unchanged.
+  and nullable. Add the CP imperative migration alongside.
 - `control-plane/pyproject.toml` adds `PyJWT[crypto]` (or equivalent)
   for RS256 signing.
+- CP `/auth/start` and OAuth callbacks issue handoff codes, not
+  HS256 bridge tokens, for hosted browser login.
+- CP `/auth/native/open-instance` issues a CP runtime JWT for iOS
+  deep-link completion. Native apps are public clients, so they never
+  receive the instance-internal exchange secret.
 
 Done when: a non-tenant script can `curl` the CP JWKS, exchange a
 handoff code for a runtime JWT via `/api/identity/exchange-handoff`,
 and the JWT verifies against the JWKS.
 
-### Phase 2 — Tenant CP verifier + handoff (1-1.5 weeks)
+### Chunk B — Runtime becomes a CP-token resource server for hosted
 
 - New `server/zerg/auth/cp_jwks.py`. Fetches and caches the CP's
   JWKS from `/api/identity/jwks.json`, verifies tokens, handles `kid`
@@ -575,69 +581,64 @@ and the JWT verifies against the JWKS.
   TokenClaims`.
 - New `server/zerg/auth/runtime_strategies.py` (or similar) that
   selects the auth strategy at startup:
-  - Hosted + `control_plane_identity: true`: `HostedCPAuthStrategy`,
+  - Hosted with `CONTROL_PLANE_URL` set: `HostedCPAuthStrategy`,
     implements `get_current_user`, `validate_ws_token`, browser
     cookie auth via `browser_auth`, and bearer auth for iOS on
     browser-owned API/SSE routes. Preserves `zdt_*` device-token
     handling (must not be parsed as a CP JWT — checked before the
     `cp_jwks` verify).
-  - Self-host or hosted with `control_plane_identity: false`:
-    `LocalJWTAuthStrategy`, the existing
-    `server/zerg/auth/strategy.py` behavior, unchanged.
+  - Self-host with `CONTROL_PLANE_URL` unset: `LocalJWTAuthStrategy`,
+    the existing `server/zerg/auth/strategy.py` behavior, unchanged.
 - Migration: add `users.cp_user_id` (see "DB migration reality").
-  Imperative only. Backfill: none, populated on first SSO.
-- Update `server/zerg/routers/auth_sso.py:_accept_token` to handle
-  both shapes during the rollout:
-  1. If the request is `GET /api/auth/accept-handoff?code=...`: call
-     CP `/api/identity/exchange-handoff` server-to-server, receive
-     the runtime JWT.
-  2. If the request is `GET /api/auth/accept-token?token=...` with a
-     legacy HS256 bridge token: verify against `JWT_SECRET` plus
-     `sso_keys_service.get_sso_keys()`, exchange for a local session
-     as today.
-  3. In hosted mode with `control_plane_identity: true`, set
-     `longhouse_session` to the CP runtime JWT. In hosted mode with
-     `control_plane_identity: false` or self-host, mint a local HS256
-     session as today.
-  4. Upsert the local user by `cp_user_id` first, falling back to
-     email lookup only if `sub` is absent. Refresh the cached
-     `email`, `display_name`, `avatar_url` from the runtime JWT
-     claims, with the account-link-conflict rule (don't overwrite
-     email if it would collide with a different local user).
-- Keep `zdt_*` device token handling untouched. `browser_auth`,
-  `browser_route_auth`, and `validate_ws_jwt` all need to be wired
-  to the strategy selected at startup. The CP JWT verifier is
-  tried *after* the device-token check.
+  Imperative only. Backfill: none, populated on first CP SSO.
+- Add `GET /api/auth/accept-handoff?code=...&tenant_state=...`.
+  Runtime validates the `tenant_login_state` cookie, calls CP
+  `/api/identity/exchange-handoff` server-to-server with the code and
+  caller tenant/instance id, verifies the returned runtime JWT against
+  CP JWKS, links/upserts the local user by `cp_user_id`, sets
+  `longhouse_session` to the CP JWT, clears any stale
+  `longhouse_refresh` cookie and the CSRF cookie, and redirects to the
+  tenant-local `return_to`.
+- Hosted `GET/POST /api/auth/accept-token` returns 410 Gone. It is
+  not a compatibility bridge. If any self-host-only local SSO use
+  remains, keep it explicitly selected by the local strategy and
+  unreachable in hosted mode.
+- Hosted `/api/auth/methods` advertises only CP SSO. Hosted
+  `/api/auth/google`, `/api/auth/password`, `/api/auth/dev-login`,
+  and `/api/auth/refresh` return 410 Gone. `/api/auth/logout`,
+  `/api/auth/status`, and SSE/WebSocket auth stay and route through
+  the hosted strategy.
+- Hosted `/api/auth/status` returns `email_verified` in the user
+  payload. The tenant verify-email banner is new UI work; it is not the
+  existing CP dashboard banner.
+- All hosted entry points funnel through the same CP verifier:
+  `get_current_user`, browser cookie auth, `validate_ws_token`,
+  WebSocket handshakes, SSE, and bearer auth must enforce signature,
+  `kid`, `iss`, `aud`, `exp`, and required claims identically.
+- Hosted mode rejects CP JWTs supplied through `?token=` query
+  parameters. Cookie auth and `Authorization: Bearer` are valid hosted
+  browser/native paths; query tokens are limited to narrow machine or
+  device-token cases where the credential is not a CP runtime JWT.
+- Upsert the local user by `cp_user_id` first. Email fallback is only
+  for linking the first CP login to David's existing hosted tenant user,
+  and only when `email_verified=true`. If the CP email collides with a
+  different local user, or the matching CP email is unverified, keep the
+  old cached email and emit `account_link_conflict`.
+- Hosted user upsert sets `is_active=True`; hosted CP identity owns
+  account disablement, and stale local `is_active=False` must not lock
+  David out after the clean break.
+- Keep `zdt_*` device token handling untouched. The CP JWT verifier
+  is tried only after device-token handling declines the credential.
+- Smoke-only routes such as `/api/auth/service-login` remain
+  self-host/dev-test helpers. Hosted runtimes must not use them to mint
+  local HS256 browser sessions.
 
-Done when: a hosted tenant with `control_plane_identity: true` accepts
-handoff codes from the browser, sets the runtime JWT directly as
-`longhouse_session`, and serves the timeline + SSE routes with that
-cookie. Self-host tenants are bit-for-bit unchanged.
+Done when: a hosted tenant accepts handoff codes from the browser, sets
+the CP runtime JWT directly as `longhouse_session`, serves the timeline
+and SSE routes with that cookie, rejects hosted local auth routes, and
+self-host tenants are bit-for-bit unchanged.
 
-### Phase 3 — Web cleanup (3-5 days)
-
-- `web/src/lib/auth.tsx` keeps calling tenant `/api/auth/status` —
-  the tenant is the source of "am I logged in" for the app. In
-  hosted mode, `/api/auth/status` verifies the CP runtime JWT and
-  returns the local `AuthenticatedUser` plus tenant-local integration
-  state. CP `/auth/status` is only used on CP-owned
-  login/account pages. Cross-origin CP status proxying is **not**
-  added; it would be misleading because CP auth != tenant auth.
-- `web/src/lib/authApi.ts` `loginWithPassword` /
-  `loginWithDevAccount` go away in hosted mode. Only
-  `loginWithGoogle` (when applicable) or "redirect to CP" remains.
-- `web/src/pages/LoginPage.tsx` deleted (it's a one-effect redirect
-  now). Keep the route as a thin component for back-compat.
-- `web/src/components/Layout.tsx` logout button calls tenant
-  `/api/auth/logout` first (clears `longhouse_session`), then
-  optionally redirects to CP `/auth/logout` to clear `cp_session`.
-  "Log out everywhere" goes to CP `/auth/logout` then tenant logout.
-
-Done when: the React app cannot log in or stay logged in without
-the CP being reachable for hosted users. Self-host tenants are
-unaffected.
-
-### Phase 4 — iOS bearer package (1-1.5 weeks)
+### Chunk C — iOS uses hosted bearer auth
 
 iOS auth is a package, not a one-line swap. Touch:
 
@@ -645,110 +646,56 @@ iOS auth is a package, not a one-line swap. Touch:
   account key includes the normalized server host. Existing global
   `longhouse_auth_token` migrates on first read to the new
   per-host key.
-- `ios/Sources/Shared/SharedAuthStore.swift` — replace cookie-jar
-  storage with Keychain-backed bearer, indexed by host. Add
-  `clear(host:)` for logout.
+- `ios/Sources/Shared/SharedAuthStore.swift` — store hosted bearer
+  tokens in Keychain, indexed by host. Keep the local cookie path for
+  self-host through the same abstraction. Add `clear(host:)` for logout.
 - `ios/Sources/LonghouseApp/LonghouseApp.swift` —
   `restoreSession()` checks per-host bearer presence and verifies
-  via tenant `/api/auth/status`. Hosted sign-in completion
-  (`exchangeHostedSSOToken`) stores the returned runtime bearer
-  directly. Logout posts tenant `/api/auth/logout` and clears
-  per-host Keychain entries.
-- `ios/Sources/LonghouseApp/LoginView.swift` — already collapsed
-  in Phase 0. Phase 4 stores the returned token in the per-host
-  Keychain entry.
-- `ios/Sources/Shared/LonghouseAPI.swift:645-663` — swap
-  `cookieHeader` injection for `Authorization: Bearer`. The
-  `/api/auth/refresh` retry path becomes a CP `/api/auth/refresh`
-  call (deferred refresh logic; if absent, retry returns 401 and
-  the app calls `appState.logout()`).
-- `ios/Sources/Shared/SessionWorkspaceStream.swift:209-217` and
-  `ios/Sources/Shared/TimelineSessionsStream.swift:123-135` — both
-  attach `Authorization: Bearer` to the request headers.
+  via tenant `/api/auth/status`. Hosted sign-in completion stores
+  the returned runtime bearer directly. Logout posts tenant
+  `/api/auth/logout` and clears per-host Keychain entries.
+- `ios/Sources/Shared/LonghouseAPI.swift` — attach
+  `Authorization: Bearer` for hosted requests. Without CP refresh,
+  401/410 refresh responses log the app out and send the user back
+  through hosted sign-in.
+- `ios/Sources/Shared/SessionWorkspaceStream.swift` and
+  `ios/Sources/Shared/TimelineSessionsStream.swift` attach
+  `Authorization: Bearer` for hosted SSE.
 - Widgets and push paths that create `LonghouseAPI(host:)` read the
   same per-host bearer.
 
-Done when: iOS can sign in, navigate, see live SSE updates, and
-stay signed in across app restarts using only the bearer token.
-The per-host Keychain storage supports multiple hosted tenants
-when the CP schema allows it, but v1 only ships with one
-hosted tenant per CP user. Self-host builds (e.g. `localhost`)
-still use cookies via the same `SharedAuthStore` abstraction.
+Done when: iOS can sign in, navigate, see live SSE updates, register
+for push, and stay signed in across app restarts using only the hosted
+bearer token. Self-host builds such as `localhost` still use cookies.
 
-Phase 4 also requires a coordinated CP-side change. The current
-`/auth/native/open-instance` route
-(`control-plane/control_plane/routers/auth.py:744-773`) mints
-the legacy HS256 `instance_sso_token` and 302s iOS to
-`ai.longhouse.ios://auth-callback?...&sso_token=...`. The CP
-must update this route to issue a CP runtime JWT (not the legacy
-HS256 bridge token) so iOS receives a token that the tenant's new
-bearer-Keychain path can store. The CP change is a single-route
-edit, not a phase — it can ship in Phase 1 with the rest of the
-CP identity-provider work. Document in the CP code that iOS is
-the only consumer that gets the runtime JWT in a deep link.
-Android and future native clients are out of scope for this
-epic; when they arrive, they should use the handoff-code path
-over a server-side channel, not a deep link.
+The runtime deploy is a flag day for hosted iOS: once hosted
+`accept-token` and `/api/auth/refresh` return 410, any iOS build still
+using the cookie path can no longer sign in or refresh. That is
+acceptable only because there are zero external users and David can
+install the bearer build in lockstep.
 
-### Phase 5 — Delete hosted local auth + refresh (1-2 weeks)
+### Chunk D — Delete dead hosted auth and provisioning behavior
 
-- **`server/zerg/routers/auth_sso.py:_accept_token` stops accepting
-  HS256 legacy bridge tokens** when `control_plane_identity: true`. The
-  dual-verify path goes away. `accept-token?token=...` returns 410
-  Gone for legacy tokens; only the handoff-code path (`accept-handoff`)
-  remains. The HS256 fallback stays for self-host only.
-- `server/zerg/routers/auth_browser.py` — when `CONTROL_PLANE_URL`
-  is set and `control_plane_identity: true`, force `google: false` and
-  `password: false` from `/api/auth/methods`. `/api/auth/google`,
-  `/api/auth/password`, `/api/auth/dev-login` return 410 Gone.
-  `/api/auth/logout`, `/api/auth/status`, and the SSE-auth
-  read paths stay (cookie clearing, status, SSE handshake) and
-  route through the new strategy. `/api/auth/refresh` returns 410
-  Gone until refresh is implemented on the CP, then becomes a CP
-  proxy.
-- `server/zerg/auth/session_tokens.py` — the local HS256 mint
-  helpers become self-host-only behind the strategy selection
-  check.
-- `control_plane/services/provisioner.py:199-200` — stop writing
-  `LONGHOUSE_PASSWORD` to hosted tenant env. The hosted Google
-  credentials for Gmail integration (`provisioner.py:202-209`) stay.
-- `control_plane/routers/auth.py` gains a refresh-token handler
-  that mints a new runtime JWT from a stored refresh-token record.
-  Tenant proxies `/api/auth/refresh` to the CP.
-- **`CONTROL_PLANE_IDENTITY` flag disappears from the runtime**
-  once the legacy bridge is gone. The runtime check becomes
-  simply `if settings.control_plane_url: hosted else: self_host`.
-  The provisioner stops writing the flag. The
-  `control_plane_identity` setting is removed from
-  `server/zerg/config/__init__.py`.
-- Self-host code paths stay. The runtime check is
-  `if settings.control_plane_url: hosted else: self_host`.
+- `control_plane/services/provisioner.py` stops writing
+  `LONGHOUSE_PASSWORD` to hosted tenant env. Hosted Google
+  credentials for Gmail integration stay.
+- Remove CP issuance of hosted HS256 bridge tokens. CP
+  `/dashboard/open-instance` and `/auth/start` both use the handoff
+  code path for browser login.
+- Remove any runtime `control_plane_identity` setting or flag. Hosted
+  is selected by `CONTROL_PLANE_URL`; self-host by its absence.
+- Keep local HS256 session helpers only for self-host.
 
-Done when: hosted tenant has zero local auth state. Self-host
-tenants are bit-for-bit unchanged. Refresh-token rotation works
-on the CP and the tenant proxies it. The
-`CONTROL_PLANE_IDENTITY` flag no longer exists.
+Done when: hosted tenant has zero local auth state. Self-host tenants
+are unchanged. The legacy hosted bridge cannot mint or accept tokens.
 
-## First vertical slice — exact ship checklist (Phase 0)
+## Phase 0 acceptance
 
-This is what David dogfoods end-to-end before any later phase lands.
-
-1. CP deploys `/auth/start` route and `tenant`-aware OAuth state.
-   Old `/dashboard/open-instance` keeps working. No new token
-   shape. No JWKS. No `CONTROL_PLANE_IDENTITY` flag.
-2. Runtime deploys thin `LoginPage` interstitial and updated
-   `/api/auth/methods` response shape. Old bridge acceptance still
-   works. The bridge still mints the same HS256 `instance_sso_token`.
-3. iOS ships SSO-only `LoginView`. The deep link and bridge token
-   flow are unchanged.
-4. David signs in to `david010.longhouse.ai` from a clean browser
-   session. Records: how many distinct "Longhouse" login pages did
-   he see? (Goal: 1.) How long did the round-trip take? (Goal:
-   <2s.)
-5. David signs in from iOS. Records: same.
-6. David signs out, then signs back in. Records: same.
-
-If 1 = 1, the front-of-funnel is done. Move to Phase 1.
+Phase 0 shipped before this clean-break revision. David dogfooded
+hosted web sign-in, sign-out, and sign-in again on
+`david010.longhouse.ai` and found no user-facing issues. The visible
+login funnel is accepted. Do not continue extending the HS256 hosted
+bridge; replace it with the CP identity-provider flow below.
 
 ## Tests to write
 
@@ -756,9 +703,8 @@ CP:
 
 - `/auth/start` unauthenticated → CP login with `tenant` preserved
   in OAuth state.
-- Google and GitHub callbacks with `tenant` state → existing
-  `/dashboard/open-instance` (or `/auth/native/open-instance` for
-  iOS) flow continues to work.
+- Google and GitHub callbacks with `tenant` state → browser handoff
+  code path for web or CP runtime JWT deep link for iOS.
 - `/auth/start` rejects unknown `tenant` (302 to `longhouse.ai`).
 - `/auth/start` rejects `tenant` not owned by the signed-in user.
 - `GET /api/identity/jwks.json` returns the active and accepted
@@ -785,18 +731,25 @@ Tenant:
   `longhouse_session`, links the local user by `cp_user_id` on
   first SSO, sets `cp_user_id` if missing on subsequent SSO for
   the same email, and does not change `users.id`.
-- `accept-token` legacy HS256 path still works for
-  `control_plane_identity: false` hosted tenants and self-host.
+- Hosted `accept-token` returns 410 Gone for HS256 bridge tokens.
 - `accept-handoff` account-link conflict: a new `email` claim
   collides with another local user's email — keep the old
   cached email and emit an `account_link_conflict` log event.
+- Unverified email fallback guard: an unverified CP user whose email
+  matches an existing local tenant user does not link to that existing
+  user and emits `account_link_conflict`.
 - `/api/auth/status` returns `authenticated: false` after tenant
   cookie expiry even if CP `cp_session` is still present.
+- `/api/auth/status` returns `email_verified` for hosted users.
 - `/api/timeline/sessions`, `/api/agents/...`, SSE all work with
   the CP JWT cookie.
-- `browser_auth`, `browser_route_auth`, and `validate_ws_token`
-  accept the CP JWT in hosted mode for the timeline and SSE
-  routes.
+- Browser cookie auth, bearer auth, and `validate_ws_token` accept the
+  CP JWT in hosted mode for timeline, WebSocket, and SSE routes.
+- WebSocket/SSE/cookie auth with a CP JWT whose `aud` belongs to a
+  different tenant is rejected on every hosted entry point.
+- CP JWTs supplied as `?token=` query parameters are rejected in hosted
+  mode; the same route still accepts valid non-CP device/query-token
+  credentials where supported.
 - `zdt_*` device-token bearer still works and is not parsed as
   a CP JWT.
 - Self-host password login still works with `CONTROL_PLANE_URL`
@@ -804,7 +757,7 @@ Tenant:
 - Hosted `/api/auth/methods` advertises only `{sso, sso_url,
   sso_login_url}`. No `google`, no `password`.
 - Hosted `/api/auth/password` returns 410 Gone.
-- Hosted `/api/auth/refresh` returns 410 Gone (until Phase 5).
+- Hosted `/api/auth/refresh` returns 410 Gone until CP refresh exists.
 - Hosted tenant `/api/auth/logout` clears `longhouse_session`
   even when CP `/auth/logout` fails.
 - CP down: existing cached JWKS + mapped user works until `exp`;
@@ -814,6 +767,12 @@ Tenant:
 - **`POST /api/identity/exchange-handoff` requires a valid
   `X-Internal-Token` header.** A request with the right code
   but wrong/missing token returns 401, not the runtime JWT.
+- **`POST /api/identity/exchange-handoff` validates the caller's
+  tenant/instance id against the handoff row.** A request with a valid
+  code but mismatched tenant returns 403.
+- Tenant runtime has no RS256 private key material in settings or env;
+  tests assert the hosted verifier is configured from JWKS/public keys
+  only.
 - **`POST /api/identity/runtime-token` (CP-internal mint) is not
   exposed publicly** — it requires the CP admin/internal auth.
   Verified by integration test that an unauthenticated request
@@ -824,23 +783,16 @@ Tenant:
   Both 403 with a `tenant_login_csrf_*` log event. A successful
   login always clears the `tenant_login_state` cookie.
 - **`email_verified=false` is a valid runtime JWT claim and
-  produces a valid session.** The tenant UI shows the existing
-  "verify your email" banner; the session is otherwise accepted.
-  Verified by integration test that mints with `email_verified:
-  false` and confirms a successful timeline load.
-- **`control_plane_identity: false` (default for new tenants
-  before the flag flip) keeps the legacy HS256-only behavior**
-  even after the dual-verification code is deployed. Verified by
-  setting the flag off, attempting the new handoff flow, and
-  confirming the runtime falls back to legacy bridge acceptance.
-- **Old bridge stop-acceptance (Phase 5).** When
-  `control_plane_identity: true`, `accept-token?token=...` with
-  an HS256 legacy bridge token returns 410 Gone. The
-  `accept-handoff?code=...` path is the only valid path.
-- **Old bridge stop-issuance (Phase 5).** CP
-  `/dashboard/open-instance` returns 410 Gone for tenants with
-  `control_plane_identity: true` after the bridge code is
-  deleted.
+  produces a valid session.** The tenant UI shows a new "verify your
+  email" banner; the session is otherwise accepted. Verified by
+  integration test that mints with `email_verified: false` and confirms
+  a successful timeline load.
+- **No hosted compatibility flag.** With `CONTROL_PLANE_URL` set,
+  hosted auth uses CP JWTs and rejects the legacy bridge. With
+  `CONTROL_PLANE_URL` unset, self-host local auth is unchanged.
+- **Old bridge stop-issuance.** CP `/dashboard/open-instance` and
+  `/auth/start` issue handoff codes for browser login, never hosted
+  HS256 bridge tokens.
 - **CP user deleted at the CP.** Tenant cookie still validates
   the runtime JWT until `exp` (1 hour). The tenant does not
   block the user. The user is told at the CP level that the
@@ -868,63 +820,27 @@ iOS:
 
 ## Deploy sequence
 
-Two repos + native clients + JWKS rotation = use flags even at
-zero users. The blast radius for a buggy CP auth change is "every
-hosted tenant can't sign in," and we don't want to debug that on a
-Friday afternoon.
+Two repos + native clients + JWKS rotation still require sequencing,
+but not a long-lived compatibility mode.
 
-1. **Deploy CP with `/auth/start`, `tenant`-aware OAuth state.**
-   No new token shape. No JWKS yet. Old `/dashboard/open-instance`
-   keeps working. No flag needed yet — `/auth/start` is purely
-   additive.
-2. **Deploy runtime thin `LoginPage` and updated
-   `/api/auth/methods`.** Old bridge still mints HS256. The
-   runtime continues to verify HS256 bridge tokens exactly as
-   today. No flag needed.
-3. **Ship iOS SSO-only `LoginView`.** No protocol change; the
-   existing deep link flow is the same.
-4. **David dogfoods web and iOS for ≥1 week.** This is Phase 0
-   done.
-5. **Deploy CP `/api/identity/*` and shared keyset.** New
-   `PyJWT[crypto]` dep. JWKS published. Handoff code mint +
-   exchange route. New CP deploys add a new public key but keep
-   the old one published for `max_token_ttl` seconds. The CP
-   `/dashboard/open-instance` path is unchanged — it still mints
-   HS256 bridge tokens.
-6. **Deploy runtime dual-verification.** Per-tenant feature flag
-   `control_plane_identity: bool` is added to the tenant's env
-   (sourced from `settings.control_plane_identity` in
-   `server/zerg/config/__init__.py`, default `False`). The
-   provisioner sets it to `True` for any new hosted tenant after
-   the deploy ships. For the first dogfood tenant, set it
-   manually. When `False`, runtime accepts only the legacy HS256
-   bridge token, mints a local HS256 session, behavior is
-   identical to today. When `True`, runtime accepts both HS256
-   bridge (legacy) and CP runtime JWTs (new), and sets the
-   runtime JWT directly as `longhouse_session` for the new
-   path. The handoff-code `/api/auth/accept-handoff` endpoint is
-   wired up but the CP still issues HS256 bridge tokens. The
-   flag is removed in Phase 5 once the legacy bridge is
-   deleted.
-7. **Flip CP `/dashboard/open-instance` for the flagged tenant
-   to issue a handoff code instead of an HS256 bridge token.**
-   Runtime accepts the new path.
-8. **Flip only `david010.longhouse.ai` to
-   `control_plane_identity: true`.** The CP open-instance for
-   that tenant issues handoff codes. The runtime exchanges them
-   for runtime JWTs and sets them as `longhouse_session`.
-9. **Dogfood web:** login, status, timeline, SSE, logout, switch
-   account, password reset, signup, OAuth, all the flows.
-10. **Ship iOS bearer build.** Dogfood: hosted login, timeline,
-    SSE, APNs registration, widget.
-11. **Flip all hosted tenants** to `control_plane_identity:
-    true`. All-at-once is fine at zero users.
-12. **Remove hosted tenant password injection in
-    `control_plane/services/provisioner.py:199-200`.** Hosted
-    Google credentials for Gmail integration stay.
-13. **Delete the legacy HS256 bridge code from the CP and the
-    runtime.** Only when every dogfooded build has been on CP
-    JWTs for ≥2 weeks.
+1. **Deploy CP identity provider.** Publish `/api/identity/jwks.json`,
+   handoff-code mint/exchange, runtime JWT minting, and iOS runtime JWT
+   deep links. CP continues to host the login page, but no longer
+   issues hosted HS256 bridge tokens.
+2. **Install or stage the iOS bearer build for David.** There is no App
+   Store/TestFlight rollout buffer in this prelaunch plan; David's
+   dogfood device moves with the runtime change.
+3. **Deploy runtime CP verifier.** Hosted runtime requires CP JWTs,
+   accepts handoff codes, sets `longhouse_session` to the CP JWT, and
+   rejects hosted local auth routes. Self-host local auth remains
+   selected by missing `CONTROL_PLANE_URL`. Existing hosted web/iOS
+   `longhouse_session` cookies are invalidated and users must re-enter
+   through CP SSO.
+4. **Dogfood web and iOS.** Verify login, status, timeline, SSE,
+   logout, switch account, password reset, signup, OAuth, APNs
+   registration, and widget behavior.
+5. **Delete dead hosted bridge/provisioner residue.** Remove hosted
+   password injection and any unreachable hosted HS256 bridge code.
 
 ## DB migration reality
 
@@ -955,8 +871,13 @@ For this spec:
 - The `users` table itself is not dropped, not renamed, not
   migrated in shape. Just one new column.
 - CP `User` model in `control-plane/control_plane/models.py` gains
-  `display_name` and `avatar_url` columns (Phase 1). These are
-  nullable. Imperative migration alongside.
+  `display_name` and `avatar_url` columns. These are nullable.
+  Imperative migration alongside.
+- CP `HandoffCode` is a new model/table created through the CP's
+  `Base.metadata.create_all` startup path. Existing CP user columns
+  such as `display_name` and `avatar_url` need explicit `ALTER TABLE
+  cp_users ...` additions in the CP startup migration block, matching
+  the existing `control_plane/main.py` pattern.
 
 ## What we explicitly don't do
 
@@ -995,33 +916,37 @@ For this spec:
   where a stolen cookie still works. The benefit is a system
   that works when the CP is briefly unreachable. Durable global
   revocation is a follow-up spec.
+- **Hosted has no refresh in this slice.** The runtime JWT TTL is the
+  hosted session TTL. With the default 1-hour access token, expired
+  tenant sessions bounce through CP SSO again. This is a UX regression
+  versus today's long-lived tenant refresh cookie, but it keeps the
+  clean break small; CP refresh is the follow-up if dogfood says hourly
+  reauth is too annoying.
 - **Self-host and hosted share a runtime but not an auth
   strategy.** The strategy selection at startup is the seam.
   Adding a third strategy later is straightforward; the
   abstraction is a class with a small interface
   (`get_current_user`, `validate_ws_token`, `verify_token`).
-- **iOS app loses its cookie-based read of the tenant session.**
+- **Hosted iOS app loses its cookie-based read of the tenant session.**
   The app is now bearer-first. This is consistent with how
   native apps should work, but it is a behavior change for any
-  iOS code that inspected cookies for auth state. Audit pass
-  during Phase 4.
+  iOS code that inspected cookies for auth state. Self-host iOS keeps
+  the cookie path.
 
 ## Why now
 
-We are pre-launch with zero external users. The current
-architecture is correct enough to dogfood but the wrong shape to
-scale. Every auth feature we add in 2026 lands in two places if
-we don't fix this. The 3.5-5 week cost is the cheapest it will
-ever be. The risk of doing this with users on the platform is a
-force-migration that touches every authed client, every tenant,
-every iOS build. The cost of *not* doing it grows with every
-ship.
+We are pre-launch with zero external users. The current architecture is
+correct enough to dogfood but the wrong shape to scale. Every auth
+feature we add in 2026 lands in two places if we don't fix this. The
+clean-break cost is the cheapest it will ever be. The risk of doing
+this with users on the platform is a force-migration that touches every
+authed client, every tenant, every iOS build. The cost of *not* doing it
+grows with every ship.
 
 ## Locked design decisions
 
-These are the answers to the open questions raised during the
-draft. If you want to revisit any of them, do it before Phase 0
-ships.
+These are the answers to the open questions raised during the draft.
+If you want to revisit any of them, do it before implementation ships.
 
 1. **RS256 keyset management.** Shared CP keyset from a single
    config/secret source, not per-process keys. The CP publishes
@@ -1040,8 +965,8 @@ ships.
 
 3. **Two hosted tenants per CP user.** Out of scope. CP
    `Instance.user_id` is unique today. The iOS Keychain becomes
-   per-host in Phase 4 to support this when the CP schema
-   changes, but the v1 spec does not promise it works.
+   per-host to support this when the CP schema changes, but the v1
+   spec does not promise it works.
 
 4. **`email_verified` claim.** Required boolean in the runtime
    JWT. The tenant must not re-verify email and must trust the
@@ -1056,15 +981,15 @@ ships.
    *opaque one-use code*, not a signed handoff JWT. The CP
    stores the handoff state (cp_user_id, profile snapshot,
    tenant subdomain, return_to, tenant_state CSRF nonce, 60-second
-   expiry) in a server-side table keyed by the code. The
+   expiry) in a server-side table keyed by the code hash. The
    tenant exchanges the code with the CP server-to-server
    using the `X-Internal-Token` header (same auth scheme as
     the existing Gmail handoff). The runtime JWT is never in a
     URL. iOS receives the runtime JWT in the custom-scheme deep
     link because the iOS app cannot hold the instance-internal
     secret; iOS uses its own local CSRF binding (a
-    `tenant_state` value stored in `UserDefaults` and verified
-    on the deep-link return) instead of the browser's cookie
+    `tenant_state` value stored in a transient Keychain entry and
+    verified on the deep-link return) instead of the browser's cookie
     binding. Anti-CSRF for the browser is enforced by a
     tenant-side `tenant_login_state` cookie that the tenant
     sets in a server route before redirecting to the CP, and
@@ -1077,10 +1002,7 @@ ships.
    first, then optionally redirects to CP `/auth/logout` to
    clear `cp_session`. CP logout cannot clear tenant cookies.
 
-7. **`CONTROL_PLANE_IDENTITY` flag lifecycle.** Introduced in
-   Phase 2 as a per-tenant env setting (`control_plane_identity:
-   bool`) on hosted tenants. Removed in Phase 5 once the
-   legacy HS256 bridge is deleted; the runtime check then
-   becomes simply `if settings.control_plane_url: hosted else:
-   self_host`. The provisioner sets the flag for new hosted
-   tenants during Phase 2-4 and stops writing it in Phase 5.
+7. **No `CONTROL_PLANE_IDENTITY` flag.** Hosted identity is selected
+   by `CONTROL_PLANE_URL` being set. Self-host identity is selected by
+   its absence. There is no per-tenant dual-auth flag and no staged
+   hosted bridge compatibility mode.
