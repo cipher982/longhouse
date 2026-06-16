@@ -339,6 +339,7 @@ describe("SessionDetailPage", () => {
     launchApiMocks.continueRemoteSession.mockResolvedValue({
       session_id: "session-codex",
       launch_state: "live",
+      execution_lifetime: "live_control",
       launch_error_code: null,
       launch_error_message: null,
     });
@@ -601,6 +602,7 @@ describe("SessionDetailPage", () => {
     launchApiMocks.continueRemoteSession.mockResolvedValueOnce({
       session_id: "session-codex",
       launch_state: "launching",
+      execution_lifetime: "live_control",
       launch_error_code: null,
       launch_error_message: null,
     });

@@ -11,6 +11,7 @@
       "control_plane_aliases": ["codex_app_server"],
       "launch_local": true,
       "launch_remote": true,
+      "run_once": false,
       "reattach": true,
       "send_input": true,
       "interrupt": true,
@@ -30,6 +31,10 @@
           "level": "live_no_token",
           "source": "scripts/qa/codex-provider-release-canary.py detached_ui",
           "next": "prove through Runtime Host remote launch smoke"
+        },
+        "run_once": {
+          "level": "none",
+          "source": "run-once canary not implemented yet"
         },
         "reattach": {
           "level": "live_no_token",
@@ -89,6 +94,7 @@
       "control_plane_aliases": [],
       "launch_local": true,
       "launch_remote": true,
+      "run_once": false,
       "reattach": true,
       "send_input": true,
       "interrupt": true,
@@ -108,6 +114,10 @@
           "level": "source_review",
           "source": "provider-control-e2e Claude fake process plus Machine Agent claude.launch support tests",
           "next": "promote with Runtime Host remote launch against real Claude or a hermetic engine launch happy-path"
+        },
+        "run_once": {
+          "level": "none",
+          "source": "run-once canary not implemented yet"
         },
         "reattach": {
           "level": "hermetic",
@@ -166,6 +176,7 @@
       "control_plane_aliases": [],
       "launch_local": true,
       "launch_remote": true,
+      "run_once": false,
       "reattach": true,
       "send_input": true,
       "interrupt": true,
@@ -185,6 +196,10 @@
           "level": "hermetic",
           "source": "provider-control-e2e OpenCode fake server bridge launch",
           "next": "promote with Runtime Host remote launch against real OpenCode"
+        },
+        "run_once": {
+          "level": "none",
+          "source": "run-once canary not implemented yet"
         },
         "reattach": {
           "level": "live_no_token",
@@ -237,6 +252,7 @@
       "control_plane_aliases": [],
       "launch_local": true,
       "launch_remote": false,
+      "run_once": false,
       "reattach": false,
       "send_input": true,
       "interrupt": false,
@@ -255,6 +271,10 @@
         "launch_remote": {
           "level": "none",
           "source": "unsupported until Antigravity launch semantics are proven"
+        },
+        "run_once": {
+          "level": "none",
+          "source": "run-once canary not implemented yet"
         },
         "reattach": {
           "level": "none",

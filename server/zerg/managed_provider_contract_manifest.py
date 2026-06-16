@@ -15,6 +15,7 @@ _REQUIRED_BOOL_FIELDS = (
     "requires_longhouse_cli",
     "launch_local",
     "launch_remote",
+    "run_once",
     "reattach",
     "send_input",
     "interrupt",
@@ -29,6 +30,7 @@ _STRING_LIST_FIELDS = ("control_plane_aliases", "machine_control_supports")
 _OPERATION_EVIDENCE_FIELDS = (
     "launch_local",
     "launch_remote",
+    "run_once",
     "reattach",
     "send_input",
     "interrupt",

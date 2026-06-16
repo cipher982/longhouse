@@ -201,6 +201,7 @@ describe("LaunchSessionModal", () => {
     apiMocks.launchRemoteSession.mockResolvedValue({
       session_id: "new-session-id",
       launch_state: "live",
+      execution_lifetime: "live_control",
       launch_error_code: null,
       launch_error_message: null,
     });
@@ -276,6 +277,7 @@ describe("LaunchSessionModal", () => {
     apiMocks.launchRemoteSession.mockResolvedValue({
       session_id: "failed-session-id",
       launch_state: "launch_failed",
+      execution_lifetime: "live_control",
       launch_error_code: "cwd_not_allowed",
       launch_error_message: "Check the workspace path: cwd must be absolute",
     });

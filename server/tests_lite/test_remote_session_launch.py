@@ -396,11 +396,13 @@ def test_happy_path_inserts_live_session(tmp_path):
         )
 
     assert result.launch_state == "live"
+    assert result.execution_lifetime == "live_control"
     with SessionLocal() as db:
         row = db.get(AgentSession, result.session_id)
         assert row is not None
         attempt = _latest_attempt(db, result.session_id)
         assert attempt.state == "adopted"
+        assert attempt.execution_lifetime == "live_control"
         assert attempt.error_code is None
         assert attempt.expires_at is None
         assert attempt.run_id is not None
@@ -415,6 +417,65 @@ def test_happy_path_inserts_live_session(tmp_path):
     assert sent["command_type"] == "session.launch"
     assert sent["session_id"] == str(result.session_id)
     assert sent["payload"]["provider"] == "codex"
+    assert sent["payload"]["execution_lifetime"] == "live_control"
+
+
+def test_one_shot_launch_requires_initial_prompt_before_provider_support(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.run_once",))
+
+    with SessionLocal() as db:
+        with pytest.raises(RemoteLaunchError) as excinfo:
+            asyncio.run(
+                launch_remote_session(
+                    db,
+                    RemoteLaunchParams(
+                        owner_id=OWNER_ID,
+                        device_id="cinder",
+                        provider="codex",
+                        cwd="/Users/me/repo",
+                        execution_lifetime="one_shot",
+                    ),
+                    registry=registry,
+                )
+            )
+
+    assert excinfo.value.code == "invalid_request"
+    assert len(registry.sent) == 0
+    with SessionLocal() as db:
+        assert db.query(AgentSession).count() == 0
+
+
+def test_one_shot_launch_requires_manifest_support_before_machine_dispatch(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.run_once",))
+
+    with SessionLocal() as db:
+        with pytest.raises(RemoteLaunchError) as excinfo:
+            asyncio.run(
+                launch_remote_session(
+                    db,
+                    RemoteLaunchParams(
+                        owner_id=OWNER_ID,
+                        device_id="cinder",
+                        provider="codex",
+                        cwd="/Users/me/repo",
+                        initial_prompt="Do one bounded turn",
+                        execution_lifetime="one_shot",
+                    ),
+                    registry=registry,
+                )
+            )
+
+    assert excinfo.value.code == "provider_unsupported"
+    assert "one_shot" in excinfo.value.detail
+    assert len(registry.sent) == 0
+    with SessionLocal() as db:
+        assert db.query(AgentSession).count() == 0
 
 
 def test_remote_launch_does_not_wait_on_write_serializer_when_writer_saturated(tmp_path, monkeypatch):
@@ -817,6 +878,7 @@ def test_http_endpoint_happy_path(tmp_path):
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["launch_state"] == "live"
+    assert body["execution_lifetime"] == "live_control"
     assert body["session_id"]
 
 
@@ -845,6 +907,7 @@ def test_http_continue_endpoint_happy_path(tmp_path):
     body = resp.json()
     assert body["session_id"] == str(session_id)
     assert body["launch_state"] == "live"
+    assert body["execution_lifetime"] == "live_control"
     assert registry.sent[0]["payload"]["mode"] == "continue"
 
 

@@ -78,6 +78,8 @@ from zerg.services.session_inputs import get_session_input
 from zerg.services.session_inputs import list_recent_inputs
 from zerg.services.session_inputs import mark_failed as _mark_input_failed
 from zerg.services.session_inputs import retry_failed_input
+from zerg.services.session_launch_lifecycle import DEFAULT_REMOTE_EXECUTION_LIFETIME
+from zerg.services.session_launch_lifecycle import RemoteExecutionLifetime
 from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
 from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
 from zerg.services.session_pause_requests import PENDING_STATUS as PAUSE_PENDING_STATUS
@@ -126,6 +128,11 @@ class RemoteSessionLaunchRequest(BaseModel):
     git_branch: str | None = Field(None, description="Optional git branch name")
     project: str | None = Field(None, description="Optional project label")
     display_name: str | None = Field(None, description="Optional display name")
+    initial_prompt: str | None = Field(None, min_length=1, max_length=20000, description="Initial one-shot prompt")
+    execution_lifetime: RemoteExecutionLifetime | None = Field(
+        None,
+        description="Remote launch execution lifetime: one_shot|live_control. Omitted preserves legacy live_control.",
+    )
     client_request_id: str | None = Field(
         None,
         min_length=1,
@@ -139,6 +146,7 @@ class RemoteSessionLaunchResponse(BaseModel):
 
     session_id: str
     launch_state: RemoteLaunchLifecycleState
+    execution_lifetime: RemoteExecutionLifetime
     launch_error_code: RemoteLaunchErrorCode | None = None
     launch_error_message: str | None = None
 
@@ -879,6 +887,7 @@ async def continue_remote_session_agents(
     return RemoteSessionLaunchResponse(
         session_id=str(result.session_id),
         launch_state=result.launch_state,
+        execution_lifetime=result.execution_lifetime,
         launch_error_code=result.launch_error_code,
         launch_error_message=result.launch_error_message,
     )
@@ -970,6 +979,8 @@ async def launch_remote_session_endpoint(
                 git_branch=body.git_branch,
                 project=body.project,
                 display_name=body.display_name,
+                initial_prompt=body.initial_prompt,
+                execution_lifetime=body.execution_lifetime or DEFAULT_REMOTE_EXECUTION_LIFETIME,
                 client_request_id=body.client_request_id,
             ),
         )
@@ -984,6 +995,7 @@ async def launch_remote_session_endpoint(
     return RemoteSessionLaunchResponse(
         session_id=str(result.session_id),
         launch_state=result.launch_state,
+        execution_lifetime=result.execution_lifetime,
         launch_error_code=result.launch_error_code,
         launch_error_message=result.launch_error_message,
     )
@@ -1019,6 +1031,7 @@ async def continue_remote_session_endpoint(
     return RemoteSessionLaunchResponse(
         session_id=str(result.session_id),
         launch_state=result.launch_state,
+        execution_lifetime=result.execution_lifetime,
         launch_error_code=result.launch_error_code,
         launch_error_message=result.launch_error_message,
     )

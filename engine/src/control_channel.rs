@@ -318,6 +318,7 @@ fn validate_managed_provider_contract_manifest(payload: &Value) -> Result<(), St
     let operations = [
         "launch_local",
         "launch_remote",
+        "run_once",
         "reattach",
         "send_input",
         "interrupt",

@@ -816,6 +816,7 @@ public enum RemoteLaunchState: String, Decodable, Sendable {
 public struct RemoteSessionLaunchResponse: Decodable, Sendable {
     public let sessionId: String
     public let launchState: RemoteLaunchState
+    public let executionLifetime: String?
     public let launchErrorCode: String?
     public let launchErrorMessage: String?
 }

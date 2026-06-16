@@ -47,9 +47,13 @@ from zerg.services.managed_provider_contracts import continue_supported_provider
 from zerg.services.managed_provider_contracts import control_plane_for_provider
 from zerg.services.managed_provider_contracts import remote_launch_supported_providers
 from zerg.services.managed_provider_contracts import require_contract_for_provider
+from zerg.services.managed_provider_contracts import run_once_supported_providers
 from zerg.services.session_continue_targets import resolve_native_continue_target
+from zerg.services.session_launch_lifecycle import DEFAULT_REMOTE_EXECUTION_LIFETIME
+from zerg.services.session_launch_lifecycle import RemoteExecutionLifetime
 from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
 from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
+from zerg.services.session_launch_lifecycle import normalize_remote_execution_lifetime
 from zerg.services.session_launch_lifecycle import normalize_remote_launch_error_code
 from zerg.services.session_launch_lifecycle import project_remote_launch_lifecycle
 from zerg.session_execution_home import ManagedSessionTransport
@@ -58,7 +62,8 @@ from zerg.session_loop_mode import SessionLoopMode
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_PROVIDERS = remote_launch_supported_providers()
+LIVE_CONTROL_SUPPORTED_PROVIDERS = remote_launch_supported_providers()
+RUN_ONCE_SUPPORTED_PROVIDERS = run_once_supported_providers()
 LAUNCH_COMMAND_TIMEOUT_SECS = 30
 LAUNCH_LEASE_SECS = 120
 
@@ -83,6 +88,8 @@ class RemoteLaunchParams:
     git_branch: str | None = None
     project: str | None = None
     display_name: str | None = None
+    initial_prompt: str | None = None
+    execution_lifetime: RemoteExecutionLifetime = DEFAULT_REMOTE_EXECUTION_LIFETIME
     client_request_id: str | None = None
 
 
@@ -99,6 +106,7 @@ class RemoteContinueParams:
 class RemoteLaunchResult:
     session_id: UUID
     launch_state: RemoteLaunchLifecycleState
+    execution_lifetime: RemoteExecutionLifetime
     launch_error_code: RemoteLaunchErrorCode | None = None
     launch_error_message: str | None = None
 
@@ -136,6 +144,7 @@ def _launch_result_for_attempt(attempt: SessionLaunchAttempt) -> RemoteLaunchRes
     return RemoteLaunchResult(
         session_id=UUID(str(attempt.session_id)),
         launch_state=lifecycle.state,
+        execution_lifetime=lifecycle.execution_lifetime,
         launch_error_code=lifecycle.error_code,
         launch_error_message=lifecycle.error_message,
     )
@@ -309,12 +318,7 @@ async def launch_remote_session(
     registry: MachineControlChannelRegistry | None = None,
 ) -> RemoteLaunchResult:
     provider = (params.provider or "").strip().lower()
-    if provider not in SUPPORTED_PROVIDERS:
-        raise RemoteLaunchError(
-            f"provider {provider!r} is not supported for remote launch in v1",
-            code="provider_unsupported",
-            status_code=400,
-        )
+    execution_lifetime = normalize_remote_execution_lifetime(params.execution_lifetime)
 
     device_id = (params.device_id or "").strip()
     if not device_id:
@@ -334,6 +338,20 @@ async def launch_remote_session(
         raise RemoteLaunchError(
             "cwd must be absolute",
             code="cwd_not_allowed",
+            status_code=400,
+        )
+    initial_prompt = (params.initial_prompt or "").strip()
+    if execution_lifetime == "one_shot" and not initial_prompt:
+        raise RemoteLaunchError(
+            "initial_prompt is required for one-shot remote launch",
+            code="invalid_request",
+            status_code=400,
+        )
+    supported_providers = RUN_ONCE_SUPPORTED_PROVIDERS if execution_lifetime == "one_shot" else LIVE_CONTROL_SUPPORTED_PROVIDERS
+    if provider not in supported_providers:
+        raise RemoteLaunchError(
+            f"provider {provider!r} is not supported for {execution_lifetime} remote launch",
+            code="provider_unsupported",
             status_code=400,
         )
 
@@ -364,7 +382,7 @@ async def launch_remote_session(
             code="machine_offline",
             status_code=409,
         )
-    launch_cap = f"{provider}.launch"
+    launch_cap = f"{provider}.run_once" if execution_lifetime == "one_shot" else f"{provider}.launch"
     if launch_cap not in info.supports:
         raise RemoteLaunchError(
             f"Machine {device_id!r} does not support {launch_cap}",
@@ -427,6 +445,7 @@ async def launch_remote_session(
         provider=provider,
         host_id=device_id,
         owner_id=params.owner_id,
+        execution_lifetime=execution_lifetime,
         client_request_id=client_request_id,
         command_id=command_id,
         state="pending",
@@ -438,16 +457,19 @@ async def launch_remote_session(
     payload = {
         "provider": provider,
         "cwd": cwd,
+        "execution_lifetime": execution_lifetime,
         "git_repo": params.git_repo,
         "git_branch": params.git_branch,
         "project": project,
         "display_name": display_name,
     }
+    if execution_lifetime == "one_shot":
+        payload["initial_prompt"] = initial_prompt
     response: MachineControlCommandResponse = await reg.send_command(
         owner_id=params.owner_id,
         device_id=device_id,
         session_id=str(session_uuid),
-        command_type="session.launch",
+        command_type="session.run_once" if execution_lifetime == "one_shot" else "session.launch",
         payload=payload,
         timeout_secs=LAUNCH_COMMAND_TIMEOUT_SECS,
         command_id=command_id,
@@ -580,7 +602,11 @@ async def continue_remote_session(
 
     caps = project_session_capabilities(db, session_id=session.id)
     if caps.live_control_available and caps.can_send_input:
-        return RemoteLaunchResult(session_id=UUID(str(session.id)), launch_state="live")
+        return RemoteLaunchResult(
+            session_id=UUID(str(session.id)),
+            launch_state="live",
+            execution_lifetime=DEFAULT_REMOTE_EXECUTION_LIFETIME,
+        )
 
     thread, provider_thread_id, thread_path = _resolve_continue_target(db, session=session)
 
@@ -636,6 +662,7 @@ async def continue_remote_session(
         provider=provider,
         host_id=device_id,
         owner_id=params.owner_id,
+        execution_lifetime=DEFAULT_REMOTE_EXECUTION_LIFETIME,
         client_request_id=client_request_id,
         command_id=command_id,
         state="pending",

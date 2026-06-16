@@ -1559,6 +1559,11 @@ class SessionLaunchAttempt(AgentsBase):
     provider = Column(String(64), nullable=False)
     host_id = Column(String(255), nullable=True, index=True)
     owner_id = Column(Integer, nullable=True, index=True)
+    execution_lifetime = Column(
+        String(32),
+        nullable=False,
+        server_default=text("'live_control'"),
+    )  # live_control | one_shot
 
     # Caller-provided idempotency key + dispatch correlation.
     client_request_id = Column(String(64), nullable=True, index=True)

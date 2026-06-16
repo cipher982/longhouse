@@ -76,6 +76,7 @@ export interface AgentSession {
   user_state?: string;
   /** Remote-launch lifecycle state; null for sessions created before remote-launch. */
   launch_state?: "launching" | "live" | "launching_unknown" | "launch_failed" | "launch_orphaned" | null;
+  execution_lifetime?: "one_shot" | "live_control" | null;
   launch_error_code?: RemoteLaunchErrorCode | null;
   launch_error_message?: string | null;
   /**

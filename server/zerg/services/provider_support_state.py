@@ -22,6 +22,7 @@ SCHEMA_VERSION = 1
 CONTRACT_OPERATIONS = (
     "launch_local",
     "launch_remote",
+    "run_once",
     "reattach",
     "send_input",
     "interrupt",

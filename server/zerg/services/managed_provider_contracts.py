@@ -36,6 +36,7 @@ class ManagedProviderContract:
     control_plane_aliases: tuple[str, ...] = ()
     launch_local: bool = True
     launch_remote: bool = False
+    run_once: bool = False
     reattach: bool = False
     send_input: bool = False
     interrupt: bool = False
@@ -79,6 +80,7 @@ def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderCont
         control_plane_aliases=tuple(str(value) for value in item.get("control_plane_aliases") or ()),
         launch_local=bool(item.get("launch_local", True)),
         launch_remote=bool(item.get("launch_remote", False)),
+        run_once=bool(item.get("run_once", False)),
         reattach=bool(item.get("reattach", False)),
         send_input=bool(item.get("send_input", False)),
         interrupt=bool(item.get("interrupt", False)),
@@ -160,6 +162,10 @@ def provider_for_control_plane(control_plane: str | None) -> str | None:
 
 def remote_launch_supported_providers() -> frozenset[str]:
     return frozenset(contract.provider for contract in _CONTRACTS if contract.launch_remote)
+
+
+def run_once_supported_providers() -> frozenset[str]:
+    return frozenset(contract.provider for contract in _CONTRACTS if contract.run_once)
 
 
 def continue_supported_providers() -> frozenset[str]:

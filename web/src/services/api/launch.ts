@@ -63,6 +63,8 @@ export type LaunchState =
   | "launch_failed"
   | "launch_orphaned";
 
+export type ExecutionLifetime = "one_shot" | "live_control";
+
 export type RemoteLaunchErrorCode =
   | "invalid_request"
   | "device_not_enrolled"
@@ -82,12 +84,15 @@ export type RemoteSessionLaunchRequest = {
   git_branch?: string | null;
   project?: string | null;
   display_name?: string | null;
+  initial_prompt?: string | null;
+  execution_lifetime?: ExecutionLifetime | null;
   client_request_id?: string | null;
 };
 
 export type RemoteSessionLaunchResponse = {
   session_id: string;
   launch_state: LaunchState;
+  execution_lifetime: ExecutionLifetime;
   launch_error_code: RemoteLaunchErrorCode | null;
   launch_error_message: string | null;
 };

@@ -35,6 +35,7 @@ def _manifest_item(provider: str = "test") -> dict:
         "tail_output": True,
         "runtime_phase": True,
         "transcript_binding": True,
+        "run_once": False,
         "operation_evidence": {
             "launch_local": {"level": "hermetic", "source": "test"},
             "launch_remote": {"level": "hermetic", "source": "test"},
@@ -46,6 +47,7 @@ def _manifest_item(provider: str = "test") -> dict:
             "tail_output": {"level": "hermetic", "source": "test"},
             "runtime_phase": {"level": "hermetic", "source": "test"},
             "transcript_binding": {"level": "hermetic", "source": "test"},
+            "run_once": {"level": "none", "source": "test"},
         },
     }
 

@@ -15,6 +15,8 @@ from typing import get_args
 
 from zerg.models.agents import SessionLaunchAttempt
 
+RemoteExecutionLifetime = Literal["one_shot", "live_control"]
+DEFAULT_REMOTE_EXECUTION_LIFETIME: RemoteExecutionLifetime = "live_control"
 RemoteLaunchLifecycleState = Literal[
     "launching",
     "live",
@@ -50,6 +52,7 @@ REMOTE_LAUNCH_ERROR_TITLES: dict[RemoteLaunchErrorCode, str] = {
 @dataclass(frozen=True)
 class RemoteLaunchLifecycle:
     state: RemoteLaunchLifecycleState
+    execution_lifetime: RemoteExecutionLifetime
     error_code: RemoteLaunchErrorCode | None
     error_message: str | None
     lease_until: datetime | None
@@ -64,6 +67,15 @@ def normalize_remote_launch_error_code(
     if normalized in KNOWN_REMOTE_LAUNCH_ERROR_CODES:
         return cast(RemoteLaunchErrorCode, normalized)
     return fallback
+
+
+def normalize_remote_execution_lifetime(value: str | None) -> RemoteExecutionLifetime:
+    normalized = str(value or "").strip()
+    if normalized == "one_shot":
+        return "one_shot"
+    if normalized == "live_control":
+        return "live_control"
+    return DEFAULT_REMOTE_EXECUTION_LIFETIME
 
 
 def format_remote_launch_error_message(
@@ -100,6 +112,7 @@ def project_remote_launch_lifecycle(attempt: SessionLaunchAttempt | None) -> Rem
     error_code = normalize_remote_launch_error_code(attempt.error_code) if attempt.error_code is not None else None
     return RemoteLaunchLifecycle(
         state=state,
+        execution_lifetime=normalize_remote_execution_lifetime(getattr(attempt, "execution_lifetime", None)),
         error_code=error_code,
         error_message=format_remote_launch_error_message(error_code, attempt.error_message),
         lease_until=attempt.expires_at,
@@ -109,8 +122,11 @@ def project_remote_launch_lifecycle(attempt: SessionLaunchAttempt | None) -> Rem
 __all__ = [
     "RemoteLaunchLifecycle",
     "RemoteLaunchErrorCode",
+    "RemoteExecutionLifetime",
     "RemoteLaunchLifecycleState",
+    "DEFAULT_REMOTE_EXECUTION_LIFETIME",
     "format_remote_launch_error_message",
+    "normalize_remote_execution_lifetime",
     "normalize_remote_launch_error_code",
     "project_remote_launch_lifecycle",
 ]

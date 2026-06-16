@@ -61,6 +61,7 @@ describe("launchRemoteSession", () => {
     baseMocks.request.mockResolvedValue({
       session_id: "s1",
       launch_state: "live",
+      execution_lifetime: "live_control",
       launch_error_code: null,
       launch_error_message: null,
     });

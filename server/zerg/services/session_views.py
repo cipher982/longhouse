@@ -44,6 +44,7 @@ from zerg.services.session_capabilities import build_session_capability_display
 from zerg.services.session_continue_targets import resolve_native_continue_target
 from zerg.services.session_current_control import engine_control_online
 from zerg.services.session_current_control import engine_session_control_attached
+from zerg.services.session_launch_lifecycle import RemoteExecutionLifetime
 from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
 from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
 from zerg.services.session_launch_lifecycle import project_remote_launch_lifecycle
@@ -778,6 +779,10 @@ class SessionResponse(UTCBaseModel):
             "Remote-launch lifecycle: launching|live|launching_unknown|"
             "launch_failed|launch_orphaned; null when there is no launch attempt"
         ),
+    )
+    execution_lifetime: Optional[RemoteExecutionLifetime] = Field(
+        None,
+        description="Remote launch execution lifetime: one_shot|live_control; null when there is no launch attempt",
     )
     launch_error_code: Optional[RemoteLaunchErrorCode] = Field(
         None,
@@ -1515,6 +1520,7 @@ def build_session_response(
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
         user_state=session.user_state or "active",
         launch_state=launch_lifecycle.state if launch_lifecycle is not None else None,
+        execution_lifetime=launch_lifecycle.execution_lifetime if launch_lifecycle is not None else None,
         launch_error_code=launch_lifecycle.error_code if launch_lifecycle is not None else None,
         launch_error_message=launch_lifecycle.error_message if launch_lifecycle is not None else None,
         sharer=sharer,
