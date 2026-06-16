@@ -415,7 +415,7 @@ struct LoginView: View {
             return
         }
 
-        guard let ssoToken = payload.ssoToken else {
+        guard let runtimeToken = payload.runtimeToken else {
             localErrorMessage = "Hosted sign-in returned without a session token"
             return
         }
@@ -425,7 +425,7 @@ struct LoginView: View {
             await appState.prepareServerForHostedLogin(instanceURL)
         }
 
-        let sessionEstablished = await appState.exchangeHostedSSOToken(ssoToken)
+        let sessionEstablished = await appState.finishHostedRuntimeToken(runtimeToken)
         if !sessionEstablished {
             localErrorMessage = appState.authError ?? "Hosted sign-in failed"
         }

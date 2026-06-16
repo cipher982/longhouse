@@ -142,6 +142,7 @@ final class AppState: ObservableObject {
             SharedAuthStore.saveServerURL(trimmedServerURL)
             SharedAuthStore.primeSharedCookieStorage(for: trimmedServerURL)
             hasCandidate = SharedAuthStore.hasManagedCookies(for: trimmedServerURL)
+                || SharedAuthStore.hasRuntimeToken(for: trimmedServerURL)
         } else {
             hasCandidate = false
         }
@@ -177,10 +178,13 @@ final class AppState: ObservableObject {
         let cookies = SharedAuthStore.managedCookies(for: serverURL)
         let hasRefresh = cookies.contains(where: { $0.name == SharedAuthStore.refreshCookieName })
         let hasSession = cookies.contains(where: { $0.name == SharedAuthStore.sessionCookieName })
-        hasLocalSessionCandidate = hasSession || hasRefresh
+        let hasRuntimeToken = SharedAuthStore.hasRuntimeToken(for: serverURL)
+        hasLocalSessionCandidate = hasRuntimeToken || hasSession || hasRefresh
 
         let result: SessionRestoreResult
-        if hasRefresh {
+        if hasRuntimeToken {
+            result = await verifyBrowserSession()
+        } else if hasRefresh {
             result = await refreshBrowserSession()
         } else if hasSession {
             result = await verifyBrowserSession()
@@ -197,8 +201,8 @@ final class AppState: ObservableObject {
                 await self?.syncStoredAPNSTokenIfPossible()
             }
         case .indeterminate:
-            isAuthenticated = hasSession || hasRefresh
-            hasLocalSessionCandidate = hasSession || hasRefresh
+            isAuthenticated = hasRuntimeToken || hasSession || hasRefresh
+            hasLocalSessionCandidate = hasRuntimeToken || hasSession || hasRefresh
         case .unauthenticated:
             await clearLocalSession()
         }
@@ -254,37 +258,44 @@ final class AppState: ObservableObject {
             TimelineCacheStore.clear(serverURL: previousURL)
             TranscriptSnapshotStore.shared.clear(serverURL: previousURL)
             PushNotificationStore.clearAPNSDeviceSyncState()
+            SharedAuthStore.clearRuntimeToken(for: previousURL)
             KeychainHelper.deleteAuthToken()
         }
         SharedAuthStore.primeSharedCookieStorage(for: trimmed)
     }
 
-    func exchangeHostedSSOToken(_ ssoToken: String) async -> Bool {
-        guard let url = URL(string: "\(serverURL)/api/auth/accept-token") else {
+    func finishHostedRuntimeToken(_ runtimeToken: String) async -> Bool {
+        let token = runtimeToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else {
+            authError = "Hosted sign-in returned without a session token"
+            return false
+        }
+        guard URL(string: serverURL) != nil else {
             authError = "Invalid server URL"
             return false
         }
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 10
+        SharedAuthStore.clearManagedCookies(for: serverURL)
+        SharedAuthStore.removeSharedCookieStorage(for: serverURL)
+        SharedAuthStore.saveRuntimeToken(token, for: serverURL)
 
-        do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: ["token": ssoToken])
-
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                let fallback = "Hosted sign-in failed"
-                authError = Self.apiErrorMessage(from: data) ?? fallback
-                return false
-            }
-
-            return await finishLoginFromSharedCookies()
-        } catch {
-            authError = "Network error: \(error.localizedDescription)"
+        let result = await verifyBrowserSession()
+        guard result == .authenticated else {
+            SharedAuthStore.clearRuntimeToken(for: serverURL)
+            authError = "Hosted sign-in failed"
+            isAuthenticated = false
+            hasLocalSessionCandidate = false
+            isValidating = false
             return false
         }
+
+        authError = nil
+        isAuthenticated = true
+        hasLocalSessionCandidate = true
+        isValidating = false
+        await syncStoredAPNSTokenIfPossible()
+        WidgetCenter.shared.reloadAllTimelines()
+        return true
     }
 
     func clearAuthError() {
@@ -338,6 +349,7 @@ final class AppState: ObservableObject {
                 TimelineCacheStore.clear(serverURL: previousURL)
                 TranscriptSnapshotStore.shared.clear(serverURL: previousURL)
                 PushNotificationStore.clearAPNSDeviceSyncState()
+                SharedAuthStore.clearRuntimeToken(for: previousURL)
                 KeychainHelper.deleteAuthToken()
             }
             SharedAuthStore.primeSharedCookieStorage(for: trimmed)
@@ -406,7 +418,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    private enum SessionRestoreResult {
+    private enum SessionRestoreResult: Equatable {
         case authenticated
         case unauthenticated
         case indeterminate
@@ -444,6 +456,9 @@ final class AppState: ObservableObject {
 
         var request = URLRequest(url: url)
         request.timeoutInterval = 5
+        if let authorizationHeader = SharedAuthStore.authorizationHeader(for: serverURL) {
+            request.setValue(authorizationHeader, forHTTPHeaderField: "Authorization")
+        }
 
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
@@ -466,6 +481,9 @@ final class AppState: ObservableObject {
             var request = URLRequest(url: url)
             request.httpMethod = "POST"
             request.timeoutInterval = 5
+            if let authorizationHeader = SharedAuthStore.authorizationHeader(for: serverURL) {
+                request.setValue(authorizationHeader, forHTTPHeaderField: "Authorization")
+            }
             _ = try? await URLSession.shared.data(for: request)
         }
 
@@ -479,6 +497,7 @@ final class AppState: ObservableObject {
     private func clearLocalSession() async {
         SharedAuthStore.clearManagedCookies(for: serverURL)
         SharedAuthStore.removeSharedCookieStorage(for: serverURL)
+        SharedAuthStore.clearRuntimeToken(for: serverURL)
         WidgetSessionSnapshotStore.clear()
         TimelineCacheStore.clear(serverURL: serverURL)
         TranscriptSnapshotStore.shared.clear(serverURL: serverURL)

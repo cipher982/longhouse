@@ -212,7 +212,9 @@ actor SessionWorkspaceStream {
         if lastEventId > 0 {
             req.addValue(String(lastEventId), forHTTPHeaderField: "Last-Event-ID")
         }
-        if let cookieHeader = SharedAuthStore.cookieHeader(for: baseURL.absoluteString) {
+        if let authorizationHeader = SharedAuthStore.authorizationHeader(for: baseURL.absoluteString) {
+            req.setValue(authorizationHeader, forHTTPHeaderField: "Authorization")
+        } else if let cookieHeader = SharedAuthStore.cookieHeader(for: baseURL.absoluteString) {
             req.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
         }
         // waitsForConnectivity: the URLSession waits during transient network

@@ -647,7 +647,10 @@ struct LonghouseAPI: Sendable {
         request.timeoutInterval = 15
         // Explicit cookie injection: widget extension runs in a separate process
         // without shared HTTPCookieStorage, so it must read from the keychain.
-        if let cookieHeader = SharedAuthStore.cookieHeader(for: baseURL.absoluteString) {
+        let authorizationHeader = SharedAuthStore.authorizationHeader(for: baseURL.absoluteString)
+        if let authorizationHeader {
+            request.setValue(authorizationHeader, forHTTPHeaderField: "Authorization")
+        } else if let cookieHeader = SharedAuthStore.cookieHeader(for: baseURL.absoluteString) {
             request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
         }
 
@@ -657,7 +660,7 @@ struct LonghouseAPI: Sendable {
         }
         persistResponseCookies(from: httpResponse, requestURL: request.url)
 
-        if httpResponse.statusCode == 401 && allowRetry {
+        if httpResponse.statusCode == 401 && allowRetry && authorizationHeader == nil {
             do {
                 try await refreshSession()
                 return try await self.data(for: request, allowRetry: false)

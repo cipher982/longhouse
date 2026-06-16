@@ -130,7 +130,9 @@ actor TimelineSessionsStream {
         var req = URLRequest(url: url)
         req.addValue("text/event-stream", forHTTPHeaderField: "Accept")
         req.addValue("no-cache", forHTTPHeaderField: "Cache-Control")
-        if let cookieHeader = SharedAuthStore.cookieHeader(for: baseURL.absoluteString) {
+        if let authorizationHeader = SharedAuthStore.authorizationHeader(for: baseURL.absoluteString) {
+            req.setValue(authorizationHeader, forHTTPHeaderField: "Authorization")
+        } else if let cookieHeader = SharedAuthStore.cookieHeader(for: baseURL.absoluteString) {
             req.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
         }
         let config = URLSessionConfiguration.default

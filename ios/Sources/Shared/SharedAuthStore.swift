@@ -21,6 +21,7 @@ enum SharedAuthStore {
 
     private static let serverURLKey = "longhouse_server_url"
     private static let cookieStoragePrefix = "managed_cookies."
+    private static let runtimeTokenStoragePrefix = "runtime_tokens."
     private static let keychainService = "ai.longhouse.shared-cookies"
 
     private static var defaults: UserDefaults? {
@@ -82,6 +83,45 @@ enum SharedAuthStore {
 
     static func hasManagedCookies(for serverURL: String) -> Bool {
         !managedCookies(for: serverURL).isEmpty
+    }
+
+    static func saveRuntimeToken(_ token: String, for serverURL: String) {
+        let value = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else {
+            clearRuntimeToken(for: serverURL)
+            return
+        }
+        guard let data = value.data(using: .utf8) else {
+            return
+        }
+        saveKeychainData(data, account: runtimeTokenStorageKey(for: serverURL))
+        KeychainHelper.saveAuthToken("Bearer \(value)")
+    }
+
+    static func runtimeToken(for serverURL: String) -> String? {
+        guard let data = loadKeychainData(account: runtimeTokenStorageKey(for: serverURL)),
+              let token = String(data: data, encoding: .utf8)?
+                  .trimmingCharacters(in: .whitespacesAndNewlines),
+              !token.isEmpty else {
+            return nil
+        }
+        return token
+    }
+
+    static func hasRuntimeToken(for serverURL: String) -> Bool {
+        runtimeToken(for: serverURL) != nil
+    }
+
+    static func authorizationHeader(for serverURL: String) -> String? {
+        guard let token = runtimeToken(for: serverURL) else {
+            return nil
+        }
+        return "Bearer \(token)"
+    }
+
+    static func clearRuntimeToken(for serverURL: String) {
+        deleteKeychainData(account: runtimeTokenStorageKey(for: serverURL))
+        KeychainHelper.deleteAuthToken()
     }
 
     static func setManagedCookies(_ cookies: [HTTPCookie], for serverURL: String) {
@@ -175,6 +215,10 @@ enum SharedAuthStore {
 
     private static func cookieStorageKeyForHost(_ host: String) -> String {
         cookieStoragePrefix + host
+    }
+
+    private static func runtimeTokenStorageKey(for serverURL: String) -> String {
+        runtimeTokenStoragePrefix + (normalizedHost(for: serverURL) ?? serverURL)
     }
 
     private static func cookieDictionary(from cookie: HTTPCookie) -> [String: Any]? {
