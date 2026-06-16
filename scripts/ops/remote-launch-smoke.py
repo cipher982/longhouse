@@ -51,6 +51,7 @@ SMOKE_USER_AGENT = (
     "AppleWebKit/605.1.15 (KHTML, like Gecko) "
     "Version/17.0 Safari/605.1.15 LonghouseRemoteLaunchSmoke/1.0"
 )
+DEVICE_TOKEN_RE = re.compile(r"zdt_[A-Za-z0-9_-]+")
 
 
 class SmokeError(RuntimeError):
@@ -194,6 +195,14 @@ def _parse_last_json_line(output: str) -> Any:
     return None
 
 
+def _redact_secrets(value: str) -> str:
+    return DEVICE_TOKEN_RE.sub("zdt_[redacted]", value)
+
+
+def _tail_remote_error(proc: subprocess.CompletedProcess[str], *, max_chars: int = 700) -> str:
+    return _redact_secrets((proc.stderr or proc.stdout or "").strip()[-max_chars:])
+
+
 def mint_device_token(*, ssh_target: str, container: str, device_id: str) -> DeviceTokenAuth:
     script = r"""
 import json
@@ -223,7 +232,7 @@ with db_session() as db:
     )
     parsed = _parse_last_json_line(proc.stdout or "")
     if proc.returncode != 0 or not isinstance(parsed, dict):
-        raise SmokeError(f"could not mint device token: {(proc.stderr or proc.stdout or '').strip()[-700:]}")
+        raise SmokeError(f"could not mint device token: {_tail_remote_error(proc)}")
     token_id = str(parsed.get("token_id") or "")
     token = str(parsed.get("token") or "")
     if not token_id or not token.startswith("zdt_"):

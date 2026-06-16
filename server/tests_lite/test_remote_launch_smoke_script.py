@@ -8,6 +8,7 @@ and requiring an assistant-role event rather than a user echo.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from types import SimpleNamespace
 from pathlib import Path
@@ -216,6 +217,31 @@ def test_remote_python_ssh_accepts_new_host_keys(monkeypatch) -> None:
     ]
 
 
+def test_mint_device_token_redacts_plain_token_on_failure(monkeypatch) -> None:
+    def fake_run(*args, **kwargs):
+        return smoke.subprocess.CompletedProcess(
+            args,
+            1,
+            stdout='{"token_id": "token-1", "token": "zdt_SECRET_VALUE"}\n',
+            stderr="",
+        )
+
+    monkeypatch.setattr(smoke, "_run_remote_python", fake_run)
+
+    try:
+        smoke.mint_device_token(
+            ssh_target="zerg",
+            container="longhouse-demo",
+            device_id="remote-launch-smoke-unit",
+        )
+    except smoke.SmokeError as exc:
+        message = str(exc)
+        assert "zdt_SECRET_VALUE" not in message
+        assert "zdt_[redacted]" in message
+    else:
+        raise AssertionError("mint_device_token should fail when remote command exits nonzero")
+
+
 def test_launch_session_rejects_non_live_state(monkeypatch) -> None:
     def fake_http_json(method, url, **kwargs):
         assert method == "POST"
@@ -387,6 +413,7 @@ def test_run_one_shot_wires_run_once_capability_and_nonce_prompt(monkeypatch) ->
     )
 
     assert result["ok"] is True
+    assert "zdt_" not in json.dumps(result)
     assert result["auth"]["device_token_id"] == "token-1"
     assert result["auth_cleanup"]["ok"] is True
     assert captured["discover_bearer_token"] == "zdt_test"
