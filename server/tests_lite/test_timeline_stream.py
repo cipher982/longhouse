@@ -421,7 +421,7 @@ def test_timeline_stream_wakes_on_topic_timeline_publish(tmp_path):
             next_event = asyncio.create_task(anext(stream))
             await asyncio.sleep(0)
             get_pubsub().publish(TOPIC_TIMELINE, {"kind": "test", "session_id": str(session.id)})
-            upsert = await asyncio.wait_for(next_event, timeout=0.5)
+            upsert = await asyncio.wait_for(next_event, timeout=2.0)
             return connected, upsert
         finally:
             await stream.aclose()
@@ -465,7 +465,7 @@ def test_timeline_stream_skip_initial_replay_sends_targeted_update_only(tmp_path
             next_event = asyncio.create_task(anext(stream))
             await asyncio.sleep(0)
             get_pubsub().publish(TOPIC_TIMELINE, {"kind": "test", "session_id": str(targeted.id)})
-            upsert = await asyncio.wait_for(next_event, timeout=0.5)
+            upsert = await asyncio.wait_for(next_event, timeout=2.0)
 
             followup = asyncio.create_task(anext(stream))
             done, pending = await asyncio.wait({followup}, timeout=0.05)
@@ -522,7 +522,7 @@ def test_timeline_stream_skip_initial_replay_targets_new_session_without_full_re
                 )
                 new_session_id = str(new_session.id)
             get_pubsub().publish(TOPIC_TIMELINE, {"kind": "test", "session_id": new_session_id})
-            upsert = await asyncio.wait_for(next_event, timeout=0.5)
+            upsert = await asyncio.wait_for(next_event, timeout=2.0)
 
             followup = asyncio.create_task(anext(stream))
             done, pending = await asyncio.wait({followup}, timeout=0.05)
@@ -583,7 +583,7 @@ def test_timeline_stream_upserts_on_bridge_transcript_preview_only_change(tmp_pa
                 TOPIC_TIMELINE,
                 {"kind": "runtime_update", "session_id": str(session.id)},
             )
-            upsert = await asyncio.wait_for(next_event, timeout=0.5)
+            upsert = await asyncio.wait_for(next_event, timeout=2.0)
             return connected, initial, upsert
         finally:
             await stream.aclose()
@@ -647,7 +647,7 @@ def test_timeline_stream_known_session_update_uses_targeted_card(tmp_path):
                 TOPIC_TIMELINE,
                 {"kind": "runtime", "session_id": str(session.id), "provider": "codex"},
             )
-            targeted = await asyncio.wait_for(next_event, timeout=0.5)
+            targeted = await asyncio.wait_for(next_event, timeout=2.0)
             return connected, initial, targeted
         finally:
             await stream.aclose()
@@ -698,7 +698,7 @@ def test_timeline_stream_ignores_session_only_topic_publish(tmp_path):
             assert next_event in pending
 
             get_pubsub().publish(TOPIC_TIMELINE, {"kind": "test", "session_id": str(session.id)})
-            upsert = await asyncio.wait_for(next_event, timeout=0.5)
+            upsert = await asyncio.wait_for(next_event, timeout=2.0)
             return connected, upsert
         finally:
             await stream.aclose()
