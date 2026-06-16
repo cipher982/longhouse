@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
+
+os.environ.setdefault("AUTH_DISABLED", "1")
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("FERNET_SECRET", "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=")
+os.environ.setdefault("JWT_SECRET", "test-jwt-secret-1234")
 
 import pytest
 from fastapi import HTTPException
@@ -11,8 +17,12 @@ from starlette.requests import Request
 from zerg.auth.cp_jwks import CPTokenClaims
 from zerg.auth.strategy import HostedCPAuthStrategy
 from zerg.database import Base
+from zerg.dependencies import browser_auth
+from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.models import User
+from zerg.routers.auth_sso import NativeHandoffRequest
+from zerg.routers.auth_sso import accept_native_handoff
 
 
 @pytest.fixture()
@@ -88,3 +98,67 @@ def test_hosted_browser_route_rejects_query_jwt(monkeypatch, db_session):
         get_current_browser_route_user(request, db_session, token="header.payload.signature")
 
     assert exc.value.status_code == 401
+
+
+def test_hosted_browser_auth_accepts_runtime_bearer(monkeypatch, db_session):
+    user = User(email="david010@gmail.com")
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+
+    class Strategy:
+        def validate_ws_token(self, token, db):
+            assert token == "cp.runtime.jwt"
+            return user
+
+    monkeypatch.setattr(browser_auth, "get_settings", lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai"))
+    monkeypatch.setattr(browser_auth.auth_deps, "AUTH_DISABLED", False)
+    monkeypatch.setattr(browser_auth.auth_deps, "_get_strategy", lambda: Strategy())
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/auth/verify",
+            "headers": [(b"authorization", b"Bearer cp.runtime.jwt")],
+            "query_string": b"",
+        }
+    )
+
+    assert get_current_browser_user(request, db_session).id == user.id
+
+
+@pytest.mark.asyncio
+async def test_accept_native_handoff_exchanges_one_use_code(monkeypatch, db_session):
+    user = User(email="david010@gmail.com")
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+
+    calls = {}
+
+    def exchange(**kwargs):
+        calls.update(kwargs)
+        return ("cp.runtime.jwt", 3600)
+
+    class Strategy:
+        def validate_ws_token(self, token, db):
+            assert token == "cp.runtime.jwt"
+            return user
+
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso.get_settings",
+        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai", internal_api_secret="secret"),
+    )
+    monkeypatch.setattr("zerg.routers.auth_sso._hosted_instance_id", lambda: "david010")
+    monkeypatch.setattr("zerg.routers.auth_sso._exchange_handoff_code", exchange)
+    monkeypatch.setattr("zerg.dependencies.auth._get_strategy", lambda: Strategy())
+
+    result = await accept_native_handoff(NativeHandoffRequest(code="one-use-code"), db_session)
+
+    assert result == {"runtime_token": "cp.runtime.jwt", "expires_in": 3600}
+    assert calls == {
+        "control_plane_url": "https://control.longhouse.ai",
+        "internal_api_secret": "secret",
+        "code": "one-use-code",
+        "tenant": "david010",
+    }

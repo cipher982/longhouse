@@ -264,6 +264,41 @@ final class AppState: ObservableObject {
         SharedAuthStore.primeSharedCookieStorage(for: trimmed)
     }
 
+    func exchangeHostedHandoffCode(_ code: String) async -> Bool {
+        let trimmedCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedCode.isEmpty else {
+            authError = "Hosted sign-in returned without a handoff code"
+            return false
+        }
+        guard let url = URL(string: "\(serverURL)/api/auth/accept-native-handoff") else {
+            authError = "Invalid server URL"
+            return false
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 10
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["code": trimmedCode])
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                authError = Self.apiErrorMessage(from: data) ?? "Hosted sign-in failed"
+                return false
+            }
+            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let runtimeToken = json["runtime_token"] as? String else {
+                authError = "Hosted sign-in returned without a session token"
+                return false
+            }
+            return await finishHostedRuntimeToken(runtimeToken)
+        } catch {
+            authError = "Network error: \(error.localizedDescription)"
+            return false
+        }
+    }
+
     func finishHostedRuntimeToken(_ runtimeToken: String) async -> Bool {
         let token = runtimeToken.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !token.isEmpty else {

@@ -15,6 +15,7 @@ from fastapi import Request
 from fastapi import Response
 from fastapi import status
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from zerg.auth import refresh_tokens
@@ -39,6 +40,10 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 TENANT_LOGIN_STATE_COOKIE = "tenant_login_state"
 
 
+class NativeHandoffRequest(BaseModel):
+    code: str
+
+
 def _hosted_instance_id() -> str:
     instance_id = os.getenv("INSTANCE_ID", "").strip()
     if instance_id:
@@ -56,6 +61,44 @@ def _hosted_instance_id() -> str:
 
 def _hosted_auth_enabled() -> bool:
     return bool(getattr(get_settings(), "control_plane_url", None))
+
+
+def _exchange_handoff_code(
+    *,
+    control_plane_url: str,
+    internal_api_secret: str,
+    code: str,
+    tenant: str,
+    tenant_state: str | None = None,
+) -> tuple[str, int]:
+    payload = {"code": code, "tenant": tenant}
+    if tenant_state:
+        payload["tenant_state"] = tenant_state
+    try:
+        exchange = httpx.post(
+            f"{control_plane_url.rstrip('/')}/api/identity/exchange-handoff",
+            headers={"X-Internal-Token": internal_api_secret},
+            json=payload,
+            timeout=10.0,
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Control plane handoff exchange failed",
+        ) from exc
+
+    if exchange.status_code >= 400:
+        raise HTTPException(status_code=exchange.status_code, detail="Control plane rejected handoff")
+
+    data = exchange.json()
+    runtime_token = data.get("runtime_token")
+    expires_in = int(data.get("expires_in") or 3600)
+    if not isinstance(runtime_token, str) or not runtime_token:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Control plane handoff response missing token",
+        )
+    return runtime_token, expires_in
 
 
 async def _accept_token(response: Response, token: str, db: Session) -> TokenOut:
@@ -204,30 +247,13 @@ async def accept_handoff_request(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Login state mismatch")
 
     tenant = _hosted_instance_id()
-    try:
-        exchange = httpx.post(
-            f"{control_plane_url.rstrip('/')}/api/identity/exchange-handoff",
-            headers={"X-Internal-Token": settings.internal_api_secret},
-            json={"code": code, "tenant": tenant},
-            timeout=10.0,
-        )
-    except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Control plane handoff exchange failed",
-        ) from exc
-
-    if exchange.status_code >= 400:
-        raise HTTPException(status_code=exchange.status_code, detail="Control plane rejected handoff")
-
-    data = exchange.json()
-    runtime_token = data.get("runtime_token")
-    expires_in = int(data.get("expires_in") or 3600)
-    if not isinstance(runtime_token, str) or not runtime_token:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Control plane handoff response missing token",
-        )
+    runtime_token, expires_in = _exchange_handoff_code(
+        control_plane_url=control_plane_url,
+        internal_api_secret=settings.internal_api_secret,
+        code=code,
+        tenant=tenant,
+        tenant_state=tenant_state,
+    )
 
     from zerg.dependencies.auth import _get_strategy
 
@@ -252,4 +278,28 @@ async def accept_handoff_request(
     return redirect
 
 
-__all__ = ["accept_handoff_request", "accept_token", "accept_token_redirect", "router"]
+@router.post("/accept-native-handoff")
+async def accept_native_handoff(body: NativeHandoffRequest, db: Session = Depends(get_db)):
+    settings = get_settings()
+    control_plane_url = getattr(settings, "control_plane_url", None)
+    if not control_plane_url:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Hosted handoff is not configured")
+
+    tenant = _hosted_instance_id()
+    runtime_token, expires_in = _exchange_handoff_code(
+        control_plane_url=control_plane_url,
+        internal_api_secret=settings.internal_api_secret,
+        code=body.code,
+        tenant=tenant,
+    )
+
+    from zerg.dependencies.auth import _get_strategy
+
+    user = _get_strategy().validate_ws_token(runtime_token, db)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid runtime token")
+
+    return {"runtime_token": runtime_token, "expires_in": expires_in}
+
+
+__all__ = ["accept_handoff_request", "accept_native_handoff", "accept_token", "accept_token_redirect", "router"]

@@ -415,17 +415,20 @@ struct LoginView: View {
             return
         }
 
-        guard let runtimeToken = payload.runtimeToken else {
-            localErrorMessage = "Hosted sign-in returned without a session token"
-            return
-        }
-
         if let instanceURL = payload.instanceURL,
            !instanceURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             await appState.prepareServerForHostedLogin(instanceURL)
         }
 
-        let sessionEstablished = await appState.finishHostedRuntimeToken(runtimeToken)
+        let sessionEstablished: Bool
+        if let code = payload.code {
+            sessionEstablished = await appState.exchangeHostedHandoffCode(code)
+        } else if let runtimeToken = payload.runtimeToken {
+            sessionEstablished = await appState.finishHostedRuntimeToken(runtimeToken)
+        } else {
+            localErrorMessage = "Hosted sign-in returned without a session token"
+            return
+        }
         if !sessionEstablished {
             localErrorMessage = appState.authError ?? "Hosted sign-in failed"
         }

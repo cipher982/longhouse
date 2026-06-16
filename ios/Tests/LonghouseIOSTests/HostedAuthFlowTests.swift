@@ -34,6 +34,7 @@ struct HostedAuthFlowTests {
             payload == HostedAuthCallbackPayload(
                 tenant: "testuser",
                 instanceURL: "https://testuser.longhouse.ai",
+                code: nil,
                 runtimeToken: "abc123",
                 tenantState: "state123",
                 error: nil
@@ -50,6 +51,18 @@ struct HostedAuthFlowTests {
         let payload = try #require(HostedAuthFlow.callbackPayload(from: callbackURL))
 
         #expect(payload.runtimeToken == "abc123")
+    }
+
+    @Test
+    func callbackPayloadExtractsHandoffCode() throws {
+        let callbackURL = try #require(URL(
+            string: "ai.longhouse.ios://auth-callback?tenant=testuser&instance_url=https%3A%2F%2Ftestuser.longhouse.ai&code=handoff123"
+        ))
+
+        let payload = try #require(HostedAuthFlow.callbackPayload(from: callbackURL))
+
+        #expect(payload.code == "handoff123")
+        #expect(payload.runtimeToken == nil)
     }
 
     @Test

@@ -10,18 +10,12 @@ from sqlalchemy.orm import Session
 
 import zerg.dependencies.auth as auth_deps
 from zerg.auth.session_tokens import SESSION_COOKIE_NAME
+from zerg.config import get_settings
 from zerg.database import db_session
 from zerg.database import get_db
 
 
-def _device_token_bearer(request: Request) -> str | None:
-    """Return a `zdt_...` device token from the Authorization header, or None.
-
-    Browser routes deliberately reject generic JWT bearers — that's the cookie
-    boundary. Device tokens are a separate, owner-scoped credential issued by
-    the CLI; allowing them lets the local dev proxy drive the UI without a
-    browser cookie. JWT bearers still fall through to None here.
-    """
+def _bearer_token(request: Request) -> str | None:
     header = request.headers.get("Authorization") or request.headers.get("authorization")
     if not header:
         return None
@@ -29,13 +23,40 @@ def _device_token_bearer(request: Request) -> str | None:
     if scheme.lower() != "bearer":
         return None
     token = token.strip()
-    return token if token.startswith("zdt_") else None
+    return token or None
+
+
+def _device_token_bearer(request: Request) -> str | None:
+    """Return a `zdt_...` device token from the Authorization header, or None.
+
+    Browser routes deliberately reject generic JWT bearers in self-host — that's
+    the cookie boundary. Device tokens are a separate, owner-scoped credential
+    issued by the CLI; allowing them lets the local dev proxy drive the UI
+    without a browser cookie.
+    """
+    token = _bearer_token(request)
+    return token if token and token.startswith("zdt_") else None
+
+
+def _hosted_runtime_bearer(request: Request) -> str | None:
+    token = _bearer_token(request)
+    if not token or token.startswith("zdt_"):
+        return None
+    if not getattr(get_settings(), "control_plane_url", None):
+        return None
+    return token
 
 
 def _get_browser_session_user(request: Request, db: Session):
     """Validate browser auth (cookie or device-token bearer) and return user."""
     if auth_deps.AUTH_DISABLED:
         return auth_deps._get_strategy().get_current_user(request, db)
+
+    hosted_bearer = _hosted_runtime_bearer(request)
+    if hosted_bearer:
+        user = auth_deps._get_strategy().validate_ws_token(hosted_bearer, db)
+        if user is not None:
+            return user
 
     session_token = request.cookies.get(SESSION_COOKIE_NAME)
     if session_token:
