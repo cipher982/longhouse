@@ -14,6 +14,14 @@ def _expected_unsupported_operations(contract) -> list[str]:
 
 
 def _expected_live_operations(contract) -> list[str]:
+    return [
+        support.split(".", 1)[1]
+        for support in contract.machine_control_supports
+        if support.split(".", 1)[1] not in {"run_once", "resume_run_once"}
+    ]
+
+
+def _expected_machine_operations(contract) -> list[str]:
     return [support.split(".", 1)[1] for support in contract.machine_control_supports]
 
 
@@ -23,7 +31,7 @@ def test_support_state_provider_capability_axes_match_manifest_contracts() -> No
         for contract in all_managed_provider_contracts()
     }
     control_operations_by_provider = {
-        contract.provider: _expected_live_operations(contract) for contract in all_managed_provider_contracts()
+        contract.provider: _expected_machine_operations(contract) for contract in all_managed_provider_contracts()
     }
 
     support = collect_provider_support_state(
@@ -40,6 +48,7 @@ def test_support_state_provider_capability_axes_match_manifest_contracts() -> No
         assert capabilities["supported_operations"] == _expected_supported_operations(contract)
         assert capabilities["unsupported_operations"] == _expected_unsupported_operations(contract)
         assert capabilities["machine_control_supports"] == list(contract.machine_control_supports)
+        assert capabilities["machine_control_operations"] == _expected_machine_operations(contract)
         assert capabilities["live_control_operations"] == _expected_live_operations(contract)
         assert capabilities["missing_live_control_operations"] == []
 
@@ -85,7 +94,28 @@ def test_support_state_separates_candidate_release_from_local_readiness() -> Non
         "launch",
         "continue",
     ]
+    assert codex["capabilities"]["missing_live_control_operations"] == []
     assert codex["proof"]["state"] == "mixed"
+
+
+def test_support_state_keeps_one_shot_support_out_of_live_control_readiness() -> None:
+    support = collect_provider_support_state(
+        provider_clis={"codex": {"path": "/opt/homebrew/bin/codex", "source": "PATH"}},
+        provider_release_status={"statuses": {}},
+        control_channel={
+            "status": "connected",
+            "control_operations_by_provider": {
+                "codex": ["send", "interrupt", "steer", "answer_pause", "launch", "continue"],
+            },
+        },
+    )
+
+    codex = support["providers"]["codex"]
+    assert codex["state"] == "ready"
+    assert "run_once" in codex["capabilities"]["supported_operations"]
+    assert "codex.run_once" in codex["capabilities"]["machine_control_supports"]
+    assert "run_once" not in codex["capabilities"]["live_control_operations"]
+    assert codex["capabilities"]["missing_live_control_operations"] == []
 
 
 def test_support_state_keeps_claude_first_class_with_mixed_proof() -> None:

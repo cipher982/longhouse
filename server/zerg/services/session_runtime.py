@@ -23,7 +23,9 @@ from zerg.metrics import managed_codex_bridge_freshness_total
 from zerg.metrics import managed_codex_liveness_invariant_sessions
 from zerg.metrics import managed_codex_runtime_observations_total
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionObservation
+from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.session_live_previews import live_preview_candidate_from_runtime_event
 from zerg.services.session_live_previews import upsert_session_live_preview
@@ -56,12 +58,13 @@ MANAGED_CODEX_FRESHNESS = timedelta(minutes=15)
 # Irreversible session endings. These states stamp AgentSession.ended_at and
 # render as closed in liveness facts.
 EXPLICIT_CLOSED_TERMINAL_STATES = {"session_ended", "user_closed", "process_gone"}
+RUN_TERMINAL_STATES = {"run_completed", "run_failed", "run_cancelled"}
 UNVERIFIED_TERMINAL_STATES = {"host_expired"}
 LIVE_EXECUTION_PHASES = {"thinking", "running"}
 ATTENTION_PHASES = {"blocked"}
 KNOWN_PHASES = {"thinking", "running", "blocked", "stalled", "needs_user", "idle", "finished", "syncing_transcript"}
 MANAGED_SESSION_LEASE_SOURCE = "engine_attached_lease"
-MANAGED_CODEX_RUNTIME_SOURCES = {MANAGED_SESSION_LEASE_SOURCE, "codex_bridge", "codex_bridge_live"}
+MANAGED_CODEX_RUNTIME_SOURCES = {MANAGED_SESSION_LEASE_SOURCE, "codex_bridge", "codex_bridge_live", "codex_exec"}
 MANAGED_CODEX_INVARIANTS = ("ended_without_session_ended", "short_freshness")
 
 
@@ -166,6 +169,7 @@ class RuntimeEventIngest(BaseModel):
     runtime_key: str = Field(..., min_length=1, max_length=255)
     session_id: UUID | None = None
     thread_id: UUID | None = None
+    run_id: UUID | None = None
     provider: str = Field(..., min_length=1, max_length=64)
     device_id: str | None = Field(None, max_length=255)
     source: str = Field(..., min_length=1, max_length=64)
@@ -665,6 +669,7 @@ def runtime_event_from_observation(observation) -> RuntimeEventIngest | None:
         ),
         session_id=observation.session_id,
         thread_id=observation.thread_id,
+        run_id=coerce_session_uuid(payload.get("run_id")),
         provider=observation.provider,
         device_id=observation.device_id,
         source=observation.source,
@@ -729,11 +734,67 @@ def _optional_payload_int(value) -> int | None:
         return None
 
 
+def _exit_status_for_terminal(terminal_state: str, payload: Mapping[str, Any]) -> str:
+    explicit = _optional_payload_str(payload.get("exit_status"))
+    if explicit:
+        return explicit[:64]
+    exit_code = _optional_payload_int(payload.get("exit_code"))
+    if exit_code is not None:
+        return f"exit_{exit_code}"[:64]
+    return terminal_state[:64]
+
+
+def _apply_run_terminal_event(
+    db: Session,
+    *,
+    event: RuntimeEventIngest,
+    state: SessionRuntimeState,
+    occurred_at: datetime,
+) -> None:
+    run_id = event.run_id or state.run_id
+    if run_id is None:
+        return
+    run = db.query(SessionRun).filter(SessionRun.id == run_id).first()
+    if run is None:
+        return
+    if event.session_id is not None:
+        from zerg.models.agents import SessionThread
+
+        owned = (
+            db.query(SessionThread.id)
+            .filter(SessionThread.id == run.thread_id)
+            .filter(SessionThread.session_id == event.session_id)
+            .first()
+        )
+        if owned is None:
+            return
+    terminal_state = str((event.payload or {}).get("terminal_state") or "finished").strip() or "finished"
+    if run.ended_at is None:
+        run.ended_at = occurred_at
+    run.exit_status = _exit_status_for_terminal(terminal_state, event.payload or {})
+    for conn in (
+        db.query(SessionConnection)
+        .filter(SessionConnection.run_id == run.id)
+        .filter(SessionConnection.state.in_(("attached", "degraded", "detached")))
+        .all()
+    ):
+        conn.state = "ended"
+        conn.released_at = occurred_at
+        conn.last_health_at = occurred_at
+        conn.can_send_input = 0
+        conn.can_interrupt = 0
+        conn.can_terminate = 0
+        conn.can_tail_output = 0
+        conn.can_resume = 0
+
+
 def _state_snapshot(state: SessionRuntimeState | None) -> tuple[Any, ...] | None:
     if state is None:
         return None
     return (
         state.session_id,
+        state.thread_id,
+        state.run_id,
         state.provider,
         state.device_id,
         state.phase,
@@ -766,6 +827,7 @@ def _ensure_state(db: Session, event: RuntimeEventIngest) -> SessionRuntimeState
         runtime_key=event.runtime_key,
         session_id=event.session_id,
         thread_id=thread_id,
+        run_id=event.run_id,
         provider=event.provider,
         device_id=event.device_id,
         phase=(event.phase or "idle").strip() or "idle",
@@ -820,6 +882,8 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
         state.thread_id = event.thread_id or ensure_thread_id_for_session(db, event.session_id)
     elif event.thread_id is not None and state.thread_id != event.thread_id:
         state.thread_id = event.thread_id
+    if event.run_id is not None and state.run_id != event.run_id:
+        state.run_id = event.run_id
     if event.provider and state.provider != event.provider:
         state.provider = event.provider
     if event.device_id is not None and state.device_id != event.device_id:
@@ -1016,6 +1080,8 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> RuntimeEvent
                 )
                 > 0
             )
+        if terminal_state in RUN_TERMINAL_STATES:
+            _apply_run_terminal_event(db, event=event, state=state, occurred_at=occurred_at)
 
     elif event.kind == "binding_signal":
         if event.session_id is not None:

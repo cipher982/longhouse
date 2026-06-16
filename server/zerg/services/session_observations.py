@@ -143,6 +143,7 @@ def record_runtime_observation(
         load_observation=load_observation,
         payload={
             "kind": event.kind,
+            "run_id": str(event.run_id) if getattr(event, "run_id", None) is not None else None,
             "phase": event.phase,
             "tool_name": event.tool_name,
             "freshness_ms": event.freshness_ms,

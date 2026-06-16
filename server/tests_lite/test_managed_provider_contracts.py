@@ -17,6 +17,7 @@ from zerg.services.managed_provider_contracts import managed_provider_names
 from zerg.services.managed_provider_contracts import managed_transport_for_control_plane
 from zerg.services.managed_provider_contracts import provider_for_control_plane
 from zerg.services.managed_provider_contracts import remote_launch_supported_providers
+from zerg.services.managed_provider_contracts import run_once_supported_providers
 from zerg.services.managed_provider_contracts import steer_control_planes
 from zerg.services.managed_provider_contracts import trusted_non_runner_control_planes
 from zerg.session_execution_home import ManagedSessionTransport
@@ -130,6 +131,7 @@ def test_codex_contract_is_current_remote_launch_engine_channel_provider():
     assert codex is not None
     assert codex.launch_local is True
     assert codex.launch_remote is True
+    assert codex.run_once is True
     assert codex.send_input is True
     assert codex.interrupt is True
     assert codex.steer_active_turn is True
@@ -140,8 +142,10 @@ def test_codex_contract_is_current_remote_launch_engine_channel_provider():
         "codex.answer_pause",
         "codex.launch",
         "codex.continue",
+        "codex.run_once",
     )
     assert remote_launch_supported_providers() == frozenset({"codex", "claude", "opencode"})
+    assert run_once_supported_providers() == frozenset({"codex"})
 
 
 def test_codex_and_managed_claude_advertise_remote_pause_answering():
@@ -255,10 +259,12 @@ def test_control_plane_aliases_are_explicit_contract_not_scattered_literals():
         ("codex", "session.interrupt", "codex.interrupt"),
         ("codex", "session.steer_text", "codex.steer"),
         ("codex", "session.answer_pause", "codex.answer_pause"),
+        ("codex", "session.run_once", "codex.run_once"),
         ("claude", "session.send_text", "claude.send"),
         ("claude", "session.interrupt", "claude.interrupt"),
         ("claude", "session.steer_text", "claude.steer"),
         ("claude", "session.answer_pause", "claude.answer_pause"),
+        ("claude", "session.run_once", None),
         ("opencode", "session.send_text", "opencode.send"),
         ("opencode", "session.interrupt", "opencode.interrupt"),
         ("opencode", "session.steer_text", None),
@@ -289,12 +295,13 @@ def test_machine_control_operations_by_provider_projects_live_supports():
             "codex.send",
             "codex.answer_pause",
             "codex.launch",
+            "codex.run_once",
             "claude.answer_pause",
             "unknown.launch",
         ],
         connected=True,
     ) == {
-        "codex": ("send", "answer_pause", "launch"),
+        "codex": ("send", "answer_pause", "launch", "run_once"),
         "claude": ("steer", "answer_pause", "launch"),
     }
 

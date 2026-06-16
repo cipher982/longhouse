@@ -40,6 +40,7 @@ EVIDENCE_RANK = {
     "live_token": 4,
 }
 _RELEASE_GAP_STATUSES = {"fail", "missing", "not_run", "skipped", "stale"}
+_ONE_SHOT_CONTROL_OPERATIONS = frozenset({"run_once", "resume_run_once"})
 
 
 def collect_provider_support_state(
@@ -65,7 +66,8 @@ def collect_provider_support_state(
         cli_info = dict(provider_clis.get(provider) or {})
         release_info = dict(release_statuses.get(provider) or {})
         live_proof_info = dict(live_proof_statuses.get(provider) or {})
-        live_control_operations = tuple(str(item) for item in live_ops_by_provider.get(provider) or ())
+        machine_control_operations = tuple(str(item) for item in live_ops_by_provider.get(provider) or ())
+        live_control_operations = _live_control_operations(machine_control_operations)
         missing_live_control_operations = _missing_live_control_operations(
             expected_supports=contract.machine_control_supports,
             live_control_operations=live_control_operations,
@@ -98,6 +100,7 @@ def collect_provider_support_state(
                 "supported_operations": _operation_names_by_support(operations, supported=True),
                 "unsupported_operations": _operation_names_by_support(operations, supported=False),
                 "machine_control_supports": list(contract.machine_control_supports),
+                "machine_control_operations": list(machine_control_operations),
                 "live_control_operations": list(live_control_operations),
                 "missing_live_control_operations": list(missing_live_control_operations),
                 "live_control_state": _live_control_state(
@@ -278,10 +281,16 @@ def _expected_live_control_operations(expected_supports: tuple[str, ...]) -> tup
     seen: set[str] = set()
     for support in expected_supports:
         _, _, operation = str(support).partition(".")
+        if operation in _ONE_SHOT_CONTROL_OPERATIONS:
+            continue
         if operation and operation not in seen:
             operations.append(operation)
             seen.add(operation)
     return tuple(operations)
+
+
+def _live_control_operations(machine_control_operations: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(operation for operation in machine_control_operations if operation not in _ONE_SHOT_CONTROL_OPERATIONS)
 
 
 def _missing_live_control_operations(

@@ -35,6 +35,8 @@ from zerg.models.agents import AgentHeartbeat
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionObservation
+from zerg.models.agents import SessionConnection
+from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import TimelineCard
 from zerg.services.agents import AgentsStore
@@ -308,6 +310,75 @@ def test_reversible_or_turn_terminal_signals_do_not_close_session(tmp_path, term
         assert row["timeline_card"]["status"]["label"] == "No live signal"
         assert row["timeline_card"]["status"]["seen_at"] is not None
         assert row["timeline_card"]["status"]["seen_at_prefix"] == "Last signal"
+
+
+def test_run_terminal_signal_closes_run_connection_not_session(tmp_path):
+    factory = _make_db(tmp_path, "run_terminal_closes_kernel_run.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        from zerg.services.agents.kernel_writes import ensure_primary_thread
+        from zerg.services.agents.kernel_writes import record_run
+        from zerg.services.agents.kernel_writes import upsert_connection_for_run
+
+        session = _seed_session(db, started_at=now - timedelta(minutes=30), ended_at=None, provider="codex")
+        thread = ensure_primary_thread(db, session)
+        run = record_run(
+            db,
+            thread=thread,
+            provider="codex",
+            host_id="cinder",
+            cwd="/Users/me/repo",
+            launch_origin="longhouse_spawned",
+        )
+        conn = upsert_connection_for_run(
+            db,
+            run=run,
+            control_plane="codex_exec",
+            acquisition_kind="spawned_control",
+            state="attached",
+            external_name="cinder",
+            can_send_input=0,
+            can_interrupt=0,
+            can_terminate=0,
+            can_tail_output=0,
+            can_resume=0,
+        )
+        db.commit()
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=f"codex:{session.id}",
+                    session_id=session.id,
+                    thread_id=thread.id,
+                    run_id=run.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_exec",
+                    kind="terminal_signal",
+                    occurred_at=now,
+                    dedupe_key=f"codex-exec:{run.id}:terminal",
+                    payload={"terminal_state": "run_completed", "exit_code": 0},
+                )
+            ],
+        )
+        db.commit()
+        db.refresh(session)
+        refreshed_run = db.get(SessionRun, run.id)
+        refreshed_conn = db.get(SessionConnection, conn.id)
+        runtime = db.get(SessionRuntimeState, f"codex:{session.id}")
+
+        assert session.ended_at is None
+        assert refreshed_run.ended_at is not None
+        assert refreshed_run.exit_status == "exit_0"
+        assert refreshed_conn.state == "ended"
+        assert refreshed_conn.released_at is not None
+        assert runtime.run_id == run.id
+        assert runtime.terminal_state == "run_completed"
+    finally:
+        db.close()
 
 
 def test_progress_after_host_expired_reopens_runtime_projection(tmp_path):

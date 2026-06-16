@@ -25,6 +25,7 @@ use crate::codex_bridge::{
     BridgeInterruptConfig, BridgeLaunchMode, BridgePauseResponseConfig, BridgeSendConfig,
     BridgeStartConfig, BridgeSteerConfig, BridgeSteerError,
 };
+use crate::codex_exec::{start_codex_exec_once, CodexExecRunConfig};
 use crate::config::ShipperConfig;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -35,6 +36,7 @@ const COMMAND_INTERRUPT: &str = "session.interrupt";
 const COMMAND_STEER_TEXT: &str = "session.steer_text";
 const COMMAND_ANSWER_PAUSE: &str = "session.answer_pause";
 const COMMAND_LAUNCH: &str = "session.launch";
+const COMMAND_RUN_ONCE: &str = "session.run_once";
 const COMMAND_PROVIDER_LIVE_PROOF: &str = "provider.live_proof";
 const COMMAND_ARCHIVE_BACKLOG_CONTROL: &str = "archive.backlog_control";
 const DEFAULT_CODEX_BIN: &str = "codex";
@@ -43,6 +45,8 @@ const DEFAULT_LONGHOUSE_BIN: &str = "longhouse";
 // the engine owns the managed zero-prompt contract explicitly.
 const REMOTE_CODEX_APPROVAL_POLICY: &str = "never";
 const REMOTE_CODEX_SANDBOX: &str = "danger-full-access";
+const REMOTE_CODEX_EXEC_APPROVAL_POLICY: &str = "never";
+const REMOTE_CODEX_EXEC_SANDBOX: &str = "workspace-write";
 // Engine is built from the monorepo. Keep this path beside the Python reader so
 // advertised supports[] and server-side contracts cannot drift silently.
 const MANAGED_PROVIDER_CONTRACTS_JSON: &str =
@@ -743,6 +747,66 @@ async fn execute_command(
     let session_id = required_string(frame, "session_id")?;
 
     match command_type.as_str() {
+        COMMAND_RUN_ONCE => {
+            let provider = payload_required_string(&payload, "provider")?;
+            if provider != "codex" {
+                return Err(CommandError {
+                    code: "provider_unsupported".to_string(),
+                    message: format!("provider={provider} is not supported for session.run_once"),
+                });
+            }
+            let cwd_raw = payload_required_string(&payload, "cwd")?;
+            let cwd = PathBuf::from(&cwd_raw);
+            if !cwd.is_absolute() {
+                return Err(CommandError {
+                    code: "cwd_not_allowed".to_string(),
+                    message: "cwd must be absolute".to_string(),
+                });
+            }
+            if !cwd.is_dir() {
+                return Err(CommandError {
+                    code: "cwd_not_found".to_string(),
+                    message: format!("cwd does not exist: {}", cwd.display()),
+                });
+            }
+            let initial_prompt = payload_required_string(&payload, "initial_prompt")?;
+            let run_id = payload_required_string(&payload, "run_id")?;
+            let api_token = config.api_token.clone().ok_or_else(|| CommandError {
+                code: "provider_launch_failed".to_string(),
+                message: "Machine Agent has no device token configured".to_string(),
+            })?;
+            let local_db_path = config
+                .db_path
+                .clone()
+                .or_else(|| crate::config::get_agent_db_path().ok());
+            let summary = start_codex_exec_once(CodexExecRunConfig {
+                session_id: session_id.clone(),
+                run_id: run_id.clone(),
+                cwd,
+                api_url: config.api_url.clone(),
+                api_token,
+                codex_bin: DEFAULT_CODEX_BIN.to_string(),
+                approval_policy: Some(REMOTE_CODEX_EXEC_APPROVAL_POLICY.to_string()),
+                sandbox: Some(REMOTE_CODEX_EXEC_SANDBOX.to_string()),
+                prompt: initial_prompt,
+                machine_name: config.machine_name.clone(),
+                local_db_path,
+            })
+            .await
+            .map_err(|err| CommandError {
+                code: "provider_launch_failed".to_string(),
+                message: err.to_string(),
+            })?;
+
+            Ok(json!({
+                "session_id": summary.session_id,
+                "run_id": summary.run_id,
+                "provider": "codex",
+                "transport": "codex_exec",
+                "pid": summary.pid,
+                "argv": summary.argv,
+            }))
+        }
         COMMAND_LAUNCH => {
             let provider = payload_required_string(&payload, "provider")?;
             if provider != "codex" && provider != "claude" && provider != "opencode" {
@@ -2113,6 +2177,9 @@ mod tests {
         assert!(supports
             .iter()
             .any(|item| item.as_str() == Some("codex.continue")));
+        assert!(supports
+            .iter()
+            .any(|item| item.as_str() == Some("codex.run_once")));
     }
 
     #[test]
@@ -2240,6 +2307,7 @@ mod tests {
             for operation in [
                 "launch_local",
                 "launch_remote",
+                "run_once",
                 "reattach",
                 "send_input",
                 "interrupt",
@@ -2334,6 +2402,7 @@ mod tests {
         });
         assert!(supports.contains(&"codex.launch".to_string()));
         assert!(supports.contains(&"codex.continue".to_string()));
+        assert!(supports.contains(&"codex.run_once".to_string()));
         assert!(!supports.contains(&"codex.live_proof".to_string()));
 
         write_executable(&dir, "codex");
@@ -2342,6 +2411,7 @@ mod tests {
         let supports = control_supports_for_path_with_env(Some(dir.as_os_str()), &|_| None);
         assert!(supports.contains(&"codex.launch".to_string()));
         assert!(supports.contains(&"codex.continue".to_string()));
+        assert!(supports.contains(&"codex.run_once".to_string()));
         assert!(supports.contains(&"claude.launch".to_string()));
         // claude.continue must survive the installed-binary gating path, not
         // just exist in the raw manifest — this is the surface the server's
@@ -2802,6 +2872,59 @@ exit 1
 
         assert_eq!(cache.get("cmd-1"), None);
         assert_eq!(cache.get("cmd-2").unwrap()["command_id"], "cmd-2");
+    }
+
+    #[tokio::test]
+    async fn run_once_rejects_missing_initial_prompt() {
+        let mut cache = command_cache();
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-run-once-no-prompt",
+                "session_id": "00000000-0000-0000-0000-000000000101",
+                "command_type": COMMAND_RUN_ONCE,
+                "payload": {
+                    "provider": "codex",
+                    "cwd": "/tmp",
+                    "run_id": "00000000-0000-0000-0000-000000000201",
+                },
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"]["code"], "invalid_command");
+        assert!(result["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("initial_prompt"));
+    }
+
+    #[tokio::test]
+    async fn run_once_rejects_unsupported_provider() {
+        let mut cache = command_cache();
+        let result = handle_command_frame(
+            json!({
+                "type": "command",
+                "command_id": "cmd-run-once-provider",
+                "session_id": "00000000-0000-0000-0000-000000000102",
+                "command_type": COMMAND_RUN_ONCE,
+                "payload": {
+                    "provider": "claude",
+                    "cwd": "/tmp",
+                    "run_id": "00000000-0000-0000-0000-000000000202",
+                    "initial_prompt": "do it",
+                },
+            }),
+            &mut cache,
+            &test_config(),
+        )
+        .await;
+
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"]["code"], "provider_unsupported");
     }
 
     #[tokio::test]

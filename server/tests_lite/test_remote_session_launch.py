@@ -448,11 +448,11 @@ def test_one_shot_launch_requires_initial_prompt_before_provider_support(tmp_pat
         assert db.query(AgentSession).count() == 0
 
 
-def test_one_shot_launch_requires_manifest_support_before_machine_dispatch(tmp_path):
+def test_one_shot_launch_requires_machine_support_before_dispatch(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)
     registry = _StubRegistry()
-    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.run_once",))
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.launch",))
 
     with SessionLocal() as db:
         with pytest.raises(RemoteLaunchError) as excinfo:
@@ -472,10 +472,173 @@ def test_one_shot_launch_requires_manifest_support_before_machine_dispatch(tmp_p
             )
 
     assert excinfo.value.code == "provider_unsupported"
-    assert "one_shot" in excinfo.value.detail
+    assert "codex.run_once" in excinfo.value.detail
     assert len(registry.sent) == 0
     with SessionLocal() as db:
         assert db.query(AgentSession).count() == 0
+
+
+def test_one_shot_happy_path_creates_codex_exec_run(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.run_once",))
+
+    with SessionLocal() as db:
+        result = asyncio.run(
+            launch_remote_session(
+                db,
+                RemoteLaunchParams(
+                    owner_id=OWNER_ID,
+                    device_id="cinder",
+                    provider="codex",
+                    cwd="/Users/me/repo",
+                    initial_prompt="Do one bounded turn",
+                    execution_lifetime="one_shot",
+                ),
+                registry=registry,
+            )
+        )
+
+    assert result.launch_state == "live"
+    assert result.execution_lifetime == "one_shot"
+    assert len(registry.sent) == 1
+    sent = registry.sent[0]
+    assert sent["command_type"] == "session.run_once"
+    assert sent["payload"]["provider"] == "codex"
+    assert sent["payload"]["initial_prompt"] == "Do one bounded turn"
+    assert sent["payload"]["execution_lifetime"] == "one_shot"
+    assert sent["payload"]["run_id"]
+
+    with SessionLocal() as db:
+        row = db.get(AgentSession, result.session_id)
+        assert row is not None
+        attempt = _latest_attempt(db, result.session_id)
+        run = db.get(SessionRun, attempt.run_id)
+        connection = db.query(SessionConnection).filter(SessionConnection.run_id == run.id).one()
+        assert attempt.state == "adopted"
+        assert attempt.execution_lifetime == "one_shot"
+        assert str(run.id) == sent["payload"]["run_id"]
+        assert run.launch_origin == "longhouse_spawned"
+        assert run.ended_at is None
+        assert connection.control_plane == "codex_exec"
+        assert connection.state == "attached"
+        assert connection.can_send_input == 0
+        assert connection.can_interrupt == 0
+        assert connection.can_resume == 0
+        assert row.ended_at is None
+
+
+def test_one_shot_timeout_late_success_adopts_reserved_run(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+
+    class _TimeoutRegistry(_StubRegistry):
+        async def send_command(self, **kwargs):
+            self.sent.append(kwargs)
+            return MachineControlCommandResponse(transport_ok=False, error="timed out")
+
+    registry = _TimeoutRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.run_once",))
+
+    with SessionLocal() as db:
+        result = asyncio.run(
+            launch_remote_session(
+                db,
+                RemoteLaunchParams(
+                    owner_id=OWNER_ID,
+                    device_id="cinder",
+                    provider="codex",
+                    cwd="/Users/me/repo",
+                    initial_prompt="Do one bounded turn",
+                    execution_lifetime="one_shot",
+                ),
+                registry=registry,
+            )
+        )
+
+    assert result.launch_state == "launching_unknown"
+    command_id = registry.sent[-1]["command_id"]
+    run_id = registry.sent[-1]["payload"]["run_id"]
+    with SessionLocal() as db:
+        attempt = _latest_attempt(db, result.session_id)
+        run = db.get(SessionRun, attempt.run_id)
+        assert attempt.state == "dispatched"
+        assert str(attempt.run_id) == run_id
+        assert run.ended_at is None
+        assert db.query(SessionConnection).count() == 0
+
+    with SessionLocal() as db:
+        reconciled = reconcile_launch_from_command_result(
+            db,
+            {
+                "type": "command_result",
+                "command_id": command_id,
+                "ok": True,
+                "result": {
+                    "session_id": str(result.session_id),
+                    "pid": 4242,
+                    "argv": ["codex", "exec", "--json", "Do one bounded turn"],
+                },
+            },
+        )
+
+    assert reconciled is True
+    with SessionLocal() as db:
+        attempt = _latest_attempt(db, result.session_id)
+        run = db.get(SessionRun, attempt.run_id)
+        connection = db.query(SessionConnection).filter(SessionConnection.run_id == run.id).one()
+        assert attempt.state == "adopted"
+        assert str(run.id) == run_id
+        assert run.pid == 4242
+        assert run.argv_redacted_json == ["codex", "exec", "--json", "Do one bounded turn"]
+        assert connection.control_plane == "codex_exec"
+        assert connection.state == "attached"
+
+
+def test_one_shot_reaper_closes_reserved_run_without_connection(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+
+    class _TimeoutRegistry(_StubRegistry):
+        async def send_command(self, **kwargs):
+            self.sent.append(kwargs)
+            return MachineControlCommandResponse(transport_ok=False, error="timed out")
+
+    registry = _TimeoutRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.run_once",))
+
+    with SessionLocal() as db:
+        result = asyncio.run(
+            launch_remote_session(
+                db,
+                RemoteLaunchParams(
+                    owner_id=OWNER_ID,
+                    device_id="cinder",
+                    provider="codex",
+                    cwd="/Users/me/repo",
+                    initial_prompt="Do one bounded turn",
+                    execution_lifetime="one_shot",
+                ),
+                registry=registry,
+            )
+        )
+
+    with SessionLocal() as db:
+        attempt = _latest_attempt(db, result.session_id)
+        reaped = reap_orphaned_launches(db, now=attempt.expires_at)
+
+    assert reaped == 1
+    with SessionLocal() as db:
+        row = db.get(AgentSession, result.session_id)
+        attempt = _latest_attempt(db, result.session_id)
+        run = db.get(SessionRun, attempt.run_id)
+        assert attempt.state == "abandoned"
+        assert attempt.error_code == "launch_timeout"
+        assert row.ended_at is not None
+        assert run.ended_at is not None
+        assert run.exit_status == "launch_timeout"
+        assert db.query(SessionConnection).count() == 0
 
 
 def test_remote_launch_does_not_wait_on_write_serializer_when_writer_saturated(tmp_path, monkeypatch):

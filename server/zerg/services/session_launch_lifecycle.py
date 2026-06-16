@@ -98,11 +98,14 @@ def project_remote_launch_lifecycle(attempt: SessionLaunchAttempt | None) -> Rem
         return None
 
     raw_state = str(attempt.state or "").strip()
+    execution_lifetime = normalize_remote_execution_lifetime(getattr(attempt, "execution_lifetime", None))
     if raw_state == "failed":
         state: RemoteLaunchLifecycleState = "launch_failed"
     elif raw_state == "abandoned":
         state = "launch_orphaned"
-    elif attempt.run_id is not None or raw_state == "adopted":
+    elif raw_state == "adopted":
+        state = "live"
+    elif attempt.run_id is not None and execution_lifetime == "live_control":
         state = "live"
     elif raw_state == "dispatched":
         state = "launching_unknown"
@@ -112,7 +115,7 @@ def project_remote_launch_lifecycle(attempt: SessionLaunchAttempt | None) -> Rem
     error_code = normalize_remote_launch_error_code(attempt.error_code) if attempt.error_code is not None else None
     return RemoteLaunchLifecycle(
         state=state,
-        execution_lifetime=normalize_remote_execution_lifetime(getattr(attempt, "execution_lifetime", None)),
+        execution_lifetime=execution_lifetime,
         error_code=error_code,
         error_message=format_remote_launch_error_message(error_code, attempt.error_message),
         lease_until=attempt.expires_at,

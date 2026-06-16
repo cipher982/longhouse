@@ -16,6 +16,7 @@ def _attempt(
     *,
     state: str | None,
     run_id=None,
+    execution_lifetime: str = "live_control",
     error_code: str | None = None,
     error_message: str | None = None,
     expires_at: datetime | None = None,
@@ -27,6 +28,7 @@ def _attempt(
         run_id=run_id,
         provider="codex",
         host_id="cinder",
+        execution_lifetime=execution_lifetime,
         state=state,
         error_code=error_code,
         error_message=error_message,
@@ -58,6 +60,22 @@ def test_remote_launch_lifecycle_transition_matrix(raw_state, run_id, expected):
     lifecycle = _project(_attempt(state=raw_state, run_id=run_id))
 
     assert lifecycle is not None
+    assert lifecycle.state == expected
+
+
+@pytest.mark.parametrize(
+    ("raw_state", "expected"),
+    [
+        ("pending", "launching"),
+        ("dispatched", "launching_unknown"),
+        ("adopted", "live"),
+    ],
+)
+def test_one_shot_reserved_run_id_is_not_launch_adoption(raw_state, expected):
+    lifecycle = _project(_attempt(state=raw_state, run_id=uuid4(), execution_lifetime="one_shot"))
+
+    assert lifecycle is not None
+    assert lifecycle.execution_lifetime == "one_shot"
     assert lifecycle.state == expected
 
 

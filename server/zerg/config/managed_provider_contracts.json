@@ -11,7 +11,7 @@
       "control_plane_aliases": ["codex_app_server"],
       "launch_local": true,
       "launch_remote": true,
-      "run_once": false,
+      "run_once": true,
       "reattach": true,
       "send_input": true,
       "interrupt": true,
@@ -33,8 +33,9 @@
           "next": "prove through Runtime Host remote launch smoke"
         },
         "run_once": {
-          "level": "none",
-          "source": "run-once canary not implemented yet"
+          "level": "hermetic",
+          "source": "engine codex_exec argv/runtime terminal tests plus server one-shot launch tests",
+          "next": "promote with live token codex exec transcript canary"
         },
         "reattach": {
           "level": "live_no_token",
@@ -81,7 +82,8 @@
         "codex.steer",
         "codex.answer_pause",
         "codex.launch",
-        "codex.continue"
+        "codex.continue",
+        "codex.run_once"
       ]
     },
     {

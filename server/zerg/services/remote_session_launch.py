@@ -232,6 +232,87 @@ def _attach_live_launch_run(
     )
 
 
+def _attach_one_shot_launch_run(
+    db: Session,
+    *,
+    session: AgentSession,
+    attempt: SessionLaunchAttempt,
+    external_name: str | None,
+    pid: int | None,
+    argv: list[str] | None,
+    cwd: str,
+) -> None:
+    now = datetime.now(timezone.utc)
+    run = db.get(SessionRun, attempt.run_id) if attempt.run_id is not None else None
+    if run is None:
+        thread = ensure_primary_thread(db, session)
+        run = record_run(
+            db,
+            thread=thread,
+            provider=session.provider,
+            host_id=session.device_id,
+            cwd=cwd or session.cwd,
+            launch_origin="longhouse_spawned",
+        )
+    if pid is not None:
+        run.pid = pid
+    if argv:
+        run.argv_redacted_json = argv
+    if run.ended_at is not None:
+        run.ended_at = None
+        run.exit_status = None
+    conn = upsert_connection_for_run(
+        db,
+        run=run,
+        control_plane="codex_exec",
+        acquisition_kind="spawned_control",
+        state="attached",
+        external_name=external_name or session.device_id,
+        device_id=session.device_id,
+        can_send_input=0,
+        can_interrupt=0,
+        can_terminate=0,
+        can_tail_output=0,
+        can_resume=0,
+    )
+    conn.last_health_at = now
+    if session.ended_at is not None:
+        session.ended_at = None
+    update_launch_attempt(
+        db,
+        attempt,
+        state="adopted",
+        run=run,
+        clear_expires=True,
+    )
+
+
+def _mark_one_shot_launch_run_failed(db: Session, *, attempt: SessionLaunchAttempt, error_code: str) -> None:
+    if attempt.run_id is None:
+        return
+    run = db.get(SessionRun, attempt.run_id)
+    if run is None:
+        return
+    now = datetime.now(timezone.utc)
+    if run.ended_at is None:
+        run.ended_at = now
+    run.exit_status = (error_code or "provider_launch_failed")[:64]
+    for conn in (
+        db.query(SessionConnection)
+        .filter(SessionConnection.run_id == run.id)
+        .filter(SessionConnection.state.in_(("attached", "degraded", "detached")))
+        .all()
+    ):
+        conn.state = "ended"
+        conn.released_at = now
+        conn.last_health_at = now
+        conn.can_send_input = 0
+        conn.can_interrupt = 0
+        conn.can_terminate = 0
+        conn.can_tail_output = 0
+        conn.can_resume = 0
+
+
 def _release_open_runs_for_thread(db: Session, *, thread: SessionThread, now: datetime) -> None:
     run_query = db.query(SessionRun).filter(SessionRun.thread_id == thread.id)
     open_runs = run_query.filter(SessionRun.ended_at.is_(None)).all()
@@ -271,6 +352,31 @@ def _result_resume_thread_path(message: Mapping | None) -> str | None:
         return None
     value = result.get("thread_path")
     return str(value).strip() if value else None
+
+
+def _result_pid(message: Mapping | None) -> int | None:
+    result = message.get("result") if isinstance(message, Mapping) else None
+    if not isinstance(result, dict):
+        return None
+    value = result.get("pid")
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        pid = int(value)
+    except (TypeError, ValueError):
+        return None
+    return pid if pid > 0 else None
+
+
+def _result_argv(message: Mapping | None) -> list[str] | None:
+    result = message.get("result") if isinstance(message, Mapping) else None
+    if not isinstance(result, dict):
+        return None
+    value = result.get("argv")
+    if not isinstance(value, list):
+        return None
+    argv = [str(item) for item in value if str(item).strip()]
+    return argv or None
 
 
 def _resolve_continue_target(db: Session, *, session: AgentSession) -> tuple[SessionThread, str, str | None]:
@@ -451,6 +557,17 @@ async def launch_remote_session(
         state="pending",
         expires_at=lease_until,
     )
+    one_shot_run: SessionRun | None = None
+    if execution_lifetime == "one_shot":
+        one_shot_run = record_run(
+            db,
+            thread=primary_thread,
+            provider=provider,
+            host_id=device_id,
+            cwd=cwd,
+            launch_origin="longhouse_spawned",
+        )
+        launch_attempt.run_id = one_shot_run.id
     db.commit()
     db.refresh(session)
 
@@ -465,6 +582,8 @@ async def launch_remote_session(
     }
     if execution_lifetime == "one_shot":
         payload["initial_prompt"] = initial_prompt
+        if one_shot_run is not None:
+            payload["run_id"] = str(one_shot_run.id)
     response: MachineControlCommandResponse = await reg.send_command(
         owner_id=params.owner_id,
         device_id=device_id,
@@ -492,23 +611,35 @@ async def launch_remote_session(
 
     message = response.message or {}
     if message.get("ok"):
-        _attach_live_launch_run(
-            db,
-            session=session,
-            attempt=launch_attempt,
-            external_name=info.machine_name or device_id,
-            provider_thread_id=_result_resume_thread_id(message),
-            thread_path=_result_resume_thread_path(message),
-            cwd=cwd,
-        )
+        if execution_lifetime == "one_shot":
+            _attach_one_shot_launch_run(
+                db,
+                session=session,
+                attempt=launch_attempt,
+                external_name=info.machine_name or device_id,
+                pid=_result_pid(message),
+                argv=_result_argv(message),
+                cwd=cwd,
+            )
+        else:
+            _attach_live_launch_run(
+                db,
+                session=session,
+                attempt=launch_attempt,
+                external_name=info.machine_name or device_id,
+                provider_thread_id=_result_resume_thread_id(message),
+                thread_path=_result_resume_thread_path(message),
+                cwd=cwd,
+            )
         db.commit()
         db.refresh(session)
         elapsed_ms = int((datetime.now(timezone.utc) - now).total_seconds() * 1000)
         logger.info(
-            "remote_launch session=%s device=%s provider=%s state=live duration_ms=%s",
+            "remote_launch session=%s device=%s provider=%s lifetime=%s state=live duration_ms=%s",
             session_uuid,
             device_id,
             provider,
+            execution_lifetime,
             elapsed_ms,
         )
         return _launch_result_for_attempt(launch_attempt)
@@ -517,6 +648,8 @@ async def launch_remote_session(
     code = normalize_remote_launch_error_code(error.get("code"))
     err_msg = str(error.get("message") or "unknown error")
     session.ended_at = datetime.now(timezone.utc)
+    if execution_lifetime == "one_shot":
+        _mark_one_shot_launch_run_failed(db, attempt=launch_attempt, error_code=code)
     update_launch_attempt(
         db,
         launch_attempt,
@@ -774,7 +907,10 @@ def reconcile_launch_from_command_result(db: Session, message: dict) -> bool:
     attempt = db.query(SessionLaunchAttempt).filter(SessionLaunchAttempt.command_id == command_id).first()
     if attempt is None:
         return False
-    if attempt.run_id is not None or attempt.state == "adopted":
+    execution_lifetime = normalize_remote_execution_lifetime(attempt.execution_lifetime)
+    if attempt.state == "adopted":
+        return True
+    if execution_lifetime != "one_shot" and attempt.run_id is not None:
         return True
     if attempt.state not in {"pending", "dispatched"}:
         return False
@@ -789,20 +925,37 @@ def reconcile_launch_from_command_result(db: Session, message: dict) -> bool:
         return False
 
     if message.get("ok"):
-        _attach_live_launch_run(
-            db,
-            session=session,
-            attempt=attempt,
-            external_name=session.device_name or session.device_id,
-            force_new_run=command_id.startswith("continue-"),
-            provider_thread_id=_result_resume_thread_id(message),
-            thread_path=_result_resume_thread_path(message),
-            cwd=session.cwd,
-        )
+        if execution_lifetime == "one_shot":
+            _attach_one_shot_launch_run(
+                db,
+                session=session,
+                attempt=attempt,
+                external_name=session.device_name or session.device_id,
+                pid=_result_pid(message),
+                argv=_result_argv(message),
+                cwd=session.cwd,
+            )
+        else:
+            _attach_live_launch_run(
+                db,
+                session=session,
+                attempt=attempt,
+                external_name=session.device_name or session.device_id,
+                force_new_run=command_id.startswith("continue-"),
+                provider_thread_id=_result_resume_thread_id(message),
+                thread_path=_result_resume_thread_path(message),
+                cwd=session.cwd,
+            )
     else:
         error = message.get("error") or {}
         if command_id.startswith("launch-") and session.ended_at is None:
             session.ended_at = datetime.now(timezone.utc)
+        if execution_lifetime == "one_shot":
+            _mark_one_shot_launch_run_failed(
+                db,
+                attempt=attempt,
+                error_code=normalize_remote_launch_error_code(error.get("code")),
+            )
         update_launch_attempt(
             db,
             attempt,
@@ -835,6 +988,8 @@ def reap_orphaned_launches(db: Session, *, now: datetime | None = None) -> int:
         command_id = str(attempt.command_id or "")
         if session is not None and session.ended_at is None and not command_id.startswith("continue-"):
             session.ended_at = cutoff
+        if normalize_remote_execution_lifetime(attempt.execution_lifetime) == "one_shot":
+            _mark_one_shot_launch_run_failed(db, attempt=attempt, error_code="launch_timeout")
         update_launch_attempt(
             db,
             attempt,
