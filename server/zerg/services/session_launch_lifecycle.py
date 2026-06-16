@@ -17,6 +17,7 @@ from zerg.models.agents import SessionLaunchAttempt
 
 RemoteExecutionLifetime = Literal["one_shot", "live_control"]
 DEFAULT_REMOTE_EXECUTION_LIFETIME: RemoteExecutionLifetime = "live_control"
+DEFAULT_REMOTE_SESSION_LAUNCH_LIFETIME: RemoteExecutionLifetime = "one_shot"
 RemoteLaunchLifecycleState = Literal[
     "launching",
     "live",
@@ -128,6 +129,7 @@ __all__ = [
     "RemoteExecutionLifetime",
     "RemoteLaunchLifecycleState",
     "DEFAULT_REMOTE_EXECUTION_LIFETIME",
+    "DEFAULT_REMOTE_SESSION_LAUNCH_LIFETIME",
     "format_remote_launch_error_message",
     "normalize_remote_execution_lifetime",
     "normalize_remote_launch_error_code",

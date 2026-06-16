@@ -8285,7 +8285,7 @@ export interface components {
             initial_prompt?: string | null;
             /**
              * Execution Lifetime
-             * @description Remote launch execution lifetime: one_shot|live_control. Omitted preserves legacy live_control.
+             * @description Remote launch execution lifetime: one_shot|live_control. Omitted defaults to one_shot.
              */
             execution_lifetime?: ("one_shot" | "live_control") | null;
             /**

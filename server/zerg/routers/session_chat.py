@@ -78,7 +78,7 @@ from zerg.services.session_inputs import get_session_input
 from zerg.services.session_inputs import list_recent_inputs
 from zerg.services.session_inputs import mark_failed as _mark_input_failed
 from zerg.services.session_inputs import retry_failed_input
-from zerg.services.session_launch_lifecycle import DEFAULT_REMOTE_EXECUTION_LIFETIME
+from zerg.services.session_launch_lifecycle import DEFAULT_REMOTE_SESSION_LAUNCH_LIFETIME
 from zerg.services.session_launch_lifecycle import RemoteExecutionLifetime
 from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
 from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
@@ -131,7 +131,7 @@ class RemoteSessionLaunchRequest(BaseModel):
     initial_prompt: str | None = Field(None, min_length=1, max_length=20000, description="Initial one-shot prompt")
     execution_lifetime: RemoteExecutionLifetime | None = Field(
         None,
-        description="Remote launch execution lifetime: one_shot|live_control. Omitted preserves legacy live_control.",
+        description="Remote launch execution lifetime: one_shot|live_control. Omitted defaults to one_shot.",
     )
     client_request_id: str | None = Field(
         None,
@@ -980,7 +980,7 @@ async def launch_remote_session_endpoint(
                 project=body.project,
                 display_name=body.display_name,
                 initial_prompt=body.initial_prompt,
-                execution_lifetime=body.execution_lifetime or DEFAULT_REMOTE_EXECUTION_LIFETIME,
+                execution_lifetime=body.execution_lifetime or DEFAULT_REMOTE_SESSION_LAUNCH_LIFETIME,
                 client_request_id=body.client_request_id,
             ),
         )

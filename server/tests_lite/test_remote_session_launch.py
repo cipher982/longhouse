@@ -1314,7 +1314,40 @@ def test_http_endpoint_happy_path(tmp_path):
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)
     registry = _StubRegistry()
-    _register_online(registry, owner_id=OWNER_ID, device_id="cinder")
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.run_once",))
+
+    original, module = _patch_registry(registry)
+    try:
+        client, api_app = _make_browser_client(SessionLocal)
+        try:
+            resp = client.post(
+                "/api/sessions/launch",
+                json={
+                    "device_id": "cinder",
+                    "provider": "codex",
+                    "cwd": "/Users/me/repo",
+                    "initial_prompt": "Check the repo and report status",
+                },
+            )
+        finally:
+            api_app.dependency_overrides.clear()
+    finally:
+        module.get_machine_control_channel_registry = original
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["launch_state"] == "live"
+    assert body["execution_lifetime"] == "one_shot"
+    assert body["session_id"]
+    assert registry.sent[0]["command_type"] == "session.run_once"
+    assert registry.sent[0]["payload"]["execution_lifetime"] == "one_shot"
+
+
+def test_http_endpoint_omitted_lifetime_without_prompt_rejects(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    _seed_user_and_device(SessionLocal)
+    registry = _StubRegistry()
+    _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("codex.run_once",))
 
     original, module = _patch_registry(registry)
     try:
@@ -1333,11 +1366,9 @@ def test_http_endpoint_happy_path(tmp_path):
     finally:
         module.get_machine_control_channel_registry = original
 
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["launch_state"] == "live"
-    assert body["execution_lifetime"] == "live_control"
-    assert body["session_id"]
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["detail"]["code"] == "invalid_request"
+    assert registry.sent == []
 
 
 def test_http_continue_endpoint_happy_path(tmp_path):
@@ -2578,6 +2609,7 @@ def test_http_endpoint_offline_machine_is_409(tmp_path):
                     "device_id": "cinder",
                     "provider": "codex",
                     "cwd": "/Users/me/repo",
+                    "initial_prompt": "Check whether this machine is online",
                 },
             )
         finally:

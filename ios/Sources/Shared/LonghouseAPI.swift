@@ -892,7 +892,7 @@ extension LonghouseAPI {
         provider: String = "codex",
         cwd: String,
         initialPrompt: String? = nil,
-        executionLifetime: RemoteExecutionLifetime = .liveControl,
+        executionLifetime: RemoteExecutionLifetime = .oneShot,
         displayName: String? = nil,
         clientRequestId: String? = nil
     ) async throws -> RemoteSessionLaunchResponse {
