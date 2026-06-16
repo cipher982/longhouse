@@ -606,9 +606,36 @@ struct ManagedSessionEntry: Identifiable {
 
 struct ManagedSessionList: View {
     let entries: [ManagedSessionEntry]
+    let bulkStopAction: (() -> Void)?
+    let bulkStopTargetCount: Int
+
+    init(
+        entries: [ManagedSessionEntry],
+        bulkStopAction: (() -> Void)? = nil,
+        bulkStopTargetCount: Int = 0
+    ) {
+        self.entries = entries
+        self.bulkStopAction = bulkStopAction
+        self.bulkStopTargetCount = bulkStopTargetCount
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if let bulkStopAction, bulkStopTargetCount > 0 {
+                BulkStopActionRow(
+                    title: "Stop all idle background sessions",
+                    detail: "\(bulkStopTargetCount) idle sessions on this Mac",
+                    tint: Color(red: 0.90, green: 0.67, blue: 0.16),
+                    accessibilityIdentifier: LonghouseMenuBarAccessibilityID.Button.stopAllBackgroundManaged,
+                    accessibilityLabel: "Stop all idle background managed sessions",
+                    action: bulkStopAction
+                )
+
+                if !entries.isEmpty {
+                    sectionDivider
+                }
+            }
+
             ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                 ManagedSessionRow(entry: entry)
 
@@ -617,6 +644,51 @@ struct ManagedSessionList: View {
                 }
             }
         }
+    }
+}
+
+private struct BulkStopActionRow: View {
+    let title: String
+    let detail: String
+    let tint: Color
+    let accessibilityIdentifier: String
+    let accessibilityLabel: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .center, spacing: 9) {
+                Image(systemName: "xmark.circle")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 18, height: 18)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.system(size: 11.5, weight: .bold))
+                        .foregroundStyle(Color.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+
+                    Text(detail)
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(Color.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+
+                Spacer(minLength: 8)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10.5, weight: .bold))
+                    .foregroundStyle(Color.secondary.opacity(0.72))
+            }
+            .contentShape(Rectangle())
+            .padding(.vertical, 8)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(accessibilityIdentifier)
+        .accessibilityLabel(accessibilityLabel)
     }
 }
 
@@ -734,9 +806,36 @@ struct BackgroundBridgeEntry: Identifiable {
 
 struct BackgroundBridgeList: View {
     let entries: [BackgroundBridgeEntry]
+    let bulkStopAction: (() -> Void)?
+    let bulkStopTargetCount: Int
+
+    init(
+        entries: [BackgroundBridgeEntry],
+        bulkStopAction: (() -> Void)? = nil,
+        bulkStopTargetCount: Int = 0
+    ) {
+        self.entries = entries
+        self.bulkStopAction = bulkStopAction
+        self.bulkStopTargetCount = bulkStopTargetCount
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if let bulkStopAction, bulkStopTargetCount > 0 {
+                BulkStopActionRow(
+                    title: "Stop all background bridges",
+                    detail: "\(bulkStopTargetCount) detached bridges on this Mac",
+                    tint: .red,
+                    accessibilityIdentifier: LonghouseMenuBarAccessibilityID.Button.stopAllBackgroundBridges,
+                    accessibilityLabel: "Stop all background bridges",
+                    action: bulkStopAction
+                )
+
+                if !entries.isEmpty {
+                    sectionDivider
+                }
+            }
+
             ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
                 BackgroundBridgeRow(entry: entry)
 

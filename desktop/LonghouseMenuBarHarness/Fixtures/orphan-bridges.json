@@ -68,6 +68,7 @@
   "managed_sessions": [],
   "orphan_bridges": [
     {
+      "session_id": "sess-orphan-zerg-codex",
       "provider": "codex",
       "pid": 27771,
       "workspace_label": "zerg",
@@ -79,7 +80,8 @@
       ]
     },
     {
-      "provider": "claude",
+      "session_id": "sess-orphan-project-codex",
+      "provider": "codex",
       "pid": 28880,
       "workspace_label": "project",
       "status": "stale",

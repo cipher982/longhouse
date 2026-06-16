@@ -370,6 +370,35 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func bulkStopManagedBridgesDryRunDeduplicatesTargets() throws {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-08T01:52:00Z",
+            healthState: "degraded",
+            severity: "yellow",
+            headline: "Managed sessions are running in background",
+            reasons: ["managed_session_detached"],
+            suggestedActions: ["Reattach or stop detached managed sessions from Longhouse.app"],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+
+        let sink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
+        let feedback = sink.handleStopManagedBridges(
+            sessionIDs: [" sess-a ", "", "sess-b", "sess-a"],
+            label: "background managed sessions",
+            snapshot: snapshot
+        )
+
+        #expect(feedback?.style == .warning)
+        #expect(feedback?.title == "Bulk stop dry run recorded")
+        #expect(feedback?.detail.contains("2 background managed sessions") == true)
+    }
+
+    @Test
     func appLocationBlockedDryRunReturnsMoveFeedback() throws {
         let snapshot = HealthSnapshot.installLocationBlockedSnapshot(
             currentPath: "/Users/test/Applications/Longhouse.app"
@@ -1392,6 +1421,22 @@ struct LonghouseMenuBarCoreTests {
         #expect(background.normalizedUIPresence == "background")
         #expect(background.isBackgroundManagedSession == true)
         #expect(background.canStopFromMenuBar == true)
+    }
+
+    @Test
+    func orphanBridgeFixtureCarriesStoppableCodexSessionIDs() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/orphan-bridges.json")
+
+        let snapshot = try FixtureHealthSnapshotSource(fileURL: fixtureURL).load()
+
+        #expect(snapshot.orphanBridgeCount == 2)
+        #expect(snapshot.currentOrphanBridges.allSatisfy { bridge in
+            bridge.provider == "codex" && bridge.sessionId?.isEmpty == false
+        })
     }
 
     @Test

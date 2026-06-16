@@ -53,6 +53,13 @@ public protocol HealthActionSink {
         workspaceLabel: String?,
         snapshot: HealthSnapshot
     ) -> HealthActionFeedback?
+
+    @discardableResult
+    func handleStopManagedBridges(
+        sessionIDs: [String],
+        label: String,
+        snapshot: HealthSnapshot
+    ) -> HealthActionFeedback?
 }
 
 public extension HealthActionSink {
@@ -60,6 +67,15 @@ public extension HealthActionSink {
     func handleStopManagedBridge(
         sessionID: String,
         workspaceLabel: String?,
+        snapshot: HealthSnapshot
+    ) -> HealthActionFeedback? {
+        nil
+    }
+
+    @discardableResult
+    func handleStopManagedBridges(
+        sessionIDs: [String],
+        label: String,
         snapshot: HealthSnapshot
     ) -> HealthActionFeedback? {
         nil
@@ -224,6 +240,65 @@ public struct SpyHealthActionSink: HealthActionSink {
         )
     }
 
+    public func handleStopManagedBridges(
+        sessionIDs: [String],
+        label: String,
+        snapshot: HealthSnapshot
+    ) -> HealthActionFeedback? {
+        let targets = uniqueSessionIDs(sessionIDs)
+        let count = targets.count
+        let targetLabel = label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "managed bridges"
+            : label.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        appendActionRecord(
+            action: HarnessAction.stopManagedBridge.rawValue,
+            snapshot: snapshot,
+            target: targets.joined(separator: ",")
+        )
+
+        guard count > 0 else {
+            return feedback(
+                for: .stopManagedBridge,
+                style: .warning,
+                title: "Nothing to stop",
+                detail: "Longhouse did not find any stoppable \(targetLabel)."
+            )
+        }
+
+        guard effectMode == .live else {
+            return feedback(
+                for: .stopManagedBridge,
+                style: .warning,
+                title: "Bulk stop dry run recorded",
+                detail: "The harness logged stop requests for \(count) \(targetLabel) without touching live bridges."
+            )
+        }
+
+        var failed: [String] = []
+        for sessionID in targets {
+            if startStopManagedBridge(sessionID: sessionID) == nil {
+                failed.append(sessionID)
+            }
+        }
+
+        if failed.isEmpty {
+            return feedback(
+                for: .stopManagedBridge,
+                style: .info,
+                title: "Stop requested",
+                detail: "Longhouse asked \(count) \(targetLabel) to stop in the background."
+            )
+        }
+
+        return feedback(
+            for: .stopManagedBridge,
+            style: .failure,
+            title: "Some stops could not start",
+            detail: "Started \(count - failed.count) of \(count) stop requests. Failed: \(failed.joined(separator: ", "))."
+        )
+    }
+
     func resolveLonghouseURL(snapshot: HealthSnapshot) -> URL? {
         if let uiURL {
             return uiURL
@@ -268,6 +343,20 @@ public struct SpyHealthActionSink: HealthActionSink {
             loggedAt: ISO8601DateFormatter().string(from: Date())
         )
         append(record: record)
+    }
+
+    private func uniqueSessionIDs(_ sessionIDs: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for rawSessionID in sessionIDs {
+            let sessionID = rawSessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !sessionID.isEmpty, !seen.contains(sessionID) else {
+                continue
+            }
+            seen.insert(sessionID)
+            result.append(sessionID)
+        }
+        return result
     }
 
     private func startBundledSetup() -> URL? {

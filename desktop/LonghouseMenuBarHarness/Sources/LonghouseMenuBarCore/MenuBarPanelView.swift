@@ -465,7 +465,11 @@ public struct MenuBarPanelView: View {
                 sectionDivider.padding(.horizontal, 4)
 
                 PanelSection(title: "Background managed", trailing: "\(backgroundManagedSessionEntries.count)") {
-                    ManagedSessionList(entries: backgroundManagedSessionEntries)
+                    ManagedSessionList(
+                        entries: backgroundManagedSessionEntries,
+                        bulkStopAction: backgroundManagedStopAllAction(),
+                        bulkStopTargetCount: backgroundManagedBulkStopTargets.count
+                    )
                 }
             }
 
@@ -473,7 +477,11 @@ public struct MenuBarPanelView: View {
                 sectionDivider.padding(.horizontal, 4)
 
                 PanelSection(title: "Background bridges", trailing: "\(backgroundBridgeEntries.count)") {
-                    BackgroundBridgeList(entries: backgroundBridgeEntries)
+                    BackgroundBridgeList(
+                        entries: backgroundBridgeEntries,
+                        bulkStopAction: backgroundBridgeStopAllAction(),
+                        bulkStopTargetCount: backgroundBridgeBulkStopTargets.count
+                    )
                 }
             }
         }
@@ -600,6 +608,31 @@ public struct MenuBarPanelView: View {
         }
     }
 
+    private var backgroundManagedBulkStopTargets: [String] {
+        backgroundManagedSessionEntries.compactMap { entry -> String? in
+            guard entry.stopAction != nil,
+                  isIdleBulkStopCandidate(entry),
+                  let sessionID = entry.sessionID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !sessionID.isEmpty
+            else {
+                return nil
+            }
+            return sessionID
+        }
+    }
+
+    private var backgroundBridgeBulkStopTargets: [String] {
+        backgroundBridgeEntries.compactMap { entry -> String? in
+            guard entry.stopAction != nil,
+                  let sessionID = entry.sessionID?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !sessionID.isEmpty
+            else {
+                return nil
+            }
+            return sessionID
+        }
+    }
+
     private func managedStopAction(for session: ManagedSessionSnapshot) -> (() -> Void)? {
         guard session.canStopFromMenuBar,
               let sessionID = session.sessionId,
@@ -636,6 +669,49 @@ public struct MenuBarPanelView: View {
                     snapshot: snapshot
                 )
             )
+        }
+    }
+
+    private func backgroundManagedStopAllAction() -> (() -> Void)? {
+        let targets = backgroundManagedBulkStopTargets
+        guard !targets.isEmpty else {
+            return nil
+        }
+
+        return {
+            setFeedback(
+                actionSink.handleStopManagedBridges(
+                    sessionIDs: targets,
+                    label: "idle background managed sessions",
+                    snapshot: snapshot
+                )
+            )
+        }
+    }
+
+    private func backgroundBridgeStopAllAction() -> (() -> Void)? {
+        let targets = backgroundBridgeBulkStopTargets
+        guard !targets.isEmpty else {
+            return nil
+        }
+
+        return {
+            setFeedback(
+                actionSink.handleStopManagedBridges(
+                    sessionIDs: targets,
+                    label: "background bridges",
+                    snapshot: snapshot
+                )
+            )
+        }
+    }
+
+    private func isIdleBulkStopCandidate(_ entry: ManagedSessionEntry) -> Bool {
+        switch entry.attention {
+        case .idle, .detached:
+            return true
+        case .working, .needsYou, .blocked, .degraded, .unknown:
+            return false
         }
     }
 

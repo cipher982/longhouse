@@ -86,5 +86,7 @@ public enum LonghouseMenuBarAccessibilityID {
         public static let copyDiagnostics = "LonghouseMenuBar.Button.CopyDiagnostics"
         public static let openLogs = "LonghouseMenuBar.Button.OpenLogs"
         public static let openLonghouse = "LonghouseMenuBar.Button.OpenLonghouse"
+        public static let stopAllBackgroundManaged = "LonghouseMenuBar.Button.StopAllBackgroundManaged"
+        public static let stopAllBackgroundBridges = "LonghouseMenuBar.Button.StopAllBackgroundBridges"
     }
 }
