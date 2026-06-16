@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Hosted remote-launch smoke for the browser/iOS launch path.
 
-This deliberately exercises the public browser-authenticated API:
+This deliberately exercises the public browser-owned API:
 
 1. wait for /api/health to report the expected build commit
-2. mint a browser session cookie from the hosted tenant container
+2. mint a temporary device token owned by the tenant user
 3. pick an online machine that advertises the matching Codex capability
 4. POST /api/sessions/launch in one-shot or live-control mode
 5. one-shot: require the launch prompt to produce an assistant nonce and exit
@@ -34,7 +34,6 @@ from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
 from urllib.error import URLError
-from urllib.parse import urlencode
 from urllib.request import Request
 from urllib.request import urlopen
 
@@ -65,6 +64,12 @@ class HttpResult:
     json_body: Any
 
 
+@dataclass(frozen=True)
+class DeviceTokenAuth:
+    token_id: str
+    token: str
+
+
 def _json_loads(value: str) -> Any:
     try:
         return json.loads(value)
@@ -78,6 +83,7 @@ def _http_json(
     *,
     body: dict[str, Any] | None = None,
     cookie: str | None = None,
+    bearer_token: str | None = None,
     timeout: float = 15,
 ) -> HttpResult:
     headers = {
@@ -89,7 +95,9 @@ def _http_json(
     if body is not None:
         data = json.dumps(body).encode("utf-8")
         headers["Content-Type"] = "application/json"
-    if cookie:
+    if bearer_token:
+        headers["Authorization"] = f"Bearer {bearer_token}"
+    elif cookie:
         headers["Cookie"] = f"{COOKIE_NAME}={cookie}"
     request = Request(url, data=data, headers=headers, method=method)
     try:
@@ -186,23 +194,71 @@ def _parse_last_json_line(output: str) -> Any:
     return None
 
 
-def mint_browser_cookie(*, ssh_target: str, container: str) -> str:
+def mint_device_token(*, ssh_target: str, container: str, device_id: str) -> DeviceTokenAuth:
     script = r"""
-from zerg.auth.session_tokens import _issue_access_token
+import json
 from zerg.database import db_session
+from zerg.models.device_token import DeviceToken
 from zerg.models.models import User
+from zerg.routers.device_tokens import generate_device_token, hash_token
 
+device_id = __import__("sys").argv[1]
+plain_token = generate_device_token()
 with db_session() as db:
     user = db.query(User).order_by(User.id.asc()).first()
     if user is None:
         raise SystemExit("no browser user found")
-    print(_issue_access_token(user.id, user.email, display_name=user.display_name, avatar_url=user.avatar_url))
+    row = DeviceToken(owner_id=user.id, device_id=device_id, token_hash=hash_token(plain_token))
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    print(json.dumps({"token_id": str(row.id), "token": plain_token}))
 """
-    proc = _run_remote_python(ssh_target, container=container, script=script, timeout_secs=30)
-    token = (proc.stdout or "").strip().splitlines()[-1] if proc.stdout else ""
-    if proc.returncode != 0 or not token:
-        raise SmokeError(f"could not mint browser cookie: {(proc.stderr or proc.stdout or '').strip()[-500:]}")
-    return token
+    proc = _run_remote_python(
+        ssh_target,
+        container=container,
+        script=script,
+        args=[device_id],
+        timeout_secs=30,
+    )
+    parsed = _parse_last_json_line(proc.stdout or "")
+    if proc.returncode != 0 or not isinstance(parsed, dict):
+        raise SmokeError(f"could not mint device token: {(proc.stderr or proc.stdout or '').strip()[-700:]}")
+    token_id = str(parsed.get("token_id") or "")
+    token = str(parsed.get("token") or "")
+    if not token_id or not token.startswith("zdt_"):
+        raise SmokeError("device token mint returned an invalid payload")
+    return DeviceTokenAuth(token_id=token_id, token=token)
+
+
+def revoke_device_token(auth: DeviceTokenAuth, *, ssh_target: str, container: str) -> dict[str, Any]:
+    script = r"""
+from datetime import datetime, timezone
+from zerg.database import db_session
+from zerg.models.device_token import DeviceToken
+
+token_id = __import__("sys").argv[1]
+with db_session() as db:
+    row = db.query(DeviceToken).filter(DeviceToken.id == token_id).first()
+    if row is None:
+        raise SystemExit("device token not found")
+    row.revoked_at = datetime.now(timezone.utc).replace(tzinfo=None)
+    db.commit()
+print("revoked")
+"""
+    proc = _run_remote_python(
+        ssh_target,
+        container=container,
+        script=script,
+        args=[auth.token_id],
+        timeout_secs=30,
+    )
+    return {
+        "ok": proc.returncode == 0,
+        "token_id": auth.token_id,
+        "stdout": (proc.stdout or "")[-200:],
+        "stderr": (proc.stderr or "")[-500:],
+    }
 
 
 def machine_supports(machine: dict[str, Any], capability: str) -> bool:
@@ -216,12 +272,19 @@ def machine_supports(machine: dict[str, Any], capability: str) -> bool:
 
 def discover_machine(
     base_url: str,
-    cookie: str,
+    cookie: str | None = None,
     *,
+    bearer_token: str | None = None,
     requested_device_id: str | None = None,
     required_capability: str = CODEX_LAUNCH_CAPABILITY,
 ) -> dict[str, Any]:
-    result = _http_json("GET", f"{base_url.rstrip('/')}/api/timeline/machines", cookie=cookie, timeout=20)
+    result = _http_json(
+        "GET",
+        f"{base_url.rstrip('/')}/api/timeline/machines",
+        cookie=cookie,
+        bearer_token=bearer_token,
+        timeout=20,
+    )
     payload = _require_json_object(result, context="GET /api/timeline/machines")
     machines = payload.get("machines")
     if not isinstance(machines, list):
@@ -259,8 +322,9 @@ def discover_machine(
 
 def launch_session(
     base_url: str,
-    cookie: str,
+    cookie: str | None = None,
     *,
+    bearer_token: str | None = None,
     device_id: str,
     cwd: str,
     project: str,
@@ -280,7 +344,14 @@ def launch_session(
     }
     if initial_prompt is not None:
         payload["initial_prompt"] = initial_prompt
-    result = _http_json("POST", f"{base_url.rstrip('/')}/api/sessions/launch", body=payload, cookie=cookie, timeout=60)
+    result = _http_json(
+        "POST",
+        f"{base_url.rstrip('/')}/api/sessions/launch",
+        body=payload,
+        cookie=cookie,
+        bearer_token=bearer_token,
+        timeout=60,
+    )
     data = _require_json_object(result, context="POST /api/sessions/launch")
     session_id = str(data.get("session_id") or "")
     if not session_id:
@@ -294,23 +365,68 @@ def launch_session(
     return data
 
 
-def send_session_input(base_url: str, cookie: str, *, session_id: str, text: str, client_request_id: str) -> dict[str, Any]:
+def send_session_input(
+    base_url: str,
+    cookie: str | None = None,
+    *,
+    bearer_token: str | None = None,
+    session_id: str,
+    text: str,
+    client_request_id: str,
+) -> dict[str, Any]:
     payload = {"text": text, "intent": "auto", "client_request_id": client_request_id}
-    result = _http_json("POST", f"{base_url.rstrip('/')}/api/sessions/{session_id}/input", body=payload, cookie=cookie, timeout=60)
+    result = _http_json(
+        "POST",
+        f"{base_url.rstrip('/')}/api/sessions/{session_id}/input",
+        body=payload,
+        cookie=cookie,
+        bearer_token=bearer_token,
+        timeout=60,
+    )
     return _require_json_object(result, context=f"POST /api/sessions/{session_id}/input")
 
 
-def send_nonce_prompt(base_url: str, cookie: str, *, session_id: str, nonce: str, client_request_id: str) -> dict[str, Any]:
+def send_nonce_prompt(
+    base_url: str,
+    cookie: str | None = None,
+    *,
+    bearer_token: str | None = None,
+    session_id: str,
+    nonce: str,
+    client_request_id: str,
+) -> dict[str, Any]:
     text = (
         "Remote launch smoke check. Reply with exactly this token and no extra analysis: "
         f"{nonce}"
     )
-    return send_session_input(base_url, cookie, session_id=session_id, text=text, client_request_id=client_request_id)
+    return send_session_input(
+        base_url,
+        cookie,
+        bearer_token=bearer_token,
+        session_id=session_id,
+        text=text,
+        client_request_id=client_request_id,
+    )
 
 
-def send_second_input_probe(base_url: str, cookie: str, *, session_id: str, nonce: str, client_request_id: str) -> dict[str, Any]:
+def send_second_input_probe(
+    base_url: str,
+    cookie: str | None = None,
+    *,
+    bearer_token: str | None = None,
+    session_id: str,
+    nonce: str,
+    client_request_id: str,
+) -> dict[str, Any]:
     text = f"Second input race probe for remote launch smoke {nonce}. Acknowledge briefly."
-    response = send_session_input(base_url, cookie, session_id=session_id, text=text, client_request_id=client_request_id)
+    response = send_session_input(
+        base_url,
+        cookie,
+        bearer_token=bearer_token,
+        session_id=session_id,
+        text=text,
+        client_request_id=client_request_id,
+    )
     outcome = str(response.get("outcome") or "")
     if outcome not in {"sent", "queued"}:
         raise SmokeError(f"second input probe returned unexpected outcome={outcome!r}: {response}")
@@ -498,6 +614,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     nonce = f"LH_REMOTE_LAUNCH_SMOKE_{run_id}_{uuid.uuid4().hex[:8]}"
     client_prefix = re.sub(r"[^a-zA-Z0-9_.:-]", "-", f"remote-smoke-{run_id}-{uuid.uuid4().hex[:8]}")[:48]
     session_id: str | None = None
+    device_auth: DeviceTokenAuth | None = None
     result: dict[str, Any] = {
         "ok": False,
         "base_url": base_url,
@@ -517,13 +634,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         health = wait_for_health_commit(base_url, args.expected_commit, timeout_secs=args.health_timeout_secs)
         result["health"] = {"status": health.get("status"), "commit": _health_commit(health), "build": health.get("build")}
 
-        cookie = mint_browser_cookie(ssh_target=args.ssh_target, container=container)
-        result["auth"] = {"browser_cookie_minted": True}
+        device_auth = mint_device_token(
+            ssh_target=args.ssh_target,
+            container=container,
+            device_id=f"remote-launch-smoke-{client_prefix}",
+        )
+        result["auth"] = {"device_token_id": device_auth.token_id}
 
         required_capability = CODEX_RUN_ONCE_CAPABILITY if args.execution_lifetime == "one_shot" else CODEX_LAUNCH_CAPABILITY
         machine = discover_machine(
             base_url,
-            cookie,
+            bearer_token=device_auth.token,
             requested_device_id=args.device_id,
             required_capability=required_capability,
         )
@@ -546,7 +667,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             )
         launch_response = launch_session(
             base_url,
-            cookie,
+            bearer_token=device_auth.token,
             device_id=str(machine["device_id"]),
             cwd=cwd,
             project=args.project,
@@ -564,7 +685,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             time.sleep(args.wait_after_launch_secs)
             send_response = send_nonce_prompt(
                 base_url,
-                cookie,
+                bearer_token=device_auth.token,
                 session_id=session_id,
                 nonce=nonce,
                 client_request_id=f"{client_prefix}-input",
@@ -572,7 +693,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             result["send"] = send_response
             result["second_send"] = send_second_input_probe(
                 base_url,
-                cookie,
+                bearer_token=device_auth.token,
                 session_id=session_id,
                 nonce=nonce,
                 client_request_id=f"{client_prefix}-second",
@@ -593,6 +714,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     finally:
         if session_id and not args.skip_stop:
             result["cleanup"] = stop_codex_bridge(session_id, target_ssh=args.bridge_stop_ssh_target)
+        if device_auth is not None:
+            result["auth_cleanup"] = revoke_device_token(
+                device_auth,
+                ssh_target=args.ssh_target,
+                container=container,
+            )
     return result
 
 

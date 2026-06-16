@@ -163,6 +163,39 @@ def test_http_json_uses_browser_like_user_agent(monkeypatch) -> None:
     assert captured["accept_language"] == "en-US,en;q=0.9"
 
 
+def test_http_json_can_send_device_token_bearer(monkeypatch) -> None:
+    captured = {}
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    def fake_urlopen(request, timeout):
+        captured["authorization"] = request.get_header("Authorization")
+        captured["cookie"] = request.get_header("Cookie")
+        return FakeResponse()
+
+    monkeypatch.setattr(smoke, "urlopen", fake_urlopen)
+
+    result = smoke._http_json(
+        "GET",
+        "https://demo.longhouse.ai/api/timeline/machines",
+        bearer_token="zdt_test",
+    )
+
+    assert result.status == 200
+    assert captured["authorization"] == "Bearer zdt_test"
+    assert captured["cookie"] is None
+
+
 def test_remote_python_ssh_accepts_new_host_keys(monkeypatch) -> None:
     captured = {}
 
@@ -289,11 +322,17 @@ def test_run_one_shot_wires_run_once_capability_and_nonce_prompt(monkeypatch) ->
 
     monkeypatch.setenv("GITHUB_RUN_ID", "unit")
     monkeypatch.setattr(smoke, "wait_for_health_commit", lambda *args, **kwargs: {"status": "ok", "build": {"commit": "live"}})
-    monkeypatch.setattr(smoke, "mint_browser_cookie", lambda **kwargs: "cookie")
+    monkeypatch.setattr(
+        smoke,
+        "mint_device_token",
+        lambda **kwargs: smoke.DeviceTokenAuth(token_id="token-1", token="zdt_test"),
+    )
+    monkeypatch.setattr(smoke, "revoke_device_token", lambda *args, **kwargs: {"ok": True, "token_id": "token-1"})
     monkeypatch.setattr(smoke, "hosted_session_debug", lambda **kwargs: {"assistant_events": []})
     monkeypatch.setattr(smoke, "stop_codex_bridge", lambda *args, **kwargs: {"ok": True})
 
-    def fake_discover_machine(base_url, cookie, **kwargs):
+    def fake_discover_machine(base_url, **kwargs):
+        captured["discover_bearer_token"] = kwargs["bearer_token"]
         captured["required_capability"] = kwargs["required_capability"]
         return {
             "device_id": "demo-machine",
@@ -303,6 +342,7 @@ def test_run_one_shot_wires_run_once_capability_and_nonce_prompt(monkeypatch) ->
         }
 
     def fake_launch_session(*args, **kwargs):
+        captured["launch_bearer_token"] = kwargs["bearer_token"]
         captured["execution_lifetime"] = kwargs["execution_lifetime"]
         captured["initial_prompt"] = kwargs["initial_prompt"]
         return {
@@ -347,6 +387,10 @@ def test_run_one_shot_wires_run_once_capability_and_nonce_prompt(monkeypatch) ->
     )
 
     assert result["ok"] is True
+    assert result["auth"]["device_token_id"] == "token-1"
+    assert result["auth_cleanup"]["ok"] is True
+    assert captured["discover_bearer_token"] == "zdt_test"
+    assert captured["launch_bearer_token"] == "zdt_test"
     assert captured["required_capability"] == "codex.run_once"
     assert captured["execution_lifetime"] == "one_shot"
     assert captured["nonce"] in captured["initial_prompt"]
