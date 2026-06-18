@@ -66,6 +66,10 @@ def _accepted_path(root: Path, proof: dict[str, Any]) -> Path:
     return _scenario_root(root, proof) / "accepted.json"
 
 
+def _accepted_path_for(root: Path, *, provider: str, scenario_id: str) -> Path:
+    return root / provider / scenario_id / "accepted.json"
+
+
 def _load_accepted(root: Path, candidate: dict[str, Any]) -> dict[str, Any] | None:
     path = _accepted_path(root, candidate)
     try:
@@ -257,6 +261,69 @@ def diff_proofs(
     }
 
 
+def baseline_status(
+    *,
+    baseline_root: Path,
+    provider: str,
+    scenario_id: str,
+) -> dict[str, Any]:
+    baseline_root = baseline_root.expanduser()
+    accepted_path = _accepted_path_for(
+        baseline_root,
+        provider=provider,
+        scenario_id=scenario_id,
+    )
+    payload: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "artifact_kind": "provider_release_proof_baseline_status",
+        "provider": provider,
+        "scenario_id": scenario_id,
+        "baseline_root": str(baseline_root),
+        "accepted": False,
+        "accepted_path": str(accepted_path),
+        "provider_version": None,
+        "accepted_at": None,
+        "archived_artifacts": {},
+        "missing_archived_artifacts": [],
+        "verdict": "yellow",
+        "failure_code": "baseline_missing",
+    }
+    try:
+        accepted = _read_json(accepted_path)
+    except FileNotFoundError:
+        return payload
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        payload["failure_code"] = "baseline_unreadable"
+        payload["message"] = f"{type(exc).__name__}: {exc}"
+        return payload
+
+    archived_artifacts = accepted.get("archived_artifacts")
+    if not isinstance(archived_artifacts, dict):
+        archived_artifacts = {}
+    missing = [
+        key
+        for key, value in sorted(archived_artifacts.items())
+        if not isinstance(value, str) or not Path(value).is_file()
+    ]
+    proof_verdict = str(accepted.get("verdict") or "").lower()
+    payload.update(
+        {
+            "accepted": True,
+            "provider_version": accepted.get("provider_version"),
+            "accepted_at": accepted.get("accepted_at") or accepted.get("generated_at"),
+            "archived_artifacts": archived_artifacts,
+            "missing_archived_artifacts": missing,
+            "verdict": "green" if proof_verdict == "green" and not missing else "yellow",
+            "failure_code": None
+            if proof_verdict == "green" and not missing
+            else "baseline_artifacts_missing"
+            if missing
+            else "accepted_baseline_not_green",
+        }
+    )
+    return payload
+
+
 def _print_or_write(payload: dict[str, Any], *, artifact: Path | None, as_json: bool) -> None:
     if artifact is not None:
         _write_json(artifact.expanduser(), payload)
@@ -286,6 +353,16 @@ def build_parser() -> argparse.ArgumentParser:
     diff.add_argument("--baseline-root", type=Path, default=DEFAULT_BASELINE_ROOT)
     diff.add_argument("--artifact", type=Path)
     diff.add_argument("--json", action="store_true")
+
+    status = subparsers.add_parser(
+        "status",
+        help="Inspect accepted baseline availability for one provider scenario",
+    )
+    status.add_argument("--provider", required=True)
+    status.add_argument("--scenario-id", required=True)
+    status.add_argument("--baseline-root", type=Path, default=DEFAULT_BASELINE_ROOT)
+    status.add_argument("--artifact", type=Path)
+    status.add_argument("--json", action="store_true")
     return parser
 
 
@@ -304,6 +381,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         _print_or_write(payload, artifact=args.artifact, as_json=args.json)
         return 1 if payload["verdict"] == "red" else 0
+    if args.command == "status":
+        payload = baseline_status(
+            baseline_root=args.baseline_root.expanduser(),
+            provider=args.provider,
+            scenario_id=args.scenario_id,
+        )
+        _print_or_write(payload, artifact=args.artifact, as_json=args.json)
+        return 1 if payload.get("verdict") == "red" else 0
     raise ValueError(f"unknown command: {args.command}")
 
 

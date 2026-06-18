@@ -112,7 +112,9 @@ def test_accept_archives_proof_and_artifacts() -> None:
         assert payload["artifact_kind"] == "provider_release_proof_baseline_acceptance"
         assert Path(payload["accepted_path"]).exists()
         assert Path(payload["version_path"]).exists()
-        assert {"source_artifact", "stdout", "stderr"} <= set(payload["archived_artifacts"])
+        assert {"source_artifact", "stdout", "stderr"} <= set(
+            payload["archived_artifacts"]
+        )
 
 
 def test_accept_refuses_non_green_proof() -> None:
@@ -294,6 +296,86 @@ def test_diff_can_compare_explicit_old_and_new_proofs() -> None:
         assert payload["candidate"]["provider_version"] == "opencode 1.2.4"
 
 
+def test_status_reports_missing_baseline_as_yellow() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+
+        result, payload = _run(
+            [
+                "status",
+                "--provider",
+                "opencode",
+                "--scenario-id",
+                "opencode-release-proof-v1",
+                "--baseline-root",
+                str(root / "baselines"),
+            ]
+        )
+
+        assert result.returncode == 0
+        assert payload["artifact_kind"] == "provider_release_proof_baseline_status"
+        assert payload["accepted"] is False
+        assert payload["verdict"] == "yellow"
+        assert payload["failure_code"] == "baseline_missing"
+
+
+def test_status_reports_accepted_baseline_and_archived_artifacts() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        baseline_root = root / "baselines"
+        accepted = _write_proof(root, "accepted")
+        _run(["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)])
+
+        result, payload = _run(
+            [
+                "status",
+                "--provider",
+                "opencode",
+                "--scenario-id",
+                "opencode-release-proof-v1",
+                "--baseline-root",
+                str(baseline_root),
+            ]
+        )
+
+        assert result.returncode == 0
+        assert payload["accepted"] is True
+        assert payload["verdict"] == "green"
+        assert payload["failure_code"] is None
+        assert payload["provider_version"] == "opencode 1.2.3"
+        assert {"source_artifact", "stdout", "stderr"} <= set(payload["archived_artifacts"])
+        assert payload["missing_archived_artifacts"] == []
+
+
+def test_status_warns_when_archived_artifact_is_missing() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        baseline_root = root / "baselines"
+        accepted = _write_proof(root, "accepted")
+        _, acceptance = _run(
+            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
+        )
+        Path(acceptance["archived_artifacts"]["stdout"]).unlink()
+
+        result, payload = _run(
+            [
+                "status",
+                "--provider",
+                "opencode",
+                "--scenario-id",
+                "opencode-release-proof-v1",
+                "--baseline-root",
+                str(baseline_root),
+            ]
+        )
+
+        assert result.returncode == 0
+        assert payload["accepted"] is True
+        assert payload["verdict"] == "yellow"
+        assert payload["failure_code"] == "baseline_artifacts_missing"
+        assert payload["missing_archived_artifacts"] == ["stdout"]
+
+
 def main() -> int:
     tests = [
         test_accept_archives_proof_and_artifacts,
@@ -305,6 +387,9 @@ def main() -> int:
         test_diff_reports_red_candidate_without_baseline_as_red,
         test_diff_does_not_promote_matching_yellow_candidate_to_green,
         test_diff_can_compare_explicit_old_and_new_proofs,
+        test_status_reports_missing_baseline_as_yellow,
+        test_status_reports_accepted_baseline_and_archived_artifacts,
+        test_status_warns_when_archived_artifact_is_missing,
     ]
     for test in tests:
         test()

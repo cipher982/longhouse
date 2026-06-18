@@ -32,6 +32,18 @@ def test_provider_release_proof_make_requires_provider() -> None:
     assert "PROVIDER is required" in result.stderr
 
 
+def test_provider_release_proof_status_make_requires_provider_and_scenario() -> None:
+    missing_provider = _run_make(["provider-release-proof-status"])
+
+    assert missing_provider.returncode == 2
+    assert "PROVIDER is required" in missing_provider.stderr
+
+    missing_scenario = _run_make(["provider-release-proof-status", "PROVIDER=opencode"])
+
+    assert missing_scenario.returncode == 2
+    assert "SCENARIO_ID is required" in missing_scenario.stderr
+
+
 def test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_yellow() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -40,6 +52,7 @@ def test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_ye
         baseline_root = root / "baselines"
         acceptance = root / "acceptance.json"
         diff = root / "diff.json"
+        status = root / "status.json"
 
         proof_result = _run_make(
             [
@@ -92,10 +105,27 @@ def test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_ye
         assert diff_payload["failure_code"] == "provider_release_proof_not_implemented"
         assert diff_payload["diff"]["status"] == "not_compared"
 
+        status_result = _run_make(
+            [
+                "provider-release-proof-status",
+                "PROVIDER=gemini",
+                "SCENARIO_ID=gemini-release-proof-v1",
+                f"BASELINE_ROOT={baseline_root}",
+                f"ARTIFACT={status}",
+            ]
+        )
+
+        assert status_result.returncode == 0, status_result.stderr
+        status_payload = _read_json(status)
+        assert status_payload["artifact_kind"] == "provider_release_proof_baseline_status"
+        assert status_payload["accepted"] is False
+        assert status_payload["failure_code"] == "baseline_missing"
+
 
 def main() -> int:
     tests = [
         test_provider_release_proof_make_requires_provider,
+        test_provider_release_proof_status_make_requires_provider_and_scenario,
         test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_yellow,
     ]
     for test in tests:

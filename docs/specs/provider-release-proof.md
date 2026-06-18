@@ -336,6 +336,31 @@ This writes:
 The utility copies referenced artifact files when they exist, so raw
 stdout/stderr and normalized contract artifacts stay available after acceptance.
 
+Baseline status is also machine-readable:
+
+```bash
+make provider-release-proof-status \
+  PROVIDER=opencode \
+  SCENARIO_ID=opencode-release-proof-v1 \
+  BASELINE_ROOT=/data/provider-release-proofs \
+  ARTIFACT=/tmp/baseline-status.json
+```
+
+Equivalent direct script:
+
+```bash
+scripts/qa/provider-release-proof-baseline.py status \
+  --provider opencode \
+  --scenario-id opencode-release-proof-v1 \
+  --baseline-root /data/provider-release-proofs \
+  --json
+```
+
+This emits `accepted`, `provider_version`, `accepted_at`,
+`archived_artifacts`, and `missing_archived_artifacts`, so release-watch and CI
+can distinguish "the proof lane exists" from "a known-good baseline is actually
+accepted and still has its evidence files."
+
 ## Phase 4 Differential Runs
 
 The release gate should eventually run:
