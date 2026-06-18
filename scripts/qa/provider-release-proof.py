@@ -91,6 +91,14 @@ def _compact_codex_canary(info: dict[str, Any]) -> dict[str, Any]:
     return compact
 
 
+def _compact_claude_canary(info: dict[str, Any]) -> dict[str, Any]:
+    compact = _compact_status(info)
+    for key in ("missing", "reason", "platform"):
+        if info.get(key) is not None:
+            compact[key] = info.get(key)
+    return compact
+
+
 def _compact_operation(info: dict[str, Any]) -> dict[str, Any]:
     return {
         key: info.get(key)
@@ -100,10 +108,16 @@ def _compact_operation(info: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_source_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
-    canary_compactor = _compact_codex_canary if artifact.get("provider") == "codex" else _compact_status
+    provider = artifact.get("provider")
+    if provider == "codex":
+        canary_compactor = _compact_codex_canary
+    elif provider == "claude":
+        canary_compactor = _compact_claude_canary
+    else:
+        canary_compactor = _compact_status
     normalized: dict[str, Any] = {
         "artifact_kind": artifact.get("artifact_kind"),
-        "provider": artifact.get("provider"),
+        "provider": provider,
         "provider_version": artifact.get("provider_version") or artifact.get("codex_version"),
         "verdict": artifact.get("verdict"),
         "failure_code": artifact.get("failure_code"),
@@ -128,6 +142,22 @@ def _normalize_source_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
         normalized["codex"] = {
             "binary_present": bool(artifact.get("codex_bin")),
             "longhouse_commit_present": bool(artifact.get("longhouse_commit")),
+        }
+    if provider == "claude":
+        canaries = dict(artifact.get("canaries") or {})
+        command_shape = canaries.get("command_shape") if isinstance(canaries.get("command_shape"), dict) else {}
+        channels_shape = canaries.get("channels_shape") if isinstance(canaries.get("channels_shape"), dict) else {}
+        detached_pty_shape = (
+            canaries.get("detached_pty_shape")
+            if isinstance(canaries.get("detached_pty_shape"), dict)
+            else {}
+        )
+        normalized["claude"] = {
+            "launch_flags_missing": list(command_shape.get("missing") or []),
+            "development_channels_status": channels_shape.get("status"),
+            "development_channels_missing": list(channels_shape.get("missing") or []),
+            "detached_pty_status": detached_pty_shape.get("status"),
+            "detached_pty_platform": detached_pty_shape.get("platform"),
         }
     return normalized
 

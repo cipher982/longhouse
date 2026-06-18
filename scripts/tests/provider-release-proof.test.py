@@ -64,10 +64,55 @@ if os.environ.get("FAKE_TIMEOUT") == "1":
 if os.environ.get("FAKE_SKIP_ARTIFACT") == "1":
     raise SystemExit(0)
 
+provider = value("--provider")
+if provider == "claude":
+    missing = ["--session-id"] if os.environ.get("FAKE_CLAUDE_MISSING_SESSION_ID") == "1" else []
+    channels_unconfirmed = os.environ.get("FAKE_CLAUDE_CHANNELS_UNCONFIRMED") == "1"
+    verdict = "red" if missing else "yellow" if channels_unconfirmed else "green"
+    artifact = {
+        "artifact_kind": "provider_live_canary",
+        "provider": "claude",
+        "provider_version": "Claude Code 2.9.9",
+        "verdict": verdict,
+        "failure_code": "claude_command_contract_missing" if missing else None,
+        "recommendation": "block_upgrade_recommendation"
+        if missing
+        else "investigate_before_upgrade"
+        if channels_unconfirmed
+        else "upgrade_allowed",
+        "canaries": {
+            "binary_identity": {"status": "pass", "version": "Claude Code 2.9.9"},
+            "command_shape": {
+                "status": "fail" if missing else "pass",
+                "failure_code": "claude_command_contract_missing" if missing else None,
+                "missing": missing,
+            },
+            "channels_shape": {
+                "status": "warn" if channels_unconfirmed else "pass",
+                "reason": "claude_development_channels_contract_unconfirmed"
+                if channels_unconfirmed
+                else None,
+                "missing": ["--resume"] if channels_unconfirmed else [],
+            },
+            "detached_pty_shape": {"status": "pass", "platform": "darwin"},
+        },
+        "operation_evidence": {
+            "launch_local": {
+                "status": "fail" if missing else "pass",
+                "level": "none" if missing else "live_no_token",
+                "canary": "claude_launch_local_no_token",
+                "failure_code": "claude_command_contract_missing" if missing else None,
+            }
+        },
+    }
+    Path(value("--artifact")).parent.mkdir(parents=True, exist_ok=True)
+    Path(value("--artifact")).write_text(json.dumps(artifact), encoding="utf-8")
+    raise SystemExit(1 if verdict == "red" else 0)
+
 verdict = os.environ.get("FAKE_VERDICT", "green")
 artifact = {
     "artifact_kind": "provider_live_canary",
-    "provider": value("--provider"),
+    "provider": provider,
     "provider_version": "opencode 1.2.3",
     "verdict": verdict,
     "failure_code": None if verdict == "green" else "fake_provider_break",
@@ -299,6 +344,55 @@ def test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest
         assert fingerprints["responses"]["initialize"]["platformFamily"] == "str"
 
 
+def test_claude_release_proof_normalizes_no_token_contract_shape() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "claude",
+            env={"FAKE_CLAUDE_CHANNELS_UNCONFIRMED": "1"},
+        )
+
+        assert result.returncode == 0
+        assert payload["provider"] == "claude"
+        assert payload["provider_version"] == "Claude Code 2.9.9"
+        assert payload["verdict"] == "yellow"
+        assert payload["normalized"]["claude"] == {
+            "launch_flags_missing": [],
+            "development_channels_status": "warn",
+            "development_channels_missing": ["--resume"],
+            "detached_pty_status": "pass",
+            "detached_pty_platform": "darwin",
+        }
+        assert payload["normalized"]["canaries"]["channels_shape"]["reason"] == (
+            "claude_development_channels_contract_unconfirmed"
+        )
+
+
+def test_claude_release_proof_red_when_session_flag_missing() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "claude",
+            env={"FAKE_CLAUDE_MISSING_SESSION_ID": "1"},
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "claude_command_contract_missing"
+        assert payload["normalized"]["claude"]["launch_flags_missing"] == ["--session-id"]
+        assert payload["operation_evidence"]["launch_local"]["failure_code"] == (
+            "claude_command_contract_missing"
+        )
+
+
 def test_gemini_release_proof_is_explicit_yellow_gap() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -320,6 +414,8 @@ def main() -> int:
         test_opencode_release_proof_blocks_when_source_artifact_missing,
         test_opencode_release_proof_blocks_when_source_canary_times_out,
         test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest,
+        test_claude_release_proof_normalizes_no_token_contract_shape,
+        test_claude_release_proof_red_when_session_flag_missing,
         test_gemini_release_proof_is_explicit_yellow_gap,
     ]
     for test in tests:
