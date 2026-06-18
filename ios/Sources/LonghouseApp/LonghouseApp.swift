@@ -182,9 +182,18 @@ final class AppState: ObservableObject {
         let hasRuntimeToken = SharedAuthStore.hasRuntimeToken(for: serverURL)
         hasLocalSessionCandidate = hasRuntimeToken || hasSession || hasRefresh
 
-        let result: SessionRestoreResult
+        var result: SessionRestoreResult
         if hasRuntimeToken {
             result = await verifyBrowserSession()
+            if result == .unauthenticated {
+                // Token may be expired but still inside the CP refresh leeway
+                // (e.g. app suspended past expiry). Try one refresh before
+                // dropping the session so an overnight-suspended app doesn't
+                // hard-log-out when the token is still refreshable.
+                if await refreshRuntimeTokenProactively() {
+                    result = await verifyBrowserSession()
+                }
+            }
         } else if hasRefresh {
             result = await refreshBrowserSession()
         } else if hasSession {
@@ -255,6 +264,8 @@ final class AppState: ObservableObject {
         isAuthenticated = false
         hasLocalSessionCandidate = false
         authError = nil
+        runtimeTokenRefreshTask?.cancel()
+        runtimeTokenRefreshTask = nil
 
         if previousURL != trimmed, !previousURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             SharedAuthStore.clearManagedCookies(for: previousURL)
@@ -368,6 +379,8 @@ final class AppState: ObservableObject {
         isValidating = false
         authError = nil
         hostedAuthAttemptURL = nil
+        runtimeTokenRefreshTask?.cancel()
+        runtimeTokenRefreshTask = nil
 
         if !previousURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             SharedAuthStore.clearManagedCookies(for: previousURL)
@@ -398,6 +411,11 @@ final class AppState: ObservableObject {
         isAuthenticated = false
         hasLocalSessionCandidate = false
         authError = nil
+        // Cancel any in-flight proactive refresh for the previous server before
+        // switching — its post-await guard checks serverURL equality, but
+        // cancelling avoids a wasted network call and a stale reschedule.
+        runtimeTokenRefreshTask?.cancel()
+        runtimeTokenRefreshTask = nil
 
         Task {
             if previousURL != trimmed {
@@ -547,24 +565,39 @@ final class AppState: ObservableObject {
         runtimeTokenRefreshTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard !Task.isCancelled else { return }
+            // Don't refresh after signout — the guard prevents resurrecting a
+            // cleared session if the task fired before cancellation landed.
+            // restoreSession calls refreshRuntimeTokenProactively directly and
+            // does not go through this task path.
+            guard await self?.isAuthenticated == true else { return }
             await self?.refreshRuntimeTokenProactively()
         }
     }
 
-    private func refreshRuntimeTokenProactively() async {
-        guard isAuthenticated else { return }
+    private func refreshRuntimeTokenProactively() async -> Bool {
+        // Snapshot the server URL: signout/server-switch may land during the
+        // await and we must not write a refreshed token back into a cleared or
+        // switched keychain slot.
+        let capturedServerURL = serverURL
         do {
-            let (token, expiresAt) = try await callRefreshRuntimeTokenRoute()
-            SharedAuthStore.saveRuntimeToken(token, expiresAt: expiresAt, for: serverURL)
+            let (token, expiresAt) = try await callRefreshRuntimeTokenRoute(serverURL: capturedServerURL)
+            guard serverURL == capturedServerURL,
+                  SharedAuthStore.hasRuntimeToken(for: capturedServerURL) else {
+                // Session was cleared or server switched while we were refreshing.
+                return false
+            }
+            SharedAuthStore.saveRuntimeToken(token, expiresAt: expiresAt, for: capturedServerURL)
             scheduleRuntimeTokenRefresh()
+            return true
         } catch {
             // Leave the existing token in place; the 401-retry path handles it
             // when the token finally expires.
             logger.error("proactive runtime token refresh failed error=\(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
-    private func callRefreshRuntimeTokenRoute() async throws -> (String, Date?) {
+    private func callRefreshRuntimeTokenRoute(serverURL: String) async throws -> (String, Date?) {
         guard let url = URL(string: "\(serverURL)/api/auth/refresh-runtime-token") else {
             throw URLError(.badURL)
         }
