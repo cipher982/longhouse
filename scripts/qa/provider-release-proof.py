@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 from datetime import UTC
@@ -94,12 +93,21 @@ def _normalize_source_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
 def _classify(source_artifact: dict[str, Any]) -> tuple[str, str | None, str]:
     verdict = str(source_artifact.get("verdict") or "").lower()
     failure_code = source_artifact.get("failure_code")
+    recommendation = source_artifact.get("recommendation")
     if verdict == "red":
-        return "red", str(failure_code or "provider_release_proof_failed"), "block_upgrade_recommendation"
+        return (
+            "red",
+            str(failure_code or "provider_release_proof_failed"),
+            str(recommendation or "block_upgrade_recommendation"),
+        )
     if verdict == "yellow":
-        return "yellow", str(failure_code or "insufficient_coverage"), "investigate_before_upgrade"
+        return (
+            "yellow",
+            str(failure_code or "insufficient_coverage"),
+            str(recommendation or "investigate_before_upgrade"),
+        )
     if verdict == "green":
-        return "green", None, "upgrade_allowed"
+        return "green", None, str(recommendation or "upgrade_allowed")
     return "yellow", "provider_release_proof_unknown_verdict", "investigate_before_upgrade"
 
 
@@ -119,6 +127,8 @@ def _run_source_canary(args: argparse.Namespace, raw_dir: Path) -> tuple[dict[st
 
     if args.provider == "gemini":
         source_path = raw_dir / "provider-release-proof-source.json"
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text("", encoding="utf-8")
         source = {
             "artifact_kind": "provider_release_proof_source",
             "provider": "gemini",
@@ -136,7 +146,15 @@ def _run_source_canary(args: argparse.Namespace, raw_dir: Path) -> tuple[dict[st
             "operation_evidence": {},
         }
         _write_json(source_path, source)
-        return source, {"source_artifact": str(source_path)}, None
+        return (
+            source,
+            {
+                "source_artifact": str(source_path),
+                "stdout": str(stdout_path),
+                "stderr": str(stderr_path),
+            },
+            None,
+        )
 
     if args.provider in LIVE_CANARY_PROVIDERS:
         source_path = raw_dir / "provider-live-canary.json"
@@ -165,7 +183,9 @@ def _run_source_canary(args: argparse.Namespace, raw_dir: Path) -> tuple[dict[st
             "--evidence-root",
             str(raw_dir / "codex-provider-release-evidence"),
             "--source-review-status",
-            "pass",
+            args.source_review_status,
+            "--source-review-note",
+            args.source_review_note,
             "--json",
         ]
         if args.provider_bin:
@@ -181,23 +201,87 @@ def _run_source_canary(args: argparse.Namespace, raw_dir: Path) -> tuple[dict[st
     else:
         raise ValueError(f"unsupported provider: {args.provider}")
 
-    result = subprocess.run(
-        argv,
-        cwd=str(args.repo_root),
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=args.timeout_secs,
-    )
-    stdout_path.write_text(result.stdout, encoding="utf-8")
-    stderr_path.write_text(result.stderr, encoding="utf-8")
     raw_artifacts = {
         "source_artifact": str(source_path),
         "stdout": str(stdout_path),
         "stderr": str(stderr_path),
     }
+    try:
+        result = subprocess.run(
+            argv,
+            cwd=str(args.repo_root),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=args.timeout_secs,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout_path.write_text(str(exc.stdout or ""), encoding="utf-8")
+        stderr_path.write_text(str(exc.stderr or ""), encoding="utf-8")
+        source = {
+            "artifact_kind": "provider_release_proof_source",
+            "provider": args.provider,
+            "provider_version": args.provider_version,
+            "verdict": "red",
+            "failure_code": "provider_release_proof_timeout",
+            "recommendation": "block_upgrade_recommendation",
+            "canaries": {
+                "release_proof": {
+                    "status": "fail",
+                    "failure_code": "provider_release_proof_timeout",
+                    "message": f"source canary timed out after {args.timeout_secs}s",
+                }
+            },
+            "operation_evidence": {},
+        }
+        _write_json(source_path, source)
+        return source, raw_artifacts, None
+    except OSError as exc:
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text(str(exc), encoding="utf-8")
+        source = {
+            "artifact_kind": "provider_release_proof_source",
+            "provider": args.provider,
+            "provider_version": args.provider_version,
+            "verdict": "red",
+            "failure_code": "provider_release_proof_source_exec_failed",
+            "recommendation": "block_upgrade_recommendation",
+            "canaries": {
+                "release_proof": {
+                    "status": "fail",
+                    "failure_code": "provider_release_proof_source_exec_failed",
+                    "message": f"{type(exc).__name__}: {exc}",
+                }
+            },
+            "operation_evidence": {},
+        }
+        _write_json(source_path, source)
+        return source, raw_artifacts, None
+
+    stdout_path.write_text(result.stdout, encoding="utf-8")
+    stderr_path.write_text(result.stderr, encoding="utf-8")
     if source_path.exists():
-        source = _read_json(source_path)
+        try:
+            source = _read_json(source_path)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            source = {
+                "artifact_kind": "provider_release_proof_source",
+                "provider": args.provider,
+                "provider_version": args.provider_version,
+                "verdict": "red",
+                "failure_code": "provider_release_proof_source_invalid_json",
+                "recommendation": "block_upgrade_recommendation",
+                "canaries": {
+                    "release_proof": {
+                        "status": "fail",
+                        "failure_code": "provider_release_proof_source_invalid_json",
+                        "message": f"{type(exc).__name__}: {exc}",
+                        "command": _command_evidence(result),
+                    }
+                },
+                "operation_evidence": {},
+            }
+            _write_json(source_path, source)
     else:
         source = {
             "artifact_kind": "provider_release_proof_source",
@@ -286,6 +370,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifact", type=Path)
     parser.add_argument("--evidence-root", type=Path)
     parser.add_argument("--timeout-secs", type=int, default=180)
+    parser.add_argument(
+        "--source-review-status",
+        choices=["not_run", "pass", "warn", "fail"],
+        default="not_run",
+        help="External source-review status passed through to providers that require it.",
+    )
+    parser.add_argument(
+        "--source-review-note",
+        default="Provider release proof did not include external source-review evidence.",
+    )
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--codex-run-fake-app-server", action="store_true")
     parser.add_argument("--codex-run-managed-tui-attach", action="store_true")

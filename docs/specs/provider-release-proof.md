@@ -47,9 +47,11 @@ What is missing:
 
 ## Coverage Legend
 
-`yes` means the current suite directly exercises the surface. `partial` means
-some lower layer or fake boundary exists, but the proof is not enough to trust a
-new upstream release. `no` means no meaningful current proof was found.
+`yes` means the current suite directly exercises the surface. A `yes` row with
+`Baseline: no` is still not a complete release gate; it means the operation can
+be proved today, but old/new baseline comparison is not wired yet. `partial`
+means some lower layer or fake boundary exists, but the proof is not enough to
+trust a new upstream release. `no` means no meaningful current proof was found.
 
 Boundary values:
 
@@ -212,6 +214,17 @@ Current implementation wraps existing source canaries:
 - Codex: `scripts/qa/codex-provider-release-canary.py`
 - Gemini: explicit yellow `provider_release_proof_not_implemented`
 
+Exit-code contract:
+
+- `red` exits `1`.
+- `yellow` and `green` exit `0`.
+- Automation callers must parse `verdict`; `yellow` is an honest proof gap, not
+  a process failure.
+
+For Codex, `--source-review-status` defaults to `not_run` and is passed through
+instead of being fabricated by the wrapper. Sauron may pass `pass`, `warn`, or
+`fail` only when it has actual source-review evidence.
+
 This is intentionally a release-proof artifact adapter, not a new behavioral
 scenario implementation.
 
@@ -233,6 +246,8 @@ provider-release-proofs/{provider}/{scenario_id}/
 
 Manual acceptance is required the first time a provider/scenario is trusted.
 After that, release-watch can compare the new proof against the accepted proof.
+If the underlying canary behavior changes meaningfully, bump `scenario_version`
+before comparing new candidates to old accepted baselines.
 
 ## Phase 4 Differential Runs
 

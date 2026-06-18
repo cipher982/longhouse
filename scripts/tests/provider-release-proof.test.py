@@ -50,12 +50,19 @@ def _write_fake_repo(root: Path) -> None:
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 args = sys.argv[1:]
 
 def value(flag):
     return args[args.index(flag) + 1]
+
+if os.environ.get("FAKE_TIMEOUT") == "1":
+    time.sleep(10)
+
+if os.environ.get("FAKE_SKIP_ARTIFACT") == "1":
+    raise SystemExit(0)
 
 verdict = os.environ.get("FAKE_VERDICT", "green")
 artifact = {
@@ -87,12 +94,57 @@ raise SystemExit(0 if verdict != "red" else 1)
 """,
     )
 
+    _write_exe(
+        root / "scripts" / "qa" / "codex-provider-release-canary.py",
+        r"""#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+
+def value(flag, default=None):
+    return args[args.index(flag) + 1] if flag in args else default
+
+args_path = os.environ.get("FAKE_CODEX_ARGS_PATH")
+if args_path:
+    Path(args_path).write_text(json.dumps(args), encoding="utf-8")
+
+source_review_status = value("--source-review-status", "missing")
+artifact = {
+    "artifact_kind": "codex_provider_release_canary",
+    "provider": "codex",
+    "codex_version": value("--provider-version", "codex 9.9.9"),
+    "verdict": "yellow" if source_review_status == "not_run" else "green",
+    "failure_code": "insufficient_coverage" if source_review_status == "not_run" else None,
+    "recommendation": "investigate_before_upgrade" if source_review_status == "not_run" else "upgrade_allowed",
+    "canaries": {
+        "binary_identity": {
+            "status": "pass",
+            "path": value("--codex-bin"),
+        }
+    },
+    "operation_evidence": {
+        "launch_local": {
+            "status": "not_run" if source_review_status == "not_run" else "pass",
+            "level": "none" if source_review_status == "not_run" else "live_no_token",
+            "canary": "fake_codex_release_canary",
+        }
+    },
+}
+Path(value("--artifact")).parent.mkdir(parents=True, exist_ok=True)
+Path(value("--artifact")).write_text(json.dumps(artifact), encoding="utf-8")
+""",
+    )
+
 
 def _run_proof(
     root: Path,
     provider: str,
     *,
     env: dict[str, str] | None = None,
+    extra_args: list[str] | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], dict]:
     artifact = root / "artifact.json"
     run_env = os.environ.copy()
@@ -113,6 +165,7 @@ def _run_proof(
             "--evidence-root",
             str(root / "evidence"),
             "--json",
+            *(extra_args or []),
         ],
         cwd=REPO_ROOT,
         env=run_env,
@@ -162,6 +215,66 @@ def test_opencode_release_proof_blocks_on_source_canary_red() -> None:
         assert payload["operation_evidence"]["send_input"]["status"] == "fail"
 
 
+def test_opencode_release_proof_blocks_when_source_artifact_missing() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "opencode",
+            env={"FAKE_SKIP_ARTIFACT": "1"},
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "provider_release_proof_source_missing"
+
+
+def test_opencode_release_proof_blocks_when_source_canary_times_out() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "opencode",
+            env={"FAKE_TIMEOUT": "1"},
+            extra_args=["--timeout-secs", "1"],
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "provider_release_proof_timeout"
+
+
+def test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        args_path = root / "codex-args.json"
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "codex",
+            env={"FAKE_CODEX_ARGS_PATH": str(args_path)},
+            extra_args=["--provider-version", "codex 2.0.0"],
+        )
+
+        assert result.returncode == 0
+        codex_args = json.loads(args_path.read_text(encoding="utf-8"))
+        assert codex_args[codex_args.index("--codex-bin") + 1] == str(root / "fake-provider")
+        assert codex_args[codex_args.index("--source-review-status") + 1] == "not_run"
+        assert payload["provider"] == "codex"
+        assert payload["provider_version"] == "codex 2.0.0"
+        assert payload["verdict"] == "yellow"
+        assert payload["failure_code"] == "insufficient_coverage"
+        assert payload["normalized"]["provider_version"] == "codex 2.0.0"
+
+
 def test_gemini_release_proof_is_explicit_yellow_gap() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -173,12 +286,16 @@ def test_gemini_release_proof_is_explicit_yellow_gap() -> None:
         assert payload["provider"] == "gemini"
         assert payload["verdict"] == "yellow"
         assert payload["failure_code"] == "provider_release_proof_not_implemented"
+        assert {"source_artifact", "stdout", "stderr"} <= set(payload["artifacts"])
 
 
 def main() -> int:
     tests = [
         test_opencode_release_proof_normalizes_source_canary,
         test_opencode_release_proof_blocks_on_source_canary_red,
+        test_opencode_release_proof_blocks_when_source_artifact_missing,
+        test_opencode_release_proof_blocks_when_source_canary_times_out,
+        test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest,
         test_gemini_release_proof_is_explicit_yellow_gap,
     ]
     for test in tests:
