@@ -97,7 +97,7 @@ first real no-token release-proof scenario after OpenCode/Codex shape stabilizes
 
 | Surface | Covered | Evidence | Boundary | CI | Sauron release-watch | Baseline | Actionable today |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| install/stage exact version | partial | Sauron stages the exact Codex GitHub release asset and passes it to `codex-provider-release-canary.py`; Longhouse tests the binary override path | real release asset | no Longhouse CI for asset staging; canary override runs in CI | yes for source-reviewed GitHub releases | no | yes if staging/version match fails |
+| install/stage exact version | partial | Sauron stages the exact Codex GitHub release asset, passes it to `codex-provider-release-canary.py`, and now wraps the staged release in a Longhouse proof/diff candidate envelope; Longhouse tests the binary override path | real release asset | no Longhouse CI for asset staging; canary override runs in CI | yes for source-reviewed GitHub releases | no | yes if staging/version match fails |
 | binary identity | yes | `codex-provider-release-canary.py` | live_no_token or fake | `validate-provider-cli-canaries` | yes | no | yes |
 | auth/status shape | partial | static contract + app-server canary lanes | hermetic/live_no_token when enabled | `validate-provider-cli-canaries` | yes | no | partial |
 | launch managed session | yes | Codex bridge tests, `codex-provider-release-canary.py managed_tui_attach` | hermetic/live_no_token | `make test`, `validate-provider-cli-canaries` | yes | no | yes if canary red |
@@ -111,8 +111,10 @@ first real no-token release-proof scenario after OpenCode/Codex shape stabilizes
 | tool/tool-result shape | partial | Codex parser fixtures and tool-call tests | fixture/hermetic | `make test`, `make test-engine` | source review only | parser fixture yes; release-proof no | partial |
 | live-token behavior | no | next notes in manifest call this out | none | no | no | no | no |
 
-Codex is the strongest existing provider lane, but it still needs to be wrapped
-into an accepted release-proof baseline and old/new differential runner.
+Codex is the strongest existing provider lane. Sauron now produces a
+Longhouse-owned proof artifact and proof-baseline diff for source-reviewed
+staged release assets, but it still needs the first accepted real baseline
+before old/new differential results can go green.
 
 ### OpenCode
 
@@ -256,7 +258,10 @@ launch proof or exact-version staged package lane.
 Codex normalization preserves source-review status, binary identity presence,
 operation evidence, canary statuses/reasons, and stable protocol fingerprints
 from `raw_fresh_remote` while dropping noisy path fields. A protocol fingerprint
-status change such as `ok` -> `missing` is contract drift signal.
+status change such as `ok` -> `missing` is contract drift signal. Sauron now
+calls this proof wrapper for staged Codex release assets and attaches the
+Longhouse diff result as `canaries.golden_envelope`; `baseline_missing` remains
+yellow evidence until a real green Codex proof is accepted.
 
 Exit-code contract:
 
