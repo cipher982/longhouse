@@ -66,6 +66,12 @@ surface, not merely a unit-test expected value unless called out.
 
 ## Phase 1 Coverage Map
 
+The machine-checkable map lives in
+`docs/specs/provider-release-proof-coverage.json` and is validated by
+`scripts/tests/provider-release-proof-coverage.test.py`, which runs under
+`make validate-provider-cli-canaries`. The tables below are the readable
+summary; update the JSON first when a provider/surface changes.
+
 ### Claude Code
 
 | Surface | Covered | Evidence | Boundary | CI | Sauron release-watch | Baseline | Actionable today |
@@ -307,11 +313,9 @@ should not by itself count as contract drift.
 
 ## Next Work
 
-1. Move Sauron OpenCode envelope comparison to call
-   `scripts/qa/provider-release-proof.py` instead of calling
-   `provider-live-canary.py` directly.
-2. Add baseline accept/diff tooling around `provider_release_proof`.
-3. Add Codex normalization coverage using the existing Codex release canary.
-4. Add Claude no-token scenario coverage for launch/channel/session binding.
-5. Decide whether Antigravity real-agy send belongs in scheduled CI or remains
+1. Add Codex normalization coverage using the existing Codex release canary.
+2. Add Claude no-token scenario coverage for launch/channel/session binding.
+3. Decide whether Antigravity real-agy send belongs in scheduled CI or remains
    an opt-in live-token proof.
+4. Accept the first real OpenCode proof baseline from a known-good version.
+5. Start old/new differential proof runs from accepted baselines.
