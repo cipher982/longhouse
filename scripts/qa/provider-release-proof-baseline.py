@@ -177,14 +177,19 @@ def diff_proofs(
         base = _read_json(base_path)
         base_uri = str(base_path)
 
+    candidate_verdict = str(candidate.get("verdict") or "").lower()
     if base is None:
-        verdict = "yellow"
-        failure_code = "baseline_missing"
-        recommendation = "investigate_before_upgrade"
+        if candidate_verdict == "red":
+            verdict = "red"
+            failure_code = str(candidate.get("failure_code") or "candidate_release_proof_failed")
+            recommendation = "block_upgrade_recommendation"
+        else:
+            verdict = "yellow"
+            failure_code = "baseline_missing"
+            recommendation = "investigate_before_upgrade"
         diff = {"status": "not_compared", "changes": []}
     else:
         diff = _diff_normalized(_normalized(base), _normalized(candidate))
-        candidate_verdict = str(candidate.get("verdict") or "").lower()
         if candidate_verdict == "red":
             verdict = "red"
             failure_code = str(candidate.get("failure_code") or "candidate_release_proof_failed")

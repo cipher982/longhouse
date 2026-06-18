@@ -168,6 +168,27 @@ def test_diff_reports_missing_baseline_as_yellow() -> None:
         assert payload["diff"]["status"] == "not_compared"
 
 
+def test_diff_reports_red_candidate_without_baseline_as_red() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        candidate = _write_proof(root, "candidate", status="fail")
+
+        result, payload = _run(
+            [
+                "diff",
+                "--candidate",
+                str(candidate),
+                "--baseline-root",
+                str(root / "baselines"),
+            ]
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "fake_drift"
+        assert payload["diff"]["status"] == "not_compared"
+
+
 def test_diff_can_compare_explicit_old_and_new_proofs() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -188,6 +209,7 @@ def main() -> int:
         test_diff_against_accepted_baseline_matches,
         test_diff_against_accepted_baseline_detects_drift,
         test_diff_reports_missing_baseline_as_yellow,
+        test_diff_reports_red_candidate_without_baseline_as_red,
         test_diff_can_compare_explicit_old_and_new_proofs,
     ]
     for test in tests:
