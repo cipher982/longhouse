@@ -22,6 +22,7 @@ enum SharedAuthStore {
     private static let serverURLKey = "longhouse_server_url"
     private static let cookieStoragePrefix = "managed_cookies."
     private static let runtimeTokenStoragePrefix = "runtime_tokens."
+    private static let runtimeTokenExpiryPrefix = "runtime_token_expires_at."
     private static let keychainService = "ai.longhouse.shared-cookies"
 
     private static var defaults: UserDefaults? {
@@ -85,7 +86,7 @@ enum SharedAuthStore {
         !managedCookies(for: serverURL).isEmpty
     }
 
-    static func saveRuntimeToken(_ token: String, for serverURL: String) {
+    static func saveRuntimeToken(_ token: String, expiresAt: Date? = nil, for serverURL: String) {
         let value = token.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else {
             clearRuntimeToken(for: serverURL)
@@ -96,6 +97,7 @@ enum SharedAuthStore {
         }
         saveKeychainData(data, account: runtimeTokenStorageKey(for: serverURL))
         KeychainHelper.saveAuthToken("Bearer \(value)")
+        saveRuntimeTokenExpiry(expiresAt, for: serverURL)
     }
 
     static func runtimeToken(for serverURL: String) -> String? {
@@ -106,6 +108,22 @@ enum SharedAuthStore {
             return nil
         }
         return token
+    }
+
+    static func runtimeTokenExpiresAt(for serverURL: String) -> Date? {
+        let key = runtimeTokenExpiryKey(for: serverURL)
+        let ts = defaults?.double(forKey: key) ?? 0
+        guard ts > 0 else { return nil }
+        return Date(timeIntervalSince1970: ts)
+    }
+
+    static func saveRuntimeTokenExpiry(_ expiresAt: Date?, for serverURL: String) {
+        let key = runtimeTokenExpiryKey(for: serverURL)
+        if let expiresAt {
+            defaults?.set(expiresAt.timeIntervalSince1970, forKey: key)
+        } else {
+            defaults?.removeObject(forKey: key)
+        }
     }
 
     static func hasRuntimeToken(for serverURL: String) -> Bool {
@@ -122,6 +140,7 @@ enum SharedAuthStore {
     static func clearRuntimeToken(for serverURL: String) {
         deleteKeychainData(account: runtimeTokenStorageKey(for: serverURL))
         KeychainHelper.deleteAuthToken()
+        saveRuntimeTokenExpiry(nil, for: serverURL)
     }
 
     static func setManagedCookies(_ cookies: [HTTPCookie], for serverURL: String) {
@@ -219,6 +238,10 @@ enum SharedAuthStore {
 
     private static func runtimeTokenStorageKey(for serverURL: String) -> String {
         runtimeTokenStoragePrefix + (normalizedHost(for: serverURL) ?? serverURL)
+    }
+
+    private static func runtimeTokenExpiryKey(for serverURL: String) -> String {
+        runtimeTokenExpiryPrefix + (normalizedHost(for: serverURL) ?? serverURL)
     }
 
     private static func cookieDictionary(from cookie: HTTPCookie) -> [String: Any]? {

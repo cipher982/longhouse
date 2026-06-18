@@ -147,4 +147,56 @@ async def accept_native_handoff(body: NativeHandoffRequest, db: Session = Depend
     return {"runtime_token": runtime_token, "expires_in": expires_in}
 
 
-__all__ = ["accept_handoff_request", "accept_native_handoff", "router"]
+@router.post("/refresh-runtime-token")
+async def refresh_runtime_token(request: Request):
+    """Proxy a CP runtime token refresh for iOS/hosted native clients.
+
+    iOS stores the CP-issued bearer in keychain and sends it on every request.
+    The token has a 1-hour lifetime, so the client proactively refreshes ~60s
+    before expiry and retries with refresh on a 401. This route forwards the
+    current bearer to the CP's /api/identity/refresh-runtime-token and returns
+    the re-minted token. No local validation — the CP is the issuer and is the
+    authority on token validity (including the refresh leeway window).
+    """
+    settings = get_settings()
+    control_plane_url = getattr(settings, "control_plane_url", None)
+    if not control_plane_url:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Hosted runtime token refresh is not configured",
+        )
+
+    auth_header = request.headers.get("Authorization") or request.headers.get("authorization")
+    if not auth_header or not auth_header.lower().startswith("bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing bearer token")
+    token = auth_header.split(" ", 1)[1].strip()
+    if not token or token.startswith("zdt_"):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Runtime token required")
+
+    try:
+        exchange = httpx.post(
+            f"{control_plane_url.rstrip('/')}/api/identity/refresh-runtime-token",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10.0,
+        )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Control plane runtime token refresh failed",
+        ) from exc
+
+    if exchange.status_code >= 400:
+        raise HTTPException(status_code=exchange.status_code, detail="Control plane rejected refresh")
+
+    data = exchange.json()
+    runtime_token = data.get("runtime_token")
+    expires_in = int(data.get("expires_in") or 3600)
+    if not isinstance(runtime_token, str) or not runtime_token:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Control plane refresh response missing token",
+        )
+    return {"runtime_token": runtime_token, "expires_in": expires_in}
+
+
+__all__ = ["accept_handoff_request", "accept_native_handoff", "refresh_runtime_token", "router"]

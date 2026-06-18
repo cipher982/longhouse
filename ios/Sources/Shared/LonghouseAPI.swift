@@ -642,6 +642,28 @@ struct LonghouseAPI: Sendable {
         }
     }
 
+    /// Refresh a hosted CP runtime bearer token via the longhouse proxy. The
+    /// current bearer is forwarded to the CP, which re-mints within its refresh
+    /// leeway window. The new token + expiry are persisted to ``SharedAuthStore``
+    /// so the next request picks them up automatically.
+    func refreshRuntimeToken() async throws {
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/auth/refresh-runtime-token"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 15
+
+        let (data, httpResponse) = try await data(for: request, allowRetry: false)
+        guard httpResponse.statusCode == 200 else {
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let token = json["runtime_token"] as? String else {
+            throw LonghouseAPIError.notAuthenticated
+        }
+        let expiresIn = json["expires_in"] as? Int
+        let expiresAt = expiresIn.map { Date().addingTimeInterval(TimeInterval($0)) }
+        SharedAuthStore.saveRuntimeToken(token, expiresAt: expiresAt, for: baseURL.absoluteString)
+    }
+
     private func data(for request: URLRequest, allowRetry: Bool = true) async throws -> (Data, HTTPURLResponse) {
         var request = request
         request.timeoutInterval = 15
@@ -660,9 +682,13 @@ struct LonghouseAPI: Sendable {
         }
         persistResponseCookies(from: httpResponse, requestURL: request.url)
 
-        if httpResponse.statusCode == 401 && allowRetry && authorizationHeader == nil {
+        if httpResponse.statusCode == 401 && allowRetry {
             do {
-                try await refreshSession()
+                if authorizationHeader != nil {
+                    try await refreshRuntimeToken()
+                } else {
+                    try await refreshSession()
+                }
                 return try await self.data(for: request, allowRetry: false)
             } catch {
                 throw LonghouseAPIError.notAuthenticated

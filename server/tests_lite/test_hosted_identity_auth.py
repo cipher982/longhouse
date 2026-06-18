@@ -11,6 +11,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("FERNET_SECRET", "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=")
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-1234")
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import create_engine
@@ -29,6 +30,7 @@ from zerg.models.models import User
 from zerg.routers.auth_sso import NativeHandoffRequest
 from zerg.routers.auth_sso import accept_handoff_request
 from zerg.routers.auth_sso import accept_native_handoff
+from zerg.routers.auth_sso import refresh_runtime_token
 
 
 @pytest.fixture()
@@ -280,3 +282,116 @@ async def test_accept_native_handoff_exchanges_one_use_code(monkeypatch, db_sess
         "tenant": "david010",
         "tenant_state": "verifier",
     }
+
+
+def _refresh_request(*, auth_header: str | None):
+    headers = []
+    if auth_header is not None:
+        headers.append((b"authorization", auth_header.encode()))
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/auth/refresh-runtime-token",
+            "headers": headers,
+            "query_string": b"",
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_refresh_runtime_token_proxies_bearer_to_cp(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        def json(self):
+            return {"runtime_token": "cp.fresh.jwt", "expires_in": 3600}
+
+    def fake_post(url, headers, timeout):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso.get_settings",
+        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai"),
+    )
+    monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", fake_post)
+
+    result = await refresh_runtime_token(_refresh_request(auth_header="Bearer cp.current.jwt"))
+
+    assert result == {"runtime_token": "cp.fresh.jwt", "expires_in": 3600}
+    assert captured["url"] == "https://control.longhouse.ai/api/identity/refresh-runtime-token"
+    assert captured["headers"] == {"Authorization": "Bearer cp.current.jwt"}
+    assert captured["timeout"] == 10.0
+
+
+@pytest.mark.asyncio
+async def test_refresh_runtime_token_rejects_missing_bearer(monkeypatch):
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso.get_settings",
+        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai"),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await refresh_runtime_token(_refresh_request(auth_header=None))
+    assert exc.value.status_code == 401
+    assert "Missing bearer" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_refresh_runtime_token_rejects_device_token(monkeypatch):
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso.get_settings",
+        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai"),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await refresh_runtime_token(_refresh_request(auth_header="Bearer zdt_abc"))
+    assert exc.value.status_code == 401
+    assert "Runtime token required" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_refresh_runtime_token_returns_404_when_not_hosted(monkeypatch):
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso.get_settings",
+        lambda: SimpleNamespace(control_plane_url=None),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await refresh_runtime_token(_refresh_request(auth_header="Bearer cp.jwt"))
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_refresh_runtime_token_propagates_cp_rejection(monkeypatch):
+    class FakeResponse:
+        status_code = 401
+        def json(self):
+            return {"detail": "Invalid or expired runtime token"}
+
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso.get_settings",
+        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai"),
+    )
+    monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", lambda *a, **k: FakeResponse())
+
+    with pytest.raises(HTTPException) as exc:
+        await refresh_runtime_token(_refresh_request(auth_header="Bearer cp.expired.jwt"))
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_refresh_runtime_token_returns_502_on_cp_network_error(monkeypatch):
+    def fake_post(*a, **k):
+        raise httpx.HTTPError("connection refused")
+
+    monkeypatch.setattr(
+        "zerg.routers.auth_sso.get_settings",
+        lambda: SimpleNamespace(control_plane_url="https://control.longhouse.ai"),
+    )
+    monkeypatch.setattr("zerg.routers.auth_sso.httpx.post", fake_post)
+
+    with pytest.raises(HTTPException) as exc:
+        await refresh_runtime_token(_refresh_request(auth_header="Bearer cp.jwt"))
+    assert exc.value.status_code == 502
