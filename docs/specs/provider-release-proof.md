@@ -261,7 +261,12 @@ from `raw_fresh_remote` while dropping noisy path fields. A protocol fingerprint
 status change such as `ok` -> `missing` is contract drift signal. Sauron now
 calls this proof wrapper for staged Codex release assets and attaches the
 Longhouse diff result as `canaries.golden_envelope`; `baseline_missing` remains
-yellow evidence until a real green Codex proof is accepted.
+yellow evidence until a real green Codex proof is accepted. Sauron also stages
+the previous Codex release asset and runs an explicit Longhouse
+`--base/--candidate` proof diff when both old/new assets are available; that
+result is `canaries.release_differential`. Red old/new proof drift is a
+top-level release-risk signal, while missing accepted baselines remain separate
+yellow evidence.
 
 Exit-code contract:
 
