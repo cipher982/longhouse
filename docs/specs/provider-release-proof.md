@@ -220,6 +220,10 @@ Current implementation wraps existing source canaries:
 - Codex: `scripts/qa/codex-provider-release-canary.py`
 - Gemini: explicit yellow `provider_release_proof_not_implemented`
 
+Codex normalization preserves source-review status, binary identity presence,
+operation evidence, canary statuses/reasons, and stable protocol fingerprints
+from `raw_fresh_remote` while dropping noisy path fields.
+
 Exit-code contract:
 
 - `red` exits `1`.
@@ -313,9 +317,8 @@ should not by itself count as contract drift.
 
 ## Next Work
 
-1. Add Codex normalization coverage using the existing Codex release canary.
-2. Add Claude no-token scenario coverage for launch/channel/session binding.
-3. Decide whether Antigravity real-agy send belongs in scheduled CI or remains
+1. Add Claude no-token scenario coverage for launch/channel/session binding.
+2. Decide whether Antigravity real-agy send belongs in scheduled CI or remains
    an opt-in live-token proof.
-4. Accept the first real OpenCode proof baseline from a known-good version.
-5. Start old/new differential proof runs from accepted baselines.
+3. Accept the first real OpenCode proof baseline from a known-good version.
+4. Start old/new differential proof runs from accepted baselines.

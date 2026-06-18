@@ -62,6 +62,35 @@ def _compact_status(info: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _compact_protocol_fingerprints(info: dict[str, Any]) -> dict[str, Any] | None:
+    fingerprints = info.get("protocol_fingerprints")
+    if not isinstance(fingerprints, dict):
+        return None
+    return {
+        key: fingerprints.get(key)
+        for key in (
+            "status",
+            "responses",
+            "notifications",
+            "server_requests",
+            "response_errors",
+        )
+        if key in fingerprints
+    }
+
+
+def _compact_codex_canary(info: dict[str, Any]) -> dict[str, Any]:
+    compact = _compact_status(info)
+    if info.get("reason") is not None:
+        compact["reason"] = info.get("reason")
+    if info.get("version") is not None:
+        compact["version"] = info.get("version")
+    protocol_fingerprints = _compact_protocol_fingerprints(info)
+    if protocol_fingerprints is not None:
+        compact["protocol_fingerprints"] = protocol_fingerprints
+    return compact
+
+
 def _compact_operation(info: dict[str, Any]) -> dict[str, Any]:
     return {
         key: info.get(key)
@@ -71,14 +100,15 @@ def _compact_operation(info: dict[str, Any]) -> dict[str, Any]:
 
 
 def _normalize_source_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
-    return {
+    canary_compactor = _compact_codex_canary if artifact.get("provider") == "codex" else _compact_status
+    normalized: dict[str, Any] = {
         "artifact_kind": artifact.get("artifact_kind"),
         "provider": artifact.get("provider"),
         "provider_version": artifact.get("provider_version") or artifact.get("codex_version"),
         "verdict": artifact.get("verdict"),
         "failure_code": artifact.get("failure_code"),
         "canaries": {
-            name: _compact_status(info)
+            name: canary_compactor(info)
             for name, info in sorted(dict(artifact.get("canaries") or {}).items())
             if isinstance(info, dict)
         },
@@ -88,6 +118,18 @@ def _normalize_source_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
             if isinstance(info, dict)
         },
     }
+    if artifact.get("provider") == "codex":
+        source_review = artifact.get("source_review")
+        normalized["source_review"] = {
+            "status": source_review.get("status")
+            if isinstance(source_review, dict)
+            else None
+        }
+        normalized["codex"] = {
+            "binary_present": bool(artifact.get("codex_bin")),
+            "longhouse_commit_present": bool(artifact.get("longhouse_commit")),
+        }
+    return normalized
 
 
 def _classify(source_artifact: dict[str, Any]) -> tuple[str, str | None, str]:

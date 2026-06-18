@@ -116,13 +116,28 @@ artifact = {
     "artifact_kind": "codex_provider_release_canary",
     "provider": "codex",
     "codex_version": value("--provider-version", "codex 9.9.9"),
+    "codex_bin": value("--codex-bin"),
+    "longhouse_commit": "abc123",
     "verdict": "yellow" if source_review_status == "not_run" else "green",
     "failure_code": "insufficient_coverage" if source_review_status == "not_run" else None,
     "recommendation": "investigate_before_upgrade" if source_review_status == "not_run" else "upgrade_allowed",
+    "source_review": {"status": source_review_status, "note": value("--source-review-note", "")},
     "canaries": {
         "binary_identity": {
             "status": "pass",
+            "version": value("--provider-version", "codex 9.9.9"),
             "path": value("--codex-bin"),
+        },
+        "raw_fresh_remote": {
+            "status": "pass",
+            "protocol_fingerprints": {
+                "status": "ok",
+                "path": "/tmp/noisy/codex.jsonl",
+                "responses": {"initialize": {"platformFamily": "str"}},
+                "notifications": {"thread/started": {"threadId": "str"}},
+                "server_requests": {},
+                "response_errors": {},
+            },
         }
     },
     "operation_evidence": {
@@ -273,6 +288,15 @@ def test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest
         assert payload["verdict"] == "yellow"
         assert payload["failure_code"] == "insufficient_coverage"
         assert payload["normalized"]["provider_version"] == "codex 2.0.0"
+        assert payload["normalized"]["source_review"]["status"] == "not_run"
+        assert payload["normalized"]["codex"] == {
+            "binary_present": True,
+            "longhouse_commit_present": True,
+        }
+        assert payload["normalized"]["canaries"]["binary_identity"]["version"] == "codex 2.0.0"
+        fingerprints = payload["normalized"]["canaries"]["raw_fresh_remote"]["protocol_fingerprints"]
+        assert "path" not in fingerprints
+        assert fingerprints["responses"]["initialize"]["platformFamily"] == "str"
 
 
 def test_gemini_release_proof_is_explicit_yellow_gap() -> None:
