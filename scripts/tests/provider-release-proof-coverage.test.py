@@ -53,6 +53,7 @@ ALLOWED_PROOF_BOUNDARY = {
     "hermetic_or_launch_flag_shape",
     "fixture_or_hermetic",
     "path_or_override",
+    "isolated_npm_package",
     "real_release_asset",
     "hermetic_plus_manual_live_token",
     "manual_live_token",

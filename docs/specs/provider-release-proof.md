@@ -76,7 +76,7 @@ summary; update the JSON first when a provider/surface changes.
 
 | Surface | Covered | Evidence | Boundary | CI | Sauron release-watch | Baseline | Actionable today |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| install/stage exact version | no | none | none | no | source/profile only | no | no |
+| install/stage exact version | partial | Sauron stages npm-sourced `@anthropic-ai/claude-code@version` into an isolated artifact root and passes `.bin/claude` to profile/live canaries | isolated npm package | Sauron tests | yes for npm releases | no | yes if staging fails |
 | binary identity | yes | `provider-live-canary --provider claude`, `provider-release-profile-canary.py` | live_no_token or fake | `validate-provider-cli-canaries` | yes, through provider status | no | yes if binary missing/version fails |
 | auth/status shape | partial | `provider-live-canary --provider claude` binary/auth/channel checks | live_no_token | `validate-provider-cli-canaries` | yes if live proof configured | no | yes if red |
 | launch managed session | partial | `provider-control-e2e-canary.py`, `test_claude_channel_launch_cli.py` | hermetic | `validate-provider-cli-canaries`, `make test` | profile/live gate only | no | partial |
@@ -239,6 +239,12 @@ Current implementation wraps existing source canaries:
 - Claude/OpenCode/Antigravity: `scripts/qa/provider-live-canary.py`
 - Codex: `scripts/qa/codex-provider-release-canary.py`
 - Gemini: explicit yellow `provider_release_proof_not_implemented`
+
+Claude npm release-watch ticks now have exact-version package staging in Sauron:
+`@anthropic-ai/claude-code@<version>` is installed under the release artifact
+root and the staged `.bin/claude` path is passed to Longhouse profile/live
+canaries. This proves package staging and binary identity for npm-sourced
+release events, but not a full managed-session baseline yet.
 
 Claude normalization preserves no-token launch-contract shape: missing launch
 flags from `claude --help`, development-channel status/missing flags, and
