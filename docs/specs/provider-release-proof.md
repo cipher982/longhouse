@@ -116,6 +116,13 @@ Longhouse-owned proof artifact and proof-baseline diff for source-reviewed
 staged release assets, but it still needs the first accepted real baseline
 before old/new differential results can go green.
 
+Local smoke evidence, 2026-06-18: Codex `0.139.0` with
+`CODEX_RUN_FAKE_APP_SERVER=1` and `CODEX_RUN_RAW_FRESH_REMOTE=1` produced a
+yellow proof with real `tail_output` protocol fingerprint evidence. This is
+useful release evidence, but not yet enough for baseline acceptance because
+launch/reattach managed bridge evidence remains missing without the managed
+bridge canaries.
+
 ### OpenCode
 
 | Surface | Covered | Evidence | Boundary | CI | Sauron release-watch | Baseline | Actionable today |
@@ -200,8 +207,9 @@ Optional variables:
 - `SOURCE_REVIEW_STATUS` and `SOURCE_REVIEW_NOTE` pass Codex/Sauron source
   review evidence through without fabricating it.
 - `TIMEOUT_SECS` bounds the wrapped source canary.
-- `CODEX_RUN_FAKE_APP_SERVER`, `CODEX_RUN_MANAGED_TUI_ATTACH`, and
-  `CODEX_RUN_DETACHED_UI` enable opt-in Codex canary lanes.
+- `CODEX_RUN_FAKE_APP_SERVER`, `CODEX_RUN_RAW_FRESH_REMOTE`,
+  `CODEX_RUN_MANAGED_TUI_ATTACH`, and `CODEX_RUN_DETACHED_UI` enable opt-in
+  Codex canary lanes.
 
 The equivalent direct script entrypoint is:
 

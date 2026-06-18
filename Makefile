@@ -351,6 +351,7 @@ provider-release-proof: ## Emit provider release proof artifact; set PROVIDER=..
 	if [ -n "$(EVIDENCE_ROOT)" ]; then set -- "$$@" --evidence-root "$(EVIDENCE_ROOT)"; fi; \
 	if [ -n "$(TIMEOUT_SECS)" ]; then set -- "$$@" --timeout-secs "$(TIMEOUT_SECS)"; fi; \
 	if [ -n "$(CODEX_RUN_FAKE_APP_SERVER)" ]; then set -- "$$@" --codex-run-fake-app-server; fi; \
+	if [ -n "$(CODEX_RUN_RAW_FRESH_REMOTE)" ]; then set -- "$$@" --codex-run-raw-fresh-remote; fi; \
 	if [ -n "$(CODEX_RUN_MANAGED_TUI_ATTACH)" ]; then set -- "$$@" --codex-run-managed-tui-attach; fi; \
 	if [ -n "$(CODEX_RUN_DETACHED_UI)" ]; then set -- "$$@" --codex-run-detached-ui; fi; \
 	python3 "$$@"

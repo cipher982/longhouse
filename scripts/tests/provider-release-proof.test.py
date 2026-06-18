@@ -343,13 +343,18 @@ def test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest
             root,
             "codex",
             env={"FAKE_CODEX_ARGS_PATH": str(args_path)},
-            extra_args=["--provider-version", "codex 2.0.0"],
+            extra_args=[
+                "--provider-version",
+                "codex 2.0.0",
+                "--codex-run-raw-fresh-remote",
+            ],
         )
 
         assert result.returncode == 0
         codex_args = json.loads(args_path.read_text(encoding="utf-8"))
         assert codex_args[codex_args.index("--codex-bin") + 1] == str(root / "fake-provider")
         assert codex_args[codex_args.index("--source-review-status") + 1] == "not_run"
+        assert "--run-raw-fresh-remote" in codex_args
         assert payload["provider"] == "codex"
         assert payload["provider_version"] == "codex 2.0.0"
         assert payload["verdict"] == "yellow"

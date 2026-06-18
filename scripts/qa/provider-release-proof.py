@@ -271,6 +271,8 @@ def _run_source_canary(args: argparse.Namespace, raw_dir: Path) -> tuple[dict[st
             argv.extend(["--provider-version", str(args.provider_version)])
         if args.codex_run_fake_app_server:
             argv.append("--run-fake-app-server")
+        if args.codex_run_raw_fresh_remote:
+            argv.append("--run-raw-fresh-remote")
         if args.codex_run_managed_tui_attach:
             argv.append("--run-managed-tui-attach")
         if args.codex_run_detached_ui:
@@ -459,6 +461,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--codex-run-fake-app-server", action="store_true")
+    parser.add_argument("--codex-run-raw-fresh-remote", action="store_true")
     parser.add_argument("--codex-run-managed-tui-attach", action="store_true")
     parser.add_argument("--codex-run-detached-ui", action="store_true")
     return parser
