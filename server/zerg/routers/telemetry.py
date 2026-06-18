@@ -246,6 +246,12 @@ async def client_render_beacon(
         if latency_s > _MAX_LATENCY_S:
             dropped_range += 1
             event_render_beacons_total.labels(surface=b.surface, outcome="stale").inc()
+            if b.webkit is not None:
+                # Historical session reads can render minutes or hours after
+                # the underlying event was emitted. Keep those WebKit facts for
+                # forensics, but do not put stale samples into latency metrics.
+                persistable.append((b, int(round(latency_ms))))
+                accepted += 1
             continue
 
         webkit_stage = b.webkit.stage if b.webkit else None

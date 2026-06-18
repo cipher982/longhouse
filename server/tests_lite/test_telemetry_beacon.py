@@ -392,3 +392,53 @@ def test_beacon_persists_ios_webkit_diagnostics():
     recent = c.get(f"/telemetry/client-render/recent?session_id={session_id}&event_id=123").json()
     assert recent["items"][0]["surface"] == "ios"
     assert recent["items"][0]["webkit"] == webkit
+
+
+def test_beacon_persists_stale_ios_webkit_diagnostics_without_latency_sample():
+    c, factory = _client()
+    session_id = UUID("bbbbbbbb-1111-4222-8333-cccccccccccc")
+    now = int(time.time() * 1000)
+    with factory() as db:
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="opencode",
+                device_id="cinder",
+                environment="test",
+                project="telemetry",
+                started_at=datetime.now(timezone.utc),
+                user_messages=1,
+                assistant_messages=1,
+            )
+        )
+        db.commit()
+
+    webkit = {
+        "stage": "rendered",
+        "payload_byte_size": 8192,
+        "row_count": 50,
+        "latest_item_id": "assistant:old",
+        "render_duration_ms": 22,
+        "render_sequence": 3,
+        "js_failure_count": 0,
+        "should_stick_to_bottom": False,
+        "web_view_loaded": True,
+    }
+    resp = c.post(
+        "/telemetry/client-render",
+        json=_beacon(
+            session_id=str(session_id),
+            event_id="old",
+            surface="ios",
+            emitted_at_ms=now - 120_000,
+            rendered_at_ms=now,
+            webkit=webkit,
+        ),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["accepted"] == 1
+    assert resp.json()["dropped_range"] == 1
+
+    recent = c.get(f"/telemetry/client-render/recent?session_id={session_id}&event_id=old").json()
+    assert recent["items"][0]["surface"] == "ios"
+    assert recent["items"][0]["webkit"] == webkit
