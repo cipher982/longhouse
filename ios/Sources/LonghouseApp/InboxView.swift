@@ -588,8 +588,7 @@ final class TimelineViewModel: ObservableObject {
                 return
             }
             applyConnectivity(.authFailed)
-            // Auth errors override stale data — re-login is required.
-            state = .error("Session expired. Sign in again.")
+            appState.handleExpiredSession()
             logger.error("timeline refresh unauthenticated elapsed_ms=\(Int(Date().timeIntervalSince(startedAt) * 1000), privacy: .public)")
         } catch {
             guard generation == streamGeneration || generation == 0 else {
@@ -722,7 +721,7 @@ final class TimelineViewModel: ObservableObject {
             let reason = classifyStreamDisconnect(error)
             applyConnectivity(.streamDisconnected(reason), generation: generation)
             if let apiError = error as? LonghouseAPIError, case .notAuthenticated = apiError {
-                state = .error("Session expired. Sign in again.")
+                appState.handleExpiredSession()
             }
             logger.info("timeline stream disconnected reason=\(String(describing: reason), privacy: .public) error=\(error?.localizedDescription ?? "nil", privacy: .public)")
         }

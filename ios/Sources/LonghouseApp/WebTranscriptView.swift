@@ -489,6 +489,7 @@ struct WebTranscriptView: UIViewRepresentable {
         private var dragStartOffsetY: CGFloat?
         private var pendingPayload: WebTranscriptPreparedPayload?
         private var inFlightPayload: WebTranscriptPreparedPayload?
+        private var lastRenderedPayload: WebTranscriptPreparedPayload?
         private var lastPayload: String?
         private var lastDuplicatePayload: String?
         private var renderSequence = 0
@@ -536,6 +537,19 @@ struct WebTranscriptView: UIViewRepresentable {
                 diagnosticsEnabled: diagnosticsEnabled,
                 onDiagnostics: onDiagnostics
             )
+        }
+
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            Task { @MainActor in
+                self.onLifecycle?("webview_content_process_terminated")
+            }
+            isLoaded = false
+            jsFailureCount += 1
+            pendingPayload = pendingPayload ?? inFlightPayload ?? lastRenderedPayload
+            inFlightPayload = nil
+            lastPayload = nil
+            lastDuplicatePayload = nil
+            webView.loadHTMLString(WebTranscriptView.documentHTML, baseURL: nil)
         }
 
         func updateBottomInset(_ inset: CGFloat, on webView: WKWebView) {
@@ -700,6 +714,7 @@ struct WebTranscriptView: UIViewRepresentable {
                 let renderDurationMs = Int(Date().timeIntervalSince(renderStartedAt) * 1000)
                 if error == nil {
                     self.lastPayload = payload.base64
+                    self.lastRenderedPayload = payload
                 } else {
                     self.jsFailureCount += 1
                 }

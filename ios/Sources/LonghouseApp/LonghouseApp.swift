@@ -344,6 +344,14 @@ final class AppState: ObservableObject {
         authError = nil
     }
 
+    func handleExpiredSession() {
+        Task {
+            await clearLocalSession()
+            isValidating = false
+            WidgetCenter.shared.reloadAllTimelines()
+        }
+    }
+
     func resetForUITests() async {
         let previousURL = serverURL
 

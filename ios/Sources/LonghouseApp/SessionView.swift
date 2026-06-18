@@ -114,14 +114,14 @@ struct SessionView: View {
         }
         .task(id: sessionId) { await viewModel.start(sessionId: sessionId, appState: appState) }
         .onDisappear {
-            viewModel.stop()
+            viewModel.pauseRealtime()
         }
         .onChange(of: scenePhase) { _, newPhase in
             // SSE over URLSession is foreground-only per Apple's contract.
             // Pause (not stop) on background/inactive so we drop the dead
             // connection but keep the session + transcript; restart on return
-            // to active. stop() is reserved for nav-away (.onDisappear) so an
-            // unlock resumes the same session instead of erasing it.
+            // to active. SwiftUI can also fire onDisappear during app switch,
+            // so that path must be non-destructive too.
             switch newPhase {
             case .active:
                 Task { await viewModel.start(sessionId: sessionId, appState: appState) }
@@ -1683,7 +1683,7 @@ final class SessionViewModel: ObservableObject {
         }
         guard enableRealtime else { return }
         // Re-attach only when the session changed or the stream was torn down
-        // (e.g. scenePhase != .active called stop()). Otherwise a scenePhase
+        // (e.g. scenePhase != .active called pauseRealtime()). Otherwise a scenePhase
         // flap would churn URLSessions and polling tasks.
         if sessionChanged || streamTask == nil {
             startStream(sessionId: sessionId, appState: appState)

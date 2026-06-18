@@ -74,6 +74,8 @@ struct HostedAuthFlowTests {
 
         #expect(payload.code == "handoff123")
         #expect(payload.runtimeToken == nil)
+        #expect(payload.tenant == "testuser")
+        #expect(payload.instanceURL == "https://testuser.longhouse.ai")
     }
 
     @Test
@@ -87,6 +89,7 @@ struct HostedAuthFlowTests {
         #expect(payload.error == "instance_not_found")
         #expect(payload.tenant == "testuser")
         #expect(payload.runtimeToken == nil)
+        #expect(payload.code == nil)
     }
 
     @Test
