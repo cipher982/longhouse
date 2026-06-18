@@ -17,6 +17,7 @@ mod heartbeat;
 mod machine_presence;
 mod managed_bridge_scan;
 mod managed_claude_scan;
+mod managed_opencode_scan;
 mod managed_reaper;
 mod observability;
 mod opencode_db;

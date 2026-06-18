@@ -31,6 +31,7 @@ use crate::flight::FlightRecorder;
 use crate::heartbeat;
 use crate::managed_bridge_scan;
 use crate::managed_claude_scan;
+use crate::managed_opencode_scan;
 use crate::managed_reaper::ManagedBridgeReaper;
 use crate::outbox;
 use crate::pipeline::compressor::CompressionAlgo;
@@ -272,6 +273,7 @@ struct ManagedObservationScanResult {
     reason: &'static str,
     codex_observations: Vec<managed_bridge_scan::CodexBridgeObservation>,
     claude_observations: Vec<managed_claude_scan::ClaudeChannelObservation>,
+    opencode_observations: Vec<managed_opencode_scan::OpenCodeServerObservation>,
     elapsed_ms: u64,
 }
 
@@ -1021,6 +1023,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 reason = result.reason,
                                 codex_count = result.codex_observations.len(),
                                 claude_count = result.claude_observations.len(),
+                                opencode_count = result.opencode_observations.len(),
                                 elapsed_ms = result.elapsed_ms,
                                 "Managed observation scan was slow"
                             );
@@ -1029,6 +1032,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                                 reason = result.reason,
                                 codex_count = result.codex_observations.len(),
                                 claude_count = result.claude_observations.len(),
+                                opencode_count = result.opencode_observations.len(),
                                 elapsed_ms = result.elapsed_ms,
                                 "Managed observation scan completed"
                             );
@@ -1079,6 +1083,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             &status_path,
                             &result.codex_observations,
                             &result.claude_observations,
+                            &result.opencode_observations,
                             serde_json::to_value(control_channel_status.snapshot()).ok(),
                             Some(unmanaged_binding_override),
                             Some(adaptive_limiter.as_ref()),
@@ -1281,6 +1286,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &observations,
                 );
                 let claude_observations = managed_claude_scan::collect_observations();
+                let opencode_observations = managed_opencode_scan::collect_observations();
                 reconcile_claude_terminal_signals(
                     &mut live_claude_channels,
                     &mut pending_claude_terminal_signals,
@@ -1323,6 +1329,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &status_path,
                     &observations,
                     &claude_observations,
+                    &opencode_observations,
                     serde_json::to_value(control_channel_status.snapshot()).ok(),
                     Some(unmanaged_binding_override),
                     Some(adaptive_limiter.as_ref()),
@@ -1371,6 +1378,7 @@ fn write_local_status_snapshot(
     status_path: &Path,
     observations: &[managed_bridge_scan::CodexBridgeObservation],
     claude_observations: &[managed_claude_scan::ClaudeChannelObservation],
+    opencode_observations: &[managed_opencode_scan::OpenCodeServerObservation],
     control_channel: Option<Value>,
     unmanaged_session_binding_override: Option<&[heartbeat::UnmanagedSessionBinding]>,
     limiter: Option<&crate::scheduler::AdaptiveLimiter>,
@@ -1402,6 +1410,14 @@ fn write_local_status_snapshot(
             claude_observations,
             now,
         ));
+    payload
+        .managed_sessions
+        .extend(heartbeat::leases_from_opencode_server_observations(
+            conn,
+            machine_id,
+            opencode_observations,
+            now,
+        ));
     payload.managed_sessions.sort_by(|a, b| {
         a.provider
             .cmp(&b.provider)
@@ -1428,6 +1444,7 @@ fn write_local_status_snapshot(
         &payload.unmanaged_session_bindings,
         observations,
         claude_observations,
+        opencode_observations,
     );
     session_snapshot_state.annotate(&mut payload);
     // Compute the fresh ledger view up front so a read failure is both
@@ -1767,10 +1784,12 @@ fn maybe_start_managed_observation_scan(
         let started = Instant::now();
         let codex_observations = managed_bridge_scan::collect_observations();
         let claude_observations = managed_claude_scan::collect_observations();
+        let opencode_observations = managed_opencode_scan::collect_observations();
         ManagedObservationScanResult {
             reason,
             codex_observations,
             claude_observations,
+            opencode_observations,
             elapsed_ms: started.elapsed().as_millis() as u64,
         }
     });
@@ -3113,6 +3132,7 @@ mod tests {
             status.path(),
             &[],
             &[],
+            &[],
             None,
             Some(&cached),
             None,
@@ -3145,6 +3165,7 @@ mod tests {
             status.path(),
             &[],
             &[],
+            &[],
             None,
             Some(&cached),
             None,
@@ -3160,6 +3181,7 @@ mod tests {
             &None,
             "cinder",
             status.path(),
+            &[],
             &[],
             &[],
             None,
@@ -3178,6 +3200,7 @@ mod tests {
             &None,
             "cinder",
             status.path(),
+            &[],
             &[],
             &[],
             None,

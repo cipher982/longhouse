@@ -20,7 +20,6 @@ from datetime import timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
-import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy import text
@@ -695,6 +694,211 @@ def test_heartbeat_empty_resolved_sessions_detaches_missing_managed_control(tmp_
         with SessionLocal() as db:
             connection = db.query(SessionConnection).one()
             assert connection.state == "detached"
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_heartbeat_resolved_opencode_server_bridge_keeps_live_control(tmp_path):
+    from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+    from zerg.services.agents.kernel_capabilities import project_session_capabilities
+
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+    session_id = uuid4()
+
+    try:
+        with SessionLocal() as db:
+            session = AgentSession(
+                id=session_id,
+                provider="opencode",
+                environment="laptop",
+                started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
+                provider_session_id="opencode-native-session",
+                execution_home="managed_local",
+                managed_transport="opencode_server_bridge",
+                device_id="testclient",
+                user_messages=1,
+                assistant_messages=1,
+                tool_calls=0,
+                is_writable_head=1,
+            )
+            db.add(session)
+            db.flush()
+            _thread, _run, connection = seed_managed_kernel_rows(
+                db,
+                session,
+                control_plane="opencode_server_bridge",
+                can_terminate=True,
+            )
+            connection.device_id = "testclient"
+            db.commit()
+
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.7.0",
+                "daemon_pid": 42,
+                "sessions": [
+                    {
+                        "session_id": str(session_id),
+                        "provider": "opencode",
+                        "provider_session_id": "opencode-native-session",
+                        "control_path": "managed",
+                        "presentation_state": "managed_attached",
+                        "state": "attached",
+                        "phase": "idle",
+                        "phase_observed_at": "2026-05-05T11:59:58Z",
+                        "last_activity_at": "2026-05-05T11:59:58Z",
+                        "workspace": {"cwd": "/Users/test/git/zerg", "label": "zerg"},
+                        "process": {"pid": 4301, "started_at": "2026-05-05T11:20:00Z"},
+                        "bridge": {
+                            "bridge_pid": 4301,
+                            "heartbeat_at": "2026-05-05T11:59:58Z",
+                            "status": "ready",
+                            "launch_mode": "server_bridge",
+                        },
+                        "evidence": {
+                            "process_observed": True,
+                            "transcript_observed": True,
+                            "join_keys": [
+                                f"session_id={session_id}",
+                                "provider_session_id=opencode-native-session",
+                                "opencode_pid=4301",
+                            ],
+                        },
+                        "reason_codes": [],
+                    }
+                ],
+            },
+        )
+
+        assert response.status_code == 204, response.text
+        with SessionLocal() as db:
+            connection = db.query(SessionConnection).one()
+            assert connection.control_plane == "opencode_server_bridge"
+            assert connection.state == "attached"
+            assert connection.device_id == "testclient"
+            caps = project_session_capabilities(db, session_id=session_id)
+            assert caps.live_control_available is True
+            assert caps.can_send_input is True
+            assert caps.can_steer_active_turn is False
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_heartbeat_repeated_opencode_digest_repairs_live_send_capabilities(monkeypatch, tmp_path):
+    import zerg.routers.heartbeat as heartbeat_router
+    from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+    from zerg.services.agents.kernel_capabilities import project_session_capabilities
+
+    SessionLocal = _make_db(tmp_path)
+    client, api_app_ref = _make_client(SessionLocal)
+    session_id = uuid4()
+
+    def fail_upsert(*args, **kwargs):
+        raise AssertionError("unchanged digest should refresh without full managed lease upsert")
+
+    try:
+        with SessionLocal() as db:
+            session = AgentSession(
+                id=session_id,
+                provider="opencode",
+                environment="laptop",
+                started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
+                provider_session_id="opencode-native-session",
+                execution_home="managed_local",
+                managed_transport="opencode_server_bridge",
+                device_id="testclient",
+                user_messages=1,
+                assistant_messages=1,
+                tool_calls=0,
+                is_writable_head=1,
+            )
+            db.add(session)
+            db.flush()
+            _thread, _run, connection = seed_managed_kernel_rows(
+                db,
+                session,
+                control_plane="opencode_server_bridge",
+                can_send_input=False,
+                can_interrupt=False,
+                can_terminate=False,
+            )
+            connection.device_id = "testclient"
+            connection.can_send_input = 0
+            connection.can_interrupt = 0
+            connection.can_terminate = 0
+            connection.can_tail_output = 0
+            connection.can_resume = 0
+            db.add(
+                AgentHeartbeat(
+                    device_id="testclient",
+                    received_at=datetime(2026, 5, 5, 11, 1, tzinfo=timezone.utc),
+                    raw_json=json.dumps({"sessions_digest": "opencode-digest-1"}),
+                    sessions_digest="opencode-digest-1",
+                    sessions_sequence=1,
+                )
+            )
+            db.commit()
+
+        monkeypatch.setattr(heartbeat_router, "upsert_managed_control_leases", fail_upsert)
+
+        response = client.post(
+            "/api/agents/heartbeat",
+            json={
+                "version": "0.7.0",
+                "daemon_pid": 42,
+                "sessions_digest": "opencode-digest-1",
+                "sessions_sequence": 2,
+                "sessions": [
+                    {
+                        "session_id": str(session_id),
+                        "provider": "opencode",
+                        "provider_session_id": "opencode-native-session",
+                        "control_path": "managed",
+                        "presentation_state": "managed_attached",
+                        "state": "attached",
+                        "phase": "idle",
+                        "phase_observed_at": "2026-05-05T11:59:58Z",
+                        "last_activity_at": "2026-05-05T11:59:58Z",
+                        "workspace": {"cwd": "/Users/test/git/zerg", "label": "zerg"},
+                        "process": {"pid": 4301, "started_at": "2026-05-05T11:20:00Z"},
+                        "bridge": {
+                            "bridge_pid": 4301,
+                            "heartbeat_at": "2026-05-05T11:59:58Z",
+                            "status": "ready",
+                            "launch_mode": "server_bridge",
+                        },
+                        "evidence": {
+                            "process_observed": True,
+                            "transcript_observed": True,
+                            "join_keys": [
+                                f"session_id={session_id}",
+                                "provider_session_id=opencode-native-session",
+                                "opencode_pid=4301",
+                            ],
+                        },
+                        "reason_codes": [],
+                    }
+                ],
+            },
+        )
+
+        assert response.status_code == 204, response.text
+        with SessionLocal() as db:
+            connection = db.query(SessionConnection).one()
+            assert connection.control_plane == "opencode_server_bridge"
+            assert connection.state == "attached"
+            assert connection.can_send_input == 1
+            assert connection.can_interrupt == 1
+            assert connection.can_terminate == 1
+            assert connection.can_tail_output == 1
+            assert connection.can_resume == 0
+            caps = project_session_capabilities(db, session_id=session_id)
+            assert caps.live_control_available is True
+            assert caps.can_send_input is True
+            assert caps.can_interrupt is True
+            assert caps.can_steer_active_turn is False
     finally:
         api_app_ref.dependency_overrides = {}
 

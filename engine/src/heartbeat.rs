@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 use crate::build_identity::BuildIdentity;
 use crate::managed_bridge_scan::CodexBridgeObservation;
 use crate::managed_claude_scan::ClaudeChannelObservation;
+use crate::managed_opencode_scan::OpenCodeServerObservation;
 
 /// Captured once per daemon process at the first write_status_file call.
 /// Compared against the on-disk binary mtime to detect "restart pending".
@@ -555,6 +556,54 @@ pub fn leases_from_claude_channel_observations(
     leases
 }
 
+/// Build managed-session leases for OpenCode server-bridge sessions.
+///
+/// OpenCode does not have a separate lease sidecar like Codex. A live
+/// `opencode serve` process plus Longhouse's private bridge state is the
+/// readiness observation. Dead state files are omitted from the complete
+/// heartbeat snapshot so the Runtime Host can detach the prior connection.
+pub fn leases_from_opencode_server_observations(
+    conn: &rusqlite::Connection,
+    machine_id: &str,
+    observations: &[OpenCodeServerObservation],
+    now: DateTime<Utc>,
+) -> Vec<ManagedSessionLease> {
+    let phase_overlay = load_managed_phase_overlay(conn);
+    let sequence = now.timestamp_millis().max(0) as u64;
+    let observed_at = now.to_rfc3339();
+    let mut leases = Vec::with_capacity(observations.len());
+
+    for obs in observations {
+        if !obs.server_alive {
+            continue;
+        }
+        let overlay = phase_overlay.get(&obs.session_id);
+        leases.push(ManagedSessionLease {
+            session_id: obs.session_id.clone(),
+            provider: "opencode".to_string(),
+            machine_id: machine_id.trim().to_string(),
+            sequence,
+            state: "attached".to_string(),
+            phase: Some(
+                overlay
+                    .and_then(|row| normalize_managed_phase(row.phase.as_deref()))
+                    .unwrap_or_else(|| "idle".to_string()),
+            ),
+            tool_name: overlay.and_then(|row| row.tool_name.clone()),
+            bridge_status: Some("ready".to_string()),
+            thread_subscription_status: None,
+            observed_at: overlay
+                .and_then(|row| row.observed_at.clone())
+                .unwrap_or_else(|| obs.updated_at.clone())
+                .if_empty(observed_at.clone()),
+            lease_ttl_ms: 15 * 60 * 1000,
+        });
+    }
+
+    leases.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+    leases
+}
+
 pub fn filter_unmanaged_bindings_owned_by_managed_observations(
     bindings: Vec<UnmanagedSessionBinding>,
     codex_observations: &[CodexBridgeObservation],
@@ -577,12 +626,17 @@ pub fn resolved_sessions_from_observations(
     unmanaged_bindings: &[UnmanagedSessionBinding],
     codex_observations: &[CodexBridgeObservation],
     claude_observations: &[ClaudeChannelObservation],
+    opencode_observations: &[OpenCodeServerObservation],
 ) -> Vec<ResolvedLocalSession> {
     let codex_by_session: HashMap<&str, &CodexBridgeObservation> = codex_observations
         .iter()
         .map(|obs| (obs.session_id.as_str(), obs))
         .collect();
     let claude_by_session: HashMap<&str, &ClaudeChannelObservation> = claude_observations
+        .iter()
+        .map(|obs| (obs.session_id.as_str(), obs))
+        .collect();
+    let opencode_by_session: HashMap<&str, &OpenCodeServerObservation> = opencode_observations
         .iter()
         .map(|obs| (obs.session_id.as_str(), obs))
         .collect();
@@ -597,6 +651,10 @@ pub fn resolved_sessions_from_observations(
             "claude" => sessions.push(resolved_managed_claude_session(
                 lease,
                 claude_by_session.get(lease.session_id.as_str()).copied(),
+            )),
+            "opencode" => sessions.push(resolved_managed_opencode_session(
+                lease,
+                opencode_by_session.get(lease.session_id.as_str()).copied(),
             )),
             _ => sessions.push(resolved_managed_generic_session(lease)),
         }
@@ -622,6 +680,64 @@ pub fn resolved_sessions_from_observations(
             })
     });
     sessions
+}
+
+fn resolved_managed_opencode_session(
+    lease: &ManagedSessionLease,
+    obs: Option<&OpenCodeServerObservation>,
+) -> ResolvedLocalSession {
+    let provider_session_id = obs.map(|obs| obs.provider_session_id.clone());
+    let transcript_observed = provider_session_id.is_some();
+    let process_pid = obs.and_then(|obs| obs.pid);
+    let mut join_keys = vec![format!("session_id={}", lease.session_id)];
+    if let Some(provider_session_id) = provider_session_id.as_deref() {
+        join_keys.push(format!("provider_session_id={provider_session_id}"));
+    }
+    if let Some(pid) = process_pid {
+        join_keys.push(format!("opencode_pid={pid}"));
+    }
+
+    ResolvedLocalSession {
+        session_id: Some(lease.session_id.clone()),
+        provider: lease.provider.clone(),
+        provider_session_id,
+        control_path: "managed".to_string(),
+        presentation_state: managed_presentation_state(&lease.state),
+        state: lease.state.clone(),
+        phase: lease.phase.clone(),
+        tool_name: lease.tool_name.clone(),
+        phase_observed_at: Some(lease.observed_at.clone()),
+        last_activity_at: Some(lease.observed_at.clone()),
+        workspace: workspace_from_cwd(obs.and_then(|obs| obs.cwd.clone())),
+        process: ResolvedProcess {
+            pid: process_pid,
+            process_start_time: None,
+            started_at: obs
+                .map(|obs| obs.started_at.clone())
+                .filter(|value| !value.trim().is_empty()),
+        },
+        bridge: ResolvedBridge {
+            bridge_pid: process_pid,
+            app_server_pid: None,
+            ws_url: None,
+            heartbeat_at: obs
+                .map(|obs| obs.updated_at.clone())
+                .filter(|value| !value.trim().is_empty()),
+            status: lease.bridge_status.clone(),
+            thread_subscription_status: None,
+            launch_mode: Some("server_bridge".to_string()),
+            ui_attached: None,
+            ui_presence: None,
+        },
+        evidence: ResolvedEvidence {
+            process_observed: obs.is_some_and(|obs| obs.server_alive),
+            transcript_observed,
+            bridge_state: lease.bridge_status.clone(),
+            hook_seen_at: None,
+            join_keys,
+        },
+        reason_codes: Vec::new(),
+    }
 }
 
 fn resolved_managed_codex_session(
@@ -1468,7 +1584,7 @@ mod tests {
 
         let observations = vec![foreground, background];
         let leases = leases_from_observations(&conn, "cinder", &observations, now);
-        let sessions = resolved_sessions_from_observations(&leases, &[], &observations, &[]);
+        let sessions = resolved_sessions_from_observations(&leases, &[], &observations, &[], &[]);
 
         let foreground_session = sessions
             .iter()
@@ -1798,7 +1914,8 @@ mod tests {
         };
         let unmanaged = test_binding("claude", "claude-unmanaged", 333);
 
-        let sessions = resolved_sessions_from_observations(&[lease], &[unmanaged], &[obs], &[]);
+        let sessions =
+            resolved_sessions_from_observations(&[lease], &[unmanaged], &[obs], &[], &[]);
 
         assert_eq!(sessions.len(), 2);
         let managed = sessions
@@ -1894,7 +2011,7 @@ mod tests {
             lease_ttl_ms: 900_000,
         };
 
-        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[obs]);
+        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[obs], &[]);
 
         assert_eq!(sessions.len(), 1);
         let session = &sessions[0];
@@ -1923,7 +2040,7 @@ mod tests {
             lease_ttl_ms: 900_000,
         };
 
-        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[]);
+        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[]);
 
         assert_eq!(sessions.len(), 1);
         let session = &sessions[0];
@@ -1944,7 +2061,7 @@ mod tests {
     }
 
     #[test]
-    fn resolved_sessions_use_generic_managed_provider_projection() {
+    fn resolved_sessions_include_managed_opencode_server_bridge_evidence() {
         let lease = ManagedSessionLease {
             session_id: "managed-opencode".to_string(),
             provider: "opencode".to_string(),
@@ -1958,8 +2075,19 @@ mod tests {
             observed_at: "2026-05-05T12:00:00Z".to_string(),
             lease_ttl_ms: 900_000,
         };
+        let obs = OpenCodeServerObservation {
+            session_id: "managed-opencode".to_string(),
+            provider_session_id: "opencode-native-session".to_string(),
+            state_file: PathBuf::from("/tmp/managed-opencode.json"),
+            cwd: Some("/Users/test/git/acme".to_string()),
+            server_url: Some("http://127.0.0.1:12345".to_string()),
+            pid: Some(9876),
+            started_at: "2026-05-05T11:59:00Z".to_string(),
+            updated_at: "2026-05-05T12:00:00Z".to_string(),
+            server_alive: true,
+        };
 
-        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[]);
+        let sessions = resolved_sessions_from_observations(&[lease], &[], &[], &[], &[obs]);
 
         assert_eq!(sessions.len(), 1);
         let session = &sessions[0];
@@ -1969,12 +2097,24 @@ mod tests {
         assert_eq!(session.presentation_state, "managed_degraded");
         assert_eq!(session.state, "degraded");
         assert_eq!(session.phase.as_deref(), Some("needs_user"));
-        assert_eq!(session.provider_session_id, None);
-        assert_eq!(session.process.pid, None);
-        assert_eq!(session.evidence.process_observed, false);
+        assert_eq!(
+            session.provider_session_id.as_deref(),
+            Some("opencode-native-session")
+        );
+        assert_eq!(
+            session.workspace.cwd.as_deref(),
+            Some("/Users/test/git/acme")
+        );
+        assert_eq!(session.process.pid, Some(9876));
+        assert_eq!(session.evidence.process_observed, true);
+        assert_eq!(session.evidence.transcript_observed, true);
         assert_eq!(
             session.evidence.join_keys,
-            vec!["session_id=managed-opencode".to_string()]
+            vec![
+                "session_id=managed-opencode".to_string(),
+                "provider_session_id=opencode-native-session".to_string(),
+                "opencode_pid=9876".to_string(),
+            ]
         );
     }
 

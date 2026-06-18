@@ -21,6 +21,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
+from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import control_plane_for_provider
 from zerg.services.managed_provider_contracts import provider_for_control_plane
 from zerg.services.managed_provider_contracts import trusted_non_runner_control_planes
@@ -62,6 +63,19 @@ def _kernel_control_plane_for_provider(provider: str) -> str:
     return control_plane_for_provider(provider)
 
 
+def _connection_capabilities_for_provider(provider: str, control_plane: str) -> dict[str, int]:
+    contract = contract_for_provider(provider)
+    if contract is None or control_plane not in contract.control_planes:
+        return {}
+    return contract.connection_capabilities
+
+
+def _apply_connection_capabilities(conn: SessionConnection, capabilities: dict[str, int]) -> None:
+    for key, value in capabilities.items():
+        if getattr(conn, key) != value:
+            setattr(conn, key, value)
+
+
 def _mirror_connection_state(
     db: Session,
     *,
@@ -85,6 +99,7 @@ def _mirror_connection_state(
 
     kernel_state = _kernel_connection_state(control_state)
     control_plane = _kernel_control_plane_for_provider(provider)
+    connection_capabilities = _connection_capabilities_for_provider(provider, control_plane)
 
     if kernel_state in {"detached", "released", "ended"}:
         existing = (
@@ -133,6 +148,7 @@ def _mirror_connection_state(
         state=kernel_state,
         external_name=external_name,
         device_id=device_id,
+        **connection_capabilities,
     )
 
 
@@ -343,6 +359,20 @@ def refresh_managed_control_lease_health(
 
     seen_session_ids = {getattr(lease, "session_id", None) for lease in leases}
     seen_session_ids.discard(None)
+    provider_by_session_id: dict[Any, str] = {}
+    live_session_ids: set[Any] = set()
+    for lease in leases:
+        session_id = getattr(lease, "session_id", None)
+        if session_id is None:
+            continue
+        provider_by_session_id[session_id] = _normalized(getattr(lease, "provider", None)).lower() or "unknown"
+        control_state, _reason = _lease_control_state(
+            lease_state=_normalized(getattr(lease, "state", None)).lower() or "unknown",
+            bridge_status=_normalized(getattr(lease, "bridge_status", None)) or None,
+            thread_subscription_status=_normalized(getattr(lease, "thread_subscription_status", None)) or None,
+        )
+        if _kernel_connection_state(control_state) in {"attached", "degraded"}:
+            live_session_ids.add(session_id)
     normalized_device_id = _normalized(device_id)
     if not seen_session_ids or not normalized_device_id:
         return set()
@@ -360,6 +390,12 @@ def refresh_managed_control_lease_health(
     )
     for conn, session_id in rows:
         conn.last_health_at = seen_at
+        if session_id in live_session_ids:
+            capabilities = _connection_capabilities_for_provider(
+                provider_by_session_id.get(session_id, "unknown"),
+                _normalized(conn.control_plane),
+            )
+            _apply_connection_capabilities(conn, capabilities)
         touched.add(session_id)
     return touched
 
