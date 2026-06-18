@@ -97,7 +97,7 @@ first real no-token release-proof scenario after OpenCode/Codex shape stabilizes
 
 | Surface | Covered | Evidence | Boundary | CI | Sauron release-watch | Baseline | Actionable today |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| install/stage exact version | partial | Sauron/local binary canary; no generalized staged package install | current PATH or override | Sauron tests | yes | no | partial |
+| install/stage exact version | partial | Sauron stages the exact Codex GitHub release asset and passes it to `codex-provider-release-canary.py`; Longhouse tests the binary override path | real release asset | Longhouse canary tests + Sauron tests | yes for source-reviewed GitHub releases | no | yes if staging/version match fails |
 | binary identity | yes | `codex-provider-release-canary.py` | live_no_token or fake | `validate-provider-cli-canaries` | yes | no | yes |
 | auth/status shape | partial | static contract + app-server canary lanes | hermetic/live_no_token when enabled | `validate-provider-cli-canaries` | yes | no | partial |
 | launch managed session | yes | Codex bridge tests, `codex-provider-release-canary.py managed_tui_attach` | hermetic/live_no_token | `make test`, `validate-provider-cli-canaries` | yes | no | yes if canary red |
