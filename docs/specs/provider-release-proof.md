@@ -249,6 +249,27 @@ After that, release-watch can compare the new proof against the accepted proof.
 If the underlying canary behavior changes meaningfully, bump `scenario_version`
 before comparing new candidates to old accepted baselines.
 
+Initial utility:
+
+```bash
+scripts/qa/provider-release-proof-baseline.py accept \
+  --proof /tmp/proof.json \
+  --baseline-root /data/provider-release-proofs \
+  --json
+```
+
+This writes:
+
+```text
+{baseline_root}/{provider}/{scenario_id}/
+  accepted.json
+  versions/{provider_version}/proof.json
+  versions/{provider_version}/artifacts/
+```
+
+The utility copies referenced artifact files when they exist, so raw
+stdout/stderr and normalized contract artifacts stay available after acceptance.
+
 ## Phase 4 Differential Runs
 
 The release gate should eventually run:
@@ -262,6 +283,27 @@ diff A.normalized vs B.normalized
 Do not diff raw logs byte-for-byte. Ignore timestamps, UUIDs, absolute paths,
 token counts, streaming chunk boundaries, and model prose unless the scenario
 uses an explicit marker string.
+
+Initial utility:
+
+```bash
+scripts/qa/provider-release-proof-baseline.py diff \
+  --candidate /tmp/new-proof.json \
+  --baseline-root /data/provider-release-proofs \
+  --json
+```
+
+For direct old/new comparison without an accepted store:
+
+```bash
+scripts/qa/provider-release-proof-baseline.py diff \
+  --base /tmp/old-proof.json \
+  --candidate /tmp/new-proof.json \
+  --json
+```
+
+The first comparison view excludes `provider_version`; version is metadata and
+should not by itself count as contract drift.
 
 ## Next Work
 

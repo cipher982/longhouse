@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""Tests for provider release-proof baseline acceptance and diffing."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+BASELINE = REPO_ROOT / "scripts" / "qa" / "provider-release-proof-baseline.py"
+
+
+def _write_proof(root: Path, name: str, *, status: str = "pass", version: str = "1.2.3") -> Path:
+    proof_dir = root / name
+    artifact_dir = proof_dir / "evidence"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    source_artifact = artifact_dir / "source.json"
+    stdout = artifact_dir / "stdout.log"
+    stderr = artifact_dir / "stderr.log"
+    normalized = {
+        "artifact_kind": "provider_release_proof",
+        "provider": "opencode",
+        "provider_version": f"opencode {version}",
+        "verdict": "green" if status == "pass" else "red",
+        "failure_code": None if status == "pass" else "fake_drift",
+        "canaries": {"server_contract": {"status": status}},
+        "operation_evidence": {
+            "send_input": {
+                "status": status,
+                "level": "live_no_token",
+                "canary": "server_contract",
+            }
+        },
+    }
+    source_artifact.write_text(json.dumps({"raw": True}), encoding="utf-8")
+    stdout.write_text("stdout\n", encoding="utf-8")
+    stderr.write_text("", encoding="utf-8")
+    proof = {
+        "schema_version": 1,
+        "artifact_kind": "provider_release_proof",
+        "provider": "opencode",
+        "provider_version": f"opencode {version}",
+        "scenario_id": "opencode-release-proof-v1",
+        "scenario_version": 1,
+        "verdict": "green" if status == "pass" else "red",
+        "failure_code": None if status == "pass" else "fake_drift",
+        "normalized": normalized,
+        "artifacts": {
+            "source_artifact": str(source_artifact),
+            "stdout": str(stdout),
+            "stderr": str(stderr),
+        },
+    }
+    proof_path = proof_dir / "proof.json"
+    proof_path.write_text(json.dumps(proof), encoding="utf-8")
+    return proof_path
+
+
+def _run(args: list[str]) -> tuple[subprocess.CompletedProcess[str], dict]:
+    artifact = Path(args[args.index("--artifact") + 1]) if "--artifact" in args else None
+    result = subprocess.run(
+        [sys.executable, str(BASELINE), *args, "--json"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    payload = json.loads(result.stdout)
+    if artifact is not None:
+        assert artifact.exists()
+    return result, payload
+
+
+def test_accept_archives_proof_and_artifacts() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        proof_path = _write_proof(root, "candidate")
+        artifact = root / "acceptance.json"
+
+        result, payload = _run(
+            [
+                "accept",
+                "--proof",
+                str(proof_path),
+                "--baseline-root",
+                str(root / "baselines"),
+                "--artifact",
+                str(artifact),
+            ]
+        )
+
+        assert result.returncode == 0
+        assert payload["artifact_kind"] == "provider_release_proof_baseline_acceptance"
+        assert Path(payload["accepted_path"]).exists()
+        assert Path(payload["version_path"]).exists()
+        assert {"source_artifact", "stdout", "stderr"} <= set(payload["archived_artifacts"])
+
+
+def test_diff_against_accepted_baseline_matches() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        baseline_root = root / "baselines"
+        accepted = _write_proof(root, "accepted")
+        candidate = _write_proof(root, "candidate", version="1.2.4")
+        _run(["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)])
+
+        result, payload = _run(
+            [
+                "diff",
+                "--candidate",
+                str(candidate),
+                "--baseline-root",
+                str(baseline_root),
+            ]
+        )
+
+        assert result.returncode == 0
+        assert payload["verdict"] == "green"
+        assert payload["failure_code"] is None
+        assert payload["diff"]["status"] == "match"
+
+
+def test_diff_against_accepted_baseline_detects_drift() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        baseline_root = root / "baselines"
+        accepted = _write_proof(root, "accepted")
+        candidate = _write_proof(root, "candidate", status="fail", version="1.2.4")
+        _run(["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)])
+
+        result, payload = _run(
+            [
+                "diff",
+                "--candidate",
+                str(candidate),
+                "--baseline-root",
+                str(baseline_root),
+            ]
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "fake_drift"
+        assert payload["diff"]["status"] == "different"
+
+
+def test_diff_reports_missing_baseline_as_yellow() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        candidate = _write_proof(root, "candidate")
+
+        result, payload = _run(
+            [
+                "diff",
+                "--candidate",
+                str(candidate),
+                "--baseline-root",
+                str(root / "baselines"),
+            ]
+        )
+
+        assert result.returncode == 0
+        assert payload["verdict"] == "yellow"
+        assert payload["failure_code"] == "baseline_missing"
+        assert payload["diff"]["status"] == "not_compared"
+
+
+def test_diff_can_compare_explicit_old_and_new_proofs() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        old = _write_proof(root, "old")
+        new = _write_proof(root, "new", version="1.2.4")
+
+        result, payload = _run(["diff", "--base", str(old), "--candidate", str(new)])
+
+        assert result.returncode == 0
+        assert payload["verdict"] == "green"
+        assert payload["baseline"]["provider_version"] == "opencode 1.2.3"
+        assert payload["candidate"]["provider_version"] == "opencode 1.2.4"
+
+
+def main() -> int:
+    tests = [
+        test_accept_archives_proof_and_artifacts,
+        test_diff_against_accepted_baseline_matches,
+        test_diff_against_accepted_baseline_detects_drift,
+        test_diff_reports_missing_baseline_as_yellow,
+        test_diff_can_compare_explicit_old_and_new_proofs,
+    ]
+    for test in tests:
+        test()
+        print(f"PASS {test.__name__}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
