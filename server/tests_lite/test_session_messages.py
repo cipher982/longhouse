@@ -21,6 +21,7 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionMessage
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.models import Runner
@@ -551,6 +552,99 @@ def test_runtime_safe_transition_delivers_queued_message_without_presence(monkey
             assert message.delivery_status == "delivered"
             assert message.delivered_at is not None
     finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_runtime_safe_transition_drains_queued_session_input(monkeypatch, tmp_path):
+    from zerg.services.session_continuity import session_lock_manager
+    from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
+    from zerg.services.session_inputs import INPUT_STATUS_QUEUED
+    from zerg.services.session_inputs import create_session_input
+
+    session_local = _make_db(tmp_path)
+    send_calls: list[str] = []
+
+    with session_local() as db:
+        to_session = _seed_session(
+            db,
+            provider="codex",
+            execution_home="managed_local",
+            managed_transport="codex_app_server",
+            source_runner_id=7,
+            source_runner_name="cinder",
+            device_id="cinder",
+            device_name="cinder",
+        )
+        row = create_session_input(
+            db,
+            session_id=to_session.id,
+            text="queued from ios",
+            owner_id=1,
+            intent="queue",
+            status=INPUT_STATUS_QUEUED,
+            client_request_id="ios-runtime-drain-1",
+        )
+        input_id = int(row.id)
+
+    async def fake_send_text(
+        *,
+        db,
+        owner_id,
+        session,
+        text,
+        commis_id=None,
+        timeout_secs=15,
+        verify_turn_started=False,
+        verification_timeout_secs=None,
+        attachments=None,
+    ):
+        send_calls.append(text)
+        return SimpleNamespace(
+            ok=True,
+            error=None,
+            exit_code=0,
+            verified_turn_started=True,
+            verified_user_event_id=None,
+        )
+
+    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
+    monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_lock_release", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        "zerg.services.session_chat_impl._schedule_managed_local_active_phase_observation",
+        lambda **_kwargs: None,
+    )
+
+    client, api_app_ref = _make_client(session_local)
+    try:
+        response = client.post(
+            "/api/agents/runtime/events/batch",
+            json={
+                "events": [
+                    {
+                        "runtime_key": runtime_key_for_session("codex", str(to_session.id)),
+                        "session_id": str(to_session.id),
+                        "provider": "codex",
+                        "device_id": "cinder",
+                        "source": "codex_bridge",
+                        "kind": "phase_signal",
+                        "phase": "idle",
+                        "occurred_at": datetime.now(timezone.utc).isoformat(),
+                        "freshness_ms": phase_freshness_ms("idle"),
+                        "dedupe_key": "codex-idle-session-input-1",
+                        "payload": {},
+                    }
+                ]
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert send_calls == ["queued from ios"]
+
+        with session_local() as verify_db:
+            row = verify_db.query(SessionInput).filter(SessionInput.id == input_id).one()
+            assert row.status == INPUT_STATUS_DELIVERED
+            assert row.delivered_at is not None
+    finally:
+        asyncio.run(session_lock_manager.release(str(to_session.id)))
         api_app_ref.dependency_overrides = {}
 
 

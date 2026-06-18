@@ -892,6 +892,58 @@ def test_queue_drain_links_session_turn_to_session_input(monkeypatch, tmp_path):
         asyncio.run(session_lock_manager.release(str(session_id)))
 
 
+def test_queue_drain_requeues_transient_machine_control_unavailable(monkeypatch, tmp_path):
+    from fastapi.responses import JSONResponse
+
+    from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE_ERROR
+    from zerg.services.session_chat_impl import _drain_next_queued_input
+    from zerg.services.session_inputs import create_session_input
+    from zerg.services.session_turns import SESSION_TURN_ERROR_SEND_FAILED
+
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_live_session(session_local)
+
+    with session_local() as db:
+        row = create_session_input(
+            db,
+            session_id=session_id,
+            text="wait for control reconnect",
+            owner_id=user_id,
+            intent="queue",
+            status=INPUT_STATUS_QUEUED,
+            client_request_id="ios-drain-requeue-1",
+        )
+        input_id = int(row.id)
+        db_bind = db.get_bind()
+
+    async def fake_dispatch(*, lock_scope_id, request_id, **_kwargs):
+        await session_lock_manager.release(lock_scope_id, request_id)
+        return JSONResponse(
+            status_code=502,
+            content={
+                "accepted": False,
+                "error": MANAGED_CONTROL_UNAVAILABLE_ERROR,
+                "error_code": SESSION_TURN_ERROR_SEND_FAILED,
+            },
+        )
+
+    monkeypatch.setattr("zerg.services.session_chat_impl._dispatch_managed_local_text", fake_dispatch)
+
+    asyncio.run(
+        _drain_next_queued_input(
+            db_bind=db_bind,
+            session_id=session_id,
+            lock_scope_id=str(session_id),
+        )
+    )
+
+    with session_local() as db:
+        row = db.query(SessionInput).filter(SessionInput.id == input_id).one()
+        assert row.status == INPUT_STATUS_QUEUED
+        assert row.delivery_request_id is None
+        assert row.last_error == MANAGED_CONTROL_UNAVAILABLE_ERROR
+
+
 def test_client_request_id_different_text_conflicts(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     session_id, user_id = _seed_live_session(session_local)

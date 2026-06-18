@@ -263,6 +263,23 @@ def mark_failed(db: Session, input_id: int, *, error: str) -> None:
     db.commit()
 
 
+def requeue_delivering(db: Session, input_id: int, *, error: str | None = None) -> None:
+    """Move a claimed input back to queued after a transient dispatch miss."""
+    db.query(SessionInput).filter(
+        SessionInput.id == input_id,
+        SessionInput.status == INPUT_STATUS_DELIVERING,
+    ).update(
+        {
+            "status": INPUT_STATUS_QUEUED,
+            "delivery_request_id": None,
+            "last_error": str(error)[:500] if error else None,
+            "updated_at": datetime.now(timezone.utc),
+        },
+        synchronize_session=False,
+    )
+    db.commit()
+
+
 def requeue_stuck_delivering(db: Session, *, stale_after_secs: float = DELIVERING_STALE_AFTER_SECS) -> int:
     """Resolve `delivering` rows older than the threshold.
 
