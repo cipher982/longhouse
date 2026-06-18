@@ -1088,6 +1088,7 @@ name = "longhouse-engine"
 version = "0.1.26"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
  "clap",
  "crossbeam-channel",
