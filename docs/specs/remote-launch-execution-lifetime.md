@@ -195,9 +195,8 @@ Recommended shape:
   - `execution_lifetime`;
   - `initial_prompt`.
 - Runtime Host validates:
-  - omitted `execution_lifetime` defaults to `one_shot`;
-  - web/iOS clients should still send `execution_lifetime` explicitly so the
-    request is self-describing;
+  - omitted `execution_lifetime` preserves legacy behavior: `live_control`;
+  - new web/iOS clients must send `execution_lifetime` explicitly;
   - `one_shot` requires `initial_prompt`;
   - `live_control` may omit `initial_prompt`;
   - target machine advertises the matching provider operation.
