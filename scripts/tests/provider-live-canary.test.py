@@ -511,6 +511,22 @@ def test_opencode_live_canary_proves_server_and_no_token_contracts() -> None:
             payload["operation_evidence"]["transcript_binding"]["canary"]
             == "opencode_prompt_async_no_reply_delivery"
         )
+        projection = payload["session_projection"]
+        assert projection["artifact_kind"] == "provider_live_session_projection"
+        assert projection["provider"] == "opencode"
+        assert projection["status"] == "captured"
+        assert projection["provider_session_id"] == "ses_fake_provider_live"
+        assert projection["checks"]["session_create"]["status"] == "pass"
+        assert (
+            projection["checks"]["prompt_async_no_reply_delivery"][
+                "observed_message_count"
+            ]
+            == 1
+        )
+        assert (
+            projection["operation_statuses"]["transcript_binding"]["canary"]
+            == "opencode_prompt_async_no_reply_delivery"
+        )
         serialized = json.dumps(payload)
         assert "Reply with exactly this token" not in serialized
 

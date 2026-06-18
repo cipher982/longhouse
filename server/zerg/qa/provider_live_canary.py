@@ -456,6 +456,80 @@ def _provider_operation_evidence(provider: str, canaries: dict[str, dict[str, An
     return {}
 
 
+def _compact_session_projection_check(info: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: info.get(key)
+        for key in (
+            "status",
+            "failure_code",
+            "provider_session_id",
+            "observed_message_count",
+            "poll_attempts",
+            "pre_restart_poll_attempts",
+            "message_marker_sha256",
+            "elapsed_ms",
+        )
+        if info.get(key) is not None
+    }
+
+
+def _opencode_session_projection(
+    canaries: dict[str, dict[str, Any]],
+    operation_evidence: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    session_create = canaries.get("session_create") or {}
+    provider_session_id = str(session_create.get("provider_session_id") or "")
+    if not provider_session_id:
+        return None
+
+    required_operations = (
+        "launch_local",
+        "send_input",
+        "transcript_binding",
+        "reattach",
+    )
+    operation_statuses = {
+        name: {
+            key: operation_evidence[name].get(key)
+            for key in ("status", "level", "canary", "failure_code")
+            if operation_evidence[name].get(key) is not None
+        }
+        for name in sorted(operation_evidence)
+    }
+    status = "captured" if all((operation_evidence.get(name) or {}).get("status") == "pass" for name in required_operations) else "partial"
+    checks = {
+        name: _compact_session_projection_check(canary)
+        for name, canary in sorted(canaries.items())
+        if name
+        in {
+            "session_create",
+            "session_get",
+            "prompt_async_no_reply_delivery",
+            "process_restart_reattach_contract",
+            "session_abort",
+        }
+    }
+    return {
+        "artifact_kind": "provider_live_session_projection",
+        "provider": "opencode",
+        "status": status,
+        "provider_session_id": provider_session_id,
+        "classification_sidecar_path": session_create.get("classification_sidecar_path"),
+        "checks": checks,
+        "operation_statuses": operation_statuses,
+    }
+
+
+def _provider_session_projection(
+    provider: str,
+    canaries: dict[str, dict[str, Any]],
+    operation_evidence: dict[str, dict[str, Any]],
+) -> dict[str, Any] | None:
+    if provider == "opencode":
+        return _opencode_session_projection(canaries, operation_evidence)
+    return None
+
+
 def _classify(canaries: dict[str, dict[str, Any]]) -> tuple[str, str | None, str]:
     first_warn: str | None = None
     for name, canary in canaries.items():
@@ -1821,6 +1895,11 @@ def run_provider_live_canary(args: argparse.Namespace | Mapping[str, Any]) -> di
         raise ValueError(f"unsupported provider: {args.provider}")
     canaries = provider_result["canaries"]
     operation_evidence = _provider_operation_evidence(provider_result["provider"], canaries)
+    session_projection = _provider_session_projection(
+        provider_result["provider"],
+        canaries,
+        operation_evidence,
+    )
     verdict, failure_code, recommendation = _classify(canaries)
     artifact = {
         "schema_version": PROVIDER_STATUS_SCHEMA_VERSION,
@@ -1837,6 +1916,8 @@ def run_provider_live_canary(args: argparse.Namespace | Mapping[str, Any]) -> di
     }
     if operation_evidence:
         artifact["operation_evidence"] = operation_evidence
+    if session_projection:
+        artifact["session_projection"] = session_projection
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
     artifact_path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return artifact

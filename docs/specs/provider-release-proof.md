@@ -134,7 +134,7 @@ bridge canaries.
 | session id/path binding | partial | OpenCode bridge/channel state tests | hermetic | `make test` | provider-live sidecar classification | no | partial |
 | transcript/log parse | partial | live canary `session.messages` marker; no engine parser golden | live_no_token | `validate-provider-cli-canaries` | yes | release-proof no | partial |
 | ingest into Longhouse | partial | provider-live session classification and route tests | hermetic/live_no_token | `make test`, `validate-provider-cli-canaries` | yes | no | partial |
-| timeline/session projection | partial | session capability/view tests for OpenCode transport | hermetic | `make test` | no dedicated baseline | no | partial |
+| timeline/session projection | partial | session capability/view tests plus provider-live session projection captured by `provider_release_proof` | hermetic/live_no_token | `make test`, `validate-provider-cli-canaries` | yes | no | partial |
 | send input | yes | provider-live canary `prompt_async` noReply marker | live_no_token | `validate-provider-cli-canaries` | yes | no | yes |
 | interrupt/abort/steer | partial | provider-live abort endpoint; steer unsupported | live_no_token | `validate-provider-cli-canaries` | yes for interrupt | no | yes for abort, no for steer |
 | reattach/resume | yes | provider-live process restart/session recovery + attach shape | live_no_token | `validate-provider-cli-canaries` | yes | no | yes |
@@ -142,9 +142,10 @@ bridge canaries.
 | live-token behavior | no | manifest marks prompt/abort proof as next release lane | none | no | no | no | no |
 
 OpenCode is the best first provider for the proof lane because it has release
-asset staging and a no-token live server canary. Sauron now has a first
-candidate-envelope wrapper, but Longhouse did not previously own a
-`provider_release_proof` artifact.
+asset staging and a no-token live server canary. The source canary now emits a
+session projection for created session, transcript marker, restart/reattach,
+and abort evidence; the release-proof wrapper captures it as
+`normalized/session_projection.json`.
 
 ### Antigravity
 

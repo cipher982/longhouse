@@ -158,6 +158,19 @@ artifact = {
             "failure_code": None if verdict == "green" else "fake_provider_break",
         },
     },
+    "session_projection": {
+        "artifact_kind": "provider_live_session_projection",
+        "provider": provider,
+        "status": "captured" if verdict == "green" else "partial",
+        "provider_session_id": "ses_fake_release_proof",
+        "operation_statuses": {
+            "send_input": {
+                "status": "pass" if verdict == "green" else "fail",
+                "level": "live_no_token" if verdict == "green" else "none",
+                "canary": "server_contract",
+            }
+        },
+    },
 }
 Path(value("--artifact")).parent.mkdir(parents=True, exist_ok=True)
 Path(value("--artifact")).write_text(json.dumps(artifact), encoding="utf-8")
@@ -285,7 +298,8 @@ def test_opencode_release_proof_normalizes_source_canary() -> None:
         session_projection = _read_json(Path(payload["artifacts"]["session_projection"]))
         assert provider_contract["contract_operations"]["send_input"]["level"] == "live_no_token"
         assert operation_evidence["operation_evidence"]["send_input"]["status"] == "pass"
-        assert session_projection["status"] == "not_captured"
+        assert session_projection["status"] == "captured"
+        assert session_projection["projection"]["provider_session_id"] == "ses_fake_release_proof"
 
 
 def test_opencode_release_proof_blocks_on_source_canary_red() -> None:
