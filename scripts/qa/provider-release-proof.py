@@ -154,9 +154,14 @@ def _normalize_source_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
         )
         normalized["claude"] = {
             "launch_flags_missing": list(command_shape.get("missing") or []),
+            "launch_flags_failure_code": command_shape.get("failure_code"),
             "development_channels_status": channels_shape.get("status"),
             "development_channels_missing": list(channels_shape.get("missing") or []),
+            "development_channels_failure_code": channels_shape.get("failure_code"),
+            "development_channels_reason": channels_shape.get("reason"),
             "detached_pty_status": detached_pty_shape.get("status"),
+            "detached_pty_failure_code": detached_pty_shape.get("failure_code"),
+            "detached_pty_reason": detached_pty_shape.get("reason"),
             "detached_pty_platform": detached_pty_shape.get("platform"),
         }
     return normalized

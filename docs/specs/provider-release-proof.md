@@ -222,7 +222,9 @@ Current implementation wraps existing source canaries:
 
 Claude normalization preserves no-token launch-contract shape: missing launch
 flags from `claude --help`, development-channel status/missing flags, and
-detached PTY wrapper status/platform. This is not yet a full managed-session
+detached PTY wrapper status/platform. Failure codes and reasons stay in the
+typed Claude block so a dev-channel contract break differs from local PTY
+environment failure in old/new diffs. This is not yet a full managed-session
 launch proof or exact-version staged package lane.
 
 Codex normalization preserves source-review status, binary identity presence,

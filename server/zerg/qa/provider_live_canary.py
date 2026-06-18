@@ -1083,6 +1083,7 @@ def _run_claude_pty_wrapper_shape() -> dict[str, Any]:
         return _fail(
             "claude_detached_pty_unavailable",
             "Detached Claude launch on macOS requires script(1), but it was not found on PATH.",
+            platform=sys.platform,
         )
     return _status("pass", script_path=script_path, platform=sys.platform)
 

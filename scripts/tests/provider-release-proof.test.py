@@ -68,15 +68,26 @@ provider = value("--provider")
 if provider == "claude":
     missing = ["--session-id"] if os.environ.get("FAKE_CLAUDE_MISSING_SESSION_ID") == "1" else []
     channels_unconfirmed = os.environ.get("FAKE_CLAUDE_CHANNELS_UNCONFIRMED") == "1"
-    verdict = "red" if missing else "yellow" if channels_unconfirmed else "green"
+    channels_missing = os.environ.get("FAKE_CLAUDE_CHANNELS_MISSING") == "1"
+    pty_missing = os.environ.get("FAKE_CLAUDE_PTY_MISSING") == "1"
+    verdict = "red" if (missing or channels_missing or pty_missing) else "yellow" if channels_unconfirmed else "green"
+    failure_code = (
+        "claude_command_contract_missing"
+        if missing
+        else "claude_development_channels_contract_missing"
+        if channels_missing
+        else "claude_detached_pty_unavailable"
+        if pty_missing
+        else None
+    )
     artifact = {
         "artifact_kind": "provider_live_canary",
         "provider": "claude",
         "provider_version": "Claude Code 2.9.9",
         "verdict": verdict,
-        "failure_code": "claude_command_contract_missing" if missing else None,
+        "failure_code": failure_code,
         "recommendation": "block_upgrade_recommendation"
-        if missing
+        if failure_code
         else "investigate_before_upgrade"
         if channels_unconfirmed
         else "upgrade_allowed",
@@ -88,20 +99,31 @@ if provider == "claude":
                 "missing": missing,
             },
             "channels_shape": {
-                "status": "warn" if channels_unconfirmed else "pass",
+                "status": "fail" if channels_missing else "warn" if channels_unconfirmed else "pass",
+                "failure_code": "claude_development_channels_contract_missing"
+                if channels_missing
+                else None,
                 "reason": "claude_development_channels_contract_unconfirmed"
                 if channels_unconfirmed
                 else None,
-                "missing": ["--resume"] if channels_unconfirmed else [],
+                "missing": ["--dangerously-load-development-channels"]
+                if channels_missing
+                else ["--resume"]
+                if channels_unconfirmed
+                else [],
             },
-            "detached_pty_shape": {"status": "pass", "platform": "darwin"},
+            "detached_pty_shape": {
+                "status": "fail" if pty_missing else "pass",
+                "failure_code": "claude_detached_pty_unavailable" if pty_missing else None,
+                "platform": "darwin",
+            },
         },
         "operation_evidence": {
             "launch_local": {
-                "status": "fail" if missing else "pass",
-                "level": "none" if missing else "live_no_token",
+                "status": "fail" if failure_code else "pass",
+                "level": "none" if failure_code else "live_no_token",
                 "canary": "claude_launch_local_no_token",
-                "failure_code": "claude_command_contract_missing" if missing else None,
+                "failure_code": failure_code,
             }
         },
     }
@@ -362,9 +384,14 @@ def test_claude_release_proof_normalizes_no_token_contract_shape() -> None:
         assert payload["verdict"] == "yellow"
         assert payload["normalized"]["claude"] == {
             "launch_flags_missing": [],
+            "launch_flags_failure_code": None,
             "development_channels_status": "warn",
             "development_channels_missing": ["--resume"],
+            "development_channels_failure_code": None,
+            "development_channels_reason": "claude_development_channels_contract_unconfirmed",
             "detached_pty_status": "pass",
+            "detached_pty_failure_code": None,
+            "detached_pty_reason": None,
             "detached_pty_platform": "darwin",
         }
         assert payload["normalized"]["canaries"]["channels_shape"]["reason"] == (
@@ -388,9 +415,56 @@ def test_claude_release_proof_red_when_session_flag_missing() -> None:
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "claude_command_contract_missing"
         assert payload["normalized"]["claude"]["launch_flags_missing"] == ["--session-id"]
+        assert payload["normalized"]["claude"]["launch_flags_failure_code"] == (
+            "claude_command_contract_missing"
+        )
         assert payload["operation_evidence"]["launch_local"]["failure_code"] == (
             "claude_command_contract_missing"
         )
+
+
+def test_claude_release_proof_preserves_development_channel_failure_code() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "claude",
+            env={"FAKE_CLAUDE_CHANNELS_MISSING": "1"},
+        )
+
+        assert result.returncode == 1
+        assert payload["failure_code"] == "claude_development_channels_contract_missing"
+        assert payload["normalized"]["claude"]["development_channels_status"] == "fail"
+        assert payload["normalized"]["claude"]["development_channels_failure_code"] == (
+            "claude_development_channels_contract_missing"
+        )
+        assert payload["normalized"]["claude"]["development_channels_missing"] == [
+            "--dangerously-load-development-channels"
+        ]
+
+
+def test_claude_release_proof_preserves_detached_pty_failure_context() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "claude",
+            env={"FAKE_CLAUDE_PTY_MISSING": "1"},
+        )
+
+        assert result.returncode == 1
+        assert payload["failure_code"] == "claude_detached_pty_unavailable"
+        assert payload["normalized"]["claude"]["detached_pty_status"] == "fail"
+        assert payload["normalized"]["claude"]["detached_pty_failure_code"] == (
+            "claude_detached_pty_unavailable"
+        )
+        assert payload["normalized"]["claude"]["detached_pty_platform"] == "darwin"
 
 
 def test_gemini_release_proof_is_explicit_yellow_gap() -> None:
@@ -416,6 +490,8 @@ def main() -> int:
         test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest,
         test_claude_release_proof_normalizes_no_token_contract_shape,
         test_claude_release_proof_red_when_session_flag_missing,
+        test_claude_release_proof_preserves_development_channel_failure_code,
+        test_claude_release_proof_preserves_detached_pty_failure_context,
         test_gemini_release_proof_is_explicit_yellow_gap,
     ]
     for test in tests:

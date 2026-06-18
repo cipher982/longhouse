@@ -50,6 +50,7 @@ ALLOWED_PROOF_BOUNDARY = {
     "live_no_token",
     "live_no_token_or_fake",
     "hermetic_or_live_no_token",
+    "hermetic_or_launch_flag_shape",
     "fixture_or_hermetic",
     "path_or_override",
     "real_release_asset",
