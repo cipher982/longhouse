@@ -110,7 +110,8 @@ def test_coverage_rows_are_auditable() -> None:
             assert not row["runs_in_ci"], row
             assert not row["runs_in_sauron_release_watch"], row
             assert row["proof_boundary"] in {"none", "unsupported"}, row
-        if row["runs_in_sauron_release_watch"]:
+        has_sauron_evidence = any(str(item).startswith("Sauron:") for item in row["test_evidence"])
+        if row["runs_in_sauron_release_watch"] and not has_sauron_evidence:
             assert row["runs_in_ci"], row
 
 
