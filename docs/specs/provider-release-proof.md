@@ -181,7 +181,27 @@ surface.
 
 ## Phase 2 Entry Point
 
-The initial Longhouse-owned entrypoint is:
+The Longhouse-owned operator entrypoint is:
+
+```bash
+make provider-release-proof \
+  PROVIDER=opencode \
+  PROVIDER_BIN=/path/to/opencode \
+  ARTIFACT=/tmp/proof.json \
+  EVIDENCE_ROOT=/tmp/proof-evidence
+```
+
+Optional variables:
+
+- `PROVIDER_VERSION` records an externally staged version when the source
+  canary cannot infer it.
+- `SOURCE_REVIEW_STATUS` and `SOURCE_REVIEW_NOTE` pass Codex/Sauron source
+  review evidence through without fabricating it.
+- `TIMEOUT_SECS` bounds the wrapped source canary.
+- `CODEX_RUN_FAKE_APP_SERVER`, `CODEX_RUN_MANAGED_TUI_ATTACH`, and
+  `CODEX_RUN_DETACHED_UI` enable opt-in Codex canary lanes.
+
+The equivalent direct script entrypoint is:
 
 ```bash
 scripts/qa/provider-release-proof.py \
@@ -270,6 +290,15 @@ before comparing new candidates to old accepted baselines.
 Initial utility:
 
 ```bash
+make provider-release-proof-accept \
+  PROOF=/tmp/proof.json \
+  BASELINE_ROOT=/data/provider-release-proofs \
+  ARTIFACT=/tmp/baseline-acceptance.json
+```
+
+Equivalent direct script:
+
+```bash
 scripts/qa/provider-release-proof-baseline.py accept \
   --proof /tmp/proof.json \
   --baseline-root /data/provider-release-proofs \
@@ -303,6 +332,15 @@ token counts, streaming chunk boundaries, and model prose unless the scenario
 uses an explicit marker string.
 
 Initial utility:
+
+```bash
+make provider-release-proof-diff \
+  CANDIDATE=/tmp/new-proof.json \
+  BASELINE_ROOT=/data/provider-release-proofs \
+  ARTIFACT=/tmp/proof-diff.json
+```
+
+Equivalent direct script:
 
 ```bash
 scripts/qa/provider-release-proof-baseline.py diff \
