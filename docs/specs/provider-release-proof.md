@@ -141,7 +141,7 @@ candidate-envelope wrapper, but Longhouse did not previously own a
 
 | Surface | Covered | Evidence | Boundary | CI | Sauron release-watch | Baseline | Actionable today |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| install/stage exact version | no | none | none | no | source/profile only | no | no |
+| install/stage exact version | partial | Sauron stages the exact Antigravity GitHub release asset and passes it to profile/live canaries | real release asset | no Longhouse CI; Sauron tests cover it | yes for source-reviewed releases | no | yes if staging/version match fails |
 | binary identity | yes | `provider-live-canary --provider antigravity`, profile canary | live_no_token or fake | `validate-provider-cli-canaries` | yes | no | yes |
 | auth/status shape | partial | version/help/plugin/global hook checks | live_no_token | `validate-provider-cli-canaries` | yes | no | partial |
 | launch managed session | partial | hook/plugin checks only | live_no_token/hermetic | `validate-provider-cli-canaries` | profile/live only | no | partial |
