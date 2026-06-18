@@ -167,6 +167,30 @@ def _normalize_source_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
     return normalized
 
 
+def _session_projection_artifact(
+    *,
+    provider: str,
+    provider_version: str | None,
+    source_artifact: dict[str, Any],
+) -> dict[str, Any]:
+    projection = source_artifact.get("session_projection")
+    if isinstance(projection, dict):
+        return {
+            "artifact_kind": "provider_release_proof_session_projection",
+            "provider": provider,
+            "provider_version": provider_version,
+            "status": "captured",
+            "projection": projection,
+        }
+    return {
+        "artifact_kind": "provider_release_proof_session_projection",
+        "provider": provider,
+        "provider_version": provider_version,
+        "status": "not_captured",
+        "reason": "source canary did not emit a normalized session projection artifact",
+    }
+
+
 def _classify(source_artifact: dict[str, Any]) -> tuple[str, str | None, str]:
     verdict = str(source_artifact.get("verdict") or "").lower()
     failure_code = source_artifact.get("failure_code")
@@ -406,6 +430,29 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
         or source_artifact.get("provider_version")
         or source_artifact.get("codex_version")
     )
+    provider_contract_path = normalized_dir / "provider_contract.json"
+    operation_evidence_path = normalized_dir / "operation_evidence.json"
+    session_projection_path = normalized_dir / "session_projection.json"
+    provider_contract = {
+        "artifact_kind": "provider_release_proof_provider_contract",
+        "provider": args.provider,
+        "provider_version": provider_version,
+        "contract_operations": contract_operations,
+    }
+    operation_evidence_artifact = {
+        "artifact_kind": "provider_release_proof_operation_evidence",
+        "provider": args.provider,
+        "provider_version": provider_version,
+        "operation_evidence": normalized.get("operation_evidence") or {},
+    }
+    session_projection = _session_projection_artifact(
+        provider=args.provider,
+        provider_version=provider_version,
+        source_artifact=source_artifact,
+    )
+    _write_json(provider_contract_path, provider_contract)
+    _write_json(operation_evidence_path, operation_evidence_artifact)
+    _write_json(session_projection_path, session_projection)
     artifact = {
         "schema_version": SCHEMA_VERSION,
         "artifact_kind": "provider_release_proof",
@@ -432,6 +479,9 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
         "artifacts": {
             **raw_artifacts,
             "normalized_contract": str(normalized_path),
+            "provider_contract": str(provider_contract_path),
+            "operation_evidence": str(operation_evidence_path),
+            "session_projection": str(session_projection_path),
             "evidence_root": str(args.evidence_root),
         },
     }

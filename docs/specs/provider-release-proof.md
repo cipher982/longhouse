@@ -239,10 +239,24 @@ It emits:
     "source_artifact": "...",
     "stdout": "...",
     "stderr": "...",
-    "normalized_contract": "..."
+    "normalized_contract": "...",
+    "provider_contract": "...",
+    "operation_evidence": "...",
+    "session_projection": "..."
   }
 }
 ```
+
+The normalized artifact files are separate on purpose:
+
+- `normalized_contract` is the compact comparable proof shape.
+- `provider_contract` is the managed-provider contract surface used for the
+  proof.
+- `operation_evidence` is the normalized evidence map for launch/send/attach
+  operations.
+- `session_projection` is captured when a source canary emits it; otherwise it
+  is an explicit `not_captured` artifact so the gap is visible in accepted
+  baselines.
 
 Current implementation wraps existing source canaries:
 

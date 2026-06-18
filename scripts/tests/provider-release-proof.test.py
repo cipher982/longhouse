@@ -21,6 +21,10 @@ def _write_exe(path: Path, text: str) -> Path:
     return path
 
 
+def _read_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def _write_fake_repo(root: Path) -> None:
     manifest = {
         "schema_version": 1,
@@ -276,6 +280,12 @@ def test_opencode_release_proof_normalizes_source_canary() -> None:
         assert payload["operation_evidence"]["send_input"]["status"] == "pass"
         assert payload["normalized"]["canaries"]["server_contract"]["status"] == "pass"
         assert Path(payload["artifacts"]["normalized_contract"]).exists()
+        provider_contract = _read_json(Path(payload["artifacts"]["provider_contract"]))
+        operation_evidence = _read_json(Path(payload["artifacts"]["operation_evidence"]))
+        session_projection = _read_json(Path(payload["artifacts"]["session_projection"]))
+        assert provider_contract["contract_operations"]["send_input"]["level"] == "live_no_token"
+        assert operation_evidence["operation_evidence"]["send_input"]["status"] == "pass"
+        assert session_projection["status"] == "not_captured"
 
 
 def test_opencode_release_proof_blocks_on_source_canary_red() -> None:
@@ -369,6 +379,9 @@ def test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest
         fingerprints = payload["normalized"]["canaries"]["raw_fresh_remote"]["protocol_fingerprints"]
         assert "path" not in fingerprints
         assert fingerprints["responses"]["initialize"]["platformFamily"] == "str"
+        assert Path(payload["artifacts"]["provider_contract"]).exists()
+        assert Path(payload["artifacts"]["operation_evidence"]).exists()
+        assert Path(payload["artifacts"]["session_projection"]).exists()
 
 
 def test_claude_release_proof_normalizes_no_token_contract_shape() -> None:
