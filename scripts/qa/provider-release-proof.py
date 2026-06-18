@@ -1,0 +1,312 @@
+#!/usr/bin/env python3
+"""Normalize Longhouse provider release proof into one artifact.
+
+This is the Longhouse-owned entrypoint Sauron should call for upstream provider
+release checks. Provider-specific canaries own behavior; this wrapper owns the
+release-proof artifact shape.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from datetime import UTC
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+SCHEMA_VERSION = 1
+SUPPORTED_PROVIDERS = ("claude", "codex", "opencode", "antigravity", "gemini")
+LIVE_CANARY_PROVIDERS = frozenset({"claude", "opencode", "antigravity"})
+
+
+def _repo_root_from_script() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path} did not contain a JSON object")
+    return payload
+
+
+def _load_provider_contract(repo_root: Path, provider: str) -> dict[str, Any] | None:
+    path = repo_root / "server" / "zerg" / "config" / "managed_provider_contracts.json"
+    try:
+        payload = _read_json(path)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    for item in payload.get("providers") or []:
+        if isinstance(item, dict) and item.get("provider") == provider:
+            return dict(item)
+    return None
+
+
+def _compact_status(info: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: info.get(key)
+        for key in ("status", "failure_code")
+        if info.get(key) is not None
+    }
+
+
+def _compact_operation(info: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: info.get(key)
+        for key in ("status", "level", "canary", "failure_code")
+        if info.get(key) is not None
+    }
+
+
+def _normalize_source_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "artifact_kind": artifact.get("artifact_kind"),
+        "provider": artifact.get("provider"),
+        "provider_version": artifact.get("provider_version") or artifact.get("codex_version"),
+        "verdict": artifact.get("verdict"),
+        "failure_code": artifact.get("failure_code"),
+        "canaries": {
+            name: _compact_status(info)
+            for name, info in sorted(dict(artifact.get("canaries") or {}).items())
+            if isinstance(info, dict)
+        },
+        "operation_evidence": {
+            name: _compact_operation(info)
+            for name, info in sorted(dict(artifact.get("operation_evidence") or {}).items())
+            if isinstance(info, dict)
+        },
+    }
+
+
+def _classify(source_artifact: dict[str, Any]) -> tuple[str, str | None, str]:
+    verdict = str(source_artifact.get("verdict") or "").lower()
+    failure_code = source_artifact.get("failure_code")
+    if verdict == "red":
+        return "red", str(failure_code or "provider_release_proof_failed"), "block_upgrade_recommendation"
+    if verdict == "yellow":
+        return "yellow", str(failure_code or "insufficient_coverage"), "investigate_before_upgrade"
+    if verdict == "green":
+        return "green", None, "upgrade_allowed"
+    return "yellow", "provider_release_proof_unknown_verdict", "investigate_before_upgrade"
+
+
+def _command_evidence(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    return {
+        "argv": list(result.args) if isinstance(result.args, list) else result.args,
+        "returncode": result.returncode,
+        "stdout": (result.stdout or "")[-4000:],
+        "stderr": (result.stderr or "")[-4000:],
+    }
+
+
+def _run_source_canary(args: argparse.Namespace, raw_dir: Path) -> tuple[dict[str, Any], dict[str, str], int | None]:
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    stdout_path = raw_dir / "stdout.log"
+    stderr_path = raw_dir / "stderr.log"
+
+    if args.provider == "gemini":
+        source_path = raw_dir / "provider-release-proof-source.json"
+        source = {
+            "artifact_kind": "provider_release_proof_source",
+            "provider": "gemini",
+            "provider_version": args.provider_version,
+            "verdict": "yellow",
+            "failure_code": "provider_release_proof_not_implemented",
+            "recommendation": "investigate_before_upgrade",
+            "canaries": {
+                "release_proof": {
+                    "status": "warn",
+                    "failure_code": "provider_release_proof_not_implemented",
+                    "message": "Gemini release proof is parser-fixture only until managed control matters.",
+                }
+            },
+            "operation_evidence": {},
+        }
+        _write_json(source_path, source)
+        return source, {"source_artifact": str(source_path)}, None
+
+    if args.provider in LIVE_CANARY_PROVIDERS:
+        source_path = raw_dir / "provider-live-canary.json"
+        argv = [
+            sys.executable,
+            str(args.repo_root / "scripts" / "qa" / "provider-live-canary.py"),
+            "--provider",
+            args.provider,
+            "--artifact",
+            str(source_path),
+            "--evidence-root",
+            str(raw_dir / "provider-live-evidence"),
+            "--json",
+        ]
+        if args.provider_bin:
+            argv.extend(["--provider-bin", str(args.provider_bin)])
+    elif args.provider == "codex":
+        source_path = raw_dir / "codex-provider-release-canary.json"
+        argv = [
+            sys.executable,
+            str(args.repo_root / "scripts" / "qa" / "codex-provider-release-canary.py"),
+            "--repo-root",
+            str(args.repo_root),
+            "--artifact",
+            str(source_path),
+            "--evidence-root",
+            str(raw_dir / "codex-provider-release-evidence"),
+            "--source-review-status",
+            "pass",
+            "--json",
+        ]
+        if args.provider_bin:
+            argv.extend(["--codex-bin", str(args.provider_bin)])
+        if args.provider_version:
+            argv.extend(["--provider-version", str(args.provider_version)])
+        if args.codex_run_fake_app_server:
+            argv.append("--run-fake-app-server")
+        if args.codex_run_managed_tui_attach:
+            argv.append("--run-managed-tui-attach")
+        if args.codex_run_detached_ui:
+            argv.append("--run-detached-ui")
+    else:
+        raise ValueError(f"unsupported provider: {args.provider}")
+
+    result = subprocess.run(
+        argv,
+        cwd=str(args.repo_root),
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=args.timeout_secs,
+    )
+    stdout_path.write_text(result.stdout, encoding="utf-8")
+    stderr_path.write_text(result.stderr, encoding="utf-8")
+    raw_artifacts = {
+        "source_artifact": str(source_path),
+        "stdout": str(stdout_path),
+        "stderr": str(stderr_path),
+    }
+    if source_path.exists():
+        source = _read_json(source_path)
+    else:
+        source = {
+            "artifact_kind": "provider_release_proof_source",
+            "provider": args.provider,
+            "provider_version": args.provider_version,
+            "verdict": "red",
+            "failure_code": "provider_release_proof_source_missing",
+            "recommendation": "block_upgrade_recommendation",
+            "canaries": {
+                "release_proof": {
+                    "status": "fail",
+                    "failure_code": "provider_release_proof_source_missing",
+                    "command": _command_evidence(result),
+                }
+            },
+            "operation_evidence": {},
+        }
+        _write_json(source_path, source)
+    return source, raw_artifacts, result.returncode
+
+
+def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
+    args.repo_root = args.repo_root.expanduser().resolve()
+    args.evidence_root = (args.evidence_root or Path.cwd() / "provider-release-proof-evidence").expanduser()
+    args.artifact = (args.artifact or args.evidence_root / "provider-release-proof.json").expanduser()
+    if args.provider_bin is not None:
+        args.provider_bin = args.provider_bin.expanduser()
+
+    raw_dir = args.evidence_root / "raw"
+    normalized_dir = args.evidence_root / "normalized"
+    normalized_dir.mkdir(parents=True, exist_ok=True)
+    source_artifact, raw_artifacts, returncode = _run_source_canary(args, raw_dir)
+    normalized = _normalize_source_artifact(source_artifact)
+    normalized_path = normalized_dir / "contract.json"
+    _write_json(normalized_path, normalized)
+
+    verdict, failure_code, recommendation = _classify(source_artifact)
+    contract = _load_provider_contract(args.repo_root, args.provider)
+    contract_operations = dict(contract.get("operation_evidence") or {}) if contract else {}
+    provider_version = (
+        args.provider_version
+        or normalized.get("provider_version")
+        or source_artifact.get("provider_version")
+        or source_artifact.get("codex_version")
+    )
+    artifact = {
+        "schema_version": SCHEMA_VERSION,
+        "artifact_kind": "provider_release_proof",
+        "provider": args.provider,
+        "provider_version": provider_version,
+        "generated_at": _now_iso(),
+        "scenario_id": f"{args.provider}-release-proof-v1",
+        "scenario_version": 1,
+        "verdict": verdict,
+        "failure_code": failure_code,
+        "recommendation": recommendation,
+        "source_canary_returncode": returncode,
+        "canaries": {
+            "source_canary": {
+                "status": "pass" if verdict == "green" else "fail" if verdict == "red" else "warn",
+                "verdict": source_artifact.get("verdict"),
+                "failure_code": source_artifact.get("failure_code"),
+                "artifact_path": raw_artifacts["source_artifact"],
+            }
+        },
+        "operation_evidence": normalized.get("operation_evidence") or {},
+        "normalized": normalized,
+        "contract_operations": contract_operations,
+        "artifacts": {
+            **raw_artifacts,
+            "normalized_contract": str(normalized_path),
+            "evidence_root": str(args.evidence_root),
+        },
+    }
+    artifact["artifact_path"] = str(args.artifact)
+    _write_json(args.artifact, artifact)
+    return artifact
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo-root", type=Path, default=_repo_root_from_script())
+    parser.add_argument("--provider", choices=SUPPORTED_PROVIDERS, required=True)
+    parser.add_argument("--provider-bin", type=Path)
+    parser.add_argument("--provider-version")
+    parser.add_argument("--artifact", type=Path)
+    parser.add_argument("--evidence-root", type=Path)
+    parser.add_argument("--timeout-secs", type=int, default=180)
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--codex-run-fake-app-server", action="store_true")
+    parser.add_argument("--codex-run-managed-tui-attach", action="store_true")
+    parser.add_argument("--codex-run-detached-ui", action="store_true")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    artifact = run_provider_release_proof(args)
+    if args.json:
+        print(json.dumps(artifact, indent=2, sort_keys=True))
+    else:
+        print(f"provider release proof: {artifact['provider']} {artifact['verdict']}")
+        print(f"artifact: {artifact['artifact_path']}")
+        print(f"evidence_root: {artifact['artifacts']['evidence_root']}")
+        if artifact.get("failure_code"):
+            print(f"failure_code: {artifact['failure_code']}")
+    return 1 if artifact["verdict"] == "red" else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
