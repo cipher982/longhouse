@@ -39,7 +39,24 @@ REQUIRED_ROW_FIELDS = {
 }
 ALLOWED_COVERED = {"yes", "partial", "no"}
 ALLOWED_FAKE_OR_REAL = {"fake", "real", "mixed", "none"}
+# release_proof is intentionally unused until Phase 3 accepts the first real
+# provider-release-proof baseline.
 ALLOWED_BASELINE = {"none", "parser_fixture", "release_proof"}
+ALLOWED_PROOF_BOUNDARY = {
+    "none",
+    "unsupported",
+    "fixture",
+    "hermetic",
+    "live_no_token",
+    "live_no_token_or_fake",
+    "hermetic_or_live_no_token",
+    "fixture_or_hermetic",
+    "path_or_override",
+    "real_release_asset",
+    "hermetic_plus_manual_live_token",
+    "manual_live_token",
+    "manual_live_token_or_fake",
+}
 
 
 def _load() -> dict:
@@ -75,18 +92,24 @@ def test_coverage_rows_are_auditable() -> None:
         assert row["covered"] in ALLOWED_COVERED, row
         assert row["fake_or_real"] in ALLOWED_FAKE_OR_REAL, row
         assert row["accepted_baseline"] in ALLOWED_BASELINE, row
+        assert row["proof_boundary"] in ALLOWED_PROOF_BOUNDARY, row
         assert isinstance(row["test_evidence"], list), row
         assert isinstance(row["runs_in_ci"], bool), row
         assert isinstance(row["runs_in_sauron_release_watch"], bool), row
         assert isinstance(row["failure_actionable"], bool), row
-        assert isinstance(row["proof_boundary"], str) and row["proof_boundary"], row
 
         if row["covered"] != "no" or row["runs_in_ci"] or row["runs_in_sauron_release_watch"]:
             assert row["test_evidence"], f"{row['provider']} {row['surface']} needs evidence"
+        if row["covered"] != "no":
+            assert row["fake_or_real"] != "none", row
+            assert row["proof_boundary"] not in {"none", "unsupported"}, row
         if row["covered"] == "no":
             assert row["accepted_baseline"] == "none", row
             assert not row["runs_in_ci"], row
             assert not row["runs_in_sauron_release_watch"], row
+            assert row["proof_boundary"] in {"none", "unsupported"}, row
+        if row["runs_in_sauron_release_watch"]:
+            assert row["runs_in_ci"], row
 
 
 def main() -> int:

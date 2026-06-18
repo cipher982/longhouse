@@ -222,7 +222,8 @@ Current implementation wraps existing source canaries:
 
 Codex normalization preserves source-review status, binary identity presence,
 operation evidence, canary statuses/reasons, and stable protocol fingerprints
-from `raw_fresh_remote` while dropping noisy path fields.
+from `raw_fresh_remote` while dropping noisy path fields. A protocol fingerprint
+status change such as `ok` -> `missing` is contract drift signal.
 
 Exit-code contract:
 
