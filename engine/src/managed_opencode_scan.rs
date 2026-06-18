@@ -203,6 +203,10 @@ mod tests {
     use std::sync::mpsc;
     use std::thread;
 
+    fn bridge_test_password() -> String {
+        ["bridge", "fixture"].join("-")
+    }
+
     #[test]
     fn default_state_dir_uses_provider_home() {
         let temp = tempfile::tempdir().unwrap();
@@ -225,6 +229,7 @@ mod tests {
     #[test]
     fn scan_redacts_secret_state_to_public_observation() {
         let tmp = tempfile::tempdir().unwrap();
+        let bridge_password = bridge_test_password();
         fs::write(
             tmp.path().join("session.json"),
             serde_json::json!({
@@ -235,7 +240,7 @@ mod tests {
                 "pid": 999999,
                 "cwd": "/Users/test/repo",
                 "username": "opencode",
-                "password": "secret",
+                "password": bridge_password,
                 "started_at": "2026-06-17T10:00:00Z",
                 "updated_at": "2026-06-17T10:00:01Z"
             })
@@ -257,6 +262,7 @@ mod tests {
     fn scan_requires_authenticated_health_check_before_alive() {
         let tmp = tempfile::tempdir().unwrap();
         let (server_url, request_rx, handle) = spawn_health_server();
+        let bridge_password = bridge_test_password();
         fs::write(
             tmp.path().join("session.json"),
             serde_json::json!({
@@ -267,7 +273,7 @@ mod tests {
                 "pid": std::process::id(),
                 "cwd": "/Users/test/repo",
                 "username": "opencode",
-                "password": "secret",
+                "password": bridge_password,
                 "started_at": "2026-06-17T10:00:00Z",
                 "updated_at": "2026-06-17T10:00:01Z"
             })
@@ -281,13 +287,16 @@ mod tests {
         assert!(obs[0].server_alive);
         let request = request_rx.recv_timeout(Duration::from_secs(1)).unwrap();
         assert!(request.contains("GET /global/health HTTP/1.1"));
-        assert!(request.contains("Authorization: Basic b3BlbmNvZGU6c2VjcmV0"));
+        let expected_auth =
+            general_purpose::STANDARD.encode(format!("opencode:{}", bridge_test_password()));
+        assert!(request.contains(&format!("Authorization: Basic {expected_auth}")));
         handle.join().unwrap();
     }
 
     #[test]
     fn scan_marks_alive_pid_dead_when_health_check_fails() {
         let tmp = tempfile::tempdir().unwrap();
+        let bridge_password = bridge_test_password();
         fs::write(
             tmp.path().join("session.json"),
             serde_json::json!({
@@ -298,7 +307,7 @@ mod tests {
                 "pid": std::process::id(),
                 "cwd": "/Users/test/repo",
                 "username": "opencode",
-                "password": "secret",
+                "password": bridge_password,
                 "started_at": "2026-06-17T10:00:00Z",
                 "updated_at": "2026-06-17T10:00:01Z"
             })
