@@ -270,6 +270,9 @@ scenario implementation.
 
 Accepted baselines should be normalized proof artifacts, not raw stdout/stderr.
 Raw artifacts stay attached for debugging and agent review.
+Only `green` proof artifacts can be accepted as baselines. `yellow` means the
+proof is incomplete or insufficiently trusted, so it must remain visible as a
+release-watch gap instead of becoming `upgrade_allowed` after a matching diff.
 
 Proposed layout for a caller such as Sauron:
 

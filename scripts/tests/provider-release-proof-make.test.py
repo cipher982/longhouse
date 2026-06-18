@@ -32,7 +32,7 @@ def test_provider_release_proof_make_requires_provider() -> None:
     assert "PROVIDER is required" in result.stderr
 
 
-def test_provider_release_proof_make_accept_and_diff() -> None:
+def test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_yellow() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         proof = root / "proof.json"
@@ -69,10 +69,12 @@ def test_provider_release_proof_make_accept_and_diff() -> None:
             ]
         )
 
-        assert accept_result.returncode == 0, accept_result.stderr
+        assert accept_result.returncode == 2, accept_result.stderr
         accept_payload = _read_json(acceptance)
         assert accept_payload["artifact_kind"] == "provider_release_proof_baseline_acceptance"
-        assert Path(accept_payload["accepted_path"]).exists()
+        assert accept_payload["verdict"] == "red"
+        assert accept_payload["failure_code"] == "baseline_acceptance_rejected"
+        assert accept_payload["accepted_path"] is None
 
         diff_result = _run_make(
             [
@@ -86,14 +88,15 @@ def test_provider_release_proof_make_accept_and_diff() -> None:
         assert diff_result.returncode == 0, diff_result.stderr
         diff_payload = _read_json(diff)
         assert diff_payload["artifact_kind"] == "provider_release_proof_diff"
-        assert diff_payload["verdict"] == "green"
-        assert diff_payload["diff"]["status"] == "match"
+        assert diff_payload["verdict"] == "yellow"
+        assert diff_payload["failure_code"] == "provider_release_proof_not_implemented"
+        assert diff_payload["diff"]["status"] == "not_compared"
 
 
 def main() -> int:
     tests = [
         test_provider_release_proof_make_requires_provider,
-        test_provider_release_proof_make_accept_and_diff,
+        test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_yellow,
     ]
     for test in tests:
         test()

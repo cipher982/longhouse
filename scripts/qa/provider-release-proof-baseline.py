@@ -108,6 +108,25 @@ def accept_proof(
 ) -> dict[str, Any]:
     proof_path = proof_path.expanduser().resolve()
     proof = _read_json(proof_path)
+    proof_verdict = str(proof.get("verdict") or "").lower()
+    if proof_verdict != "green":
+        failure_code = str(proof.get("failure_code") or "baseline_acceptance_rejected")
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "artifact_kind": "provider_release_proof_baseline_acceptance",
+            "provider": _provider(proof),
+            "provider_version": _provider_version(proof),
+            "scenario_id": _scenario_id(proof),
+            "verdict": "red",
+            "failure_code": "baseline_acceptance_rejected",
+            "message": (
+                f"Only green provider release proofs can be accepted; "
+                f"candidate verdict was {proof_verdict or 'missing'} ({failure_code})."
+            ),
+            "accepted_path": None,
+            "version_path": None,
+            "archived_artifacts": {},
+        }
     version_dir = _version_root(baseline_root, proof)
     archived_artifacts = _copy_artifacts(
         proof,
@@ -183,9 +202,13 @@ def diff_proofs(
             verdict = "red"
             failure_code = str(candidate.get("failure_code") or "candidate_release_proof_failed")
             recommendation = "block_upgrade_recommendation"
-        else:
+        elif candidate_verdict == "green":
             verdict = "yellow"
             failure_code = "baseline_missing"
+            recommendation = "investigate_before_upgrade"
+        else:
+            verdict = "yellow"
+            failure_code = str(candidate.get("failure_code") or "candidate_release_proof_not_green")
             recommendation = "investigate_before_upgrade"
         diff = {"status": "not_compared", "changes": []}
     else:
@@ -194,6 +217,10 @@ def diff_proofs(
             verdict = "red"
             failure_code = str(candidate.get("failure_code") or "candidate_release_proof_failed")
             recommendation = "block_upgrade_recommendation"
+        elif candidate_verdict != "green":
+            verdict = "yellow"
+            failure_code = str(candidate.get("failure_code") or "candidate_release_proof_not_green")
+            recommendation = "investigate_before_upgrade"
         elif diff.get("status") == "match":
             verdict = "green"
             failure_code = None
@@ -268,7 +295,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "accept":
         payload = accept_proof(args.proof, baseline_root=args.baseline_root.expanduser())
         _print_or_write(payload, artifact=args.artifact, as_json=args.json)
-        return 0
+        return 1 if payload.get("verdict") == "red" else 0
     if args.command == "diff":
         payload = diff_proofs(
             args.candidate,
