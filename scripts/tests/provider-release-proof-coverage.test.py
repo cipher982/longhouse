@@ -39,8 +39,6 @@ REQUIRED_ROW_FIELDS = {
 }
 ALLOWED_COVERED = {"yes", "partial", "no"}
 ALLOWED_FAKE_OR_REAL = {"fake", "real", "mixed", "none"}
-# release_proof is intentionally unused until Phase 3 accepts the first real
-# provider-release-proof baseline.
 ALLOWED_BASELINE = {"none", "parser_fixture", "release_proof"}
 ALLOWED_PROOF_BOUNDARY = {
     "none",

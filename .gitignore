@@ -230,6 +230,8 @@ videos/
 
 # Generated local artifacts
 artifacts/
+.provider-release-proofs/
+provider-release-proof-evidence/
 desktop/LonghouseMenuBarHarness/XcodeHarness/*.xcodeproj/
 
 # Swift menu bar harness build outputs

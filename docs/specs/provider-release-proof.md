@@ -1,8 +1,8 @@
 # Provider Release Proof
 
-**Status:** Phase 1 inventory + Longhouse proof/baseline/diff entrypoints; no accepted release-proof baselines yet
+**Status:** Phase 1 inventory + Longhouse proof/baseline/diff entrypoints; first OpenCode release-proof baseline accepted locally
 **Owner:** David
-**Last updated:** 2026-06-18
+**Last updated:** 2026-06-19
 
 ## Purpose
 
@@ -40,19 +40,20 @@ What exists:
 
 What is missing:
 
-- accepted release-proof baselines per provider/scenario
+- accepted release-proof baselines for Claude, Codex, and Antigravity
 - raw-to-normalized proof fixtures for all release-sensitive surfaces
 - full managed-session/live-token proof for every release-sensitive surface
-- scheduled old/new differentials from accepted baselines rather than only
-  candidate or directly staged old/new artifacts
+- scheduled old/new differentials from the accepted baseline store rather than
+  only candidate or directly staged old/new artifacts
 
 ## Audit Snapshot - 2026-06-18
 
-This snapshot reflects Longhouse `54b0dc071` plus Sauron jobs `6f1a212` after
-Gemini was removed as a release-watch provider and Antigravity became the
-canonical Google lane. Later Sauron surface-target commits are unrelated to
-provider release-proofing; the release-watch/proof scope remains
-Claude Code, Codex/OpenAI, OpenCode, and Antigravity.
+This snapshot reflects the Longhouse audit through `8b5426a84`, Sauron jobs
+`6f1a212`, and the 2026-06-19 local OpenCode baseline promotion after Gemini
+was removed as a release-watch provider and Antigravity became the canonical
+Google lane. Later Sauron surface-target commits are unrelated to provider
+release-proofing; the release-watch/proof scope remains Claude Code,
+Codex/OpenAI, OpenCode, and Antigravity.
 
 Machine-validated coverage map:
 
@@ -67,7 +68,7 @@ Machine-validated coverage map:
 | Rows running in Longhouse CI | 41 |
 | Rows running in Sauron release-watch | 29 |
 | Rows with accepted parser-fixture baselines | 4 |
-| Rows with accepted release-proof baselines | 0 |
+| Rows with accepted release-proof baselines | 9 |
 
 Provider shape:
 
@@ -75,7 +76,7 @@ Provider shape:
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Claude Code | 2 | 11 | 0 | 11 | 5 | 0 |
 | Codex/OpenAI | 4 | 8 | 1 | 11 | 8 | 0 |
-| OpenCode | 4 | 7 | 2 | 11 | 11 | 0 |
+| OpenCode | 4 | 7 | 2 | 11 | 11 | 9 |
 | Antigravity | 1 | 9 | 3 | 8 | 5 | 0 |
 
 Known uncovered surfaces:
@@ -86,10 +87,12 @@ Known uncovered surfaces:
   shape.
 
 Implication: CI is meaningful for parser, wrapper, profile-canary, and several
-no-token live surfaces, but it is not yet a complete release gate. The next
-promotion step is accepting the first real green baseline for one provider
-scenario, likely OpenCode because it has the strongest no-token real-run proof
-today.
+no-token live surfaces, and OpenCode now has one accepted known-good
+release-proof baseline. This is still not a complete release gate: Claude,
+Codex, and Antigravity have no accepted release-proof baselines, OpenCode still
+lacks tool/tool-result and live-token proof, and the Sauron release-watch path
+still needs to consume the accepted baseline store instead of treating
+`baseline_missing` as the normal state.
 
 ## Coverage Legend
 
@@ -109,6 +112,9 @@ Boundary values:
 
 Baseline means an accepted normalized output exists for the release-proof
 surface, not merely a unit-test expected value unless called out.
+For OpenCode, the current `release_proof` baseline is a `live_no_token`
+baseline; it protects provider server/API/control-shape drift, not
+model-visible response quality.
 
 ## Phase 1 Coverage Map
 
@@ -176,24 +182,28 @@ bridge canaries.
 | Surface | Covered | Evidence | Boundary | CI | Sauron release-watch | Baseline | Actionable today |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | install/stage exact version | partial | Sauron OpenCode release asset staging | real release asset | Sauron tests | yes | no | yes if staging fails |
-| binary identity | yes | `provider-live-canary --provider opencode` | live_no_token or fake | `validate-provider-cli-canaries` | yes | no | yes |
-| auth/status shape | partial | server health/auth/doc checks | live_no_token | `validate-provider-cli-canaries` | yes | no | yes |
-| launch managed session | yes | provider live canary server/session checks; channel CLI tests | live_no_token + hermetic | `validate-provider-cli-canaries`, `make test` | yes | no | yes |
-| session id/path binding | partial | OpenCode bridge/channel state tests | hermetic | `make test` | provider-live sidecar classification | no | partial |
-| transcript/log parse | partial | live canary `session.messages` marker; no engine parser golden | live_no_token | `validate-provider-cli-canaries` | yes | release-proof no | partial |
+| binary identity | yes | `provider-live-canary --provider opencode` | live_no_token or fake | `validate-provider-cli-canaries` | yes | release-proof yes (`opencode-release-proof-v1`, 1.16.2) | yes |
+| auth/status shape | partial | server health/auth/doc checks | live_no_token | `validate-provider-cli-canaries` | yes | release-proof yes (`opencode-release-proof-v1`, 1.16.2) | yes |
+| launch managed session | yes | provider live canary server/session checks; channel CLI tests | live_no_token + hermetic | `validate-provider-cli-canaries`, `make test` | yes | release-proof yes (`opencode-release-proof-v1`, 1.16.2) | yes |
+| session id/path binding | partial | OpenCode bridge/channel state tests plus provider-live sidecar classification | hermetic/live_no_token | `make test`, `validate-provider-cli-canaries` | provider-live sidecar classification | release-proof yes (`opencode-release-proof-v1`, 1.16.2) | partial |
+| transcript/log parse | partial | live canary `session.messages` marker; no engine parser golden | live_no_token | `validate-provider-cli-canaries` | yes | release-proof yes (`opencode-release-proof-v1`, 1.16.2) | partial |
 | ingest into Longhouse | partial | provider-live session classification and route tests | hermetic/live_no_token | `make test`, `validate-provider-cli-canaries` | yes | no | partial |
-| timeline/session projection | partial | session capability/view tests plus provider-live session projection captured by `provider_release_proof` | hermetic/live_no_token | `make test`, `validate-provider-cli-canaries` | yes | no | partial |
-| send input | yes | provider-live canary `prompt_async` noReply marker | live_no_token | `validate-provider-cli-canaries` | yes | no | yes |
-| interrupt/abort/steer | partial | provider-live abort endpoint; steer unsupported | live_no_token | `validate-provider-cli-canaries` | yes for interrupt | no | yes for abort, no for steer |
-| reattach/resume | yes | provider-live process restart/session recovery + attach shape | live_no_token | `validate-provider-cli-canaries` | yes | no | yes |
+| timeline/session projection | partial | session capability/view tests plus provider-live session projection captured by `provider_release_proof` | hermetic/live_no_token | `make test`, `validate-provider-cli-canaries` | yes | release-proof yes (`opencode-release-proof-v1`, 1.16.2) | partial |
+| send input | yes | provider-live canary `prompt_async` noReply marker | live_no_token | `validate-provider-cli-canaries` | yes | release-proof yes (`opencode-release-proof-v1`, 1.16.2) | yes |
+| interrupt/abort/steer | partial | provider-live abort endpoint; steer unsupported | live_no_token | `validate-provider-cli-canaries` | yes for interrupt | release-proof yes for abort (`opencode-release-proof-v1`, 1.16.2); steer remains unsupported | yes for abort, no for steer |
+| reattach/resume | yes | provider-live process restart/session recovery + attach shape | live_no_token | `validate-provider-cli-canaries` | yes | release-proof yes (`opencode-release-proof-v1`, 1.16.2) | yes |
 | tool/tool-result shape | no | no OpenCode parser/tool result golden found | none | no | no | no | no |
 | live-token behavior | no | manifest marks prompt/abort proof as next release lane | none | no | no | no | no |
 
-OpenCode is the best first provider for the proof lane because it has release
-asset staging and a no-token live server canary. The source canary now emits a
-session projection for created session, transcript marker, restart/reattach,
-and abort evidence; the release-proof wrapper captures it as
-`normalized/session_projection.json`.
+OpenCode is the first accepted release-proof baseline. On 2026-06-19,
+`opencode 1.16.2` produced a green `opencode-release-proof-v1` artifact and a
+fresh rerun diffed green/match against the accepted baseline. The accepted
+local dogfood baseline is under
+`~/.local/share/longhouse/provider-release-proofs/opencode/opencode-release-proof-v1/`.
+The archived artifacts include source stdout/stderr, normalized contract,
+provider contract, operation evidence, and session projection. This proves the
+no-token server/API/control-shape lane; it does not prove OpenCode
+tool/tool-result transcript shape or live-token model-visible behavior.
 
 ### Antigravity
 
@@ -498,8 +508,11 @@ should not by itself count as contract drift.
 
 ## Next Work
 
-1. Add Claude managed-session binding proof beyond no-token launch shape.
-2. Decide whether Antigravity real-agy send belongs in scheduled CI or remains
+1. Wire Sauron release-watch to consume the accepted OpenCode baseline store
+   for `opencode-release-proof-v1` instead of reporting `baseline_missing`.
+2. Add Claude managed-session binding proof beyond no-token launch shape.
+3. Decide whether Antigravity real-agy send belongs in scheduled CI or remains
    an opt-in live-token proof.
-3. Accept the first real OpenCode proof baseline from a known-good version.
-4. Start old/new differential proof runs from accepted baselines.
+4. Accept real Codex and Antigravity baselines once their proof lanes are green
+   enough to trust.
+5. Start old/new differential proof runs from accepted baselines.
