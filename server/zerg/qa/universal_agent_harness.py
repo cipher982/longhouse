@@ -7,6 +7,7 @@ stay behind adapters while universal scenarios produce comparable evidence.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import shutil
@@ -16,9 +17,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 from typing import Protocol
+from uuid import NAMESPACE_URL
+from uuid import uuid5
 
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
@@ -34,6 +38,7 @@ SCENARIOS = (
     "collect_raw_evidence",
     "action_matrix",
     "parse_ingest_project",
+    "db_ingest_project",
     "run_prompt_once",
     "launch_managed_session",
     "send_receive",
@@ -65,6 +70,7 @@ MVP_METHODS = (
     "run_prompt",
     "collect_evidence",
     "decode_normalize",
+    "db_ingest_project",
     "launch_managed_session",
     "send_receive",
     "managed_session_e2e",
@@ -400,6 +406,8 @@ class AgentHarnessAdapter(Protocol):
 
     def decode_normalize(self, package: "EvidencePackage", fixture_path: Path) -> dict[str, Any]: ...
 
+    def db_ingest_project(self, package: "EvidencePackage", fixture_path: Path | None) -> dict[str, Any]: ...
+
     def launch_managed_session(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def send_receive(self, package: "EvidencePackage", prompt: str) -> dict[str, Any]: ...
@@ -655,6 +663,19 @@ class UniversalProviderAdapter:
         }
         package.write_json("assertions/parse_ingest_project.json", payload)
         return payload
+
+    def db_ingest_project(self, package: EvidencePackage, fixture_path: Path | None) -> dict[str, Any]:
+        try:
+            rows = read_json_lines(fixture_path) if fixture_path is not None else default_db_ingest_rows()
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            payload = {
+                "status": STATUS_FAIL,
+                "failure_code": "db_ingest_fixture_decode_failed",
+                "message": f"{type(exc).__name__}: {exc}",
+            }
+            package.write_json("assertions/db_ingest_project.json", payload)
+            return payload
+        return ingest_canonical_events_into_longhouse_db(package=package, provider=self.config.provider, rows=rows)
 
     def launch_managed_session(self, package: EvidencePackage) -> dict[str, Any]:
         if "launch_managed_session" not in self.config.safe_managed_session_scenarios:
@@ -1101,18 +1122,13 @@ def _action_status(
         }
 
     if action.action_id == "db_ingest":
-        next_step = "".join(
-            [
-                "Add a fixture-backed DB ingest lane that verifies session detail, ",
-                "timeline, search, and export reads.",
-            ]
-        )
         return {
-            "status": STATUS_BLOCKED,
-            "failure_code": "db_ingest_release_lane_missing",
-            "message": "The universal harness projects canonical events but does not yet insert them into a test DB.",
-            "proof_scope": "longhouse_db",
-            "next": next_step,
+            "status": STATUS_PASS,
+            "evidence_level": "hermetic",
+            "proof_scope": "longhouse_sqlite_ingest",
+            "source": "universal db_ingest_project scenario uses AgentsStore.ingest_session and timeline/export reads",
+            "canary": "universal_db_ingest_project",
+            "next": "Promote with provider-live raw evidence and hosted Runtime Host read-surface proof.",
         }
 
     if action.action_id == "baseline_compare":
@@ -1208,6 +1224,270 @@ def _operation_from_action_row(row: Mapping[str, Any]) -> dict[str, Any]:
         "canary": row.get("canary"),
         "failure_code": row.get("failure_code"),
     }
+
+
+def default_db_ingest_rows() -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "user",
+            "role": "user",
+            "text": "universal db ingest hello",
+        },
+        {
+            "type": "assistant",
+            "role": "assistant",
+            "tool_name": "Bash",
+            "tool_input_json": {"command": "printf universal-db-ingest"},
+            "tool_call_id": "toolu_universal_db_ingest",
+        },
+        {
+            "type": "tool",
+            "role": "tool",
+            "text": "universal-db-ingest",
+            "tool_name": "Bash",
+            "tool_output_text": "universal-db-ingest",
+            "tool_call_id": "toolu_universal_db_ingest",
+        },
+        {
+            "type": "assistant",
+            "role": "assistant",
+            "text": "universal db ingest done",
+        },
+    ]
+
+
+def ingest_canonical_events_into_longhouse_db(
+    *,
+    package: EvidencePackage,
+    provider: str,
+    rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    os.environ.setdefault("TESTING", "1")
+    os.environ.setdefault("DATABASE_URL", f"sqlite:///{package.path('longhouse', 'settings-bootstrap.sqlite')}")
+
+    from zerg.database import initialize_database
+    from zerg.database import make_engine
+    from zerg.database import make_sessionmaker
+    from zerg.services.agents import AgentsStore
+    from zerg.services.agents import EventIngest
+    from zerg.services.agents import SessionIngest
+    from zerg.services.agents import SourceLineIngest
+    from zerg.services.timeline_session_listing import TimelineSessionListParams
+    from zerg.services.timeline_session_listing import list_timeline_sessions_for_browser
+
+    package.write_text(
+        "events/provider-raw-events.jsonl",
+        "\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n",
+    )
+    canonical = [canonical_event_from_fixture(row, provider=provider, index=index) for index, row in enumerate(rows)]
+    package.write_text(
+        "events/canonical-longhouse-events.jsonl",
+        "\n".join(json.dumps(row, sort_keys=True) for row in canonical) + "\n",
+    )
+
+    db_path = package.path("longhouse", "db-ingest.sqlite")
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    engine = make_engine(f"sqlite:///{db_path}")
+    initialize_database(engine)
+    session_factory = make_sessionmaker(engine)
+    session_id = uuid5(NAMESPACE_URL, f"longhouse-universal-db-ingest:{provider}:{package.root}")
+    source_path = str(package.path("events", "provider-raw-events.jsonl"))
+    started_at = datetime(2026, 6, 19, 12, 0, tzinfo=UTC)
+    event_ingests: list[Any] = []
+    source_lines: list[Any] = []
+    for index, row in enumerate(rows):
+        raw_json = json.dumps(row, sort_keys=True)
+        event_ingests.append(
+            EventIngest(
+                role=_event_role(row),
+                content_text=_event_content_text(row),
+                tool_name=_clean_optional_str(row.get("tool_name")),
+                tool_input_json=row.get("tool_input_json") if isinstance(row.get("tool_input_json"), dict) else None,
+                tool_output_text=_clean_optional_str(row.get("tool_output_text")),
+                tool_call_id=_clean_optional_str(row.get("tool_call_id")),
+                timestamp=started_at + timedelta(seconds=index),
+                source_path=source_path,
+                source_offset=index,
+                raw_json=raw_json,
+            )
+        )
+        source_lines.append(SourceLineIngest(source_path=source_path, source_offset=index, raw_json=raw_json))
+
+    with session_factory() as db:
+        store = AgentsStore(db)
+        ingest_result = store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider=provider,
+                environment="test",
+                project="universal-agent-harness",
+                device_id="universal-harness",
+                cwd=str(package.path("workspace")),
+                started_at=started_at,
+                provider_session_id=f"universal-db-ingest-{provider}",
+                events=event_ingests,
+                source_lines=source_lines,
+            )
+        )
+        db.commit()
+        session = store.get_session(session_id)
+        visible_events = store.get_session_events(session_id, limit=50)
+        export_result = store.export_session_jsonl(session_id)
+        query_sessions, query_total = store.list_sessions(
+            include_test=True,
+            project="universal-agent-harness",
+            provider=provider,
+            query="universal",
+            limit=10,
+            hide_autonomous=False,
+        )
+        timeline_result = asyncio.run(
+            list_timeline_sessions_for_browser(
+                db=db,
+                params=TimelineSessionListParams(
+                    project="universal-agent-harness",
+                    provider=provider,
+                    environment=None,
+                    include_test=True,
+                    hide_autonomous=False,
+                    device_id=None,
+                    days_back=30,
+                    query=None,
+                    limit=10,
+                    offset=0,
+                    sort=None,
+                    mode="lexical",
+                    context_mode="forensic",
+                ),
+            )
+        )
+
+    if session is None or export_result is None:
+        payload = {
+            "status": STATUS_FAIL,
+            "failure_code": "db_ingest_session_missing",
+            "message": "Ingest completed but session or export was missing from Longhouse DB reads.",
+        }
+        package.write_json("assertions/db_ingest_project.json", payload)
+        return payload
+
+    timeline_cards = getattr(timeline_result.response, "sessions", [])
+    timeline_card = next((card for card in timeline_cards if card.head.id == str(session_id)), None)
+    timeline_preview_text = None
+    if timeline_card and timeline_card.head.transcript_preview:
+        timeline_preview_text = timeline_card.head.transcript_preview.text
+    db_snapshot = {
+        "session_id": str(session_id),
+        "db_path": str(db_path),
+        "ingest_result": ingest_result.model_dump(mode="json"),
+        "session_counts": {
+            "user_messages": int(session.user_messages or 0),
+            "assistant_messages": int(session.assistant_messages or 0),
+            "tool_calls": int(session.tool_calls or 0),
+            "transcript_revision": int(session.transcript_revision or 0),
+        },
+        "visible_events": [
+            {
+                "role": event.role,
+                "content_text": event.content_text,
+                "tool_name": event.tool_name,
+                "tool_call_id": event.tool_call_id,
+            }
+            for event in visible_events
+        ],
+        "query_total": query_total,
+        "query_session_ids": [str(item.id) for item in query_sessions],
+        "export_jsonl": export_result[0].decode("utf-8"),
+        "timeline": {
+            "compatibility_raw": bool(timeline_result.compatibility_raw),
+            "total": int(timeline_result.response.total),
+            "matched": timeline_card is not None,
+            "preview_text": timeline_preview_text,
+            "head_id": timeline_card.head.id if timeline_card else None,
+        },
+    }
+    db_snapshot_path = package.write_json("longhouse/db-ingest-result.json", db_snapshot)
+    session_projection = {
+        **project_session(canonical, provider=provider),
+        "provider_session_id": f"universal-db-ingest-{provider}",
+        "longhouse_session_id": str(session_id),
+        "db_ingest_result_path": str(db_snapshot_path),
+    }
+    timeline_projection = {
+        **project_timeline(canonical),
+        "db_timeline_matched": timeline_card is not None,
+        "db_timeline_total": int(timeline_result.response.total),
+    }
+    package.write_json("longhouse/session-projection.json", session_projection)
+    package.write_json("longhouse/timeline-projection.json", timeline_projection)
+
+    assertions = {
+        "events_inserted": ingest_result.events_inserted == len(rows),
+        "visible_event_count": len(visible_events) == len(rows),
+        "export_contains_raw": "universal db ingest hello" in db_snapshot["export_jsonl"],
+        "query_found_session": str(session_id) in db_snapshot["query_session_ids"],
+        "timeline_found_session": timeline_card is not None,
+        "counts_match": db_snapshot["session_counts"]
+        == {
+            "user_messages": 1,
+            "assistant_messages": 1,
+            "tool_calls": 1,
+            "transcript_revision": db_snapshot["session_counts"]["transcript_revision"],
+        }
+        and db_snapshot["session_counts"]["transcript_revision"] > 0,
+    }
+    status = STATUS_PASS if all(assertions.values()) else STATUS_FAIL
+    payload = {
+        "status": status,
+        "failure_code": None if status == STATUS_PASS else "db_ingest_assertion_failed",
+        "session_id": str(session_id),
+        "raw_event_count": len(rows),
+        "canonical_event_count": len(canonical),
+        "db_path": str(db_path),
+        "db_snapshot_path": str(db_snapshot_path),
+        "session_projection_path": str(package.path("longhouse", "session-projection.json")),
+        "timeline_projection_path": str(package.path("longhouse", "timeline-projection.json")),
+        "assertions": assertions,
+        "operation_evidence": {
+            "db_ingest": {
+                "status": status,
+                "level": "hermetic",
+                "canary": "universal_db_ingest_project",
+                "failure_code": None if status == STATUS_PASS else "db_ingest_assertion_failed",
+            },
+            "session_projection": {
+                "status": status,
+                "level": "hermetic",
+                "canary": "universal_db_ingest_project",
+            },
+            "timeline_projection": {
+                "status": status,
+                "level": "hermetic",
+                "canary": "universal_db_ingest_project",
+            },
+        },
+    }
+    package.write_json("assertions/db_ingest_project.json", payload)
+    return payload
+
+
+def _event_role(row: Mapping[str, Any]) -> str:
+    role = str(row.get("role") or row.get("type") or "system").strip().lower()
+    return role if role in {"user", "assistant", "tool", "system"} else "system"
+
+
+def _event_content_text(row: Mapping[str, Any]) -> str | None:
+    if _event_role(row) == "assistant" and row.get("tool_name"):
+        return None
+    text = row.get("text")
+    if text is None:
+        text = row.get("content")
+    return _clean_optional_str(text)
+
+
+def _clean_optional_str(value: Any) -> str | None:
+    text = str(value).strip() if value is not None else ""
+    return text or None
 
 
 def canonical_event_from_fixture(row: Mapping[str, Any], *, provider: str, index: int) -> dict[str, Any]:
@@ -1444,6 +1724,22 @@ def run_parse_ingest_project(
     )
 
 
+def run_db_ingest_project(
+    adapter: AgentHarnessAdapter,
+    package: EvidencePackage,
+    fixture_path: Path | None,
+) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.db_ingest_project(package, fixture_path)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="db_ingest_project",
+        package=package,
+        payload=payload,
+    )
+
+
 def run_prompt_once(adapter: AgentHarnessAdapter, package: EvidencePackage, prompt: str | None) -> ScenarioResult:
     adapter.prepare(package)
     payload = adapter.run_prompt(package, prompt or "Reply with exactly: LONGHOUSE UNIVERSAL HARNESS")
@@ -1497,6 +1793,7 @@ SCENARIO_RUNNERS = {
     "collect_raw_evidence": run_collect_raw_evidence,
     "action_matrix": run_action_matrix,
     "parse_ingest_project": run_parse_ingest_project,
+    "db_ingest_project": run_db_ingest_project,
     "run_prompt_once": run_prompt_once,
     "launch_managed_session": run_launch_managed_session,
     "send_receive": run_send_receive,
@@ -1525,6 +1822,8 @@ def run_scenario(
     package = EvidencePackage(root=evidence_root, provider=adapter.config.provider, scenario=scenario)
     runner = SCENARIO_RUNNERS[scenario]
     if scenario == "parse_ingest_project":
+        return runner(adapter, package, fixture_path)  # type: ignore[misc]
+    if scenario == "db_ingest_project":
         return runner(adapter, package, fixture_path)  # type: ignore[misc]
     if scenario == "run_prompt_once":
         return runner(adapter, package, prompt)  # type: ignore[misc]

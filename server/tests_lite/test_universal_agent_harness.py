@@ -256,7 +256,8 @@ def test_action_matrix_emits_same_longhouse_actions_for_all_providers(tmp_path: 
         assert actions["interrupt_cancel"]["contract_operation"] == "interrupt"
         assert actions["raw_evidence_capture"]["status"] == "pass"
         assert actions["parse_normalize"]["status"] == "pass"
-        assert actions["db_ingest"]["status"] == "blocked"
+        assert actions["db_ingest"]["status"] == "pass"
+        assert actions["db_ingest"]["canary"] == "universal_db_ingest_project"
         assert actions["old_new_release_diff"]["status"] == "blocked"
         assert Path(result["data"]["action_matrix_path"]).is_file()
 
@@ -282,6 +283,31 @@ def test_action_matrix_marks_provider_specific_unsupported_actions(tmp_path: Pat
     assert by_provider["antigravity"]["interrupt_cancel"]["status"] == "unsupported_gap"
     assert by_provider["antigravity"]["send_message"]["status"] == "pass"
     assert by_provider["antigravity"]["send_message"]["evidence_level"] == "live_token"
+
+
+def test_db_ingest_project_uses_real_longhouse_sqlite_for_all_providers(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=uah.SUPPORTED_PROVIDERS,
+            scenarios=("db_ingest_project",),
+            evidence_root=tmp_path / "evidence",
+        )
+    )
+
+    assert payload["verdict"] == "green"
+    assert {result["provider"] for result in payload["results"]} == set(uah.SUPPORTED_PROVIDERS)
+    for result in payload["results"]:
+        assert result["status"] == "pass"
+        assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
+        evidence_root = Path(result["evidence_root"])
+        db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
+        assert Path(db_snapshot["db_path"]).is_file()
+        assert db_snapshot["ingest_result"]["events_inserted"] == 4
+        assert db_snapshot["session_counts"]["user_messages"] == 1
+        assert db_snapshot["session_counts"]["assistant_messages"] == 1
+        assert db_snapshot["session_counts"]["tool_calls"] == 1
+        assert db_snapshot["timeline"]["matched"] is True
+        assert "universal db ingest hello" in db_snapshot["export_jsonl"]
 
 
 def test_codex_run_prompt_once_writes_safe_projection(tmp_path: Path) -> None:

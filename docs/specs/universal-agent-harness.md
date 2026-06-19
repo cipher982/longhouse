@@ -216,6 +216,7 @@ Universal scenarios:
 | `managed_session_e2e` | P0 | Real provider-safe managed/session mechanics run, raw provider/control evidence is captured, and canonical session/timeline projection is produced. |
 | `collect_raw_evidence` | P0 | stdout/stderr/provider logs/transcripts are persisted on success and failure. |
 | `parse_ingest_project` | P0 | Raw evidence becomes canonical events, ingests into Longhouse, and projects a session/timeline. |
+| `db_ingest_project` | P0 | Canonical events ingest through `AgentsStore` into an isolated SQLite DB, then session events/counts/export/timeline reads prove durable Longhouse projection. |
 | `tool_call_result` | P1 | Tool call/result events are paired and attributed; workspace side effects match the fixture. |
 | `interrupt_cancel` | P1 | A long active turn can be interrupted without corrupting session evidence. |
 | `resume_reattach` | P1 | A prior session can be resumed or explicitly reports an unsupported gap. |

@@ -47,6 +47,24 @@ baseline compare, and old/new release diff. Rows that are not genuinely proven
 remain `blocked` or `unsupported_gap`; this is expected until those lanes are
 promoted.
 
+Run the DB-backed universal ingest lane explicitly:
+
+```bash
+scripts/qa/provider-release-proof.py \
+  --provider codex \
+  --provider-bin /path/to/codex \
+  --artifact /tmp/codex-db-proof.json \
+  --evidence-root /tmp/codex-db-proof-evidence \
+  --run-universal-harness \
+  --universal-scenario db_ingest_project \
+  --json
+```
+
+This lane uses the server `uv` environment, ingests canonical events into an
+isolated SQLite Longhouse DB via `AgentsStore.ingest_session`, and verifies
+durable events, turn counts, export JSONL, and timeline reads. It is hermetic
+DB/product-surface proof, not live provider-token proof.
+
 Run only the action matrix:
 
 ```bash

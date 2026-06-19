@@ -52,6 +52,7 @@ UNIVERSAL_SCENARIOS = (
     "collect_raw_evidence",
     "action_matrix",
     "parse_ingest_project",
+    "db_ingest_project",
     "run_prompt_once",
     "launch_managed_session",
     "send_receive",
@@ -666,15 +667,32 @@ def _run_universal_harness(
     stderr_path = raw_dir / "universal-agent-harness-stderr.log"
     artifact_path = evidence_root / "universal-agent-harness.json"
     scenarios = _universal_scenarios(args)
-    argv = [
-        sys.executable,
-        str(Path(__file__).resolve().with_name("universal-agent-harness.py")),
-        "--provider",
-        args.provider,
-        "--evidence-root",
-        str(evidence_root),
-        "--json",
-    ]
+    harness_script = Path(__file__).resolve().with_name("universal-agent-harness.py")
+    if "db_ingest_project" in scenarios:
+        harness_project = _repo_root_from_script() / "server"
+        argv = [
+            "uv",
+            "run",
+            "--project",
+            str(harness_project),
+            "python",
+            str(harness_script),
+            "--provider",
+            args.provider,
+            "--evidence-root",
+            str(evidence_root),
+            "--json",
+        ]
+    else:
+        argv = [
+            sys.executable,
+            str(harness_script),
+            "--provider",
+            args.provider,
+            "--evidence-root",
+            str(evidence_root),
+            "--json",
+        ]
     for scenario in scenarios:
         argv.extend(["--scenario", scenario])
     if args.provider_bin:

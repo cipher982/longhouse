@@ -902,6 +902,36 @@ def test_release_proof_exposes_universal_session_evidence_for_codex_and_opencode
             assert session["has_assistant"] is True
 
 
+def test_release_proof_can_attach_universal_db_ingest_project() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        _write_fake_provider_bin(root, "codex 9.9.9")
+
+        result, payload = _run_proof(
+            root,
+            "codex",
+            extra_args=[
+                "--run-universal-harness",
+                "--universal-scenario",
+                "db_ingest_project",
+            ],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["normalized"]["canaries"]["universal_db_ingest_project"]["status"] == "pass"
+        assert payload["operation_evidence"]["universal_db_ingest"]["status"] == "pass"
+        assert payload["operation_evidence"]["universal_db_ingest"]["level"] == "hermetic"
+        universal_artifact = _read_json(Path(payload["artifacts"]["universal_harness_artifact"]))
+        db_result = universal_artifact["results"][0]
+        assert db_result["scenario"] == "db_ingest_project"
+        assert db_result["status"] == "pass"
+        db_snapshot = _read_json(Path(db_result["data"]["db_snapshot_path"]))
+        assert db_snapshot["ingest_result"]["events_inserted"] == 4
+        assert db_snapshot["timeline"]["matched"] is True
+        assert "universal db ingest hello" in db_snapshot["export_jsonl"]
+
+
 def test_opencode_release_proof_can_attach_real_universal_managed_session_e2e() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -1836,6 +1866,7 @@ def main() -> int:
         test_opencode_release_proof_normalizes_source_canary,
         test_release_proof_can_attach_universal_harness_for_all_providers,
         test_release_proof_exposes_universal_session_evidence_for_codex_and_opencode,
+        test_release_proof_can_attach_universal_db_ingest_project,
         test_opencode_release_proof_can_attach_real_universal_managed_session_e2e,
         test_opencode_release_proof_blocks_on_source_canary_red,
         test_opencode_release_proof_blocks_green_artifact_from_failed_source_canary,

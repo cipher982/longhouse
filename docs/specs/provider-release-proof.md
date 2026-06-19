@@ -48,7 +48,7 @@ What exists:
 
 What is missing:
 
-- DB-ingest-backed proof fixtures for all release-sensitive surfaces
+- provider-live DB-ingest-backed proof fixtures for all release-sensitive surfaces
 - full managed-session/live-token proof for every release-sensitive surface
 - scheduled old/new differentials from the accepted baseline store rather than
   only candidate or directly staged old/new artifacts
@@ -115,11 +115,12 @@ env-gated real-tool lane.
 
 Universal action-matrix implication: Longhouse can now emit one comparable
 control/observe/projection table for Claude Code, Codex/OpenAI, OpenCode, and
-Antigravity. That table is not a complete live proof. It intentionally leaves
-DB ingest, baseline compare, and old/new release diff rows blocked until those
-lanes are executable, and it marks provider-specific unsupported actions such
-as Antigravity interrupt/reattach or OpenCode active-turn steer as
-`unsupported_gap`.
+Antigravity. That table is not a complete live proof. The `db_ingest` row is
+now backed by a hermetic `db_ingest_project` scenario that writes through
+`AgentsStore.ingest_session` and verifies events/counts/export/timeline reads.
+Baseline compare and old/new release diff remain blocked until those lanes are
+executable, and provider-specific unsupported actions such as Antigravity
+interrupt/reattach or OpenCode active-turn steer remain `unsupported_gap`.
 
 ## Coverage Legend
 
