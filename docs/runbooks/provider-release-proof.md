@@ -67,7 +67,9 @@ flag use scenario `opencode-real-tool-release-proof-v1`; the default
 Accept this as a baseline only after confirming the artifact shows a completed
 `bash` tool event with a non-empty `callID`, structured command input, and
 exact marker output plus a same-session `DONE` text event. The real-run timeout
-has a 45 second minimum guard. Production Sauron does not run this
+has a 45 second minimum guard. Sauron release-watch can request this same
+scenario for OpenCode golden-envelope and old/new differential checks with
+`AGENT_RELEASE_OPENCODE_REAL_TOOL=1`; production Sauron does not run this
 token-spending lane by default.
 
 For Codex, optional Make variables enable the deeper lanes:
@@ -459,6 +461,9 @@ an accepted baseline.
 - Antigravity real-agy send release-watch: Sauron has an env-gated pass-through
   for this scenario, but production Sauron is not configured with
   `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` by default.
+- OpenCode real-tool release-watch: Sauron has an env-gated pass-through for
+  this scenario, but production Sauron is not configured with
+  `AGENT_RELEASE_OPENCODE_REAL_TOOL=1` by default.
 
 ## Promotion Checklist
 

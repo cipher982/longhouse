@@ -70,7 +70,7 @@ Machine-validated coverage map:
 | Covered `partial` | 38 |
 | Covered `no` | 3 |
 | Rows running in Longhouse CI | 46 |
-| Rows running in Sauron release-watch | 32 |
+| Rows running in Sauron release-watch | 33 |
 | Rows with accepted parser-fixture baselines | 4 |
 | Rows with accepted release-proof baselines | 26 |
 
@@ -80,7 +80,7 @@ Provider shape:
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Claude Code | 2 | 11 | 0 | 12 | 7 | 3 |
 | Codex/OpenAI | 4 | 9 | 0 | 12 | 9 | 7 |
-| OpenCode | 4 | 9 | 0 | 13 | 11 | 11 |
+| OpenCode | 4 | 9 | 0 | 13 | 12 | 11 |
 | Antigravity | 1 | 9 | 3 | 9 | 5 | 5 |
 
 `Release baselines` counts rows whose current behavior is compared against an
@@ -106,8 +106,8 @@ This is still not a complete release gate: Claude still lacks managed-session
 binding and live-token proof, Codex still lacks accepted-baseline-backed
 interrupt/tool proof beyond its accepted live-send lane, Antigravity still lacks
 interrupt/reattach/tool proof beyond its accepted live-send lane, and OpenCode
-still lacks scheduled managed live-token proof beyond its accepted manual
-real-tool lane.
+still lacks production-enabled managed live-token proof beyond its accepted
+env-gated real-tool lane.
 
 ## Coverage Legend
 
@@ -271,8 +271,8 @@ and the complete accepted store was promoted to Sauron production
 | send input | yes | provider-live canary `prompt_async` noReply marker | live_no_token | `validate-provider-cli-canaries` | yes | release-proof yes (`opencode-release-proof-v1`, 1.16.2) | yes |
 | interrupt/abort/steer | partial | provider-live abort endpoint; steer unsupported | live_no_token | `validate-provider-cli-canaries` | yes for interrupt | release-proof yes for abort (`opencode-release-proof-v1`, 1.16.2); steer remains unsupported | yes for abort, no for steer |
 | reattach/resume | yes | provider-live process restart/session recovery + attach shape | live_no_token | `validate-provider-cli-canaries` | yes | release-proof yes (`opencode-release-proof-v1`, 1.16.2) | yes |
-| tool/tool-result shape | partial | OpenCode SQLite parser unit covers `opencode_tool_call`/`opencode_tool_result`; `provider-release-proof.py --opencode-run-real-tool` captures a real `opencode run --format json` completed bash tool event with callID, structured input, and marker output | manual live_token plus fake wrapper/parser fixture | fake-wrapper CI plus parser unit | not configured in production release-watch | release-proof yes (`opencode-real-tool-release-proof-v1`, 1.16.2) | yes for manual proof/diff; production gate remains off |
-| live-token behavior | partial | `provider-control-e2e-canary.py --opencode-run-real-tool`; `provider-release-proof.py --opencode-run-real-tool` attaches real OpenCode tool-use evidence to a release proof | manual live_token plus fake wrapper | fake-wrapper CI | not configured in production release-watch | release-proof yes (`opencode-real-tool-release-proof-v1`, 1.16.2) | yes for manual proof/diff; production gate remains off |
+| tool/tool-result shape | partial | OpenCode SQLite parser unit covers `opencode_tool_call`/`opencode_tool_result`; `provider-release-proof.py --opencode-run-real-tool` captures a real `opencode run --format json` completed bash tool event with callID, structured input, and marker output | manual live_token plus fake wrapper/parser fixture | fake-wrapper CI plus parser unit; Sauron proof/diff plumbing tests | opt-in proof/diff when `AGENT_RELEASE_OPENCODE_REAL_TOOL=1` | release-proof yes (`opencode-real-tool-release-proof-v1`, 1.16.2) | yes for manual/configured proof/diff; production gate remains off |
+| live-token behavior | partial | `provider-control-e2e-canary.py --opencode-run-real-tool`; `provider-release-proof.py --opencode-run-real-tool` attaches real OpenCode tool-use evidence to a release proof | manual live_token plus fake wrapper | fake-wrapper CI plus Sauron plumbing tests | opt-in proof/diff when `AGENT_RELEASE_OPENCODE_REAL_TOOL=1`; not configured in production | release-proof yes (`opencode-real-tool-release-proof-v1`, 1.16.2) | yes for manual/configured proof/diff; production gate remains off |
 
 OpenCode is the first accepted release-proof baseline. On 2026-06-19,
 `opencode 1.16.2` produced a green `opencode-release-proof-v1` artifact and a
@@ -287,8 +287,11 @@ no-token server/API/control-shape lane. A separate accepted proof,
 `bash` tool event with a real `callID`, structured command input, marker output,
 one text response event, and `operation_evidence.transcript_binding.level=live_token`.
 Together, these baselines prove no-token server/control shape plus scoped
-real-token tool-result event shape. They do not prove scheduled managed
-live-token send/steer behavior in production release-watch.
+real-token tool-result event shape. Sauron can request the real-tool scenario in
+golden-envelope and old/new differential release-watch paths with
+`AGENT_RELEASE_OPENCODE_REAL_TOOL=1`, but production does not enable that token
+spend by default. They still do not prove scheduled managed live-token
+send/steer behavior in production release-watch.
 
 ### Antigravity
 
