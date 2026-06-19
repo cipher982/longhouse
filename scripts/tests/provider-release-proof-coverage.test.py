@@ -8,8 +8,15 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COVERAGE_PATH = REPO_ROOT / "docs" / "specs" / "provider-release-proof-coverage.json"
+SPEC_PATH = REPO_ROOT / "docs" / "specs" / "provider-release-proof.md"
 
-EXPECTED_PROVIDERS = ("claude", "codex", "opencode", "antigravity", )
+EXPECTED_PROVIDERS = ("claude", "codex", "opencode", "antigravity")
+PROVIDER_LABELS = {
+    "claude": "Claude Code",
+    "codex": "Codex/OpenAI",
+    "opencode": "OpenCode",
+    "antigravity": "Antigravity",
+}
 EXPECTED_SURFACES = (
     "install/stage exact version",
     "binary identity",
@@ -65,6 +72,61 @@ def _load() -> dict:
     return payload
 
 
+def _metric_table(markdown: str) -> dict[str, int]:
+    in_table = False
+    metrics: dict[str, int] = {}
+    for line in markdown.splitlines():
+        if line == "| Metric | Count |":
+            in_table = True
+            continue
+        if not in_table:
+            continue
+        if not line.startswith("|"):
+            break
+        if line.startswith("| ---"):
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if len(cells) == 2:
+            metrics[cells[0]] = int(cells[1])
+    return metrics
+
+
+def _provider_shape_table(markdown: str) -> dict[str, dict[str, int]]:
+    in_table = False
+    rows: dict[str, dict[str, int]] = {}
+    for line in markdown.splitlines():
+        if line == "| Provider | Yes | Partial | No | CI rows | Sauron rows | Release baselines |":
+            in_table = True
+            continue
+        if not in_table:
+            continue
+        if not line.startswith("|"):
+            break
+        if line.startswith("| ---"):
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if len(cells) != 7:
+            continue
+        provider, yes, partial, no, ci, sauron, release_baselines = cells
+        rows[provider] = {
+            "yes": int(yes),
+            "partial": int(partial),
+            "no": int(no),
+            "ci": int(ci),
+            "sauron": int(sauron),
+            "release_baselines": int(release_baselines),
+        }
+    return rows
+
+
+def _count(rows: list[dict], **matches: object) -> int:
+    return sum(
+        1
+        for row in rows
+        if all(row.get(key) == value for key, value in matches.items())
+    )
+
+
 def test_coverage_map_has_full_provider_surface_grid() -> None:
     payload = _load()
 
@@ -113,10 +175,54 @@ def test_coverage_rows_are_auditable() -> None:
             assert row["runs_in_ci"], row
 
 
+def test_spec_snapshot_tables_match_coverage_json() -> None:
+    payload = _load()
+    rows = payload["rows"]
+    markdown = SPEC_PATH.read_text(encoding="utf-8")
+
+    metrics = _metric_table(markdown)
+    assert metrics == {
+        "Providers": len(payload["providers"]),
+        "Contract surfaces per provider": len(payload["surfaces"]),
+        "Total provider/surface rows": len(rows),
+        "Covered `yes`": _count(rows, covered="yes"),
+        "Covered `partial`": _count(rows, covered="partial"),
+        "Covered `no`": _count(rows, covered="no"),
+        "Rows running in Longhouse CI": sum(1 for row in rows if row["runs_in_ci"]),
+        "Rows running in Sauron release-watch": sum(
+            1 for row in rows if row["runs_in_sauron_release_watch"]
+        ),
+        "Rows with accepted parser-fixture baselines": _count(
+            rows, accepted_baseline="parser_fixture"
+        ),
+        "Rows with accepted release-proof baselines": _count(
+            rows, accepted_baseline="release_proof"
+        ),
+    }
+
+    provider_shape = _provider_shape_table(markdown)
+    assert set(provider_shape) == set(PROVIDER_LABELS.values())
+    for provider, label in PROVIDER_LABELS.items():
+        provider_rows = [row for row in rows if row["provider"] == provider]
+        assert provider_shape[label] == {
+            "yes": _count(provider_rows, covered="yes"),
+            "partial": _count(provider_rows, covered="partial"),
+            "no": _count(provider_rows, covered="no"),
+            "ci": sum(1 for row in provider_rows if row["runs_in_ci"]),
+            "sauron": sum(
+                1 for row in provider_rows if row["runs_in_sauron_release_watch"]
+            ),
+            "release_baselines": _count(
+                provider_rows, accepted_baseline="release_proof"
+            ),
+        }
+
+
 def main() -> int:
     tests = [
         test_coverage_map_has_full_provider_surface_grid,
         test_coverage_rows_are_auditable,
+        test_spec_snapshot_tables_match_coverage_json,
     ]
     for test in tests:
         test()
