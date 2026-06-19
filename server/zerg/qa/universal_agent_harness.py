@@ -1119,6 +1119,8 @@ class UniversalProviderAdapter:
         return payload
 
     def launch_managed_session(self, package: EvidencePackage) -> dict[str, Any]:
+        if self.config.provider == "claude":
+            return self._run_claude_launch_managed_session(package)
         if "launch_managed_session" not in self.config.safe_managed_session_scenarios:
             payload = self._unsupported_payload(
                 "launch_managed_session",
@@ -3064,16 +3066,23 @@ class UniversalProviderAdapter:
         package.write_json("assertions/resume_reattach.json", payload)
         return payload
 
-    def _run_claude_managed_session_e2e(self, package: EvidencePackage) -> dict[str, Any]:
+    def _run_claude_provider_live_projection(
+        self,
+        package: EvidencePackage,
+        *,
+        scenario: str,
+        assertion_name: str,
+        require_operation: str | None = None,
+    ) -> dict[str, Any]:
         binary, source = self._resolve_binary()
         if binary is None:
             payload = {
                 "status": STATUS_FAIL,
                 "failure_code": "provider_binary_not_found",
-                "message": "claude binary was not found for managed_session_e2e",
+                "message": f"claude binary was not found for {scenario}",
                 "binary_source": source,
             }
-            package.write_json("assertions/managed_session_e2e.json", payload)
+            package.write_json(f"assertions/{assertion_name}.json", payload)
             return payload
 
         from zerg.qa.provider_live_canary import run_provider_live_canary
@@ -3130,7 +3139,7 @@ class UniversalProviderAdapter:
         payload = {
             **projection,
             "status": status,
-            "scenario": "managed_session_e2e",
+            "scenario": scenario,
             "provider_version": live_artifact.get("provider_version"),
             "provider_live_artifact_path": str(live_artifact_path),
             "provider_live_evidence_root": str(live_evidence_root),
@@ -3153,10 +3162,31 @@ class UniversalProviderAdapter:
             payload["failure_code"] = live_artifact.get("failure_code") or "claude_provider_live_unconfirmed"
             payload["message"] = "Claude provider-live no-token canary is recognized but not fully confirmed."
         elif db_verdict != STATUS_PASS:
-            payload["failure_code"] = db_ingest.get("failure_code") or "managed_session_e2e_db_ingest_failed"
+            payload["failure_code"] = db_ingest.get("failure_code") or f"{scenario}_db_ingest_failed"
             payload["message"] = "Claude provider-live evidence did not pass Longhouse DB ingest assertions."
-        package.write_json("assertions/managed_session_e2e.json", payload)
+        if require_operation and status == STATUS_PASS:
+            operation_status = str((operation_evidence.get(require_operation) or {}).get("status") or STATUS_FAIL)
+            if operation_status != STATUS_PASS:
+                payload["status"] = STATUS_FAIL
+                payload["failure_code"] = f"claude_{require_operation}_evidence_missing"
+                payload["message"] = f"Claude provider-live canary did not produce passing {require_operation} evidence."
+        package.write_json(f"assertions/{assertion_name}.json", payload)
         return payload
+
+    def _run_claude_managed_session_e2e(self, package: EvidencePackage) -> dict[str, Any]:
+        return self._run_claude_provider_live_projection(
+            package,
+            scenario="managed_session_e2e",
+            assertion_name="managed_session_e2e",
+        )
+
+    def _run_claude_launch_managed_session(self, package: EvidencePackage) -> dict[str, Any]:
+        return self._run_claude_provider_live_projection(
+            package,
+            scenario="launch_managed_session",
+            assertion_name="launch_managed_session",
+            require_operation="launch_local",
+        )
 
     def _run_codex_interrupt_cancel(self, package: EvidencePackage) -> dict[str, Any]:
         binary, source = self._resolve_binary()

@@ -176,9 +176,11 @@ action id instead of silently skipping unsupported or unimplemented behavior.
 `managed_session_e2e` is adapter-specific today. OpenCode calls the provider-live
 server/session canary and DB-ingests the resulting rows. Claude calls the
 provider-live no-token command/channel/PTY contract, projects those rows, and
-DB-ingests them; live send and steer remain explicit blocked operations until
-the live-token Claude contract is promoted. Codex calls the provider-release
-canary for `managed_tui_attach` and `detached_ui`, then DB-ingests those
+DB-ingests them; Claude `launch_managed_session` now uses the same provider-live
+contract and requires passing `launch_local` evidence. Live send and steer
+remain explicit blocked operations until the live-token Claude contract is
+promoted. Codex calls the provider-release canary for `managed_tui_attach` and
+`detached_ui`, then DB-ingests those
 launch/reattach rows when Runtime Host credentials are available; without those
 credentials it returns a typed `unsupported_gap`. Codex `resume_reattach` uses
 the same provider-release canary and requires a passing reattach row, so the
@@ -556,6 +558,9 @@ shape:
    Longhouse SQLite ingest and verifies durable events, session counts, export
    JSONL, query lookup, timeline listing, and preserved provider-session
    binding.
+10. Claude `launch_managed_session` now calls the provider-live no-token
+   command/channel/PTY contract, requires passing `launch_local` evidence, and
+   DB-ingests those rows. Claude send/receive remains an explicit no-token gap.
 10. Codex `resume_reattach` now calls the existing provider-release canary,
    requires passing reattach evidence, and DB-ingests the resulting rows when
    Runtime Host credentials are present; without credentials it reports the

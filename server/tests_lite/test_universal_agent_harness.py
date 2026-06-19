@@ -34,7 +34,7 @@ raise SystemExit(2)
 
 def _fake_bins(tmp_path: Path) -> dict[str, Path]:
     return {
-        "claude": _write_exe(tmp_path / "bin" / "claude", "2.9.9-fake (Claude Code)"),
+        "claude": _fake_claude_provider_live(tmp_path / "bin" / "claude"),
         "codex": _write_exe(tmp_path / "bin" / "codex", "codex-cli 9.9.9"),
         "opencode": _write_exe(tmp_path / "bin" / "opencode", "opencode 9.9.9"),
         "antigravity": _write_exe(tmp_path / "bin" / "agy", "agy 9.9.9"),
@@ -1022,7 +1022,35 @@ def test_managed_session_scenarios_pass_for_codex_and_opencode(tmp_path: Path) -
             assert session["operation_statuses"]["launch_local"]["level"] == "live_no_token"
 
 
-def test_managed_session_scenarios_are_typed_gaps_for_other_providers(tmp_path: Path) -> None:
+def test_claude_launch_managed_session_uses_provider_live_contract_canary(tmp_path: Path) -> None:
+    fake_claude = _fake_claude_provider_live(tmp_path / "bin" / "claude")
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("claude",),
+            scenarios=("launch_managed_session",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"claude": fake_claude},
+        )
+    )
+
+    result = payload["results"][0]
+    assert payload["verdict"] == "green"
+    assert result["status"] == "pass"
+    assert result["data"]["scenario"] == "launch_managed_session"
+    assert result["data"]["source_artifact_kind"] == "provider_live_canary"
+    assert result["data"]["operation_evidence"]["launch_local"]["status"] == "pass"
+    assert result["data"]["operation_evidence"]["launch_local"]["level"] == "live_no_token"
+    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
+
+    evidence_root = Path(result["evidence_root"])
+    assert (evidence_root / "assertions" / "launch_managed_session.json").is_file()
+    provider_live = json.loads((evidence_root / "raw" / "provider-live-canary.json").read_text(encoding="utf-8"))
+    assert provider_live["canaries"]["command_shape"]["status"] == "pass"
+    raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
+    assert "command_shape" in raw_events
+
+
+def test_managed_session_scenarios_keep_remaining_typed_gaps(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
             providers=("claude", "antigravity"),
@@ -1038,11 +1066,17 @@ def test_managed_session_scenarios_are_typed_gaps_for_other_providers(tmp_path: 
 
     assert payload["verdict"] == "yellow"
     assert len(payload["results"]) == 4
-    assert {result["status"] for result in payload["results"]} == {"unsupported_gap"}
-    assert {result["failure_code"] for result in payload["results"]} == {
-        "managed_session_not_safe_no_token",
-        "send_receive_not_safe_no_token",
+    by_key = {(result["provider"], result["scenario"]): result for result in payload["results"]}
+    expected = {
+        ("claude", "launch_managed_session"): ("pass", None),
+        ("claude", "send_receive"): ("unsupported_gap", "send_receive_not_safe_no_token"),
+        ("antigravity", "launch_managed_session"): ("unsupported_gap", "managed_session_not_safe_no_token"),
+        ("antigravity", "send_receive"): ("unsupported_gap", "send_receive_not_safe_no_token"),
     }
+    for key, (status, failure_code) in expected.items():
+        assert by_key[key]["status"] == status
+        if failure_code is not None:
+            assert by_key[key]["failure_code"] == failure_code
 
 
 def test_opencode_managed_session_e2e_uses_real_provider_live_canary(tmp_path: Path) -> None:
@@ -2847,7 +2881,6 @@ def test_script_entrypoint_runs_all_provider_fake_no_token_release_surface(tmp_p
     by_key = {(item["provider"], item["scenario"]): item for item in payload["results"]}
     expected_gaps = {
         ("claude", "run_prompt_once"): "run_prompt_once_not_safe_no_token",
-        ("claude", "launch_managed_session"): "managed_session_not_safe_no_token",
         ("claude", "send_receive"): "send_receive_not_safe_no_token",
         ("opencode", "run_prompt_once"): "run_prompt_once_not_safe_no_token",
         ("antigravity", "run_prompt_once"): "run_prompt_once_not_safe_no_token",
