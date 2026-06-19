@@ -528,6 +528,31 @@ def diff_proofs(
     }
 
 
+def diff_old_new_proofs(
+    old_path: Path,
+    new_path: Path,
+    *,
+    baseline_root: Path,
+) -> dict[str, Any]:
+    payload = diff_proofs(
+        new_path,
+        baseline_root=baseline_root,
+        base_path=old_path,
+    )
+    old_path = old_path.expanduser().resolve()
+    new_path = new_path.expanduser().resolve()
+    payload["artifact_kind"] = "provider_release_proof_old_new_diff"
+    payload["old_proof_uri"] = str(old_path)
+    payload["new_proof_uri"] = str(new_path)
+    payload["staging"] = {
+        "status": "explicit_proof_artifacts",
+        "message": (
+            "Old/new provider binaries were not installed by this command; caller supplied both proof artifacts."
+        ),
+    }
+    return payload
+
+
 def baseline_status(
     *,
     baseline_root: Path,
@@ -702,6 +727,16 @@ def build_parser() -> argparse.ArgumentParser:
     diff.add_argument("--artifact", type=Path)
     diff.add_argument("--json", action="store_true")
 
+    old_new = subparsers.add_parser(
+        "old-new",
+        help="Diff explicit old and new provider proof artifacts",
+    )
+    old_new.add_argument("--old", type=Path, required=True)
+    old_new.add_argument("--new", type=Path, required=True)
+    old_new.add_argument("--baseline-root", type=Path, default=DEFAULT_BASELINE_ROOT)
+    old_new.add_argument("--artifact", type=Path)
+    old_new.add_argument("--json", action="store_true")
+
     status = subparsers.add_parser(
         "status",
         help="Inspect accepted baseline availability for one provider scenario",
@@ -735,6 +770,14 @@ def main(argv: list[str] | None = None) -> int:
             args.candidate,
             baseline_root=args.baseline_root.expanduser(),
             base_path=args.base,
+        )
+        _print_or_write(payload, artifact=args.artifact, as_json=args.json)
+        return 1 if payload["verdict"] == "red" else 0
+    if args.command == "old-new":
+        payload = diff_old_new_proofs(
+            args.old,
+            args.new,
+            baseline_root=args.baseline_root.expanduser(),
         )
         _print_or_write(payload, artifact=args.artifact, as_json=args.json)
         return 1 if payload["verdict"] == "red" else 0

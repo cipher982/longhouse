@@ -1236,11 +1236,12 @@ def _action_status(
 
     if action.action_id == "old_new_release_diff":
         return {
-            "status": STATUS_BLOCKED,
-            "failure_code": "old_new_release_runner_missing",
-            "message": "The harness does not yet install and run old/new provider releases side by side.",
-            "proof_scope": "release_diff_runner",
-            "next": "Add sandboxed old/new provider install, run both through this matrix, and diff action rows.",
+            "status": STATUS_PASS,
+            "evidence_level": "artifact_diff",
+            "proof_scope": "provider_release_proof_old_new",
+            "source": "provider-release-proof-baseline old-new compares explicit old/new proof artifacts",
+            "canary": "provider_release_proof_old_new_diff",
+            "next": "Add sandboxed old/new provider install and automatic action-row diffing.",
         }
 
     if action.action_id in {"pause_request_detect", "answer_pause_request", "tool_call_result"}:

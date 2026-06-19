@@ -869,7 +869,9 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
             action_matrix = payload["action_matrix"]
             assert action_matrix["action_count"] > 10
             assert action_matrix["action_ids"]
-            assert payload["normalized"]["action_matrix"]["status_counts"]["blocked"] >= 1
+            action_statuses = {row["action_id"]: row for row in action_matrix["actions"]}
+            assert action_statuses["old_new_release_diff"]["status"] == "pass"
+            assert action_statuses["old_new_release_diff"]["evidence_level"] == "artifact_diff"
             control_surface = payload["control_surface"]
             assert 8 < control_surface["action_count"] < action_matrix["action_count"]
             assert "send_message" in control_surface["action_ids"]

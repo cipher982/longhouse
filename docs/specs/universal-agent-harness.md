@@ -146,6 +146,11 @@ provider/action at the recorded evidence level. It does not automatically mean
 the current invocation spent tokens or drove a live model turn. The row's
 `evidence_level` and `proof_scope` are the important qualifiers.
 
+`old_new_release_diff` is now a first-class artifact-diff proof row: it passes
+when the release-proof baseline tool can compare explicit old and new proof
+artifacts. It is not yet automatic provider-version staging/install; that
+belongs to the release runner that produces the two proof artifacts.
+
 ## Capabilities And Profiles
 
 Capabilities are the vocabulary scenarios use to decide what is required:

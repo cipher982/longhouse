@@ -650,6 +650,63 @@ def test_diff_can_compare_explicit_old_and_new_proofs() -> None:
         assert payload["candidate"]["provider_version"] == "opencode 1.2.4"
 
 
+def test_old_new_command_compares_explicit_proof_artifacts() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        old = _write_proof(root, "old")
+        new = _write_proof(root, "new", version="1.2.4")
+        artifact = root / "old-new-diff.json"
+
+        result, payload = _run(
+            [
+                "old-new",
+                "--old",
+                str(old),
+                "--new",
+                str(new),
+                "--artifact",
+                str(artifact),
+            ]
+        )
+
+        assert result.returncode == 0
+        assert payload["artifact_kind"] == "provider_release_proof_old_new_diff"
+        assert payload["verdict"] == "green"
+        assert payload["diff"]["status"] == "match"
+        assert payload["old_proof_uri"] == str(old.resolve())
+        assert payload["new_proof_uri"] == str(new.resolve())
+        assert payload["staging"]["status"] == "explicit_proof_artifacts"
+
+
+def test_old_new_command_blocks_on_action_row_drift() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        old = _write_proof(root, "old")
+        new = _write_proof(root, "new", version="1.2.4")
+        new_payload = json.loads(new.read_text(encoding="utf-8"))
+        action_matrix_path = Path(new_payload["artifacts"]["action_matrix"])
+        action_matrix = json.loads(action_matrix_path.read_text(encoding="utf-8"))
+        action_matrix["action_matrix"]["actions"][0]["status"] = "fail"
+        action_matrix["action_matrix"]["actions"][0]["failure_code"] = "send_message_contract_regressed"
+        action_matrix_path.write_text(json.dumps(action_matrix), encoding="utf-8")
+
+        result, payload = _run(
+            [
+                "old-new",
+                "--old",
+                str(old),
+                "--new",
+                str(new),
+            ]
+        )
+
+        assert result.returncode == 1
+        assert payload["artifact_kind"] == "provider_release_proof_old_new_diff"
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "provider_release_proof_drift"
+        assert payload["diff"]["status"] == "different"
+
+
 def test_status_reports_missing_baseline_as_yellow() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -918,6 +975,8 @@ def main() -> int:
         test_diff_does_not_promote_matching_yellow_candidate_to_green,
         test_diff_blocks_drift_even_when_candidate_is_yellow,
         test_diff_can_compare_explicit_old_and_new_proofs,
+        test_old_new_command_compares_explicit_proof_artifacts,
+        test_old_new_command_blocks_on_action_row_drift,
         test_status_reports_missing_baseline_as_yellow,
         test_status_reports_accepted_baseline_and_archived_artifacts,
         test_relocated_baseline_store_resolves_archived_artifacts,

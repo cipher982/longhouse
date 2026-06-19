@@ -118,15 +118,18 @@ control/observe/projection table for Claude Code, Codex/OpenAI, OpenCode, and
 Antigravity. That table is not a complete live proof. The `db_ingest` row is
 now backed by a hermetic `db_ingest_project` scenario that writes through
 `AgentsStore.ingest_session` and verifies events/counts/export/timeline reads.
-Baseline compare and old/new release diff remain blocked until those lanes are
-executable, and provider-specific unsupported actions such as Antigravity
-interrupt/reattach or OpenCode active-turn steer remain `unsupported_gap`.
+Baseline compare is executable through accepted proof artifacts, and old/new
+release diff is executable when the caller supplies explicit old and new proof
+artifacts. Automatic provider-version staging/install for those two artifacts is
+still release-runner work. Provider-specific unsupported actions such as
+Antigravity interrupt/reattach or OpenCode active-turn steer remain
+`unsupported_gap`.
 
 ## Coverage Legend
 
 `yes` means the current suite directly exercises the surface. A `yes` row with
 `Baseline: no` is still not a complete release gate; it means the operation can
-be proved today, but old/new baseline comparison is not wired yet. `partial`
+be proved today, but accepted-baseline coverage is not wired yet. `partial`
 means some lower layer or fake boundary exists, but the proof is not enough to
 trust a new upstream release. `no` means no meaningful current proof was found.
 
@@ -684,14 +687,25 @@ scripts/qa/provider-release-proof-baseline.py diff \
 For direct old/new comparison without an accepted store:
 
 ```bash
-scripts/qa/provider-release-proof-baseline.py diff \
-  --base /tmp/old-proof.json \
-  --candidate /tmp/new-proof.json \
+make provider-release-proof-old-new \
+  OLD=/tmp/old-proof.json \
+  NEW=/tmp/new-proof.json \
+  ARTIFACT=/tmp/old-new-proof-diff.json
+```
+
+Equivalent direct script:
+
+```bash
+scripts/qa/provider-release-proof-baseline.py old-new \
+  --old /tmp/old-proof.json \
+  --new /tmp/new-proof.json \
   --json
 ```
 
 The first comparison view excludes `provider_version`; version is metadata and
-should not by itself count as contract drift.
+should not by itself count as contract drift. The old/new command records
+`staging.status=explicit_proof_artifacts` because it compares the supplied
+artifacts rather than staging provider binaries itself.
 
 ## Next Work
 

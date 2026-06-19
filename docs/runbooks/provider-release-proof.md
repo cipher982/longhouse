@@ -357,11 +357,15 @@ make provider-release-proof-diff \
 Diff explicit old/new proof artifacts:
 
 ```bash
-make provider-release-proof-diff \
-  BASE=/tmp/old-proof.json \
-  CANDIDATE=/tmp/new-proof.json \
+make provider-release-proof-old-new \
+  OLD=/tmp/old-proof.json \
+  NEW=/tmp/new-proof.json \
   ARTIFACT=/tmp/old-new-proof-diff.json
 ```
+
+This emits `artifact_kind=provider_release_proof_old_new_diff` with
+`staging.status=explicit_proof_artifacts`. It compares supplied proof artifacts;
+it does not install or stage old/new provider binaries by itself.
 
 `diff.status=match` with `verdict=green` means no normalized contract drift was
 found. `diff.status=different` with `verdict=red` is a release-risk signal.
