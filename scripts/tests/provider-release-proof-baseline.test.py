@@ -179,6 +179,7 @@ def test_accept_archives_proof_and_artifacts() -> None:
             "source_artifact",
             "stdout",
             "stderr",
+            "normalized_contract",
             "provider_contract",
             "operation_evidence",
             "session_projection",
@@ -481,6 +482,38 @@ def test_diff_does_not_promote_matching_yellow_candidate_to_green() -> None:
         assert payload["diff"]["status"] == "match"
 
 
+def test_diff_blocks_drift_even_when_candidate_is_yellow() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        baseline_root = root / "baselines"
+        accepted = _write_proof(root, "accepted")
+        candidate = _write_proof(root, "candidate", version="1.2.4")
+        candidate_payload = json.loads(candidate.read_text(encoding="utf-8"))
+        candidate_payload["verdict"] = "yellow"
+        candidate_payload["failure_code"] = "fake_warning"
+        normalized_path = Path(candidate_payload["artifacts"]["normalized_contract"])
+        normalized = json.loads(normalized_path.read_text(encoding="utf-8"))
+        normalized["operation_evidence"]["send_input"]["status"] = "fail"
+        normalized["operation_evidence"]["send_input"]["failure_code"] = "fake_drift"
+        normalized_path.write_text(json.dumps(normalized), encoding="utf-8")
+        _run(["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)])
+
+        result, payload = _run(
+            [
+                "diff",
+                "--candidate",
+                str(candidate),
+                "--baseline-root",
+                str(baseline_root),
+            ]
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "provider_release_proof_drift"
+        assert payload["diff"]["status"] == "different"
+
+
 def test_diff_can_compare_explicit_old_and_new_proofs() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -622,6 +655,38 @@ def test_status_warns_when_archived_artifact_is_missing() -> None:
         assert payload["missing_archived_artifacts"] == ["stdout"]
 
 
+def test_status_blocks_when_accepted_baseline_is_not_green() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        baseline_root = root / "baselines"
+        accepted = _write_proof(root, "accepted")
+        _, acceptance = _run(
+            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
+        )
+        accepted_path = Path(acceptance["accepted_path"])
+        accepted_payload = json.loads(accepted_path.read_text(encoding="utf-8"))
+        accepted_payload["verdict"] = "yellow"
+        accepted_payload["failure_code"] = "tampered"
+        accepted_path.write_text(json.dumps(accepted_payload), encoding="utf-8")
+
+        result, payload = _run(
+            [
+                "status",
+                "--provider",
+                "opencode",
+                "--scenario-id",
+                "opencode-release-proof-v1",
+                "--baseline-root",
+                str(baseline_root),
+            ]
+        )
+
+        assert result.returncode == 1
+        assert payload["accepted"] is True
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "accepted_baseline_not_green"
+
+
 def main() -> int:
     tests = [
         test_accept_archives_proof_and_artifacts,
@@ -635,11 +700,13 @@ def main() -> int:
         test_diff_reports_yellow_candidate_without_baseline_as_yellow,
         test_diff_reports_red_candidate_without_baseline_as_red,
         test_diff_does_not_promote_matching_yellow_candidate_to_green,
+        test_diff_blocks_drift_even_when_candidate_is_yellow,
         test_diff_can_compare_explicit_old_and_new_proofs,
         test_status_reports_missing_baseline_as_yellow,
         test_status_reports_accepted_baseline_and_archived_artifacts,
         test_relocated_baseline_store_resolves_archived_artifacts,
         test_status_warns_when_archived_artifact_is_missing,
+        test_status_blocks_when_accepted_baseline_is_not_green,
     ]
     for test in tests:
         test()

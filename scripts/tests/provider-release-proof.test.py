@@ -174,7 +174,7 @@ artifact = {
 }
 Path(value("--artifact")).parent.mkdir(parents=True, exist_ok=True)
 Path(value("--artifact")).write_text(json.dumps(artifact), encoding="utf-8")
-raise SystemExit(0 if verdict != "red" else 1)
+raise SystemExit(1 if os.environ.get("FAKE_EXIT_ONE") == "1" else 0 if verdict != "red" else 1)
 """,
     )
 
@@ -194,6 +194,20 @@ def value(flag, default=None):
 args_path = os.environ.get("FAKE_CODEX_ARGS_PATH")
 if args_path:
     Path(args_path).write_text(json.dumps(args), encoding="utf-8")
+env_path = os.environ.get("FAKE_CODEX_ENV_PATH")
+if env_path:
+    Path(env_path).write_text(
+        json.dumps(
+            {
+                "CODEX_AGENTS_TOKEN": os.environ.get("CODEX_AGENTS_TOKEN"),
+                "CODEX_API_URL": os.environ.get("CODEX_API_URL"),
+            }
+        ),
+        encoding="utf-8",
+    )
+if os.environ.get("FAKE_CODEX_SKIP_ARTIFACT") == "1":
+    print(os.environ.get("CODEX_AGENTS_TOKEN", ""))
+    raise SystemExit(0)
 
 source_review_status = value("--source-review-status", "missing")
 artifact = {
@@ -321,6 +335,24 @@ def test_opencode_release_proof_blocks_on_source_canary_red() -> None:
         assert payload["operation_evidence"]["send_input"]["status"] == "fail"
 
 
+def test_opencode_release_proof_blocks_green_artifact_from_failed_source_canary() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "opencode",
+            env={"FAKE_EXIT_ONE": "1"},
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "source_canary_returncode_mismatch"
+        assert payload["source_canary_returncode"] == 1
+
+
 def test_opencode_release_proof_blocks_when_source_artifact_missing() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -360,13 +392,14 @@ def test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         args_path = root / "codex-args.json"
+        env_path = root / "codex-env.json"
         _write_fake_repo(root / "repo")
         (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
 
         result, payload = _run_proof(
             root,
             "codex",
-            env={"FAKE_CODEX_ARGS_PATH": str(args_path)},
+            env={"FAKE_CODEX_ARGS_PATH": str(args_path), "FAKE_CODEX_ENV_PATH": str(env_path)},
             extra_args=[
                 "--provider-version",
                 "codex 2.0.0",
@@ -382,13 +415,15 @@ def test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest
 
         assert result.returncode == 0
         codex_args = json.loads(args_path.read_text(encoding="utf-8"))
+        codex_env = json.loads(env_path.read_text(encoding="utf-8"))
         assert codex_args[codex_args.index("--codex-bin") + 1] == str(root / "fake-provider")
         assert codex_args[codex_args.index("--source-review-status") + 1] == "not_run"
         assert "--run-raw-fresh-remote" in codex_args
         assert "--run-managed-tui-attach" in codex_args
         assert "--run-detached-ui" in codex_args
         assert codex_args[codex_args.index("--api-url") + 1] == "http://longhouse.test"
-        assert codex_args[codex_args.index("--agents-token") + 1] == "secret-token"
+        assert "--agents-token" not in codex_args
+        assert codex_env["CODEX_AGENTS_TOKEN"] == "secret-token"
         assert payload["provider"] == "codex"
         assert payload["provider_version"] == "codex 2.0.0"
         assert payload["verdict"] == "yellow"
@@ -406,6 +441,26 @@ def test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest
         assert Path(payload["artifacts"]["provider_contract"]).exists()
         assert Path(payload["artifacts"]["operation_evidence"]).exists()
         assert Path(payload["artifacts"]["session_projection"]).exists()
+
+
+def test_codex_release_proof_redacts_token_from_command_evidence() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "codex",
+            env={"FAKE_CODEX_SKIP_ARTIFACT": "1"},
+            extra_args=["--codex-agents-token", "secret-token"],
+        )
+
+        assert result.returncode == 1
+        source = _read_json(Path(payload["artifacts"]["source_artifact"]))
+        command = source["canaries"]["release_proof"]["command"]
+        assert "secret-token" not in json.dumps(command)
+        assert "<redacted>" in json.dumps(command)
 
 
 def test_claude_release_proof_normalizes_no_token_contract_shape() -> None:
@@ -513,9 +568,11 @@ def main() -> int:
     tests = [
         test_opencode_release_proof_normalizes_source_canary,
         test_opencode_release_proof_blocks_on_source_canary_red,
+        test_opencode_release_proof_blocks_green_artifact_from_failed_source_canary,
         test_opencode_release_proof_blocks_when_source_artifact_missing,
         test_opencode_release_proof_blocks_when_source_canary_times_out,
         test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest,
+        test_codex_release_proof_redacts_token_from_command_evidence,
         test_claude_release_proof_normalizes_no_token_contract_shape,
         test_claude_release_proof_red_when_session_flag_missing,
         test_claude_release_proof_preserves_development_channel_failure_code,

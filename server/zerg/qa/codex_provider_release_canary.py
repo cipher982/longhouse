@@ -35,6 +35,8 @@ _RAW_FRESH_REMOTE_MESSAGE = " ".join(
     )
 )
 _MANAGED_BRIDGE_CREDENTIALS_MISSING = "managed_bridge_credentials_missing"
+CODEX_API_URL_ENV = "CODEX_API_URL"
+CODEX_AGENTS_TOKEN_ENV = "CODEX_AGENTS_TOKEN"
 TERMINAL_TURN_METHODS = {
     "turn/completed",
     "turn/failed",
@@ -943,6 +945,8 @@ def _coerce_args(args: argparse.Namespace | Mapping[str, Any]) -> argparse.Names
         args.evidence_root = Path(args.evidence_root).expanduser().resolve()
     if args.artifact is not None:
         args.artifact = Path(args.artifact).expanduser().resolve()
+    args.api_url = args.api_url or os.getenv(CODEX_API_URL_ENV)
+    args.agents_token = args.agents_token or os.getenv(CODEX_AGENTS_TOKEN_ENV)
     return args
 
 

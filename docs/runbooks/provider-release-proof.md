@@ -123,6 +123,9 @@ make provider-release-proof-status \
 `failure_code=baseline_artifacts_missing` means an accepted baseline exists but
 one or more archived evidence files no longer resolve; repair the baseline store
 before trusting release-watch output.
+`failure_code=accepted_baseline_not_green` means the accepted store was edited or
+corrupted; treat it as red integrity failure and recopy or re-accept the baseline
+from reviewed green evidence.
 
 ## Diff A Candidate
 
@@ -192,6 +195,10 @@ lane. Inbox alerts are for structured provider-status evidence:
 The Sauron alert path currently treats `baseline_missing` and
 `insufficient_coverage` as non-actionable yellows for inbox purposes. Other
 yellow failure codes should reach the inbox as warnings.
+
+Codex Runtime Host tokens are read from environment variables and passed to
+nested proof commands through `CODEX_AGENTS_TOKEN`; they should not appear in
+argv, raw command evidence, or published fallback artifacts.
 
 ## Current Provider State
 

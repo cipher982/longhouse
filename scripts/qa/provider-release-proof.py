@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from datetime import UTC
@@ -20,6 +21,8 @@ from typing import Any
 SCHEMA_VERSION = 1
 SUPPORTED_PROVIDERS = ("claude", "codex", "opencode", "antigravity")
 LIVE_CANARY_PROVIDERS = frozenset({"claude", "opencode", "antigravity"})
+CODEX_API_URL_ENV = "CODEX_API_URL"
+CODEX_AGENTS_TOKEN_ENV = "CODEX_AGENTS_TOKEN"
 
 
 def _repo_root_from_script() -> Path:
@@ -191,10 +194,20 @@ def _session_projection_artifact(
     }
 
 
-def _classify(source_artifact: dict[str, Any]) -> tuple[str, str | None, str]:
+def _classify(
+    source_artifact: dict[str, Any],
+    *,
+    source_canary_returncode: int | None = None,
+) -> tuple[str, str | None, str]:
     verdict = str(source_artifact.get("verdict") or "").lower()
     failure_code = source_artifact.get("failure_code")
     recommendation = source_artifact.get("recommendation")
+    if source_canary_returncode not in (None, 0) and verdict == "green":
+        return (
+            "red",
+            "source_canary_returncode_mismatch",
+            "block_upgrade_recommendation",
+        )
     if verdict == "red":
         return (
             "red",
@@ -212,12 +225,41 @@ def _classify(source_artifact: dict[str, Any]) -> tuple[str, str | None, str]:
     return "yellow", "provider_release_proof_unknown_verdict", "investigate_before_upgrade"
 
 
-def _command_evidence(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+def _redact_argv(argv: Any, secrets: list[str] | None = None) -> Any:
+    if not isinstance(argv, list):
+        return argv
+    secrets = [secret for secret in (secrets or []) if secret]
+    redacted: list[Any] = []
+    redact_next = False
+    for item in argv:
+        if redact_next:
+            redacted.append("<redacted>")
+            redact_next = False
+            continue
+        redacted.append("<redacted>" if item in secrets else item)
+        if item in {"--agents-token", "--codex-agents-token"}:
+            redact_next = True
+    return redacted
+
+
+def _redact_text(text: str, secrets: list[str] | None = None) -> str:
+    redacted = text
+    for secret in secrets or []:
+        if secret:
+            redacted = redacted.replace(secret, "<redacted>")
+    return redacted
+
+
+def _command_evidence(
+    result: subprocess.CompletedProcess[str],
+    *,
+    secrets: list[str] | None = None,
+) -> dict[str, Any]:
     return {
-        "argv": list(result.args) if isinstance(result.args, list) else result.args,
+        "argv": _redact_argv(result.args, secrets),
         "returncode": result.returncode,
-        "stdout": (result.stdout or "")[-4000:],
-        "stderr": (result.stderr or "")[-4000:],
+        "stdout": _redact_text((result.stdout or "")[-4000:], secrets),
+        "stderr": _redact_text((result.stderr or "")[-4000:], secrets),
     }
 
 
@@ -264,8 +306,6 @@ def _run_source_canary(args: argparse.Namespace, raw_dir: Path) -> tuple[dict[st
             argv.extend(["--provider-version", str(args.provider_version)])
         if args.codex_api_url:
             argv.extend(["--api-url", args.codex_api_url])
-        if args.codex_agents_token:
-            argv.extend(["--agents-token", args.codex_agents_token])
         if args.codex_run_fake_app_server:
             argv.append("--run-fake-app-server")
         if args.codex_run_raw_fresh_remote:
@@ -277,15 +317,24 @@ def _run_source_canary(args: argparse.Namespace, raw_dir: Path) -> tuple[dict[st
     else:
         raise ValueError(f"unsupported provider: {args.provider}")
 
+    if source_path.exists():
+        source_path.unlink()
+
     raw_artifacts = {
         "source_artifact": str(source_path),
         "stdout": str(stdout_path),
         "stderr": str(stderr_path),
     }
+    secrets = [args.codex_agents_token] if args.provider == "codex" else []
+    run_env = None
+    if args.provider == "codex" and args.codex_agents_token:
+        run_env = os.environ.copy()
+        run_env[CODEX_AGENTS_TOKEN_ENV] = args.codex_agents_token
     try:
         result = subprocess.run(
             argv,
             cwd=str(args.repo_root),
+            env=run_env,
             text=True,
             capture_output=True,
             check=False,
@@ -352,7 +401,7 @@ def _run_source_canary(args: argparse.Namespace, raw_dir: Path) -> tuple[dict[st
                         "status": "fail",
                         "failure_code": "provider_release_proof_source_invalid_json",
                         "message": f"{type(exc).__name__}: {exc}",
-                        "command": _command_evidence(result),
+                        "command": _command_evidence(result, secrets=secrets),
                     }
                 },
                 "operation_evidence": {},
@@ -370,7 +419,7 @@ def _run_source_canary(args: argparse.Namespace, raw_dir: Path) -> tuple[dict[st
                 "release_proof": {
                     "status": "fail",
                     "failure_code": "provider_release_proof_source_missing",
-                    "command": _command_evidence(result),
+                    "command": _command_evidence(result, secrets=secrets),
                 }
             },
             "operation_evidence": {},
@@ -385,6 +434,9 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
     args.artifact = (args.artifact or args.evidence_root / "provider-release-proof.json").expanduser()
     if args.provider_bin is not None:
         args.provider_bin = args.provider_bin.expanduser()
+    if args.provider == "codex":
+        args.codex_api_url = args.codex_api_url or os.getenv(CODEX_API_URL_ENV)
+        args.codex_agents_token = args.codex_agents_token or os.getenv(CODEX_AGENTS_TOKEN_ENV)
 
     raw_dir = args.evidence_root / "raw"
     normalized_dir = args.evidence_root / "normalized"
@@ -394,7 +446,10 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
     normalized_path = normalized_dir / "contract.json"
     _write_json(normalized_path, normalized)
 
-    verdict, failure_code, recommendation = _classify(source_artifact)
+    verdict, failure_code, recommendation = _classify(
+        source_artifact,
+        source_canary_returncode=returncode,
+    )
     contract = _load_provider_contract(args.repo_root, args.provider)
     contract_operations = dict(contract.get("operation_evidence") or {}) if contract else {}
     provider_version = (

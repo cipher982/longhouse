@@ -20,6 +20,7 @@ from typing import Any
 SCHEMA_VERSION = 1
 DEFAULT_BASELINE_ROOT = Path(".provider-release-proofs")
 COMPARABLE_ARTIFACT_KEYS = (
+    "normalized_contract",
     "provider_contract",
     "operation_evidence",
     "session_projection",
@@ -321,6 +322,10 @@ def _stable_session_projection(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _stable_artifact(key: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if key == "normalized_contract":
+        comparable = json.loads(json.dumps(payload))
+        comparable.pop("provider_version", None)
+        return comparable
     if key == "provider_contract":
         return {
             field: payload.get(field)
@@ -428,22 +433,22 @@ def diff_proofs(
             verdict = "red"
             failure_code = str(candidate.get("failure_code") or "candidate_release_proof_failed")
             recommendation = "block_upgrade_recommendation"
-        elif candidate_verdict != "green":
-            verdict = "yellow"
-            failure_code = str(candidate.get("failure_code") or "candidate_release_proof_not_green")
-            recommendation = "investigate_before_upgrade"
         elif comparable_errors:
             verdict = "red"
             failure_code = "provider_release_proof_comparable_artifacts_unavailable"
             recommendation = "block_upgrade_recommendation"
-        elif diff.get("status") == "match":
-            verdict = "green"
-            failure_code = None
-            recommendation = "upgrade_allowed"
-        else:
+        elif diff.get("status") != "match":
             verdict = "red"
             failure_code = "provider_release_proof_drift"
             recommendation = "block_upgrade_recommendation"
+        elif candidate_verdict != "green":
+            verdict = "yellow"
+            failure_code = str(candidate.get("failure_code") or "candidate_release_proof_not_green")
+            recommendation = "investigate_before_upgrade"
+        else:
+            verdict = "green"
+            failure_code = None
+            recommendation = "upgrade_allowed"
         if comparable_errors:
             diff["artifact_errors"] = comparable_errors
 
@@ -524,6 +529,15 @@ def baseline_status(
         if not resolved.is_file():
             missing.append(key)
     proof_verdict = str(accepted.get("verdict") or "").lower()
+    if proof_verdict != "green":
+        verdict = "red"
+        failure_code = "accepted_baseline_not_green"
+    elif missing:
+        verdict = "yellow"
+        failure_code = "baseline_artifacts_missing"
+    else:
+        verdict = "green"
+        failure_code = None
     payload.update(
         {
             "accepted": True,
@@ -531,12 +545,8 @@ def baseline_status(
             "accepted_at": accepted.get("accepted_at") or accepted.get("generated_at"),
             "archived_artifacts": resolved_archived_artifacts,
             "missing_archived_artifacts": missing,
-            "verdict": "green" if proof_verdict == "green" and not missing else "yellow",
-            "failure_code": None
-            if proof_verdict == "green" and not missing
-            else "baseline_artifacts_missing"
-            if missing
-            else "accepted_baseline_not_green",
+            "verdict": verdict,
+            "failure_code": failure_code,
         }
     )
     return payload

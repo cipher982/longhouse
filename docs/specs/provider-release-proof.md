@@ -81,6 +81,11 @@ Provider shape:
 | OpenCode | 4 | 7 | 2 | 11 | 11 | 9 |
 | Antigravity | 1 | 9 | 3 | 8 | 5 | 3 |
 
+`Release baselines` counts rows whose current behavior is compared against an
+accepted Longhouse proof. It does not mean every adjacent setup action is fully
+protected: Claude and Antigravity staging are still Sauron-tested but not
+accepted-baseline rows, and provider-specific gaps remain listed below.
+
 Known uncovered surfaces:
 
 - Codex/OpenAI: live-token behavior.

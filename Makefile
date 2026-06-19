@@ -357,7 +357,6 @@ provider-release-proof: ## Emit provider release proof artifact; set PROVIDER=..
 	if [ -n "$(CODEX_RUN_MANAGED_TUI_ATTACH)" ]; then set -- "$$@" --codex-run-managed-tui-attach; fi; \
 	if [ -n "$(CODEX_RUN_DETACHED_UI)" ]; then set -- "$$@" --codex-run-detached-ui; fi; \
 	if [ -n "$(CODEX_API_URL)" ]; then set -- "$$@" --codex-api-url "$(CODEX_API_URL)"; fi; \
-	if [ -n "$(CODEX_AGENTS_TOKEN)" ]; then set -- "$$@" --codex-agents-token "$(CODEX_AGENTS_TOKEN)"; fi; \
 	python3 "$$@"
 
 provider-release-proof-accept: ## Accept provider proof baseline; set PROOF=... and optional BASELINE_ROOT=...
