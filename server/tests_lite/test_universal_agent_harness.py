@@ -524,6 +524,142 @@ def test_opencode_managed_session_e2e_uses_real_provider_live_canary(tmp_path: P
     assert db_snapshot["timeline"]["matched"] is True
 
 
+def test_codex_managed_session_e2e_uses_provider_release_canary(tmp_path: Path, monkeypatch) -> None:
+    from zerg.qa import codex_provider_release_canary
+
+    calls: list[dict[str, object]] = []
+
+    def fake_canary(args: dict[str, object]) -> dict[str, object]:
+        calls.append(args)
+        return {
+            "artifact_kind": "provider_release_canary",
+            "provider": "codex",
+            "provider_version": "codex 9.9.9-e2e",
+            "verdict": "green",
+            "failure_code": None,
+            "canaries": {
+                "managed_tui_attach": {
+                    "status": "pass",
+                    "thread_id": "thread_codex_universal_e2e",
+                    "state_file": "/tmp/codex-state.json",
+                },
+                "detached_ui": {
+                    "status": "pass",
+                    "thread_id": "thread_codex_universal_e2e",
+                    "ipc_socket": "/tmp/codex-state.sock",
+                },
+            },
+            "operation_evidence": {
+                "launch_local": {
+                    "status": "pass",
+                    "level": "live_no_token",
+                    "canary": "managed_tui_attach",
+                },
+                "launch_remote": {
+                    "status": "pass",
+                    "level": "live_no_token",
+                    "canary": "detached_ui",
+                },
+                "reattach": {
+                    "status": "pass",
+                    "level": "live_no_token",
+                    "canary": "managed_tui_attach",
+                },
+            },
+        }
+
+    monkeypatch.setattr(codex_provider_release_canary, "run_codex_provider_release_canary", fake_canary)
+    fake_codex = _fake_bins(tmp_path)["codex"]
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("codex",),
+            scenarios=("managed_session_e2e",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"codex": fake_codex},
+        )
+    )
+
+    assert calls
+    assert calls[0]["codex_bin"] == str(fake_codex)
+    assert calls[0]["run_managed_tui_attach"] is True
+    assert calls[0]["run_detached_ui"] is True
+    result = payload["results"][0]
+    assert payload["verdict"] == "green"
+    assert result["status"] == "pass"
+    assert result["data"]["source_artifact_kind"] == "provider_release_canary"
+    assert result["data"]["synthetic"] is False
+    assert result["data"]["longhouse_ingest"]["status"] == "pass"
+    assert result["data"]["operation_evidence"]["launch_local"]["canary"] == "managed_tui_attach"
+    assert result["data"]["operation_evidence"]["launch_remote"]["canary"] == "detached_ui"
+    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
+
+    evidence_root = Path(result["evidence_root"])
+    assert (evidence_root / "raw" / "codex-provider-release-canary.json").is_file()
+    raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
+    assert "codex_provider_release_canary" in raw_events
+    session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
+    assert session["provider_session_id"] == "thread_codex_universal_e2e"
+    assert session["operation_statuses"]["launch_local"]["level"] == "live_no_token"
+    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
+    assert db_snapshot["ingest_result"]["events_inserted"] == 2
+    assert db_snapshot["timeline"]["matched"] is True
+
+
+def test_codex_managed_session_e2e_reports_credentials_gap(tmp_path: Path, monkeypatch) -> None:
+    from zerg.qa import codex_provider_release_canary
+
+    def fake_canary(_args: dict[str, object]) -> dict[str, object]:
+        return {
+            "artifact_kind": "provider_release_canary",
+            "provider": "codex",
+            "provider_version": "codex 9.9.9-e2e",
+            "verdict": "yellow",
+            "failure_code": "insufficient_coverage",
+            "canaries": {
+                "managed_tui_attach": {
+                    "status": "not_run",
+                    "failure_code": "managed_bridge_credentials_missing",
+                    "missing": ["--api-url", "--agents-token"],
+                },
+                "detached_ui": {
+                    "status": "not_run",
+                    "failure_code": "managed_bridge_credentials_missing",
+                    "missing": ["--api-url", "--agents-token"],
+                },
+            },
+            "operation_evidence": {
+                "launch_local": {
+                    "status": "not_run",
+                    "level": "none",
+                    "canary": "managed_tui_attach",
+                    "failure_code": "managed_bridge_credentials_missing",
+                },
+                "launch_remote": {
+                    "status": "not_run",
+                    "level": "none",
+                    "canary": "detached_ui",
+                    "failure_code": "managed_bridge_credentials_missing",
+                },
+            },
+        }
+
+    monkeypatch.setattr(codex_provider_release_canary, "run_codex_provider_release_canary", fake_canary)
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("codex",),
+            scenarios=("managed_session_e2e",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"codex": _fake_bins(tmp_path)["codex"]},
+        )
+    )
+
+    result = payload["results"][0]
+    assert payload["verdict"] == "yellow"
+    assert result["status"] == "unsupported_gap"
+    assert result["failure_code"] == "codex_managed_bridge_credentials_missing"
+    assert result["data"]["missing"] == ["--agents-token", "--api-url"]
+
+
 def test_opencode_managed_session_e2e_fails_when_real_canary_fails(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("FAKE_OPENCODE_DROP_PROMPT_ASYNC", "1")
     fake_opencode = _fake_opencode_server(tmp_path / "bin" / "opencode")

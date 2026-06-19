@@ -2,7 +2,7 @@
 
 **Status:** Active roadmap
 **Last updated:** 2026-06-19
-**Current grand-epic score:** 52/100
+**Current grand-epic score:** 53/100
 
 This roadmap tracks the migration from one-off provider canaries and release
 emails to a full end-to-end release regression CI. The design target is
@@ -17,12 +17,12 @@ Do not quote a score without naming the axis.
 | --- | --- | ---: |
 | Existing Longhouse CI/test maturity | Internal Longhouse confidence before this release-proof epic: parser tests, bridge tests, shipper tests, backend/engine/frontend tests | 45/100 |
 | Release-watch proofing before recent work | Sauron release emails plus limited/fake provider checks | 20/100 |
-| Release-watch proofing after recent work | Longhouse proof lanes, coverage matrix, baseline tooling, Sauron invocation, universal harness attachment, concrete provider adapter action rows, first real OpenCode no-token e2e lane, universal action/control-surface artifacts, action/control baseline diff, explicit old/new proof-artifact diff, all-provider fake/no-token CLI e2e, hermetic DB ingest proof, and OpenCode provider-live DB round-trip | 52/100 |
-| Universal harness plumbing only | Adapter protocol, concrete provider adapter classes, runner, evidence package, action matrix, control-surface scenario, action/control/explicit-old-new baseline diff, all-provider fake/no-token CLI e2e, DB ingest scenario, OpenCode provider-live DB promotion, and proof-artifact attachment, excluding all-provider-live/staged-old-new/Sauron completion | 77/100 |
+| Release-watch proofing after recent work | Longhouse proof lanes, coverage matrix, baseline tooling, Sauron invocation, universal harness attachment, concrete provider adapter action rows, first real OpenCode no-token e2e lane, Codex managed-session e2e adapter lane, universal action/control-surface artifacts, action/control baseline diff, explicit old/new proof-artifact diff, all-provider fake/no-token CLI e2e, hermetic DB ingest proof, and provider-live DB round-trips | 53/100 |
+| Universal harness plumbing only | Adapter protocol, concrete provider adapter classes, runner, evidence package, action matrix, control-surface scenario, action/control/explicit-old-new baseline diff, all-provider fake/no-token CLI e2e, DB ingest scenario, Codex/OpenCode managed-session e2e promotion, and proof-artifact attachment, excluding all-provider-live/staged-old-new/Sauron completion | 78/100 |
 
 The apparent drop from 45 to 25/35 was a denominator change: internal CI
 maturity was being compared with the larger release-proofing product. The fair
-movement for this epic is release-watch proofing before/after: roughly 20 -> 52.
+movement for this epic is release-watch proofing before/after: roughly 20 -> 53.
 
 ## Ownership Boundary
 
@@ -47,8 +47,8 @@ provider compatibility.
 | Longhouse proof artifact/core commands | 15 | 12 | Proof artifacts, normalized contracts, action-matrix/control-surface/DB-ingest artifacts, all-provider fake/no-token CLI e2e, accept/status/diff commands exist; OpenCode e2e DB artifacts flow through release proof; universal artifacts are comparable but not yet full CI gates |
 | Baselines and differential confidence | 15 | 5 | Accepted baseline machinery exists and now compares universal action/control artifacts plus explicit old/new proof artifacts; durable/auditable old/new release source of truth is unsettled |
 | Sauron private runner/reporting | 10 | 2 | Sauron can call Longhouse lanes, but private alert/noise policy is not migrated to universal artifacts |
-| Provider real e2e migration | 25 | 8 | OpenCode has first real no-token universal e2e lane with provider-live evidence fed through Longhouse DB ingest; other providers' real mechanics and old/new diff remain unmigrated |
-| **Total** | **100** | **52** |  |
+| Provider real e2e migration | 25 | 9 | OpenCode has first real no-token universal e2e lane with provider-live evidence fed through Longhouse DB ingest; Codex managed-session e2e now calls the existing Codex canary and reports Runtime Host credential gaps explicitly; Claude/Antigravity real mechanics remain less migrated |
+| **Total** | **100** | **53** |  |
 
 ## Provider-agnostic Phases
 
@@ -149,6 +149,10 @@ Implemented:
   through isolated Longhouse SQLite ingest, then verifies durable events,
   session counts, export JSONL, query lookup, timeline listing, and preserved
   provider-session binding.
+- Codex exposes a `managed_session_e2e` adapter lane that calls the existing
+  Codex provider-release canary for `managed_tui_attach` and `detached_ui`,
+  projects those rows, and feeds them through isolated Longhouse SQLite ingest.
+  Missing Runtime Host credentials remain a typed `unsupported_gap`.
 - Unsupported unsafe scenarios remain explicit `unsupported_gap` results for
   providers that do not yet have a safe universal adapter lane.
 - Explicit old/new proof-artifact diff exists; automatic staged old/new
@@ -214,7 +218,7 @@ contract for the provider's declared profile and run the same scenario corpus.
 | Provider | Adapter migration score | Current state | Next migration gate |
 | --- | ---: | --- | --- |
 | Claude Code | 4/10 | MVP adapter runs safe universal scenarios; no-token proof baseline and machine dispatch path exist; live-token machine proof still times out with weak partial evidence | Move PTY/channel/live-token logic behind the Claude adapter and make failure artifacts bounded |
-| Codex/OpenAI | 8/10 | MVP adapter runs safe universal scenarios; strongest existing lane has staged asset proof, managed live-send/interrupt, real-tool scenarios, accepted baselines | Migrate Codex managed launch/send/control canaries into universal scenarios |
+| Codex/OpenAI | 8/10 | MVP adapter runs safe universal scenarios; strongest existing lane has staged asset proof, managed live-send/interrupt, real-tool scenarios, accepted baselines; universal `managed_session_e2e` now calls the Codex provider-release canary and DB-ingests launch/reattach evidence when Runtime Host credentials are present | Migrate Codex live send/interrupt/control canaries into universal scenarios |
 | OpenCode | 8/10 | First real no-token universal e2e lane calls the provider-live server/session/schema/prompt_async/reattach/abort canary, projects canonical evidence, and round-trips it through Longhouse DB ingest; real-tool baseline exists | Promote old/new release diff for OpenCode, then migrate control/live-token scenarios |
 | Antigravity | 5/10 | MVP adapter runs safe universal scenarios; no-token hook/plugin baseline and live-send baseline exist | Model hooks/inbox as `external_event_channel`; classify interrupt/reattach/tool gaps explicitly |
 
@@ -252,6 +256,7 @@ evidence path is recorded and the relevant doc, test, or proof command exists.
 | H25 | Compare universal action/control rows in release-proof baselines | Done | +1 | `provider-release-proof-baseline.py` includes `action_matrix` and `control_surface` comparable artifacts |
 | H26 | Add explicit old/new proof-artifact diff lane | Done | +1 | `provider-release-proof-baseline.py old-new`, `make provider-release-proof-old-new`, and baseline tests compare explicit old/new artifacts |
 | H27 | Move universal action rows behind concrete provider adapter classes | Done | +1 | `ClaudeCodeHarnessAdapter`, `CodexOpenAIHarnessAdapter`, `OpenCodeHarnessAdapter`, `AntigravityHarnessAdapter`, and `action_result` row tests |
+| H28 | Promote Codex managed-session e2e behind the universal adapter | Done | +1 | Codex `managed_session_e2e` calls `run_codex_provider_release_canary`, projects canary rows, DB-ingests them, and reports credential gaps as `unsupported_gap` |
 
 ## Score Update Rules
 
@@ -278,8 +283,8 @@ then move into Phase 4 control/live-token scenarios:
 
 1. Add sandboxed provider-version staging/install that generates the old and
    new proof artifacts automatically for every provider lane.
-2. Replace the current Codex projection-only session lane with real adapter
-   calls to the existing no-token canary mechanics where possible.
+2. Migrate Codex live send/interrupt/control canaries into universal scenarios
+   instead of only release-proof profile flags.
 3. Bring Claude PTY/channel and Antigravity hook/inbox mechanics behind
    adapters instead of only compatibility canaries.
 5. Migrate `interrupt_cancel`, `resume_reattach`, `tool_call_result`, and

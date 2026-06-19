@@ -159,6 +159,12 @@ The registry uses concrete provider adapter classes:
 abstract `action_result` method, so every provider emits a result for every
 action id instead of silently skipping unsupported or unimplemented behavior.
 
+`managed_session_e2e` is adapter-specific today. OpenCode calls the provider-live
+server/session canary and DB-ingests the resulting rows. Codex calls the
+provider-release canary for `managed_tui_attach` and `detached_ui`, then
+DB-ingests those launch/reattach rows when Runtime Host credentials are
+available; without those credentials it returns a typed `unsupported_gap`.
+
 ## Capabilities And Profiles
 
 Capabilities are the vocabulary scenarios use to decide what is required:

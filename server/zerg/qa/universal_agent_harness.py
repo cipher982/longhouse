@@ -886,10 +886,12 @@ class UniversalProviderAdapter:
             package.write_json("assertions/managed_session_e2e.json", payload)
             return payload
         if self.config.provider != "opencode":
+            if self.config.provider == "codex":
+                return self._run_codex_managed_session_e2e(package)
             payload = self._unsupported_payload(
                 "managed_session_e2e",
                 "managed_session_e2e_adapter_missing",
-                "Only the OpenCode real no-token managed-session e2e adapter is implemented.",
+                "No managed-session e2e adapter is implemented for this provider yet.",
             )
             package.write_json("assertions/managed_session_e2e.json", payload)
             return payload
@@ -990,6 +992,107 @@ class UniversalProviderAdapter:
         elif db_verdict != STATUS_PASS:
             payload["failure_code"] = db_ingest.get("failure_code") or "managed_session_e2e_db_ingest_failed"
             payload["message"] = "OpenCode provider-live evidence did not pass Longhouse DB ingest assertions."
+        package.write_json("assertions/managed_session_e2e.json", payload)
+        return payload
+
+    def _run_codex_managed_session_e2e(self, package: EvidencePackage) -> dict[str, Any]:
+        binary, source = self._resolve_binary()
+        if binary is None:
+            payload = {
+                "status": STATUS_FAIL,
+                "failure_code": "provider_binary_not_found",
+                "message": "codex binary was not found for managed_session_e2e",
+                "binary_source": source,
+            }
+            package.write_json("assertions/managed_session_e2e.json", payload)
+            return payload
+
+        from zerg.qa.codex_provider_release_canary import run_codex_provider_release_canary
+
+        canary_evidence_root = package.path("raw", "codex-release-canary-evidence")
+        canary_artifact_path = package.path("raw", "codex-provider-release-canary.json")
+        canary_artifact = run_codex_provider_release_canary(
+            {
+                "codex_bin": str(binary),
+                "artifact": canary_artifact_path,
+                "evidence_root": canary_evidence_root,
+                "repo_root": default_repo_root(),
+                "source_review_status": "pass",
+                "run_managed_tui_attach": True,
+                "run_detached_ui": True,
+            }
+        )
+        if not canary_artifact_path.is_file():
+            package.write_json("raw/codex-provider-release-canary.json", canary_artifact)
+        package.write_json("raw/codex-provider-release-canary-inline.json", canary_artifact)
+        operation_evidence = {
+            str(operation): dict(evidence)
+            for operation, evidence in dict(canary_artifact.get("operation_evidence") or {}).items()
+            if isinstance(evidence, Mapping)
+        }
+        raw_events = codex_provider_release_raw_events(canary_artifact)
+        provider_session_id = _first_codex_thread_id(canary_artifact) or self._session_id(package)
+        projection = self._write_session_projection(
+            package,
+            raw_events=raw_events,
+            operations=operation_evidence,
+            provider_session_id=provider_session_id,
+        )
+        db_ingest = ingest_canonical_events_into_longhouse_db(
+            package=package,
+            provider=self.config.provider,
+            rows=raw_events,
+            provider_session_id=provider_session_id,
+        )
+        operation_evidence.update(
+            {
+                str(operation): dict(evidence)
+                for operation, evidence in dict(db_ingest.get("operation_evidence") or {}).items()
+                if isinstance(evidence, Mapping)
+            }
+        )
+        session_projection_path = package.path("longhouse", "session-projection.json")
+        try:
+            session_projection = json.loads(session_projection_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            session_projection = {}
+        if isinstance(session_projection, dict):
+            session_projection["operation_statuses"] = operation_evidence
+            package.write_json("longhouse/session-projection.json", session_projection)
+
+        verdict = str(canary_artifact.get("verdict") or "red")
+        credentials_gap = _codex_managed_bridge_credentials_gap(canary_artifact)
+        db_status = str(db_ingest.get("status") or STATUS_FAIL)
+        payload = {
+            **projection,
+            "status": STATUS_PASS if verdict == "green" and db_status == STATUS_PASS else STATUS_FAIL,
+            "scenario": "managed_session_e2e",
+            "provider_version": canary_artifact.get("provider_version"),
+            "codex_canary_artifact_path": str(canary_artifact_path),
+            "codex_canary_evidence_root": str(canary_evidence_root),
+            "codex_canary_verdict": verdict,
+            "source_artifact_kind": canary_artifact.get("artifact_kind"),
+            "synthetic": False,
+            "operation_evidence": operation_evidence,
+            "longhouse_ingest": {
+                "status": db_status,
+                "failure_code": db_ingest.get("failure_code"),
+                "db_snapshot_path": db_ingest.get("db_snapshot_path"),
+                "session_projection_path": db_ingest.get("session_projection_path"),
+                "timeline_projection_path": db_ingest.get("timeline_projection_path"),
+            },
+        }
+        if credentials_gap:
+            payload["status"] = STATUS_UNSUPPORTED_GAP
+            payload["failure_code"] = "codex_managed_bridge_credentials_missing"
+            payload["message"] = "Codex managed-session e2e requires Runtime Host credentials."
+            payload["missing"] = credentials_gap
+        elif verdict != "green":
+            payload["failure_code"] = canary_artifact.get("failure_code") or "codex_provider_release_canary_failed"
+            payload["message"] = "Codex provider release canary did not pass."
+        elif db_status != STATUS_PASS:
+            payload["failure_code"] = db_ingest.get("failure_code") or "managed_session_e2e_db_ingest_failed"
+            payload["message"] = "Codex canary evidence did not pass Longhouse DB ingest assertions."
         package.write_json("assertions/managed_session_e2e.json", payload)
         return payload
 
@@ -1809,6 +1912,79 @@ def opencode_provider_live_raw_events(artifact: Mapping[str, Any]) -> list[dict[
     return rows
 
 
+def codex_provider_release_raw_events(artifact: Mapping[str, Any]) -> list[dict[str, Any]]:
+    canaries = dict(artifact.get("canaries") or {})
+    managed_tui = dict(canaries.get("managed_tui_attach") or {})
+    detached_ui = dict(canaries.get("detached_ui") or {})
+    provider_session_id = _first_codex_thread_id(artifact) or "codex-managed-session-e2e"
+    rows: list[dict[str, Any]] = []
+    if managed_tui:
+        rows.append(
+            {
+                "type": "session_start",
+                "role": "system",
+                "text": "Codex managed TUI bridge attached to a provider thread.",
+                "provider_session_id": provider_session_id,
+                "source_canary": "managed_tui_attach",
+                "thread_id": managed_tui.get("thread_id"),
+                "status": managed_tui.get("status"),
+                "evidence_origin": "codex_provider_release_canary",
+            }
+        )
+    if detached_ui:
+        rows.append(
+            {
+                "type": "session_reattach",
+                "role": "system",
+                "text": "Codex detached UI bridge exposed a resumable provider thread and IPC socket.",
+                "provider_session_id": provider_session_id,
+                "source_canary": "detached_ui",
+                "thread_id": detached_ui.get("thread_id"),
+                "status": detached_ui.get("status"),
+                "evidence_origin": "codex_provider_release_canary",
+            }
+        )
+    if not rows:
+        rows.append(
+            {
+                "type": "system",
+                "role": "system",
+                "text": "Codex managed-session e2e canary produced no runnable managed bridge rows.",
+                "provider_session_id": provider_session_id,
+                "source_canary": "codex_provider_release_canary",
+                "status": artifact.get("verdict"),
+                "evidence_origin": "codex_provider_release_canary",
+            }
+        )
+    return rows
+
+
+def _first_codex_thread_id(artifact: Mapping[str, Any]) -> str | None:
+    canaries = dict(artifact.get("canaries") or {})
+    for name in ("managed_tui_attach", "detached_ui"):
+        canary = canaries.get(name)
+        if isinstance(canary, Mapping):
+            thread_id = _clean_optional_str(canary.get("thread_id"))
+            if thread_id:
+                return thread_id
+    return None
+
+
+def _codex_managed_bridge_credentials_gap(artifact: Mapping[str, Any]) -> list[str]:
+    canaries = dict(artifact.get("canaries") or {})
+    missing: set[str] = set()
+    for name in ("managed_tui_attach", "detached_ui"):
+        canary = canaries.get(name)
+        if not isinstance(canary, Mapping):
+            continue
+        if canary.get("failure_code") != "managed_bridge_credentials_missing":
+            continue
+        values = canary.get("missing")
+        if isinstance(values, list):
+            missing.update(str(value) for value in values if str(value))
+    return sorted(missing)
+
+
 def provider_configs() -> dict[str, AdapterConfig]:
     providers = set(managed_provider_names()) | set(SUPPORTED_PROVIDERS)
     configs: dict[str, AdapterConfig] = {}
@@ -1824,6 +2000,7 @@ def provider_configs() -> dict[str, AdapterConfig]:
         if provider == "codex":
             safe_run_prompt_once = True
             safe_managed_session_scenarios = SAFE_MANAGED_SESSION_SCENARIOS
+            real_managed_session_e2e = True
         elif provider == "opencode":
             safe_managed_session_scenarios = SAFE_MANAGED_SESSION_SCENARIOS
             real_managed_session_e2e = True
