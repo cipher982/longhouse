@@ -1,6 +1,6 @@
 # Provider Release Proof
 
-**Status:** Phase 1 inventory + Longhouse proof/baseline/diff entrypoints; OpenCode, scoped Claude, and scoped Antigravity release-proof baselines accepted
+**Status:** Phase 1 inventory + Longhouse proof/baseline/diff entrypoints; OpenCode, Codex, scoped Claude, and scoped Antigravity release-proof baselines accepted
 **Owner:** David
 **Last updated:** 2026-06-19
 
@@ -42,7 +42,6 @@ What exists:
 
 What is missing:
 
-- an accepted release-proof baseline for Codex
 - raw-to-normalized proof fixtures for all release-sensitive surfaces
 - full managed-session/live-token proof for every release-sensitive surface
 - scheduled old/new differentials from the accepted baseline store rather than
@@ -71,14 +70,14 @@ Machine-validated coverage map:
 | Rows running in Longhouse CI | 41 |
 | Rows running in Sauron release-watch | 29 |
 | Rows with accepted parser-fixture baselines | 4 |
-| Rows with accepted release-proof baselines | 15 |
+| Rows with accepted release-proof baselines | 20 |
 
 Provider shape:
 
 | Provider | Yes | Partial | No | CI rows | Sauron rows | Release baselines |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Claude Code | 2 | 11 | 0 | 11 | 5 | 3 |
-| Codex/OpenAI | 4 | 8 | 1 | 11 | 8 | 0 |
+| Codex/OpenAI | 4 | 8 | 1 | 11 | 8 | 5 |
 | OpenCode | 4 | 7 | 2 | 11 | 11 | 9 |
 | Antigravity | 1 | 9 | 3 | 8 | 5 | 3 |
 
@@ -95,10 +94,14 @@ baseline for its no-token server/control proof, Claude has an accepted scoped
 no-token baseline for binary identity, channel/status shape, and launch
 flag/PTY shape, and Antigravity has an accepted scoped no-token baseline for
 binary identity, plugin/global hook shape, and hook-inbox launch mechanics.
-This is still not a complete release gate: Codex has no accepted release-proof
-baseline, Claude still lacks managed-session binding and live-token proof,
-Antigravity still lacks model-visible send/reattach/tool proof, and OpenCode
-still lacks tool/tool-result and live-token proof.
+Codex has an accepted no-token managed proof baseline for binary identity,
+static/app-server protocol shape, managed TUI attach, detached-ui launch, raw
+remote protocol fingerprints, and launch/remote/reattach operation evidence.
+This is still not a complete release gate: Claude still lacks managed-session
+binding and live-token proof, Codex still lacks Longhouse-level
+send/interrupt/tool/live-token proof, Antigravity still lacks model-visible
+send/reattach/tool proof, and OpenCode still lacks tool/tool-result and
+live-token proof.
 
 ## Coverage Legend
 
@@ -163,24 +166,25 @@ binding, transcript, send/steer, resume, and live-token proof are still missing.
 
 | Surface | Covered | Evidence | Boundary | CI | Sauron release-watch | Baseline | Actionable today |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| install/stage exact version | partial | Sauron stages the exact Codex GitHub release asset, passes it to `codex-provider-release-canary.py`, and now wraps the staged release in a Longhouse proof/diff candidate envelope; Longhouse tests the binary override path | real release asset | no Longhouse CI for asset staging; canary override runs in CI | yes for source-reviewed GitHub releases | no | yes if staging/version match fails |
-| binary identity | yes | `codex-provider-release-canary.py` | live_no_token or fake | `validate-provider-cli-canaries` | yes | no | yes |
-| auth/status shape | partial | static contract + app-server canary lanes | hermetic/live_no_token when enabled | `validate-provider-cli-canaries` | yes | no | partial |
-| launch managed session | yes | Codex bridge tests, `codex-provider-release-canary.py managed_tui_attach` | hermetic/live_no_token | `make test`, `validate-provider-cli-canaries` | yes | no | yes if canary red |
+| install/stage exact version | partial | Sauron stages the exact Codex GitHub release asset, passes it to `codex-provider-release-canary.py`, and now wraps the staged release in a Longhouse proof/diff candidate envelope; Longhouse tests the binary override path | real release asset | no Longhouse CI for asset staging; canary override runs in CI | yes for source-reviewed GitHub releases | release-proof yes (`codex-release-proof-v1`, codex-cli 0.139.0) | yes if staging/version match fails |
+| binary identity | yes | `codex-provider-release-canary.py` | live_no_token or fake | `validate-provider-cli-canaries` | yes | release-proof yes (`codex-release-proof-v1`, codex-cli 0.139.0) | yes |
+| auth/status shape | partial | static contract + app-server canary lanes | hermetic/live_no_token when enabled | `validate-provider-cli-canaries` | yes | release-proof yes (`codex-release-proof-v1`, codex-cli 0.139.0) | partial |
+| launch managed session | yes | Codex bridge tests, `codex-provider-release-canary.py managed_tui_attach` | hermetic/live_no_token | `make test`, `validate-provider-cli-canaries` | yes | release-proof yes (`codex-release-proof-v1`, codex-cli 0.139.0) | yes if canary red |
 | session id/path binding | yes | `test_codex_bridge_contract.py`, engine state contract | hermetic | `make test` | provider status indirect | no | yes |
 | transcript/log parse | yes | engine Codex golden + adversarial parser tests | fixture | `make test-engine` | source review only | parser fixture yes; release-proof no | yes for parser drift |
 | ingest into Longhouse | partial | hook/outbox tests, shipper E2E | fixture/hermetic | `make test`, `make test-shipper-e2e` | no dedicated release proof | no | partial |
 | timeline/session projection | partial | session capabilities/messages/views | hermetic | `make test` | no | no | partial |
 | send input | partial | engine bridge IPC turn/start tests | hermetic | `make test`, engine tests | Sauron canary when configured | no | partial |
 | interrupt/abort/steer | partial | engine bridge interrupt/steer tests | hermetic | `make test`, engine tests | Sauron canary when configured | no | partial |
-| reattach/resume | partial | managed TUI attach canary; resume path tests | hermetic/live_no_token | `validate-provider-cli-canaries` | yes | no | partial |
+| reattach/resume | partial | managed TUI attach canary; resume path tests | hermetic/live_no_token | `validate-provider-cli-canaries` | yes | release-proof yes (`codex-release-proof-v1`, codex-cli 0.139.0) | partial |
 | tool/tool-result shape | partial | Codex parser fixtures and tool-call tests | fixture/hermetic | `make test`, `make test-engine` | source review only | parser fixture yes; release-proof no | partial |
 | live-token behavior | no | next notes in manifest call this out | none | no | no | no | no |
 
 Codex is the strongest existing provider lane. Sauron now produces a
 Longhouse-owned proof artifact and proof-baseline diff for source-reviewed
-staged release assets, but it still needs the first accepted real baseline
-before old/new differential results can go green.
+staged release assets, and the local dogfood store has the first accepted
+Codex release-proof baseline for no-token managed launch/reattach/protocol
+shape evidence.
 
 Local smoke evidence, 2026-06-18: Codex `0.139.0` with
 `CODEX_RUN_FAKE_APP_SERVER=1` and `CODEX_RUN_RAW_FRESH_REMOTE=1` produced a
@@ -199,9 +203,15 @@ that failure path. A rerun passed raw-fresh-remote and captured stable
 `managed_tui_attach` and `detached_ui` without Runtime Host credentials; those
 lanes now emit `status=not_run` with
 `failure_code=managed_bridge_credentials_missing` instead of a red bridge
-exception. This still should not be accepted as a baseline: managed launch,
-remote launch, and reattach remain yellow until the proof is run with a real
-`--api-url` and `--agents-token`.
+exception.
+
+Accepted baseline evidence, 2026-06-19: Codex `codex-cli 0.139.0` was run with
+fake app-server, raw-fresh-remote, managed TUI attach, and detached-ui lanes
+against the dogfood Runtime Host. The proof was green, no device token was found
+in the artifact tree, baseline acceptance/status were green with
+`missing_archived_artifacts=[]`, and a fresh rerun diffed green/match against
+the accepted baseline. The accepted local dogfood baseline is under
+`~/.local/share/longhouse/provider-release-proofs/codex/codex-release-proof-v1/`.
 
 ### OpenCode
 

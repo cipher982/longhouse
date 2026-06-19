@@ -155,7 +155,7 @@ Promote a local accepted provider baseline to the Sauron production container
 only after a green proof, green status, and green diff.
 
 ```bash
-COPYFILE_DISABLE=1 tar \
+COPYFILE_DISABLE=1 tar --no-xattrs \
   -C "$HOME/.local/share/longhouse/provider-release-proofs" \
   -cf - opencode \
   | ssh clifford "docker exec -u 0 -i sauron sh -lc 'mkdir -p /data/provider-release-proofs && tar -C /data/provider-release-proofs -xf -'"
@@ -201,8 +201,8 @@ yellow failure codes should reach the inbox as warnings.
   version `claude 2.1.161`.
 - Antigravity: accepted scoped baseline `antigravity-release-proof-v1`, provider
   version `agy 1.0.8`.
-- Codex/OpenAI: no accepted baseline yet; current deep proof is yellow when
-  managed bridge credentials are missing.
+- Codex/OpenAI: accepted baseline `codex-release-proof-v1`, provider version
+  `codex-cli 0.139.0`.
 
 ## Promotion Checklist
 
