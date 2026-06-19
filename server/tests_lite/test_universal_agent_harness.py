@@ -563,6 +563,55 @@ def test_opencode_managed_session_e2e_uses_real_provider_live_canary(tmp_path: P
     assert db_snapshot["timeline"]["matched"] is True
 
 
+def test_opencode_resume_reattach_uses_process_restart_canary(tmp_path: Path) -> None:
+    fake_opencode = _fake_opencode_server(tmp_path / "bin" / "opencode")
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("opencode",),
+            scenarios=("resume_reattach",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"opencode": fake_opencode},
+        )
+    )
+
+    result = payload["results"][0]
+    assert payload["verdict"] == "green"
+    assert result["status"] == "pass"
+    assert result["data"]["source_artifact_kind"] == "provider_live_canary"
+    assert result["data"]["synthetic"] is False
+    assert result["data"]["operation_evidence"]["reattach"]["status"] == "pass"
+    assert result["data"]["operation_evidence"]["reattach"]["level"] == "live_no_token"
+    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
+
+    evidence_root = Path(result["evidence_root"])
+    provider_live = json.loads((evidence_root / "raw" / "provider-live-canary.json").read_text(encoding="utf-8"))
+    assert provider_live["canaries"]["process_restart_reattach_contract"]["status"] == "pass"
+    raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
+    assert "process_restart_reattach_contract" in raw_events
+    assert "provider_live_canary" in raw_events
+    session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
+    assert session["operation_statuses"]["reattach"]["status"] == "pass"
+    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
+    assert db_snapshot["ingest_result"]["events_inserted"] == 4
+    assert db_snapshot["timeline"]["matched"] is True
+
+
+def test_resume_reattach_is_typed_gap_for_unmigrated_providers(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("claude", "codex", "antigravity"),
+            scenarios=("resume_reattach",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
+        )
+    )
+
+    assert payload["verdict"] == "yellow"
+    assert {result["provider"] for result in payload["results"]} == {"claude", "codex", "antigravity"}
+    assert {result["status"] for result in payload["results"]} == {"unsupported_gap"}
+    assert {result["failure_code"] for result in payload["results"]} == {"resume_reattach_adapter_missing"}
+
+
 def test_claude_managed_session_e2e_uses_provider_live_contract_canary(tmp_path: Path) -> None:
     fake_claude = _fake_claude_provider_live(tmp_path / "bin" / "claude")
     payload = uah.run_harness(

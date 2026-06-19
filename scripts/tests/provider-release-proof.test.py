@@ -1131,6 +1131,44 @@ def test_opencode_release_proof_can_attach_real_universal_managed_session_e2e() 
         assert '"synthetic": true' not in raw_events
 
 
+def test_opencode_release_proof_can_attach_universal_resume_reattach_e2e() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        _write_fake_opencode_server_bin(root)
+
+        result, payload = _run_proof(
+            root,
+            "opencode",
+            extra_args=[
+                "--run-universal-harness",
+                "--universal-scenario",
+                "resume_reattach",
+            ],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["verdict"] == "green"
+        assert payload["normalized"]["canaries"]["universal_resume_reattach"]["status"] == "pass"
+        assert payload["operation_evidence"]["universal_reattach"]["status"] == "pass"
+        assert payload["operation_evidence"]["universal_reattach"]["level"] == "live_no_token"
+        assert payload["operation_evidence"]["universal_db_ingest"]["status"] == "pass"
+
+        universal_artifact = _read_json(Path(payload["artifacts"]["universal_harness_artifact"]))
+        result_row = universal_artifact["results"][0]
+        assert result_row["scenario"] == "resume_reattach"
+        assert result_row["status"] == "pass"
+        assert result_row["data"]["source_artifact_kind"] == "provider_live_canary"
+        assert result_row["data"]["synthetic"] is False
+
+        evidence_root = Path(result_row["evidence_root"])
+        raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
+        assert "process_restart_reattach_contract" in raw_events
+        db_snapshot = _read_json(evidence_root / "longhouse" / "db-ingest-result.json")
+        assert db_snapshot["ingest_result"]["events_inserted"] == 4
+        assert db_snapshot["timeline"]["matched"] is True
+
+
 def test_claude_release_proof_can_attach_universal_provider_live_contract_e2e() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -2115,6 +2153,7 @@ def main() -> int:
         test_codex_release_proof_can_attach_universal_interrupt_credentials_gap,
         test_codex_release_proof_can_attach_universal_tool_call_result_e2e,
         test_opencode_release_proof_can_attach_real_universal_managed_session_e2e,
+        test_opencode_release_proof_can_attach_universal_resume_reattach_e2e,
         test_claude_release_proof_can_attach_universal_provider_live_contract_e2e,
         test_antigravity_release_proof_can_attach_universal_hook_inbox_e2e,
         test_opencode_release_proof_blocks_on_source_canary_red,

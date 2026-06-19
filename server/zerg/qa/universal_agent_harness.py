@@ -46,6 +46,7 @@ SCENARIOS = (
     "managed_session_e2e",
     "interrupt_cancel",
     "tool_call_result",
+    "resume_reattach",
 )
 
 STATUS_PASS = "pass"
@@ -81,6 +82,7 @@ MVP_METHODS = (
     "managed_session_e2e",
     "interrupt_cancel",
     "tool_call_result",
+    "resume_reattach",
     "cleanup",
 )
 MVP_CAPABILITIES = (
@@ -452,6 +454,8 @@ class AgentHarnessAdapter(Protocol):
     def interrupt_cancel(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def tool_call_result(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def resume_reattach(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def managed_session_e2e(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
@@ -929,6 +933,25 @@ class UniversalProviderAdapter:
         package.write_json("assertions/tool_call_result.json", payload)
         return payload
 
+    def resume_reattach(self, package: EvidencePackage) -> dict[str, Any]:
+        if self.config.provider == "opencode":
+            return self._run_opencode_resume_reattach(package)
+        payload = self._unsupported_payload(
+            "resume_reattach",
+            "resume_reattach_adapter_missing",
+            "resume_reattach is not yet backed by a universal provider adapter for this provider.",
+        )
+        payload["operation_evidence"] = {
+            "reattach": {
+                "status": STATUS_UNSUPPORTED_GAP,
+                "level": "none",
+                "canary": "universal_resume_reattach",
+                "failure_code": "resume_reattach_adapter_missing",
+            }
+        }
+        package.write_json("assertions/resume_reattach.json", payload)
+        return payload
+
     def managed_session_e2e(self, package: EvidencePackage) -> dict[str, Any]:
         if not self.config.real_managed_session_e2e:
             payload = self._unsupported_payload(
@@ -1050,6 +1073,101 @@ class UniversalProviderAdapter:
             payload["failure_code"] = db_ingest.get("failure_code") or "managed_session_e2e_db_ingest_failed"
             payload["message"] = "OpenCode provider-live evidence did not pass Longhouse DB ingest assertions."
         package.write_json("assertions/managed_session_e2e.json", payload)
+        return payload
+
+    def _run_opencode_resume_reattach(self, package: EvidencePackage) -> dict[str, Any]:
+        binary, source = self._resolve_binary()
+        if binary is None:
+            payload = {
+                "status": STATUS_FAIL,
+                "failure_code": "provider_binary_not_found",
+                "message": "opencode binary was not found for resume_reattach",
+                "binary_source": source,
+            }
+            package.write_json("assertions/resume_reattach.json", payload)
+            return payload
+
+        from zerg.qa.provider_live_canary import run_provider_live_canary
+
+        live_evidence_root = package.path("raw", "provider-live-evidence")
+        live_artifact_path = package.path("raw", "provider-live-canary.json")
+        live_artifact = run_provider_live_canary(
+            {
+                "provider": "opencode",
+                "provider_bin": str(binary),
+                "artifact": live_artifact_path,
+                "evidence_root": live_evidence_root,
+                "wait_ready_secs": 15.0,
+                "json": False,
+            }
+        )
+        package.write_json("raw/provider-live-canary-inline.json", live_artifact)
+        operation_evidence = {
+            str(operation): dict(evidence)
+            for operation, evidence in dict(live_artifact.get("operation_evidence") or {}).items()
+            if isinstance(evidence, Mapping)
+        }
+        raw_events = opencode_provider_live_raw_events(live_artifact)
+        provider_session_id = str((live_artifact.get("session_projection") or {}).get("provider_session_id") or self._session_id(package))
+        projection = self._write_session_projection(
+            package,
+            raw_events=raw_events,
+            operations=operation_evidence,
+            provider_session_id=provider_session_id,
+        )
+        db_ingest = ingest_canonical_events_into_longhouse_db(
+            package=package,
+            provider=self.config.provider,
+            rows=raw_events,
+            provider_session_id=provider_session_id,
+        )
+        operation_evidence.update(
+            {
+                str(operation): dict(evidence)
+                for operation, evidence in dict(db_ingest.get("operation_evidence") or {}).items()
+                if isinstance(evidence, Mapping)
+            }
+        )
+        session_projection_path = package.path("longhouse", "session-projection.json")
+        try:
+            session_projection = json.loads(session_projection_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            session_projection = {}
+        if isinstance(session_projection, dict):
+            session_projection["operation_statuses"] = operation_evidence
+            package.write_json("longhouse/session-projection.json", session_projection)
+
+        live_verdict = str(live_artifact.get("verdict") or "red")
+        reattach_status = str((operation_evidence.get("reattach") or {}).get("status") or STATUS_FAIL)
+        db_status = str(db_ingest.get("status") or STATUS_FAIL)
+        payload = {
+            **projection,
+            "status": STATUS_PASS
+            if live_verdict == "green" and reattach_status == STATUS_PASS and db_status == STATUS_PASS
+            else STATUS_FAIL,
+            "scenario": "resume_reattach",
+            "provider_version": live_artifact.get("provider_version"),
+            "provider_live_artifact_path": str(live_artifact_path),
+            "provider_live_evidence_root": str(live_evidence_root),
+            "provider_live_verdict": live_verdict,
+            "source_artifact_kind": live_artifact.get("artifact_kind"),
+            "synthetic": False,
+            "operation_evidence": operation_evidence,
+            "longhouse_ingest": {
+                "status": db_status,
+                "failure_code": db_ingest.get("failure_code"),
+                "db_snapshot_path": db_ingest.get("db_snapshot_path"),
+                "session_projection_path": db_ingest.get("session_projection_path"),
+                "timeline_projection_path": db_ingest.get("timeline_projection_path"),
+            },
+        }
+        if live_verdict != "green" or reattach_status != STATUS_PASS:
+            payload["failure_code"] = live_artifact.get("failure_code") or "opencode_resume_reattach_failed"
+            payload["message"] = "OpenCode process-restart reattach canary did not pass."
+        elif db_status != STATUS_PASS:
+            payload["failure_code"] = db_ingest.get("failure_code") or "resume_reattach_db_ingest_failed"
+            payload["message"] = "OpenCode reattach evidence did not pass Longhouse DB ingest assertions."
+        package.write_json("assertions/resume_reattach.json", payload)
         return payload
 
     def _run_claude_managed_session_e2e(self, package: EvidencePackage) -> dict[str, Any]:
@@ -2996,6 +3114,18 @@ def run_tool_call_result(adapter: AgentHarnessAdapter, package: EvidencePackage)
     )
 
 
+def run_resume_reattach(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.resume_reattach(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="resume_reattach",
+        package=package,
+        payload=payload,
+    )
+
+
 def run_managed_session_e2e(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
     adapter.prepare(package)
     payload = adapter.managed_session_e2e(package)
@@ -3021,6 +3151,7 @@ SCENARIO_RUNNERS = {
     "managed_session_e2e": run_managed_session_e2e,
     "interrupt_cancel": run_interrupt_cancel,
     "tool_call_result": run_tool_call_result,
+    "resume_reattach": run_resume_reattach,
 }
 
 
