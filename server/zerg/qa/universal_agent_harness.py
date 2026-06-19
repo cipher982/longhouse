@@ -540,6 +540,8 @@ class HarnessOptions:
     prompt: str | None = None
     old_proof_path: Path | None = None
     new_proof_path: Path | None = None
+    old_proof_paths: Mapping[str, Path] | None = None
+    new_proof_paths: Mapping[str, Path] | None = None
     baseline_root: Path | None = None
 
 
@@ -6160,7 +6162,13 @@ def run_control_surface(adapter: AgentHarnessAdapter, package: EvidencePackage) 
     )
 
 
-def run_full_action_suite(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+def run_full_action_suite(
+    adapter: AgentHarnessAdapter,
+    package: EvidencePackage,
+    old_proof_path: Path | None = None,
+    new_proof_path: Path | None = None,
+    baseline_root: Path | None = None,
+) -> ScenarioResult:
     adapter.prepare(package)
     parse_fixture = package.write_text(
         "input/parse-fixture.jsonl",
@@ -6181,6 +6189,9 @@ def run_full_action_suite(adapter: AgentHarnessAdapter, package: EvidencePackage
                 scenario,
                 evidence_root=sub_evidence_root,
                 fixture_path=parse_fixture if scenario == "parse_ingest_project" else None,
+                old_proof_path=old_proof_path,
+                new_proof_path=new_proof_path,
+                baseline_root=baseline_root,
             )
         )
     adapter.cleanup(package)
@@ -6544,7 +6555,7 @@ def run_tool_call_result_projection(
         "status": db_status,
         "level": "hermetic" if db_status == STATUS_PASS else "none",
         "canary": "universal_tool_call_result_projection",
-        "failure_code": None if db_status == STATUS_PASS else db_ingest.get("failure_code") or "tool_call_result_projection_failed",
+        "failure_code": (None if db_status == STATUS_PASS else db_ingest.get("failure_code") or "tool_call_result_projection_failed"),
     }
     operation_evidence["tool_call_result"] = tool_evidence
     operation_evidence["transcript_binding"] = {
@@ -6833,7 +6844,20 @@ def run_scenario(
         return runner(adapter, package, baseline_root)  # type: ignore[misc]
     if scenario == "old_new_release_diff":
         return runner(adapter, package, old_proof_path, new_proof_path, baseline_root)  # type: ignore[misc]
+    if scenario == "full_action_suite":
+        return runner(adapter, package, old_proof_path, new_proof_path, baseline_root)  # type: ignore[misc]
     return runner(adapter, package)  # type: ignore[misc]
+
+
+def _proof_path_for_provider(
+    provider: str,
+    *,
+    provider_paths: Mapping[str, Path] | None,
+    fallback_path: Path | None,
+) -> Path | None:
+    if provider_paths and provider in provider_paths:
+        return provider_paths[provider]
+    return fallback_path
 
 
 def verdict_for_results(results: Iterable[ScenarioResult]) -> str:
@@ -7069,6 +7093,16 @@ def run_harness(options: HarnessOptions) -> dict[str, Any]:
             )
             continue
         for scenario in options.scenarios:
+            old_proof_path = _proof_path_for_provider(
+                provider,
+                provider_paths=options.old_proof_paths,
+                fallback_path=options.old_proof_path,
+            )
+            new_proof_path = _proof_path_for_provider(
+                provider,
+                provider_paths=options.new_proof_paths,
+                fallback_path=options.new_proof_path,
+            )
             results.append(
                 run_scenario(
                     adapter,
@@ -7076,8 +7110,8 @@ def run_harness(options: HarnessOptions) -> dict[str, Any]:
                     evidence_root=options.evidence_root,
                     fixture_path=options.fixture_path,
                     prompt=options.prompt,
-                    old_proof_path=options.old_proof_path,
-                    new_proof_path=options.new_proof_path,
+                    old_proof_path=old_proof_path,
+                    new_proof_path=new_proof_path,
                     baseline_root=options.baseline_root,
                 )
             )

@@ -694,6 +694,62 @@ def test_old_new_release_diff_compares_explicit_proof_artifacts(tmp_path: Path) 
     assert operation["level"] == "artifact_diff"
 
 
+def test_full_action_suite_uses_provider_scoped_old_new_artifacts(tmp_path: Path) -> None:
+    providers = ("claude", "codex")
+    old_paths = {
+        provider: _write_release_proof(
+            tmp_path,
+            f"{provider}-old",
+            provider=provider,
+            scenario_id=f"{provider}-release-proof-v1",
+        )
+        for provider in providers
+    }
+    new_paths = {
+        provider: _write_release_proof(
+            tmp_path,
+            f"{provider}-new",
+            version="1.2.4",
+            provider=provider,
+            scenario_id=f"{provider}-release-proof-v1",
+        )
+        for provider in providers
+    }
+
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=providers,
+            scenarios=("full_action_suite",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
+            old_proof_paths=old_paths,
+            new_proof_paths=new_paths,
+            baseline_root=tmp_path / "baselines",
+        )
+    )
+
+    assert payload["verdict"] == "yellow"
+    execution_rows = {
+        row["action_id"]: row
+        for row in payload["provider_execution_coverage_matrix"]["actions"]
+    }
+    assert execution_rows["old_new_release_diff"]["coverage_status_counts"] == {
+        "pass": len(providers)
+    }
+    for result in payload["results"]:
+        suite_path = Path(result["data"]["full_action_suite_path"])
+        suite = json.loads(suite_path.read_text(encoding="utf-8"))
+        old_new_result = next(
+            row for row in suite["results"] if row["scenario"] == "old_new_release_diff"
+        )
+        assert old_new_result["status"] == "pass"
+        assert old_new_result["data"]["old_proof_uri"] == str(
+            old_paths[result["provider"]].resolve()
+        )
+        coverage = {row["action_id"]: row for row in suite["actions"]}
+        assert coverage["old_new_release_diff"]["coverage_status"] == "pass"
+
+
 def test_old_new_release_diff_fails_on_proof_artifact_drift(tmp_path: Path) -> None:
     old = _write_release_proof(tmp_path, "old")
     new = _write_release_proof(tmp_path, "new", version="1.2.4")

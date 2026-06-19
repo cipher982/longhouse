@@ -249,11 +249,28 @@ def test_provider_release_proof_universal_smoke_default_runs_managed_session_e2e
         payload = _read_json(artifact)
         assert payload["verdict"] == "yellow"
         assert "managed_session_e2e" in payload["scenarios"]
+        assert "old_new_release_diff" in payload["scenarios"]
+        assert set(payload["synthetic_old_proof_paths"]) == set(payload["providers"])
+        assert set(payload["synthetic_new_proof_paths"]) == set(payload["providers"])
         assert payload["result_count"] == len(payload["providers"]) * len(
             payload["scenarios"]
         )
 
         universal = _read_json(Path(payload["universal_harness_artifact"]))
+        old_new_results = {
+            row["provider"]: row
+            for row in universal["results"]
+            if row["scenario"] == "old_new_release_diff"
+        }
+        assert set(old_new_results) == set(payload["providers"])
+        for provider, row in old_new_results.items():
+            assert row["status"] == "pass"
+            assert row["data"]["provider_release_proof_old_new_verdict"] == "green"
+            assert (
+                row["data"]["old_proof_uri"]
+                == str(Path(payload["synthetic_old_proof_paths"][provider]).resolve())
+            )
+
         managed_results = {
             row["provider"]: row
             for row in universal["results"]
@@ -273,6 +290,13 @@ def test_provider_release_proof_universal_smoke_default_runs_managed_session_e2e
             managed_results["codex"]["failure_code"]
             == "codex_managed_bridge_credentials_missing"
         )
+        execution_rows = {
+            row["action_id"]: row
+            for row in payload["provider_execution_coverage_matrix"]["actions"]
+        }
+        assert execution_rows["old_new_release_diff"]["coverage_status_counts"] == {
+            "pass": len(payload["providers"])
+        }
 
 
 def test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_yellow() -> (

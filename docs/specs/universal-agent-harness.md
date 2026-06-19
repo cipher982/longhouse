@@ -164,8 +164,11 @@ with `scripts/qa/universal-agent-harness.py --scenario old_new_release_diff
 --old-proof-artifact OLD --new-proof-artifact NEW`, or attach it to
 `provider-release-proof.py --run-universal-harness` with
 `--universal-old-proof-artifact` and `--universal-new-proof-artifact`.
+All-provider callers can also pass provider-scoped proof paths through
+`HarnessOptions.old_proof_paths` and `HarnessOptions.new_proof_paths`; the
+single old/new proof path fields remain the backward-compatible fallback.
 It is not yet automatic provider-version staging/install; that belongs to the
-release runner that produces the two proof artifacts.
+release runner that produces the proof artifacts.
 
 The registry uses concrete provider adapter classes:
 `ClaudeCodeHarnessAdapter`, `CodexOpenAIHarnessAdapter`,
@@ -250,7 +253,9 @@ by an executable scenario result or by an explicit matrix/contract row. It now
 executes `baseline_compare` through the same provider-release-proof baseline
 diff CLI used by release watch, and executes `tool_call_result` through the
 portable `tool_call_result_projection` DB-ingest lane. It also executes
-`launch_remote` through the portable `launch_remote_projection` lifecycle lane.
+`launch_remote` through the portable `launch_remote_projection` lifecycle lane,
+and forwards explicit old/new proof artifacts into nested
+`old_new_release_diff`.
 It keeps real Machine Agent remote dispatch, live-token provider tool
 execution, and staged old/new prerequisites out of the portable bundle; those
 remain stronger opt-in lanes. A blocked suite is expected while permission
@@ -546,9 +551,12 @@ shape:
 9. The CLI entrypoint has a broad all-provider fake/no-token smoke that runs
    identity, evidence capture, projections, run/send/session, pause detection,
    tail/runtime/transcript, multi-turn continuity, crash cleanup, and
-   provider-specific `managed_session_e2e` lanes in one command. Implemented
-   scenarios must pass; unsafe provider mechanics must report operation-level
-   `unsupported_gap` evidence.
+   provider-specific `managed_session_e2e` lanes in one command. It also
+   generates provider-scoped synthetic old/new proof pairs and proves
+   `old_new_release_diff` both as a top-level scenario and inside the
+   `full_action_suite` execution matrix. Implemented scenarios must pass;
+   unsafe provider mechanics must report operation-level `unsupported_gap`
+   evidence.
 10. OpenCode has the first real no-token `managed_session_e2e` lane. It calls the
    existing provider-live canary to prove server startup, schema, session
    create/get, `prompt_async noReply`, transcript marker recovery, process

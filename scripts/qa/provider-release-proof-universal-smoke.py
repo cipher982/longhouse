@@ -16,8 +16,8 @@ from typing import Any
 SERVER_PATH = Path(__file__).resolve().parents[2] / "server"
 sys.path.insert(0, str(SERVER_PATH))
 
-from zerg.qa.universal_agent_harness import HarnessOptions
 from zerg.qa.universal_agent_harness import SUPPORTED_PROVIDERS
+from zerg.qa.universal_agent_harness import HarnessOptions
 from zerg.qa.universal_agent_harness import run_harness
 
 DEFAULT_SCENARIOS = (
@@ -28,6 +28,7 @@ DEFAULT_SCENARIOS = (
     "control_surface",
     "full_action_suite",
     "baseline_compare",
+    "old_new_release_diff",
     "parse_ingest_project",
     "db_ingest_project",
     "session_projection",
@@ -316,6 +317,213 @@ def write_parse_fixture(root: Path) -> Path:
     return fixture_path
 
 
+def _proof_verdict_for_status(status: str) -> str:
+    if status == "pass":
+        return "green"
+    if status == "warn":
+        return "yellow"
+    return "red"
+
+
+def _proof_failure_for_status(status: str) -> str | None:
+    if status == "pass":
+        return None
+    if status == "warn":
+        return "synthetic_warning"
+    return "synthetic_drift"
+
+
+def write_synthetic_release_proof(
+    root: Path,
+    provider: str,
+    name: str,
+    *,
+    version: str,
+    status: str = "pass",
+) -> Path:
+    proof_dir = root / "synthetic-old-new-proofs" / provider / name
+    artifact_dir = proof_dir / "evidence"
+    source_artifact = artifact_dir / "source.json"
+    stdout = artifact_dir / "stdout.log"
+    stderr = artifact_dir / "stderr.log"
+    normalized_contract = artifact_dir / "normalized" / "contract.json"
+    provider_contract = artifact_dir / "normalized" / "provider-contract.json"
+    operation_evidence_artifact = artifact_dir / "normalized" / "operation-evidence.json"
+    session_projection = artifact_dir / "normalized" / "session-projection.json"
+    action_matrix = artifact_dir / "normalized" / "action-matrix.json"
+    control_surface = artifact_dir / "normalized" / "control-surface.json"
+    provider_version = f"{provider} {version}"
+    canary = "universal_smoke_synthetic_old_new_diff"
+    failure_code = _proof_failure_for_status(status)
+    operation_evidence = {
+        "send_input": {
+            "status": status,
+            "level": "synthetic",
+            "canary": canary,
+            "failure_code": failure_code,
+        },
+        "old_new_release_diff": {
+            "status": "pass",
+            "level": "artifact_diff",
+            "canary": "provider_release_proof_old_new_diff",
+        },
+    }
+    action_rows = [
+        {
+            "action_id": "send_message",
+            "category": "control",
+            "status": status,
+            "support": True,
+            "support_reason": "synthetic_provider_scoped_proof",
+            "required_evidence": "synthetic",
+            "evidence_level": "synthetic",
+            "proof_scope": "provider_release_proof_smoke",
+            "contract_operation": "send_input",
+            "canary": canary,
+            "failure_code": failure_code,
+        },
+        {
+            "action_id": "old_new_release_diff",
+            "category": "release_diff",
+            "status": "pass",
+            "support": True,
+            "support_reason": "provider_release_proof",
+            "required_evidence": "artifact_diff",
+            "evidence_level": "artifact_diff",
+            "proof_scope": "provider_release_proof_old_new",
+            "canary": "provider_release_proof_old_new_diff",
+        },
+    ]
+    normalized = {
+        "artifact_kind": "provider_release_proof",
+        "provider": provider,
+        "provider_version": provider_version,
+        "verdict": _proof_verdict_for_status(status),
+        "failure_code": failure_code,
+        "operation_evidence": operation_evidence,
+    }
+    provider_contract_payload = {
+        "artifact_kind": "provider_release_proof_provider_contract",
+        "provider": provider,
+        "provider_version": provider_version,
+        "contract_operations": {
+            "send_input": {
+                "status": status,
+                "level": "synthetic",
+                "canary": canary,
+                "failure_code": failure_code,
+            }
+        },
+    }
+    operation_evidence_payload = {
+        "artifact_kind": "provider_release_proof_operation_evidence",
+        "provider": provider,
+        "provider_version": provider_version,
+        "operation_evidence": operation_evidence,
+    }
+    session_projection_payload = {
+        "artifact_kind": "provider_release_proof_session_projection",
+        "provider": provider,
+        "provider_version": provider_version,
+        "status": "captured",
+        "projection": {
+            "artifact_kind": "longhouse_session_projection",
+            "provider": provider,
+            "status": status,
+            "checks": {"send_input": {"status": status, "failure_code": failure_code}},
+            "operation_statuses": operation_evidence,
+        },
+    }
+    action_matrix_payload = {
+        "artifact_kind": "provider_release_proof_action_matrix",
+        "provider": provider,
+        "provider_version": provider_version,
+        "status": "captured",
+        "action_matrix": {
+            "artifact_kind": "provider_release_proof_action_matrix",
+            "provider": provider,
+            "action_count": len(action_rows),
+            "action_ids": [row["action_id"] for row in action_rows],
+            "status_counts": (
+                {"pass": len(action_rows)}
+                if status == "pass"
+                else {status: 1, "pass": 1}
+            ),
+            "actions": action_rows,
+        },
+    }
+    control_surface_payload = {
+        "artifact_kind": "provider_release_proof_control_surface",
+        "provider": provider,
+        "provider_version": provider_version,
+        "status": "captured",
+        "control_surface": {
+            "artifact_kind": "provider_release_proof_control_surface",
+            "provider": provider,
+            "action_count": 1,
+            "action_ids": ["send_message"],
+            "status_counts": {status: 1},
+            "actions": [action_rows[0]],
+        },
+    }
+    write_json(source_artifact, {"synthetic": True, "provider": provider, "side": name})
+    stdout.parent.mkdir(parents=True, exist_ok=True)
+    stdout.write_text("synthetic old/new smoke\n", encoding="utf-8")
+    stderr.write_text("", encoding="utf-8")
+    write_json(normalized_contract, normalized)
+    write_json(provider_contract, provider_contract_payload)
+    write_json(operation_evidence_artifact, operation_evidence_payload)
+    write_json(session_projection, session_projection_payload)
+    write_json(action_matrix, action_matrix_payload)
+    write_json(control_surface, control_surface_payload)
+    proof = {
+        "schema_version": 1,
+        "artifact_kind": "provider_release_proof",
+        "provider": provider,
+        "provider_version": provider_version,
+        "scenario_id": f"{provider}-universal-smoke-old-new-v1",
+        "scenario_version": 1,
+        "verdict": _proof_verdict_for_status(status),
+        "failure_code": failure_code,
+        "normalized": normalized,
+        "artifacts": {
+            "source_artifact": str(source_artifact.resolve()),
+            "stdout": str(stdout.resolve()),
+            "stderr": str(stderr.resolve()),
+            "normalized_contract": str(normalized_contract.resolve()),
+            "provider_contract": str(provider_contract.resolve()),
+            "operation_evidence": str(operation_evidence_artifact.resolve()),
+            "session_projection": str(session_projection.resolve()),
+            "action_matrix": str(action_matrix.resolve()),
+            "control_surface": str(control_surface.resolve()),
+        },
+    }
+    proof_path = proof_dir / "proof.json"
+    write_json(proof_path, proof)
+    return proof_path
+
+
+def write_synthetic_old_new_release_proofs(
+    root: Path,
+) -> tuple[dict[str, Path], dict[str, Path]]:
+    old_paths: dict[str, Path] = {}
+    new_paths: dict[str, Path] = {}
+    for provider in SUPPORTED_PROVIDERS:
+        old_paths[provider] = write_synthetic_release_proof(
+            root,
+            provider,
+            "old",
+            version="9.9.8-smoke",
+        )
+        new_paths[provider] = write_synthetic_release_proof(
+            root,
+            provider,
+            "new",
+            version="9.9.9-smoke",
+        )
+    return old_paths, new_paths
+
+
 def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
     evidence_root = (args.evidence_root or default_evidence_root()).expanduser().resolve()
     artifact_path = (
@@ -324,6 +532,7 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
     scenarios = tuple(args.scenario or DEFAULT_SCENARIOS)
     provider_bins = write_fake_provider_bins(evidence_root)
     fixture_path = write_parse_fixture(evidence_root)
+    old_proof_paths, new_proof_paths = write_synthetic_old_new_release_proofs(evidence_root)
     harness = run_harness(
         HarnessOptions(
             providers=SUPPORTED_PROVIDERS,
@@ -332,6 +541,9 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             provider_bins=provider_bins,
             fixture_path=fixture_path,
             prompt="Longhouse release-proof universal fake/no-token smoke.",
+            old_proof_paths=old_proof_paths,
+            new_proof_paths=new_proof_paths,
+            baseline_root=evidence_root / "baselines",
         )
     )
     artifact = {
@@ -343,6 +555,12 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         "scenarios": list(scenarios),
         "result_count": len(harness.get("results") or []),
         "evidence_root": str(evidence_root),
+        "synthetic_old_proof_paths": {
+            provider: str(path) for provider, path in old_proof_paths.items()
+        },
+        "synthetic_new_proof_paths": {
+            provider: str(path) for provider, path in new_proof_paths.items()
+        },
         "universal_harness_artifact": str(
             evidence_root / "universal-agent-harness" / "universal-agent-harness.json"
         ),
