@@ -75,6 +75,24 @@ Sauron release-watch reuses `AGENT_RELEASE_LONGHOUSE_API_URL` and
 `AGENT_RELEASE_LONGHOUSE_AGENTS_TOKEN` for the same Codex managed bridge proof
 when `AGENT_RELEASE_CODEX_CANARY_LIVE=1`.
 
+Antigravity has an optional live-token send proof:
+
+```bash
+ANTIGRAVITY_RUN_REAL_AGY_SEND=1 \
+make provider-release-proof \
+  PROVIDER=antigravity \
+  PROVIDER_BIN=/path/to/agy \
+  SOURCE_REVIEW_STATUS=pass \
+  ARTIFACT=/tmp/antigravity-proof.json \
+  EVIDENCE_ROOT=/tmp/antigravity-proof-evidence
+```
+
+This spends a real `agy --print` turn through
+`provider-control-e2e-canary.py --antigravity-real-agy-send` and attaches the
+resulting `operation_evidence.send_input` to the release proof. Accept this as a
+baseline only after confirming the artifact shows `level=live_token` and the
+model-visible marker came from the injected Longhouse inbox message.
+
 ## Read A Proof
 
 Key top-level fields:

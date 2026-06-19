@@ -67,7 +67,7 @@ Machine-validated coverage map:
 | Covered `yes` | 11 |
 | Covered `partial` | 35 |
 | Covered `no` | 6 |
-| Rows running in Longhouse CI | 41 |
+| Rows running in Longhouse CI | 42 |
 | Rows running in Sauron release-watch | 29 |
 | Rows with accepted parser-fixture baselines | 4 |
 | Rows with accepted release-proof baselines | 20 |
@@ -79,7 +79,7 @@ Provider shape:
 | Claude Code | 2 | 11 | 0 | 11 | 5 | 3 |
 | Codex/OpenAI | 4 | 8 | 1 | 11 | 8 | 5 |
 | OpenCode | 4 | 7 | 2 | 11 | 11 | 9 |
-| Antigravity | 1 | 9 | 3 | 8 | 5 | 3 |
+| Antigravity | 1 | 9 | 3 | 9 | 5 | 3 |
 
 `Release baselines` counts rows whose current behavior is compared against an
 accepted Longhouse proof. It does not mean every adjacent setup action is fully
@@ -258,11 +258,11 @@ tool/tool-result transcript shape or live-token model-visible behavior.
 | transcript/log parse | partial | hook transcript binding tests | hermetic | `make test` | no | no | partial |
 | ingest into Longhouse | partial | hook outbox/runtime tests | hermetic | `make test` | no | no | partial |
 | timeline/session projection | partial | session capabilities for Antigravity transport | hermetic | `make test` | no | no | partial |
-| send input | partial | `provider-control-e2e-canary.py --antigravity-real-agy-send`; Sauron release-watch now preserves Longhouse proof/differential evidence from staged `agy` | live_token when explicitly run; release proof uses current live canary maturity | wrapper test in CI uses fake agy | profile/live plus proof/diff | no | partial |
+| send input | partial | `provider-control-e2e-canary.py --antigravity-real-agy-send`; `provider-release-proof.py --antigravity-run-real-agy-send` can attach that send evidence to a release proof; Sauron release-watch preserves staged `agy` proof/differential evidence | live_token when explicitly run; fake wrapper in CI | wrapper test in CI uses fake agy | profile/live plus proof/diff without the live-token flag | no | partial |
 | interrupt/abort/steer | no | unsupported in manifest | none | no | no | no | no |
 | reattach/resume | no | unsupported in manifest | none | no | no | no | no |
 | tool/tool-result shape | no | no provider transcript parser golden found | none | no | no | no | no |
-| live-token behavior | partial | real agy send canary exists but is not a scheduled CI/release lane | live_token manual/configured | fake-wrapper CI only | no | no | no |
+| live-token behavior | partial | real agy send canary exists and `provider-release-proof.py --antigravity-run-real-agy-send` can attach it; CI covers the adapter with fake agy | live_token manual/configured plus fake adapter | fake-wrapper CI only | no | no | no |
 
 Antigravity should stay narrow: on 2026-06-19, `agy 1.0.8` produced a green
 `antigravity-release-proof-v1` artifact and a fresh rerun diffed green/match
@@ -270,8 +270,10 @@ against the accepted baseline. The accepted local dogfood baseline is under
 `~/.local/share/longhouse/provider-release-proofs/antigravity/antigravity-release-proof-v1/`.
 This proves the no-token binary/plugin/global-hook/hook-inbox contract. It
 does not prove model-visible send, reattach/resume, tool/tool-result shape, or
-live-token behavior. The next useful step is proving the hook inbox actually
-changes the model-visible turn, then keeping unsupported operations explicit.
+live-token behavior. A separate opt-in proof flag can attach the manual real
+`agy` send canary to a release proof, but no accepted baseline includes it yet.
+The next useful step is accepting a reviewed real-`agy` proof baseline for send,
+then keeping unsupported operations explicit.
 
 ### Legacy Google JSON Imports
 

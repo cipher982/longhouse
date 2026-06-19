@@ -23,6 +23,7 @@ SUPPORTED_PROVIDERS = ("claude", "codex", "opencode", "antigravity")
 LIVE_CANARY_PROVIDERS = frozenset({"claude", "opencode", "antigravity"})
 CODEX_API_URL_ENV = "CODEX_API_URL"
 CODEX_AGENTS_TOKEN_ENV = "CODEX_AGENTS_TOKEN"
+ANTIGRAVITY_BIN_ENV = "LONGHOUSE_ANTIGRAVITY_BIN"
 
 
 def _repo_root_from_script() -> Path:
@@ -428,6 +429,137 @@ def _run_source_canary(args: argparse.Namespace, raw_dir: Path) -> tuple[dict[st
     return source, raw_artifacts, result.returncode
 
 
+def _merge_antigravity_real_send_proof(source: dict[str, Any], control: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(source)
+    canaries = dict(merged.get("canaries") or {})
+    operation_evidence = dict(merged.get("operation_evidence") or {})
+    antigravity = (control.get("canaries") or {}).get("antigravity")
+    if not isinstance(antigravity, dict):
+        antigravity = _fail_control_canary(
+            "antigravity_real_agy_send_missing",
+            "provider-control-e2e did not emit an Antigravity canary result.",
+        )
+    canaries["antigravity_real_agy_send"] = antigravity
+    for operation, evidence in dict(antigravity.get("operation_evidence") or {}).items():
+        if isinstance(operation, str) and isinstance(evidence, dict):
+            operation_evidence[operation] = evidence
+    merged["canaries"] = canaries
+    merged["operation_evidence"] = operation_evidence
+    if antigravity.get("status") == "fail":
+        merged["verdict"] = "red"
+        merged["failure_code"] = str(antigravity.get("failure_code") or "antigravity_real_agy_send_failed")
+        merged["recommendation"] = "block_upgrade_recommendation"
+    return merged
+
+
+def _fail_control_canary(code: str, message: str, **fields: Any) -> dict[str, Any]:
+    payload = {"status": "fail", "failure_code": code, "message": message}
+    payload.update(fields)
+    return payload
+
+
+def _run_antigravity_real_send_proof(
+    args: argparse.Namespace,
+    raw_dir: Path,
+) -> tuple[dict[str, Any], dict[str, str], int | None]:
+    artifact_path = raw_dir / "antigravity-control-e2e.json"
+    evidence_root = raw_dir / "antigravity-control-evidence"
+    stdout_path = raw_dir / "antigravity-control-stdout.log"
+    stderr_path = raw_dir / "antigravity-control-stderr.log"
+    argv = [
+        sys.executable,
+        str(args.repo_root / "scripts" / "qa" / "provider-control-e2e-canary.py"),
+        "--repo-root",
+        str(args.repo_root),
+        "--provider",
+        "antigravity",
+        "--artifact",
+        str(artifact_path),
+        "--evidence-root",
+        str(evidence_root),
+        "--antigravity-real-agy-send",
+        "--antigravity-print-timeout-secs",
+        str(args.antigravity_print_timeout_secs),
+        "--json",
+    ]
+    raw_artifacts = {
+        "antigravity_control_artifact": str(artifact_path),
+        "antigravity_control_stdout": str(stdout_path),
+        "antigravity_control_stderr": str(stderr_path),
+    }
+    if artifact_path.exists():
+        artifact_path.unlink()
+    run_env = os.environ.copy()
+    if args.provider_bin is not None:
+        run_env[ANTIGRAVITY_BIN_ENV] = str(args.provider_bin)
+    try:
+        result = subprocess.run(
+            argv,
+            cwd=str(args.repo_root),
+            env=run_env,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=args.timeout_secs,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout_path.write_text(str(exc.stdout or ""), encoding="utf-8")
+        stderr_path.write_text(str(exc.stderr or ""), encoding="utf-8")
+        artifact = {
+            "schema_version": 1,
+            "provider": "antigravity",
+            "verdict": "red",
+            "failure_code": "antigravity_real_agy_send_timeout",
+            "canaries": {
+                "antigravity": _fail_control_canary(
+                    "antigravity_real_agy_send_timeout",
+                    f"provider-control-e2e timed out after {args.timeout_secs}s",
+                )
+            },
+            "evidence_root": str(evidence_root),
+        }
+        _write_json(artifact_path, artifact)
+        return artifact, raw_artifacts, None
+    stdout_path.write_text(result.stdout, encoding="utf-8")
+    stderr_path.write_text(result.stderr, encoding="utf-8")
+    if artifact_path.exists():
+        try:
+            artifact = _read_json(artifact_path)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            artifact = {
+                "schema_version": 1,
+                "provider": "antigravity",
+                "verdict": "red",
+                "failure_code": "antigravity_real_agy_send_invalid_json",
+                "canaries": {
+                    "antigravity": _fail_control_canary(
+                        "antigravity_real_agy_send_invalid_json",
+                        f"{type(exc).__name__}: {exc}",
+                        command=_command_evidence(result),
+                    )
+                },
+                "evidence_root": str(evidence_root),
+            }
+            _write_json(artifact_path, artifact)
+    else:
+        artifact = {
+            "schema_version": 1,
+            "provider": "antigravity",
+            "verdict": "red",
+            "failure_code": "antigravity_real_agy_send_missing_artifact",
+            "canaries": {
+                "antigravity": _fail_control_canary(
+                    "antigravity_real_agy_send_missing_artifact",
+                    "provider-control-e2e exited without writing an artifact.",
+                    command=_command_evidence(result),
+                )
+            },
+            "evidence_root": str(evidence_root),
+        }
+        _write_json(artifact_path, artifact)
+    return artifact, raw_artifacts, result.returncode
+
+
 def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
     args.repo_root = args.repo_root.expanduser().resolve()
     args.evidence_root = (args.evidence_root or Path.cwd() / "provider-release-proof-evidence").expanduser()
@@ -442,6 +574,11 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
     normalized_dir = args.evidence_root / "normalized"
     normalized_dir.mkdir(parents=True, exist_ok=True)
     source_artifact, raw_artifacts, returncode = _run_source_canary(args, raw_dir)
+    if args.provider == "antigravity" and args.antigravity_run_real_agy_send:
+        control_artifact, control_artifacts, control_returncode = _run_antigravity_real_send_proof(args, raw_dir)
+        raw_artifacts.update(control_artifacts)
+        source_artifact = _merge_antigravity_real_send_proof(source_artifact, control_artifact)
+        returncode = returncode or control_returncode
     normalized = _normalize_source_artifact(source_artifact)
     normalized_path = normalized_dir / "contract.json"
     _write_json(normalized_path, normalized)
@@ -544,6 +681,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--codex-run-detached-ui", action="store_true")
     parser.add_argument("--codex-api-url")
     parser.add_argument("--codex-agents-token")
+    parser.add_argument("--antigravity-run-real-agy-send", action="store_true")
+    parser.add_argument("--antigravity-print-timeout-secs", type=int, default=45)
     return parser
 
 

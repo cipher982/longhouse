@@ -134,6 +134,31 @@ if provider == "claude":
     Path(value("--artifact")).parent.mkdir(parents=True, exist_ok=True)
     Path(value("--artifact")).write_text(json.dumps(artifact), encoding="utf-8")
     raise SystemExit(1 if verdict == "red" else 0)
+if provider == "antigravity":
+    artifact = {
+        "artifact_kind": "provider_live_canary",
+        "provider": "antigravity",
+        "provider_version": "agy 1.0.3",
+        "verdict": "green",
+        "failure_code": None,
+        "recommendation": "upgrade_allowed",
+        "canaries": {
+            "binary_identity": {"status": "pass", "version": "agy 1.0.3"},
+            "command_shape": {"status": "pass"},
+            "plugin_contract": {"status": "pass"},
+            "global_hooks_contract": {"status": "pass"},
+        },
+        "operation_evidence": {
+            "launch_local": {
+                "status": "pass",
+                "level": "live_no_token",
+                "canary": "antigravity_launch_local_no_token",
+            }
+        },
+    }
+    Path(value("--artifact")).parent.mkdir(parents=True, exist_ok=True)
+    Path(value("--artifact")).write_text(json.dumps(artifact), encoding="utf-8")
+    raise SystemExit(0)
 
 verdict = os.environ.get("FAKE_VERDICT", "green")
 artifact = {
@@ -175,6 +200,52 @@ artifact = {
 Path(value("--artifact")).parent.mkdir(parents=True, exist_ok=True)
 Path(value("--artifact")).write_text(json.dumps(artifact), encoding="utf-8")
 raise SystemExit(1 if os.environ.get("FAKE_EXIT_ONE") == "1" else 0 if verdict != "red" else 1)
+""",
+    )
+
+    _write_exe(
+        root / "scripts" / "qa" / "provider-control-e2e-canary.py",
+        r"""#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+
+def value(flag):
+    return args[args.index(flag) + 1]
+
+args_path = os.environ.get("FAKE_CONTROL_ARGS_PATH")
+if args_path:
+    Path(args_path).write_text(json.dumps(args), encoding="utf-8")
+
+status = "fail" if os.environ.get("FAKE_ANTIGRAVITY_CONTROL_FAIL") == "1" else "pass"
+failure_code = "fake_antigravity_send_failed" if status == "fail" else None
+artifact = {
+    "schema_version": 1,
+    "provider": value("--provider"),
+    "verdict": "red" if status == "fail" else "green",
+    "failure_code": failure_code,
+    "canaries": {
+        "antigravity": {
+            "status": status,
+            "failure_code": failure_code,
+            "operation_evidence": {
+                "send_input": {
+                    "status": status,
+                    "level": "none" if status == "fail" else "live_token",
+                    "source": "fake real agy send canary",
+                    "canary": "antigravity_real_agy_send",
+                    "failure_code": failure_code,
+                }
+            },
+        }
+    },
+}
+Path(value("--artifact")).parent.mkdir(parents=True, exist_ok=True)
+Path(value("--artifact")).write_text(json.dumps(artifact), encoding="utf-8")
+raise SystemExit(1 if status == "fail" else 0)
 """,
     )
 
@@ -463,6 +534,58 @@ def test_codex_release_proof_redacts_token_from_command_evidence() -> None:
         assert "<redacted>" in json.dumps(command)
 
 
+def test_antigravity_release_proof_can_attach_real_agy_send_evidence() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        args_path = root / "control-args.json"
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "antigravity",
+            env={"FAKE_CONTROL_ARGS_PATH": str(args_path)},
+            extra_args=[
+                "--antigravity-run-real-agy-send",
+                "--antigravity-print-timeout-secs",
+                "5",
+            ],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        control_args = json.loads(args_path.read_text(encoding="utf-8"))
+        assert "--antigravity-real-agy-send" in control_args
+        assert payload["provider"] == "antigravity"
+        assert payload["verdict"] == "green"
+        assert payload["operation_evidence"]["send_input"]["status"] == "pass"
+        assert payload["operation_evidence"]["send_input"]["level"] == "live_token"
+        assert payload["normalized"]["operation_evidence"]["send_input"]["level"] == "live_token"
+        assert payload["normalized"]["canaries"]["antigravity_real_agy_send"]["status"] == "pass"
+        assert Path(payload["artifacts"]["antigravity_control_artifact"]).exists()
+
+
+def test_antigravity_release_proof_blocks_failed_real_agy_send_evidence() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "antigravity",
+            env={"FAKE_ANTIGRAVITY_CONTROL_FAIL": "1"},
+            extra_args=["--antigravity-run-real-agy-send"],
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "fake_antigravity_send_failed"
+        assert payload["operation_evidence"]["send_input"]["status"] == "fail"
+        assert payload["normalized"]["canaries"]["antigravity_real_agy_send"]["failure_code"] == (
+            "fake_antigravity_send_failed"
+        )
+
+
 def test_claude_release_proof_normalizes_no_token_contract_shape() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -573,6 +696,8 @@ def main() -> int:
         test_opencode_release_proof_blocks_when_source_canary_times_out,
         test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest,
         test_codex_release_proof_redacts_token_from_command_evidence,
+        test_antigravity_release_proof_can_attach_real_agy_send_evidence,
+        test_antigravity_release_proof_blocks_failed_real_agy_send_evidence,
         test_claude_release_proof_normalizes_no_token_contract_shape,
         test_claude_release_proof_red_when_session_flag_missing,
         test_claude_release_proof_preserves_development_channel_failure_code,
