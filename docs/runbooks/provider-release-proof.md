@@ -135,7 +135,10 @@ scripts/qa/provider-release-proof.py \
 `full_action_suite` is intentionally portable/no-token. It executes the shared
 Longhouse control and observation surface, then records explicit blocked or
 unsupported rows for actions that require live provider-held prompts, real tool
-execution, token-spending live turns, or staged old/new proof artifacts.
+execution, token-spending live turns, or staged old/new proof artifacts. The
+portable bundle does execute `baseline_compare` by generating comparable
+synthetic release-proof envelopes and invoking the same baseline diff CLI used
+by release watch.
 
 OpenCode has the first real provider-safe universal e2e lane:
 

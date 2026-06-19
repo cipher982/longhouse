@@ -26,6 +26,7 @@ DEFAULT_SCENARIOS = (
     "collect_raw_evidence",
     "action_matrix",
     "control_surface",
+    "baseline_compare",
     "parse_ingest_project",
     "db_ingest_project",
     "session_projection",

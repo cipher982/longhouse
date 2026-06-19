@@ -223,11 +223,12 @@ stronger raw evidence when they run.
 `full_action_suite` is an opt-in portable aggregate scenario. It runs the
 action matrix plus the safe no-token control/observe scenarios, writes a single
 coverage artifact, and verifies that every abstract action id is either covered
-by an executable scenario result or by an explicit matrix/contract row. It keeps
-real tool-call, live-token, and staged old/new prerequisites out of the portable
-bundle; those remain stronger opt-in lanes. A blocked suite is expected while
-permission prompts, live answer-pause delivery, and some provider-specific
-control lanes are still explicit gaps.
+by an executable scenario result or by an explicit matrix/contract row. It now
+executes `baseline_compare` through the same provider-release-proof baseline
+diff CLI used by release watch. It keeps real tool-call, live-token, and staged
+old/new prerequisites out of the portable bundle; those remain stronger opt-in
+lanes. A blocked suite is expected while permission prompts, live answer-pause
+delivery, and some provider-specific control lanes are still explicit gaps.
 
 ## Capabilities And Profiles
 
@@ -540,6 +541,11 @@ shape:
    live-token scenario. It calls real print, DB-ingests prompt/result marker
    rows, and exposes `universal_live_token_streaming` evidence through release
    proof without claiming managed-session steer.
+15. `baseline_compare` is an executable universal release-diff scenario. It
+    generates comparable synthetic provider-release-proof envelopes from the
+    current action/control artifacts, calls `provider-release-proof-baseline.py
+    diff`, and records the baseline/candidate proof plus diff artifact for all
+    providers.
 15. Codex `live_token_streaming` is an executable universal live-token
    scenario. It calls managed live-send, DB-ingests user/assistant marker rows
    when Runtime Host credentials are present, and exposes live-token credential

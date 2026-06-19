@@ -609,6 +609,59 @@ def test_old_new_release_diff_blocks_without_explicit_artifacts(tmp_path: Path) 
         assert operation["canary"] == "provider_release_proof_old_new_diff"
 
 
+def test_baseline_compare_executes_release_proof_diff_for_all_providers(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=uah.SUPPORTED_PROVIDERS,
+            scenarios=("baseline_compare",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
+            baseline_root=tmp_path / "baselines",
+        )
+    )
+
+    assert payload["verdict"] == "green"
+    assert {result["provider"] for result in payload["results"]} == set(uah.SUPPORTED_PROVIDERS)
+    for result in payload["results"]:
+        assert result["scenario"] == "baseline_compare"
+        assert result["status"] == "pass"
+        data = result["data"]
+        assert data["provider_release_proof_diff_verdict"] == "green"
+        assert data["diff"]["status"] == "match"
+        assert Path(data["baseline_proof_path"]).is_file()
+        assert Path(data["candidate_proof_path"]).is_file()
+        assert Path(data["baseline_compare_artifact_path"]).is_file()
+        assert Path(data["raw_command_path"]).is_file()
+        operation = data["operation_evidence"]["baseline_compare"]
+        assert operation["status"] == "pass"
+        assert operation["level"] == "artifact_diff"
+        assert operation["canary"] == "provider_release_proof_baseline_diff"
+
+
+def test_baseline_compare_uses_resolvable_artifacts_with_relative_evidence_root(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    bins = _fake_bins(tmp_path)
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("claude",),
+            scenarios=("baseline_compare",),
+            evidence_root=Path("relative-evidence"),
+            provider_bins={"claude": bins["claude"]},
+        )
+    )
+
+    result = payload["results"][0]
+    data = result["data"]
+    assert payload["verdict"] == "green"
+    assert result["status"] == "pass"
+    diff = json.loads(Path(data["baseline_compare_artifact_path"]).read_text(encoding="utf-8"))
+    assert diff["verdict"] == "green"
+    assert "artifact_errors" not in diff["diff"]
+
+
 def test_old_new_release_diff_compares_explicit_proof_artifacts(tmp_path: Path) -> None:
     old = _write_release_proof(tmp_path, "old")
     new = _write_release_proof(tmp_path, "new", version="1.2.4")
@@ -748,6 +801,7 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
         assert "adapter_conformance" in result["data"]["scenario_ids"]
         assert "interrupt_cancel" in result["data"]["scenario_ids"]
         assert "answer_pause_request" in result["data"]["scenario_ids"]
+        assert "baseline_compare" in result["data"]["scenario_ids"]
         assert "old_new_release_diff" in result["data"]["scenario_ids"]
 
         evidence_root = Path(result["evidence_root"])
@@ -762,7 +816,9 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
         assert coverage["pause_request_detect"]["coverage_status"] == "pass"
         assert coverage["permission_prompt"]["coverage_status"] == "blocked"
         assert coverage["tool_call_result"]["coverage_kind"] == "matrix_contract"
-        assert coverage["baseline_compare"]["coverage_kind"] == "matrix_contract"
+        assert coverage["baseline_compare"]["coverage_kind"] == "executable_scenario"
+        assert coverage["baseline_compare"]["coverage_status"] == "pass"
+        assert coverage["baseline_compare"]["scenario_ids"] == ["baseline_compare"]
         assert coverage["old_new_release_diff"]["coverage_status"] == "blocked"
 
 

@@ -1253,10 +1253,11 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
             assert Path(payload["artifacts"]["control_surface"]).exists()
             assert Path(payload["artifacts"]["provider_support_matrix"]).exists()
             universal = payload["normalized"]["universal_harness"]
-            assert universal["result_count"] == 17
+            assert universal["result_count"] == 18
             assert "adapter_conformance" in universal["scenarios"]
             assert "action_matrix" in universal["scenarios"]
             assert "control_surface" in universal["scenarios"]
+            assert "baseline_compare" in universal["scenarios"]
             assert "session_projection" in universal["scenarios"]
             assert "timeline_projection" in universal["scenarios"]
             assert "parse_ingest_project" in universal["scenarios"]

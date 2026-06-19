@@ -41,6 +41,7 @@ SCENARIOS = (
     "action_matrix",
     "control_surface",
     "full_action_suite",
+    "baseline_compare",
     "parse_ingest_project",
     "db_ingest_project",
     "session_projection",
@@ -116,6 +117,7 @@ MVP_METHODS = (
     "permission_prompt",
     "crash_timeout_cleanup",
     "live_token_streaming",
+    "baseline_compare",
     "old_new_release_diff",
     "cleanup",
 )
@@ -154,6 +156,7 @@ FULL_ACTION_SUITE_SCENARIOS = (
     "external_event_channel",
     "permission_prompt",
     "crash_timeout_cleanup",
+    "baseline_compare",
     "old_new_release_diff",
 )
 ACTION_EXECUTION_SCENARIO_BY_ID = {
@@ -182,7 +185,7 @@ ACTION_EXECUTION_SCENARIO_BY_ID = {
     "db_ingest": ("db_ingest_project",),
     "session_projection": ("session_projection",),
     "timeline_projection": ("timeline_projection",),
-    "baseline_compare": (),
+    "baseline_compare": ("baseline_compare",),
     "old_new_release_diff": ("old_new_release_diff",),
 }
 
@@ -629,6 +632,13 @@ class AgentHarnessAdapter(Protocol):
 
     def live_token_streaming(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
+    def baseline_compare(
+        self,
+        package: "EvidencePackage",
+        *,
+        baseline_root: Path | None,
+    ) -> dict[str, Any]: ...
+
     def old_new_release_diff(
         self,
         package: "EvidencePackage",
@@ -782,11 +792,15 @@ class UniversalProviderAdapter:
         action_mapping_keys = set(ACTION_EXECUTION_SCENARIO_BY_ID)
         unmapped_actions = sorted(set(ACTIONS) - action_mapping_keys)
         extra_action_mappings = sorted(action_mapping_keys - set(ACTIONS))
-        mapped_unknown_scenarios = sorted(
-            {scenario for scenarios in ACTION_EXECUTION_SCENARIO_BY_ID.values() for scenario in scenarios if scenario not in SCENARIOS}
-        )
+        mapped_scenarios: set[str] = set()
+        for scenarios in ACTION_EXECUTION_SCENARIO_BY_ID.values():
+            mapped_scenarios.update(scenarios)
+        mapped_unknown_scenarios = sorted(set(mapped_scenarios) - set(SCENARIOS))
         missing_scenario_runners = sorted(set(SCENARIOS) - set(SCENARIO_RUNNERS))
         extra_scenario_runners = sorted(set(SCENARIO_RUNNERS) - set(SCENARIOS))
+        action_execution_scenarios: dict[str, list[str]] = {}
+        for action_id, scenarios in ACTION_EXECUTION_SCENARIO_BY_ID.items():
+            action_execution_scenarios[action_id] = list(scenarios)
         failures = {
             "missing_declared_methods": sorted(required_methods - declared_methods),
             "extra_declared_methods": sorted(declared_methods - required_methods),
@@ -813,7 +827,7 @@ class UniversalProviderAdapter:
             "action_ids": list(ACTIONS),
             "scenario_count": len(SCENARIOS),
             "scenario_ids": list(SCENARIOS),
-            "action_execution_scenarios": {action_id: list(scenarios) for action_id, scenarios in ACTION_EXECUTION_SCENARIO_BY_ID.items()},
+            "action_execution_scenarios": action_execution_scenarios,
             "failures": failures,
             "operation_evidence": {
                 "adapter_conformance": {
@@ -1644,6 +1658,303 @@ class UniversalProviderAdapter:
         package.write_json("assertions/live_token_streaming.json", payload)
         return payload
 
+    def baseline_compare(
+        self,
+        package: EvidencePackage,
+        *,
+        baseline_root: Path | None,
+    ) -> dict[str, Any]:
+        action_matrix = self.action_matrix(package)
+        control_surface = self.control_surface(package)
+        session_projection = self.session_projection(package)
+        base_proof_path = self._write_synthetic_release_proof(
+            package,
+            name="baseline",
+            provider_version=f"{self.config.provider} universal-baseline",
+            action_matrix=action_matrix,
+            control_surface=control_surface,
+            session_projection=session_projection,
+        )
+        candidate_proof_path = self._write_synthetic_release_proof(
+            package,
+            name="candidate",
+            provider_version=f"{self.config.provider} universal-candidate",
+            action_matrix=action_matrix,
+            control_surface=control_surface,
+            session_projection=session_projection,
+        )
+        baseline_script = default_repo_root() / "scripts" / "qa" / "provider-release-proof-baseline.py"
+        diff_artifact_path = package.path("assertions", "baseline-compare-diff.json").resolve()
+        root = (baseline_root or package.path("baseline-store")).resolve()
+        stdout_path = package.path("raw", "baseline-compare-stdout.log")
+        stderr_path = package.path("raw", "baseline-compare-stderr.log")
+        command_path = package.path("raw", "baseline-compare-command.json")
+        argv = [
+            sys.executable,
+            str(baseline_script),
+            "diff",
+            "--candidate",
+            str(candidate_proof_path),
+            "--base",
+            str(base_proof_path),
+            "--baseline-root",
+            str(root),
+            "--artifact",
+            str(diff_artifact_path),
+            "--json",
+        ]
+        if not baseline_script.is_file():
+            payload = {
+                "status": STATUS_BLOCKED,
+                "scenario": "baseline_compare",
+                "failure_code": "baseline_compare_tool_missing",
+                "message": f"Baseline diff tool was not found at {baseline_script}.",
+                "operation_evidence": {
+                    "baseline_compare": {
+                        "status": STATUS_BLOCKED,
+                        "level": "artifact_diff",
+                        "canary": "provider_release_proof_baseline_diff",
+                        "failure_code": "baseline_compare_tool_missing",
+                    }
+                },
+            }
+            package.write_json("assertions/baseline_compare.json", payload)
+            return payload
+        try:
+            result = subprocess.run(
+                argv,
+                cwd=str(default_repo_root()),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        except OSError as exc:
+            stdout_path.parent.mkdir(parents=True, exist_ok=True)
+            stdout_path.write_text("", encoding="utf-8")
+            stderr_path.write_text(f"{type(exc).__name__}: {exc}", encoding="utf-8")
+            write_json(
+                command_path,
+                {
+                    "argv": argv,
+                    "returncode": None,
+                    "stdout": "",
+                    "stderr": f"{type(exc).__name__}: {exc}",
+                },
+            )
+            payload = {
+                "status": STATUS_FAIL,
+                "scenario": "baseline_compare",
+                "failure_code": "baseline_compare_exec_failed",
+                "message": f"{type(exc).__name__}: {exc}",
+                "baseline_proof_path": str(base_proof_path),
+                "candidate_proof_path": str(candidate_proof_path),
+                "raw_command_path": str(command_path),
+                "operation_evidence": {
+                    "baseline_compare": {
+                        "status": STATUS_FAIL,
+                        "level": "artifact_diff",
+                        "canary": "provider_release_proof_baseline_diff",
+                        "failure_code": "baseline_compare_exec_failed",
+                    }
+                },
+            }
+            package.write_json("assertions/baseline_compare.json", payload)
+            return payload
+
+        stdout_path.parent.mkdir(parents=True, exist_ok=True)
+        stdout_path.write_text(result.stdout or "", encoding="utf-8")
+        stderr_path.write_text(result.stderr or "", encoding="utf-8")
+        write_json(command_path, command_evidence(result))
+        try:
+            diff_payload = _read_json(diff_artifact_path)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            payload = {
+                "status": STATUS_FAIL,
+                "scenario": "baseline_compare",
+                "failure_code": "baseline_compare_artifact_unreadable",
+                "message": f"{type(exc).__name__}: {exc}",
+                "baseline_proof_path": str(base_proof_path),
+                "candidate_proof_path": str(candidate_proof_path),
+                "raw_command_path": str(command_path),
+                "operation_evidence": {
+                    "baseline_compare": {
+                        "status": STATUS_FAIL,
+                        "level": "artifact_diff",
+                        "canary": "provider_release_proof_baseline_diff",
+                        "failure_code": "baseline_compare_artifact_unreadable",
+                    }
+                },
+            }
+            package.write_json("assertions/baseline_compare.json", payload)
+            return payload
+
+        verdict = str(diff_payload.get("verdict") or "red")
+        diff_status = str(dict(diff_payload.get("diff") or {}).get("status") or "unknown")
+        passed = result.returncode == 0 and verdict == "green" and diff_status == "match"
+        failure_code = None if passed else str(diff_payload.get("failure_code") or "baseline_compare_failed")
+        payload = {
+            "status": STATUS_PASS if passed else STATUS_FAIL,
+            "scenario": "baseline_compare",
+            "provider_release_proof_diff_verdict": verdict,
+            "baseline_proof_path": str(base_proof_path),
+            "candidate_proof_path": str(candidate_proof_path),
+            "baseline_compare_artifact_path": str(diff_artifact_path),
+            "raw_command_path": str(command_path),
+            "diff": diff_payload.get("diff"),
+            "operation_evidence": {
+                "baseline_compare": {
+                    "status": STATUS_PASS if passed else STATUS_FAIL,
+                    "level": "artifact_diff",
+                    "canary": "provider_release_proof_baseline_diff",
+                    "failure_code": failure_code,
+                }
+            },
+        }
+        if not passed:
+            payload["failure_code"] = failure_code
+            payload["message"] = "Provider release-proof baseline comparison did not match."
+        package.write_json("assertions/baseline_compare.json", payload)
+        return payload
+
+    def _write_synthetic_release_proof(
+        self,
+        package: EvidencePackage,
+        *,
+        name: str,
+        provider_version: str,
+        action_matrix: Mapping[str, Any],
+        control_surface: Mapping[str, Any],
+        session_projection: Mapping[str, Any],
+    ) -> Path:
+        artifact_dir = package.path("baseline-compare", name, "evidence")
+        normalized_contract = artifact_dir / "normalized" / "contract.json"
+        provider_contract = artifact_dir / "normalized" / "provider_contract.json"
+        operation_evidence_artifact = artifact_dir / "normalized" / "operation_evidence.json"
+        session_projection_artifact = artifact_dir / "normalized" / "session_projection.json"
+        action_matrix_artifact = artifact_dir / "normalized" / "action_matrix.json"
+        control_surface_artifact = artifact_dir / "normalized" / "control_surface.json"
+        source_artifact = artifact_dir / "source.json"
+        stdout = artifact_dir / "stdout.log"
+        stderr = artifact_dir / "stderr.log"
+        operation_evidence = {
+            "baseline_compare": {
+                "status": STATUS_PASS,
+                "level": "artifact_diff",
+                "canary": "provider_release_proof_baseline_diff",
+            }
+        }
+        normalized = {
+            "artifact_kind": "provider_release_proof",
+            "provider": self.config.provider,
+            "provider_version": provider_version,
+            "verdict": "green",
+            "failure_code": None,
+            "canaries": {
+                "provider_release_proof_baseline_diff": {"status": "pass"},
+            },
+            "operation_evidence": operation_evidence,
+        }
+        provider_contract_payload = {
+            "artifact_kind": "provider_release_proof_provider_contract",
+            "provider": self.config.provider,
+            "provider_version": provider_version,
+            "contract_operations": {
+                "baseline_compare": {
+                    "level": "artifact_diff",
+                    "source": "universal_agent_harness baseline_compare synthetic proof",
+                }
+            },
+        }
+        operation_evidence_payload = {
+            "artifact_kind": "provider_release_proof_operation_evidence",
+            "provider": self.config.provider,
+            "provider_version": provider_version,
+            "operation_evidence": operation_evidence,
+        }
+        session_projection_payload = {
+            "artifact_kind": "provider_release_proof_session_projection",
+            "provider": self.config.provider,
+            "provider_version": provider_version,
+            "status": "captured",
+            "projection": {
+                "artifact_kind": "provider_live_session_projection",
+                "provider": self.config.provider,
+                "status": "captured",
+                "operation_statuses": operation_evidence,
+                "checks": {
+                    "baseline_compare": {"status": STATUS_PASS},
+                },
+            },
+        }
+        if isinstance(session_projection.get("operation_evidence"), Mapping):
+            session_projection_payload["projection"]["operation_statuses"] = {
+                **dict(session_projection.get("operation_evidence") or {}),
+                **operation_evidence,
+            }
+        action_matrix_payload = {
+            "artifact_kind": "provider_release_proof_action_matrix",
+            "provider": self.config.provider,
+            "provider_version": provider_version,
+            "status": "captured",
+            "action_matrix": {
+                "artifact_kind": "provider_release_proof_action_matrix",
+                "provider": self.config.provider,
+                "action_count": action_matrix.get("action_count"),
+                "action_ids": action_matrix.get("action_ids"),
+                "status_counts": action_matrix.get("status_counts"),
+                "actions": action_matrix.get("actions"),
+            },
+        }
+        control_surface_payload = {
+            "artifact_kind": "provider_release_proof_control_surface",
+            "provider": self.config.provider,
+            "provider_version": provider_version,
+            "status": "captured",
+            "control_surface": {
+                "artifact_kind": "provider_release_proof_control_surface",
+                "provider": self.config.provider,
+                "action_count": control_surface.get("action_count"),
+                "action_ids": control_surface.get("action_ids"),
+                "status_counts": control_surface.get("status_counts"),
+                "actions": control_surface.get("actions"),
+            },
+        }
+        write_json(source_artifact, {"synthetic": True, "scenario": "baseline_compare"})
+        source_artifact.parent.mkdir(parents=True, exist_ok=True)
+        stdout.write_text("universal baseline compare\n", encoding="utf-8")
+        stderr.write_text("", encoding="utf-8")
+        write_json(normalized_contract, normalized)
+        write_json(provider_contract, provider_contract_payload)
+        write_json(operation_evidence_artifact, operation_evidence_payload)
+        write_json(session_projection_artifact, session_projection_payload)
+        write_json(action_matrix_artifact, action_matrix_payload)
+        write_json(control_surface_artifact, control_surface_payload)
+        proof = {
+            "schema_version": SCHEMA_VERSION,
+            "artifact_kind": "provider_release_proof",
+            "provider": self.config.provider,
+            "provider_version": provider_version,
+            "scenario_id": f"{self.config.provider}-universal-baseline-compare-v1",
+            "scenario_version": 1,
+            "verdict": "green",
+            "failure_code": None,
+            "normalized": normalized,
+            "artifacts": {
+                "source_artifact": str(source_artifact.resolve()),
+                "stdout": str(stdout.resolve()),
+                "stderr": str(stderr.resolve()),
+                "normalized_contract": str(normalized_contract.resolve()),
+                "provider_contract": str(provider_contract.resolve()),
+                "operation_evidence": str(operation_evidence_artifact.resolve()),
+                "session_projection": str(session_projection_artifact.resolve()),
+                "action_matrix": str(action_matrix_artifact.resolve()),
+                "control_surface": str(control_surface_artifact.resolve()),
+            },
+        }
+        proof_path = package.path("baseline-compare", name, "proof.json")
+        write_json(proof_path, proof)
+        return proof_path.resolve()
+
     def old_new_release_diff(
         self,
         package: EvidencePackage,
@@ -1692,8 +2003,8 @@ class UniversalProviderAdapter:
         baseline_root: Path | None,
     ) -> dict[str, Any]:
         baseline_script = default_repo_root() / "scripts" / "qa" / "provider-release-proof-baseline.py"
-        artifact_path = package.path("assertions", "old-new-release-diff.json")
-        root = baseline_root or package.path("baseline-store")
+        artifact_path = package.path("assertions", "old-new-release-diff.json").resolve()
+        root = (baseline_root or package.path("baseline-store")).resolve()
         stdout_path = package.path("raw", "old-new-release-diff-stdout.log")
         stderr_path = package.path("raw", "old-new-release-diff-stderr.log")
         command_path = package.path("raw", "old-new-release-diff-command.json")
@@ -6141,6 +6452,22 @@ def run_live_token_streaming(adapter: AgentHarnessAdapter, package: EvidencePack
     )
 
 
+def run_baseline_compare(
+    adapter: AgentHarnessAdapter,
+    package: EvidencePackage,
+    baseline_root: Path | None,
+) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.baseline_compare(package, baseline_root=baseline_root)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="baseline_compare",
+        package=package,
+        payload=payload,
+    )
+
+
 def run_old_new_release_diff(
     adapter: AgentHarnessAdapter,
     package: EvidencePackage,
@@ -6206,6 +6533,7 @@ SCENARIO_RUNNERS = {
     "permission_prompt": run_permission_prompt,
     "crash_timeout_cleanup": run_crash_timeout_cleanup,
     "live_token_streaming": run_live_token_streaming,
+    "baseline_compare": run_baseline_compare,
     "old_new_release_diff": run_old_new_release_diff,
 }
 
@@ -6241,6 +6569,8 @@ def run_scenario(
         return runner(adapter, package, prompt)  # type: ignore[misc]
     if scenario == "send_receive":
         return runner(adapter, package, prompt)  # type: ignore[misc]
+    if scenario == "baseline_compare":
+        return runner(adapter, package, baseline_root)  # type: ignore[misc]
     if scenario == "old_new_release_diff":
         return runner(adapter, package, old_proof_path, new_proof_path, baseline_root)  # type: ignore[misc]
     return runner(adapter, package)  # type: ignore[misc]
@@ -6314,6 +6644,10 @@ def provider_support_matrix(
                 )
                 if row.get(key) is not None
             }
+        cell_statuses = []
+        for cell in cells.values():
+            if cell.get("status") in STATUSES:
+                cell_statuses.append(cell["status"])
         matrix_rows.append(
             {
                 "action_id": action.action_id,
@@ -6322,10 +6656,14 @@ def provider_support_matrix(
                 "contract_operation": action.contract_operation,
                 "required_evidence": action.required_evidence,
                 "providers": cells,
-                "status_counts": _status_counts(cell["status"] for cell in cells.values() if cell.get("status") in STATUSES),
+                "status_counts": _status_counts(cell_statuses),
             }
         )
 
+    provider_status_counts = {}
+    for provider, statuses in provider_statuses.items():
+        if statuses:
+            provider_status_counts[provider] = _status_counts(statuses)
     return {
         "schema_version": SCHEMA_VERSION,
         "artifact_kind": "universal_agent_harness_provider_support_matrix",
@@ -6335,7 +6673,7 @@ def provider_support_matrix(
         "action_count": len(matrix_rows),
         "captured_provider_count": len(action_rows_by_provider),
         "missing_provider_actions": missing_provider_actions,
-        "provider_status_counts": {provider: _status_counts(statuses) for provider, statuses in provider_statuses.items() if statuses},
+        "provider_status_counts": provider_status_counts,
         "actions": matrix_rows,
     }
 
