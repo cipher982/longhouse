@@ -318,6 +318,8 @@ Diffs should compare stable structural fields:
 - session ids and continuity semantics
 - tool call/result pairing
 - Longhouse ingest/projection shape
+- universal `action_matrix`/`control_surface` row status, support, evidence
+  level, proof scope, canary, and failure code
 - failure codes and severity
 - timing only through bounded thresholds, not exact durations
 

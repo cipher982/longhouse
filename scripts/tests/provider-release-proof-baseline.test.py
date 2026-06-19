@@ -49,6 +49,34 @@ def _write_proof(
     provider_contract = artifact_dir / "normalized" / "provider_contract.json"
     operation_evidence_artifact = artifact_dir / "normalized" / "operation_evidence.json"
     session_projection = artifact_dir / "normalized" / "session_projection.json"
+    action_matrix = artifact_dir / "normalized" / "action_matrix.json"
+    control_surface = artifact_dir / "normalized" / "control_surface.json"
+    action_rows = [
+        {
+            "action_id": "send_message",
+            "category": "control",
+            "status": status,
+            "support": True,
+            "support_reason": "contract.send_input",
+            "required_evidence": "hermetic",
+            "evidence_level": "live_no_token",
+            "proof_scope": "managed_provider_contract",
+            "contract_operation": "send_input",
+            "canary": "server_contract",
+            "failure_code": _failure_for_status(status),
+            "raw_artifacts": [f"/tmp/{name}/volatile-action-path.json"],
+        },
+        {
+            "action_id": "old_new_release_diff",
+            "category": "release_diff",
+            "status": "blocked",
+            "support": True,
+            "support_reason": "provider_release_proof",
+            "required_evidence": "live_no_token",
+            "proof_scope": "release_diff_runner",
+            "failure_code": "old_new_release_runner_missing",
+        },
+    ]
     normalized = {
         "artifact_kind": "provider_release_proof",
         "provider": provider,
@@ -113,6 +141,38 @@ def _write_proof(
             },
         },
     }
+    action_matrix_payload = {
+        "artifact_kind": "provider_release_proof_action_matrix",
+        "provider": provider,
+        "provider_version": f"{provider} {version}",
+        "status": "captured",
+        "action_matrix": {
+            "artifact_kind": "provider_release_proof_action_matrix",
+            "provider": provider,
+            "action_count": len(action_rows),
+            "action_ids": [row["action_id"] for row in action_rows],
+            "status_counts": {"blocked": 1, status: 1},
+            "action_matrix_path": f"/tmp/{name}/volatile-action-matrix.json",
+            "raw_inputs_path": f"/tmp/{name}/volatile-action-inputs.json",
+            "actions": action_rows,
+        },
+    }
+    control_surface_payload = {
+        "artifact_kind": "provider_release_proof_control_surface",
+        "provider": provider,
+        "provider_version": f"{provider} {version}",
+        "status": "captured",
+        "control_surface": {
+            "artifact_kind": "provider_release_proof_control_surface",
+            "provider": provider,
+            "action_count": 1,
+            "action_ids": ["send_message"],
+            "status_counts": {status: 1},
+            "control_surface_path": f"/tmp/{name}/volatile-control-surface.json",
+            "raw_inputs_path": f"/tmp/{name}/volatile-control-inputs.json",
+            "actions": [action_rows[0]],
+        },
+    }
     source_artifact.write_text(json.dumps({"raw": True}), encoding="utf-8")
     stdout.write_text("stdout\n", encoding="utf-8")
     stderr.write_text("", encoding="utf-8")
@@ -121,6 +181,8 @@ def _write_proof(
     provider_contract.write_text(json.dumps(provider_contract_payload), encoding="utf-8")
     operation_evidence_artifact.write_text(json.dumps(operation_evidence_payload), encoding="utf-8")
     session_projection.write_text(json.dumps(session_projection_payload), encoding="utf-8")
+    action_matrix.write_text(json.dumps(action_matrix_payload), encoding="utf-8")
+    control_surface.write_text(json.dumps(control_surface_payload), encoding="utf-8")
     proof = {
         "schema_version": 1,
         "artifact_kind": "provider_release_proof",
@@ -139,6 +201,8 @@ def _write_proof(
             "provider_contract": str(provider_contract),
             "operation_evidence": str(operation_evidence_artifact),
             "session_projection": str(session_projection),
+            "action_matrix": str(action_matrix),
+            "control_surface": str(control_surface),
         },
     }
     proof_path = proof_dir / "proof.json"
@@ -208,9 +272,7 @@ def test_accept_archives_proof_and_artifacts() -> None:
             "provider_contract",
             "operation_evidence",
             "session_projection",
-        } <= set(
-            payload["archived_artifacts"]
-        )
+        } <= set(payload["archived_artifacts"])
 
 
 def test_accept_refuses_non_green_proof() -> None:
@@ -324,16 +386,53 @@ def test_diff_detects_stable_session_projection_drift() -> None:
         previous = payload["diff"]["changes"][0]["previous"]
         current = payload["diff"]["changes"][0]["current"]
         assert (
-            previous["artifacts"]["session_projection"]["projection"]["checks"][
-                "prompt_async_no_reply_delivery"
-            ]["status"]
+            previous["artifacts"]["session_projection"]["projection"]["checks"]["prompt_async_no_reply_delivery"][
+                "status"
+            ]
             == "pass"
         )
         assert (
-            current["artifacts"]["session_projection"]["projection"]["checks"][
-                "prompt_async_no_reply_delivery"
-            ]["failure_code"]
+            current["artifacts"]["session_projection"]["projection"]["checks"]["prompt_async_no_reply_delivery"][
+                "failure_code"
+            ]
             == "opencode_prompt_async_delivery_not_observed"
+        )
+
+
+def test_diff_detects_stable_action_matrix_drift() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        baseline_root = root / "baselines"
+        accepted = _write_proof(root, "accepted")
+        candidate = _write_proof(root, "candidate", version="1.2.4")
+        candidate_payload = json.loads(candidate.read_text(encoding="utf-8"))
+        action_matrix_path = Path(candidate_payload["artifacts"]["action_matrix"])
+        action_matrix = json.loads(action_matrix_path.read_text(encoding="utf-8"))
+        action_matrix["action_matrix"]["actions"][0]["status"] = "fail"
+        action_matrix["action_matrix"]["actions"][0]["failure_code"] = "send_message_contract_regressed"
+        action_matrix["action_matrix"]["status_counts"] = {"blocked": 1, "fail": 1}
+        action_matrix_path.write_text(json.dumps(action_matrix), encoding="utf-8")
+        _run(["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)])
+
+        result, payload = _run(
+            [
+                "diff",
+                "--candidate",
+                str(candidate),
+                "--baseline-root",
+                str(baseline_root),
+            ]
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "provider_release_proof_drift"
+        assert payload["diff"]["status"] == "different"
+        previous = payload["diff"]["changes"][0]["previous"]
+        current = payload["diff"]["changes"][0]["current"]
+        assert previous["artifacts"]["action_matrix"]["action_matrix"]["actions"][0]["status"] == "pass"
+        assert current["artifacts"]["action_matrix"]["action_matrix"]["actions"][0]["failure_code"] == (
+            "send_message_contract_regressed"
         )
 
 
@@ -343,9 +442,7 @@ def test_diff_blocks_when_comparable_artifacts_are_missing() -> None:
         baseline_root = root / "baselines"
         accepted = _write_proof(root, "accepted")
         candidate = _write_proof(root, "candidate", version="1.2.4")
-        _, acceptance = _run(
-            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
-        )
+        _, acceptance = _run(["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)])
         Path(acceptance["archived_artifacts"]["session_projection"]).unlink()
         candidate_payload = json.loads(candidate.read_text(encoding="utf-8"))
         Path(candidate_payload["artifacts"]["session_projection"]).unlink()
@@ -656,9 +753,7 @@ def test_status_warns_when_archived_artifact_is_missing() -> None:
         root = Path(temp_dir)
         baseline_root = root / "baselines"
         accepted = _write_proof(root, "accepted")
-        _, acceptance = _run(
-            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
-        )
+        _, acceptance = _run(["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)])
         Path(acceptance["archived_artifacts"]["stdout"]).unlink()
 
         result, payload = _run(
@@ -685,9 +780,7 @@ def test_status_blocks_when_accepted_baseline_is_not_green() -> None:
         root = Path(temp_dir)
         baseline_root = root / "baselines"
         accepted = _write_proof(root, "accepted")
-        _, acceptance = _run(
-            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
-        )
+        _, acceptance = _run(["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)])
         accepted_path = Path(acceptance["accepted_path"])
         accepted_payload = json.loads(accepted_path.read_text(encoding="utf-8"))
         accepted_payload["verdict"] = "yellow"
@@ -816,6 +909,7 @@ def main() -> int:
         test_diff_against_accepted_baseline_matches,
         test_diff_against_accepted_baseline_detects_drift,
         test_diff_detects_stable_session_projection_drift,
+        test_diff_detects_stable_action_matrix_drift,
         test_diff_blocks_when_comparable_artifacts_are_missing,
         test_diff_blocks_when_operation_evidence_artifact_is_malformed,
         test_diff_reports_missing_baseline_as_yellow,

@@ -258,6 +258,8 @@ def test_action_matrix_emits_same_longhouse_actions_for_all_providers(tmp_path: 
         assert actions["parse_normalize"]["status"] == "pass"
         assert actions["db_ingest"]["status"] == "pass"
         assert actions["db_ingest"]["canary"] == "universal_db_ingest_project"
+        assert actions["baseline_compare"]["status"] == "pass"
+        assert actions["baseline_compare"]["canary"] == "provider_release_proof_baseline_diff"
         assert actions["old_new_release_diff"]["status"] == "blocked"
         assert Path(result["data"]["action_matrix_path"]).is_file()
 
@@ -694,6 +696,7 @@ def test_script_entrypoint_runs_all_provider_action_e2e(tmp_path: Path) -> None:
         matrix_actions = {row["action_id"]: row for row in action_matrix["data"]["actions"]}
         surface_actions = {row["action_id"]: row for row in control_surface["data"]["actions"]}
         assert matrix_actions["raw_evidence_capture"]["status"] == "pass"
+        assert matrix_actions["baseline_compare"]["status"] == "pass"
         assert matrix_actions["old_new_release_diff"]["status"] == "blocked"
         assert surface_actions["send_message"]["category"] == "control"
         assert surface_actions["tail_output"]["category"] == "observe"

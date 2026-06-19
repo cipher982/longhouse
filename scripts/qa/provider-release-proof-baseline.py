@@ -19,17 +19,14 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 DEFAULT_BASELINE_ROOT = Path(".provider-release-proofs")
-DEFAULT_COVERAGE_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "docs"
-    / "specs"
-    / "provider-release-proof-coverage.json"
-)
+DEFAULT_COVERAGE_PATH = Path(__file__).resolve().parents[2] / "docs" / "specs" / "provider-release-proof-coverage.json"
 COMPARABLE_ARTIFACT_KEYS = (
     "normalized_contract",
     "provider_contract",
     "operation_evidence",
     "session_projection",
+    "action_matrix",
+    "control_surface",
 )
 STABLE_OPERATION_KEYS = ("status", "level", "canary", "failure_code")
 STABLE_CHECK_KEYS = ("status", "failure_code")
@@ -203,7 +200,9 @@ def _artifact_paths(proof: dict[str, Any]) -> dict[str, str]:
     paths: dict[str, str] = {}
     artifacts = proof.get("artifacts")
     if isinstance(artifacts, dict):
-        paths.update({key: value for key, value in artifacts.items() if isinstance(key, str) and isinstance(value, str)})
+        paths.update(
+            {key: value for key, value in artifacts.items() if isinstance(key, str) and isinstance(value, str)}
+        )
     archived_artifacts = proof.get("archived_artifacts")
     if isinstance(archived_artifacts, dict):
         paths.update(
@@ -280,6 +279,8 @@ def _artifact_shape_errors(key: str, payload: dict[str, Any]) -> list[dict[str, 
     checks = {
         "provider_contract": "contract_operations",
         "operation_evidence": "operation_evidence",
+        "action_matrix": "action_matrix",
+        "control_surface": "control_surface",
     }
     required_field = checks.get(key)
     if required_field is None:
@@ -307,9 +308,7 @@ def _artifact_shape_errors(key: str, payload: dict[str, Any]) -> list[dict[str, 
 
 def _stable_session_projection(payload: dict[str, Any]) -> dict[str, Any]:
     comparable: dict[str, Any] = {
-        key: payload.get(key)
-        for key in ("artifact_kind", "provider", "status")
-        if payload.get(key) is not None
+        key: payload.get(key) for key in ("artifact_kind", "provider", "status") if payload.get(key) is not None
     }
     projection = payload.get("projection")
     if isinstance(projection, dict):
@@ -324,6 +323,46 @@ def _stable_session_projection(payload: dict[str, Any]) -> dict[str, Any]:
         operation_statuses = _stable_operation_map(projection.get("operation_statuses"))
         if operation_statuses:
             comparable["projection"]["operation_statuses"] = operation_statuses
+    return comparable
+
+
+def _stable_action_row(row: Any) -> dict[str, Any]:
+    if not isinstance(row, dict):
+        return {}
+    stable_keys = (
+        "action_id",
+        "category",
+        "status",
+        "support",
+        "support_reason",
+        "required_evidence",
+        "evidence_level",
+        "proof_scope",
+        "contract_operation",
+        "canary",
+        "failure_code",
+    )
+    return {key: row.get(key) for key in stable_keys if row.get(key) is not None}
+
+
+def _stable_action_artifact(payload: dict[str, Any], field: str) -> dict[str, Any]:
+    comparable: dict[str, Any] = {
+        key: payload.get(key) for key in ("artifact_kind", "provider", "status") if payload.get(key) is not None
+    }
+    summary = payload.get(field)
+    if isinstance(summary, dict):
+        comparable[field] = {
+            key: summary.get(key)
+            for key in ("artifact_kind", "provider", "action_count", "action_ids", "status_counts")
+            if summary.get(key) is not None
+        }
+        actions = summary.get("actions")
+        if isinstance(actions, list):
+            comparable[field]["actions"] = [
+                _stable_action_row(row)
+                for row in actions
+                if isinstance(row, dict) and isinstance(row.get("action_id"), str)
+            ]
     return comparable
 
 
@@ -346,6 +385,10 @@ def _stable_artifact(key: str, payload: dict[str, Any]) -> dict[str, Any]:
         }
     if key == "session_projection":
         return _stable_session_projection(payload)
+    if key == "action_matrix":
+        return _stable_action_artifact(payload, "action_matrix")
+    if key == "control_surface":
+        return _stable_action_artifact(payload, "control_surface")
     comparable = json.loads(json.dumps(payload))
     comparable.pop("provider_version", None)
     return comparable
@@ -563,25 +606,17 @@ def _accepted_scenarios_from_coverage(coverage_path: Path) -> list[dict[str, Any
     payload = _read_json(coverage_path)
     scenarios = payload.get("accepted_release_proof_scenarios")
     if not isinstance(scenarios, list):
-        raise ValueError(
-            f"{coverage_path} does not define accepted_release_proof_scenarios"
-        )
+        raise ValueError(f"{coverage_path} does not define accepted_release_proof_scenarios")
     accepted: list[dict[str, Any]] = []
     for index, scenario in enumerate(scenarios):
         if not isinstance(scenario, dict):
-            raise ValueError(
-                f"{coverage_path} accepted_release_proof_scenarios[{index}] is not an object"
-            )
+            raise ValueError(f"{coverage_path} accepted_release_proof_scenarios[{index}] is not an object")
         provider = scenario.get("provider")
         scenario_id = scenario.get("scenario_id")
         if not isinstance(provider, str) or not provider:
-            raise ValueError(
-                f"{coverage_path} accepted_release_proof_scenarios[{index}] is missing provider"
-            )
+            raise ValueError(f"{coverage_path} accepted_release_proof_scenarios[{index}] is missing provider")
         if not isinstance(scenario_id, str) or not scenario_id:
-            raise ValueError(
-                f"{coverage_path} accepted_release_proof_scenarios[{index}] is missing scenario_id"
-            )
+            raise ValueError(f"{coverage_path} accepted_release_proof_scenarios[{index}] is missing scenario_id")
         accepted.append(scenario)
     return accepted
 

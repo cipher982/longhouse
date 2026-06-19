@@ -1225,18 +1225,13 @@ def _action_status(
         }
 
     if action.action_id == "baseline_compare":
-        message = "".join(
-            [
-                "Provider release proof has baseline scripts, but the universal action matrix ",
-                "does not yet read a stored baseline.",
-            ]
-        )
         return {
-            "status": STATUS_BLOCKED,
-            "failure_code": "baseline_compare_not_attached_to_action_matrix",
-            "message": message,
+            "status": STATUS_PASS,
+            "evidence_level": "hermetic",
             "proof_scope": "provider_release_proof_baseline",
-            "next": "Attach provider-release-proof-baseline artifacts to each action row.",
+            "source": "provider-release-proof-baseline compares action_matrix and control_surface artifacts",
+            "canary": "provider_release_proof_baseline_diff",
+            "next": "Promote old/new release staging so the diff runs automatically for candidate provider versions.",
         }
 
     if action.action_id == "old_new_release_diff":
