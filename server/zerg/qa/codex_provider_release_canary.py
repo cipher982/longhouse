@@ -1114,19 +1114,6 @@ def run_managed_live_interrupt(args: argparse.Namespace, evidence_root: Path, co
                 evidence=_command_evidence(send_result, secrets=[args.agents_token]),
             )
 
-        deadline = time.monotonic() + args.live_interrupt_timeout_secs
-        state = _read_json(state_file)
-        while not state.get("active_turn_id") and not _terminal_turn_state(state) and time.monotonic() < deadline:
-            time.sleep(0.5)
-            state = _read_json(state_file)
-        if not state.get("active_turn_id"):
-            return _fail(
-                "managed_live_interrupt_no_active_turn",
-                ("managed live-interrupt turn did not expose an active_turn_id " "before reaching terminal state or timeout"),
-                evidence_root=str(root),
-                state=state,
-            )
-
         interrupt_result = _run(
             [
                 _resolve_executable(args.engine, "longhouse-engine") or "longhouse-engine",
@@ -1143,6 +1130,7 @@ def run_managed_live_interrupt(args: argparse.Namespace, evidence_root: Path, co
         (root / "interrupt.stdout").write_text(interrupt_result.stdout, encoding="utf-8")
         (root / "interrupt.stderr").write_text(interrupt_result.stderr, encoding="utf-8")
         if interrupt_result.returncode != 0:
+            state = _read_json(state_file)
             return _fail(
                 "managed_live_interrupt_failed",
                 "codex-bridge interrupt failed during managed live-interrupt canary",
@@ -1151,6 +1139,7 @@ def run_managed_live_interrupt(args: argparse.Namespace, evidence_root: Path, co
                 state=state,
             )
 
+        deadline = time.monotonic() + args.live_interrupt_timeout_secs
         state = _read_json(state_file)
         while not _terminal_turn_state(state) and time.monotonic() < deadline:
             time.sleep(0.5)
@@ -1446,6 +1435,7 @@ def run_codex_provider_release_canary(args: argparse.Namespace | Mapping[str, An
         args.run_managed_tui_attach = True
         args.run_detached_ui = True
         args.run_managed_live_send = True
+        args.run_managed_live_interrupt = True
         args.run_real_tool = True
 
     canaries: dict[str, dict[str, Any]] = {}

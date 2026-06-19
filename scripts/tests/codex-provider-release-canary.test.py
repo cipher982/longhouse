@@ -453,7 +453,6 @@ def test_full_fake_canary_can_go_green() -> None:
             fixture,
             [
                 "--run-all-live",
-                "--run-managed-live-interrupt",
                 "--source-review-status",
                 "pass",
             ],
