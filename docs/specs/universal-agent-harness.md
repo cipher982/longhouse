@@ -187,6 +187,12 @@ provider-live process-restart reattach canary, projects the recovered session
 and marker transcript rows, and DB-ingests the reattach evidence. Other providers
 currently return typed adapter gaps for this scenario.
 
+`live_token_streaming` is an executable universal scenario for Codex. It calls
+the existing managed-live-send canary, projects the user prompt and assistant
+marker rows, and DB-ingests the live-token evidence when Runtime Host
+credentials are present. Other providers currently return typed adapter gaps for
+this scenario.
+
 ## Capabilities And Profiles
 
 Capabilities are the vocabulary scenarios use to decide what is required:
@@ -416,7 +422,7 @@ rewritten to call the shared scenario runner.
 | `scripts/qa/provider-release-proof.py` | Proof wrapper, normalization, baseline artifact generation | Reusable shell; should eventually call universal runner instead of provider-specific canary scripts. |
 | `server/zerg/qa/provider_live_canary.py` Claude binary/channel/PTY checks | `probe_identity`, `launch_managed_session`, `collect_raw_evidence` | Migrated into Claude `managed_session_e2e`; live-token send/steer still need promotion. |
 | `server/zerg/qa/managed_claude_live.py` | `send_receive`, `live_token_streaming`, `interrupt_cancel`, `multi_turn_continuity` | Migration candidate; PTY loop and channel readiness are Claude adapter internals. |
-| `server/zerg/qa/codex_provider_release_canary.py` | `probe_identity`, `run_prompt_once`, `launch_managed_session`, `resume_reattach`, `send_receive`, `interrupt_cancel`, `tool_call_result` | Partly migrated: Codex `managed_session_e2e`, `interrupt_cancel`, and `tool_call_result` now call this canary; live send/control still need promotion. |
+| `server/zerg/qa/codex_provider_release_canary.py` | `probe_identity`, `run_prompt_once`, `launch_managed_session`, `resume_reattach`, `send_receive`, `interrupt_cancel`, `tool_call_result` | Partly migrated: Codex `managed_session_e2e`, `interrupt_cancel`, `tool_call_result`, and `live_token_streaming` now call this canary; remaining control/steer lanes still need promotion. |
 | `server/zerg/qa/provider_live_canary.py` OpenCode server/schema/session checks | `launch_managed_session`, `send_receive`, `resume_reattach`, `interrupt_cancel`, `parse_ingest_project` | Partly migrated: OpenCode `managed_session_e2e` and `resume_reattach` now call this canary; remaining control/live-token scenarios still need promotion. |
 | `server/zerg/qa/provider_live_canary.py` Antigravity plugin/global hook checks | `probe_identity`, `external_event_channel`, `send_receive` | Migration candidate; hook/inbox setup is Antigravity adapter internal. |
 | `scripts/qa/provider-control-e2e-canary.py` | `send_receive`, `interrupt_cancel`, `tool_call_result`, `external_event_channel` | Migration candidate; keep provider-specific fakes as adapter test fixtures. |
@@ -465,8 +471,12 @@ shape:
    scenario. It calls the provider-live process-restart reattach canary,
    DB-ingests reattach evidence, and exposes `universal_reattach` evidence
    through release proof.
-13. Evidence packages are written for pass, fail, and unsupported results.
-14. Existing one-off canaries remain compatibility lanes until each behavior is
+13. Codex `live_token_streaming` is an executable universal live-token
+   scenario. It calls managed live-send, DB-ingests user/assistant marker rows
+   when Runtime Host credentials are present, and exposes live-token credential
+   gaps as yellow release-proof evidence.
+14. Evidence packages are written for pass, fail, and unsupported results.
+15. Existing one-off canaries remain compatibility lanes until each behavior is
    migrated and baselined.
 
 Next implementation target: migrate Codex live send/control mechanics, Claude

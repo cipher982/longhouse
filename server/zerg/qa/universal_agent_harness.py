@@ -47,6 +47,7 @@ SCENARIOS = (
     "interrupt_cancel",
     "tool_call_result",
     "resume_reattach",
+    "live_token_streaming",
 )
 
 STATUS_PASS = "pass"
@@ -83,6 +84,7 @@ MVP_METHODS = (
     "interrupt_cancel",
     "tool_call_result",
     "resume_reattach",
+    "live_token_streaming",
     "cleanup",
 )
 MVP_CAPABILITIES = (
@@ -456,6 +458,8 @@ class AgentHarnessAdapter(Protocol):
     def tool_call_result(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def resume_reattach(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def live_token_streaming(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def managed_session_e2e(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
@@ -950,6 +954,31 @@ class UniversalProviderAdapter:
             }
         }
         package.write_json("assertions/resume_reattach.json", payload)
+        return payload
+
+    def live_token_streaming(self, package: EvidencePackage) -> dict[str, Any]:
+        if self.config.provider == "codex":
+            return self._run_codex_live_token_streaming(package)
+        payload = self._unsupported_payload(
+            "live_token_streaming",
+            "live_token_streaming_adapter_missing",
+            "live_token_streaming is not yet backed by a universal provider adapter for this provider.",
+        )
+        payload["operation_evidence"] = {
+            "send_input": {
+                "status": STATUS_UNSUPPORTED_GAP,
+                "level": "none",
+                "canary": "universal_live_token_streaming",
+                "failure_code": "live_token_streaming_adapter_missing",
+            },
+            "live_token_behavior": {
+                "status": STATUS_UNSUPPORTED_GAP,
+                "level": "none",
+                "canary": "universal_live_token_streaming",
+                "failure_code": "live_token_streaming_adapter_missing",
+            },
+        }
+        package.write_json("assertions/live_token_streaming.json", payload)
         return payload
 
     def managed_session_e2e(self, package: EvidencePackage) -> dict[str, Any]:
@@ -1475,6 +1504,131 @@ class UniversalProviderAdapter:
             payload["failure_code"] = db_ingest.get("failure_code") or "tool_call_result_db_ingest_failed"
             payload["message"] = "Codex real-tool call/result evidence did not pass Longhouse DB ingest assertions."
         package.write_json("assertions/tool_call_result.json", payload)
+        return payload
+
+    def _run_codex_live_token_streaming(self, package: EvidencePackage) -> dict[str, Any]:
+        binary, source = self._resolve_binary()
+        if binary is None:
+            payload = {
+                "status": STATUS_FAIL,
+                "failure_code": "provider_binary_not_found",
+                "message": "codex binary was not found for live_token_streaming",
+                "binary_source": source,
+            }
+            package.write_json("assertions/live_token_streaming.json", payload)
+            return payload
+
+        from zerg.qa.codex_provider_release_canary import run_codex_provider_release_canary
+
+        canary_evidence_root = package.path("raw", "codex-live-token-canary-evidence")
+        canary_artifact_path = package.path("raw", "codex-provider-release-canary.json")
+        canary_artifact = run_codex_provider_release_canary(
+            {
+                "codex_bin": str(binary),
+                "artifact": canary_artifact_path,
+                "evidence_root": canary_evidence_root,
+                "repo_root": default_repo_root(),
+                "source_review_status": "pass",
+                "skip_static_contract": True,
+                "run_managed_live_send": True,
+            }
+        )
+        if not canary_artifact_path.is_file():
+            package.write_json("raw/codex-provider-release-canary.json", canary_artifact)
+        package.write_json("raw/codex-provider-release-canary-inline.json", canary_artifact)
+        credentials_gap = _codex_canary_credentials_gap(canary_artifact, ("managed_live_send",))
+        if credentials_gap:
+            payload = {
+                "status": STATUS_UNSUPPORTED_GAP,
+                "scenario": "live_token_streaming",
+                "failure_code": "codex_managed_bridge_credentials_missing",
+                "message": "Codex live_token_streaming requires Runtime Host credentials.",
+                "missing": credentials_gap,
+                "codex_canary_artifact_path": str(canary_artifact_path),
+                "codex_canary_evidence_root": str(canary_evidence_root),
+                "source_artifact_kind": canary_artifact.get("artifact_kind"),
+                "synthetic": False,
+                "operation_evidence": {
+                    "send_input": {
+                        "status": STATUS_UNSUPPORTED_GAP,
+                        "level": "live_token_required",
+                        "canary": "managed_live_send",
+                        "failure_code": "codex_managed_bridge_credentials_missing",
+                    },
+                    "live_token_behavior": {
+                        "status": STATUS_UNSUPPORTED_GAP,
+                        "level": "live_token_required",
+                        "canary": "managed_live_send",
+                        "failure_code": "codex_managed_bridge_credentials_missing",
+                    },
+                },
+            }
+            package.write_json("assertions/live_token_streaming.json", payload)
+            return payload
+
+        operation_evidence = codex_live_token_streaming_operation_evidence(canary_artifact)
+        raw_events = codex_live_token_streaming_raw_events(canary_artifact)
+        provider_session_id = _first_codex_thread_id(canary_artifact) or self._session_id(package)
+        projection = self._write_session_projection(
+            package,
+            raw_events=raw_events,
+            operations=operation_evidence,
+            provider_session_id=provider_session_id,
+        )
+        db_ingest = ingest_canonical_events_into_longhouse_db(
+            package=package,
+            provider=self.config.provider,
+            rows=raw_events,
+            provider_session_id=provider_session_id,
+        )
+        operation_evidence.update(
+            {
+                str(operation): dict(evidence)
+                for operation, evidence in dict(db_ingest.get("operation_evidence") or {}).items()
+                if isinstance(evidence, Mapping)
+            }
+        )
+        session_projection_path = package.path("longhouse", "session-projection.json")
+        try:
+            session_projection = json.loads(session_projection_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            session_projection = {}
+        if isinstance(session_projection, dict):
+            session_projection["operation_statuses"] = operation_evidence
+            package.write_json("longhouse/session-projection.json", session_projection)
+
+        verdict = str(canary_artifact.get("verdict") or "red")
+        live_status = str((operation_evidence.get("live_token_behavior") or {}).get("status") or STATUS_FAIL)
+        send_status = str((operation_evidence.get("send_input") or {}).get("status") or STATUS_FAIL)
+        db_status = str(db_ingest.get("status") or STATUS_FAIL)
+        payload = {
+            **projection,
+            "status": STATUS_PASS
+            if verdict == "green" and live_status == STATUS_PASS and send_status == STATUS_PASS and db_status == STATUS_PASS
+            else STATUS_FAIL,
+            "scenario": "live_token_streaming",
+            "provider_version": canary_artifact.get("codex_version") or canary_artifact.get("provider_version"),
+            "codex_canary_artifact_path": str(canary_artifact_path),
+            "codex_canary_evidence_root": str(canary_evidence_root),
+            "codex_canary_verdict": verdict,
+            "source_artifact_kind": canary_artifact.get("artifact_kind"),
+            "synthetic": False,
+            "operation_evidence": operation_evidence,
+            "longhouse_ingest": {
+                "status": db_status,
+                "failure_code": db_ingest.get("failure_code"),
+                "db_snapshot_path": db_ingest.get("db_snapshot_path"),
+                "session_projection_path": db_ingest.get("session_projection_path"),
+                "timeline_projection_path": db_ingest.get("timeline_projection_path"),
+            },
+        }
+        if verdict != "green" or live_status != STATUS_PASS or send_status != STATUS_PASS:
+            payload["failure_code"] = canary_artifact.get("failure_code") or "codex_live_token_streaming_failed"
+            payload["message"] = "Codex managed live-send canary did not pass."
+        elif db_status != STATUS_PASS:
+            payload["failure_code"] = db_ingest.get("failure_code") or "live_token_streaming_db_ingest_failed"
+            payload["message"] = "Codex live-token evidence did not pass Longhouse DB ingest assertions."
+        package.write_json("assertions/live_token_streaming.json", payload)
         return payload
 
     def _run_codex_managed_session_e2e(self, package: EvidencePackage) -> dict[str, Any]:
@@ -2630,7 +2784,7 @@ def codex_provider_release_raw_events(artifact: Mapping[str, Any]) -> list[dict[
 
 def _first_codex_thread_id(artifact: Mapping[str, Any]) -> str | None:
     canaries = dict(artifact.get("canaries") or {})
-    for name in ("managed_tui_attach", "detached_ui", "managed_live_interrupt"):
+    for name in ("managed_tui_attach", "detached_ui", "managed_live_send", "managed_live_interrupt"):
         canary = canaries.get(name)
         if isinstance(canary, Mapping):
             thread_id = _clean_optional_str(canary.get("thread_id"))
@@ -2668,6 +2822,43 @@ def codex_interrupt_cancel_raw_events(artifact: Mapping[str, Any]) -> list[dict[
                 "last_turn_status": interrupt.get("last_turn_status"),
                 "status": interrupt.get("status"),
                 "failure_code": interrupt.get("failure_code"),
+                "evidence_origin": "codex_provider_release_canary",
+            }
+        )
+    return rows
+
+
+def codex_live_token_streaming_raw_events(artifact: Mapping[str, Any]) -> list[dict[str, Any]]:
+    canaries = dict(artifact.get("canaries") or {})
+    live_send = dict(canaries.get("managed_live_send") or {})
+    provider_session_id = _first_codex_thread_id(artifact) or "codex-live-token-streaming"
+    marker = str(live_send.get("marker") or "marker-unavailable")
+    rows: list[dict[str, Any]] = []
+    if live_send:
+        rows.append(
+            {
+                "type": "user",
+                "role": "user",
+                "text": f"Reply exactly {marker} and nothing else.",
+                "provider_session_id": provider_session_id,
+                "source_canary": "managed_live_send",
+                "thread_id": live_send.get("thread_id"),
+                "state_file": live_send.get("state_file"),
+                "thread_path": live_send.get("thread_path"),
+                "send_summary": live_send.get("send_summary"),
+                "evidence_origin": "codex_provider_release_canary",
+            }
+        )
+        rows.append(
+            {
+                "type": "assistant",
+                "role": "assistant",
+                "text": marker if live_send.get("status") == STATUS_PASS else "",
+                "provider_session_id": provider_session_id,
+                "source_canary": "managed_live_send",
+                "thread_id": live_send.get("thread_id"),
+                "thread_path": live_send.get("thread_path"),
+                "marker_found": live_send.get("status") == STATUS_PASS,
                 "evidence_origin": "codex_provider_release_canary",
             }
         )
@@ -2731,6 +2922,30 @@ def codex_tool_call_result_raw_events(artifact: Mapping[str, Any]) -> list[dict[
             }
         )
     return rows
+
+
+def codex_live_token_streaming_operation_evidence(artifact: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    operation_evidence = {
+        str(operation): dict(evidence)
+        for operation, evidence in dict(artifact.get("operation_evidence") or {}).items()
+        if isinstance(evidence, Mapping)
+    }
+    live_send = dict(dict(artifact.get("canaries") or {}).get("managed_live_send") or {})
+    status = STATUS_PASS if live_send.get("status") == "pass" else STATUS_FAIL
+    failure_code = None if status == STATUS_PASS else str(live_send.get("failure_code") or "codex_live_token_streaming_failed")
+    operation_evidence["send_input"] = {
+        "status": status,
+        "level": "live_token" if status == STATUS_PASS else "none",
+        "canary": "managed_live_send",
+        "failure_code": failure_code,
+    }
+    operation_evidence["live_token_behavior"] = {
+        "status": status,
+        "level": "live_token" if status == STATUS_PASS else "none",
+        "canary": "managed_live_send",
+        "failure_code": failure_code,
+    }
+    return operation_evidence
 
 
 def codex_tool_call_result_operation_evidence(artifact: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
@@ -3126,6 +3341,18 @@ def run_resume_reattach(adapter: AgentHarnessAdapter, package: EvidencePackage) 
     )
 
 
+def run_live_token_streaming(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.live_token_streaming(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="live_token_streaming",
+        package=package,
+        payload=payload,
+    )
+
+
 def run_managed_session_e2e(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
     adapter.prepare(package)
     payload = adapter.managed_session_e2e(package)
@@ -3152,6 +3379,7 @@ SCENARIO_RUNNERS = {
     "interrupt_cancel": run_interrupt_cancel,
     "tool_call_result": run_tool_call_result,
     "resume_reattach": run_resume_reattach,
+    "live_token_streaming": run_live_token_streaming,
 }
 
 
