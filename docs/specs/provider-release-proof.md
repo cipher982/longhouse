@@ -151,7 +151,7 @@ and abort evidence; the release-proof wrapper captures it as
 
 | Surface | Covered | Evidence | Boundary | CI | Sauron release-watch | Baseline | Actionable today |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| install/stage exact version | partial | Sauron stages the exact Antigravity GitHub release asset and passes it to profile/live canaries | real release asset | no Longhouse CI; Sauron tests cover it | yes for source-reviewed releases | no | yes if staging/version match fails |
+| install/stage exact version | partial | Sauron stages the exact Antigravity GitHub release asset, passes it to profile/live canaries, and wraps it in Longhouse proof/differential envelopes | real release asset | no Longhouse CI; Sauron tests cover it | yes for source-reviewed releases | no | yes if staging/version match fails or old/new proof drift is red |
 | binary identity | yes | `provider-live-canary --provider antigravity`, profile canary | live_no_token or fake | `validate-provider-cli-canaries` | yes | no | yes |
 | auth/status shape | partial | version/help/plugin/global hook checks | live_no_token | `validate-provider-cli-canaries` | yes | no | partial |
 | launch managed session | partial | hook/plugin checks only | live_no_token/hermetic | `validate-provider-cli-canaries` | profile/live only | no | partial |
@@ -159,14 +159,17 @@ and abort evidence; the release-proof wrapper captures it as
 | transcript/log parse | partial | hook transcript binding tests | hermetic | `make test` | no | no | partial |
 | ingest into Longhouse | partial | hook outbox/runtime tests | hermetic | `make test` | no | no | partial |
 | timeline/session projection | partial | session capabilities for Antigravity transport | hermetic | `make test` | no | no | partial |
-| send input | partial | `provider-control-e2e-canary.py --antigravity-real-agy-send` | live_token when explicitly run | wrapper test in CI uses fake agy | profile/live only | no | partial |
+| send input | partial | `provider-control-e2e-canary.py --antigravity-real-agy-send`; Sauron release-watch now preserves Longhouse proof/differential evidence from staged `agy` | live_token when explicitly run; release proof uses current live canary maturity | wrapper test in CI uses fake agy | profile/live plus proof/diff | no | partial |
 | interrupt/abort/steer | no | unsupported in manifest | none | no | no | no | no |
 | reattach/resume | no | unsupported in manifest | none | no | no | no | no |
 | tool/tool-result shape | no | no provider transcript parser golden found | none | no | no | no | no |
 | live-token behavior | partial | real agy send canary exists but is not a scheduled CI/release lane | live_token manual/configured | fake-wrapper CI only | no | no | no |
 
-Antigravity should stay narrow: prove the hook inbox actually changes the
-model-visible turn, then keep unsupported operations explicit.
+Antigravity should stay narrow: Sauron now stages current and previous release
+assets and runs Longhouse proof/differential artifacts, but the release proof
+still inherits the current canary maturity. The next useful step is proving the
+hook inbox actually changes the model-visible turn, then keeping unsupported
+operations explicit.
 
 ### Gemini CLI
 
@@ -290,6 +293,16 @@ the previous Codex release asset and runs an explicit Longhouse
 result is `canaries.release_differential`. Red old/new proof drift is a
 top-level release-risk signal, while missing accepted baselines remain separate
 yellow evidence.
+
+Antigravity release-watch now follows the same Longhouse proof wrapper shape
+for staged `agy` release assets. It publishes `canaries.golden_envelope` and,
+when the previous release asset stages, `canaries.release_differential`; red
+old/new proof drift is a top-level release-risk signal. The diff compares
+normalized Longhouse canary contract fields, not arbitrary binary bytes, so two
+different binaries with identical live-canary shape still match. This does not
+by itself make Antigravity green enough for full model-visible send-input
+confidence, because the scheduled release proof still stops short of the
+manual live-token `agy send` scenario.
 
 Exit-code contract:
 
