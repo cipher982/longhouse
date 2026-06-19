@@ -170,6 +170,10 @@ Implemented:
   command/channel/PTY contract, requires passing `launch_local` evidence, and
   feeds the resulting rows through isolated Longhouse SQLite ingest. Claude
   send/receive remains an explicit no-token gap.
+- `send_message` execution coverage now uses any mapped executable scenario
+  that proves send input. Claude's channel-control `interrupt_cancel` canary
+  proves no-token `send_input`, while the unsupported `send_receive` response
+  binding gap remains visible in scenario status/failure metadata.
 - The default all-provider fake/no-token smoke now includes
   `managed_session_e2e`. In routine CI/Sauron smoke artifacts, Claude,
   OpenCode, and Antigravity must pass their provider-specific managed-session
@@ -384,6 +388,7 @@ evidence path is recorded and the relevant doc, test, or proof command exists.
 | H58 | Run managed-session e2e in the default universal smoke | Done | +1 | `provider-release-proof-universal-smoke.py` now includes `managed_session_e2e` by default, its fake Claude binary supports provider-live command/channel contract checks, and the Make smoke test asserts Claude/OpenCode/Antigravity pass while Codex reports the typed Runtime Host credentials gap |
 | H59 | Promote Codex resume/reattach behind the universal adapter | Done | +1 | `resume_reattach` now routes Codex through the existing provider-release canary, DB-ingests reattach evidence when Runtime Host credentials are present, and reports `codex_managed_bridge_credentials_missing` instead of an adapter-missing gap in fake/no-token smoke |
 | H60 | Promote Claude launch behind the universal adapter | Done | +1 | `launch_managed_session` now routes Claude through the provider-live no-token command/channel/PTY contract canary, requires `launch_local` evidence, DB-ingests the rows, and keeps Claude send/receive as an explicit no-token gap |
+| H61 | Count mapped send-input evidence without hiding response gaps | Done | +0 | `send_message` execution coverage now accepts any mapped executable scenario that proves send input, so Claude's channel-control `interrupt_cancel` evidence can cover the abstract send action while `send_receive_not_safe_no_token` remains recorded in scenario metadata |
 
 ## Score Update Rules
 

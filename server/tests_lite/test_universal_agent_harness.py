@@ -832,7 +832,23 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
     execution_rows = {row["action_id"]: row for row in execution_matrix["actions"]}
     assert set(execution_rows) == set(uah.ACTIONS)
     assert execution_rows["send_message"]["providers"]["claude"]["coverage_kind"] == "executable_scenario"
-    assert execution_rows["send_message"]["providers"]["codex"]["scenario_ids"] == ["send_receive"]
+    assert execution_rows["send_message"]["providers"]["claude"]["coverage_status"] == "pass"
+    assert execution_rows["send_message"]["providers"]["claude"]["coverage_policy"] == "any_mapped_scenario"
+    assert execution_rows["send_message"]["providers"]["claude"]["scenario_ids"] == [
+        "send_receive",
+        "interrupt_cancel",
+    ]
+    assert execution_rows["send_message"]["providers"]["claude"]["scenario_statuses"] == {
+        "send_receive": "unsupported_gap",
+        "interrupt_cancel": "pass",
+    }
+    assert execution_rows["send_message"]["providers"]["claude"]["scenario_failure_codes"] == {
+        "send_receive": "send_receive_not_safe_no_token",
+    }
+    assert execution_rows["send_message"]["providers"]["codex"]["scenario_ids"] == [
+        "send_receive",
+        "interrupt_cancel",
+    ]
     assert execution_rows["launch_remote"]["providers"]["claude"]["coverage_kind"] == "executable_scenario"
     assert execution_rows["launch_remote"]["providers"]["claude"]["coverage_status"] == "pass"
     assert execution_rows["launch_remote"]["providers"]["claude"]["scenario_ids"] == [
@@ -874,7 +890,16 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
         coverage = {row["action_id"]: row for row in suite["actions"]}
         assert set(coverage) == set(uah.ACTIONS)
         assert coverage["send_message"]["coverage_kind"] == "executable_scenario"
-        assert coverage["send_message"]["scenario_ids"] == ["send_receive"]
+        assert coverage["send_message"]["scenario_ids"] == ["send_receive", "interrupt_cancel"]
+        if result["provider"] == "claude":
+            assert coverage["send_message"]["coverage_status"] == "pass"
+            assert coverage["send_message"]["scenario_statuses"] == {
+                "send_receive": "unsupported_gap",
+                "interrupt_cancel": "pass",
+            }
+            assert coverage["send_message"]["scenario_failure_codes"] == {
+                "send_receive": "send_receive_not_safe_no_token",
+            }
         assert coverage["launch_remote"]["coverage_kind"] == "executable_scenario"
         assert coverage["launch_remote"]["scenario_ids"] == [
             "launch_remote_projection"

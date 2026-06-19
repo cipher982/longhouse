@@ -170,7 +170,7 @@ ACTION_EXECUTION_SCENARIO_BY_ID = {
     "launch_remote": ("launch_remote_projection",),
     "run_once": ("run_prompt_once",),
     "session_identity": ("launch_managed_session", "resume_reattach"),
-    "send_message": ("send_receive",),
+    "send_message": ("send_receive", "interrupt_cancel"),
     "steer_active_turn": ("steer_active_turn",),
     "pause_request_detect": ("pause_request_detect",),
     "answer_pause_request": ("answer_pause_request",),
@@ -4646,8 +4646,11 @@ def _full_action_suite_coverage(
             coverage_status = "missing"
             failure_code = "action_matrix_row_missing"
         elif scenario_results:
-            coverage_status = _worst_status([result.status for result in scenario_results])
-            failure_code = _first_failure_code(scenario_results)
+            coverage_status = _scenario_coverage_status(
+                action_id=action.action_id,
+                results=scenario_results,
+            )
+            failure_code = None if coverage_status == STATUS_PASS else _first_failure_code(scenario_results)
         else:
             matrix_status = str(matrix.get("status") or STATUS_FAIL)
             coverage_status = matrix_status if matrix_status in STATUSES else STATUS_FAIL
@@ -4667,10 +4670,24 @@ def _full_action_suite_coverage(
                 "scenario_ids": list(scenarios),
                 "scenario_statuses": scenario_statuses,
                 "scenario_failure_codes": scenario_failure_codes,
+                "coverage_policy": _action_coverage_policy(action.action_id),
                 "required_evidence": action.required_evidence,
             }
         )
     return coverage
+
+
+def _action_coverage_policy(action_id: str) -> str:
+    if action_id == "send_message":
+        return "any_mapped_scenario"
+    return "all_mapped_scenarios"
+
+
+def _scenario_coverage_status(*, action_id: str, results: Iterable[ScenarioResult]) -> str:
+    statuses = [result.status for result in results]
+    if _action_coverage_policy(action_id) == "any_mapped_scenario" and STATUS_PASS in statuses:
+        return STATUS_PASS
+    return _worst_status(statuses)
 
 
 def _worst_status(statuses: Iterable[str]) -> str:
@@ -6981,6 +6998,7 @@ def provider_execution_coverage_matrix(
                     "scenario_ids",
                     "scenario_statuses",
                     "scenario_failure_codes",
+                    "coverage_policy",
                     "required_evidence",
                 )
                 if row.get(key) is not None

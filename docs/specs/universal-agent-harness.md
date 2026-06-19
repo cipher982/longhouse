@@ -561,6 +561,10 @@ shape:
 10. Claude `launch_managed_session` now calls the provider-live no-token
    command/channel/PTY contract, requires passing `launch_local` evidence, and
    DB-ingests those rows. Claude send/receive remains an explicit no-token gap.
+10. `send_message` action coverage can be proven by any mapped executable
+   scenario that carries passing `send_input` evidence. This lets Claude's
+   channel-control `interrupt_cancel` canary cover the abstract send action
+   while `send_receive` still records the no-token response-binding gap.
 10. Codex `resume_reattach` now calls the existing provider-release canary,
    requires passing reattach evidence, and DB-ingests the resulting rows when
    Runtime Host credentials are present; without credentials it reports the
