@@ -1335,6 +1335,8 @@ class UniversalProviderAdapter:
         return payload
 
     def resume_reattach(self, package: EvidencePackage) -> dict[str, Any]:
+        if self.config.provider == "claude":
+            return self._run_claude_resume_reattach(package)
         if self.config.provider == "opencode":
             return self._run_opencode_resume_reattach(package)
         if self.config.provider == "codex":
@@ -2993,6 +2995,83 @@ class UniversalProviderAdapter:
             payload["failure_code"] = payload.get("failure_code") or "steer_active_turn_db_ingest_failed"
             payload["message"] = "Claude steer evidence did not pass Longhouse DB ingest assertions."
         package.write_json("assertions/steer_active_turn.json", payload)
+        return payload
+
+    def _run_claude_resume_reattach(self, package: EvidencePackage) -> dict[str, Any]:
+        from zerg.services.claude_channel_bridge import CLAUDE_CHANNEL_DEVELOPMENT_FLAG
+        from zerg.services.claude_channel_bridge import CLAUDE_CHANNEL_SERVER_NAME
+        from zerg.services.claude_channel_bridge import build_claude_channel_exec_command
+
+        provider_session_id = "11111111-1111-1111-1111-111111111111"
+        longhouse_session_id = "22222222-2222-4222-8222-222222222222"
+        cwd = str(package.path("workspace"))
+        command = build_claude_channel_exec_command(
+            provider_session_id=provider_session_id,
+            longhouse_session_id=longhouse_session_id,
+            cwd=cwd,
+            resume=True,
+            claude_command=str(self.provider_bin or self.config.binary_name),
+        )
+        assertions = {
+            "uses_resume_flag": f"--resume {provider_session_id}" in command,
+            "does_not_use_session_id_flag": f"--session-id {provider_session_id}" not in command,
+            "exports_longhouse_session_id": f"LONGHOUSE_CHANNEL_SESSION_ID={longhouse_session_id}" in command,
+            "exports_provider_session_id": f"LONGHOUSE_PROVIDER_SESSION_ID={provider_session_id}" in command,
+            "loads_development_channel": CLAUDE_CHANNEL_DEVELOPMENT_FLAG in command,
+            "loads_longhouse_channel_server": f"server:{CLAUDE_CHANNEL_SERVER_NAME}" in command,
+            "changes_to_workspace": cwd in command,
+        }
+        passed = all(assertions.values())
+        raw_path = package.write_json(
+            "raw/claude-resume-command.json",
+            {
+                "command": command,
+                "provider_session_id": provider_session_id,
+                "longhouse_session_id": longhouse_session_id,
+                "cwd": cwd,
+                "assertions": assertions,
+            },
+        )
+        operations = {
+            "reattach": {
+                "status": STATUS_PASS if passed else STATUS_FAIL,
+                "level": "hermetic",
+                "canary": "claude_channel_resume_command_shape",
+                "failure_code": None if passed else "claude_resume_command_shape_failed",
+                "source": "zerg.services.claude_channel_bridge.build_claude_channel_exec_command",
+            }
+        }
+        payload = self._write_session_projection(
+            package,
+            raw_events=(
+                {
+                    "type": "system",
+                    "role": "system",
+                    "text": "Claude channel resume command shape was built for an existing provider session.",
+                    "provider_session_id": provider_session_id,
+                    "source_canary": "claude_channel_resume_command_shape",
+                    "evidence_origin": "claude_channel_bridge_command_shape",
+                },
+            ),
+            operations=operations,
+            provider_session_id=provider_session_id,
+        )
+        next_gate = "Promote with launch, process restart, reattach, and send against the same provider session id."
+        payload.update(
+            {
+                "status": STATUS_PASS if passed else STATUS_FAIL,
+                "scenario": "resume_reattach",
+                "assertions": assertions,
+                "raw_resume_command_path": str(raw_path),
+                "proof_scope": "claude_channel_resume_command_shape",
+                "synthetic": False,
+                "next": next_gate,
+            }
+        )
+        if not passed:
+            payload["failure_code"] = "claude_resume_command_shape_failed"
+            payload["message"] = "Claude resume command shape did not pass."
+        package.write_json("assertions/resume_reattach.json", payload)
         return payload
 
     def _run_codex_steer_active_turn(self, package: EvidencePackage) -> dict[str, Any]:

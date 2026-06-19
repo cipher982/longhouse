@@ -183,20 +183,23 @@ DB-ingests them; Claude `launch_managed_session` now uses the same provider-live
 contract and requires passing `launch_local` evidence. Live send and steer
 remain explicit blocked operations until the live-token Claude contract is
 promoted. Codex calls the provider-release canary for `managed_tui_attach` and
-`detached_ui`, then DB-ingests those
-launch/reattach rows when Runtime Host credentials are available; without those
+`detached_ui`, then DB-ingests those launch/reattach rows when Runtime Host
+credentials are available; without those
 credentials it returns a typed `unsupported_gap`. Codex `resume_reattach` uses
 the same provider-release canary and requires a passing reattach row, so the
 dedicated action now reports evidence when Runtime Host credentials are present
-and the same typed credentials gap otherwise. Antigravity calls the
-provider-control hook/inbox canary, projects external-event channel rows, and
-DB-ingests them. The default all-provider fake/no-token release smoke includes
-this scenario, so routine CI/Sauron smoke artifacts must show Claude, OpenCode,
-and Antigravity passing their provider-specific managed-session lanes while
-Codex reports the typed Runtime Host credentials gap when credentials are not
-configured. That proves hook/inbox input delivery and Stop/force-continue
-behavior for Antigravity; it does not prove interrupt, reattach, or tool-result
-semantics.
+and the same typed credentials gap otherwise. Claude `resume_reattach` proves
+the channel command shape hermetically through `build_claude_channel_exec_command`,
+including `--resume`, session env, development-channel loading, and workspace
+selection; live process restart plus same-session send remains a stronger gate.
+Antigravity calls the provider-control hook/inbox canary, projects
+external-event channel rows, and DB-ingests them. The default all-provider
+fake/no-token release smoke includes this scenario, so routine CI/Sauron smoke
+artifacts must show Claude, OpenCode, and Antigravity passing their
+provider-specific managed-session lanes while Codex reports the typed Runtime
+Host credentials gap when credentials are not configured. That proves
+hook/inbox input delivery and Stop/force-continue behavior for Antigravity; it
+does not prove interrupt, reattach, or tool-result semantics.
 
 `interrupt_cancel` is a dedicated universal control scenario. Claude routes it
 to the provider-control channel canary, proves normal send metadata, steer
@@ -219,10 +222,16 @@ linked tool result row, and the final assistant response row, then DB-ingest the
 linkage. Other providers currently return typed adapter gaps for the stronger
 live scenario.
 
-`resume_reattach` is an executable universal scenario for OpenCode. It calls the
-provider-live process-restart reattach canary, projects the recovered session
-and marker transcript rows, and DB-ingests the reattach evidence. Other providers
-currently return typed adapter gaps for this scenario.
+`resume_reattach` is an executable universal scenario for OpenCode, Codex, and
+Claude. OpenCode calls the provider-live process-restart reattach canary,
+projects the recovered session and marker transcript rows, and DB-ingests the
+reattach evidence. Codex calls the provider-release canary and DB-ingests
+reattach evidence when Runtime Host credentials are present, otherwise reporting
+the typed credentials gap. Claude builds the channel resume command through
+Longhouse's bridge command builder and asserts the `--resume` flag, Longhouse
+and provider session env, development-channel load, longhouse-channel server
+load, and workspace selection. Antigravity currently returns a typed adapter
+gap for this scenario.
 
 `live_token_streaming` is an executable universal scenario for Claude, Codex,
 OpenCode, and Antigravity. Claude calls the real-print one-shot canary. Codex

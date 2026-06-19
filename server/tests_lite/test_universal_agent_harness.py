@@ -909,12 +909,10 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
     ]
     assert execution_rows["session_identity"]["providers"]["claude"]["scenario_statuses"] == {
         "launch_managed_session": "pass",
-        "resume_reattach": "unsupported_gap",
+        "resume_reattach": "pass",
         "managed_session_e2e": "pass",
     }
-    assert execution_rows["session_identity"]["providers"]["claude"]["scenario_failure_codes"] == {
-        "resume_reattach": "resume_reattach_adapter_missing",
-    }
+    assert execution_rows["session_identity"]["providers"]["claude"]["scenario_failure_codes"] == {}
     assert execution_rows["session_identity"]["providers"]["codex"]["coverage_status"] == "pass"
     assert execution_rows["session_identity"]["providers"]["codex"]["scenario_statuses"] == {
         "launch_managed_session": "pass",
@@ -923,7 +921,7 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
     }
     assert execution_rows["session_identity"]["providers"]["antigravity"]["coverage_status"] == "pass"
     assert execution_rows["send_message"]["providers"]["antigravity"]["coverage_status"] == "pass"
-    assert execution_rows["resume_reattach"]["providers"]["claude"]["coverage_status"] == "unsupported_gap"
+    assert execution_rows["resume_reattach"]["providers"]["claude"]["coverage_status"] == "pass"
     assert execution_rows["resume_reattach"]["providers"]["codex"]["coverage_status"] == "unsupported_gap"
     assert execution_rows["launch_remote"]["providers"]["claude"]["coverage_kind"] == "executable_scenario"
     assert execution_rows["launch_remote"]["providers"]["claude"]["coverage_status"] == "pass"
@@ -983,9 +981,7 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
                 "send_receive": "send_receive_not_safe_no_token",
             }
             assert coverage["session_identity"]["coverage_status"] == "pass"
-            assert coverage["session_identity"]["scenario_failure_codes"] == {
-                "resume_reattach": "resume_reattach_adapter_missing",
-            }
+            assert coverage["session_identity"]["scenario_failure_codes"] == {}
         if result["provider"] == "codex":
             assert coverage["session_identity"]["coverage_status"] == "pass"
             assert coverage["session_identity"]["scenario_failure_codes"] == {
@@ -1401,7 +1397,7 @@ def test_codex_resume_reattach_reports_credentials_gap(tmp_path: Path, monkeypat
     assert result["data"]["missing"] == ["--agents-token", "--api-url"]
 
 
-def test_resume_reattach_is_typed_gap_for_unmigrated_providers(tmp_path: Path) -> None:
+def test_resume_reattach_uses_claude_command_shape_and_keeps_unmigrated_gap(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
             providers=("claude", "antigravity"),
@@ -1413,8 +1409,25 @@ def test_resume_reattach_is_typed_gap_for_unmigrated_providers(tmp_path: Path) -
 
     assert payload["verdict"] == "yellow"
     assert {result["provider"] for result in payload["results"]} == {"claude", "antigravity"}
-    assert {result["status"] for result in payload["results"]} == {"unsupported_gap"}
-    assert {result["failure_code"] for result in payload["results"]} == {"resume_reattach_adapter_missing"}
+    by_provider = {result["provider"]: result for result in payload["results"]}
+    claude = by_provider["claude"]
+    assert claude["status"] == "pass"
+    assert claude["data"]["operation_evidence"]["reattach"]["status"] == "pass"
+    assert claude["data"]["operation_evidence"]["reattach"]["level"] == "hermetic"
+    assert claude["data"]["operation_evidence"]["reattach"]["canary"] == "claude_channel_resume_command_shape"
+    assert claude["data"]["assertions"] == {
+        "changes_to_workspace": True,
+        "does_not_use_session_id_flag": True,
+        "exports_longhouse_session_id": True,
+        "exports_provider_session_id": True,
+        "loads_development_channel": True,
+        "loads_longhouse_channel_server": True,
+        "uses_resume_flag": True,
+    }
+    assert Path(claude["data"]["raw_resume_command_path"]).is_file()
+    antigravity = by_provider["antigravity"]
+    assert antigravity["status"] == "unsupported_gap"
+    assert antigravity["failure_code"] == "resume_reattach_adapter_missing"
 
 
 def test_claude_managed_session_e2e_uses_provider_live_contract_canary(tmp_path: Path) -> None:
