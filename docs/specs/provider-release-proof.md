@@ -76,10 +76,10 @@ summary; update the JSON first when a provider/surface changes.
 
 | Surface | Covered | Evidence | Boundary | CI | Sauron release-watch | Baseline | Actionable today |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| install/stage exact version | partial | Sauron stages npm-sourced `@anthropic-ai/claude-code@version` into an isolated artifact root and passes `.bin/claude` to profile/live canaries | isolated npm package | no Longhouse CI; Sauron tests cover it | yes for npm releases | no | yes if staging/version match fails |
+| install/stage exact version | partial | Sauron stages npm-sourced `@anthropic-ai/claude-code@version` into an isolated artifact root, passes `.bin/claude` to profile/live canaries, and wraps it in Longhouse proof/differential envelopes | isolated npm package | no Longhouse CI; Sauron tests cover it | yes for npm releases | no | yes if staging/version match fails or old/new proof drift is red |
 | binary identity | yes | `provider-live-canary --provider claude`, `provider-release-profile-canary.py` | live_no_token or fake | `validate-provider-cli-canaries` | yes, through provider status | no | yes if binary missing/version fails |
 | auth/status shape | partial | `provider-live-canary --provider claude` binary/auth/channel checks | live_no_token | `validate-provider-cli-canaries` | yes if live proof configured | no | yes if red |
-| launch managed session | partial | `provider-control-e2e-canary.py`, `test_claude_channel_launch_cli.py` | hermetic | `validate-provider-cli-canaries`, `make test` | profile/live gate only | no | partial |
+| launch managed session | partial | `provider-control-e2e-canary.py`, `test_claude_channel_launch_cli.py`, Sauron proof/diff for no-token launch flag shape | hermetic plus exact npm package shape | `validate-provider-cli-canaries`, `make test`; Sauron tests cover release-watch proof wiring | profile/live plus proof/diff for npm releases | no | partial |
 | session id/path binding | partial | `test_claude_channel_bridge.py`, hook/session tests | hermetic | `make test` | no dedicated baseline | no | partial |
 | transcript/log parse | yes | engine Claude golden + adversarial parser tests | fixture | `make test-engine` | source review only | parser fixture yes; release-proof no | yes for parser drift |
 | ingest into Longhouse | partial | shipper E2E, Claude hook/outbox tests | fixture/hermetic | `make test`, `make test-shipper-e2e` | no dedicated release proof | no | partial |
@@ -90,8 +90,10 @@ summary; update the JSON first when a provider/surface changes.
 | tool/tool-result shape | partial | parser/tool-result tests cover transcript shapes | fixture/hermetic | `make test`, `make test-engine` | source review only | parser fixture yes; release-proof no | partial |
 | live-token behavior | partial | `make managed-claude-poc` | live_token manual | no normal CI | no | no | no |
 
-Claude risk: high. Closed source and release notes are not enough. Needs the
-first real no-token release-proof scenario after OpenCode/Codex shape stabilizes.
+Claude risk: high. Closed source and release notes are not enough. Sauron now
+stages exact npm package versions and runs Longhouse proof/differential
+artifacts, but accepted baselines and full managed-session live-token proof are
+still missing.
 
 ### Codex
 
@@ -271,15 +273,18 @@ Current implementation wraps existing source canaries:
 Claude npm release-watch ticks now have exact-version package staging in Sauron:
 `@anthropic-ai/claude-code@<version>` is installed under the release artifact
 root and the staged `.bin/claude` path is passed to Longhouse profile/live
-canaries. This proves package staging and binary identity for npm-sourced
-release events, but not a full managed-session baseline yet.
+canaries. Sauron also runs the Longhouse proof wrapper and, when `prev_tag`
+installs, an explicit old/new proof diff. This proves package staging, binary
+identity, and normalized no-token contract-shape drift for npm-sourced release
+events, but not an accepted baseline or full managed-session live-token proof
+yet.
 
 Claude normalization preserves no-token launch-contract shape: missing launch
 flags from `claude --help`, development-channel status/missing flags, and
 detached PTY wrapper status/platform. Failure codes and reasons stay in the
 typed Claude block so a dev-channel contract break differs from local PTY
 environment failure in old/new diffs. This is not yet a full managed-session
-launch proof or exact-version staged package lane.
+launch proof.
 
 Codex normalization preserves source-review status, binary identity presence,
 operation evidence, canary statuses/reasons, and stable protocol fingerprints
