@@ -726,6 +726,35 @@ def test_old_new_release_diff_fails_on_proof_artifact_drift(tmp_path: Path) -> N
     assert operation["failure_code"] == "provider_release_proof_drift"
 
 
+def test_launch_remote_projection_runs_for_supported_providers(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=uah.SUPPORTED_PROVIDERS,
+            scenarios=("launch_remote_projection",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
+        )
+    )
+
+    assert payload["verdict"] == "yellow"
+    by_provider = {result["provider"]: result for result in payload["results"]}
+    for provider in ("claude", "codex", "opencode"):
+        result = by_provider[provider]
+        assert result["status"] == "pass"
+        assert result["data"]["operation_evidence"]["launch_remote"]["status"] == "pass"
+        assert result["data"]["projections"]["dispatched"]["state"] == "launching_unknown"
+        assert result["data"]["projections"]["adopted"]["state"] == "live"
+        assert result["data"]["projections"]["failed"]["error_code"] == "provider_launch_failed"
+        assert Path(result["evidence_root"], "longhouse", "remote-launch-projection.json").is_file()
+    antigravity = by_provider["antigravity"]
+    assert antigravity["status"] == "unsupported_gap"
+    assert antigravity["failure_code"] == "launch_remote_unsupported"
+    assert (
+        antigravity["data"]["operation_evidence"]["launch_remote"]["status"]
+        == "unsupported_gap"
+    )
+
+
 def test_control_surface_emits_same_control_actions_for_all_providers(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
@@ -804,6 +833,12 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
     assert set(execution_rows) == set(uah.ACTIONS)
     assert execution_rows["send_message"]["providers"]["claude"]["coverage_kind"] == "executable_scenario"
     assert execution_rows["send_message"]["providers"]["codex"]["scenario_ids"] == ["send_receive"]
+    assert execution_rows["launch_remote"]["providers"]["claude"]["coverage_kind"] == "executable_scenario"
+    assert execution_rows["launch_remote"]["providers"]["claude"]["coverage_status"] == "pass"
+    assert execution_rows["launch_remote"]["providers"]["claude"]["scenario_ids"] == [
+        "launch_remote_projection"
+    ]
+    assert execution_rows["launch_remote"]["providers"]["antigravity"]["coverage_status"] == "unsupported_gap"
     assert execution_rows["baseline_compare"]["providers"]["opencode"]["coverage_status"] == "pass"
     assert execution_rows["tool_call_result"]["providers"]["antigravity"]["coverage_kind"] == "executable_scenario"
     assert execution_rows["tool_call_result"]["providers"]["antigravity"]["coverage_status"] == "pass"
@@ -813,7 +848,7 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
     assert execution_rows["permission_prompt"]["providers"]["claude"]["coverage_status"] == "blocked"
     assert (
         execution_matrix["provider_coverage_kind_counts"]["claude"]["executable_scenario"]
-        > execution_matrix["provider_coverage_kind_counts"]["claude"]["matrix_contract"]
+        > execution_matrix["provider_coverage_kind_counts"]["claude"].get("matrix_contract", 0)
     )
     for result in payload["results"]:
         assert result["scenario"] == "full_action_suite"
@@ -824,6 +859,7 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
         assert result["data"]["missing_actions"] == []
         assert "action_matrix" in result["data"]["scenario_ids"]
         assert "adapter_conformance" in result["data"]["scenario_ids"]
+        assert "launch_remote_projection" in result["data"]["scenario_ids"]
         assert "interrupt_cancel" in result["data"]["scenario_ids"]
         assert "tool_call_result_projection" in result["data"]["scenario_ids"]
         assert "answer_pause_request" in result["data"]["scenario_ids"]
@@ -839,6 +875,10 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
         assert set(coverage) == set(uah.ACTIONS)
         assert coverage["send_message"]["coverage_kind"] == "executable_scenario"
         assert coverage["send_message"]["scenario_ids"] == ["send_receive"]
+        assert coverage["launch_remote"]["coverage_kind"] == "executable_scenario"
+        assert coverage["launch_remote"]["scenario_ids"] == [
+            "launch_remote_projection"
+        ]
         assert coverage["pause_request_detect"]["coverage_status"] == "pass"
         assert coverage["permission_prompt"]["coverage_status"] == "blocked"
         assert coverage["tool_call_result"]["coverage_kind"] == "executable_scenario"

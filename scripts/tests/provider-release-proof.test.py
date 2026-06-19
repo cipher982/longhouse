@@ -1619,7 +1619,7 @@ def test_release_proof_can_attach_universal_full_action_suite() -> None:
         assert provider_execution["action_count"] > 20
         assert provider_execution["execution_coverage_matrix_path"]
         assert provider_execution["coverage_kind_counts"]["executable_scenario"] > 0
-        assert provider_execution["coverage_kind_counts"]["matrix_contract"] > 0
+        assert provider_execution["coverage_kind_counts"].get("matrix_contract", 0) == 0
         assert (
             payload["normalized"]["provider_execution_coverage_matrix"]["action_count"]
             == provider_execution["action_count"]
@@ -1630,6 +1630,13 @@ def test_release_proof_can_attach_universal_full_action_suite() -> None:
         assert execution_actions["send_message"]["coverage_kind"] == (
             "executable_scenario"
         )
+        assert execution_actions["launch_remote"]["coverage_kind"] == (
+            "executable_scenario"
+        )
+        assert execution_actions["launch_remote"]["coverage_status"] == "pass"
+        assert execution_actions["launch_remote"]["scenario_ids"] == [
+            "launch_remote_projection"
+        ]
         assert execution_actions["tool_call_result"]["coverage_kind"] == (
             "executable_scenario"
         )
@@ -1652,6 +1659,7 @@ def test_release_proof_can_attach_universal_full_action_suite() -> None:
         assert suite["action_ids"] == suite_result["data"]["action_ids"]
         assert suite["missing_actions"] == []
         assert "interrupt_cancel" in suite["scenario_ids"]
+        assert "launch_remote_projection" in suite["scenario_ids"]
 
 
 def test_codex_release_proof_can_attach_universal_interrupt_credentials_gap() -> None:

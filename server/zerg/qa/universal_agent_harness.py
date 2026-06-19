@@ -20,6 +20,7 @@ from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from typing import Protocol
 from uuid import NAMESPACE_URL
@@ -48,6 +49,7 @@ SCENARIOS = (
     "timeline_projection",
     "run_prompt_once",
     "launch_managed_session",
+    "launch_remote_projection",
     "send_receive",
     "managed_session_e2e",
     "steer_active_turn",
@@ -143,6 +145,7 @@ FULL_ACTION_SUITE_SCENARIOS = (
     "timeline_projection",
     "run_prompt_once",
     "launch_managed_session",
+    "launch_remote_projection",
     "send_receive",
     "steer_active_turn",
     "pause_request_detect",
@@ -164,7 +167,7 @@ FULL_ACTION_SUITE_SCENARIOS = (
 ACTION_EXECUTION_SCENARIO_BY_ID = {
     "provider_identity": ("probe_identity",),
     "launch_local": ("launch_managed_session",),
-    "launch_remote": (),
+    "launch_remote": ("launch_remote_projection",),
     "run_once": ("run_prompt_once",),
     "session_identity": ("launch_managed_session", "resume_reattach"),
     "send_message": ("send_receive",),
@@ -6271,6 +6274,104 @@ def run_launch_managed_session(adapter: AgentHarnessAdapter, package: EvidencePa
     )
 
 
+def run_launch_remote_projection(
+    adapter: AgentHarnessAdapter,
+    package: EvidencePackage,
+) -> ScenarioResult:
+    adapter.prepare(package)
+    contract = contract_for_provider(adapter.config.provider)
+    if contract is None or not contract.launch_remote:
+        payload = {
+            "status": STATUS_UNSUPPORTED_GAP,
+            "scenario": "launch_remote_projection",
+            "failure_code": "launch_remote_unsupported",
+            "message": f"{adapter.config.provider} does not advertise remote launch support.",
+            "operation_evidence": {
+                "launch_remote": {
+                    "status": STATUS_UNSUPPORTED_GAP,
+                    "level": "none",
+                    "canary": "universal_launch_remote_projection",
+                    "failure_code": "launch_remote_unsupported",
+                }
+            },
+        }
+        package.write_json("assertions/launch_remote_projection.json", payload)
+        adapter.cleanup(package)
+        return scenario_result(
+            provider=adapter.config.provider,
+            scenario="launch_remote_projection",
+            package=package,
+            payload=payload,
+        )
+
+    os.environ.setdefault("TESTING", "1")
+    from zerg.services.session_launch_lifecycle import project_remote_launch_lifecycle
+
+    now = datetime(2026, 6, 19, 12, 0, tzinfo=UTC)
+    attempts = {
+        "dispatched": SimpleNamespace(
+            state="dispatched",
+            execution_lifetime="live_control",
+            error_code=None,
+            error_message=None,
+            expires_at=now + timedelta(seconds=120),
+            run_id=None,
+        ),
+        "adopted": SimpleNamespace(
+            state="adopted",
+            execution_lifetime="live_control",
+            error_code=None,
+            error_message=None,
+            expires_at=None,
+            run_id="run-universal-launch-remote",
+        ),
+        "failed": SimpleNamespace(
+            state="failed",
+            execution_lifetime="live_control",
+            error_code="provider_launch_failed",
+            error_message="provider exited before transcript binding",
+            expires_at=None,
+            run_id=None,
+        ),
+    }
+    projections = {name: _json_safe(project_remote_launch_lifecycle(attempt).__dict__) for name, attempt in attempts.items()}
+    assertions = {
+        "dispatched_projects_launching_unknown": projections["dispatched"]["state"] == "launching_unknown",
+        "adopted_projects_live": projections["adopted"]["state"] == "live",
+        "failed_preserves_error_code": projections["failed"]["error_code"] == "provider_launch_failed",
+    }
+    status = STATUS_PASS if all(assertions.values()) else STATUS_FAIL
+    payload = {
+        "status": status,
+        "scenario": "launch_remote_projection",
+        "provider": adapter.config.provider,
+        "control_plane": contract.control_plane,
+        "machine_control_supports": list(contract.machine_control_supports),
+        "assertions": assertions,
+        "projections": projections,
+        "operation_evidence": {
+            "launch_remote": {
+                "status": status,
+                "level": "hermetic" if status == STATUS_PASS else "none",
+                "canary": "universal_launch_remote_projection",
+                "failure_code": None if status == STATUS_PASS else "launch_remote_projection_failed",
+            }
+        },
+    }
+    if status != STATUS_PASS:
+        payload["failure_code"] = "launch_remote_projection_failed"
+        payload["message"] = "Remote-launch lifecycle projection assertions failed."
+    package.write_json("longhouse/remote-launch-projection.json", payload)
+    package.write_json("assertions/launch_remote_projection.json", payload)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="launch_remote_projection",
+        package=package,
+        payload=payload,
+    )
+
+
 def run_send_receive(adapter: AgentHarnessAdapter, package: EvidencePackage, prompt: str | None) -> ScenarioResult:
     adapter.prepare(package)
     payload = adapter.send_receive(package, prompt or "LONGHOUSE UNIVERSAL HARNESS")
@@ -6596,6 +6697,7 @@ SCENARIO_RUNNERS = {
     "timeline_projection": run_timeline_projection,
     "run_prompt_once": run_prompt_once,
     "launch_managed_session": run_launch_managed_session,
+    "launch_remote_projection": run_launch_remote_projection,
     "send_receive": run_send_receive,
     "managed_session_e2e": run_managed_session_e2e,
     "steer_active_turn": run_steer_active_turn,
