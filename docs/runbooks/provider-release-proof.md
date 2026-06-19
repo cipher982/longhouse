@@ -354,8 +354,8 @@ Expected healthy summary:
 {
   "status": "healthy",
   "verdict": "green",
-  "scenario_count": 5,
-  "green_count": 5,
+  "scenario_count": 8,
+  "green_count": 8,
   "non_green_count": 0,
   "artifact_path": "/data/provider-release-proofs/baseline-status-all.json"
 }

@@ -374,7 +374,8 @@ Optional variables:
   canary lanes.
 - `SCENARIO_ID`/`--scenario-id` can override the proof bucket for manual
   experiments; otherwise Codex managed live-send uses
-  `codex-managed-live-send-release-proof-v1`, Antigravity real-agy send uses
+  `codex-managed-live-send-release-proof-v1`, Codex real-tool uses
+  `codex-real-tool-release-proof-v1`, Antigravity real-agy send uses
   `antigravity-real-agy-send-release-proof-v1`, and default proofs use
   `{provider}-release-proof-v1`.
 - `PREFLIGHT_ONLY=1`/`--preflight-only` emits
