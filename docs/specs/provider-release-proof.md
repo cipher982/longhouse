@@ -561,9 +561,11 @@ should not by itself count as contract drift.
 ## Next Work
 
 1. Add Claude managed-session binding proof beyond no-token launch shape.
-2. Accept a reviewed real Codex baseline that includes managed live-send
-   evidence.
-3. Decide whether Antigravity real-agy send belongs in scheduled CI or remains
-   an opt-in live-token proof.
-4. Accept a real Codex baseline once its proof lane is green enough to trust.
-5. Add model-visible live-token proof for the surfaces still marked partial.
+2. Promote Codex from no-token baseline protection to a reviewed managed
+   live-send baseline after running the Runtime Host credentialed lane.
+3. Decide whether Antigravity real-agy send belongs in scheduled release-watch
+   or remains an opt-in live-token proof, then accept the matching baseline.
+4. Add OpenCode tool/tool-result and live-token proof, which are currently the
+   provider's two uncovered release-sensitive surfaces.
+5. Add model-visible live-token proof for the remaining partial Claude, Codex,
+   and Antigravity surfaces.
