@@ -39,6 +39,14 @@ def _fake_bins(tmp_path: Path) -> dict[str, Path]:
     }
 
 
+EXPECTED_ADAPTER_CLASS_BY_PROVIDER = {
+    "claude": "ClaudeCodeHarnessAdapter",
+    "codex": "CodexOpenAIHarnessAdapter",
+    "opencode": "OpenCodeHarnessAdapter",
+    "antigravity": "AntigravityHarnessAdapter",
+}
+
+
 def _fake_opencode_server(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -230,6 +238,17 @@ def test_probe_identity_runs_for_all_providers_through_shared_scenario(tmp_path:
         assert probe["version"]
 
 
+def test_adapter_registry_uses_concrete_provider_adapters(tmp_path: Path) -> None:
+    registry = uah.adapter_registry(_fake_bins(tmp_path))
+
+    assert set(registry) == set(uah.SUPPORTED_PROVIDERS)
+    for provider, expected_class in EXPECTED_ADAPTER_CLASS_BY_PROVIDER.items():
+        adapter = registry[provider]
+        assert type(adapter).__name__ == expected_class
+        assert adapter.config.provider == provider
+        assert "action_result" in adapter.config.methods
+
+
 def test_action_matrix_emits_same_longhouse_actions_for_all_providers(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
@@ -249,6 +268,10 @@ def test_action_matrix_emits_same_longhouse_actions_for_all_providers(tmp_path: 
         assert result["data"]["action_count"] == len(uah.ACTIONS)
         actions = {row["action_id"]: row for row in result["data"]["actions"]}
         assert set(actions) == set(uah.ACTIONS)
+        expected_class = EXPECTED_ADAPTER_CLASS_BY_PROVIDER[result["provider"]]
+        assert {row["adapter_class"] for row in actions.values()} == {expected_class}
+        assert {row["adapter_method"] for row in actions.values()} == {"action_result"}
+        assert all(row["implementation_kind"] for row in actions.values())
         assert actions["send_message"]["category"] == "control"
         assert actions["steer_active_turn"]["category"] == "control"
         assert actions["pause_request_detect"]["category"] == "observe"

@@ -135,6 +135,8 @@ Each row includes:
 | --- | --- |
 | `support` / `support_reason` | Whether the provider can support the action and which contract/capability says so. |
 | `status` | Current proof state: `pass`, `fail`, `unsupported_gap`, `blocked`, etc. |
+| `adapter_class` / `adapter_method` | The concrete provider adapter class and method that emitted the row. |
+| `implementation_kind` | Whether the row is backed by a provider probe, managed-provider contract, derived Longhouse surface, DB ingest, release diff, typed unsupported gap, or typed blocked gap. |
 | `required_evidence` | The minimum evidence level this action should eventually have. |
 | `evidence_level` | The strongest recorded proof level for the action today, when present. |
 | `proof_scope` | Where the current proof comes from: version command, managed-provider contract, parser tests, DB lane, release diff runner, etc. |
@@ -150,6 +152,12 @@ the current invocation spent tokens or drove a live model turn. The row's
 when the release-proof baseline tool can compare explicit old and new proof
 artifacts. It is not yet automatic provider-version staging/install; that
 belongs to the release runner that produces the two proof artifacts.
+
+The registry uses concrete provider adapter classes:
+`ClaudeCodeHarnessAdapter`, `CodexOpenAIHarnessAdapter`,
+`OpenCodeHarnessAdapter`, and `AntigravityHarnessAdapter`. They share the same
+abstract `action_result` method, so every provider emits a result for every
+action id instead of silently skipping unsupported or unimplemented behavior.
 
 ## Capabilities And Profiles
 

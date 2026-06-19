@@ -67,6 +67,7 @@ YELLOW_STATUSES = (STATUS_UNSUPPORTED_GAP, STATUS_BLOCKED, STATUS_FLAKY, STATUS_
 MVP_METHODS = (
     "prepare",
     "probe",
+    "action_result",
     "action_matrix",
     "control_surface",
     "run_prompt",
@@ -412,6 +413,15 @@ class AgentHarnessAdapter(Protocol):
 
     def probe(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
+    def action_result(
+        self,
+        package: "EvidencePackage",
+        action: ActionDefinition,
+        *,
+        probe: Mapping[str, Any],
+        files: Iterable[str],
+    ) -> dict[str, Any]: ...
+
     def action_matrix(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def control_surface(self, package: "EvidencePackage") -> dict[str, Any]: ...
@@ -473,6 +483,10 @@ class UniversalProviderAdapter:
         self.config = config
         self.provider_bin = provider_bin
 
+    @property
+    def adapter_name(self) -> str:
+        return type(self).__name__
+
     def prepare(self, package: EvidencePackage) -> dict[str, Any]:
         package.initialize(adapter=self.config)
         workspace = package.path("workspace")
@@ -481,6 +495,7 @@ class UniversalProviderAdapter:
             "status": STATUS_PASS,
             "workspace": str(workspace),
             "provider": self.config.provider,
+            "adapter_class": self.adapter_name,
             "methods": list(self.config.methods),
             "capabilities": list(self.config.capabilities),
         }
@@ -498,6 +513,7 @@ class UniversalProviderAdapter:
             "declared_capabilities": list(self.config.capabilities),
             "declared_profiles": list(self.config.profiles),
             "mvp_methods": list(self.config.methods),
+            "adapter_class": self.adapter_name,
             "managed_contract": {
                 "managed_transport": str(contract.managed_transport) if contract else None,
                 "control_plane": contract.control_plane if contract else None,
@@ -548,6 +564,52 @@ class UniversalProviderAdapter:
             }
         package.write_json("assertions/probe.json", payload)
         return payload
+
+    def action_result(
+        self,
+        package: EvidencePackage,
+        action: ActionDefinition,
+        *,
+        probe: Mapping[str, Any],
+        files: Iterable[str],
+    ) -> dict[str, Any]:
+        contract = contract_for_provider(self.config.provider)
+        support, support_reason = _action_support(self.config.provider, action, contract)
+        contract_evidence: dict[str, Any] = {}
+        if contract is not None and action.contract_operation:
+            contract_evidence = dict(contract.operation_evidence_for(action.contract_operation))
+        row = {
+            "action_id": action.action_id,
+            "title": action.title,
+            "category": action.category,
+            "provider": self.config.provider,
+            "adapter_class": self.adapter_name,
+            "adapter_method": "action_result",
+            "implementation_kind": _action_implementation_kind(
+                action=action,
+                support=support,
+                contract_evidence=contract_evidence,
+            ),
+            "support": support,
+            "support_reason": support_reason,
+            "required_evidence": action.required_evidence,
+            "description": action.description,
+            "contract_operation": action.contract_operation,
+            "contract_evidence": contract_evidence,
+        }
+        row.update(
+            _action_status(
+                action=action,
+                support=support,
+                support_reason=support_reason,
+                contract_evidence=contract_evidence,
+                provider=self.config.provider,
+                probe=probe,
+                files=list(files),
+                package=package,
+            )
+        )
+        return row
 
     def run_prompt(self, package: EvidencePackage, prompt: str) -> dict[str, Any]:
         package.write_text("input/prompt.txt", prompt)
@@ -949,41 +1011,10 @@ class UniversalProviderAdapter:
         probe: Mapping[str, Any],
         files: Iterable[str],
     ) -> list[dict[str, Any]]:
-        contract = contract_for_provider(self.config.provider)
         file_list = list(files)
         rows: list[dict[str, Any]] = []
         for action in ACTION_DEFINITIONS:
-            support, support_reason = _action_support(self.config.provider, action, contract)
-            contract_evidence = (
-                dict(contract.operation_evidence_for(action.contract_operation))
-                if contract is not None and action.contract_operation
-                else {}
-            )
-            row = {
-                "action_id": action.action_id,
-                "title": action.title,
-                "category": action.category,
-                "provider": self.config.provider,
-                "support": support,
-                "support_reason": support_reason,
-                "required_evidence": action.required_evidence,
-                "description": action.description,
-                "contract_operation": action.contract_operation,
-                "contract_evidence": contract_evidence,
-            }
-            row.update(
-                _action_status(
-                    action=action,
-                    support=support,
-                    support_reason=support_reason,
-                    contract_evidence=contract_evidence,
-                    provider=self.config.provider,
-                    probe=probe,
-                    files=file_list,
-                    package=package,
-                )
-            )
-            rows.append(row)
+            rows.append(self.action_result(package, action, probe=probe, files=file_list))
         return rows
 
     def _session_id(self, package: EvidencePackage) -> str:
@@ -1087,6 +1118,30 @@ class UniversalProviderAdapter:
         return (Path(path), "PATH") if path else (None, "missing")
 
 
+class ClaudeCodeHarnessAdapter(UniversalProviderAdapter):
+    """Claude Code concrete adapter for the universal Longhouse action contract."""
+
+
+class CodexOpenAIHarnessAdapter(UniversalProviderAdapter):
+    """Codex/OpenAI concrete adapter for the universal Longhouse action contract."""
+
+
+class OpenCodeHarnessAdapter(UniversalProviderAdapter):
+    """OpenCode concrete adapter for the universal Longhouse action contract."""
+
+
+class AntigravityHarnessAdapter(UniversalProviderAdapter):
+    """Antigravity concrete adapter for the universal Longhouse action contract."""
+
+
+ADAPTER_CLASS_BY_PROVIDER: Mapping[str, type[UniversalProviderAdapter]] = {
+    "claude": ClaudeCodeHarnessAdapter,
+    "codex": CodexOpenAIHarnessAdapter,
+    "opencode": OpenCodeHarnessAdapter,
+    "antigravity": AntigravityHarnessAdapter,
+}
+
+
 def adapter_snapshot(config: AdapterConfig) -> dict[str, Any]:
     return {
         "provider": config.provider,
@@ -1160,6 +1215,34 @@ def _action_support(provider: str, action: ActionDefinition, contract: Any) -> t
     if action.support_kind == "tool_result":
         return bool(contract.transcript_binding), "contract.transcript_binding"
     return False, f"unknown_support_kind:{action.support_kind}"
+
+
+def _action_implementation_kind(
+    *,
+    action: ActionDefinition,
+    support: bool,
+    contract_evidence: Mapping[str, Any],
+) -> str:
+    if not support:
+        return "typed_unsupported_gap"
+    if action.action_id == "provider_identity":
+        return "provider_probe"
+    if action.action_id in {
+        "raw_evidence_capture",
+        "parse_normalize",
+        "session_projection",
+        "timeline_projection",
+    }:
+        return "universal_harness_projection"
+    if action.action_id == "db_ingest":
+        return "longhouse_db_ingest"
+    if action.action_id in {"baseline_compare", "old_new_release_diff"}:
+        return "provider_release_proof_diff"
+    if action.action_id in {"pause_request_detect", "answer_pause_request", "tool_call_result"}:
+        return "derived_longhouse_surface"
+    if contract_evidence:
+        return "managed_provider_contract"
+    return "typed_blocked_gap"
 
 
 def _action_status(
@@ -1759,7 +1842,8 @@ def adapter_registry(provider_bins: Mapping[str, Path] | None = None) -> dict[st
     bins = dict(provider_bins or {})
     registry: dict[str, AgentHarnessAdapter] = {}
     for provider, config in provider_configs().items():
-        registry[provider] = UniversalProviderAdapter(config, provider_bin=bins.get(provider))
+        adapter_class = ADAPTER_CLASS_BY_PROVIDER.get(provider, UniversalProviderAdapter)
+        registry[provider] = adapter_class(config, provider_bin=bins.get(provider))
     return registry
 
 
@@ -2105,10 +2189,15 @@ __all__ = [
     "SCENARIOS",
     "STATUSES",
     "SUPPORTED_PROVIDERS",
+    "ADAPTER_CLASS_BY_PROVIDER",
+    "AntigravityHarnessAdapter",
     "AdapterConfig",
     "AgentHarnessAdapter",
+    "ClaudeCodeHarnessAdapter",
+    "CodexOpenAIHarnessAdapter",
     "EvidencePackage",
     "HarnessOptions",
+    "OpenCodeHarnessAdapter",
     "ScenarioResult",
     "adapter_registry",
     "provider_configs",
