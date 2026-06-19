@@ -138,8 +138,12 @@ if args[:2] == ["codex-bridge", "send"]:
         raise SystemExit(1)
     turn_id = "turn_live_fake"
     text = arg_value("--text", "")
-    state["active_turn_id"] = None
-    state["last_turn_status"] = "completed"
+    if os.environ.get("FAKE_LIVE_SEND_STUCK") == "1":
+        state["active_turn_id"] = turn_id
+        state["last_turn_status"] = None
+    else:
+        state["active_turn_id"] = None
+        state["last_turn_status"] = "failed" if os.environ.get("FAKE_LIVE_SEND_TURN_FAILED") == "1" else "completed"
     state_file.write_text(json.dumps(state), encoding="utf-8")
     thread_path = Path(state["thread_path"])
     user_text = text
@@ -483,6 +487,44 @@ def test_managed_live_send_failure_redacts_token() -> None:
         assert "<redacted>" in evidence_blob
 
 
+def test_managed_live_send_timeout_is_red() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fixture = _fixture(root)
+        result, payload = _run_canary(
+            root,
+            fixture,
+            [
+                "--run-managed-live-send",
+                "--live-send-timeout-secs",
+                "0",
+                "--source-review-status",
+                "pass",
+            ],
+            {"FAKE_LIVE_SEND_STUCK": "1"},
+        )
+        assert result.returncode == 1
+        assert payload["failure_code"] == "managed_live_send_timeout"
+        canary = payload["canaries"]["managed_live_send"]
+        assert canary["status"] == "fail"
+        assert canary["state"]["active_turn_id"] == "turn_live_fake"
+
+
+def test_managed_live_send_non_completed_turn_is_red() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fixture = _fixture(root)
+        result, payload = _run_canary(
+            root,
+            fixture,
+            ["--run-managed-live-send", "--source-review-status", "pass"],
+            {"FAKE_LIVE_SEND_TURN_FAILED": "1"},
+        )
+        assert result.returncode == 1
+        assert payload["failure_code"] == "managed_live_send_turn_not_completed"
+        assert payload["canaries"]["managed_live_send"]["state"]["last_turn_status"] == "failed"
+
+
 def test_raw_fresh_remote_warning_is_yellow() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -677,6 +719,8 @@ def main() -> int:
         test_managed_live_send_marker_missing_is_red,
         test_managed_live_send_marker_in_user_prompt_only_is_red,
         test_managed_live_send_failure_redacts_token,
+        test_managed_live_send_timeout_is_red,
+        test_managed_live_send_non_completed_turn_is_red,
         test_raw_fresh_remote_warning_is_yellow,
         test_raw_fresh_remote_failure_preserves_protocol_fingerprints,
         test_managed_tui_attach_active_thread_error_is_red,
