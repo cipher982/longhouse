@@ -1,6 +1,6 @@
 # Provider Release Proof
 
-**Status:** Phase 1 inventory + Longhouse proof/baseline/diff entrypoints; seven accepted release-proof scenarios promoted to Sauron's baseline guard store (scoped Claude, Codex default, Codex live-send, OpenCode, OpenCode real-tool, scoped Antigravity, Antigravity live-send)
+**Status:** Phase 1 inventory + Longhouse proof/baseline/diff entrypoints; eight accepted release-proof scenarios promoted to Sauron's baseline guard store (scoped Claude, Codex default, Codex live-send, Codex real-tool, OpenCode, OpenCode real-tool, scoped Antigravity, Antigravity live-send)
 **Owner:** David
 **Last updated:** 2026-06-19
 
@@ -52,11 +52,11 @@ What is missing:
 ## Audit Snapshot - 2026-06-19
 
 This snapshot reflects the 2026-06-19 Longhouse accepted-baseline promotions,
-Sauron jobs `4791001`, and the post-Gemini state where Antigravity is the
+Sauron jobs `50ed09f`, and the post-Gemini state where Antigravity is the
 canonical Google lane. The release-watch/proof scope is Claude Code,
 Codex/OpenAI, OpenCode, and Antigravity. Sauron's
 `agent-release-baseline-guard` now checks the promoted accepted baseline store
-daily; the live container guard returned 7/7 green against
+daily; the live container guard returned 8/8 green against
 `/data/provider-release-proofs` on 2026-06-19.
 
 Machine-validated coverage map:
@@ -70,7 +70,7 @@ Machine-validated coverage map:
 | Covered `partial` | 38 |
 | Covered `no` | 3 |
 | Rows running in Longhouse CI | 46 |
-| Rows running in Sauron release-watch | 33 |
+| Rows running in Sauron release-watch | 34 |
 | Rows with accepted parser-fixture baselines | 3 |
 | Rows with accepted release-proof baselines | 27 |
 
@@ -79,7 +79,7 @@ Provider shape:
 | Provider | Yes | Partial | No | CI rows | Sauron rows | Release baselines |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Claude Code | 2 | 11 | 0 | 12 | 7 | 3 |
-| Codex/OpenAI | 4 | 9 | 0 | 12 | 9 | 8 |
+| Codex/OpenAI | 4 | 9 | 0 | 12 | 10 | 8 |
 | OpenCode | 4 | 9 | 0 | 13 | 12 | 11 |
 | Antigravity | 1 | 9 | 3 | 9 | 5 | 5 |
 
@@ -104,10 +104,10 @@ static/app-server protocol shape, managed TUI attach, detached-ui launch, raw
 remote protocol fingerprints, and launch/remote/reattach operation evidence.
 This is still not a complete release gate: Claude still lacks managed-session
 binding and live-token proof, Codex still lacks accepted-baseline-backed
-interrupt/tool proof beyond its accepted live-send lane, Antigravity still lacks
-interrupt/reattach/tool proof beyond its accepted live-send lane, and OpenCode
-still lacks production-enabled managed live-token proof beyond its accepted
-env-gated real-tool lane.
+interrupt proof beyond its accepted live-send and real-tool lanes, Antigravity
+still lacks interrupt/reattach/tool proof beyond its accepted live-send lane,
+and OpenCode still lacks production-enabled managed live-token proof beyond its
+accepted env-gated real-tool lane.
 
 ## Coverage Legend
 
@@ -197,7 +197,7 @@ accepted baseline yet, and full resume/tool coverage remains missing.
 | send input | partial | engine bridge IPC turn/start tests; `codex-provider-release-canary.py --run-managed-live-send` starts a managed detached bridge, sends a unique marker, waits for completion, and checks transcript/state evidence | hermetic/live_token when explicitly run; fake wrapper in CI | `make test`, engine tests, wrapper fake-engine test | Sauron canary when configured | release-proof yes (`codex-managed-live-send-release-proof-v1`, codex-cli 0.139.0) | partial |
 | interrupt/abort/steer | partial | engine bridge interrupt/steer tests | hermetic | `make test`, engine tests | Sauron canary when configured | no | partial |
 | reattach/resume | partial | managed TUI attach canary; resume path tests | hermetic/live_no_token | `validate-provider-cli-canaries` | yes | release-proof yes (`codex-release-proof-v1`, codex-cli 0.139.0) | partial |
-| tool/tool-result shape | partial | Codex parser fixtures and `provider-release-proof.py --codex-run-real-tool` capture real `codex exec --json` `command_execution` events with marker output and a DONE agent message | live_token when explicitly run; fake wrapper/parser fixture | wrapper fake-Codex test plus parser tests | not yet wired into Sauron release-watch | release-proof yes (`codex-real-tool-release-proof-v1`, codex-cli 0.139.0) | yes for manual proof/diff; release-watch gate remains off |
+| tool/tool-result shape | partial | Codex parser fixtures and `provider-release-proof.py --codex-run-real-tool` capture real `codex exec --json` `command_execution` events with marker output and a DONE agent message | live_token when explicitly run; fake wrapper/parser fixture | wrapper fake-Codex test plus parser tests | env-gated proof/diff when `AGENT_RELEASE_CODEX_REAL_TOOL=1` | release-proof yes (`codex-real-tool-release-proof-v1`, codex-cli 0.139.0) | yes |
 | live-token behavior | partial | `codex-provider-release-canary.py --run-managed-live-send`; `provider-release-proof.py --codex-run-managed-live-send` can attach the evidence to a release proof | managed Runtime Host live_token when explicitly run; fake wrapper in CI | wrapper fake-engine test | yes; production Sauron has `AGENT_RELEASE_CODEX_CANARY_LIVE=1` and Runtime Host credentials configured | release-proof yes (`codex-managed-live-send-release-proof-v1`, codex-cli 0.139.0) | yes |
 
 Codex is the strongest existing provider lane. Sauron now produces a
@@ -263,8 +263,10 @@ events, exact marker output, a DONE `agent_message`, and
 `operation_evidence.run_once/transcript_binding.level=live_token`. The accepted
 local dogfood baseline is under
 `~/.local/share/longhouse/provider-release-proofs/codex/codex-real-tool-release-proof-v1/`.
-It has been promoted to production Sauron's baseline store, but it is not yet
-wired into release-watch.
+It has been promoted to production Sauron's baseline store, and Sauron jobs
+`50ed09f` can request the same scenario for Codex golden-envelope and old/new
+differential release-watch checks with `AGENT_RELEASE_CODEX_REAL_TOOL=1`.
+Production Sauron leaves this token-spending lane off by default.
 
 ### OpenCode
 
@@ -367,8 +369,9 @@ Optional variables:
   review evidence through without fabricating it.
 - `TIMEOUT_SECS` bounds the wrapped source canary.
 - `CODEX_RUN_FAKE_APP_SERVER`, `CODEX_RUN_RAW_FRESH_REMOTE`,
-  `CODEX_RUN_MANAGED_TUI_ATTACH`, `CODEX_RUN_DETACHED_UI`, and
-  `CODEX_RUN_MANAGED_LIVE_SEND` enable opt-in Codex canary lanes.
+  `CODEX_RUN_MANAGED_TUI_ATTACH`, `CODEX_RUN_DETACHED_UI`,
+  `CODEX_RUN_MANAGED_LIVE_SEND`, and `CODEX_RUN_REAL_TOOL` enable opt-in Codex
+  canary lanes.
 - `SCENARIO_ID`/`--scenario-id` can override the proof bucket for manual
   experiments; otherwise Codex managed live-send uses
   `codex-managed-live-send-release-proof-v1`, Antigravity real-agy send uses
@@ -645,9 +648,9 @@ should not by itself count as contract drift.
    `claude-real-print-release-proof-v1`, then accept a green real-print
    baseline; after that, add Claude managed-session binding proof beyond
    no-token launch shape.
-2. Wire an env-gated Codex real-tool release-watch path for
-   `codex-real-tool-release-proof-v1`; then add Codex interrupt coverage beyond
-   the accepted send-input/tool baselines.
+2. Add Codex interrupt coverage beyond the accepted send-input/tool baselines,
+   then decide whether to enable `AGENT_RELEASE_CODEX_REAL_TOOL=1` in
+   production Sauron by default.
 3. Decide whether to enable `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` in
    production Sauron; the accepted baseline exists, but the default release
    watch still avoids real `agy` token spend.

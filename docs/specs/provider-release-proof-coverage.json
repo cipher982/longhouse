@@ -453,12 +453,16 @@
                 "engine/tests/golden_parser_contract.rs",
                 "server/tests_lite/test_session_processing.py",
                 "scripts/tests/codex-provider-release-canary.test.py",
-                "scripts/tests/provider-release-proof.test.py"
+                "scripts/tests/provider-release-proof.test.py",
+                "Sauron:jobs/agents/release_triage/provider_status.py",
+                "Sauron:jobs/agents/release_envelope/__init__.py",
+                "Sauron:tests/test_agent_release_provider_status.py",
+                "Sauron:tests/test_agent_release_envelope.py"
             ],
             "proof_boundary": "manual_live_token_or_fake",
             "fake_or_real": "mixed",
             "runs_in_ci": true,
-            "runs_in_sauron_release_watch": false,
+            "runs_in_sauron_release_watch": true,
             "accepted_baseline": "release_proof",
             "failure_actionable": true,
             "baseline_scenarios": [

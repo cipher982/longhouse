@@ -110,6 +110,11 @@ lanes are still missing if the baseline is intended to protect those surfaces.
 marker output and a DONE `agent_message`. Proofs with this flag use scenario
 `codex-real-tool-release-proof-v1`.
 
+Sauron release-watch can request that same Codex real-tool scenario for
+golden-envelope and old/new differential checks with
+`AGENT_RELEASE_CODEX_REAL_TOOL=1`. Production Sauron does not run this
+token-spending lane by default.
+
 Sauron release-watch reuses `AGENT_RELEASE_CODEX_LONGHOUSE_API_URL` and
 `AGENT_RELEASE_CODEX_LONGHOUSE_AGENTS_TOKEN` for the same Codex managed bridge
 proof when `AGENT_RELEASE_CODEX_CANARY_LIVE=1`, falling back to the global
@@ -468,8 +473,9 @@ an accepted baseline.
   The accepted proof showed real `codex exec --json` completed
   `command_execution` events, exact marker output, a DONE `agent_message`, and
   `operation_evidence.run_once/transcript_binding.level=live_token`. This
-  baseline is promoted to production Sauron, but release-watch is not yet wired
-  to spend this real-tool turn.
+  baseline is promoted to production Sauron, and Sauron jobs `50ed09f` can run
+  it in release-watch with `AGENT_RELEASE_CODEX_REAL_TOOL=1`. Production Sauron
+  leaves that token-spending lane off by default.
 - Sauron baseline inventory guard: live in production as
   `agent-release-baseline-guard`; on 2026-06-19 it returned 8/8 accepted
   scenarios green against `/data/provider-release-proofs`.
