@@ -1,6 +1,6 @@
 # Provider Release Proof
 
-**Status:** Phase 1 inventory + initial Longhouse entrypoint
+**Status:** Phase 1 inventory + Longhouse proof/baseline/diff entrypoints; no accepted release-proof baselines yet
 **Owner:** David
 **Last updated:** 2026-06-18
 
@@ -40,10 +40,56 @@ What exists:
 
 What is missing:
 
-- exact old-version vs new-version differential execution
 - accepted release-proof baselines per provider/scenario
 - raw-to-normalized proof fixtures for all release-sensitive surfaces
-- a single Longhouse-owned proof artifact consumed by Sauron for every provider
+- full managed-session/live-token proof for every release-sensitive surface
+- scheduled old/new differentials from accepted baselines rather than only
+  candidate or directly staged old/new artifacts
+
+## Audit Snapshot - 2026-06-18
+
+This snapshot reflects Longhouse `54b0dc071` plus Sauron jobs `6f1a212` after
+Gemini was removed as a release-watch provider and Antigravity became the
+canonical Google lane. Later Sauron surface-target commits are unrelated to
+provider release-proofing; the release-watch/proof scope remains
+Claude Code, Codex/OpenAI, OpenCode, and Antigravity.
+
+Machine-validated coverage map:
+
+| Metric | Count |
+| --- | ---: |
+| Providers | 4 |
+| Contract surfaces per provider | 13 |
+| Total provider/surface rows | 52 |
+| Covered `yes` | 11 |
+| Covered `partial` | 35 |
+| Covered `no` | 6 |
+| Rows running in Longhouse CI | 41 |
+| Rows running in Sauron release-watch | 29 |
+| Rows with accepted parser-fixture baselines | 4 |
+| Rows with accepted release-proof baselines | 0 |
+
+Provider shape:
+
+| Provider | Yes | Partial | No | CI rows | Sauron rows | Release baselines |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Claude Code | 2 | 11 | 0 | 11 | 5 | 0 |
+| Codex/OpenAI | 4 | 8 | 1 | 11 | 8 | 0 |
+| OpenCode | 4 | 7 | 2 | 11 | 11 | 0 |
+| Antigravity | 1 | 9 | 3 | 8 | 5 | 0 |
+
+Known uncovered surfaces:
+
+- Codex/OpenAI: live-token behavior.
+- OpenCode: tool/tool-result shape and live-token behavior.
+- Antigravity: interrupt/abort/steer, reattach/resume, and tool/tool-result
+  shape.
+
+Implication: CI is meaningful for parser, wrapper, profile-canary, and several
+no-token live surfaces, but it is not yet a complete release gate. The next
+promotion step is accepting the first real green baseline for one provider
+scenario, likely OpenCode because it has the strongest no-token real-run proof
+today.
 
 ## Coverage Legend
 
