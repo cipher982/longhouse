@@ -101,8 +101,31 @@ marker = match.group(1) if match else "MISSING_MARKER"
     )
 
 
-def _fake_opencode_run(path: Path, *, emit_tool_marker: bool = True) -> Path:
+def _fake_opencode_run(
+    path: Path,
+    *,
+    emit_tool_marker: bool = True,
+    emit_done_text: bool = True,
+) -> Path:
     output_expr = "marker" if emit_tool_marker else "'BASELINE_NO_TOOL_MARKER'"
+    done_block = (
+        """
+print(json.dumps({
+    "type": "text",
+    "timestamp": 1781861714070,
+    "sessionID": session_id,
+    "part": {
+        "id": "prt_fake_text",
+        "messageID": "msg_fake_text",
+        "sessionID": session_id,
+        "type": "text",
+        "text": "DONE",
+    },
+}))
+"""
+        if emit_done_text
+        else ""
+    )
     return _write_exe(
         path,
         f"""#!/usr/bin/env python3
@@ -143,18 +166,7 @@ print(json.dumps({{
         }},
     }},
 }}))
-print(json.dumps({{
-    "type": "text",
-    "timestamp": 1781861714070,
-    "sessionID": session_id,
-    "part": {{
-        "id": "prt_fake_text",
-        "messageID": "msg_fake_text",
-        "sessionID": session_id,
-        "type": "text",
-        "text": "DONE",
-    }},
-}}))
+{done_block}
 """,
     )
 
@@ -284,9 +296,11 @@ def test_opencode_real_tool_canary_requires_completed_tool_marker() -> None:
         assert opencode["tool_event_count"] == 1
         assert opencode["text_event_count"] == 1
         assert opencode["session_ids"] == ["ses_fake_opencode_tool"]
-        assert opencode["matching_tool_event"]["part"]["state"]["output"].startswith(
-            "LONGHOUSE_OPENCODE_TOOL_"
-        )
+        assert opencode["matching_tool_event"]["command_exact_match"] is True
+        assert opencode["matching_tool_event"]["output_exact_match"] is True
+        assert opencode["matching_tool_event"]["metadata_output_exact_match"] is True
+        assert opencode["matching_tool_event"]["callID_present"] is True
+        assert opencode["done_text_event"]["text_exact_match"] is True
 
 
 def test_opencode_real_tool_canary_fails_without_marker_output() -> None:
@@ -318,6 +332,35 @@ def test_opencode_real_tool_canary_fails_without_marker_output() -> None:
         assert opencode["matching_tool_event"] is None
 
 
+def test_opencode_real_tool_canary_fails_without_done_text() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_home = root / "home"
+        fake_bin = _fake_opencode_run(root / "bin" / "opencode", emit_done_text=False)
+        result, payload = _run_canary(
+            root,
+            [
+                "--provider",
+                "opencode",
+                "--opencode-run-real-tool",
+                "--opencode-run-timeout-secs",
+                "5",
+            ],
+            env={
+                "PATH": f"{fake_bin.parent}:{os.environ['PATH']}",
+                "HOME": str(fake_home),
+                "LONGHOUSE_OPENCODE_BIN": str(fake_bin),
+            },
+        )
+
+        assert result.returncode == 1
+        opencode = payload["canaries"]["opencode"]
+        assert opencode["status"] == "fail"
+        assert opencode["failure_code"] == "opencode_real_tool_done_text_missing"
+        assert opencode["matching_tool_event"]["output_exact_match"] is True
+        assert opencode["done_text_event"] is None
+
+
 def main() -> int:
     tests = [
         test_all_current_provider_control_paths_are_green,
@@ -326,6 +369,7 @@ def main() -> int:
         test_antigravity_real_agy_send_canary_fails_without_injected_marker,
         test_opencode_real_tool_canary_requires_completed_tool_marker,
         test_opencode_real_tool_canary_fails_without_marker_output,
+        test_opencode_real_tool_canary_fails_without_done_text,
     ]
     for test in tests:
         test()

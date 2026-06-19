@@ -618,6 +618,59 @@ def _event_part(event: dict[str, Any]) -> dict[str, Any]:
     return part if isinstance(part, dict) else {}
 
 
+def _opencode_real_tool_env() -> dict[str, str]:
+    env: dict[str, str] = {}
+    for key in ("HOME", "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR", "USER", "SHELL"):
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
+    return env
+
+
+def _event_session_id(event: dict[str, Any]) -> str:
+    return str(event.get("sessionID") or _event_part(event).get("sessionID") or "").strip()
+
+
+def _compact_opencode_tool_event(event: dict[str, Any], *, marker: str) -> dict[str, Any]:
+    part = _event_part(event)
+    state = part.get("state") if isinstance(part.get("state"), dict) else {}
+    input_payload = state.get("input") if isinstance(state.get("input"), dict) else {}
+    output = str(state.get("output") or "")
+    metadata = state.get("metadata") if isinstance(state.get("metadata"), dict) else {}
+    metadata_output = str(metadata.get("output") or "")
+    return {
+        "type": event.get("type"),
+        "sessionID": _event_session_id(event),
+        "part_type": part.get("type"),
+        "tool": part.get("tool"),
+        "callID_present": bool(part.get("callID")),
+        "state_status": state.get("status"),
+        "input_keys": sorted(input_payload),
+        "command_sha256": hashlib.sha256(str(input_payload.get("command") or "").encode("utf-8")).hexdigest(),
+        "command_exact_match": str(input_payload.get("command") or "") == f"printf '{marker}'",
+        "output_sha256": hashlib.sha256(output.encode("utf-8")).hexdigest(),
+        "output_exact_match": output.strip() == marker,
+        "metadata_output_exact_match": metadata_output.strip() == marker,
+    }
+
+
+def _opencode_text_done_event(events: list[dict[str, Any]], *, session_id: str) -> dict[str, Any] | None:
+    for event in events:
+        part = _event_part(event)
+        if event.get("type") != "text" or part.get("type") != "text":
+            continue
+        if _event_session_id(event) != session_id:
+            continue
+        if str(part.get("text") or "").strip() == "DONE":
+            return {
+                "type": event.get("type"),
+                "sessionID": session_id,
+                "part_type": part.get("type"),
+                "text_exact_match": True,
+            }
+    return None
+
+
 def run_opencode_real_tool_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     """Prove real opencode emits a stable tool-call/tool-result event shape."""
 
@@ -658,7 +711,7 @@ def run_opencode_real_tool_canary(args: argparse.Namespace, root: Path) -> dict[
         result = subprocess.run(
             command,
             cwd=str(workspace),
-            env=_runtime_env(args),
+            env=_opencode_real_tool_env(),
             text=True,
             capture_output=True,
             check=False,
@@ -692,6 +745,7 @@ def run_opencode_real_tool_canary(args: argparse.Namespace, root: Path) -> dict[
         if event.get("type") == "tool_use" and _event_part(event).get("type") == "tool"
     ]
     matching_event: dict[str, Any] | None = None
+    expected_command = f"printf '{marker}'"
     for event in tool_events:
         part = _event_part(event)
         state = part.get("state") if isinstance(part.get("state"), dict) else {}
@@ -703,8 +757,9 @@ def run_opencode_real_tool_canary(args: argparse.Namespace, root: Path) -> dict[
             part.get("tool") == "bash"
             and part.get("callID")
             and state.get("status") == "completed"
-            and marker in str(input_payload.get("command") or "")
-            and (marker in output or marker in metadata_output)
+            and str(input_payload.get("command") or "") == expected_command
+            and output.strip() == marker
+            and (not metadata_output or metadata_output.strip() == marker)
         ):
             matching_event = event
             break
@@ -716,10 +771,17 @@ def run_opencode_real_tool_canary(args: argparse.Namespace, root: Path) -> dict[
     ]
     session_ids = sorted(
         {
-            str(event.get("sessionID") or _event_part(event).get("sessionID") or "")
+            _event_session_id(event)
             for event in events
-            if str(event.get("sessionID") or _event_part(event).get("sessionID") or "").strip()
+            if _event_session_id(event)
         }
+    )
+    matching_session_id = _event_session_id(matching_event) if matching_event is not None else ""
+    done_event = _opencode_text_done_event(events, session_id=matching_session_id) if matching_session_id else None
+    matching_tool_event = (
+        _compact_opencode_tool_event(matching_event, marker=marker)
+        if matching_event is not None
+        else None
     )
     evidence = {
         "provider_version": version,
@@ -734,8 +796,6 @@ def run_opencode_real_tool_canary(args: argparse.Namespace, root: Path) -> dict[
         "stderr_path": str(stderr_path),
         "stdout_sha256": _sha256_file(stdout_path),
         "stderr_sha256": _sha256_file(stderr_path),
-        "stdout_tail": stdout[-4000:],
-        "stderr_tail": stderr[-4000:],
         "jsonl_parse_error": parse_error,
         "event_count": len(events),
         "tool_event_count": len(tool_events),
@@ -744,7 +804,8 @@ def run_opencode_real_tool_canary(args: argparse.Namespace, root: Path) -> dict[
         "marker": marker,
         "marker_sha256": hashlib.sha256(marker.encode("utf-8")).hexdigest(),
         "marker_in_prompt": marker in prompt,
-        "matching_tool_event": matching_event,
+        "matching_tool_event": matching_tool_event,
+        "done_text_event": done_event,
     }
     if result.returncode != 0 or timed_out:
         return _fail(
@@ -762,6 +823,12 @@ def run_opencode_real_tool_canary(args: argparse.Namespace, root: Path) -> dict[
         return _fail(
             "opencode_real_tool_shape_missing",
             "real opencode run did not emit the expected completed bash tool event with marker output",
+            **evidence,
+        )
+    if done_event is None:
+        return _fail(
+            "opencode_real_tool_done_text_missing",
+            "real opencode run did not emit a DONE text event after the tool call",
             **evidence,
         )
 
@@ -1385,7 +1452,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="For --provider opencode/all, spend a real opencode run turn to prove tool-call/tool-result JSON event shape.",
     )
-    parser.add_argument("--opencode-run-timeout-secs", type=int, default=180)
+    parser.add_argument(
+        "--opencode-run-timeout-secs",
+        type=int,
+        default=180,
+        help="Timeout for the real opencode tool run; the execution guard uses a minimum of 45 seconds.",
+    )
     parser.add_argument(
         "--antigravity-real-agy-send",
         action="store_true",

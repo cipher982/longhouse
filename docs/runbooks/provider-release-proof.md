@@ -66,8 +66,9 @@ flag use scenario `opencode-real-tool-release-proof-v1`; the default
 `opencode-release-proof-v1` remains the no-token server/control baseline.
 Accept this as a baseline only after confirming the artifact shows a completed
 `bash` tool event with a non-empty `callID`, structured command input, and
-marker output. Production Sauron does not run this token-spending lane by
-default.
+exact marker output plus a same-session `DONE` text event. The real-run timeout
+has a 45 second minimum guard. Production Sauron does not run this
+token-spending lane by default.
 
 For Codex, optional Make variables enable the deeper lanes:
 
@@ -236,6 +237,10 @@ Promote local accepted provider baselines to the Sauron production container
 only after a green proof, green status, and green diff. Copy the full baseline
 store, not just `accepted.json`; archived artifacts under `versions/` are part
 of the integrity check.
+
+Here "promote to Sauron" means copying accepted known-good baseline artifacts
+into the production guard store. It does not by itself enable any
+token-spending release-watch lane.
 
 ```bash
 COPYFILE_DISABLE=1 tar \

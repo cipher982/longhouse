@@ -1,6 +1,6 @@
 # Provider Release Proof
 
-**Status:** Phase 1 inventory + Longhouse proof/baseline/diff entrypoints; seven accepted release-proof scenarios promoted to Sauron (scoped Claude, Codex default, Codex live-send, OpenCode, OpenCode real-tool, scoped Antigravity, Antigravity live-send)
+**Status:** Phase 1 inventory + Longhouse proof/baseline/diff entrypoints; seven accepted release-proof scenarios promoted to Sauron's baseline guard store (scoped Claude, Codex default, Codex live-send, OpenCode, OpenCode real-tool, scoped Antigravity, Antigravity live-send)
 **Owner:** David
 **Last updated:** 2026-06-19
 

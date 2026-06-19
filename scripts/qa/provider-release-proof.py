@@ -1246,7 +1246,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--claude-agents-token")
     parser.add_argument("--claude-device-id")
     parser.add_argument("--opencode-run-real-tool", action="store_true")
-    parser.add_argument("--opencode-run-timeout-secs", type=int, default=180)
+    parser.add_argument(
+        "--opencode-run-timeout-secs",
+        type=int,
+        default=180,
+        help="Timeout for the real opencode tool run; provider-control-e2e-canary enforces a minimum of 45 seconds.",
+    )
     parser.add_argument("--antigravity-run-real-agy-send", action="store_true")
     parser.add_argument("--antigravity-print-timeout-secs", type=int, default=45)
     return parser
