@@ -71,9 +71,11 @@ Today the managed Codex bridge lanes need Runtime Host credentials. Without
 an upstream break. `CODEX_RUN_MANAGED_LIVE_SEND=1` spends a real managed Codex
 turn and records `operation_evidence.send_input` at `level=live_token` only
 after the turn completes and transcript/state evidence contains the unique
-canary marker. Do not accept a Codex baseline while the managed attach,
-detached UI, or live-send lanes are still missing if the baseline is intended to
-protect those surfaces.
+canary marker. Proofs with this flag use scenario
+`codex-managed-live-send-release-proof-v1`; the default
+`codex-release-proof-v1` remains the no-token managed/protocol baseline. Do not
+accept a Codex baseline while the managed attach, detached UI, or live-send
+lanes are still missing if the baseline is intended to protect those surfaces.
 
 Sauron release-watch reuses `AGENT_RELEASE_LONGHOUSE_API_URL` and
 `AGENT_RELEASE_LONGHOUSE_AGENTS_TOKEN` for the same Codex managed bridge proof
@@ -93,9 +95,12 @@ make provider-release-proof \
 
 This spends a real `agy --print` turn through
 `provider-control-e2e-canary.py --antigravity-real-agy-send` and attaches the
-resulting `operation_evidence.send_input` to the release proof. Accept this as a
-baseline only after confirming the artifact shows `level=live_token` and the
-model-visible marker came from the injected Longhouse inbox message.
+resulting `operation_evidence.send_input` to the release proof. Proofs with this
+flag use scenario `antigravity-real-agy-send-release-proof-v1`; the default
+`antigravity-release-proof-v1` remains the no-token hook/plugin baseline.
+Accept this as a baseline only after confirming the artifact shows
+`level=live_token` and the model-visible marker came from the injected
+Longhouse inbox message.
 
 ## Read A Proof
 
@@ -232,6 +237,10 @@ argv, raw command evidence, or published fallback artifacts.
   version `agy 1.0.8`.
 - Codex/OpenAI: accepted baseline `codex-release-proof-v1`, provider version
   `codex-cli 0.139.0`.
+- Codex/OpenAI live-send: no accepted baseline yet for
+  `codex-managed-live-send-release-proof-v1`.
+- Antigravity real-agy send: no accepted baseline yet for
+  `antigravity-real-agy-send-release-proof-v1`.
 
 ## Promotion Checklist
 

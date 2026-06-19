@@ -124,11 +124,36 @@ def test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_ye
         assert status_payload["failure_code"] == "baseline_missing"
 
 
+def test_provider_release_proof_make_passes_scenario_id_override() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        proof = root / "proof.json"
+        evidence = root / "evidence"
+
+        proof_result = _run_make(
+            [
+                "provider-release-proof",
+                "PROVIDER=codex",
+                "PROVIDER_VERSION=codex-test-0",
+                "SOURCE_REVIEW_STATUS=pass",
+                "SCENARIO_ID=codex-custom-proof-v1",
+                f"ARTIFACT={proof}",
+                f"EVIDENCE_ROOT={evidence}",
+            ]
+        )
+
+        assert proof_result.returncode == 0, proof_result.stderr
+        proof_payload = _read_json(proof)
+        assert proof_payload["scenario_id"] == "codex-custom-proof-v1"
+        assert proof_payload["scenario_profile"] == "default"
+
+
 def main() -> int:
     tests = [
         test_provider_release_proof_make_requires_provider,
         test_provider_release_proof_status_make_requires_provider_and_scenario,
         test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_yellow,
+        test_provider_release_proof_make_passes_scenario_id_override,
     ]
     for test in tests:
         test()

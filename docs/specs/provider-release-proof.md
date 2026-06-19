@@ -213,8 +213,10 @@ The managed live-send lane is now available as an explicit opt-in proof. It
 spends a real managed Codex turn only when Runtime Host credentials are
 provided, records `operation_evidence.send_input` at `level=live_token`, and
 fails red if the turn does not complete or the provider transcript/state does
-not contain the unique canary marker. No accepted baseline includes this lane
-yet.
+not contain the unique canary marker. This lane uses scenario
+`codex-managed-live-send-release-proof-v1` so it cannot be confused with the
+default no-token `codex-release-proof-v1` baseline. No accepted baseline
+includes this lane yet.
 
 Accepted baseline evidence, 2026-06-19: Codex `codex-cli 0.139.0` was run with
 fake app-server, raw-fresh-remote, managed TUI attach, and detached-ui lanes
@@ -277,9 +279,10 @@ against the accepted baseline. The accepted local dogfood baseline is under
 This proves the no-token binary/plugin/global-hook/hook-inbox contract. It
 does not prove model-visible send, reattach/resume, tool/tool-result shape, or
 live-token behavior. A separate opt-in proof flag can attach the manual real
-`agy` send canary to a release proof, but no accepted baseline includes it yet.
-The next useful step is accepting a reviewed real-`agy` proof baseline for send,
-then keeping unsupported operations explicit.
+`agy` send canary to a release proof under scenario
+`antigravity-real-agy-send-release-proof-v1`, but no accepted baseline includes
+it yet. The next useful step is accepting a reviewed real-`agy` proof baseline
+for send, then keeping unsupported operations explicit.
 
 ### Legacy Google JSON Imports
 
@@ -313,6 +316,11 @@ Optional variables:
 - `CODEX_RUN_FAKE_APP_SERVER`, `CODEX_RUN_RAW_FRESH_REMOTE`,
   `CODEX_RUN_MANAGED_TUI_ATTACH`, `CODEX_RUN_DETACHED_UI`, and
   `CODEX_RUN_MANAGED_LIVE_SEND` enable opt-in Codex canary lanes.
+- `SCENARIO_ID`/`--scenario-id` can override the proof bucket for manual
+  experiments; otherwise Codex managed live-send uses
+  `codex-managed-live-send-release-proof-v1`, Antigravity real-agy send uses
+  `antigravity-real-agy-send-release-proof-v1`, and default proofs use
+  `{provider}-release-proof-v1`.
 
 The equivalent direct script entrypoint is:
 
@@ -561,8 +569,8 @@ should not by itself count as contract drift.
 ## Next Work
 
 1. Add Claude managed-session binding proof beyond no-token launch shape.
-2. Promote Codex from no-token baseline protection to a reviewed managed
-   live-send baseline after running the Runtime Host credentialed lane.
+2. Accept a reviewed Codex `codex-managed-live-send-release-proof-v1` baseline
+   after running the Runtime Host credentialed lane.
 3. Decide whether Antigravity real-agy send belongs in scheduled release-watch
    or remains an opt-in live-token proof, then accept the matching baseline.
 4. Add OpenCode tool/tool-result and live-token proof, which are currently the

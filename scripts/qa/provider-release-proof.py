@@ -264,6 +264,23 @@ def _command_evidence(
     }
 
 
+def _scenario_profile(args: argparse.Namespace) -> str:
+    if args.provider == "codex" and args.codex_run_managed_live_send:
+        return "managed-live-send"
+    if args.provider == "antigravity" and args.antigravity_run_real_agy_send:
+        return "real-agy-send"
+    return "default"
+
+
+def _scenario_id(args: argparse.Namespace) -> str:
+    if args.scenario_id:
+        return args.scenario_id
+    profile = _scenario_profile(args)
+    if profile == "default":
+        return f"{args.provider}-release-proof-v1"
+    return f"{args.provider}-{profile}-release-proof-v1"
+
+
 def _run_source_canary(args: argparse.Namespace, raw_dir: Path) -> tuple[dict[str, Any], dict[str, str], int | None]:
     raw_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = raw_dir / "stdout.log"
@@ -626,7 +643,8 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
         "provider": args.provider,
         "provider_version": provider_version,
         "generated_at": _now_iso(),
-        "scenario_id": f"{args.provider}-release-proof-v1",
+        "scenario_id": _scenario_id(args),
+        "scenario_profile": _scenario_profile(args),
         "scenario_version": 1,
         "verdict": verdict,
         "failure_code": failure_code,
@@ -665,6 +683,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--provider-version")
     parser.add_argument("--artifact", type=Path)
     parser.add_argument("--evidence-root", type=Path)
+    parser.add_argument("--scenario-id")
     parser.add_argument("--timeout-secs", type=int, default=180)
     parser.add_argument(
         "--source-review-status",

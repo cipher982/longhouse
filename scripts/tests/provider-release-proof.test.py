@@ -372,6 +372,8 @@ def test_opencode_release_proof_normalizes_source_canary() -> None:
         assert payload["artifact_kind"] == "provider_release_proof"
         assert payload["provider"] == "opencode"
         assert payload["provider_version"] == "opencode 1.2.3"
+        assert payload["scenario_id"] == "opencode-release-proof-v1"
+        assert payload["scenario_profile"] == "default"
         assert payload["verdict"] == "green"
         assert payload["failure_code"] is None
         assert payload["canaries"]["source_canary"]["status"] == "pass"
@@ -536,6 +538,54 @@ def test_codex_release_proof_redacts_token_from_command_evidence() -> None:
         assert "<redacted>" in json.dumps(command)
 
 
+def test_codex_managed_live_send_uses_distinct_scenario() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        args_path = root / "codex-args.json"
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "codex",
+            env={"FAKE_CODEX_ARGS_PATH": str(args_path)},
+            extra_args=[
+                "--source-review-status",
+                "pass",
+                "--codex-run-managed-live-send",
+            ],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["scenario_id"] == "codex-managed-live-send-release-proof-v1"
+        assert payload["scenario_profile"] == "managed-live-send"
+        source_args = json.loads(args_path.read_text(encoding="utf-8"))
+        assert "--run-managed-live-send" in source_args
+
+
+def test_explicit_scenario_id_overrides_profile_default() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "codex",
+            extra_args=[
+                "--source-review-status",
+                "pass",
+                "--codex-run-managed-live-send",
+                "--scenario-id",
+                "codex-custom-live-proof-v1",
+            ],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["scenario_id"] == "codex-custom-live-proof-v1"
+        assert payload["scenario_profile"] == "managed-live-send"
+
+
 def test_antigravity_release_proof_can_attach_real_agy_send_evidence() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -558,6 +608,8 @@ def test_antigravity_release_proof_can_attach_real_agy_send_evidence() -> None:
         control_args = json.loads(args_path.read_text(encoding="utf-8"))
         assert "--antigravity-real-agy-send" in control_args
         assert payload["provider"] == "antigravity"
+        assert payload["scenario_id"] == "antigravity-real-agy-send-release-proof-v1"
+        assert payload["scenario_profile"] == "real-agy-send"
         assert payload["verdict"] == "green"
         assert payload["operation_evidence"]["send_input"]["status"] == "pass"
         assert payload["operation_evidence"]["send_input"]["level"] == "live_token"
@@ -698,6 +750,8 @@ def main() -> int:
         test_opencode_release_proof_blocks_when_source_canary_times_out,
         test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest,
         test_codex_release_proof_redacts_token_from_command_evidence,
+        test_codex_managed_live_send_uses_distinct_scenario,
+        test_explicit_scenario_id_overrides_profile_default,
         test_antigravity_release_proof_can_attach_real_agy_send_evidence,
         test_antigravity_release_proof_blocks_failed_real_agy_send_evidence,
         test_claude_release_proof_normalizes_no_token_contract_shape,
