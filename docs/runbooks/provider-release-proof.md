@@ -115,7 +115,9 @@ records `operation_evidence.interrupt` at `level=live_token` only after
 `codex-bridge interrupt` succeeds and bridge state reaches `interrupted` or
 `cancelled`. Proofs with this flag use scenario
 `codex-managed-live-interrupt-release-proof-v1`. No accepted baseline exists
-yet; run it manually before wiring a Sauron release-watch gate.
+yet. Sauron can request this same proof/diff scenario with
+`AGENT_RELEASE_CODEX_MANAGED_LIVE_INTERRUPT=1`, but production does not enable
+that gate by default.
 
 `CODEX_RUN_REAL_TOOL=1` spends a real local `codex exec --json` turn and records
 `operation_evidence.run_once` plus `operation_evidence.transcript_binding` at
@@ -481,6 +483,9 @@ an accepted baseline.
   credentials for scheduled Codex live-send release-watch; a no-spend preflight
   in the `sauron` container on 2026-06-19 returned green for
   `codex-managed-live-send-release-proof-v1`.
+- Codex/OpenAI live-interrupt: no accepted baseline yet. Sauron has an opt-in
+  proof/diff pass-through with `AGENT_RELEASE_CODEX_MANAGED_LIVE_INTERRUPT=1`,
+  but production does not enable it by default.
 - Codex/OpenAI real-tool: accepted local baseline
   `codex-real-tool-release-proof-v1`, provider version `codex-cli 0.139.0`.
   The accepted proof showed real `codex exec --json` completed
