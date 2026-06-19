@@ -92,6 +92,22 @@ accepted Longhouse proof. It does not mean every adjacent setup action is fully
 protected: Claude and Antigravity staging are still Sauron-tested but not
 accepted-baseline rows, and provider-specific gaps remain listed below.
 
+Machine-readable maturity rollups:
+
+```bash
+make provider-release-proof-maturity \
+  BASELINE_ROOT=/data/provider-release-proofs \
+  ARTIFACT=/tmp/provider-release-proof-maturity.json
+```
+
+This emits `artifact_kind=provider_release_proof_maturity_rollup` with static
+coverage ratios, accepted-baseline readiness, per-provider rollups, and optional
+universal harness action-matrix pass ratios. Add
+`UNIVERSAL_ARTIFACT=/path/to/universal-agent-harness.json` when a release run
+has a fresh universal harness artifact to include in the same rollup. The
+rollup is evidence for "how far along are we"; it is not itself a release
+approval.
+
 Known uncovered surfaces:
 
 - Antigravity: interrupt/abort/steer, reattach/resume, and tool/tool-result

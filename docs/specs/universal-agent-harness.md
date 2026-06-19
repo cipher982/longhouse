@@ -450,6 +450,9 @@ shape:
 4. `provider-release-proof.py --run-universal-harness` attaches the universal
    run artifact, normalized universal canaries, and prefixed universal
    operation evidence.
+   `provider-release-proof-maturity.py` can then roll coverage inventory,
+   accepted-baseline status, and optional universal harness action-matrix
+   artifacts into a machine-readable maturity report.
 5. `control_surface` emits the same launch/send/steer/pause/interrupt/resume/
    terminate/tail/runtime/transcript/tool rows for every provider and is
    captured as a normalized release-proof artifact.

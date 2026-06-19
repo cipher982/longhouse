@@ -16,7 +16,7 @@ CLAUDE_API_URL ?=
 CLAUDE_AGENTS_TOKEN ?=
 CLAUDE_DEVICE_ID ?=
 
-.PHONY: help dev dev-demo stop test test-ios test-ios-session-open ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-runner test-e2e test-e2e-core test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-ios-api validate-makefile validate-build-identity validate-managed-codex-contract validate-managed-session-contract validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-old-new provider-release-proof-status provider-release-proof-status-all regen-ws generate-sdk generate-ios-api qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e provider-live-route-e2e-opencode-transcript reprovision deploy-status launch-readiness ship-watch ship release ui-capture marketing-screenshots demo-render qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-synthetic-bench test-shipper-synthetic-live-bench test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check observability-up observability-down
+.PHONY: help dev dev-demo stop test test-ios test-ios-session-open ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-runner test-e2e test-e2e-core test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-ios-api validate-makefile validate-build-identity validate-managed-codex-contract validate-managed-session-contract validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-old-new provider-release-proof-status provider-release-proof-status-all provider-release-proof-maturity regen-ws generate-sdk generate-ios-api qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e provider-live-route-e2e-opencode-transcript reprovision deploy-status launch-readiness ship-watch ship release ui-capture marketing-screenshots demo-render qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-synthetic-bench test-shipper-synthetic-live-bench test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check observability-up observability-down
 
 # ---------------------------------------------------------------------------
 # Help
@@ -336,6 +336,7 @@ validate-provider-cli-canaries: ## @internal Provider release canary wrapper tes
 	@python3 scripts/tests/provider-release-proof-coverage.test.py
 	@python3 scripts/tests/provider-release-proof.test.py
 	@python3 scripts/tests/provider-release-proof-baseline.test.py
+	@python3 scripts/tests/provider-release-proof-maturity.test.py
 	@python3 scripts/tests/provider-release-proof-make.test.py
 	@python3 scripts/tests/provider-control-e2e-canary.test.py
 	@python3 scripts/tests/provider-live-canary.test.py
@@ -428,6 +429,15 @@ provider-release-proof-status-all: ## Inspect all accepted provider proof baseli
 		--baseline-root "$(BASELINE_ROOT)" \
 		--json; \
 	if [ -n "$(COVERAGE)" ]; then set -- "$$@" --coverage "$(COVERAGE)"; fi; \
+	if [ -n "$(ARTIFACT)" ]; then set -- "$$@" --artifact "$(ARTIFACT)"; fi; \
+	python3 "$$@"
+
+provider-release-proof-maturity: ## Emit provider release-proof maturity rollups from coverage/baselines/universal artifacts
+	@set -eu; \
+	set -- scripts/qa/provider-release-proof-maturity.py --json; \
+	if [ -n "$(COVERAGE)" ]; then set -- "$$@" --coverage "$(COVERAGE)"; fi; \
+	if [ -n "$(BASELINE_ROOT)" ]; then set -- "$$@" --baseline-root "$(BASELINE_ROOT)"; fi; \
+	if [ -n "$(UNIVERSAL_ARTIFACT)" ]; then set -- "$$@" --universal-artifact "$(UNIVERSAL_ARTIFACT)"; fi; \
 	if [ -n "$(ARTIFACT)" ]; then set -- "$$@" --artifact "$(ARTIFACT)"; fi; \
 	python3 "$$@"
 
