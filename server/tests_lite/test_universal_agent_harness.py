@@ -838,6 +838,40 @@ def test_codex_interrupt_cancel_reports_runtime_host_credentials_gap(tmp_path: P
     assert result["data"]["operation_evidence"]["interrupt"]["level"] == "live_token_required"
 
 
+def test_opencode_interrupt_cancel_uses_session_abort_canary(tmp_path: Path) -> None:
+    fake_opencode = _fake_opencode_server(tmp_path / "bin" / "opencode")
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("opencode",),
+            scenarios=("interrupt_cancel",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"opencode": fake_opencode},
+        )
+    )
+
+    result = payload["results"][0]
+    assert payload["verdict"] == "green"
+    assert result["status"] == "pass"
+    assert result["data"]["scenario"] == "interrupt_cancel"
+    assert result["data"]["source_artifact_kind"] == "provider_live_canary"
+    assert result["data"]["synthetic"] is False
+    assert result["data"]["operation_evidence"]["interrupt"]["status"] == "pass"
+    assert result["data"]["operation_evidence"]["interrupt"]["level"] == "live_no_token"
+    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
+
+    evidence_root = Path(result["evidence_root"])
+    provider_live = json.loads((evidence_root / "raw" / "provider-live-canary.json").read_text(encoding="utf-8"))
+    assert provider_live["canaries"]["session_abort"]["status"] == "pass"
+    raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
+    assert "session_abort" in raw_events
+    assert "provider_live_canary" in raw_events
+    session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
+    assert session["operation_statuses"]["interrupt"]["status"] == "pass"
+    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
+    assert db_snapshot["ingest_result"]["events_inserted"] == 4
+    assert db_snapshot["timeline"]["matched"] is True
+
+
 def test_codex_live_token_streaming_uses_managed_live_send_canary(tmp_path: Path, monkeypatch) -> None:
     from zerg.qa import codex_provider_release_canary
 

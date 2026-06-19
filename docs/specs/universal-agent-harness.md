@@ -171,11 +171,12 @@ provider-control hook/inbox canary, projects external-event channel rows, and
 DB-ingests them. That proves hook/inbox input delivery and Stop/force-continue
 behavior; it does not prove interrupt, reattach, or tool-result semantics.
 
-`interrupt_cancel` is the first dedicated universal control scenario. Codex
-routes it to the existing managed-live-interrupt canary and DB-ingests interrupt
-evidence when Runtime Host credentials are present. Without those credentials it
-returns a typed `unsupported_gap`. Other providers currently return typed
-adapter gaps for this scenario.
+`interrupt_cancel` is a dedicated universal control scenario. Codex routes it to
+the existing managed-live-interrupt canary and DB-ingests interrupt evidence
+when Runtime Host credentials are present. Without those credentials it returns a
+typed `unsupported_gap`. OpenCode routes it to the provider-live session.abort
+canary and DB-ingests abort evidence. Claude and Antigravity currently return
+typed adapter gaps for this scenario.
 
 `tool_call_result` is also an executable universal scenario. Codex routes it to
 the existing Codex real-tool canary; OpenCode routes it to the provider-control
@@ -425,7 +426,7 @@ rewritten to call the shared scenario runner.
 | `server/zerg/qa/provider_live_canary.py` Claude binary/channel/PTY checks | `probe_identity`, `launch_managed_session`, `collect_raw_evidence` | Migrated into Claude `managed_session_e2e`; live-token send/steer still need promotion. |
 | `server/zerg/qa/managed_claude_live.py` | `send_receive`, `live_token_streaming`, `interrupt_cancel`, `multi_turn_continuity` | Migration candidate; PTY loop and channel readiness are Claude adapter internals. |
 | `server/zerg/qa/codex_provider_release_canary.py` | `probe_identity`, `run_prompt_once`, `launch_managed_session`, `resume_reattach`, `send_receive`, `interrupt_cancel`, `tool_call_result`, `live_token_streaming` | Partly migrated: Codex `managed_session_e2e`, `interrupt_cancel`, `tool_call_result`, and `live_token_streaming` now call this canary; remaining control/steer lanes still need promotion. |
-| `server/zerg/qa/provider_live_canary.py` OpenCode server/schema/session checks | `launch_managed_session`, `send_receive`, `resume_reattach`, `interrupt_cancel`, `parse_ingest_project` | Partly migrated: OpenCode `managed_session_e2e` and `resume_reattach` now call this canary; remaining control/live-token scenarios still need promotion. |
+| `server/zerg/qa/provider_live_canary.py` OpenCode server/schema/session checks | `launch_managed_session`, `send_receive`, `resume_reattach`, `interrupt_cancel`, `parse_ingest_project` | Partly migrated: OpenCode `managed_session_e2e`, `interrupt_cancel`, and `resume_reattach` now call this canary; remaining live-token scenarios still need promotion. |
 | `server/zerg/qa/provider_live_canary.py` Antigravity plugin/global hook checks | `probe_identity`, `external_event_channel`, `send_receive` | Migration candidate; hook/inbox setup is Antigravity adapter internal. |
 | `scripts/qa/provider-control-e2e-canary.py` | `send_receive`, `interrupt_cancel`, `tool_call_result`, `external_event_channel`, `live_token_streaming` | Partly migrated: Claude and Antigravity `live_token_streaming`, plus OpenCode `tool_call_result`, now call this canary; keep provider-specific fakes as adapter test fixtures. |
 | Engine parser golden/adversarial tests | `parse_ingest_project` fixture replay | Reusable as `fixture_replay` scenarios. |
@@ -463,9 +464,10 @@ shape:
    Longhouse SQLite ingest and verifies durable events, session counts, export
    JSONL, query lookup, timeline listing, and preserved provider-session
    binding.
-10. Codex `interrupt_cancel` is an executable universal control scenario. It
-   calls the managed-live-interrupt canary, DB-ingests pass evidence, and returns
-   an explicit Runtime Host credentials gap when not configured.
+10. Codex and OpenCode `interrupt_cancel` are executable universal control
+   scenarios. Codex calls the managed-live-interrupt canary and returns an
+   explicit Runtime Host credentials gap when not configured. OpenCode calls the
+   provider-live session.abort canary. Both DB-ingest pass evidence.
 11. Codex and OpenCode `tool_call_result` are executable universal observation
    scenarios. They call their existing real-tool canaries, DB-ingest linked tool
    call/result rows, and expose `universal_tool_call_result` evidence through

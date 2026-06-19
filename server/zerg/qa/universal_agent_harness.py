@@ -902,6 +902,8 @@ class UniversalProviderAdapter:
     def interrupt_cancel(self, package: EvidencePackage) -> dict[str, Any]:
         if self.config.provider == "codex":
             return self._run_codex_interrupt_cancel(package)
+        if self.config.provider == "opencode":
+            return self._run_opencode_interrupt_cancel(package)
         payload = self._unsupported_payload(
             "interrupt_cancel",
             "interrupt_cancel_adapter_missing",
@@ -1108,6 +1110,101 @@ class UniversalProviderAdapter:
             payload["failure_code"] = db_ingest.get("failure_code") or "managed_session_e2e_db_ingest_failed"
             payload["message"] = "OpenCode provider-live evidence did not pass Longhouse DB ingest assertions."
         package.write_json("assertions/managed_session_e2e.json", payload)
+        return payload
+
+    def _run_opencode_interrupt_cancel(self, package: EvidencePackage) -> dict[str, Any]:
+        binary, source = self._resolve_binary()
+        if binary is None:
+            payload = {
+                "status": STATUS_FAIL,
+                "failure_code": "provider_binary_not_found",
+                "message": "opencode binary was not found for interrupt_cancel",
+                "binary_source": source,
+            }
+            package.write_json("assertions/interrupt_cancel.json", payload)
+            return payload
+
+        from zerg.qa.provider_live_canary import run_provider_live_canary
+
+        live_evidence_root = package.path("raw", "provider-live-evidence")
+        live_artifact_path = package.path("raw", "provider-live-canary.json")
+        live_artifact = run_provider_live_canary(
+            {
+                "provider": "opencode",
+                "provider_bin": str(binary),
+                "artifact": live_artifact_path,
+                "evidence_root": live_evidence_root,
+                "wait_ready_secs": 15.0,
+                "json": False,
+            }
+        )
+        package.write_json("raw/provider-live-canary-inline.json", live_artifact)
+        operation_evidence = {
+            str(operation): dict(evidence)
+            for operation, evidence in dict(live_artifact.get("operation_evidence") or {}).items()
+            if isinstance(evidence, Mapping)
+        }
+        raw_events = opencode_provider_live_raw_events(live_artifact)
+        live_session_projection = live_artifact.get("session_projection") or {}
+        provider_session_id = str(live_session_projection.get("provider_session_id") or self._session_id(package))
+        projection = self._write_session_projection(
+            package,
+            raw_events=raw_events,
+            operations=operation_evidence,
+            provider_session_id=provider_session_id,
+        )
+        db_ingest = ingest_canonical_events_into_longhouse_db(
+            package=package,
+            provider=self.config.provider,
+            rows=raw_events,
+            provider_session_id=provider_session_id,
+        )
+        operation_evidence.update(
+            {
+                str(operation): dict(evidence)
+                for operation, evidence in dict(db_ingest.get("operation_evidence") or {}).items()
+                if isinstance(evidence, Mapping)
+            }
+        )
+        session_projection_path = package.path("longhouse", "session-projection.json")
+        try:
+            session_projection = json.loads(session_projection_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            session_projection = {}
+        if isinstance(session_projection, dict):
+            session_projection["operation_statuses"] = operation_evidence
+            package.write_json("longhouse/session-projection.json", session_projection)
+
+        live_verdict = str(live_artifact.get("verdict") or "red")
+        interrupt_status = str((operation_evidence.get("interrupt") or {}).get("status") or STATUS_FAIL)
+        db_status = str(db_ingest.get("status") or STATUS_FAIL)
+        passed = live_verdict == "green" and interrupt_status == STATUS_PASS and db_status == STATUS_PASS
+        payload = {
+            **projection,
+            "status": STATUS_PASS if passed else STATUS_FAIL,
+            "scenario": "interrupt_cancel",
+            "provider_version": live_artifact.get("provider_version"),
+            "provider_live_artifact_path": str(live_artifact_path),
+            "provider_live_evidence_root": str(live_evidence_root),
+            "provider_live_verdict": live_verdict,
+            "source_artifact_kind": live_artifact.get("artifact_kind"),
+            "synthetic": False,
+            "operation_evidence": operation_evidence,
+            "longhouse_ingest": {
+                "status": db_status,
+                "failure_code": db_ingest.get("failure_code"),
+                "db_snapshot_path": db_ingest.get("db_snapshot_path"),
+                "session_projection_path": db_ingest.get("session_projection_path"),
+                "timeline_projection_path": db_ingest.get("timeline_projection_path"),
+            },
+        }
+        if live_verdict != "green" or interrupt_status != STATUS_PASS:
+            payload["failure_code"] = live_artifact.get("failure_code") or "opencode_interrupt_cancel_failed"
+            payload["message"] = "OpenCode session.abort canary did not pass."
+        elif db_status != STATUS_PASS:
+            payload["failure_code"] = db_ingest.get("failure_code") or "interrupt_cancel_db_ingest_failed"
+            payload["message"] = "OpenCode interrupt evidence did not pass Longhouse DB ingest assertions."
+        package.write_json("assertions/interrupt_cancel.json", payload)
         return payload
 
     def _run_opencode_resume_reattach(self, package: EvidencePackage) -> dict[str, Any]:
