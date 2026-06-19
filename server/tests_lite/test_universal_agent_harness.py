@@ -285,6 +285,57 @@ def test_action_matrix_marks_provider_specific_unsupported_actions(tmp_path: Pat
     assert by_provider["antigravity"]["send_message"]["evidence_level"] == "live_token"
 
 
+def test_control_surface_emits_same_control_actions_for_all_providers(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=uah.SUPPORTED_PROVIDERS,
+            scenarios=("control_surface",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
+        )
+    )
+
+    assert payload["verdict"] == "yellow"
+    assert {result["provider"] for result in payload["results"]} == set(uah.SUPPORTED_PROVIDERS)
+    for result in payload["results"]:
+        assert result["scenario"] == "control_surface"
+        assert result["status"] == "blocked"
+        assert result["data"]["action_ids"] == list(uah.CONTROL_SURFACE_ACTION_IDS)
+        assert result["data"]["action_count"] == len(uah.CONTROL_SURFACE_ACTION_IDS)
+        assert Path(result["data"]["control_surface_path"]).is_file()
+        actions = {row["action_id"]: row for row in result["data"]["actions"]}
+        assert set(actions) == set(uah.CONTROL_SURFACE_ACTION_IDS)
+        assert actions["send_message"]["category"] == "control"
+        assert actions["tail_output"]["category"] == "observe"
+        assert actions["tool_call_result"]["status"] == "pass"
+        assert "baseline_compare" not in actions
+        assert "db_ingest" not in actions
+
+
+def test_control_surface_keeps_unsupported_and_live_token_rows_explicit(tmp_path: Path) -> None:
+    bins = _fake_bins(tmp_path)
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("opencode", "antigravity"),
+            scenarios=("control_surface",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"opencode": bins["opencode"], "antigravity": bins["antigravity"]},
+        )
+    )
+
+    by_provider = {
+        result["provider"]: {row["action_id"]: row for row in result["data"]["actions"]}
+        for result in payload["results"]
+    }
+    assert by_provider["opencode"]["steer_active_turn"]["status"] == "unsupported_gap"
+    assert by_provider["opencode"]["resume_reattach"]["status"] == "pass"
+    assert by_provider["opencode"]["resume_reattach"]["evidence_level"] == "live_no_token"
+    assert by_provider["antigravity"]["interrupt_cancel"]["status"] == "unsupported_gap"
+    assert by_provider["antigravity"]["send_message"]["status"] == "pass"
+    assert by_provider["antigravity"]["send_message"]["required_evidence"] == "hermetic"
+    assert by_provider["antigravity"]["send_message"]["evidence_level"] == "live_token"
+
+
 def test_db_ingest_project_uses_real_longhouse_sqlite_for_all_providers(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(

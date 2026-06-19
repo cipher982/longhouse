@@ -210,6 +210,7 @@ Universal scenarios:
 | --- | --- | --- |
 | `probe_identity` | P0 | Version, binary path, adapter version, platform, declared/observed capabilities. |
 | `action_matrix` | P0 | Every provider emits the same Longhouse action ids with explicit pass/fail/unsupported/blocked status and proof source. |
+| `control_surface` | P0 | Every provider emits the same control/observation action subset with concrete pass/fail/unsupported/blocked evidence rows. |
 | `run_prompt_once` | P0 | One-shot prompt exits cleanly, emits evidence, and produces a model or fixture response. |
 | `launch_managed_session` | P0 | Managed session starts, exposes a session handle, and has raw evidence. |
 | `send_receive` | P0 | Input reaches the correct active session and a response is observed. |
@@ -394,22 +395,25 @@ shape:
 4. `provider-release-proof.py --run-universal-harness` attaches the universal
    run artifact, normalized universal canaries, and prefixed universal
    operation evidence.
-5. `run_prompt_once` has a safe Codex/OpenAI projection and typed
+5. `control_surface` emits the same launch/send/steer/pause/interrupt/resume/
+   terminate/tail/runtime/transcript/tool rows for every provider and is
+   captured as a normalized release-proof artifact.
+6. `run_prompt_once` has a safe Codex/OpenAI projection and typed
    `unsupported_gap` results for unsafe providers.
-6. Codex/OpenAI and OpenCode have first no-token/session-safe
+7. Codex/OpenAI and OpenCode have first no-token/session-safe
    `launch_managed_session` and `send_receive` projections behind the universal
    runner.
-7. OpenCode has the first real no-token `managed_session_e2e` lane. It calls the
+8. OpenCode has the first real no-token `managed_session_e2e` lane. It calls the
    existing provider-live canary to prove server startup, schema, session
    create/get, `prompt_async noReply`, transcript marker recovery, process
    reattach, and abort behavior, then writes canonical Longhouse-style
    event/session/timeline projections.
-8. That OpenCode lane now feeds the provider-live raw rows through isolated
+9. That OpenCode lane now feeds the provider-live raw rows through isolated
    Longhouse SQLite ingest and verifies durable events, session counts, export
    JSONL, query lookup, timeline listing, and preserved provider-session
    binding.
-9. Evidence packages are written for pass, fail, and unsupported results.
-10. Existing one-off canaries remain compatibility lanes until each behavior is
+10. Evidence packages are written for pass, fail, and unsupported results.
+11. Existing one-off canaries remain compatibility lanes until each behavior is
    migrated and baselined.
 
 Next implementation target: migrate Codex managed mechanics, Claude PTY/channel

@@ -37,6 +37,7 @@ SCENARIOS = (
     "probe_identity",
     "collect_raw_evidence",
     "action_matrix",
+    "control_surface",
     "parse_ingest_project",
     "db_ingest_project",
     "run_prompt_once",
@@ -67,6 +68,7 @@ MVP_METHODS = (
     "prepare",
     "probe",
     "action_matrix",
+    "control_surface",
     "run_prompt",
     "collect_evidence",
     "decode_normalize",
@@ -310,6 +312,18 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
     ),
 )
 ACTIONS = tuple(action.action_id for action in ACTION_DEFINITIONS)
+CONTROL_SURFACE_CATEGORIES = frozenset({"control", "observe"})
+
+
+def _action_ids_for_categories(categories: frozenset[str]) -> tuple[str, ...]:
+    action_ids: list[str] = []
+    for action in ACTION_DEFINITIONS:
+        if action.category in categories:
+            action_ids.append(action.action_id)
+    return tuple(action_ids)
+
+
+CONTROL_SURFACE_ACTION_IDS = _action_ids_for_categories(CONTROL_SURFACE_CATEGORIES)
 
 
 def utc_now() -> str:
@@ -399,6 +413,8 @@ class AgentHarnessAdapter(Protocol):
     def probe(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def action_matrix(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def control_surface(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def run_prompt(self, package: "EvidencePackage", prompt: str) -> dict[str, Any]: ...
 
@@ -617,6 +633,56 @@ class UniversalProviderAdapter:
             "operation_evidence": operation_evidence,
         }
         package.write_json("assertions/action_matrix.json", payload)
+        return payload
+
+    def control_surface(self, package: EvidencePackage) -> dict[str, Any]:
+        probe = self.probe(package)
+        files = sorted(str(path.relative_to(package.root)) for path in package.root.rglob("*") if path.is_file())
+        rows = [
+            row
+            for row in self._build_action_matrix_rows(package=package, probe=probe, files=files)
+            if row["action_id"] in CONTROL_SURFACE_ACTION_IDS
+        ]
+        control_surface = {
+            "schema_version": SCHEMA_VERSION,
+            "artifact_kind": "universal_agent_harness_control_surface",
+            "provider": self.config.provider,
+            "generated_at": utc_now(),
+            "actions": rows,
+            "action_ids": [row["action_id"] for row in rows],
+            "status_counts": _status_counts(row["status"] for row in rows),
+        }
+        control_surface_path = package.write_json("assertions/control-surface.json", control_surface)
+        raw_path = package.write_json(
+            "raw/control-surface-inputs.json",
+            {
+                "provider": self.config.provider,
+                "probe": probe,
+                "files": files,
+                "contract": _contract_snapshot(self.config.provider),
+                "control_surface_action_ids": list(CONTROL_SURFACE_ACTION_IDS),
+            },
+        )
+        operation_evidence: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            if row.get("status") == STATUS_PASS:
+                operation_evidence[str(row["action_id"])] = _operation_from_action_row(row)
+        status = STATUS_PASS
+        if any(row["status"] == STATUS_FAIL for row in rows):
+            status = STATUS_FAIL
+        elif any(row["status"] in YELLOW_STATUSES for row in rows):
+            status = STATUS_BLOCKED
+        payload = {
+            "status": status,
+            "action_count": len(rows),
+            "action_ids": [row["action_id"] for row in rows],
+            "control_surface_path": str(control_surface_path),
+            "raw_inputs_path": str(raw_path),
+            "status_counts": control_surface["status_counts"],
+            "actions": rows,
+            "operation_evidence": operation_evidence,
+        }
+        package.write_json("assertions/control_surface.json", payload)
         return payload
 
     def decode_normalize(self, package: EvidencePackage, fixture_path: Path) -> dict[str, Any]:
@@ -1758,6 +1824,18 @@ def run_action_matrix(adapter: AgentHarnessAdapter, package: EvidencePackage) ->
     )
 
 
+def run_control_surface(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.control_surface(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="control_surface",
+        package=package,
+        payload=payload,
+    )
+
+
 def run_parse_ingest_project(
     adapter: AgentHarnessAdapter,
     package: EvidencePackage,
@@ -1850,6 +1928,7 @@ SCENARIO_RUNNERS = {
     "probe_identity": run_probe_identity,
     "collect_raw_evidence": run_collect_raw_evidence,
     "action_matrix": run_action_matrix,
+    "control_surface": run_control_surface,
     "parse_ingest_project": run_parse_ingest_project,
     "db_ingest_project": run_db_ingest_project,
     "run_prompt_once": run_prompt_once,
@@ -2026,6 +2105,7 @@ __all__ = [
     "ARTIFACT_KIND",
     "ACTIONS",
     "ACTION_DEFINITIONS",
+    "CONTROL_SURFACE_ACTION_IDS",
     "SCENARIOS",
     "STATUSES",
     "SUPPORTED_PROVIDERS",

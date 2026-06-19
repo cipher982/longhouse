@@ -39,13 +39,15 @@ first Codex/OpenCode managed-session projections. Provider-specific canaries
 remain compatibility lanes for real control/live-token behavior until those
 mechanics are migrated behind adapters.
 
-The default attached universal harness includes `action_matrix`. That matrix
-emits the same Longhouse action ids for every provider, including send,
-steer, pause detect/answer, interrupt/cancel, resume/reattach, terminate,
-raw-evidence capture, parse/normalize, DB ingest, session/timeline projection,
-baseline compare, and old/new release diff. Rows that are not genuinely proven
-remain `blocked` or `unsupported_gap`; this is expected until those lanes are
-promoted.
+The default attached universal harness includes `action_matrix` and
+`control_surface`. The matrix emits the full Longhouse action vocabulary for
+every provider, including send, steer, pause detect/answer, interrupt/cancel,
+resume/reattach, terminate, raw-evidence capture, parse/normalize, DB ingest,
+session/timeline projection, baseline compare, and old/new release diff. The
+control surface emits the shared control/observation subset as a separate
+normalized artifact for easier release-digest review. Rows that are not
+genuinely proven remain `blocked` or `unsupported_gap`; this is expected until
+those lanes are promoted.
 
 Run the DB-backed universal ingest lane explicitly:
 

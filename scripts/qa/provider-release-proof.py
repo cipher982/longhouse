@@ -43,6 +43,7 @@ DEFAULT_UNIVERSAL_SCENARIOS = (
     "probe_identity",
     "collect_raw_evidence",
     "action_matrix",
+    "control_surface",
     "run_prompt_once",
     "launch_managed_session",
     "send_receive",
@@ -51,6 +52,7 @@ UNIVERSAL_SCENARIOS = (
     "probe_identity",
     "collect_raw_evidence",
     "action_matrix",
+    "control_surface",
     "parse_ingest_project",
     "db_ingest_project",
     "run_prompt_once",
@@ -243,6 +245,20 @@ def _normalize_source_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
                 "raw_inputs_path",
             )
             if action_matrix.get(key) is not None
+        }
+    control_surface = artifact.get("control_surface")
+    if isinstance(control_surface, dict):
+        normalized["control_surface"] = {
+            key: control_surface.get(key)
+            for key in (
+                "artifact_kind",
+                "provider",
+                "action_count",
+                "status_counts",
+                "control_surface_path",
+                "raw_inputs_path",
+            )
+            if control_surface.get(key) is not None
         }
     return normalized
 
@@ -864,6 +880,7 @@ def _merge_universal_harness(source: dict[str, Any], universal: dict[str, Any]) 
     operation_evidence = dict(merged.get("operation_evidence") or {})
     universal_projection: dict[str, Any] | None = None
     action_matrix_summary: dict[str, Any] | None = None
+    control_surface_summary: dict[str, Any] | None = None
     for result in provider_results:
         scenario = str(result.get("scenario") or "unknown")
         status = str(result.get("status") or "fail")
@@ -895,6 +912,17 @@ def _merge_universal_harness(source: dict[str, Any], universal: dict[str, Any]) 
                 "raw_inputs_path": data.get("raw_inputs_path"),
                 "actions": list(data.get("actions") or []),
             }
+        if scenario == "control_surface" and isinstance(data.get("actions"), list):
+            control_surface_summary = {
+                "artifact_kind": "provider_release_proof_control_surface",
+                "provider": source.get("provider"),
+                "action_count": data.get("action_count"),
+                "action_ids": list(data.get("action_ids") or []),
+                "status_counts": dict(data.get("status_counts") or {}),
+                "control_surface_path": data.get("control_surface_path"),
+                "raw_inputs_path": data.get("raw_inputs_path"),
+                "actions": list(data.get("actions") or []),
+            }
         if universal_projection is None:
             universal_projection = _read_universal_projection(result)
     merged["canaries"] = canaries
@@ -902,6 +930,8 @@ def _merge_universal_harness(source: dict[str, Any], universal: dict[str, Any]) 
     merged["universal_harness"] = universal_summary
     if action_matrix_summary is not None:
         merged["action_matrix"] = action_matrix_summary
+    if control_surface_summary is not None:
+        merged["control_surface"] = control_surface_summary
     if universal_projection is not None:
         merged["universal_session_projection"] = universal_projection
         if not isinstance(merged.get("session_projection"), dict):
@@ -1706,6 +1736,7 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
     operation_evidence_path = normalized_dir / "operation_evidence.json"
     session_projection_path = normalized_dir / "session_projection.json"
     action_matrix_path = normalized_dir / "action_matrix.json"
+    control_surface_path = normalized_dir / "control_surface.json"
     provider_contract = {
         "artifact_kind": "provider_release_proof_provider_contract",
         "provider": args.provider,
@@ -1732,10 +1763,20 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
         if isinstance(source_artifact.get("action_matrix"), dict)
         else None,
     }
+    control_surface_artifact = {
+        "artifact_kind": "provider_release_proof_control_surface",
+        "provider": args.provider,
+        "provider_version": provider_version,
+        "status": "captured" if isinstance(source_artifact.get("control_surface"), dict) else "not_captured",
+        "control_surface": source_artifact.get("control_surface")
+        if isinstance(source_artifact.get("control_surface"), dict)
+        else None,
+    }
     _write_json(provider_contract_path, provider_contract)
     _write_json(operation_evidence_path, operation_evidence_artifact)
     _write_json(session_projection_path, session_projection)
     _write_json(action_matrix_path, action_matrix_artifact)
+    _write_json(control_surface_path, control_surface_artifact)
     artifact = {
         "schema_version": SCHEMA_VERSION,
         "artifact_kind": "provider_release_proof",
@@ -1760,6 +1801,7 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
         },
         "operation_evidence": normalized.get("operation_evidence") or {},
         "action_matrix": source_artifact.get("action_matrix"),
+        "control_surface": source_artifact.get("control_surface"),
         "normalized": normalized,
         "contract_operations": contract_operations,
         "artifacts": {
@@ -1769,6 +1811,7 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
             "operation_evidence": str(operation_evidence_path),
             "session_projection": str(session_projection_path),
             "action_matrix": str(action_matrix_path),
+            "control_surface": str(control_surface_path),
             "evidence_root": str(args.evidence_root),
         },
     }

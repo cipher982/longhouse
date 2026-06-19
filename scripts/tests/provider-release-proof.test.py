@@ -851,13 +851,16 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
             assert Path(payload["artifacts"]["universal_harness_artifact"]).exists()
             assert Path(payload["artifacts"]["universal_harness_evidence_root"]).is_dir()
             assert Path(payload["artifacts"]["action_matrix"]).exists()
+            assert Path(payload["artifacts"]["control_surface"]).exists()
             universal = payload["normalized"]["universal_harness"]
-            assert universal["result_count"] == 7
+            assert universal["result_count"] == 8
             assert "action_matrix" in universal["scenarios"]
+            assert "control_surface" in universal["scenarios"]
             assert "parse_ingest_project" in universal["scenarios"]
             assert payload["normalized"]["canaries"]["universal_probe_identity"]["status"] == "pass"
             assert payload["normalized"]["canaries"]["universal_collect_raw_evidence"]["status"] == "pass"
             assert payload["normalized"]["canaries"]["universal_action_matrix"]["status"] == "warn"
+            assert payload["normalized"]["canaries"]["universal_control_surface"]["status"] == "warn"
             assert payload["normalized"]["canaries"]["universal_parse_ingest_project"]["status"] == "pass"
             assert payload["normalized"]["canaries"]["universal_run_prompt_once"]["status"] in {
                 "pass",
@@ -867,6 +870,12 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
             assert action_matrix["action_count"] > 10
             assert action_matrix["action_ids"]
             assert payload["normalized"]["action_matrix"]["status_counts"]["blocked"] >= 1
+            control_surface = payload["control_surface"]
+            assert 8 < control_surface["action_count"] < action_matrix["action_count"]
+            assert "send_message" in control_surface["action_ids"]
+            assert "old_new_release_diff" not in control_surface["action_ids"]
+            control_counts = payload["normalized"]["control_surface"]["status_counts"]
+            assert control_counts.get("blocked", 0) + control_counts.get("unsupported_gap", 0) >= 1
 
 
 def test_release_proof_exposes_universal_session_evidence_for_codex_and_opencode() -> None:
