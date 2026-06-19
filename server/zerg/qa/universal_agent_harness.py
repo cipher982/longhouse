@@ -900,6 +900,8 @@ class UniversalProviderAdapter:
         return payload
 
     def interrupt_cancel(self, package: EvidencePackage) -> dict[str, Any]:
+        if self.config.provider == "claude":
+            return self._run_claude_interrupt_cancel(package)
         if self.config.provider == "codex":
             return self._run_codex_interrupt_cancel(package)
         if self.config.provider == "opencode":
@@ -1110,6 +1112,82 @@ class UniversalProviderAdapter:
             payload["failure_code"] = db_ingest.get("failure_code") or "managed_session_e2e_db_ingest_failed"
             payload["message"] = "OpenCode provider-live evidence did not pass Longhouse DB ingest assertions."
         package.write_json("assertions/managed_session_e2e.json", payload)
+        return payload
+
+    def _run_claude_interrupt_cancel(self, package: EvidencePackage) -> dict[str, Any]:
+        control_evidence_root = package.path("raw", "provider-control-e2e-evidence")
+        control_artifact_path = package.path("raw", "provider-control-e2e.json")
+        control_artifact = run_provider_control_e2e_canary(
+            provider="claude",
+            artifact_path=control_artifact_path,
+            evidence_root=control_evidence_root,
+        )
+        if not control_artifact_path.is_file():
+            package.write_json("raw/provider-control-e2e.json", control_artifact)
+        package.write_json("raw/provider-control-e2e-inline.json", control_artifact)
+
+        claude = _claude_control_canary(control_artifact)
+        operation_evidence = claude_channel_control_operation_evidence(claude)
+        raw_events = claude_channel_control_raw_events(claude)
+        provider_session_id = _first_claude_control_session_id(claude) or self._session_id(package)
+        projection = self._write_session_projection(
+            package,
+            raw_events=raw_events,
+            operations=operation_evidence,
+            provider_session_id=provider_session_id,
+        )
+        db_ingest = ingest_canonical_events_into_longhouse_db(
+            package=package,
+            provider=self.config.provider,
+            rows=raw_events,
+            provider_session_id=provider_session_id,
+        )
+        operation_evidence.update(
+            {
+                str(operation): dict(evidence)
+                for operation, evidence in dict(db_ingest.get("operation_evidence") or {}).items()
+                if isinstance(evidence, Mapping)
+            }
+        )
+        session_projection_path = package.path("longhouse", "session-projection.json")
+        try:
+            session_projection = json.loads(session_projection_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            session_projection = {}
+        if isinstance(session_projection, dict):
+            session_projection["operation_statuses"] = operation_evidence
+            package.write_json("longhouse/session-projection.json", session_projection)
+
+        verdict = str(control_artifact.get("verdict") or "red")
+        interrupt_status = str((operation_evidence.get("interrupt") or {}).get("status") or STATUS_FAIL)
+        db_status = str(db_ingest.get("status") or STATUS_FAIL)
+        passed = verdict == "green" and interrupt_status == STATUS_PASS and db_status == STATUS_PASS
+        payload = {
+            **projection,
+            "status": STATUS_PASS if passed else STATUS_FAIL,
+            "scenario": "interrupt_cancel",
+            "provider_control_artifact_path": str(control_artifact_path),
+            "provider_control_evidence_root": str(control_evidence_root),
+            "provider_control_verdict": verdict,
+            "source_artifact_kind": "provider_control_e2e_canary",
+            "synthetic": False,
+            "operation_evidence": operation_evidence,
+            "longhouse_ingest": {
+                "status": db_status,
+                "failure_code": db_ingest.get("failure_code"),
+                "db_snapshot_path": db_ingest.get("db_snapshot_path"),
+                "session_projection_path": db_ingest.get("session_projection_path"),
+                "timeline_projection_path": db_ingest.get("timeline_projection_path"),
+            },
+        }
+        if verdict != "green" or interrupt_status != STATUS_PASS:
+            failure_code = control_artifact.get("failure_code") or claude.get("failure_code")
+            payload["failure_code"] = failure_code or "claude_interrupt_cancel_failed"
+            payload["message"] = "Claude channel interrupt canary did not pass."
+        elif db_status != STATUS_PASS:
+            payload["failure_code"] = db_ingest.get("failure_code") or "interrupt_cancel_db_ingest_failed"
+            payload["message"] = "Claude interrupt evidence did not pass Longhouse DB ingest assertions."
+        package.write_json("assertions/interrupt_cancel.json", payload)
         return payload
 
     def _run_opencode_interrupt_cancel(self, package: EvidencePackage) -> dict[str, Any]:
@@ -3333,6 +3411,9 @@ def _antigravity_control_canary(artifact: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _first_claude_control_session_id(canary: Mapping[str, Any]) -> str | None:
+    cleaned = _clean_optional_str(canary.get("session_id"))
+    if cleaned:
+        return cleaned
     session_ids = canary.get("session_ids")
     if isinstance(session_ids, list):
         for session_id in session_ids:
@@ -3421,6 +3502,47 @@ def opencode_tool_call_result_raw_events(artifact: Mapping[str, Any]) -> list[di
     return rows
 
 
+def claude_channel_control_raw_events(canary: Mapping[str, Any]) -> list[dict[str, Any]]:
+    session_id = _first_claude_control_session_id(canary) or "claude-channel-control"
+    rows: list[dict[str, Any]] = []
+    if canary:
+        rows.append(
+            {
+                "type": "user",
+                "role": "user",
+                "text": "hello from provider control canary",
+                "provider_session_id": session_id,
+                "source_canary": "claude_channel_control",
+                "meta": canary.get("send_meta"),
+                "evidence_origin": "provider_control_e2e_canary",
+            }
+        )
+        rows.append(
+            {
+                "type": "user",
+                "role": "user",
+                "text": "steer from provider control canary",
+                "provider_session_id": session_id,
+                "source_canary": "claude_channel_control",
+                "intent": "steer",
+                "meta": canary.get("steer_meta"),
+                "evidence_origin": "provider_control_e2e_canary",
+            }
+        )
+        rows.append(
+            {
+                "type": "system",
+                "role": "system",
+                "text": "Claude channel interrupt delivered SIGINT to the owned fake provider process.",
+                "provider_session_id": session_id,
+                "source_canary": "claude_channel_control",
+                "interrupt_marker": canary.get("interrupt_marker"),
+                "evidence_origin": "provider_control_e2e_canary",
+            }
+        )
+    return rows
+
+
 def claude_real_print_raw_events(canary: Mapping[str, Any]) -> list[dict[str, Any]]:
     provider_session_id = _first_claude_control_session_id(canary) or "claude-real-print"
     marker = str(canary.get("marker") or "marker-unavailable")
@@ -3492,6 +3614,34 @@ def antigravity_real_send_raw_events(canary: Mapping[str, Any]) -> list[dict[str
             }
         )
     return rows
+
+
+def claude_channel_control_operation_evidence(canary: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    status = STATUS_PASS if canary.get("status") == "pass" else STATUS_FAIL
+    if status == STATUS_PASS:
+        failure_code = None
+    else:
+        failure_code = str(canary.get("failure_code") or "claude_channel_control_failed")
+    return {
+        "send_input": {
+            "status": status,
+            "level": "live_no_token" if status == STATUS_PASS else "none",
+            "canary": "claude_channel_control",
+            "failure_code": failure_code,
+        },
+        "steer_active_turn": {
+            "status": status,
+            "level": "live_no_token" if status == STATUS_PASS else "none",
+            "canary": "claude_channel_control",
+            "failure_code": failure_code,
+        },
+        "interrupt": {
+            "status": status,
+            "level": "live_no_token" if status == STATUS_PASS else "none",
+            "canary": "claude_channel_control",
+            "failure_code": failure_code,
+        },
+    }
 
 
 def claude_real_print_operation_evidence(canary: Mapping[str, Any]) -> dict[str, dict[str, Any]]:

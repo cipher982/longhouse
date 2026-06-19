@@ -838,6 +838,86 @@ def test_codex_interrupt_cancel_reports_runtime_host_credentials_gap(tmp_path: P
     assert result["data"]["operation_evidence"]["interrupt"]["level"] == "live_token_required"
 
 
+def test_claude_interrupt_cancel_uses_channel_control_canary(tmp_path: Path, monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_control_canary(
+        *,
+        provider: str,
+        artifact_path: Path,
+        evidence_root: Path,
+        extra_args: list[str] | None = None,
+        extra_env: dict[str, str] | None = None,
+    ) -> dict[str, object]:
+        calls.append(
+            {
+                "provider": provider,
+                "artifact_path": artifact_path,
+                "evidence_root": evidence_root,
+                "extra_args": extra_args,
+                "extra_env": extra_env,
+            }
+        )
+        return {
+            "schema_version": 1,
+            "provider": "claude",
+            "verdict": "green",
+            "failure_code": None,
+            "canaries": {
+                "claude": {
+                    "status": "pass",
+                    "session_id": "claude-channel-control-session",
+                    "send_meta": {
+                        "injected_by": "longhouse",
+                        "longhouse_session_id": "claude-channel-control-session",
+                    },
+                    "steer_meta": {
+                        "injected_by": "longhouse",
+                        "intent": "steer",
+                        "longhouse_session_id": "claude-channel-control-session",
+                    },
+                    "interrupt_marker": str(tmp_path / "interrupted.txt"),
+                }
+            },
+        }
+
+    monkeypatch.setattr(uah, "run_provider_control_e2e_canary", fake_control_canary)
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("claude",),
+            scenarios=("interrupt_cancel",),
+            evidence_root=tmp_path / "evidence",
+        )
+    )
+
+    assert calls
+    assert calls[0]["provider"] == "claude"
+    assert calls[0]["extra_args"] is None
+    assert calls[0]["extra_env"] is None
+    result = payload["results"][0]
+    assert payload["verdict"] == "green"
+    assert result["status"] == "pass"
+    assert result["data"]["scenario"] == "interrupt_cancel"
+    assert result["data"]["source_artifact_kind"] == "provider_control_e2e_canary"
+    assert result["data"]["synthetic"] is False
+    assert result["data"]["operation_evidence"]["send_input"]["level"] == "live_no_token"
+    assert result["data"]["operation_evidence"]["steer_active_turn"]["status"] == "pass"
+    assert result["data"]["operation_evidence"]["interrupt"]["status"] == "pass"
+    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
+
+    evidence_root = Path(result["evidence_root"])
+    raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
+    assert "claude_channel_control" in raw_events
+    assert "steer from provider control canary" in raw_events
+    assert "SIGINT" in raw_events
+    session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
+    assert session["provider_session_id"] == "claude-channel-control-session"
+    assert session["operation_statuses"]["interrupt"]["level"] == "live_no_token"
+    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
+    assert db_snapshot["ingest_result"]["events_inserted"] == 3
+    assert db_snapshot["timeline"]["matched"] is True
+
+
 def test_opencode_interrupt_cancel_uses_session_abort_canary(tmp_path: Path) -> None:
     fake_opencode = _fake_opencode_server(tmp_path / "bin" / "opencode")
     payload = uah.run_harness(
