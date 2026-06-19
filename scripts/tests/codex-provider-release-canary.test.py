@@ -134,7 +134,7 @@ if args[:2] == ["codex-bridge", "send"]:
     state_file = state_root / f"{session_id}.json"
     state = json.loads(state_file.read_text(encoding="utf-8"))
     if os.environ.get("FAKE_LIVE_SEND_FAIL") == "1":
-        print("fake live send failed", file=sys.stderr)
+        print("fake live send failed with token secret-token", file=sys.stderr)
         raise SystemExit(1)
     turn_id = "turn_live_fake"
     text = arg_value("--text", "")
@@ -142,12 +142,27 @@ if args[:2] == ["codex-bridge", "send"]:
     state["last_turn_status"] = "completed"
     state_file.write_text(json.dumps(state), encoding="utf-8")
     thread_path = Path(state["thread_path"])
-    marker_text = "marker missing" if os.environ.get("FAKE_LIVE_SEND_MARKER_MISSING") == "1" else text
+    user_text = text
+    assistant_text = "marker missing" if os.environ.get("FAKE_LIVE_SEND_MARKER_MISSING") == "1" else text
     thread_path.write_text(
         "\n".join(
             [
-                json.dumps({"type": "user_message", "text": marker_text}),
-                json.dumps({"type": "agent_message", "text": marker_text}),
+                json.dumps({
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": user_text}],
+                    },
+                }),
+                json.dumps({
+                    "type": "response_item",
+                    "payload": {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": assistant_text}],
+                    },
+                }),
             ]
         )
         + "\n",
@@ -436,6 +451,38 @@ def test_managed_live_send_marker_missing_is_red() -> None:
         assert payload["operation_evidence"]["send_input"]["level"] == "none"
 
 
+def test_managed_live_send_marker_in_user_prompt_only_is_red() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fixture = _fixture(root)
+        result, payload = _run_canary(
+            root,
+            fixture,
+            ["--run-managed-live-send", "--source-review-status", "pass"],
+            {"FAKE_LIVE_SEND_MARKER_MISSING": "1"},
+        )
+        assert result.returncode == 1
+        assert payload["failure_code"] == "managed_live_send_marker_missing"
+        assert "assistant transcript" in payload["canaries"]["managed_live_send"]["message"]
+
+
+def test_managed_live_send_failure_redacts_token() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fixture = _fixture(root)
+        result, payload = _run_canary(
+            root,
+            fixture,
+            ["--run-managed-live-send", "--source-review-status", "pass"],
+            {"FAKE_LIVE_SEND_FAIL": "1"},
+        )
+        assert result.returncode == 1
+        assert payload["failure_code"] == "managed_live_send_failed"
+        evidence_blob = json.dumps(payload["canaries"]["managed_live_send"].get("evidence") or {})
+        assert "secret-token" not in evidence_blob
+        assert "<redacted>" in evidence_blob
+
+
 def test_raw_fresh_remote_warning_is_yellow() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -628,6 +675,8 @@ def main() -> int:
     tests = [
         test_full_fake_canary_can_go_green,
         test_managed_live_send_marker_missing_is_red,
+        test_managed_live_send_marker_in_user_prompt_only_is_red,
+        test_managed_live_send_failure_redacts_token,
         test_raw_fresh_remote_warning_is_yellow,
         test_raw_fresh_remote_failure_preserves_protocol_fingerprints,
         test_managed_tui_attach_active_thread_error_is_red,

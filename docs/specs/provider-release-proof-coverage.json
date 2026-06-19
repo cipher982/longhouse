@@ -422,7 +422,7 @@
             "proof_boundary": "managed_runtime_live_token_or_fake",
             "fake_or_real": "mixed",
             "runs_in_ci": true,
-            "runs_in_sauron_release_watch": true,
+            "runs_in_sauron_release_watch": false,
             "accepted_baseline": "none",
             "failure_actionable": false
         },

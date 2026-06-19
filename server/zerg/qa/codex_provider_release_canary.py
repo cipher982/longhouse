@@ -884,6 +884,42 @@ def _terminal_turn_state(state: dict[str, Any]) -> bool:
     return state.get("last_turn_status") in {"completed", "failed", "interrupted", "cancelled"} and not state.get("active_turn_id")
 
 
+def _assistant_text_from_rollout_event(value: dict[str, Any]) -> str | None:
+    payload = value.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    payload_type = payload.get("type")
+    if payload_type == "agent_message":
+        text = str(payload.get("message") or "").strip()
+        return text or None
+    if payload_type == "message" and payload.get("role") == "assistant":
+        chunks = []
+        for item in payload.get("content") or []:
+            if isinstance(item, dict) and item.get("type") == "output_text":
+                chunks.append(str(item.get("text") or ""))
+        text = "".join(chunks).strip()
+        return text or None
+    return None
+
+
+def _assistant_transcript_contains(path: Path, marker: str) -> bool:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    for line in reversed(lines):
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(value, dict):
+            continue
+        text = _assistant_text_from_rollout_event(value)
+        if text and marker in text:
+            return True
+    return False
+
+
 def run_managed_live_send(args: argparse.Namespace, evidence_root: Path, codex_bin: str) -> dict[str, Any]:
     root = evidence_root / "managed-live-send"
     root.mkdir(parents=True, exist_ok=True)
@@ -935,7 +971,7 @@ def run_managed_live_send(args: argparse.Namespace, evidence_root: Path, codex_b
                 "managed_live_send_failed",
                 "codex-bridge send failed during managed live-send canary",
                 evidence_root=str(root),
-                evidence=_command_evidence(send_result),
+                evidence=_command_evidence(send_result, secrets=[args.agents_token]),
             )
 
         deadline = time.monotonic() + args.live_send_timeout_secs
@@ -974,11 +1010,10 @@ def run_managed_live_send(args: argparse.Namespace, evidence_root: Path, codex_b
                 state=state,
                 expected_thread_path=str(thread_path),
             )
-        transcript_text = thread_path.read_text(encoding="utf-8", errors="replace")
-        if marker not in transcript_text:
+        if not _assistant_transcript_contains(thread_path, marker):
             return _fail(
                 "managed_live_send_marker_missing",
-                "managed live-send transcript did not contain the unique canary marker",
+                "managed live-send assistant transcript did not contain the unique canary marker",
                 evidence_root=str(root),
                 state=state,
                 thread_path=str(thread_path),
