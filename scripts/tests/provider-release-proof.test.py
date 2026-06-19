@@ -1244,12 +1244,13 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
             assert Path(payload["artifacts"]["action_matrix"]).exists()
             assert Path(payload["artifacts"]["control_surface"]).exists()
             universal = payload["normalized"]["universal_harness"]
-            assert universal["result_count"] == 10
+            assert universal["result_count"] == 11
             assert "action_matrix" in universal["scenarios"]
             assert "control_surface" in universal["scenarios"]
             assert "session_projection" in universal["scenarios"]
             assert "timeline_projection" in universal["scenarios"]
             assert "parse_ingest_project" in universal["scenarios"]
+            assert "pause_request_detect" in universal["scenarios"]
             assert (
                 payload["normalized"]["canaries"]["universal_probe_identity"]["status"]
                 == "pass"
@@ -1287,6 +1288,12 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
                 == "pass"
             )
             assert (
+                payload["normalized"]["canaries"]["universal_pause_request_detect"][
+                    "status"
+                ]
+                == "pass"
+            )
+            assert (
                 payload["operation_evidence"]["universal_session_projection"][
                     "status"
                 ]
@@ -1296,6 +1303,16 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
                 payload["operation_evidence"]["universal_timeline_projection"][
                     "status"
                 ]
+                == "pass"
+            )
+            assert (
+                payload["operation_evidence"]["universal_pause_request_detect"][
+                    "status"
+                ]
+                == "pass"
+            )
+            assert (
+                payload["operation_evidence"]["universal_runtime_phase"]["status"]
                 == "pass"
             )
             assert payload["normalized"]["canaries"]["universal_run_prompt_once"][
@@ -1351,7 +1368,7 @@ def test_release_proof_can_attach_universal_old_new_release_diff() -> None:
 
         assert result.returncode == 0, result.stderr + result.stdout
         universal = payload["normalized"]["universal_harness"]
-        assert universal["result_count"] == 10
+        assert universal["result_count"] == 11
         assert "old_new_release_diff" in universal["scenarios"]
         assert (
             payload["normalized"]["canaries"]["universal_old_new_release_diff"][
@@ -1642,6 +1659,67 @@ def test_claude_release_proof_can_attach_universal_steer_active_turn_e2e() -> No
         db_snapshot = _read_json(evidence_root / "longhouse" / "db-ingest-result.json")
         assert db_snapshot["ingest_result"]["events_inserted"] == 3
         assert db_snapshot["timeline"]["matched"] is True
+
+
+def test_codex_release_proof_can_attach_universal_answer_pause_request_service_gap() -> (
+    None
+):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        _write_fake_provider_bin(root, "codex 9.9.9")
+
+        result, payload = _run_proof(
+            root,
+            "codex",
+            extra_args=[
+                "--run-universal-harness",
+                "--universal-scenario",
+                "answer_pause_request",
+            ],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["verdict"] == "yellow"
+        assert (
+            payload["normalized"]["canaries"]["universal_answer_pause_request"][
+                "status"
+            ]
+            == "warn"
+        )
+        assert (
+            payload["operation_evidence"]["universal_answer_pause_request"][
+                "status"
+            ]
+            == "blocked"
+        )
+        assert (
+            payload["operation_evidence"]["universal_answer_pause_request"]["level"]
+            == "live_token_required"
+        )
+        assert (
+            payload["operation_evidence"][
+                "universal_longhouse_pause_response_service"
+            ]["status"]
+            == "pass"
+        )
+        universal_artifact = _read_json(
+            Path(payload["artifacts"]["universal_harness_artifact"])
+        )
+        result_row = universal_artifact["results"][0]
+        assert result_row["provider"] == "codex"
+        assert result_row["scenario"] == "answer_pause_request"
+        assert result_row["status"] == "blocked"
+        assert (
+            result_row["failure_code"] == "answer_pause_provider_delivery_unproven"
+        )
+        assert result_row["data"]["longhouse_response_service"]["status"] == "pass"
+        evidence_root = Path(result_row["evidence_root"])
+        resolved = _read_json(
+            evidence_root / "longhouse" / "pause-request-resolved.json"
+        )
+        assert resolved["resolved_pause_request"]["status"] == "resolved"
+        assert resolved["active_after_response"] is None
 
 
 def test_codex_release_proof_can_attach_universal_live_token_credentials_gap() -> None:
@@ -3271,6 +3349,7 @@ def main() -> int:
         test_codex_release_proof_can_attach_universal_interrupt_credentials_gap,
         test_claude_release_proof_can_attach_universal_interrupt_cancel_e2e,
         test_claude_release_proof_can_attach_universal_steer_active_turn_e2e,
+        test_codex_release_proof_can_attach_universal_answer_pause_request_service_gap,
         test_codex_release_proof_can_attach_universal_live_token_credentials_gap,
         test_claude_release_proof_can_attach_universal_live_token_e2e,
         test_antigravity_release_proof_can_attach_universal_live_token_e2e,

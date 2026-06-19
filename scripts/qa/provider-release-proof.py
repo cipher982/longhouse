@@ -49,6 +49,7 @@ DEFAULT_UNIVERSAL_SCENARIOS = (
     "run_prompt_once",
     "launch_managed_session",
     "send_receive",
+    "pause_request_detect",
 )
 UNIVERSAL_SCENARIOS = (
     "probe_identity",
@@ -64,6 +65,8 @@ UNIVERSAL_SCENARIOS = (
     "send_receive",
     "managed_session_e2e",
     "steer_active_turn",
+    "pause_request_detect",
+    "answer_pause_request",
     "interrupt_cancel",
     "tool_call_result",
     "resume_reattach",
@@ -743,6 +746,8 @@ def _run_universal_harness(
             "db_ingest_project",
             "managed_session_e2e",
             "steer_active_turn",
+            "pause_request_detect",
+            "answer_pause_request",
             "interrupt_cancel",
             "tool_call_result",
             "resume_reattach",

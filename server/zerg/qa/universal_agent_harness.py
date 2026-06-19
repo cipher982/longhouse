@@ -48,6 +48,8 @@ SCENARIOS = (
     "send_receive",
     "managed_session_e2e",
     "steer_active_turn",
+    "pause_request_detect",
+    "answer_pause_request",
     "interrupt_cancel",
     "tool_call_result",
     "resume_reattach",
@@ -89,6 +91,8 @@ MVP_METHODS = (
     "send_receive",
     "managed_session_e2e",
     "steer_active_turn",
+    "pause_request_detect",
+    "answer_pause_request",
     "interrupt_cancel",
     "tool_call_result",
     "resume_reattach",
@@ -353,6 +357,20 @@ def write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.write_text(json.dumps(dict(payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat().replace("+00:00", "Z")
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_safe(item) for item in value]
+    return value
+
+
 def _read_json(path: Path) -> dict[str, Any]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
@@ -470,6 +488,10 @@ class AgentHarnessAdapter(Protocol):
     def send_receive(self, package: "EvidencePackage", prompt: str) -> dict[str, Any]: ...
 
     def steer_active_turn(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def pause_request_detect(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def answer_pause_request(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def interrupt_cancel(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
@@ -984,6 +1006,33 @@ class UniversalProviderAdapter:
         package.write_json("assertions/steer_active_turn.json", payload)
         return payload
 
+    def pause_request_detect(self, package: EvidencePackage) -> dict[str, Any]:
+        payload = self._run_pause_request_service_projection(package, answer=False)
+        package.write_json("assertions/pause_request_detect.json", payload)
+        return payload
+
+    def answer_pause_request(self, package: EvidencePackage) -> dict[str, Any]:
+        if not _provider_answer_pause_supported(self.config.provider):
+            payload = self._unsupported_payload(
+                "answer_pause_request",
+                "answer_pause_request_unsupported",
+                "This provider does not expose stable answer-pause machine-control semantics.",
+            )
+            payload["operation_evidence"] = {
+                "answer_pause_request": {
+                    "status": STATUS_UNSUPPORTED_GAP,
+                    "level": "none",
+                    "canary": "universal_answer_pause_request",
+                    "failure_code": "answer_pause_request_unsupported",
+                }
+            }
+            package.write_json("assertions/answer_pause_request.json", payload)
+            return payload
+
+        payload = self._run_pause_request_service_projection(package, answer=True)
+        package.write_json("assertions/answer_pause_request.json", payload)
+        return payload
+
     def interrupt_cancel(self, package: EvidencePackage) -> dict[str, Any]:
         if self.config.provider == "claude":
             return self._run_claude_interrupt_cancel(package)
@@ -1246,6 +1295,297 @@ class UniversalProviderAdapter:
             payload["failure_code"] = failure_code
             payload["message"] = "Old/new provider release-proof artifacts diverged."
         package.write_json("assertions/old_new_release_diff.json", payload)
+        return payload
+
+    def _run_pause_request_service_projection(self, package: EvidencePackage, *, answer: bool) -> dict[str, Any]:
+        os.environ.setdefault("TESTING", "1")
+        os.environ.setdefault("DATABASE_URL", f"sqlite:///{package.path('longhouse', 'settings-bootstrap.sqlite')}")
+
+        from zerg.database import initialize_database
+        from zerg.database import make_engine
+        from zerg.database import make_sessionmaker
+        from zerg.models.agents import AgentSession
+        from zerg.models.agents import SessionPauseRequest
+        from zerg.models.agents import SessionRuntimeState
+        from zerg.services.session_pause_requests import PAUSE_KIND_STRUCTURED_QUESTION
+        from zerg.services.session_pause_requests import list_pause_requests_for_session
+        from zerg.services.session_pause_requests import load_active_pause_request_for_session
+        from zerg.services.session_pause_requests import resolve_pause_request
+        from zerg.services.session_pause_requests import serialize_pause_request_projection
+        from zerg.services.session_runtime import RuntimeEventIngest
+        from zerg.services.session_runtime import ingest_runtime_events
+
+        scenario = "answer_pause_request" if answer else "pause_request_detect"
+        can_respond = _provider_answer_pause_supported(self.config.provider)
+        now = datetime(2026, 6, 19, 12, 0, tzinfo=UTC)
+        db_path = package.path("longhouse", "pause-request-service.sqlite")
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        engine = make_engine(f"sqlite:///{db_path}")
+        initialize_database(engine)
+        session_factory = make_sessionmaker(engine)
+
+        with session_factory() as db:
+            session = AgentSession(
+                provider=self.config.provider,
+                environment="test",
+                project="universal-agent-harness",
+                device_id="universal-harness",
+                cwd=str(package.path("workspace")),
+                started_at=now - timedelta(minutes=5),
+                last_activity_at=now,
+                user_messages=1,
+                assistant_messages=0,
+            )
+            db.add(session)
+            db.flush()
+            db.refresh(session)
+            runtime_key = f"{self.config.provider}:{session.id}:pause-request"
+            question_payload = {
+                "questions": [
+                    {
+                        "id": "approach",
+                        "header": "Approach",
+                        "question": "Which implementation approach should the agent use?",
+                        "multiSelect": False,
+                        "options": [
+                            {"label": "Small adapter path", "description": "Keep this provider-specific change narrow."},
+                            {"label": "Broad refactor", "description": "Reshape the whole provider bridge."},
+                        ],
+                    }
+                ]
+            }
+            phase_result = ingest_runtime_events(
+                db,
+                [
+                    RuntimeEventIngest(
+                        runtime_key=runtime_key,
+                        session_id=session.id,
+                        provider=self.config.provider,
+                        device_id="universal-harness",
+                        source="universal_harness",
+                        kind="phase_signal",
+                        phase="needs_user",
+                        occurred_at=now,
+                        freshness_ms=10 * 60 * 1000,
+                        dedupe_key=f"{scenario}:phase-needs-user",
+                        payload={},
+                    )
+                ],
+            )
+            pause_result = ingest_runtime_events(
+                db,
+                [
+                    RuntimeEventIngest(
+                        runtime_key=runtime_key,
+                        session_id=session.id,
+                        provider=self.config.provider,
+                        device_id="universal-harness",
+                        source="universal_harness",
+                        kind="pause_request",
+                        tool_name=_provider_pause_tool_name(self.config.provider),
+                        occurred_at=now + timedelta(seconds=1),
+                        dedupe_key=f"{scenario}:pause-question",
+                        payload={
+                            "provider_request_id": "question-1",
+                            "kind": PAUSE_KIND_STRUCTURED_QUESTION,
+                            "title": "Choose approach",
+                            "summary": "The provider needs a structured user decision before continuing.",
+                            "request_payload": question_payload,
+                            "can_respond": can_respond,
+                            "provider_ref": {
+                                "source": "universal_harness",
+                                "scenario": scenario,
+                            },
+                        },
+                    )
+                ],
+            )
+            db.commit()
+
+            state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one_or_none()
+            active = load_active_pause_request_for_session(db, session.id)
+            pending_projection = _json_safe(serialize_pause_request_projection(active, can_respond=can_respond))
+            pending_rows = [
+                _json_safe(serialize_pause_request_projection(row, can_respond=row.can_respond))
+                for row in list_pause_requests_for_session(db, session.id)
+            ]
+            pending_assertions = {
+                "runtime_phase_needs_user": state is not None and state.phase == "needs_user",
+                "active_pause_request_visible": active is not None,
+                "pause_request_pending": active is not None and active.status == "pending",
+                "question_payload_projected": bool((pending_projection or {}).get("questions")),
+                "can_respond_matches_provider_contract": bool((pending_projection or {}).get("can_respond")) == can_respond,
+            }
+
+            resolved_projection = None
+            active_after_response = None
+            all_rows_after_response: list[dict[str, Any] | None] = []
+            response_assertions: dict[str, bool] = {}
+            if answer and active is not None:
+                resolved = resolve_pause_request(
+                    db,
+                    pause_request_id=active.id,
+                    status="resolved",
+                    occurred_at=now + timedelta(seconds=5),
+                    response_payload={
+                        "answers": {
+                            "approach": "Small adapter path",
+                        }
+                    },
+                    response_text="Use the small adapter path.",
+                )
+                db.commit()
+                if resolved is not None:
+                    db.refresh(resolved)
+                active_after = load_active_pause_request_for_session(db, session.id)
+                active_after_response = _json_safe(serialize_pause_request_projection(active_after))
+                rows_after = (
+                    db.query(SessionPauseRequest)
+                    .filter(SessionPauseRequest.session_id == session.id)
+                    .order_by(SessionPauseRequest.created_at.asc())
+                    .all()
+                )
+                all_rows_after_response = [
+                    _json_safe(serialize_pause_request_projection(row, can_respond=row.can_respond)) for row in rows_after
+                ]
+                resolved_projection = _json_safe(serialize_pause_request_projection(resolved, can_respond=can_respond))
+                response_assertions = {
+                    "pause_request_resolved": resolved is not None and resolved.status == "resolved",
+                    "active_pause_request_cleared": active_after is None,
+                    "response_payload_stored": bool(getattr(resolved, "response_payload_json", None)),
+                    "response_text_stored": getattr(resolved, "response_text", None) == "Use the small adapter path.",
+                }
+
+            state_projection = None
+            if state is not None:
+                state_projection = {
+                    "runtime_key": state.runtime_key,
+                    "session_id": str(state.session_id) if state.session_id else None,
+                    "provider": state.provider,
+                    "phase": state.phase,
+                    "phase_source": state.phase_source,
+                    "active_tool": state.active_tool,
+                    "phase_started_at": state.phase_started_at,
+                    "last_runtime_signal_at": state.last_runtime_signal_at,
+                    "runtime_version": state.runtime_version,
+                }
+
+            db_summary = {
+                "session_id": str(session.id),
+                "runtime_key": runtime_key,
+                "db_path": str(db_path),
+                "phase_result": phase_result.model_dump(mode="json"),
+                "pause_result": pause_result.model_dump(mode="json"),
+                "state": _json_safe(state_projection),
+                "pending_pause_request": pending_projection,
+                "pending_pause_requests": pending_rows,
+                "resolved_pause_request": resolved_projection,
+                "active_after_response": active_after_response,
+                "all_rows_after_response": all_rows_after_response,
+            }
+
+        db_summary_path = package.write_json("longhouse/pause-request-service.json", _json_safe(db_summary))
+        package.write_json(
+            "longhouse/runtime-state.json",
+            _json_safe({"state": db_summary["state"], "runtime_key": db_summary["runtime_key"]}),
+        )
+        package.write_json(
+            "longhouse/pause-request-pending.json",
+            _json_safe({"pause_request": pending_projection, "pause_requests": pending_rows}),
+        )
+        if answer:
+            package.write_json(
+                "longhouse/pause-request-resolved.json",
+                _json_safe(
+                    {
+                        "resolved_pause_request": resolved_projection,
+                        "active_after_response": active_after_response,
+                        "all_rows_after_response": all_rows_after_response,
+                    }
+                ),
+            )
+
+        pending_pass = all(pending_assertions.values())
+        service_pass = not answer or (pending_pass and all(response_assertions.values()))
+        if not answer:
+            status = STATUS_PASS if pending_pass else STATUS_FAIL
+            failure_code = None if status == STATUS_PASS else "pause_request_detect_projection_failed"
+            payload = {
+                "status": status,
+                "scenario": scenario,
+                "db_path": str(db_path),
+                "db_summary_path": str(db_summary_path),
+                "runtime_key": db_summary["runtime_key"],
+                "session_id": db_summary["session_id"],
+                "runtime_state_path": str(package.path("longhouse", "runtime-state.json")),
+                "pause_request_pending_path": str(package.path("longhouse", "pause-request-pending.json")),
+                "pause_request": pending_projection,
+                "assertions": pending_assertions,
+                "operation_evidence": {
+                    "pause_request_detect": {
+                        "status": status,
+                        "level": "hermetic",
+                        "canary": "universal_pause_request_detect",
+                        "failure_code": failure_code,
+                    },
+                    "runtime_phase": {
+                        "status": STATUS_PASS if pending_assertions["runtime_phase_needs_user"] else STATUS_FAIL,
+                        "level": "hermetic",
+                        "canary": "universal_pause_request_detect",
+                    },
+                },
+            }
+            if failure_code:
+                payload["failure_code"] = failure_code
+                payload["message"] = "Longhouse did not project a pending structured pause request."
+            return payload
+
+        payload = {
+            "status": STATUS_BLOCKED if service_pass else STATUS_FAIL,
+            "scenario": scenario,
+            "failure_code": "answer_pause_provider_delivery_unproven" if service_pass else "answer_pause_request_service_failed",
+            "message": (
+                "Longhouse resolved the pause request, but provider-held live answer delivery still needs a token/live canary."
+                if service_pass
+                else "Longhouse pause-request response service assertions failed."
+            ),
+            "db_path": str(db_path),
+            "db_summary_path": str(db_summary_path),
+            "runtime_key": db_summary["runtime_key"],
+            "session_id": db_summary["session_id"],
+            "pause_request_pending_path": str(package.path("longhouse", "pause-request-pending.json")),
+            "pause_request_resolved_path": str(package.path("longhouse", "pause-request-resolved.json")),
+            "pause_request": pending_projection,
+            "resolved_pause_request": resolved_projection,
+            "active_after_response": active_after_response,
+            "assertions": {**pending_assertions, **response_assertions},
+            "longhouse_response_service": {
+                "status": STATUS_PASS if service_pass else STATUS_FAIL,
+                "level": "hermetic",
+                "canary": "universal_answer_pause_request_service",
+                "failure_code": None if service_pass else "answer_pause_request_service_failed",
+            },
+            "operation_evidence": {
+                "answer_pause_request": {
+                    "status": STATUS_BLOCKED if service_pass else STATUS_FAIL,
+                    "level": "live_token_required",
+                    "canary": "universal_answer_pause_request",
+                    "failure_code": "answer_pause_provider_delivery_unproven" if service_pass else "answer_pause_request_service_failed",
+                },
+                "pause_request_detect": {
+                    "status": STATUS_PASS if pending_pass else STATUS_FAIL,
+                    "level": "hermetic",
+                    "canary": "universal_pause_request_detect",
+                },
+                "longhouse_pause_response_service": {
+                    "status": STATUS_PASS if service_pass else STATUS_FAIL,
+                    "level": "hermetic",
+                    "canary": "universal_answer_pause_request_service",
+                    "failure_code": None if service_pass else "answer_pause_request_service_failed",
+                },
+            },
+            "next": "Promote with a live provider-held structured-question canary that proves the answer reaches the provider runtime.",
+        }
         return payload
 
     def managed_session_e2e(self, package: EvidencePackage) -> dict[str, Any]:
@@ -2911,6 +3251,25 @@ def _action_support(provider: str, action: ActionDefinition, contract: Any) -> t
     return False, f"unknown_support_kind:{action.support_kind}"
 
 
+def _provider_answer_pause_supported(provider: str) -> bool:
+    contract = contract_for_provider(provider)
+    if contract is None:
+        return False
+    return f"{provider}.answer_pause" in contract.machine_control_supports
+
+
+def _provider_pause_tool_name(provider: str) -> str:
+    if provider == "claude":
+        return "AskUserQuestion"
+    if provider == "codex":
+        return "requestUserInput"
+    if provider == "opencode":
+        return "opencode_pause_request"
+    if provider == "antigravity":
+        return "antigravity_pause_request"
+    return "structured_question"
+
+
 def _action_implementation_kind(
     *,
     action: ActionDefinition,
@@ -2932,7 +3291,9 @@ def _action_implementation_kind(
         return "longhouse_db_ingest"
     if action.action_id in {"baseline_compare", "old_new_release_diff"}:
         return "provider_release_proof_diff"
-    if action.action_id in {"pause_request_detect", "answer_pause_request", "tool_call_result"}:
+    if action.action_id in {"pause_request_detect", "answer_pause_request"}:
+        return "universal_pause_request_service"
+    if action.action_id == "tool_call_result":
         return "derived_longhouse_surface"
     if contract_evidence:
         return "managed_provider_contract"
@@ -4636,6 +4997,30 @@ def run_steer_active_turn(adapter: AgentHarnessAdapter, package: EvidencePackage
     )
 
 
+def run_pause_request_detect(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.pause_request_detect(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="pause_request_detect",
+        package=package,
+        payload=payload,
+    )
+
+
+def run_answer_pause_request(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.answer_pause_request(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="answer_pause_request",
+        package=package,
+        payload=payload,
+    )
+
+
 def run_interrupt_cancel(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
     adapter.prepare(package)
     payload = adapter.interrupt_cancel(package)
@@ -4733,6 +5118,8 @@ SCENARIO_RUNNERS = {
     "send_receive": run_send_receive,
     "managed_session_e2e": run_managed_session_e2e,
     "steer_active_turn": run_steer_active_turn,
+    "pause_request_detect": run_pause_request_detect,
+    "answer_pause_request": run_answer_pause_request,
     "interrupt_cancel": run_interrupt_cancel,
     "tool_call_result": run_tool_call_result,
     "resume_reattach": run_resume_reattach,

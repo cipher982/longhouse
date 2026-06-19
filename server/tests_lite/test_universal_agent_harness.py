@@ -1340,6 +1340,81 @@ def test_steer_active_turn_reports_explicit_provider_gaps(tmp_path: Path) -> Non
         assert result["data"]["operation_evidence"]["steer_active_turn"]["status"] == "unsupported_gap"
 
 
+def test_pause_request_detect_projects_pending_question_for_all_providers(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=uah.SUPPORTED_PROVIDERS,
+            scenarios=("pause_request_detect",),
+            evidence_root=tmp_path / "evidence",
+        )
+    )
+
+    assert payload["verdict"] == "green"
+    assert {result["provider"] for result in payload["results"]} == set(uah.SUPPORTED_PROVIDERS)
+    for result in payload["results"]:
+        assert result["status"] == "pass"
+        data = result["data"]
+        assert data["scenario"] == "pause_request_detect"
+        assert data["operation_evidence"]["pause_request_detect"]["status"] == "pass"
+        assert data["operation_evidence"]["runtime_phase"]["status"] == "pass"
+        assert data["assertions"] == {
+            "runtime_phase_needs_user": True,
+            "active_pause_request_visible": True,
+            "pause_request_pending": True,
+            "question_payload_projected": True,
+            "can_respond_matches_provider_contract": True,
+        }
+        assert data["pause_request"]["status"] == "pending"
+        assert data["pause_request"]["questions"][0]["id"] == "approach"
+        assert data["pause_request"]["can_respond"] is (result["provider"] in {"claude", "codex"})
+        evidence_root = Path(result["evidence_root"])
+        assert (evidence_root / "longhouse" / "pause-request-service.json").is_file()
+        assert (evidence_root / "longhouse" / "runtime-state.json").is_file()
+        assert (evidence_root / "longhouse" / "pause-request-pending.json").is_file()
+
+
+def test_answer_pause_request_resolves_longhouse_service_but_blocks_provider_delivery(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("claude", "codex"),
+            scenarios=("answer_pause_request",),
+            evidence_root=tmp_path / "evidence",
+        )
+    )
+
+    assert payload["verdict"] == "yellow"
+    for result in payload["results"]:
+        assert result["status"] == "blocked"
+        assert result["failure_code"] == "answer_pause_provider_delivery_unproven"
+        data = result["data"]
+        assert data["longhouse_response_service"]["status"] == "pass"
+        assert data["operation_evidence"]["answer_pause_request"]["status"] == "blocked"
+        assert data["operation_evidence"]["answer_pause_request"]["level"] == "live_token_required"
+        assert data["operation_evidence"]["longhouse_pause_response_service"]["status"] == "pass"
+        assert data["resolved_pause_request"]["status"] == "resolved"
+        assert data["active_after_response"] is None
+        assert data["assertions"]["pause_request_resolved"] is True
+        assert data["assertions"]["active_pause_request_cleared"] is True
+        evidence_root = Path(result["evidence_root"])
+        assert (evidence_root / "longhouse" / "pause-request-resolved.json").is_file()
+
+
+def test_answer_pause_request_reports_explicit_provider_gaps(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("opencode", "antigravity"),
+            scenarios=("answer_pause_request",),
+            evidence_root=tmp_path / "evidence",
+        )
+    )
+
+    assert payload["verdict"] == "yellow"
+    for result in payload["results"]:
+        assert result["status"] == "unsupported_gap"
+        assert result["failure_code"] == "answer_pause_request_unsupported"
+        assert result["data"]["operation_evidence"]["answer_pause_request"]["status"] == "unsupported_gap"
+
+
 def test_opencode_interrupt_cancel_uses_session_abort_canary(tmp_path: Path) -> None:
     fake_opencode = _fake_opencode_server(tmp_path / "bin" / "opencode")
     payload = uah.run_harness(
