@@ -377,6 +377,8 @@ def test_provider_live_proof_route_dispatches_typed_machine_command(tmp_path):
                 json={
                     "provider": "claude",
                     "expected_provider_version": "2.1.153",
+                    "run_live_token_contract": True,
+                    "live_token_timeout_secs": 45,
                 },
             )
             status_url = resp.json().get("status_url")
@@ -402,6 +404,8 @@ def test_provider_live_proof_route_dispatches_typed_machine_command(tmp_path):
     assert sent["command_id"] == f"machine-op:{body['operation_id']}"
     assert sent["payload"]["provider"] == "claude"
     assert sent["payload"]["expected_provider_version"] == "2.1.153"
+    assert sent["payload"]["run_live_token_contract"] is True
+    assert sent["payload"]["live_token_timeout_secs"] == 45
     assert "timeout_secs" not in sent["payload"]
 
     with SessionLocal() as db:

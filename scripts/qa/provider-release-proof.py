@@ -34,6 +34,11 @@ OPENCODE_BIN_ENV = "LONGHOUSE_OPENCODE_BIN"
 ANTIGRAVITY_BIN_ENV = "LONGHOUSE_ANTIGRAVITY_BIN"
 DEFAULT_OPERATION_POLL_INTERVAL_S = 2.0
 RETRYABLE_STATUS_CODES = {0, 408, 429, 500, 502, 503, 504}
+CLAUDE_MACHINE_LIVE_REQUIRED_OPERATIONS = (
+    "send_input",
+    "transcript_binding",
+    "steer_active_turn",
+)
 
 
 def _repo_root_from_script() -> Path:
@@ -784,6 +789,25 @@ def _detail_message(payload: dict[str, Any]) -> str:
     return json.dumps(payload, sort_keys=True)[-1000:]
 
 
+def _legacy_live_token_contract_rejected(status: int, payload: dict[str, Any]) -> bool:
+    if status != 422:
+        return False
+    detail = payload.get("detail")
+    if not isinstance(detail, list):
+        return False
+    rejected_fields = set()
+    for item in detail:
+        if not isinstance(item, dict):
+            continue
+        loc = item.get("loc")
+        if isinstance(loc, list) and len(loc) >= 2 and loc[0] == "body":
+            rejected_fields.add(str(loc[1]))
+    return bool(
+        rejected_fields
+        & {"run_live_token_contract", "live_token_timeout_secs"}
+    )
+
+
 def _request_json(
     *,
     method: str,
@@ -916,15 +940,18 @@ def _post_machine_live_proof(args: argparse.Namespace) -> tuple[int, dict[str, A
     process_timeout_s = max(1, min(int(args.timeout_secs), 900))
     live_token_timeout_s = max(1, min(int(args.timeout_secs), 600))
     api_url = args.claude_api_url.rstrip("/")
-    body: dict[str, Any] = {
+    base_body: dict[str, Any] = {
         "provider": "claude",
         "publish": True,
         "timeout_secs": process_timeout_s,
+    }
+    if args.provider_version:
+        base_body["expected_provider_version"] = args.provider_version
+    body: dict[str, Any] = {
+        **base_body,
         "run_live_token_contract": True,
         "live_token_timeout_secs": live_token_timeout_s,
     }
-    if args.provider_version:
-        body["expected_provider_version"] = args.provider_version
     status, payload = _request_json(
         method="POST",
         url=f"{api_url}/api/agents/machines/{args.claude_device_id}/provider-live-proof",
@@ -932,6 +959,14 @@ def _post_machine_live_proof(args: argparse.Namespace) -> tuple[int, dict[str, A
         body=body,
         timeout_s=process_timeout_s + 30,
     )
+    if _legacy_live_token_contract_rejected(status, payload):
+        status, payload = _request_json(
+            method="POST",
+            url=f"{api_url}/api/agents/machines/{args.claude_device_id}/provider-live-proof",
+            token=args.claude_agents_token,
+            body=base_body,
+            timeout_s=process_timeout_s + 30,
+        )
     if status != 202:
         return status, payload
     return _poll_operation(
@@ -943,6 +978,23 @@ def _post_machine_live_proof(args: argparse.Namespace) -> tuple[int, dict[str, A
         http_timeout_s=process_timeout_s + 30,
         poll_timeout_s=process_timeout_s + 60,
     )
+
+
+def _missing_claude_machine_live_operations(
+    artifact: dict[str, Any],
+) -> list[str]:
+    evidence = artifact.get("operation_evidence")
+    if not isinstance(evidence, dict):
+        evidence = {}
+    missing: list[str] = []
+    for operation in CLAUDE_MACHINE_LIVE_REQUIRED_OPERATIONS:
+        item = evidence.get(operation)
+        if not isinstance(item, dict):
+            missing.append(operation)
+            continue
+        if item.get("status") != "pass" or item.get("level") != "manual_live_token":
+            missing.append(operation)
+    return missing
 
 
 def _run_claude_machine_live_proof(
@@ -993,15 +1045,35 @@ def _run_claude_machine_live_proof(
         return artifact, raw_artifacts, 1
 
     live_artifact = dict(live_artifact)
+    missing_operations = _missing_claude_machine_live_operations(live_artifact)
+    insufficient_message = None
+    if live_artifact.get("verdict") != "red" and missing_operations:
+        insufficient_message = (
+            "Runtime Host provider-live-proof did not return required "
+            "manual live-token evidence for: "
+            + ", ".join(missing_operations)
+        )
+        live_artifact["verdict"] = "yellow"
+        live_artifact["failure_code"] = "claude_machine_live_insufficient_coverage"
+        live_artifact["recommendation"] = "investigate_before_upgrade"
     canaries = dict(live_artifact.get("canaries") or {})
+    verdict = str(live_artifact.get("verdict") or "").lower()
+    canary_status = (
+        "fail" if verdict == "red" else "warn" if verdict == "yellow" else "pass"
+    )
     canaries["claude_machine_live_proof"] = {
-        "status": "pass" if live_artifact.get("verdict") != "red" else "fail",
+        "status": canary_status,
         "verdict": live_artifact.get("verdict"),
         "failure_code": live_artifact.get("failure_code"),
         "device_id": payload.get("device_id"),
         "command_id": payload.get("command_id"),
         "operation_id": payload.get("operation_id"),
     }
+    if insufficient_message is not None:
+        canaries["claude_machine_live_proof"]["message"] = insufficient_message
+        canaries["claude_machine_live_proof"][
+            "missing_operations"
+        ] = missing_operations
     live_artifact["canaries"] = canaries
     returncode = None
     if isinstance(result, dict) and result.get("exit_code") is not None:

@@ -39,6 +39,14 @@ def canary_command(
         float,
         typer.Option("--wait-ready-secs", help="Seconds to wait for provider local servers to become ready."),
     ] = 15.0,
+    run_live_token_contract: Annotated[
+        bool,
+        typer.Option("--run-live-token-contract", help="Run the provider-specific live-token contract."),
+    ] = False,
+    live_token_timeout_secs: Annotated[
+        int | None,
+        typer.Option("--live-token-timeout-secs", min=1, max=600, help="Timeout for the live-token contract."),
+    ] = None,
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Emit machine-readable JSON."),
@@ -56,6 +64,8 @@ def canary_command(
         artifact=artifact,
         evidence_root=evidence_root,
         wait_ready_secs=wait_ready_secs,
+        run_live_token_contract=run_live_token_contract,
+        live_token_timeout_secs=live_token_timeout_secs,
         json=json_output,
     )
     result = run_provider_live_canary(args)
@@ -92,6 +102,14 @@ def publish_command(
         float,
         typer.Option("--wait-ready-secs", help="Seconds to wait for provider local servers to become ready."),
     ] = 15.0,
+    run_live_token_contract: Annotated[
+        bool,
+        typer.Option("--run-live-token-contract", help="Run provider-specific live-token contracts for selected providers."),
+    ] = False,
+    live_token_timeout_secs: Annotated[
+        int | None,
+        typer.Option("--live-token-timeout-secs", min=1, max=600, help="Timeout for live-token contracts."),
+    ] = None,
     json_output: Annotated[
         bool,
         typer.Option("--json", help="Emit machine-readable JSON."),
@@ -109,6 +127,8 @@ def publish_command(
         proof_dir=proof_dir,
         evidence_root=evidence_root,
         wait_ready_secs=wait_ready_secs,
+        run_live_token_contract=run_live_token_contract,
+        live_token_timeout_secs=live_token_timeout_secs,
         json=json_output,
     )
     payload = run_provider_live_proof_publish(args)

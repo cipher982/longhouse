@@ -33,6 +33,8 @@ from typing import Any
 
 from zerg.provider_live_proof import LIVE_PROOF_ARTIFACT_KIND
 from zerg.provider_live_proof import SUPPORTED_LIVE_PROOF_PROVIDERS
+from zerg.qa.managed_claude_live import ManagedClaudeLiveConfig
+from zerg.qa.managed_claude_live import run_managed_claude_live_session
 from zerg.qa.repo_root import provider_live_evidence_base
 from zerg.services.longhouse_paths import get_provider_live_proof_dir
 from zerg.services.managed_provider_contracts import ManagedProviderContract
@@ -326,6 +328,31 @@ def _simple_operation_evidence(
     return evidence
 
 
+def _claude_operation_evidence(
+    contract: ManagedProviderContract,
+    canaries: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    evidence = _simple_operation_evidence(contract, canaries)
+    if "live_token_contract" not in canaries:
+        return evidence
+    live_status, detail = _group_operation_status(canaries, ["live_token_contract"])
+    if not live_status:
+        return evidence
+    for operation in ("send_input", "transcript_binding", "steer_active_turn"):
+        evidence[operation] = _operation_entry(
+            contract,
+            operation,
+            status=live_status,
+            canary="claude_managed_live_token_contract",
+            canaries=["live_token_contract"],
+            level="none" if live_status == "fail" else "manual_live_token",
+            source="longhouse provider-live canary --provider claude --run-live-token-contract",
+            message=(detail or {}).get("message"),
+            failure_code=(detail or {}).get("failure_code"),
+        )
+    return evidence
+
+
 def _opencode_operation_evidence(
     contract: ManagedProviderContract,
     canaries: dict[str, dict[str, Any]],
@@ -449,6 +476,8 @@ def _provider_operation_evidence(provider: str, canaries: dict[str, dict[str, An
     contract = contract_for_provider(provider)
     if contract is None:
         return {}
+    if provider == "claude":
+        return _claude_operation_evidence(contract, canaries)
     if provider in _SIMPLE_OPERATION_GROUPS:
         return _simple_operation_evidence(contract, canaries)
     if provider == "opencode":
@@ -1627,6 +1656,49 @@ def run_claude_live_canary(args: argparse.Namespace, root: Path) -> dict[str, An
         "channels_shape": _run_claude_channels_shape(binary),
         "detached_pty_shape": _run_claude_pty_wrapper_shape(),
     }
+    if getattr(args, "run_live_token_contract", False):
+        timeout_secs = int(getattr(args, "live_token_timeout_secs", None) or 120)
+        live_root = root / "claude-live-token-contract"
+        (live_root / "workspace").mkdir(parents=True, exist_ok=True)
+        prompt_marker = f"LONGHOUSE CLAUDE LIVE TOKEN READY {secrets.token_hex(4)}"
+        steer_marker = f"LONGHOUSE CLAUDE LIVE TOKEN STEER {secrets.token_hex(4)}"
+        try:
+            summary = run_managed_claude_live_session(
+                ManagedClaudeLiveConfig(
+                    cwd=live_root / "workspace",
+                    name="Claude provider-live token contract",
+                    prompt=f"Reply with exactly: {prompt_marker}",
+                    expected=prompt_marker,
+                    steer_text=f"Change course and reply with exactly: {steer_marker}",
+                    steer_expected=steer_marker,
+                    response_timeout_secs=float(timeout_secs),
+                    output_dir=live_root,
+                    skip_post_close_probe=True,
+                    repo_root=Path(__file__).resolve().parents[3],
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            canaries["live_token_contract"] = _fail(
+                "claude_live_token_contract_exception",
+                f"{type(exc).__name__}: {exc}",
+            )
+        else:
+            status = "pass" if summary.get("success") else "fail"
+            payload = {
+                "status": status,
+                "summary_path": str(live_root / "summary.json"),
+                "events_path": summary.get("events_path"),
+                "terminal_log": summary.get("terminal_log"),
+                "session_id": summary.get("session_id"),
+                "sent_prompt": summary.get("sent_prompt"),
+                "steer_sent": summary.get("steer_sent"),
+                "observed_expected": summary.get("observed_expected"),
+                "process_returncode": summary.get("process_returncode"),
+            }
+            if status == "fail":
+                payload["failure_code"] = "claude_live_token_contract_failed"
+                payload["message"] = "Managed Claude live-token contract did not complete."
+            canaries["live_token_contract"] = payload
     return {
         "provider": "claude",
         "provider_version": version,

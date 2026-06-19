@@ -180,7 +180,12 @@ looks healthy but a real `claude --print` turn cannot authenticate. On
 2026-06-19, that real local proof returned red with
 `failure_code=claude_real_print_api_error` against `2.1.161 (Claude Code)`, so
 no real-print baseline has been accepted. The machine-live profile also has no
-accepted baseline yet, and full resume/tool coverage remains missing.
+accepted baseline yet. As of 2026-06-19, the Runtime Host compatibility fallback
+works, but production returned only no-token `launch_local` evidence; the
+wrapper now classifies that as yellow
+`claude_machine_live_insufficient_coverage` until `send_input`,
+`transcript_binding`, and `steer_active_turn` all have `manual_live_token`
+evidence. Full resume/tool coverage remains missing.
 
 ### Codex
 
@@ -668,20 +673,24 @@ should not by itself count as contract drift.
 
 ## Next Work
 
-1. Fix the local Claude auth/run divergence surfaced by
+1. Deploy the Claude Runtime Host/Machine Agent live-token proof path, rerun
+   `claude-machine-live-release-proof-v1`, and accept it only after it returns
+   green with manual live-token `send_input`, `transcript_binding`, and
+   `steer_active_turn` evidence.
+2. Fix the local Claude auth/run divergence surfaced by
    `claude-real-print-release-proof-v1`, then accept a green real-print
    baseline; after that, add Claude managed-session binding proof beyond
    no-token launch shape.
-2. `AGENT_RELEASE_CODEX_MANAGED_LIVE_INTERRUPT=1` is now enabled in production
+3. `AGENT_RELEASE_CODEX_MANAGED_LIVE_INTERRUPT=1` is now enabled in production
    Sauron after accepting and promoting the
    `codex-managed-live-interrupt-release-proof-v1` baseline. Separately decide
    whether to enable `AGENT_RELEASE_CODEX_REAL_TOOL=1` in production Sauron by
    default.
-3. `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` is now enabled in production
+4. `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` is now enabled in production
    Sauron after accepting and promoting the
    `antigravity-real-agy-send-release-proof-v1` baseline.
-4. `AGENT_RELEASE_OPENCODE_REAL_TOOL=1` is now enabled in production Sauron
+5. `AGENT_RELEASE_OPENCODE_REAL_TOOL=1` is now enabled in production Sauron
    after accepting and promoting the `opencode-real-tool-release-proof-v1`
    baseline.
-5. Add model-visible live-token proof for the remaining partial Claude, Codex,
+6. Add model-visible live-token proof for the remaining partial Claude, Codex,
    OpenCode, and Antigravity surfaces.

@@ -113,6 +113,59 @@ def test_provider_live_operation_evidence_surfaces_failed_and_warned_canaries() 
     assert warned["message"] == "channel surface is partial"
 
 
+def test_claude_provider_live_canary_maps_live_token_session_to_operation_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_bin = _fake_claude(tmp_path / "bin" / "claude")
+    calls: list[object] = []
+
+    def fake_live_session(config):
+        calls.append(config)
+        assert config.cwd == (
+            tmp_path / "evidence" / "claude-live-token-contract" / "workspace"
+        )
+        assert config.expected.startswith("LONGHOUSE CLAUDE LIVE TOKEN READY ")
+        assert config.steer_expected.startswith("LONGHOUSE CLAUDE LIVE TOKEN STEER ")
+        assert config.response_timeout_secs == 7.0
+        return {
+            "success": True,
+            "events_path": str(tmp_path / "events.jsonl"),
+            "terminal_log": str(tmp_path / "terminal.log"),
+            "session_id": "claude-live-session",
+            "sent_prompt": True,
+            "steer_sent": True,
+            "observed_expected": True,
+            "process_returncode": 0,
+        }
+
+    monkeypatch.setattr(plc, "run_managed_claude_live_session", fake_live_session)
+
+    payload = run_provider_live_canary(
+        {
+            "provider": "claude",
+            "provider_bin": str(fake_bin),
+            "artifact": tmp_path / "artifact.json",
+            "evidence_root": tmp_path / "evidence",
+            "wait_ready_secs": 1.0,
+            "run_live_token_contract": True,
+            "live_token_timeout_secs": 7,
+            "json": True,
+        }
+    )
+
+    assert calls
+    assert payload["verdict"] == "green"
+    live = payload["canaries"]["live_token_contract"]
+    assert live["status"] == "pass"
+    assert live["session_id"] == "claude-live-session"
+    evidence = payload["operation_evidence"]
+    for operation in ("send_input", "transcript_binding", "steer_active_turn"):
+        assert evidence[operation]["status"] == "pass"
+        assert evidence[operation]["level"] == "manual_live_token"
+        assert evidence[operation]["canary"] == "claude_managed_live_token_contract"
+
+
 def test_opencode_provider_live_operation_evidence_preserves_explicit_schema_failures() -> None:
     evidence = plc._provider_operation_evidence(
         "opencode",

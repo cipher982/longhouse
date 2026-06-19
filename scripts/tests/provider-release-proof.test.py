@@ -55,6 +55,29 @@ def _fake_claude_machine_live_server(*, mode: str = "success"):
                     "body": body,
                 }
             )
+            if mode == "legacy_extra_forbidden" and body.get(
+                "run_live_token_contract"
+            ):
+                self._write(
+                    422,
+                    {
+                        "detail": [
+                            {
+                                "input": True,
+                                "loc": ["body", "run_live_token_contract"],
+                                "msg": "Extra inputs are not permitted",
+                                "type": "extra_forbidden",
+                            },
+                            {
+                                "input": body.get("live_token_timeout_secs"),
+                                "loc": ["body", "live_token_timeout_secs"],
+                                "msg": "Extra inputs are not permitted",
+                                "type": "extra_forbidden",
+                            },
+                        ]
+                    },
+                )
+                return
             self._write(
                 202,
                 {
@@ -83,6 +106,36 @@ def _fake_claude_machine_live_server(*, mode: str = "success"):
                     },
                 )
                 return
+            operation_evidence = {
+                "launch_local": {
+                    "status": "pass",
+                    "level": "live_no_token",
+                    "source": "fake machine proof launch",
+                },
+                "send_input": {
+                    "status": "pass",
+                    "level": "manual_live_token",
+                    "source": "fake machine proof send",
+                },
+                "transcript_binding": {
+                    "status": "pass",
+                    "level": "manual_live_token",
+                    "source": "fake machine proof transcript",
+                },
+                "steer_active_turn": {
+                    "status": "pass",
+                    "level": "manual_live_token",
+                    "source": "fake machine proof steer",
+                },
+            }
+            if mode == "legacy_extra_forbidden":
+                operation_evidence = {
+                    "launch_local": {
+                        "status": "pass",
+                        "level": "live_no_token",
+                        "source": "fake legacy machine proof launch",
+                    },
+                }
             self._write(
                 200,
                 {
@@ -101,28 +154,7 @@ def _fake_claude_machine_live_server(*, mode: str = "success"):
                             "failure_code": None,
                             "recommendation": "upgrade_allowed",
                             "canaries": {"live_contract": {"status": "pass"}},
-                            "operation_evidence": {
-                                "launch_local": {
-                                    "status": "pass",
-                                    "level": "live_no_token",
-                                    "source": "fake machine proof launch",
-                                },
-                                "send_input": {
-                                    "status": "pass",
-                                    "level": "manual_live_token",
-                                    "source": "fake machine proof send",
-                                },
-                                "transcript_binding": {
-                                    "status": "pass",
-                                    "level": "manual_live_token",
-                                    "source": "fake machine proof transcript",
-                                },
-                                "steer_active_turn": {
-                                    "status": "pass",
-                                    "level": "manual_live_token",
-                                    "source": "fake machine proof steer",
-                                },
-                            },
+                            "operation_evidence": operation_evidence,
                         },
                     },
                 },
@@ -1307,6 +1339,8 @@ def test_claude_machine_live_proof_uses_distinct_scenario_and_operation_evidence
             extra_args=[
                 "--provider-version",
                 "Claude Code 2.9.9",
+                "--timeout-secs",
+                "120",
                 "--claude-run-machine-live-proof",
                 "--claude-api-url",
                 api_url,
@@ -1344,6 +1378,56 @@ def test_claude_machine_live_proof_uses_distinct_scenario_and_operation_evidence
         assert requests[0]["token"] == "secret-token"
         assert requests[0]["body"]["run_live_token_contract"] is True
         assert requests[0]["body"]["expected_provider_version"] == "Claude Code 2.9.9"
+
+
+def test_claude_machine_live_proof_retries_legacy_runtime_host_without_live_token_fields() -> (
+    None
+):
+    with (
+        tempfile.TemporaryDirectory() as temp_dir,
+        _fake_claude_machine_live_server(mode="legacy_extra_forbidden") as (
+            server,
+            requests,
+        ),
+    ):
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+        api_url = f"http://127.0.0.1:{server.server_port}"
+
+        result, payload = _run_proof(
+            root,
+            "claude",
+            extra_args=[
+                "--provider-version",
+                "Claude Code 2.9.9",
+                "--timeout-secs",
+                "120",
+                "--claude-run-machine-live-proof",
+                "--claude-api-url",
+                api_url,
+                "--claude-device-id",
+                "cinder",
+            ],
+            env={"CLAUDE_AGENTS_TOKEN": "secret-token"},
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["scenario_id"] == "claude-machine-live-release-proof-v1"
+        assert payload["verdict"] == "yellow"
+        assert payload["failure_code"] == "claude_machine_live_insufficient_coverage"
+        assert [request["method"] for request in requests] == ["POST", "POST", "GET"]
+        first = requests[0]["body"]
+        second = requests[1]["body"]
+        assert first["run_live_token_contract"] is True
+        assert first["live_token_timeout_secs"] == 120
+        assert "run_live_token_contract" not in second
+        assert "live_token_timeout_secs" not in second
+        assert second["expected_provider_version"] == "Claude Code 2.9.9"
+        canary = payload["normalized"]["canaries"]["claude_machine_live_proof"]
+        assert canary["status"] == "warn"
+        assert canary["failure_code"] == "claude_machine_live_insufficient_coverage"
+        assert "send_input" not in payload["operation_evidence"]
 
 
 def test_claude_machine_live_proof_preflight_reports_missing_credentials() -> None:
@@ -1595,6 +1679,7 @@ def main() -> int:
         test_claude_release_proof_blocks_failed_real_print_evidence,
         test_claude_real_print_wrapper_catches_real_control_api_error,
         test_claude_machine_live_proof_uses_distinct_scenario_and_operation_evidence,
+        test_claude_machine_live_proof_retries_legacy_runtime_host_without_live_token_fields,
         test_claude_machine_live_proof_preflight_reports_missing_credentials,
         test_claude_machine_live_proof_blocks_failed_operation,
         test_claude_machine_live_proof_does_not_mask_red_source_canary,

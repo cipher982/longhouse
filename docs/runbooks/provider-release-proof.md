@@ -427,6 +427,13 @@ machine-live `send_input`, `transcript_binding`, and `steer_active_turn`
 operation evidence. The agents token is read from `CLAUDE_AGENTS_TOKEN` and
 should not appear in the artifact tree.
 
+A machine-live proof is green only when those three operations are present with
+`level=manual_live_token`. During Runtime Host rollout, older hosts may reject
+the live-token request fields; the wrapper retries without those fields for
+compatibility, but the result stays yellow with
+`claude_machine_live_insufficient_coverage` if the machine returns only
+no-token launch evidence.
+
 Claude also has a simpler local real-print proof:
 
 ```bash
@@ -466,7 +473,10 @@ an accepted baseline.
   reported logged in.
 - Claude Code machine-live: no accepted baseline yet for
   `claude-machine-live-release-proof-v1`; the Longhouse wrapper can run it when
-  Runtime Host URL/token/device credentials are supplied.
+  Runtime Host URL/token/device credentials are supplied. On 2026-06-19,
+  production Runtime Host accepted the fallback path but returned only
+  `launch_local` no-token evidence, so the proof correctly stayed yellow with
+  `claude_machine_live_insufficient_coverage`.
 - Antigravity: accepted scoped baseline `antigravity-release-proof-v1`, provider
   version `agy 1.0.8`.
 - Antigravity real-agy send: accepted baseline

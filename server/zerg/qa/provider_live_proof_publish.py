@@ -119,6 +119,8 @@ def _run_packaged_canary(
                 "artifact": artifact_path,
                 "evidence_root": evidence_root,
                 "wait_ready_secs": args.wait_ready_secs,
+                "run_live_token_contract": bool(getattr(args, "run_live_token_contract", False)),
+                "live_token_timeout_secs": getattr(args, "live_token_timeout_secs", None),
                 "json": False,
             }
         )
@@ -171,6 +173,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--proof-dir", type=Path, default=None)
     parser.add_argument("--evidence-root", type=Path)
     parser.add_argument("--wait-ready-secs", type=float, default=15.0)
+    parser.add_argument("--run-live-token-contract", action="store_true")
+    parser.add_argument("--live-token-timeout-secs", type=int, default=None)
     parser.add_argument("--json", action="store_true")
     return parser
 

@@ -103,6 +103,16 @@ class ProviderLiveProofRequest(UTCBaseModel):
         le=900,
         description="Optional provider-live process timeout. When omitted, the Machine Agent uses a no-token default.",
     )
+    run_live_token_contract: bool = Field(
+        default=False,
+        description="Run the provider-specific live-token contract when the target Machine Agent supports it.",
+    )
+    live_token_timeout_secs: int | None = Field(
+        default=None,
+        ge=1,
+        le=600,
+        description="Optional timeout for the live-token contract portion of the proof.",
+    )
 
 
 class ProviderLiveProofAcceptedResponse(UTCBaseModel):
