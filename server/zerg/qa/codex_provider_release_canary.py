@@ -543,6 +543,7 @@ def run_raw_fresh_remote(args: argparse.Namespace, evidence_root: Path, codex_bi
             "raw fresh remote TUI canary command failed",
             evidence_root=str(root),
             evidence=_command_evidence(result),
+            protocol_fingerprints=protocol_fingerprints_from_jsonl(jsonl_path),
         )
 
     remote_log = remote_tui_log.read_text(encoding="utf-8", errors="replace") if remote_tui_log.exists() else ""

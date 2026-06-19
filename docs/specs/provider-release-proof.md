@@ -177,6 +177,16 @@ useful release evidence, but not yet enough for baseline acceptance because
 launch/reattach managed bridge evidence remains missing without the managed
 bridge canaries.
 
+Local smoke evidence, 2026-06-19: Codex `codex-cli 0.139.0` with the same
+fake app-server plus raw-fresh-remote lane still stayed yellow. One run timed
+out after the app-server initialized, started a thread, accepted `turn/start`,
+and waited for completion; the canary now preserves protocol fingerprints even
+on that failure path. A rerun passed raw-fresh-remote and captured stable
+`initialize`, `thread/resume`, `turn/start`, `thread/started`, and
+`turn/completed` protocol fingerprints. This still should not be accepted as a
+baseline because source review was `not_run` and the managed TUI attach plus
+detached-UI lanes require a Runtime Host `--api-url` and `--agents-token`.
+
 ### OpenCode
 
 | Surface | Covered | Evidence | Boundary | CI | Sauron release-watch | Baseline | Actionable today |

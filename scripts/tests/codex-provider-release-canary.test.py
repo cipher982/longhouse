@@ -201,6 +201,9 @@ if args and args[0] == "codex-app-server-canary":
         "remote_tui_alive_after_grace": True,
         "remote_tui_alive_before_shutdown": True,
     }))
+    if os.environ.get("FAKE_RAW_CANARY_FAIL") == "1":
+        print("fake raw canary failed after writing protocol log", file=sys.stderr)
+        raise SystemExit(1)
     raise SystemExit(0)
 
 print("unexpected fake engine args: " + json.dumps(args), file=sys.stderr)
@@ -395,6 +398,25 @@ def test_raw_fresh_remote_warning_is_yellow() -> None:
         assert fingerprints["notifications"]["turn/completed"]["turn"]["status"] == "str"
 
 
+def test_raw_fresh_remote_failure_preserves_protocol_fingerprints() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fixture = _fixture(root)
+        result, payload = _run_canary(
+            root,
+            fixture,
+            ["--run-raw-fresh-remote", "--source-review-status", "pass"],
+            {"FAKE_RAW_CANARY_FAIL": "1"},
+        )
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "raw_fresh_remote_failed"
+        raw = payload["canaries"]["raw_fresh_remote"]
+        assert raw["status"] == "fail"
+        assert raw["protocol_fingerprints"]["responses"]["initialize"]["platformFamily"] == "str"
+        assert raw["protocol_fingerprints"]["notifications"]["turn/completed"]["turn"]["status"] == "str"
+
+
 def test_managed_tui_attach_active_thread_error_is_red() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -512,6 +534,7 @@ def main() -> int:
     tests = [
         test_full_fake_canary_can_go_green,
         test_raw_fresh_remote_warning_is_yellow,
+        test_raw_fresh_remote_failure_preserves_protocol_fingerprints,
         test_managed_tui_attach_active_thread_error_is_red,
         test_managed_tui_attach_requires_thread_after_attach,
         test_forbidden_longhouse_codex_path_is_red,
