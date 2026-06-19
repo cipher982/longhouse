@@ -49,6 +49,23 @@ normalized artifact for easier release-digest review. Rows that are not
 genuinely proven remain `blocked` or `unsupported_gap`; this is expected until
 those lanes are promoted.
 
+Run the all-provider fake/no-token action/control gate directly:
+
+```bash
+scripts/qa/universal-agent-harness.py \
+  --scenario action_matrix \
+  --scenario control_surface \
+  --provider-bin claude=/path/to/claude \
+  --provider-bin codex=/path/to/codex \
+  --provider-bin opencode=/path/to/opencode \
+  --provider-bin antigravity=/path/to/agy \
+  --evidence-root /tmp/longhouse-universal-actions \
+  --json
+```
+
+This should return `yellow`, not `red`, while unsupported or blocked rows remain
+explicit in the artifact.
+
 Run the DB-backed universal ingest lane explicitly:
 
 ```bash

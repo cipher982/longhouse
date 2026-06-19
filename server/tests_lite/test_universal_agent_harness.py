@@ -644,3 +644,57 @@ def test_script_entrypoint_emits_normalized_artifact(tmp_path: Path) -> None:
     assert payload["artifact_kind"] == uah.ARTIFACT_KIND
     assert payload["verdict"] == "green"
     assert (artifact_root / "universal-agent-harness.json").is_file()
+
+
+def test_script_entrypoint_runs_all_provider_action_e2e(tmp_path: Path) -> None:
+    fake_bins = _fake_bins(tmp_path)
+    artifact_root = tmp_path / "all-provider-cli-evidence"
+    provider_bin_args = [f"{provider}={path}" for provider, path in fake_bins.items()]
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "qa" / "universal-agent-harness.py"),
+            "--scenario",
+            "action_matrix",
+            "--scenario",
+            "control_surface",
+            "--evidence-root",
+            str(artifact_root),
+            "--json",
+            *[item for provider_bin in provider_bin_args for item in ("--provider-bin", provider_bin)],
+        ],
+        cwd=str(REPO_ROOT),
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["artifact_kind"] == uah.ARTIFACT_KIND
+    assert payload["providers"] == list(uah.SUPPORTED_PROVIDERS)
+    assert payload["scenarios"] == ["action_matrix", "control_surface"]
+    assert payload["verdict"] == "yellow"
+    assert len(payload["results"]) == len(uah.SUPPORTED_PROVIDERS) * 2
+    assert (artifact_root / "universal-agent-harness.json").is_file()
+
+    by_provider_scenario = {(item["provider"], item["scenario"]): item for item in payload["results"]}
+    for provider in uah.SUPPORTED_PROVIDERS:
+        action_matrix = by_provider_scenario[(provider, "action_matrix")]
+        control_surface = by_provider_scenario[(provider, "control_surface")]
+        assert action_matrix["status"] == "blocked"
+        assert control_surface["status"] == "blocked"
+        assert action_matrix["data"]["action_ids"] == list(uah.ACTIONS)
+        assert control_surface["data"]["action_ids"] == list(uah.CONTROL_SURFACE_ACTION_IDS)
+        assert set(control_surface["data"]["action_ids"]).issubset(set(action_matrix["data"]["action_ids"]))
+        assert Path(action_matrix["data"]["action_matrix_path"]).is_file()
+        assert Path(control_surface["data"]["control_surface_path"]).is_file()
+        matrix_actions = {row["action_id"]: row for row in action_matrix["data"]["actions"]}
+        surface_actions = {row["action_id"]: row for row in control_surface["data"]["actions"]}
+        assert matrix_actions["raw_evidence_capture"]["status"] == "pass"
+        assert matrix_actions["old_new_release_diff"]["status"] == "blocked"
+        assert surface_actions["send_message"]["category"] == "control"
+        assert surface_actions["tail_output"]["category"] == "observe"
+        assert "old_new_release_diff" not in surface_actions
