@@ -708,6 +708,87 @@ def test_codex_managed_session_e2e_uses_provider_release_canary(tmp_path: Path, 
     assert db_snapshot["timeline"]["matched"] is True
 
 
+def test_codex_interrupt_cancel_uses_managed_live_interrupt_canary(tmp_path: Path, monkeypatch) -> None:
+    from zerg.qa import codex_provider_release_canary
+
+    calls: list[dict[str, object]] = []
+
+    def fake_canary(args: dict[str, object]) -> dict[str, object]:
+        calls.append(args)
+        return {
+            "artifact_kind": "codex_provider_release_canary",
+            "provider": "codex",
+            "codex_version": "codex-cli 9.9.9",
+            "verdict": "green",
+            "failure_code": None,
+            "canaries": {
+                "managed_live_interrupt": {
+                    "status": "pass",
+                    "thread_id": "codex-thread-interrupt",
+                    "marker": "LONGHOUSE_CODEX_INTERRUPT_CANARY_fake",
+                    "last_turn_status": "interrupted",
+                    "state_file": str(tmp_path / "state.json"),
+                }
+            },
+            "operation_evidence": {
+                "interrupt": {
+                    "status": "pass",
+                    "level": "live_token",
+                    "canary": "managed_live_interrupt",
+                }
+            },
+        }
+
+    monkeypatch.setattr(codex_provider_release_canary, "run_codex_provider_release_canary", fake_canary)
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("codex",),
+            scenarios=("interrupt_cancel",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"codex": _fake_bins(tmp_path)["codex"]},
+        )
+    )
+
+    assert calls
+    assert calls[0]["run_managed_live_interrupt"] is True
+    assert calls[0]["source_review_status"] == "pass"
+    result = payload["results"][0]
+    assert payload["verdict"] == "green"
+    assert result["status"] == "pass"
+    assert result["data"]["scenario"] == "interrupt_cancel"
+    assert result["data"]["operation_evidence"]["interrupt"]["level"] == "live_token"
+    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
+
+    evidence_root = Path(result["evidence_root"])
+    raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
+    assert "managed_live_interrupt" in raw_events
+    assert "interrupted" in raw_events
+    session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
+    assert session["provider_session_id"] == "codex-thread-interrupt"
+    assert session["operation_statuses"]["interrupt"]["status"] == "pass"
+    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
+    assert db_snapshot["ingest_result"]["events_inserted"] == 2
+    assert db_snapshot["timeline"]["matched"] is True
+
+
+def test_codex_interrupt_cancel_reports_runtime_host_credentials_gap(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("codex",),
+            scenarios=("interrupt_cancel",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"codex": _fake_bins(tmp_path)["codex"]},
+        )
+    )
+
+    result = payload["results"][0]
+    assert payload["verdict"] == "yellow"
+    assert result["status"] == "unsupported_gap"
+    assert result["failure_code"] == "codex_managed_bridge_credentials_missing"
+    assert result["data"]["missing"] == ["--agents-token", "--api-url"]
+    assert result["data"]["operation_evidence"]["interrupt"]["level"] == "live_token_required"
+
+
 def test_codex_managed_session_e2e_reports_credentials_gap(tmp_path: Path, monkeypatch) -> None:
     from zerg.qa import codex_provider_release_canary
 

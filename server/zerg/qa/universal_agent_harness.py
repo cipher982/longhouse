@@ -44,6 +44,7 @@ SCENARIOS = (
     "launch_managed_session",
     "send_receive",
     "managed_session_e2e",
+    "interrupt_cancel",
 )
 
 STATUS_PASS = "pass"
@@ -77,6 +78,7 @@ MVP_METHODS = (
     "launch_managed_session",
     "send_receive",
     "managed_session_e2e",
+    "interrupt_cancel",
     "cleanup",
 )
 MVP_CAPABILITIES = (
@@ -444,6 +446,8 @@ class AgentHarnessAdapter(Protocol):
     def launch_managed_session(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def send_receive(self, package: "EvidencePackage", prompt: str) -> dict[str, Any]: ...
+
+    def interrupt_cancel(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def managed_session_e2e(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
@@ -883,6 +887,25 @@ class UniversalProviderAdapter:
         package.write_json("assertions/send_receive.json", payload)
         return payload
 
+    def interrupt_cancel(self, package: EvidencePackage) -> dict[str, Any]:
+        if self.config.provider == "codex":
+            return self._run_codex_interrupt_cancel(package)
+        payload = self._unsupported_payload(
+            "interrupt_cancel",
+            "interrupt_cancel_adapter_missing",
+            "interrupt_cancel is not yet backed by a universal provider adapter for this provider.",
+        )
+        payload["operation_evidence"] = {
+            "interrupt": {
+                "status": STATUS_UNSUPPORTED_GAP,
+                "level": "none",
+                "canary": "universal_interrupt_cancel",
+                "failure_code": "interrupt_cancel_adapter_missing",
+            }
+        }
+        package.write_json("assertions/interrupt_cancel.json", payload)
+        return payload
+
     def managed_session_e2e(self, package: EvidencePackage) -> dict[str, Any]:
         if not self.config.real_managed_session_e2e:
             payload = self._unsupported_payload(
@@ -1098,6 +1121,126 @@ class UniversalProviderAdapter:
             payload["failure_code"] = db_ingest.get("failure_code") or "managed_session_e2e_db_ingest_failed"
             payload["message"] = "Claude provider-live evidence did not pass Longhouse DB ingest assertions."
         package.write_json("assertions/managed_session_e2e.json", payload)
+        return payload
+
+    def _run_codex_interrupt_cancel(self, package: EvidencePackage) -> dict[str, Any]:
+        binary, source = self._resolve_binary()
+        if binary is None:
+            payload = {
+                "status": STATUS_FAIL,
+                "failure_code": "provider_binary_not_found",
+                "message": "codex binary was not found for interrupt_cancel",
+                "binary_source": source,
+            }
+            package.write_json("assertions/interrupt_cancel.json", payload)
+            return payload
+
+        from zerg.qa.codex_provider_release_canary import run_codex_provider_release_canary
+
+        canary_evidence_root = package.path("raw", "codex-interrupt-canary-evidence")
+        canary_artifact_path = package.path("raw", "codex-provider-release-canary.json")
+        canary_artifact = run_codex_provider_release_canary(
+            {
+                "codex_bin": str(binary),
+                "artifact": canary_artifact_path,
+                "evidence_root": canary_evidence_root,
+                "repo_root": default_repo_root(),
+                "source_review_status": "pass",
+                "skip_static_contract": True,
+                "run_managed_live_interrupt": True,
+            }
+        )
+        if not canary_artifact_path.is_file():
+            package.write_json("raw/codex-provider-release-canary.json", canary_artifact)
+        package.write_json("raw/codex-provider-release-canary-inline.json", canary_artifact)
+        credentials_gap = _codex_canary_credentials_gap(canary_artifact, ("managed_live_interrupt",))
+        if credentials_gap:
+            payload = {
+                "status": STATUS_UNSUPPORTED_GAP,
+                "scenario": "interrupt_cancel",
+                "failure_code": "codex_managed_bridge_credentials_missing",
+                "message": "Codex interrupt_cancel requires Runtime Host credentials.",
+                "missing": credentials_gap,
+                "codex_canary_artifact_path": str(canary_artifact_path),
+                "codex_canary_evidence_root": str(canary_evidence_root),
+                "source_artifact_kind": canary_artifact.get("artifact_kind"),
+                "synthetic": False,
+                "operation_evidence": {
+                    "interrupt": {
+                        "status": STATUS_UNSUPPORTED_GAP,
+                        "level": "live_token_required",
+                        "canary": "managed_live_interrupt",
+                        "failure_code": "codex_managed_bridge_credentials_missing",
+                    }
+                },
+            }
+            package.write_json("assertions/interrupt_cancel.json", payload)
+            return payload
+
+        operation_evidence = {
+            str(operation): dict(evidence)
+            for operation, evidence in dict(canary_artifact.get("operation_evidence") or {}).items()
+            if isinstance(evidence, Mapping)
+        }
+        raw_events = codex_interrupt_cancel_raw_events(canary_artifact)
+        provider_session_id = _first_codex_thread_id(canary_artifact) or self._session_id(package)
+        projection = self._write_session_projection(
+            package,
+            raw_events=raw_events,
+            operations=operation_evidence,
+            provider_session_id=provider_session_id,
+        )
+        db_ingest = ingest_canonical_events_into_longhouse_db(
+            package=package,
+            provider=self.config.provider,
+            rows=raw_events,
+            provider_session_id=provider_session_id,
+        )
+        operation_evidence.update(
+            {
+                str(operation): dict(evidence)
+                for operation, evidence in dict(db_ingest.get("operation_evidence") or {}).items()
+                if isinstance(evidence, Mapping)
+            }
+        )
+        session_projection_path = package.path("longhouse", "session-projection.json")
+        try:
+            session_projection = json.loads(session_projection_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            session_projection = {}
+        if isinstance(session_projection, dict):
+            session_projection["operation_statuses"] = operation_evidence
+            package.write_json("longhouse/session-projection.json", session_projection)
+
+        verdict = str(canary_artifact.get("verdict") or "red")
+        interrupt_status = str((operation_evidence.get("interrupt") or {}).get("status") or STATUS_FAIL)
+        db_status = str(db_ingest.get("status") or STATUS_FAIL)
+        payload = {
+            **projection,
+            "status": STATUS_PASS if verdict == "green" and interrupt_status == STATUS_PASS and db_status == STATUS_PASS else STATUS_FAIL,
+            "scenario": "interrupt_cancel",
+            "provider_version": canary_artifact.get("codex_version") or canary_artifact.get("provider_version"),
+            "codex_canary_artifact_path": str(canary_artifact_path),
+            "codex_canary_evidence_root": str(canary_evidence_root),
+            "codex_canary_verdict": verdict,
+            "source_artifact_kind": canary_artifact.get("artifact_kind"),
+            "synthetic": False,
+            "operation_evidence": operation_evidence,
+            "longhouse_ingest": {
+                "status": db_status,
+                "failure_code": db_ingest.get("failure_code"),
+                "db_snapshot_path": db_ingest.get("db_snapshot_path"),
+                "session_projection_path": db_ingest.get("session_projection_path"),
+                "timeline_projection_path": db_ingest.get("timeline_projection_path"),
+            },
+        }
+        if verdict != "green" or interrupt_status != STATUS_PASS:
+            payload["failure_code"] = canary_artifact.get("failure_code") or "codex_interrupt_cancel_failed"
+            payload["message"] = "Codex managed live interrupt canary did not pass."
+        elif db_status != STATUS_PASS:
+            payload["failure_code"] = db_ingest.get("failure_code") or "interrupt_cancel_db_ingest_failed"
+            payload["message"] = "Codex interrupt evidence did not pass Longhouse DB ingest assertions."
+        package.write_json("assertions/interrupt_cancel.json", payload)
         return payload
 
     def _run_codex_managed_session_e2e(self, package: EvidencePackage) -> dict[str, Any]:
@@ -2253,7 +2396,7 @@ def codex_provider_release_raw_events(artifact: Mapping[str, Any]) -> list[dict[
 
 def _first_codex_thread_id(artifact: Mapping[str, Any]) -> str | None:
     canaries = dict(artifact.get("canaries") or {})
-    for name in ("managed_tui_attach", "detached_ui"):
+    for name in ("managed_tui_attach", "detached_ui", "managed_live_interrupt"):
         canary = canaries.get(name)
         if isinstance(canary, Mapping):
             thread_id = _clean_optional_str(canary.get("thread_id"))
@@ -2262,10 +2405,45 @@ def _first_codex_thread_id(artifact: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _codex_managed_bridge_credentials_gap(artifact: Mapping[str, Any]) -> list[str]:
+def codex_interrupt_cancel_raw_events(artifact: Mapping[str, Any]) -> list[dict[str, Any]]:
+    canaries = dict(artifact.get("canaries") or {})
+    interrupt = dict(canaries.get("managed_live_interrupt") or {})
+    provider_session_id = _first_codex_thread_id(artifact) or "codex-interrupt-cancel"
+    rows: list[dict[str, Any]] = []
+    marker = interrupt.get("marker")
+    if interrupt:
+        rows.append(
+            {
+                "type": "user",
+                "role": "user",
+                "text": f"Codex managed live-interrupt canary turn started: {marker or 'marker-unavailable'}",
+                "provider_session_id": provider_session_id,
+                "source_canary": "managed_live_interrupt",
+                "thread_id": interrupt.get("thread_id"),
+                "state_file": interrupt.get("state_file"),
+                "evidence_origin": "codex_provider_release_canary",
+            }
+        )
+        rows.append(
+            {
+                "type": "interrupt",
+                "role": "system",
+                "text": f"Codex interrupt result: {interrupt.get('last_turn_status')}",
+                "provider_session_id": provider_session_id,
+                "source_canary": "managed_live_interrupt",
+                "last_turn_status": interrupt.get("last_turn_status"),
+                "status": interrupt.get("status"),
+                "failure_code": interrupt.get("failure_code"),
+                "evidence_origin": "codex_provider_release_canary",
+            }
+        )
+    return rows
+
+
+def _codex_canary_credentials_gap(artifact: Mapping[str, Any], canary_names: tuple[str, ...]) -> list[str]:
     canaries = dict(artifact.get("canaries") or {})
     missing: set[str] = set()
-    for name in ("managed_tui_attach", "detached_ui"):
+    for name in canary_names:
         canary = canaries.get(name)
         if not isinstance(canary, Mapping):
             continue
@@ -2275,6 +2453,10 @@ def _codex_managed_bridge_credentials_gap(artifact: Mapping[str, Any]) -> list[s
         if isinstance(values, list):
             missing.update(str(value) for value in values if str(value))
     return sorted(missing)
+
+
+def _codex_managed_bridge_credentials_gap(artifact: Mapping[str, Any]) -> list[str]:
+    return _codex_canary_credentials_gap(artifact, ("managed_tui_attach", "detached_ui"))
 
 
 def run_provider_control_e2e_canary(
@@ -2597,6 +2779,18 @@ def run_send_receive(adapter: AgentHarnessAdapter, package: EvidencePackage, pro
     )
 
 
+def run_interrupt_cancel(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.interrupt_cancel(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="interrupt_cancel",
+        package=package,
+        payload=payload,
+    )
+
+
 def run_managed_session_e2e(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
     adapter.prepare(package)
     payload = adapter.managed_session_e2e(package)
@@ -2620,6 +2814,7 @@ SCENARIO_RUNNERS = {
     "launch_managed_session": run_launch_managed_session,
     "send_receive": run_send_receive,
     "managed_session_e2e": run_managed_session_e2e,
+    "interrupt_cancel": run_interrupt_cancel,
 }
 
 

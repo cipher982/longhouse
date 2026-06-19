@@ -979,6 +979,36 @@ def test_release_proof_can_attach_universal_db_ingest_project() -> None:
         assert "universal db ingest hello" in db_snapshot["export_jsonl"]
 
 
+def test_codex_release_proof_can_attach_universal_interrupt_credentials_gap() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        _write_fake_provider_bin(root, "codex-cli 9.9.9")
+
+        result, payload = _run_proof(
+            root,
+            "codex",
+            extra_args=[
+                "--run-universal-harness",
+                "--universal-scenario",
+                "interrupt_cancel",
+            ],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["verdict"] == "yellow"
+        assert payload["normalized"]["canaries"]["universal_interrupt_cancel"]["status"] == "warn"
+        assert payload["operation_evidence"]["universal_interrupt"]["status"] == "unsupported_gap"
+        assert payload["operation_evidence"]["universal_interrupt"]["level"] == "live_token_required"
+
+        universal_artifact = _read_json(Path(payload["artifacts"]["universal_harness_artifact"]))
+        result_row = universal_artifact["results"][0]
+        assert result_row["scenario"] == "interrupt_cancel"
+        assert result_row["status"] == "unsupported_gap"
+        assert result_row["failure_code"] == "codex_managed_bridge_credentials_missing"
+        assert result_row["data"]["missing"] == ["--agents-token", "--api-url"]
+
+
 def test_opencode_release_proof_can_attach_real_universal_managed_session_e2e() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -2005,6 +2035,7 @@ def main() -> int:
         test_release_proof_can_attach_universal_harness_for_all_providers,
         test_release_proof_exposes_universal_session_evidence_for_codex_and_opencode,
         test_release_proof_can_attach_universal_db_ingest_project,
+        test_codex_release_proof_can_attach_universal_interrupt_credentials_gap,
         test_opencode_release_proof_can_attach_real_universal_managed_session_e2e,
         test_claude_release_proof_can_attach_universal_provider_live_contract_e2e,
         test_antigravity_release_proof_can_attach_universal_hook_inbox_e2e,

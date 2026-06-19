@@ -171,6 +171,12 @@ provider-control hook/inbox canary, projects external-event channel rows, and
 DB-ingests them. That proves hook/inbox input delivery and Stop/force-continue
 behavior; it does not prove interrupt, reattach, or tool-result semantics.
 
+`interrupt_cancel` is the first dedicated universal control scenario. Codex
+routes it to the existing managed-live-interrupt canary and DB-ingests interrupt
+evidence when Runtime Host credentials are present. Without those credentials it
+returns a typed `unsupported_gap`. Other providers currently return typed
+adapter gaps for this scenario.
+
 ## Capabilities And Profiles
 
 Capabilities are the vocabulary scenarios use to decide what is required:
@@ -400,7 +406,7 @@ rewritten to call the shared scenario runner.
 | `scripts/qa/provider-release-proof.py` | Proof wrapper, normalization, baseline artifact generation | Reusable shell; should eventually call universal runner instead of provider-specific canary scripts. |
 | `server/zerg/qa/provider_live_canary.py` Claude binary/channel/PTY checks | `probe_identity`, `launch_managed_session`, `collect_raw_evidence` | Migrated into Claude `managed_session_e2e`; live-token send/steer still need promotion. |
 | `server/zerg/qa/managed_claude_live.py` | `send_receive`, `live_token_streaming`, `interrupt_cancel`, `multi_turn_continuity` | Migration candidate; PTY loop and channel readiness are Claude adapter internals. |
-| `server/zerg/qa/codex_provider_release_canary.py` | `probe_identity`, `run_prompt_once`, `launch_managed_session`, `resume_reattach`, `send_receive`, `interrupt_cancel`, `tool_call_result` | Migration candidate; app-server/bridge mechanics are Codex adapter internals. |
+| `server/zerg/qa/codex_provider_release_canary.py` | `probe_identity`, `run_prompt_once`, `launch_managed_session`, `resume_reattach`, `send_receive`, `interrupt_cancel`, `tool_call_result` | Partly migrated: Codex `managed_session_e2e` and `interrupt_cancel` now call this canary; live send/control and real-tool still need promotion. |
 | `server/zerg/qa/provider_live_canary.py` OpenCode server/schema/session checks | `launch_managed_session`, `send_receive`, `resume_reattach`, `interrupt_cancel`, `parse_ingest_project` | Migration candidate; server startup/schema probing are OpenCode adapter internals or evidence collectors. |
 | `server/zerg/qa/provider_live_canary.py` Antigravity plugin/global hook checks | `probe_identity`, `external_event_channel`, `send_receive` | Migration candidate; hook/inbox setup is Antigravity adapter internal. |
 | `scripts/qa/provider-control-e2e-canary.py` | `send_receive`, `interrupt_cancel`, `tool_call_result`, `external_event_channel` | Migration candidate; keep provider-specific fakes as adapter test fixtures. |
@@ -439,8 +445,11 @@ shape:
    Longhouse SQLite ingest and verifies durable events, session counts, export
    JSONL, query lookup, timeline listing, and preserved provider-session
    binding.
-10. Evidence packages are written for pass, fail, and unsupported results.
-11. Existing one-off canaries remain compatibility lanes until each behavior is
+10. Codex `interrupt_cancel` is an executable universal control scenario. It
+   calls the managed-live-interrupt canary, DB-ingests pass evidence, and returns
+   an explicit Runtime Host credentials gap when not configured.
+11. Evidence packages are written for pass, fail, and unsupported results.
+12. Existing one-off canaries remain compatibility lanes until each behavior is
    migrated and baselined.
 
 Next implementation target: migrate Codex live send/interrupt/control mechanics,
