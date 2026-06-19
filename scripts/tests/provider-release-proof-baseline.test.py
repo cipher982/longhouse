@@ -30,7 +30,15 @@ def _failure_for_status(status: str) -> str | None:
     return "fake_drift"
 
 
-def _write_proof(root: Path, name: str, *, status: str = "pass", version: str = "1.2.3") -> Path:
+def _write_proof(
+    root: Path,
+    name: str,
+    *,
+    status: str = "pass",
+    version: str = "1.2.3",
+    provider: str = "opencode",
+    scenario_id: str = "opencode-release-proof-v1",
+) -> Path:
     proof_dir = root / name
     artifact_dir = proof_dir / "evidence"
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -43,8 +51,8 @@ def _write_proof(root: Path, name: str, *, status: str = "pass", version: str = 
     session_projection = artifact_dir / "normalized" / "session_projection.json"
     normalized = {
         "artifact_kind": "provider_release_proof",
-        "provider": "opencode",
-        "provider_version": f"opencode {version}",
+        "provider": provider,
+        "provider_version": f"{provider} {version}",
         "verdict": _verdict_for_status(status),
         "failure_code": _failure_for_status(status),
         "canaries": {"server_contract": {"status": status}},
@@ -58,8 +66,8 @@ def _write_proof(root: Path, name: str, *, status: str = "pass", version: str = 
     }
     provider_contract_payload = {
         "artifact_kind": "provider_release_proof_provider_contract",
-        "provider": "opencode",
-        "provider_version": f"opencode {version}",
+        "provider": provider,
+        "provider_version": f"{provider} {version}",
         "contract_operations": {
             "send_input": {
                 "level": "live_no_token",
@@ -69,18 +77,18 @@ def _write_proof(root: Path, name: str, *, status: str = "pass", version: str = 
     }
     operation_evidence_payload = {
         "artifact_kind": "provider_release_proof_operation_evidence",
-        "provider": "opencode",
-        "provider_version": f"opencode {version}",
+        "provider": provider,
+        "provider_version": f"{provider} {version}",
         "operation_evidence": normalized["operation_evidence"],
     }
     session_projection_payload = {
         "artifact_kind": "provider_release_proof_session_projection",
-        "provider": "opencode",
-        "provider_version": f"opencode {version}",
+        "provider": provider,
+        "provider_version": f"{provider} {version}",
         "status": "captured",
         "projection": {
             "artifact_kind": "provider_live_session_projection",
-            "provider": "opencode",
+            "provider": provider,
             "status": "captured",
             "provider_session_id": f"volatile-{name}-{version}",
             "classification_sidecar_path": f"/tmp/{name}/sidecar.json",
@@ -116,9 +124,9 @@ def _write_proof(root: Path, name: str, *, status: str = "pass", version: str = 
     proof = {
         "schema_version": 1,
         "artifact_kind": "provider_release_proof",
-        "provider": "opencode",
-        "provider_version": f"opencode {version}",
-        "scenario_id": "opencode-release-proof-v1",
+        "provider": provider,
+        "provider_version": f"{provider} {version}",
+        "scenario_id": scenario_id,
         "scenario_version": 1,
         "verdict": _verdict_for_status(status),
         "failure_code": _failure_for_status(status),
@@ -151,6 +159,23 @@ def _run(args: list[str]) -> tuple[subprocess.CompletedProcess[str], dict]:
     if artifact is not None:
         assert artifact.exists()
     return result, payload
+
+
+def _write_coverage_inventory(root: Path, scenarios: list[dict]) -> Path:
+    path = root / "provider-release-proof-coverage.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "providers": sorted({scenario["provider"] for scenario in scenarios}),
+                "surfaces": [],
+                "rows": [],
+                "accepted_release_proof_scenarios": scenarios,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
 
 
 def test_accept_archives_proof_and_artifacts() -> None:
@@ -687,6 +712,103 @@ def test_status_blocks_when_accepted_baseline_is_not_green() -> None:
         assert payload["failure_code"] == "accepted_baseline_not_green"
 
 
+def test_status_all_reports_inventory_green_when_every_accepted_scenario_is_green() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        baseline_root = root / "baselines"
+        opencode = _write_proof(root, "opencode")
+        codex = _write_proof(
+            root,
+            "codex",
+            provider="codex",
+            scenario_id="codex-managed-live-send-release-proof-v1",
+        )
+        _run(["accept", "--proof", str(opencode), "--baseline-root", str(baseline_root)])
+        _run(["accept", "--proof", str(codex), "--baseline-root", str(baseline_root)])
+        coverage = _write_coverage_inventory(
+            root,
+            [
+                {
+                    "provider": "opencode",
+                    "scenario_id": "opencode-release-proof-v1",
+                    "provider_version": "opencode 1.2.3",
+                    "baseline_scope": "no_token_server_api_control_shape",
+                    "baseline_boundary": "live_no_token",
+                    "promoted_to_sauron": True,
+                },
+                {
+                    "provider": "codex",
+                    "scenario_id": "codex-managed-live-send-release-proof-v1",
+                    "provider_version": "codex 1.2.3",
+                    "baseline_scope": "managed_runtime_live_send_marker",
+                    "baseline_boundary": "managed_runtime_live_token_or_fake",
+                    "promoted_to_sauron": True,
+                },
+            ],
+        )
+
+        result, payload = _run(
+            [
+                "status-all",
+                "--coverage",
+                str(coverage),
+                "--baseline-root",
+                str(baseline_root),
+            ]
+        )
+
+        assert result.returncode == 0
+        assert payload["artifact_kind"] == "provider_release_proof_baseline_status_all"
+        assert payload["verdict"] == "green"
+        assert payload["failure_code"] is None
+        assert payload["scenario_count"] == 2
+        assert payload["green_count"] == 2
+        assert payload["non_green_count"] == 0
+        assert [status["provider"] for status in payload["statuses"]] == [
+            "opencode",
+            "codex",
+        ]
+        assert all(status["accepted"] is True for status in payload["statuses"])
+
+
+def test_status_all_blocks_when_inventory_claimed_baseline_is_missing() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        baseline_root = root / "baselines"
+        coverage = _write_coverage_inventory(
+            root,
+            [
+                {
+                    "provider": "opencode",
+                    "scenario_id": "opencode-release-proof-v1",
+                    "provider_version": "opencode 1.2.3",
+                    "baseline_scope": "no_token_server_api_control_shape",
+                    "baseline_boundary": "live_no_token",
+                    "promoted_to_sauron": True,
+                }
+            ],
+        )
+
+        result, payload = _run(
+            [
+                "status-all",
+                "--coverage",
+                str(coverage),
+                "--baseline-root",
+                str(baseline_root),
+            ]
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "accepted_baseline_inventory_incomplete"
+        assert payload["scenario_count"] == 1
+        assert payload["green_count"] == 0
+        assert payload["non_green_count"] == 1
+        assert payload["statuses"][0]["accepted"] is False
+        assert payload["statuses"][0]["failure_code"] == "baseline_missing"
+
+
 def main() -> int:
     tests = [
         test_accept_archives_proof_and_artifacts,
@@ -707,6 +829,8 @@ def main() -> int:
         test_relocated_baseline_store_resolves_archived_artifacts,
         test_status_warns_when_archived_artifact_is_missing,
         test_status_blocks_when_accepted_baseline_is_not_green,
+        test_status_all_reports_inventory_green_when_every_accepted_scenario_is_green,
+        test_status_all_blocks_when_inventory_claimed_baseline_is_missing,
     ]
     for test in tests:
         test()

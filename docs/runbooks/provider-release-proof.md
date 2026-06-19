@@ -256,6 +256,34 @@ PY
 The status should be `verdict=green`, `accepted=true`, and
 `missing_archived_artifacts=[]`.
 
+Longhouse also has a single inventory check that reads
+`docs/specs/provider-release-proof-coverage.json` and verifies every scenario
+listed in `accepted_release_proof_scenarios`:
+
+```bash
+make provider-release-proof-status-all \
+  BASELINE_ROOT="$HOME/.local/share/longhouse/provider-release-proofs" \
+  ARTIFACT=/tmp/provider-release-proof-status-all.json
+```
+
+For production Sauron, the explicit `/data/jobs` verification above remains
+the canonical container check. If a Longhouse checkout is available in the
+container or on a machine with access to the same baseline store, the equivalent
+inventory check is:
+
+```bash
+python3 scripts/qa/provider-release-proof-baseline.py status-all \
+  --coverage docs/specs/provider-release-proof-coverage.json \
+  --baseline-root /data/provider-release-proofs \
+  --artifact /tmp/provider-release-proof-status-all.json \
+  --json
+```
+
+`provider_release_proof_baseline_status_all.verdict=green` means every scenario
+the matrix claims as accepted exists, remains green, and still has its archived
+artifacts. Any non-green entry is a repair/reaccept task before claiming that
+scenario is protected.
+
 ## Sauron Email Interpretation
 
 Routine release digests should skip the inbox and live under a label/archive

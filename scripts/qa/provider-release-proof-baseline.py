@@ -19,6 +19,12 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 DEFAULT_BASELINE_ROOT = Path(".provider-release-proofs")
+DEFAULT_COVERAGE_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "docs"
+    / "specs"
+    / "provider-release-proof-coverage.json"
+)
 COMPARABLE_ARTIFACT_KEYS = (
     "normalized_contract",
     "provider_contract",
@@ -552,6 +558,85 @@ def baseline_status(
     return payload
 
 
+def _accepted_scenarios_from_coverage(coverage_path: Path) -> list[dict[str, Any]]:
+    coverage_path = coverage_path.expanduser()
+    payload = _read_json(coverage_path)
+    scenarios = payload.get("accepted_release_proof_scenarios")
+    if not isinstance(scenarios, list):
+        raise ValueError(
+            f"{coverage_path} does not define accepted_release_proof_scenarios"
+        )
+    accepted: list[dict[str, Any]] = []
+    for index, scenario in enumerate(scenarios):
+        if not isinstance(scenario, dict):
+            raise ValueError(
+                f"{coverage_path} accepted_release_proof_scenarios[{index}] is not an object"
+            )
+        provider = scenario.get("provider")
+        scenario_id = scenario.get("scenario_id")
+        if not isinstance(provider, str) or not provider:
+            raise ValueError(
+                f"{coverage_path} accepted_release_proof_scenarios[{index}] is missing provider"
+            )
+        if not isinstance(scenario_id, str) or not scenario_id:
+            raise ValueError(
+                f"{coverage_path} accepted_release_proof_scenarios[{index}] is missing scenario_id"
+            )
+        accepted.append(scenario)
+    return accepted
+
+
+def baseline_status_all(
+    *,
+    baseline_root: Path,
+    coverage_path: Path,
+) -> dict[str, Any]:
+    coverage_path = coverage_path.expanduser()
+    scenarios = _accepted_scenarios_from_coverage(coverage_path)
+    statuses: list[dict[str, Any]] = []
+    for scenario in scenarios:
+        status = baseline_status(
+            baseline_root=baseline_root,
+            provider=str(scenario["provider"]),
+            scenario_id=str(scenario["scenario_id"]),
+        )
+        status["expected_provider_version"] = scenario.get("provider_version")
+        status["baseline_scope"] = scenario.get("baseline_scope")
+        status["baseline_boundary"] = scenario.get("baseline_boundary")
+        status["promoted_to_sauron"] = scenario.get("promoted_to_sauron")
+        statuses.append(status)
+
+    red = [status for status in statuses if status.get("verdict") == "red"]
+    non_green = [status for status in statuses if status.get("verdict") != "green"]
+    if red:
+        verdict = "red"
+        failure_code = "accepted_baseline_inventory_failed"
+        recommendation = "repair_or_reaccept_baselines"
+    elif non_green:
+        verdict = "red"
+        failure_code = "accepted_baseline_inventory_incomplete"
+        recommendation = "repair_or_reaccept_baselines"
+    else:
+        verdict = "green"
+        failure_code = None
+        recommendation = "baseline_store_ready"
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "artifact_kind": "provider_release_proof_baseline_status_all",
+        "generated_at": _now_iso(),
+        "baseline_root": str(baseline_root.expanduser()),
+        "coverage_path": str(coverage_path),
+        "scenario_count": len(statuses),
+        "green_count": sum(1 for status in statuses if status.get("verdict") == "green"),
+        "non_green_count": len(non_green),
+        "verdict": verdict,
+        "failure_code": failure_code,
+        "recommendation": recommendation,
+        "statuses": statuses,
+    }
+
+
 def _print_or_write(payload: dict[str, Any], *, artifact: Path | None, as_json: bool) -> None:
     if artifact is not None:
         _write_json(artifact.expanduser(), payload)
@@ -591,6 +676,15 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--baseline-root", type=Path, default=DEFAULT_BASELINE_ROOT)
     status.add_argument("--artifact", type=Path)
     status.add_argument("--json", action="store_true")
+
+    status_all = subparsers.add_parser(
+        "status-all",
+        help="Inspect every accepted provider proof scenario listed in the coverage inventory",
+    )
+    status_all.add_argument("--coverage", type=Path, default=DEFAULT_COVERAGE_PATH)
+    status_all.add_argument("--baseline-root", type=Path, default=DEFAULT_BASELINE_ROOT)
+    status_all.add_argument("--artifact", type=Path)
+    status_all.add_argument("--json", action="store_true")
     return parser
 
 
@@ -614,6 +708,13 @@ def main(argv: list[str] | None = None) -> int:
             baseline_root=args.baseline_root.expanduser(),
             provider=args.provider,
             scenario_id=args.scenario_id,
+        )
+        _print_or_write(payload, artifact=args.artifact, as_json=args.json)
+        return 1 if payload.get("verdict") == "red" else 0
+    if args.command == "status-all":
+        payload = baseline_status_all(
+            baseline_root=args.baseline_root.expanduser(),
+            coverage_path=args.coverage,
         )
         _print_or_write(payload, artifact=args.artifact, as_json=args.json)
         return 1 if payload.get("verdict") == "red" else 0

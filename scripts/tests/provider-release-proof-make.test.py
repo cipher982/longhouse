@@ -44,6 +44,50 @@ def test_provider_release_proof_status_make_requires_provider_and_scenario() -> 
     assert "SCENARIO_ID is required" in missing_scenario.stderr
 
 
+def test_provider_release_proof_status_all_make_reports_inventory_missing_baseline() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        coverage = root / "coverage.json"
+        artifact = root / "status-all.json"
+        coverage.write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "providers": ["opencode"],
+                    "surfaces": [],
+                    "rows": [],
+                    "accepted_release_proof_scenarios": [
+                        {
+                            "provider": "opencode",
+                            "scenario_id": "opencode-release-proof-v1",
+                            "provider_version": "opencode 1.16.2",
+                            "baseline_scope": "no_token_server_api_control_shape",
+                            "baseline_boundary": "live_no_token",
+                            "promoted_to_sauron": True,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = _run_make(
+            [
+                "provider-release-proof-status-all",
+                f"COVERAGE={coverage}",
+                f"BASELINE_ROOT={root / 'baselines'}",
+                f"ARTIFACT={artifact}",
+            ]
+        )
+
+        assert result.returncode == 2, result.stderr
+        payload = _read_json(artifact)
+        assert payload["artifact_kind"] == "provider_release_proof_baseline_status_all"
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "accepted_baseline_inventory_incomplete"
+        assert payload["statuses"][0]["failure_code"] == "baseline_missing"
+
+
 def test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_yellow() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -179,6 +223,7 @@ def main() -> int:
     tests = [
         test_provider_release_proof_make_requires_provider,
         test_provider_release_proof_status_make_requires_provider_and_scenario,
+        test_provider_release_proof_status_all_make_reports_inventory_missing_baseline,
         test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_yellow,
         test_provider_release_proof_make_passes_scenario_id_override,
         test_provider_release_proof_make_runs_preflight_only,
