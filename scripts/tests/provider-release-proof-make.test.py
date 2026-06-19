@@ -219,6 +219,38 @@ def test_provider_release_proof_make_runs_preflight_only() -> None:
         assert not (evidence / "raw").exists()
 
 
+def test_provider_release_proof_make_forwards_claude_real_print_profile() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        proof = root / "preflight.json"
+        evidence = root / "evidence"
+        fake_provider = root / "fake-claude"
+        fake_provider.write_text("#!/bin/sh\n", encoding="utf-8")
+        fake_provider.chmod(0o755)
+
+        proof_result = _run_make(
+            [
+                "provider-release-proof",
+                "PROVIDER=claude",
+                f"PROVIDER_BIN={fake_provider}",
+                "PROVIDER_VERSION=Claude Code 2.1.test",
+                "CLAUDE_RUN_REAL_PRINT=1",
+                "CLAUDE_PRINT_TIMEOUT_SECS=5",
+                "PREFLIGHT_ONLY=1",
+                f"ARTIFACT={proof}",
+                f"EVIDENCE_ROOT={evidence}",
+            ]
+        )
+
+        assert proof_result.returncode == 0, proof_result.stderr
+        proof_payload = _read_json(proof)
+        assert proof_payload["artifact_kind"] == "provider_release_proof_preflight"
+        assert proof_payload["scenario_id"] == "claude-real-print-release-proof-v1"
+        assert proof_payload["scenario_profile"] == "real-print"
+        assert proof_payload["verdict"] == "green"
+        assert not (evidence / "raw").exists()
+
+
 def main() -> int:
     tests = [
         test_provider_release_proof_make_requires_provider,
@@ -227,6 +259,7 @@ def main() -> int:
         test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_yellow,
         test_provider_release_proof_make_passes_scenario_id_override,
         test_provider_release_proof_make_runs_preflight_only,
+        test_provider_release_proof_make_forwards_claude_real_print_profile,
     ]
     for test in tests:
         test()

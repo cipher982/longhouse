@@ -397,6 +397,28 @@ machine-live `send_input`, `transcript_binding`, and `steer_active_turn`
 operation evidence. The agents token is read from `CLAUDE_AGENTS_TOKEN` and
 should not appear in the artifact tree.
 
+Claude also has a simpler local real-print proof:
+
+```bash
+CLAUDE_RUN_REAL_PRINT=1 \
+CLAUDE_PRINT_TIMEOUT_SECS=90 \
+make provider-release-proof \
+  PROVIDER=claude \
+  PROVIDER_BIN="$(command -v claude)" \
+  PROVIDER_VERSION="$(claude --version)" \
+  SOURCE_REVIEW_STATUS=pass \
+  ARTIFACT=/tmp/claude-real-print-proof.json \
+  EVIDENCE_ROOT=/tmp/claude-real-print-proof-evidence
+```
+
+This uses scenario `claude-real-print-release-proof-v1` and spends one local
+`claude --print --output-format stream-json` turn. Accept it only when the proof
+is green and the nested `claude_real_print` canary shows an exact marker result.
+On 2026-06-19, local `claude auth status --json` reported logged in, but this
+proof returned red with `failure_code=claude_real_print_api_error` for
+`2.1.161 (Claude Code)`. That is an actionable local auth/run divergence, not
+an accepted baseline.
+
 ## Current Provider State
 
 - OpenCode: accepted baseline `opencode-release-proof-v1`, provider version
@@ -408,6 +430,10 @@ should not appear in the artifact tree.
   `operation_evidence.transcript_binding.level=live_token`.
 - Claude Code: accepted scoped baseline `claude-release-proof-v1`, provider
   version `claude 2.1.161`.
+- Claude Code real-print: no accepted baseline yet for
+  `claude-real-print-release-proof-v1`; a local run on 2026-06-19 returned
+  `claude_real_print_api_error` even though `claude auth status --json`
+  reported logged in.
 - Claude Code machine-live: no accepted baseline yet for
   `claude-machine-live-release-proof-v1`; the Longhouse wrapper can run it when
   Runtime Host URL/token/device credentials are supplied.

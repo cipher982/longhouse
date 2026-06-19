@@ -54,6 +54,79 @@ def _write_exe(path: Path, text: str) -> Path:
     return path
 
 
+def _fake_claude_print(path: Path, *, mode: str = "success") -> Path:
+    return _write_exe(
+        path,
+        f"""#!/usr/bin/env python3
+import json
+import os
+import re
+import sys
+
+args = sys.argv[1:]
+if args == ["--version"]:
+    print("2.1.181-fake (Claude Code)")
+    raise SystemExit(0)
+if args == ["auth", "status", "--json"]:
+    print(json.dumps({{
+        "loggedIn": True,
+        "authMethod": "fake-auth",
+        "apiProvider": "fake-provider",
+    }}))
+    raise SystemExit(0)
+if "--print" not in args:
+    print("unexpected fake claude args: " + json.dumps(args), file=sys.stderr)
+    raise SystemExit(2)
+
+prompt = sys.stdin.read()
+match = re.search(r"exactly ([A-Za-z0-9_]+)", prompt)
+marker = match.group(1) if match else "MISSING_MARKER"
+session_id = "fake-claude-print-session"
+print(json.dumps({{
+    "type": "system",
+    "subtype": "init",
+    "session_id": session_id,
+    "claude_code_version": "2.1.181-fake",
+}}))
+if {mode!r} == "api_error":
+    print(json.dumps({{
+        "type": "result",
+        "subtype": "success",
+        "is_error": True,
+        "api_error_status": 401,
+        "error": "authentication_failed",
+        "result": "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+        "session_id": session_id,
+    }}))
+    raise SystemExit(0)
+if {mode!r} == "require_launch_env" and not (
+    os.environ.get("CLAUDE_CODE_USE_BEDROCK")
+    and os.environ.get("AWS_PROFILE")
+    and os.environ.get("AWS_REGION")
+    and os.environ.get("ANTHROPIC_MODEL")
+):
+    print(json.dumps({{
+        "type": "result",
+        "subtype": "success",
+        "is_error": True,
+        "api_error_status": 401,
+        "error": "launch_env_missing",
+        "result": "Claude launch env was not preserved",
+        "session_id": session_id,
+    }}))
+    raise SystemExit(0)
+print(json.dumps({{
+    "type": "result",
+    "subtype": "success",
+    "is_error": False,
+    "result": marker,
+    "stop_reason": "end_turn",
+    "session_id": session_id,
+}}))
+""",
+    )
+
+
 def _fake_agy(path: Path, *, emit_marker: bool = True) -> Path:
     stdout_expr = "print(marker)\n" if emit_marker else "print('BASELINE_NO_HOOK')\n"
     return _write_exe(
@@ -201,6 +274,101 @@ def test_provider_selection_runs_one_control_lane() -> None:
         assert payload["verdict"] == "green"
         assert set(payload["canaries"]) == {"opencode"}
         assert payload["canaries"]["opencode"]["status"] == "pass"
+
+
+def test_claude_real_print_canary_requires_exact_marker_result() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_home = root / "home"
+        fake_bin = _fake_claude_print(root / "bin" / "claude")
+        result, payload = _run_canary(
+            root,
+            [
+                "--provider",
+                "claude",
+                "--claude-run-real-print",
+                "--claude-print-timeout-secs",
+                "5",
+            ],
+            env={
+                "PATH": f"{fake_bin.parent}:{os.environ['PATH']}",
+                "HOME": str(fake_home),
+                "LONGHOUSE_CLAUDE_BIN": str(fake_bin),
+            },
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        claude = payload["canaries"]["claude"]
+        assert claude["status"] == "pass"
+        assert claude["canary"] == "claude_real_print"
+        assert claude["auth_status"]["loggedIn"] is True
+        assert claude["auth_status"]["authMethod_present"] is True
+        assert claude["auth_status"]["apiProvider"] == "fake-provider"
+        assert claude["result_event"]["result_exact_match"] is True
+        assert claude["result_event"]["session_id_present"] is True
+        assert claude["operation_evidence"]["run_once"]["level"] == "live_token"
+        assert claude["operation_evidence"]["live_token_behavior"]["level"] == "live_token"
+        assert "stdout_tail" not in claude
+        assert "stderr_tail" not in claude
+
+
+def test_claude_real_print_canary_fails_on_api_error_result() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_home = root / "home"
+        fake_bin = _fake_claude_print(root / "bin" / "claude", mode="api_error")
+        result, payload = _run_canary(
+            root,
+            [
+                "--provider",
+                "claude",
+                "--claude-run-real-print",
+                "--claude-print-timeout-secs",
+                "5",
+            ],
+            env={
+                "PATH": f"{fake_bin.parent}:{os.environ['PATH']}",
+                "HOME": str(fake_home),
+                "LONGHOUSE_CLAUDE_BIN": str(fake_bin),
+            },
+        )
+
+        assert result.returncode == 1
+        claude = payload["canaries"]["claude"]
+        assert claude["status"] == "fail"
+        assert claude["failure_code"] == "claude_real_print_api_error"
+        assert claude["result_event"]["api_error_status"] == 401
+        assert claude["result_event"]["error"] == "authentication_failed"
+        assert claude["result_event"]["result_exact_match"] is False
+
+
+def test_claude_real_print_canary_preserves_non_secret_launch_env() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fake_home = root / "home"
+        fake_bin = _fake_claude_print(root / "bin" / "claude", mode="require_launch_env")
+        result, payload = _run_canary(
+            root,
+            [
+                "--provider",
+                "claude",
+                "--claude-run-real-print",
+                "--claude-print-timeout-secs",
+                "5",
+            ],
+            env={
+                "PATH": f"{fake_bin.parent}:{os.environ['PATH']}",
+                "HOME": str(fake_home),
+                "LONGHOUSE_CLAUDE_BIN": str(fake_bin),
+                "CLAUDE_CODE_USE_BEDROCK": "1",
+                "AWS_PROFILE": "fake-profile",
+                "AWS_REGION": "us-east-1",
+                "ANTHROPIC_MODEL": "fake-model",
+            },
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["canaries"]["claude"]["status"] == "pass"
 
 
 def test_antigravity_real_agy_send_canary_requires_model_visible_marker() -> None:
@@ -365,6 +533,9 @@ def main() -> int:
     tests = [
         test_all_current_provider_control_paths_are_green,
         test_provider_selection_runs_one_control_lane,
+        test_claude_real_print_canary_requires_exact_marker_result,
+        test_claude_real_print_canary_fails_on_api_error_result,
+        test_claude_real_print_canary_preserves_non_secret_launch_env,
         test_antigravity_real_agy_send_canary_requires_model_visible_marker,
         test_antigravity_real_agy_send_canary_fails_without_injected_marker,
         test_opencode_real_tool_canary_requires_completed_tool_marker,

@@ -364,8 +364,10 @@ provider-release-proof: ## Emit provider release proof artifact; set PROVIDER=..
 	if [ -n "$(CODEX_RUN_MANAGED_LIVE_SEND)" ]; then set -- "$$@" --codex-run-managed-live-send; fi; \
 	if [ -n "$(CODEX_API_URL)" ]; then set -- "$$@" --codex-api-url "$(CODEX_API_URL)"; fi; \
 	if [ -n "$(CLAUDE_RUN_MACHINE_LIVE_PROOF)" ]; then set -- "$$@" --claude-run-machine-live-proof; fi; \
+	if [ -n "$(CLAUDE_RUN_REAL_PRINT)" ]; then set -- "$$@" --claude-run-real-print; fi; \
 	if [ -n "$(CLAUDE_API_URL)" ]; then set -- "$$@" --claude-api-url "$(CLAUDE_API_URL)"; fi; \
 	if [ -n "$(CLAUDE_DEVICE_ID)" ]; then set -- "$$@" --claude-device-id "$(CLAUDE_DEVICE_ID)"; fi; \
+	if [ -n "$(CLAUDE_PRINT_TIMEOUT_SECS)" ]; then set -- "$$@" --claude-print-timeout-secs "$(CLAUDE_PRINT_TIMEOUT_SECS)"; fi; \
 	if [ -n "$(OPENCODE_RUN_REAL_TOOL)" ]; then set -- "$$@" --opencode-run-real-tool; fi; \
 	if [ -n "$(OPENCODE_RUN_TIMEOUT_SECS)" ]; then set -- "$$@" --opencode-run-timeout-secs "$(OPENCODE_RUN_TIMEOUT_SECS)"; fi; \
 	if [ -n "$(ANTIGRAVITY_RUN_REAL_AGY_SEND)" ]; then set -- "$$@" --antigravity-run-real-agy-send; fi; \

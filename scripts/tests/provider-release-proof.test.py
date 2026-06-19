@@ -341,6 +341,12 @@ if provider == "opencode":
     canary = "opencode_real_tool_result_shape"
     operation = "transcript_binding"
     level = "none" if status == "fail" else "live_token"
+elif provider == "claude":
+    status = "fail" if os.environ.get("FAKE_CLAUDE_REAL_PRINT_FAIL") == "1" else "pass"
+    failure_code = "fake_claude_real_print_failed" if status == "fail" else None
+    canary = "claude_real_print"
+    operation = "live_token_behavior"
+    level = "none" if status == "fail" else "live_token"
 else:
     status = "fail" if os.environ.get("FAKE_ANTIGRAVITY_CONTROL_FAIL") == "1" else "pass"
     failure_code = "fake_antigravity_send_failed" if status == "fail" else None
@@ -444,6 +450,52 @@ artifact = {
 }
 Path(value("--artifact")).parent.mkdir(parents=True, exist_ok=True)
 Path(value("--artifact")).write_text(json.dumps(artifact), encoding="utf-8")
+""",
+    )
+
+
+def _write_fake_claude_real_print_binary(path: Path, *, mode: str = "success") -> Path:
+    return _write_exe(
+        path,
+        f"""#!/usr/bin/env python3
+import json
+import re
+import sys
+
+args = sys.argv[1:]
+if args == ["--version"]:
+    print("2.1.181-fake (Claude Code)")
+    raise SystemExit(0)
+if args == ["auth", "status", "--json"]:
+    print(json.dumps({{"loggedIn": True, "authMethod": "fake-auth", "apiProvider": "fake-provider"}}))
+    raise SystemExit(0)
+if "--print" not in args:
+    print("unexpected fake claude args: " + json.dumps(args), file=sys.stderr)
+    raise SystemExit(2)
+prompt = sys.stdin.read()
+match = re.search(r"exactly ([A-Za-z0-9_]+)", prompt)
+marker = match.group(1) if match else "MISSING_MARKER"
+session_id = "fake-claude-print-session"
+print(json.dumps({{"type": "system", "subtype": "init", "session_id": session_id}}))
+if {mode!r} == "api_error":
+    print(json.dumps({{
+        "type": "result",
+        "subtype": "success",
+        "is_error": True,
+        "api_error_status": 401,
+        "error": "authentication_failed",
+        "result": "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+        "session_id": session_id,
+    }}))
+    raise SystemExit(0)
+print(json.dumps({{
+    "type": "result",
+    "subtype": "success",
+    "is_error": False,
+    "result": marker,
+    "stop_reason": "end_turn",
+    "session_id": session_id,
+}}))
 """,
     )
 
@@ -890,6 +942,95 @@ def test_opencode_release_proof_blocks_failed_real_tool_evidence() -> None:
         )
 
 
+def test_claude_release_proof_can_attach_real_print_evidence() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        args_path = root / "control-args.json"
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "claude",
+            env={"FAKE_CONTROL_ARGS_PATH": str(args_path)},
+            extra_args=[
+                "--claude-run-real-print",
+                "--claude-print-timeout-secs",
+                "5",
+            ],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        control_args = json.loads(args_path.read_text(encoding="utf-8"))
+        assert "--claude-run-real-print" in control_args
+        assert payload["provider"] == "claude"
+        assert payload["scenario_id"] == "claude-real-print-release-proof-v1"
+        assert payload["scenario_profile"] == "real-print"
+        assert payload["verdict"] == "green"
+        assert payload["operation_evidence"]["live_token_behavior"]["status"] == "pass"
+        assert payload["operation_evidence"]["live_token_behavior"]["level"] == "live_token"
+        assert payload["normalized"]["operation_evidence"]["live_token_behavior"]["level"] == "live_token"
+        assert payload["normalized"]["canaries"]["claude_real_print"]["status"] == "pass"
+        assert Path(payload["artifacts"]["claude_control_artifact"]).exists()
+
+
+def test_claude_release_proof_blocks_failed_real_print_evidence() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "claude",
+            env={"FAKE_CLAUDE_REAL_PRINT_FAIL": "1"},
+            extra_args=["--claude-run-real-print"],
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "fake_claude_real_print_failed"
+        assert payload["operation_evidence"]["live_token_behavior"]["status"] == "fail"
+        assert payload["normalized"]["canaries"]["claude_real_print"]["failure_code"] == (
+            "fake_claude_real_print_failed"
+        )
+
+
+def test_claude_real_print_wrapper_catches_real_control_api_error() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        repo = root / "repo"
+        _write_fake_repo(repo)
+        _write_fake_claude_real_print_binary(root / "fake-provider", mode="api_error")
+        control_path = repo / "scripts" / "qa" / "provider-control-e2e-canary.py"
+        control_path.write_text(
+            (REPO_ROOT / "scripts" / "qa" / "provider-control-e2e-canary.py").read_text(
+                encoding="utf-8"
+            ),
+            encoding="utf-8",
+        )
+        control_path.chmod(0o755)
+
+        result, payload = _run_proof(
+            root,
+            "claude",
+            extra_args=[
+                "--claude-run-real-print",
+                "--claude-print-timeout-secs",
+                "5",
+            ],
+        )
+
+        assert result.returncode == 1
+        assert payload["scenario_id"] == "claude-real-print-release-proof-v1"
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "claude_real_print_api_error"
+        assert payload["operation_evidence"]["live_token_behavior"]["status"] == "fail"
+        assert payload["normalized"]["canaries"]["claude_real_print"]["failure_code"] == (
+            "claude_real_print_api_error"
+        )
+
+
 def test_claude_machine_live_proof_uses_distinct_scenario_and_operation_evidence() -> None:
     with tempfile.TemporaryDirectory() as temp_dir, _fake_claude_machine_live_server() as (
         server,
@@ -1163,6 +1304,9 @@ def main() -> int:
         test_antigravity_release_proof_blocks_failed_real_agy_send_evidence,
         test_opencode_release_proof_can_attach_real_tool_evidence,
         test_opencode_release_proof_blocks_failed_real_tool_evidence,
+        test_claude_release_proof_can_attach_real_print_evidence,
+        test_claude_release_proof_blocks_failed_real_print_evidence,
+        test_claude_real_print_wrapper_catches_real_control_api_error,
         test_claude_machine_live_proof_uses_distinct_scenario_and_operation_evidence,
         test_claude_machine_live_proof_preflight_reports_missing_credentials,
         test_claude_machine_live_proof_blocks_failed_operation,

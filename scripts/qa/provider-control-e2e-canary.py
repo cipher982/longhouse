@@ -28,7 +28,16 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+CLAUDE_BIN_ENV = "LONGHOUSE_CLAUDE_BIN"
 OPENCODE_BIN_ENV = "LONGHOUSE_OPENCODE_BIN"
+CLAUDE_REAL_PRINT_ENV_KEYS = (
+    "CLAUDE_CONFIG_DIR",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "AWS_PROFILE",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    "ANTHROPIC_MODEL",
+)
 
 
 def _repo_root_from_script() -> Path:
@@ -371,6 +380,278 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
                 fake_claude.kill()
 
 
+def _resolve_claude_binary() -> str | None:
+    env_candidate = str(os.environ.get(CLAUDE_BIN_ENV) or "").strip()
+    if env_candidate:
+        candidate = Path(env_candidate).expanduser()
+        if candidate.is_file():
+            return str(candidate)
+        resolved = shutil.which(env_candidate)
+        if resolved:
+            return resolved
+    return shutil.which("claude")
+
+
+def _provider_real_run_env(*, extra_keys: tuple[str, ...] = ()) -> dict[str, str]:
+    env: dict[str, str] = {}
+    for key in (
+        "HOME",
+        "PATH",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "TERM",
+        "TMPDIR",
+        "USER",
+        "SHELL",
+        *extra_keys,
+    ):
+        value = os.environ.get(key)
+        if value:
+            env[key] = value
+    return env
+
+
+def _compact_claude_result_event(event: dict[str, Any] | None, *, marker: str) -> dict[str, Any] | None:
+    if event is None:
+        return None
+    result_text = str(event.get("result") or "")
+    return {
+        "type": event.get("type"),
+        "subtype": event.get("subtype"),
+        "session_id_present": bool(event.get("session_id")),
+        "is_error": bool(event.get("is_error")),
+        "api_error_status": event.get("api_error_status"),
+        "error": event.get("error"),
+        "stop_reason": event.get("stop_reason"),
+        "result_sha256": hashlib.sha256(result_text.encode("utf-8")).hexdigest(),
+        "result_exact_match": result_text.strip() == marker,
+    }
+
+
+def _run_claude_auth_status(binary: str, *, env: dict[str, str], root: Path) -> dict[str, Any]:
+    stdout_path = root / "claude-auth-status-stdout.json"
+    stderr_path = root / "claude-auth-status-stderr.log"
+    command = [binary, "auth", "status", "--json"]
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(root),
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=15,
+        )
+        timed_out = False
+    except subprocess.TimeoutExpired as exc:
+        result = subprocess.CompletedProcess(
+            command,
+            returncode=124,
+            stdout=(exc.stdout or "") if isinstance(exc.stdout, str) else "",
+            stderr=(exc.stderr or "") if isinstance(exc.stderr, str) else "",
+        )
+        timed_out = True
+    stdout_path.write_text(result.stdout or "", encoding="utf-8")
+    stderr_path.write_text(result.stderr or "", encoding="utf-8")
+    parsed: dict[str, Any] | None = None
+    parse_error = None
+    if result.stdout.strip():
+        try:
+            payload = json.loads(result.stdout)
+            if isinstance(payload, dict):
+                parsed = payload
+            else:
+                parse_error = "auth status JSON was not an object"
+        except json.JSONDecodeError as exc:
+            parse_error = f"{type(exc).__name__}: {exc}"
+    return {
+        "argv": command,
+        "returncode": result.returncode,
+        "timed_out": timed_out,
+        "stdout_path": str(stdout_path),
+        "stderr_path": str(stderr_path),
+        "stdout_sha256": _sha256_file(stdout_path),
+        "stderr_sha256": _sha256_file(stderr_path),
+        "json_parse_error": parse_error,
+        "loggedIn": bool(parsed.get("loggedIn")) if parsed is not None else None,
+        "authMethod_present": bool(parsed.get("authMethod")) if parsed is not None else None,
+        "apiProvider": parsed.get("apiProvider") if parsed is not None else None,
+    }
+
+
+def _claude_real_print_failure(code: str, message: str, **fields: Any) -> dict[str, Any]:
+    fields.setdefault(
+        "operation_evidence",
+        {
+            "run_once": {
+                "status": "fail",
+                "level": "none",
+                "canary": "claude_real_print",
+                "failure_code": code,
+            },
+            "live_token_behavior": {
+                "status": "fail",
+                "level": "none",
+                "canary": "claude_real_print",
+                "failure_code": code,
+            },
+        },
+    )
+    return _fail(code, message, **fields)
+
+
+def run_claude_real_print_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    """Spend one real Claude Code print turn to prove auth + stream-json execution."""
+
+    binary = _resolve_claude_binary()
+    if not binary:
+        return _fail("provider_binary_not_found", "claude binary was not found on PATH")
+
+    version, version_evidence = _run_provider_version(binary)
+    if not version:
+        return _fail(
+            "provider_version_failed",
+            "claude --version failed",
+            path=binary,
+            evidence=version_evidence,
+        )
+
+    workspace = root / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    run_env = _provider_real_run_env(extra_keys=CLAUDE_REAL_PRINT_ENV_KEYS)
+    auth_status = _run_claude_auth_status(binary, env=run_env, root=root)
+    stdout_path = root / "claude-print-stdout.jsonl"
+    stderr_path = root / "claude-print-stderr.log"
+    marker = f"LONGHOUSE_CLAUDE_PRINT_{uuid.uuid4().hex}"
+    prompt = f"Reply with exactly {marker} and nothing else."
+    command = [
+        binary,
+        "--print",
+        "--verbose",
+        "--output-format",
+        "stream-json",
+        "--permission-mode",
+        "default",
+    ]
+    started = time.monotonic()
+    try:
+        result = subprocess.run(
+            command,
+            input=prompt + "\n",
+            cwd=str(workspace),
+            env=run_env,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=max(45, args.claude_print_timeout_secs),
+        )
+        timed_out = False
+    except subprocess.TimeoutExpired as exc:
+        result = subprocess.CompletedProcess(
+            command,
+            returncode=124,
+            stdout=(exc.stdout or "") if isinstance(exc.stdout, str) else "",
+            stderr=(exc.stderr or "") if isinstance(exc.stderr, str) else "",
+        )
+        timed_out = True
+    elapsed = round(time.monotonic() - started, 3)
+    stdout = result.stdout or ""
+    stderr = result.stderr or ""
+    stdout_path.write_text(stdout, encoding="utf-8")
+    stderr_path.write_text(stderr, encoding="utf-8")
+
+    try:
+        events = _parse_json_lines(stdout)
+        parse_error = None
+    except (json.JSONDecodeError, ValueError) as exc:
+        events = []
+        parse_error = f"{type(exc).__name__}: {exc}"
+    result_events = [event for event in events if event.get("type") == "result"]
+    result_event = result_events[-1] if result_events else None
+    compact_result = _compact_claude_result_event(result_event, marker=marker)
+    session_ids = sorted(
+        {
+            str(event.get("session_id") or "").strip()
+            for event in events
+            if str(event.get("session_id") or "").strip()
+        }
+    )
+    evidence = {
+        "provider_version": version,
+        "binary": binary,
+        "binary_evidence": version_evidence,
+        "auth_status": auth_status,
+        "workspace": str(workspace),
+        "argv": command,
+        "returncode": result.returncode,
+        "elapsed_secs": elapsed,
+        "timed_out": timed_out,
+        "stdout_path": str(stdout_path),
+        "stderr_path": str(stderr_path),
+        "stdout_sha256": _sha256_file(stdout_path),
+        "stderr_sha256": _sha256_file(stderr_path),
+        "jsonl_parse_error": parse_error,
+        "event_count": len(events),
+        "result_event_count": len(result_events),
+        "session_ids": session_ids,
+        "marker": marker,
+        "marker_sha256": hashlib.sha256(marker.encode("utf-8")).hexdigest(),
+        "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        "result_event": compact_result,
+    }
+    if parse_error:
+        return _claude_real_print_failure(
+            "claude_real_print_jsonl_invalid",
+            "real claude --print did not emit valid stream-json events",
+            **evidence,
+        )
+    if result_event is None:
+        return _claude_real_print_failure(
+            "claude_real_print_result_missing",
+            "real claude --print did not emit a result event",
+            **evidence,
+        )
+    if result_event.get("is_error") or result_event.get("api_error_status"):
+        return _claude_real_print_failure(
+            "claude_real_print_api_error",
+            "real claude --print emitted an API/auth error result",
+            **evidence,
+        )
+    if result.returncode != 0 or timed_out:
+        return _claude_real_print_failure(
+            "claude_real_print_run_failed",
+            "real claude --print did not complete successfully",
+            **evidence,
+        )
+    if str(result_event.get("result") or "").strip() != marker:
+        return _claude_real_print_failure(
+            "claude_real_print_marker_mismatch",
+            "real claude --print did not return the expected marker text",
+            **evidence,
+        )
+
+    return _status(
+        "pass",
+        canary="claude_real_print",
+        operation_evidence={
+            "run_once": {
+                "status": "pass",
+                "level": "live_token",
+                "source": "real claude --print stream-json turn returned the exact requested marker",
+                "canary": "claude_real_print",
+            },
+            "live_token_behavior": {
+                "status": "pass",
+                "level": "live_token",
+                "source": "real claude --print authenticated and completed one model-backed turn",
+                "canary": "claude_real_print",
+            },
+        },
+        **evidence,
+    )
+
+
 def _fake_opencode(path: Path) -> Path:
     return _write_executable(
         path,
@@ -619,12 +900,7 @@ def _event_part(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _opencode_real_tool_env() -> dict[str, str]:
-    env: dict[str, str] = {}
-    for key in ("HOME", "PATH", "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TMPDIR", "USER", "SHELL"):
-        value = os.environ.get(key)
-        if value:
-            env[key] = value
-    return env
+    return _provider_real_run_env()
 
 
 def _event_session_id(event: dict[str, Any]) -> str:
@@ -1448,6 +1724,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--python-bin")
     parser.add_argument("--longhouse-bin")
     parser.add_argument(
+        "--claude-run-real-print",
+        action="store_true",
+        help="For --provider claude/all, spend a real claude --print turn to prove auth + stream-json execution.",
+    )
+    parser.add_argument(
+        "--claude-print-timeout-secs",
+        type=int,
+        default=180,
+        help="Timeout for the real claude --print run; the execution guard uses a minimum of 45 seconds.",
+    )
+    parser.add_argument(
         "--opencode-run-real-tool",
         action="store_true",
         help="For --provider opencode/all, spend a real opencode run turn to prove tool-call/tool-result JSON event shape.",
@@ -1483,7 +1770,10 @@ def main(argv: list[str] | None = None) -> int:
         provider_root = evidence_root / provider
         provider_root.mkdir(parents=True, exist_ok=True)
         if provider == "claude":
-            canaries[provider] = run_claude_channel_canary(args, provider_root)
+            if args.claude_run_real_print:
+                canaries[provider] = run_claude_real_print_canary(args, provider_root)
+            else:
+                canaries[provider] = run_claude_channel_canary(args, provider_root)
         elif provider == "opencode":
             if args.opencode_run_real_tool:
                 canaries[provider] = run_opencode_real_tool_canary(args, provider_root)

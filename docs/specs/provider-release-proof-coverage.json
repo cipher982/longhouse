@@ -63,6 +63,9 @@
             "surface": "auth/status shape",
             "covered": "partial",
             "test_evidence": [
+                "scripts/qa/provider-control-e2e-canary.py --claude-run-real-print",
+                "scripts/tests/provider-control-e2e-canary.test.py",
+                "scripts/tests/provider-release-proof.test.py",
                 "scripts/tests/provider-live-canary.test.py",
                 "server/tests_lite/test_provider_live_cli.py"
             ],
@@ -232,6 +235,8 @@
             "covered": "partial",
             "test_evidence": [
                 "Makefile:managed-claude-poc",
+                "scripts/qa/provider-control-e2e-canary.py --claude-run-real-print",
+                "scripts/tests/provider-control-e2e-canary.test.py",
                 "scripts/tests/provider-release-proof.test.py"
             ],
             "proof_boundary": "manual_live_token_or_machine_live_token",

@@ -157,7 +157,7 @@ runs it", and "a reviewed green proof exists in the accepted baseline store".
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | install/stage exact version | partial | Sauron stages npm-sourced `@anthropic-ai/claude-code@version` into an isolated artifact root, passes `.bin/claude` to profile/live canaries, and wraps it in Longhouse proof/differential envelopes | isolated npm package | no Longhouse CI; Sauron tests cover it | yes for npm releases | no | yes if staging/version match fails or old/new proof drift is red |
 | binary identity | yes | `provider-live-canary --provider claude`, `provider-release-profile-canary.py` | live_no_token or fake | `validate-provider-cli-canaries` | yes, through provider status | release-proof yes (`claude-release-proof-v1`, 2.1.161) | yes if binary missing/version fails |
-| auth/status shape | partial | `provider-live-canary --provider claude` binary/auth/channel checks | live_no_token | `validate-provider-cli-canaries` | yes if live proof configured | release-proof yes (`claude-release-proof-v1`, 2.1.161) | yes if red |
+| auth/status shape | partial | `provider-live-canary --provider claude` binary/auth/channel checks; `provider-control-e2e-canary.py --claude-run-real-print` can spend a real print turn to catch auth-status/run divergence | live_no_token plus manual live_token | `validate-provider-cli-canaries` with fake real-print wrapper | yes if live proof configured | release-proof yes (`claude-release-proof-v1`, 2.1.161); no real-print baseline yet | yes if red |
 | launch managed session | partial | `provider-control-e2e-canary.py`, `test_claude_channel_launch_cli.py`, Sauron proof/diff for no-token launch flag shape, and `provider-release-proof.py --claude-run-machine-live-proof` | hermetic plus exact npm package shape plus explicit Runtime Host machine-live proof | `validate-provider-cli-canaries`, `make test`; Sauron tests cover release-watch proof wiring | profile/live plus proof/diff for npm releases; machine-live when configured | release-proof yes for no-token launch/PTY shape (`claude-release-proof-v1`, 2.1.161); no machine-live baseline yet | partial |
 | session id/path binding | partial | `test_claude_channel_bridge.py`, hook/session tests | hermetic | `make test` | no dedicated baseline | no | partial |
 | transcript/log parse | yes | engine Claude golden + adversarial parser tests | fixture | `make test-engine` | source review only | parser fixture yes; release-proof no | yes for parser drift |
@@ -167,15 +167,20 @@ runs it", and "a reviewed green proof exists in the accepted baseline store".
 | interrupt/abort/steer | partial | Claude interrupt/steer channel tests; managed Claude POC is manual/live; `provider-release-proof.py --claude-run-machine-live-proof` can attach `steer_active_turn` evidence | hermetic + manual/machine live_token | `make test`; wrapper fake Runtime Host test | machine live proof if configured | no | partial |
 | reattach/resume | partial | channel bridge resume/state tests | hermetic | `make test` | no dedicated baseline | no | partial |
 | tool/tool-result shape | partial | parser/tool-result tests cover transcript shapes | fixture/hermetic | `make test`, `make test-engine` | source review only | parser fixture yes; release-proof no | partial |
-| live-token behavior | partial | `make managed-claude-poc`; `provider-release-proof.py --claude-run-machine-live-proof` posts to Runtime Host `provider-live-proof`, polls the operation, and attaches live-token operation evidence | live_token manual or machine-live when explicitly run | wrapper fake Runtime Host test; real proof is opt-in | yes if machine proof credentials are configured | no | yes when explicitly run |
+| live-token behavior | partial | `make managed-claude-poc`; `provider-release-proof.py --claude-run-real-print` can spend one real local print turn; `provider-release-proof.py --claude-run-machine-live-proof` posts to Runtime Host `provider-live-proof`, polls the operation, and attaches live-token operation evidence | live_token manual or machine-live when explicitly run | wrapper fake Runtime Host test plus fake real-print wrapper; real proofs are opt-in | yes if machine proof credentials are configured | no | yes when explicitly run |
 
 Claude risk: high. Closed source and release notes are not enough. Sauron now
 stages exact npm package versions and runs Longhouse proof/differential
 artifacts against an accepted scoped no-token baseline. Longhouse also has an
 explicit `claude-machine-live-release-proof-v1` profile that can spend a Runtime
 Host machine-live proof and attach send, transcript-binding, and steer evidence.
-That profile has no accepted baseline yet, and full resume/tool coverage remains
-missing.
+Longhouse also has `claude-real-print-release-proof-v1`, a manual local
+live-token profile that catches the class where `claude auth status --json`
+looks healthy but a real `claude --print` turn cannot authenticate. On
+2026-06-19, that real local proof returned red with
+`failure_code=claude_real_print_api_error` against `2.1.161 (Claude Code)`, so
+no real-print baseline has been accepted. The machine-live profile also has no
+accepted baseline yet, and full resume/tool coverage remains missing.
 
 ### Codex
 
@@ -623,7 +628,10 @@ should not by itself count as contract drift.
 
 ## Next Work
 
-1. Add Claude managed-session binding proof beyond no-token launch shape.
+1. Fix the local Claude auth/run divergence surfaced by
+   `claude-real-print-release-proof-v1`, then accept a green real-print
+   baseline; after that, add Claude managed-session binding proof beyond
+   no-token launch shape.
 2. Keep the scheduled Codex live-send release-watch and Sauron
    `agent-release-baseline-guard` green, and add Codex interrupt/tool coverage
    beyond the currently accepted send-input baseline.
