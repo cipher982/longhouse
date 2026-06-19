@@ -512,7 +512,7 @@ rewritten to call the shared scenario runner.
 | `scripts/qa/provider-release-proof.py` | Proof wrapper, normalization, baseline artifact generation | Reusable shell; should eventually call universal runner instead of provider-specific canary scripts. |
 | `server/zerg/qa/provider_live_canary.py` Claude binary/channel/PTY checks | `probe_identity`, `launch_managed_session`, `collect_raw_evidence` | Migrated into Claude `managed_session_e2e`; live-token send/steer still need promotion. |
 | `server/zerg/qa/managed_claude_live.py` | `send_receive`, `live_token_streaming`, `interrupt_cancel`, `multi_turn_continuity` | Migration candidate; PTY loop and channel readiness are Claude adapter internals. |
-| `server/zerg/qa/codex_provider_release_canary.py` | `probe_identity`, `run_prompt_once`, `launch_managed_session`, `resume_reattach`, `send_receive`, `interrupt_cancel`, `tool_call_result`, `live_token_streaming` | Partly migrated: Codex `managed_session_e2e`, `interrupt_cancel`, `tool_call_result`, and `live_token_streaming` now call this canary; remaining control/steer lanes still need promotion. |
+| `server/zerg/qa/codex_provider_release_canary.py` | `probe_identity`, `run_prompt_once`, `launch_managed_session`, `resume_reattach`, `send_receive`, `interrupt_cancel`, `tool_call_result`, `live_token_streaming` | Partly migrated: Codex `managed_session_e2e`, `interrupt_cancel`, `tool_call_result`, and `live_token_streaming` now call this canary; live active-turn steer behavior still needs promotion. |
 | `server/zerg/qa/provider_live_canary.py` OpenCode server/schema/session checks | `launch_managed_session`, `send_receive`, `resume_reattach`, `interrupt_cancel`, `parse_ingest_project` | Partly migrated: OpenCode `managed_session_e2e`, `interrupt_cancel`, and `resume_reattach` now call this canary; remaining live-token scenarios still need promotion. |
 | `server/zerg/qa/provider_live_canary.py` Antigravity plugin/global hook checks | `probe_identity`, `external_event_channel`, `send_receive` | Migration candidate; hook/inbox setup is Antigravity adapter internal. |
 | `scripts/qa/provider-control-e2e-canary.py` | `send_receive`, `interrupt_cancel`, `tool_call_result`, `external_event_channel`, `live_token_streaming` | Partly migrated: Claude `interrupt_cancel` and `live_token_streaming`, OpenCode `tool_call_result` and `live_token_streaming`, plus Antigravity `live_token_streaming`, now call this canary; keep provider-specific fakes as adapter test fixtures. |
@@ -589,10 +589,13 @@ shape:
    managed-live-interrupt canary and returns an explicit Runtime Host
    credentials gap when not configured. OpenCode calls the provider-live
    session.abort canary. All pass lanes DB-ingest their evidence.
-11. Claude `steer_active_turn` is an executable universal control scenario. It
-   calls the provider-control channel canary, evaluates the steer metadata path
-   directly, DB-ingests the resulting no-token control rows, and reports Codex,
-   OpenCode, and Antigravity gaps explicitly.
+11. Claude and Codex `steer_active_turn` are executable universal control
+   scenarios. Claude calls the provider-control channel canary, evaluates the
+   steer metadata path directly, and DB-ingests the resulting no-token control
+   rows. Codex seeds a managed-local Codex session, dispatches through
+   `steer_text_to_managed_local_session`, and records the `session.steer_text`
+   command/payload/transport. OpenCode and Antigravity still report explicit
+   unsupported gaps.
 12. Codex and OpenCode `tool_call_result` are executable universal observation
    scenarios. They call their existing real-tool canaries, DB-ingest linked tool
    call/result rows, and expose `universal_tool_call_result` evidence through

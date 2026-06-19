@@ -1222,6 +1222,8 @@ class UniversalProviderAdapter:
     def steer_active_turn(self, package: EvidencePackage) -> dict[str, Any]:
         if self.config.provider == "claude":
             return self._run_claude_steer_active_turn(package)
+        if self.config.provider == "codex":
+            return self._run_codex_steer_active_turn(package)
         contract = contract_for_provider(self.config.provider)
         if contract is not None and contract.steer_active_turn:
             message = " ".join(
@@ -2993,6 +2995,161 @@ class UniversalProviderAdapter:
         package.write_json("assertions/steer_active_turn.json", payload)
         return payload
 
+    def _run_codex_steer_active_turn(self, package: EvidencePackage) -> dict[str, Any]:
+        os.environ.setdefault("TESTING", "1")
+        os.environ.setdefault("DATABASE_URL", f"sqlite:///{package.path('longhouse', 'settings-bootstrap.sqlite')}")
+
+        from zerg.database import initialize_database
+        from zerg.database import make_engine
+        from zerg.database import make_sessionmaker
+        from zerg.models.agents import AgentSession
+        from zerg.services import managed_local_control as control
+        from zerg.session_execution_home import ManagedSessionTransport
+        from zerg.session_execution_home import SessionExecutionHome
+
+        db_path = package.path("longhouse", "codex-steer-dispatch.sqlite")
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        engine = make_engine(f"sqlite:///{db_path}")
+        initialize_database(engine)
+        session_factory = make_sessionmaker(engine)
+        now = datetime(2026, 6, 19, 12, 0, tzinfo=UTC)
+        steer_text = "Longhouse universal Codex steer transport proof."
+        attachment_id = "11111111-1111-1111-1111-111111111111"
+        blob_url = f"/api/agents/sessions/codex-steer/inputs/1/attachments/{attachment_id}/blob"
+        attachments = [
+            {
+                "id": attachment_id,
+                "mime_type": "image/png",
+                "sha256": "a" * 64,
+                "blob_url": blob_url,
+            }
+        ]
+        calls: list[dict[str, Any]] = []
+        codex_transport = ManagedSessionTransport.CODEX_APP_SERVER.value
+
+        async def fake_dispatch(**kwargs: Any) -> SimpleNamespace:
+            calls.append(
+                {
+                    "owner_id": kwargs.get("owner_id"),
+                    "timeout_secs": kwargs.get("timeout_secs"),
+                    "command_type": kwargs.get("command_type"),
+                    "payload": kwargs.get("payload"),
+                    "commis_id": kwargs.get("commis_id"),
+                    "run_id": kwargs.get("run_id"),
+                    "provider": getattr(kwargs.get("session"), "provider", None),
+                    "managed_transport": getattr(kwargs.get("session"), "managed_transport", None),
+                }
+            )
+            return SimpleNamespace(
+                ok=True,
+                transport="engine_channel",
+                data={"exit_code": 0, "stdout": "", "stderr": ""},
+                error=None,
+            )
+
+        original_dispatch = control.dispatch_managed_control_command
+        original_transport_error = control._managed_control_transport_error
+        control.dispatch_managed_control_command = fake_dispatch
+        control._managed_control_transport_error = lambda *_args, **_kwargs: None
+        try:
+            with session_factory() as db:
+                session = AgentSession(
+                    provider="codex",
+                    environment="test",
+                    project="universal-agent-harness",
+                    device_id="universal-harness",
+                    cwd=str(package.path("workspace")),
+                    started_at=now - timedelta(minutes=5),
+                    last_activity_at=now,
+                    provider_session_id="codex-steer-transport-session",
+                    user_messages=1,
+                    assistant_messages=1,
+                    execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
+                    managed_transport=ManagedSessionTransport.CODEX_APP_SERVER.value,
+                    managed_session_name="codex-steer-transport-proof",
+                )
+                db.add(session)
+                db.flush()
+                result = asyncio.run(
+                    control.steer_text_to_managed_local_session(
+                        db=db,
+                        owner_id=1,
+                        session=session,
+                        text=steer_text,
+                        commis_id="universal-codex-steer",
+                        attachments=attachments,
+                    )
+                )
+        finally:
+            control.dispatch_managed_control_command = original_dispatch
+            control._managed_control_transport_error = original_transport_error
+
+        request = calls[0] if calls else {}
+        expected_payload = {"text": steer_text, "intent": "steer", "attachments": attachments}
+        assertions = {
+            "command_dispatched": bool(calls),
+            "command_type_matches": request.get("command_type") == "session.steer_text",
+            "payload_matches": request.get("payload") == expected_payload,
+            "provider_is_codex": request.get("provider") == "codex",
+            "transport_is_codex_app_server": request.get("managed_transport") == codex_transport,
+            "result_ok": result.ok is True,
+            "exit_code_zero": result.exit_code == 0,
+        }
+        passed = all(assertions.values())
+        raw_path = package.write_json(
+            "raw/codex-steer-dispatch.json",
+            {
+                "db_path": str(db_path),
+                "calls": calls,
+                "result": {
+                    "ok": result.ok,
+                    "exit_code": result.exit_code,
+                    "error": result.error,
+                },
+                "assertions": assertions,
+            },
+        )
+        operations = {
+            "steer_active_turn": {
+                "status": STATUS_PASS if passed else STATUS_FAIL,
+                "level": "hermetic",
+                "canary": "codex_managed_local_steer_dispatch",
+                "failure_code": None if passed else "codex_steer_dispatch_failed",
+                "source": "zerg.services.managed_local_control.steer_text_to_managed_local_session",
+            }
+        }
+        payload = self._write_session_projection(
+            package,
+            raw_events=(
+                {
+                    "type": "user",
+                    "role": "user",
+                    "text": steer_text,
+                    "provider_session_id": "codex-steer-transport-session",
+                    "source_canary": "codex_managed_local_steer_dispatch",
+                    "intent": "steer",
+                    "evidence_origin": "managed_local_control_transport_proof",
+                },
+            ),
+            operations=operations,
+            provider_session_id="codex-steer-transport-session",
+        )
+        payload.update(
+            {
+                "status": STATUS_PASS if passed else STATUS_FAIL,
+                "scenario": "steer_active_turn",
+                "assertions": assertions,
+                "raw_steer_dispatch_path": str(raw_path),
+                "proof_scope": "codex_managed_local_steer_dispatch",
+                "synthetic": False,
+            }
+        )
+        if not passed:
+            payload["failure_code"] = "codex_steer_dispatch_failed"
+            payload["message"] = "Codex managed-local steer dispatch did not pass."
+        package.write_json("assertions/steer_active_turn.json", payload)
+        return payload
+
     def _run_opencode_interrupt_cancel(self, package: EvidencePackage) -> dict[str, Any]:
         binary, source = self._resolve_binary()
         if binary is None:
@@ -4644,6 +4801,7 @@ def _action_status(
     if action.action_id in {
         "pause_request_detect",
         "answer_pause_request",
+        "steer_active_turn",
         "tool_call_result",
         "external_event_channel",
         "permission_prompt",
@@ -4688,6 +4846,23 @@ def _derived_action_status(*, action: ActionDefinition, provider: str) -> dict[s
             "source": "server/tests_lite/test_shipper_parser_tool_results.py and provider parser fixtures",
             "canary": "shipper_parser_tool_results",
             "next": "Promote with live provider tool-call/result canaries per provider.",
+        }
+    if action.action_id == "steer_active_turn":
+        if provider == "codex":
+            return {
+                "status": STATUS_PASS,
+                "evidence_level": "hermetic",
+                "proof_scope": "codex_managed_local_steer_dispatch",
+                "source": "zerg.services.managed_local_control.steer_text_to_managed_local_session",
+                "canary": "codex_managed_local_steer_dispatch",
+                "next": "Promote with a live active-turn Codex steer canary that proves provider behavior.",
+            }
+        return {
+            "status": STATUS_BLOCKED,
+            "failure_code": "steer_active_turn_provider_canary_missing",
+            "message": f"{provider} steer_active_turn behavior needs a provider-specific canary.",
+            "proof_scope": "managed_control_steer",
+            "next": "Add a live active-turn steer canary, or keep unsupported without a stable provider semantic.",
         }
     if action.action_id == "external_event_channel":
         return {

@@ -1806,9 +1806,21 @@ def test_steer_active_turn_reports_explicit_provider_gaps(tmp_path: Path) -> Non
 
     by_provider = {result["provider"]: result for result in payload["results"]}
     assert payload["verdict"] == "yellow"
-    assert by_provider["codex"]["status"] == "blocked"
-    assert by_provider["codex"]["failure_code"] == "steer_active_turn_adapter_missing"
-    assert by_provider["codex"]["data"]["operation_evidence"]["steer_active_turn"]["status"] == "blocked"
+    codex = by_provider["codex"]
+    assert codex["status"] == "pass"
+    assert codex["data"]["operation_evidence"]["steer_active_turn"]["status"] == "pass"
+    assert codex["data"]["operation_evidence"]["steer_active_turn"]["level"] == "hermetic"
+    assert codex["data"]["operation_evidence"]["steer_active_turn"]["canary"] == "codex_managed_local_steer_dispatch"
+    assert codex["data"]["assertions"] == {
+        "command_dispatched": True,
+        "command_type_matches": True,
+        "exit_code_zero": True,
+        "payload_matches": True,
+        "provider_is_codex": True,
+        "result_ok": True,
+        "transport_is_codex_app_server": True,
+    }
+    assert Path(codex["data"]["raw_steer_dispatch_path"]).is_file()
     for provider in ("opencode", "antigravity"):
         result = by_provider[provider]
         assert result["status"] == "unsupported_gap"
@@ -2933,6 +2945,8 @@ def test_script_entrypoint_runs_all_provider_action_e2e(tmp_path: Path) -> None:
     assert set(support_rows) == set(uah.ACTIONS)
     assert support_rows["send_message"]["providers"]["codex"]["status"] == "pass"
     assert support_rows["send_message"]["providers"]["claude"]["status"] == "pass"
+    assert support_rows["steer_active_turn"]["providers"]["codex"]["status"] == "pass"
+    assert support_rows["steer_active_turn"]["providers"]["codex"]["canary"] == "codex_managed_local_steer_dispatch"
     assert support_rows["steer_active_turn"]["providers"]["opencode"]["status"] == "unsupported_gap"
     assert support_rows["permission_prompt"]["providers"]["opencode"]["status"] == "pass"
     assert support_rows["permission_prompt"]["providers"]["opencode"]["canary"] == "opencode_bridge_permission_reply"
