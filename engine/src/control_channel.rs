@@ -1,6 +1,6 @@
 //! Machine Agent managed-control WebSocket client.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::{OsStr, OsString};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -11,6 +11,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use std::process::Stdio;
 use tokio::process::Command;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 use tokio_tungstenite::connect_async;
@@ -594,9 +595,22 @@ async fn run_once(
     heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
     heartbeat.tick().await;
     let mut next_heartbeat_due = Instant::now() + heartbeat_interval;
+    let (command_result_tx, mut command_result_rx) = mpsc::unbounded_channel::<(String, Value)>();
+    let mut in_flight_commands: HashSet<String> = HashSet::new();
 
     loop {
         tokio::select! {
+            Some((command_id, result)) = command_result_rx.recv() => {
+                in_flight_commands.remove(&command_id);
+                completed_commands.insert(command_id, result.clone());
+                send_control_message(
+                    &mut stream,
+                    Message::Text(result.to_string()),
+                    "machine control command result",
+                    status,
+                )
+                .await?;
+            }
             _ = heartbeat.tick() => {
                 let now = Instant::now();
                 let lateness = now.saturating_duration_since(next_heartbeat_due);
@@ -650,14 +664,45 @@ async fn run_once(
                     );
                     continue;
                 }
-                let result = handle_command_frame(frame, completed_commands, config).await;
-                send_control_message(
-                    &mut stream,
-                    Message::Text(result.to_string()),
-                    "machine control command result",
-                    status,
-                )
-                .await?;
+                let command_id = frame
+                    .get("command_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                if command_id.is_empty() {
+                    let result = command_error("", "invalid_command", "command_id is required");
+                    send_control_message(
+                        &mut stream,
+                        Message::Text(result.to_string()),
+                        "machine control command result",
+                        status,
+                    )
+                    .await?;
+                    continue;
+                }
+                if let Some(result) = completed_commands.get(&command_id) {
+                    send_control_message(
+                        &mut stream,
+                        Message::Text(result.to_string()),
+                        "machine control command result",
+                        status,
+                    )
+                    .await?;
+                    continue;
+                }
+                if in_flight_commands.contains(&command_id) {
+                    tracing::debug!(command_id, "Ignoring duplicate in-flight machine control command");
+                    continue;
+                }
+
+                in_flight_commands.insert(command_id.clone());
+                let tx = command_result_tx.clone();
+                let config = config.clone();
+                tokio::spawn(async move {
+                    let mut no_cache = CompletedCommandCache::new(0, Duration::ZERO);
+                    let result = handle_command_frame(frame, &mut no_cache, &config).await;
+                    let _ = tx.send((command_id, result));
+                });
             }
         }
     }
@@ -1495,8 +1540,7 @@ async fn run_provider_live_proof_command(
     let timeout_secs = payload_optional_u64(payload, "timeout_secs", 1, 900).unwrap_or(120);
     let run_live_token_contract =
         payload_optional_bool(payload, "run_live_token_contract").unwrap_or(false);
-    let live_token_timeout_secs =
-        payload_optional_u64(payload, "live_token_timeout_secs", 1, 600);
+    let live_token_timeout_secs = payload_optional_u64(payload, "live_token_timeout_secs", 1, 600);
     let expected_provider_version = payload_optional_string(payload, "expected_provider_version");
 
     let mut args = vec![
