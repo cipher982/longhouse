@@ -420,7 +420,8 @@ def test_opencode_managed_session_e2e_uses_real_provider_live_canary(tmp_path: P
     assert result["status"] == "pass"
     assert result["data"]["source_artifact_kind"] == "provider_live_canary"
     assert result["data"]["synthetic"] is False
-    assert result["data"]["longhouse_ingest"]["status"] == "blocked"
+    assert result["data"]["longhouse_ingest"]["status"] == "pass"
+    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
 
     evidence_root = Path(result["evidence_root"])
     provider_live = json.loads((evidence_root / "raw" / "provider-live-canary.json").read_text(encoding="utf-8"))
@@ -437,8 +438,12 @@ def test_opencode_managed_session_e2e_uses_real_provider_live_canary(tmp_path: P
 
     session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
     assert session["provider_session_id"] == "ses_fake_universal_e2e"
+    assert session["longhouse_session_id"]
     assert session["operation_statuses"]["send_input"]["level"] == "live_no_token"
     assert session["operation_statuses"]["transcript_binding"]["canary"] == "opencode_prompt_async_no_reply_delivery"
+    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
+    assert db_snapshot["ingest_result"]["events_inserted"] == 4
+    assert db_snapshot["timeline"]["matched"] is True
 
 
 def test_opencode_managed_session_e2e_fails_when_real_canary_fails(tmp_path: Path, monkeypatch) -> None:

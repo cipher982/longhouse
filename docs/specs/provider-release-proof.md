@@ -428,8 +428,8 @@ Optional variables:
   enables fixture replay, and `--universal-prompt` supplies the prompt/input
   used by universal prompt/session scenarios.
 - OpenCode `--universal-scenario managed_session_e2e` is the first real
-  no-token universal provider lane; it still marks DB ingest as a blocked next
-  gate.
+  no-token universal provider lane with Longhouse DB ingest enabled for its
+  provider-live raw evidence.
 
 The equivalent direct script entrypoint is:
 

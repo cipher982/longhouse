@@ -93,8 +93,9 @@ scripts/qa/provider-release-proof.py \
 
 That lane calls the existing no-token provider-live canary and attaches raw
 OpenCode server/session/schema evidence plus canonical event/session/timeline
-projection. It still reports DB ingest as a blocked next gate rather than
-counting database round-trip coverage as done.
+projection. It also feeds the provider-live raw rows through isolated Longhouse
+SQLite ingest and verifies durable events, session counts, export JSONL, query
+lookup, timeline listing, and preserved provider-session binding.
 
 ## Baseline Stores
 

@@ -404,13 +404,14 @@ shape:
    create/get, `prompt_async noReply`, transcript marker recovery, process
    reattach, and abort behavior, then writes canonical Longhouse-style
    event/session/timeline projections.
-8. Full DB ingest is still explicit `blocked` evidence for that lane; it is not
-   silently counted as done.
+8. That OpenCode lane now feeds the provider-live raw rows through isolated
+   Longhouse SQLite ingest and verifies durable events, session counts, export
+   JSONL, query lookup, timeline listing, and preserved provider-session
+   binding.
 9. Evidence packages are written for pass, fail, and unsupported results.
 10. Existing one-off canaries remain compatibility lanes until each behavior is
    migrated and baselined.
 
-Next implementation target: promote OpenCode `managed_session_e2e` into real DB
-ingest/session/timeline assertions, then migrate Codex managed mechanics, Claude
-PTY/channel mechanics, and Antigravity hook/inbox mechanics behind the same
+Next implementation target: migrate Codex managed mechanics, Claude PTY/channel
+mechanics, and Antigravity hook/inbox mechanics behind the same
 runner.

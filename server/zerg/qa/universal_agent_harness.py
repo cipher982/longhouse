@@ -813,12 +813,33 @@ class UniversalProviderAdapter:
                 (live_artifact.get("session_projection") or {}).get("provider_session_id") or self._session_id(package)
             ),
         )
+        db_ingest = ingest_canonical_events_into_longhouse_db(
+            package=package,
+            provider=self.config.provider,
+            rows=raw_events,
+            provider_session_id=str(
+                (live_artifact.get("session_projection") or {}).get("provider_session_id") or self._session_id(package)
+            ),
+        )
+        db_operation_evidence = {
+            str(operation): dict(evidence)
+            for operation, evidence in dict(db_ingest.get("operation_evidence") or {}).items()
+            if isinstance(evidence, Mapping)
+        }
+        operation_evidence.update(db_operation_evidence)
+        session_projection_path = package.path("longhouse", "session-projection.json")
+        try:
+            session_projection = json.loads(session_projection_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            session_projection = {}
+        if isinstance(session_projection, dict):
+            session_projection["operation_statuses"] = operation_evidence
+            package.write_json("longhouse/session-projection.json", session_projection)
         live_verdict = str(live_artifact.get("verdict") or "red")
-        ingest_gap_message = "This lane currently proves raw provider evidence and canonical "
-        ingest_gap_message += "projection; DB ingest promotion is the next gate."
+        db_verdict = str(db_ingest.get("status") or STATUS_FAIL)
         payload = {
             **projection,
-            "status": STATUS_PASS if live_verdict == "green" else STATUS_FAIL,
+            "status": STATUS_PASS if live_verdict == "green" and db_verdict == STATUS_PASS else STATUS_FAIL,
             "scenario": "managed_session_e2e",
             "provider_version": live_artifact.get("provider_version"),
             "provider_live_artifact_path": str(live_artifact_path),
@@ -826,15 +847,21 @@ class UniversalProviderAdapter:
             "provider_live_verdict": live_verdict,
             "source_artifact_kind": live_artifact.get("artifact_kind"),
             "synthetic": False,
+            "operation_evidence": operation_evidence,
             "longhouse_ingest": {
-                "status": STATUS_BLOCKED,
-                "failure_code": "db_ingest_not_in_universal_e2e_slice",
-                "message": ingest_gap_message,
+                "status": db_verdict,
+                "failure_code": db_ingest.get("failure_code"),
+                "db_snapshot_path": db_ingest.get("db_snapshot_path"),
+                "session_projection_path": db_ingest.get("session_projection_path"),
+                "timeline_projection_path": db_ingest.get("timeline_projection_path"),
             },
         }
         if live_verdict != "green":
             payload["failure_code"] = live_artifact.get("failure_code") or "provider_live_canary_failed"
             payload["message"] = "OpenCode provider-live no-token canary did not pass."
+        elif db_verdict != STATUS_PASS:
+            payload["failure_code"] = db_ingest.get("failure_code") or "managed_session_e2e_db_ingest_failed"
+            payload["message"] = "OpenCode provider-live evidence did not pass Longhouse DB ingest assertions."
         package.write_json("assertions/managed_session_e2e.json", payload)
         return payload
 
@@ -1261,6 +1288,7 @@ def ingest_canonical_events_into_longhouse_db(
     package: EvidencePackage,
     provider: str,
     rows: list[dict[str, Any]],
+    provider_session_id: str | None = None,
 ) -> dict[str, Any]:
     os.environ.setdefault("TESTING", "1")
     os.environ.setdefault("DATABASE_URL", f"sqlite:///{package.path('longhouse', 'settings-bootstrap.sqlite')}")
@@ -1291,6 +1319,7 @@ def ingest_canonical_events_into_longhouse_db(
     initialize_database(engine)
     session_factory = make_sessionmaker(engine)
     session_id = uuid5(NAMESPACE_URL, f"longhouse-universal-db-ingest:{provider}:{package.root}")
+    resolved_provider_session_id = provider_session_id or f"universal-db-ingest-{provider}"
     source_path = str(package.path("events", "provider-raw-events.jsonl"))
     started_at = datetime(2026, 6, 19, 12, 0, tzinfo=UTC)
     event_ingests: list[Any] = []
@@ -1312,6 +1341,9 @@ def ingest_canonical_events_into_longhouse_db(
             )
         )
         source_lines.append(SourceLineIngest(source_path=source_path, source_offset=index, raw_json=raw_json))
+    expected_counts = _expected_session_counts(event_ingests)
+    expected_export_marker = next((event.content_text for event in event_ingests if event.content_text), None)
+    expected_query_marker = _query_marker_for_events(event_ingests)
 
     with session_factory() as db:
         store = AgentsStore(db)
@@ -1324,7 +1356,7 @@ def ingest_canonical_events_into_longhouse_db(
                 device_id="universal-harness",
                 cwd=str(package.path("workspace")),
                 started_at=started_at,
-                provider_session_id=f"universal-db-ingest-{provider}",
+                provider_session_id=resolved_provider_session_id,
                 events=event_ingests,
                 source_lines=source_lines,
             )
@@ -1337,7 +1369,7 @@ def ingest_canonical_events_into_longhouse_db(
             include_test=True,
             project="universal-agent-harness",
             provider=provider,
-            query="universal",
+            query=expected_query_marker,
             limit=10,
             hide_autonomous=False,
         )
@@ -1396,6 +1428,7 @@ def ingest_canonical_events_into_longhouse_db(
             for event in visible_events
         ],
         "query_total": query_total,
+        "query_marker": expected_query_marker,
         "query_session_ids": [str(item.id) for item in query_sessions],
         "export_jsonl": export_result[0].decode("utf-8"),
         "timeline": {
@@ -1409,7 +1442,7 @@ def ingest_canonical_events_into_longhouse_db(
     db_snapshot_path = package.write_json("longhouse/db-ingest-result.json", db_snapshot)
     session_projection = {
         **project_session(canonical, provider=provider),
-        "provider_session_id": f"universal-db-ingest-{provider}",
+        "provider_session_id": resolved_provider_session_id,
         "longhouse_session_id": str(session_id),
         "db_ingest_result_path": str(db_snapshot_path),
     }
@@ -1424,17 +1457,10 @@ def ingest_canonical_events_into_longhouse_db(
     assertions = {
         "events_inserted": ingest_result.events_inserted == len(rows),
         "visible_event_count": len(visible_events) == len(rows),
-        "export_contains_raw": "universal db ingest hello" in db_snapshot["export_jsonl"],
+        "export_contains_raw": expected_export_marker is None or expected_export_marker in db_snapshot["export_jsonl"],
         "query_found_session": str(session_id) in db_snapshot["query_session_ids"],
         "timeline_found_session": timeline_card is not None,
-        "counts_match": db_snapshot["session_counts"]
-        == {
-            "user_messages": 1,
-            "assistant_messages": 1,
-            "tool_calls": 1,
-            "transcript_revision": db_snapshot["session_counts"]["transcript_revision"],
-        }
-        and db_snapshot["session_counts"]["transcript_revision"] > 0,
+        "counts_match": _counts_match(db_snapshot["session_counts"], expected_counts),
     }
     status = STATUS_PASS if all(assertions.values()) else STATUS_FAIL
     payload = {
@@ -1483,6 +1509,38 @@ def _event_content_text(row: Mapping[str, Any]) -> str | None:
     if text is None:
         text = row.get("content")
     return _clean_optional_str(text)
+
+
+def _expected_session_counts(events: Iterable[Any]) -> dict[str, int]:
+    counts = {"user_messages": 0, "assistant_messages": 0, "tool_calls": 0}
+    for event in events:
+        role = str(getattr(event, "role", "") or "")
+        if role == "user":
+            counts["user_messages"] += 1
+        elif role == "assistant" and getattr(event, "tool_name", None):
+            counts["tool_calls"] += 1
+        elif role == "assistant":
+            counts["assistant_messages"] += 1
+    return counts
+
+
+def _query_marker_for_events(events: Iterable[Any]) -> str | None:
+    fallback = None
+    for event in events:
+        content = _clean_optional_str(getattr(event, "content_text", None))
+        if content is None:
+            continue
+        fallback = fallback or content
+        if str(getattr(event, "role", "") or "") in {"user", "assistant"}:
+            return content
+    return fallback
+
+
+def _counts_match(actual: Mapping[str, Any], expected: Mapping[str, int]) -> bool:
+    for key, value in expected.items():
+        if int(actual.get(key) or 0) != value:
+            return False
+    return int(actual.get("transcript_revision") or 0) > 0
 
 
 def _clean_optional_str(value: Any) -> str | None:

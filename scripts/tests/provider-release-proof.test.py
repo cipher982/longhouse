@@ -963,11 +963,15 @@ def test_opencode_release_proof_can_attach_real_universal_managed_session_e2e() 
         assert e2e_result["status"] == "pass"
         assert e2e_result["data"]["source_artifact_kind"] == "provider_live_canary"
         assert e2e_result["data"]["synthetic"] is False
-        assert e2e_result["data"]["longhouse_ingest"]["status"] == "blocked"
+        assert e2e_result["data"]["longhouse_ingest"]["status"] == "pass"
+        assert payload["operation_evidence"]["universal_db_ingest"]["status"] == "pass"
 
         evidence_root = Path(e2e_result["evidence_root"])
         assert (evidence_root / "raw" / "provider-live-canary.json").is_file()
         assert (evidence_root / "raw" / "provider-live-evidence" / "opencode-server.log").is_file()
+        db_snapshot = _read_json(evidence_root / "longhouse" / "db-ingest-result.json")
+        assert db_snapshot["ingest_result"]["events_inserted"] == 4
+        assert db_snapshot["timeline"]["matched"] is True
         raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
         assert "provider_live_canary" in raw_events
         assert '"synthetic": true' not in raw_events
