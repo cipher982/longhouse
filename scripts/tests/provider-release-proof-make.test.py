@@ -44,7 +44,9 @@ def test_provider_release_proof_status_make_requires_provider_and_scenario() -> 
     assert "SCENARIO_ID is required" in missing_scenario.stderr
 
 
-def test_provider_release_proof_status_all_make_reports_inventory_missing_baseline() -> None:
+def test_provider_release_proof_status_all_make_reports_inventory_missing_baseline() -> (
+    None
+):
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         coverage = root / "coverage.json"
@@ -88,7 +90,9 @@ def test_provider_release_proof_status_all_make_reports_inventory_missing_baseli
         assert payload["statuses"][0]["failure_code"] == "baseline_missing"
 
 
-def test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_yellow() -> None:
+def test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_yellow() -> (
+    None
+):
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         proof = root / "proof.json"
@@ -130,7 +134,10 @@ def test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_ye
 
         assert accept_result.returncode == 2, accept_result.stderr
         accept_payload = _read_json(acceptance)
-        assert accept_payload["artifact_kind"] == "provider_release_proof_baseline_acceptance"
+        assert (
+            accept_payload["artifact_kind"]
+            == "provider_release_proof_baseline_acceptance"
+        )
         assert accept_payload["verdict"] == "red"
         assert accept_payload["failure_code"] == "baseline_acceptance_rejected"
         assert accept_payload["accepted_path"] is None
@@ -163,7 +170,9 @@ def test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_ye
 
         assert status_result.returncode == 0, status_result.stderr
         status_payload = _read_json(status)
-        assert status_payload["artifact_kind"] == "provider_release_proof_baseline_status"
+        assert (
+            status_payload["artifact_kind"] == "provider_release_proof_baseline_status"
+        )
         assert status_payload["accepted"] is False
         assert status_payload["failure_code"] == "baseline_missing"
 
@@ -214,8 +223,47 @@ def test_provider_release_proof_make_runs_preflight_only() -> None:
         assert proof_result.returncode == 0, proof_result.stderr
         proof_payload = _read_json(proof)
         assert proof_payload["artifact_kind"] == "provider_release_proof_preflight"
-        assert proof_payload["scenario_id"] == "codex-managed-live-send-release-proof-v1"
-        assert proof_payload["failure_code"] == "provider_release_proof_prerequisites_missing"
+        assert (
+            proof_payload["scenario_id"] == "codex-managed-live-send-release-proof-v1"
+        )
+        assert (
+            proof_payload["failure_code"]
+            == "provider_release_proof_prerequisites_missing"
+        )
+        assert not (evidence / "raw").exists()
+
+
+def test_provider_release_proof_make_forwards_codex_live_interrupt_profile() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        proof = root / "preflight.json"
+        evidence = root / "evidence"
+
+        proof_result = _run_make(
+            [
+                "provider-release-proof",
+                "PROVIDER=codex",
+                "PROVIDER_VERSION=codex-test-0",
+                "CODEX_RUN_MANAGED_LIVE_INTERRUPT=1",
+                "CODEX_LIVE_INTERRUPT_TIMEOUT_SECS=7",
+                "PREFLIGHT_ONLY=1",
+                f"ARTIFACT={proof}",
+                f"EVIDENCE_ROOT={evidence}",
+            ]
+        )
+
+        assert proof_result.returncode == 0, proof_result.stderr
+        proof_payload = _read_json(proof)
+        assert proof_payload["artifact_kind"] == "provider_release_proof_preflight"
+        assert (
+            proof_payload["scenario_id"]
+            == "codex-managed-live-interrupt-release-proof-v1"
+        )
+        assert proof_payload["scenario_profile"] == "managed-live-interrupt"
+        assert (
+            proof_payload["failure_code"]
+            == "provider_release_proof_prerequisites_missing"
+        )
         assert not (evidence / "raw").exists()
 
 
@@ -259,6 +307,7 @@ def main() -> int:
         test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_yellow,
         test_provider_release_proof_make_passes_scenario_id_override,
         test_provider_release_proof_make_runs_preflight_only,
+        test_provider_release_proof_make_forwards_codex_live_interrupt_profile,
         test_provider_release_proof_make_forwards_claude_real_print_profile,
     ]
     for test in tests:

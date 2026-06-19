@@ -362,6 +362,8 @@ provider-release-proof: ## Emit provider release proof artifact; set PROVIDER=..
 	if [ -n "$(CODEX_RUN_MANAGED_TUI_ATTACH)" ]; then set -- "$$@" --codex-run-managed-tui-attach; fi; \
 	if [ -n "$(CODEX_RUN_DETACHED_UI)" ]; then set -- "$$@" --codex-run-detached-ui; fi; \
 	if [ -n "$(CODEX_RUN_MANAGED_LIVE_SEND)" ]; then set -- "$$@" --codex-run-managed-live-send; fi; \
+	if [ -n "$(CODEX_RUN_MANAGED_LIVE_INTERRUPT)" ]; then set -- "$$@" --codex-run-managed-live-interrupt; fi; \
+	if [ -n "$(CODEX_LIVE_INTERRUPT_TIMEOUT_SECS)" ]; then set -- "$$@" --codex-live-interrupt-timeout-secs "$(CODEX_LIVE_INTERRUPT_TIMEOUT_SECS)"; fi; \
 	if [ -n "$(CODEX_RUN_REAL_TOOL)" ]; then set -- "$$@" --codex-run-real-tool; fi; \
 	if [ -n "$(CODEX_REAL_TOOL_TIMEOUT_SECS)" ]; then set -- "$$@" --codex-real-tool-timeout-secs "$(CODEX_REAL_TOOL_TIMEOUT_SECS)"; fi; \
 	if [ -n "$(CODEX_API_URL)" ]; then set -- "$$@" --codex-api-url "$(CODEX_API_URL)"; fi; \

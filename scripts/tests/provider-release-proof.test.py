@@ -158,7 +158,9 @@ def _write_fake_repo(root: Path) -> None:
             }
         ],
     }
-    manifest_path = root / "server" / "zerg" / "config" / "managed_provider_contracts.json"
+    manifest_path = (
+        root / "server" / "zerg" / "config" / "managed_provider_contracts.json"
+    )
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
@@ -413,14 +415,21 @@ if os.environ.get("FAKE_CODEX_SKIP_ARTIFACT") == "1":
 
 source_review_status = value("--source-review-status", "missing")
 run_real_tool = "--run-real-tool" in args
+run_live_interrupt = "--run-managed-live-interrupt" in args
 real_tool_status = "fail" if os.environ.get("FAKE_CODEX_REAL_TOOL_FAIL") == "1" else "pass"
 real_tool_failure_code = "fake_codex_real_tool_failed" if real_tool_status == "fail" else None
+live_interrupt_status = "fail" if os.environ.get("FAKE_CODEX_INTERRUPT_FAIL") == "1" else "pass"
+live_interrupt_failure_code = "fake_codex_interrupt_failed" if live_interrupt_status == "fail" else None
 verdict = "yellow" if source_review_status == "not_run" else "green"
 failure_code = "insufficient_coverage" if source_review_status == "not_run" else None
 recommendation = "investigate_before_upgrade" if source_review_status == "not_run" else "upgrade_allowed"
 if run_real_tool and real_tool_status == "fail":
     verdict = "red"
     failure_code = real_tool_failure_code
+    recommendation = "block_upgrade_recommendation"
+if run_live_interrupt and live_interrupt_status == "fail":
+    verdict = "red"
+    failure_code = live_interrupt_failure_code
     recommendation = "block_upgrade_recommendation"
 artifact = {
     "artifact_kind": "codex_provider_release_canary",
@@ -478,6 +487,18 @@ if run_real_tool:
         "level": "none" if real_tool_status == "fail" else "live_token",
         "canary": "codex_real_tool_result_shape",
         "failure_code": real_tool_failure_code,
+    }
+if run_live_interrupt:
+    artifact["canaries"]["managed_live_interrupt"] = {
+        "status": live_interrupt_status,
+        "failure_code": live_interrupt_failure_code,
+        "last_turn_status": "interrupted" if live_interrupt_status == "pass" else "completed",
+    }
+    artifact["operation_evidence"]["interrupt"] = {
+        "status": live_interrupt_status,
+        "level": "none" if live_interrupt_status == "fail" else "live_token",
+        "canary": "managed_live_interrupt",
+        "failure_code": live_interrupt_failure_code,
     }
 Path(value("--artifact")).parent.mkdir(parents=True, exist_ok=True)
 Path(value("--artifact")).write_text(json.dumps(artifact), encoding="utf-8")
@@ -590,12 +611,24 @@ def test_opencode_release_proof_normalizes_source_canary() -> None:
         assert payload["normalized"]["canaries"]["server_contract"]["status"] == "pass"
         assert Path(payload["artifacts"]["normalized_contract"]).exists()
         provider_contract = _read_json(Path(payload["artifacts"]["provider_contract"]))
-        operation_evidence = _read_json(Path(payload["artifacts"]["operation_evidence"]))
-        session_projection = _read_json(Path(payload["artifacts"]["session_projection"]))
-        assert provider_contract["contract_operations"]["send_input"]["level"] == "live_no_token"
-        assert operation_evidence["operation_evidence"]["send_input"]["status"] == "pass"
+        operation_evidence = _read_json(
+            Path(payload["artifacts"]["operation_evidence"])
+        )
+        session_projection = _read_json(
+            Path(payload["artifacts"]["session_projection"])
+        )
+        assert (
+            provider_contract["contract_operations"]["send_input"]["level"]
+            == "live_no_token"
+        )
+        assert (
+            operation_evidence["operation_evidence"]["send_input"]["status"] == "pass"
+        )
         assert session_projection["status"] == "captured"
-        assert session_projection["projection"]["provider_session_id"] == "ses_fake_release_proof"
+        assert (
+            session_projection["projection"]["provider_session_id"]
+            == "ses_fake_release_proof"
+        )
 
 
 def test_opencode_release_proof_blocks_on_source_canary_red() -> None:
@@ -617,7 +650,9 @@ def test_opencode_release_proof_blocks_on_source_canary_red() -> None:
         assert payload["operation_evidence"]["send_input"]["status"] == "fail"
 
 
-def test_opencode_release_proof_blocks_green_artifact_from_failed_source_canary() -> None:
+def test_opencode_release_proof_blocks_green_artifact_from_failed_source_canary() -> (
+    None
+):
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         _write_fake_repo(root / "repo")
@@ -670,7 +705,9 @@ def test_opencode_release_proof_blocks_when_source_canary_times_out() -> None:
         assert payload["failure_code"] == "provider_release_proof_timeout"
 
 
-def test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest() -> None:
+def test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest() -> (
+    None
+):
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         args_path = root / "codex-args.json"
@@ -681,7 +718,10 @@ def test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest
         result, payload = _run_proof(
             root,
             "codex",
-            env={"FAKE_CODEX_ARGS_PATH": str(args_path), "FAKE_CODEX_ENV_PATH": str(env_path)},
+            env={
+                "FAKE_CODEX_ARGS_PATH": str(args_path),
+                "FAKE_CODEX_ENV_PATH": str(env_path),
+            },
             extra_args=[
                 "--provider-version",
                 "codex 2.0.0",
@@ -699,7 +739,9 @@ def test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest
         assert result.returncode == 0
         codex_args = json.loads(args_path.read_text(encoding="utf-8"))
         codex_env = json.loads(env_path.read_text(encoding="utf-8"))
-        assert codex_args[codex_args.index("--codex-bin") + 1] == str(root / "fake-provider")
+        assert codex_args[codex_args.index("--codex-bin") + 1] == str(
+            root / "fake-provider"
+        )
         assert codex_args[codex_args.index("--source-review-status") + 1] == "not_run"
         assert "--run-raw-fresh-remote" in codex_args
         assert "--run-managed-tui-attach" in codex_args
@@ -718,8 +760,13 @@ def test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest
             "binary_present": True,
             "longhouse_commit_present": True,
         }
-        assert payload["normalized"]["canaries"]["binary_identity"]["version"] == "codex 2.0.0"
-        fingerprints = payload["normalized"]["canaries"]["raw_fresh_remote"]["protocol_fingerprints"]
+        assert (
+            payload["normalized"]["canaries"]["binary_identity"]["version"]
+            == "codex 2.0.0"
+        )
+        fingerprints = payload["normalized"]["canaries"]["raw_fresh_remote"][
+            "protocol_fingerprints"
+        ]
         assert "path" not in fingerprints
         assert fingerprints["responses"]["initialize"]["platformFamily"] == "str"
         assert Path(payload["artifacts"]["provider_contract"]).exists()
@@ -800,10 +847,23 @@ def test_codex_release_proof_can_attach_real_tool_evidence() -> None:
         assert "--run-real-tool" in source_args
         assert source_args[source_args.index("--real-tool-timeout-secs") + 1] == "5"
         assert payload["operation_evidence"]["run_once"]["level"] == "live_token"
-        assert payload["operation_evidence"]["transcript_binding"]["level"] == "live_token"
-        assert payload["normalized"]["operation_evidence"]["run_once"]["level"] == "live_token"
-        assert payload["normalized"]["canaries"]["codex_real_tool_result_shape"]["status"] == "pass"
-        assert payload["normalized"]["canaries"]["codex_real_tool_result_shape"]["command_status"] == "completed"
+        assert (
+            payload["operation_evidence"]["transcript_binding"]["level"] == "live_token"
+        )
+        assert (
+            payload["normalized"]["operation_evidence"]["run_once"]["level"]
+            == "live_token"
+        )
+        assert (
+            payload["normalized"]["canaries"]["codex_real_tool_result_shape"]["status"]
+            == "pass"
+        )
+        assert (
+            payload["normalized"]["canaries"]["codex_real_tool_result_shape"][
+                "command_status"
+            ]
+            == "completed"
+        )
 
 
 def test_codex_release_proof_blocks_failed_real_tool_evidence() -> None:
@@ -827,9 +887,82 @@ def test_codex_release_proof_blocks_failed_real_tool_evidence() -> None:
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "fake_codex_real_tool_failed"
         assert payload["operation_evidence"]["run_once"]["status"] == "fail"
-        assert payload["normalized"]["canaries"]["codex_real_tool_result_shape"]["failure_code"] == (
-            "fake_codex_real_tool_failed"
+        assert payload["normalized"]["canaries"]["codex_real_tool_result_shape"][
+            "failure_code"
+        ] == ("fake_codex_real_tool_failed")
+
+
+def test_codex_managed_live_interrupt_uses_distinct_scenario() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        args_path = root / "codex-args.json"
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "codex",
+            env={"FAKE_CODEX_ARGS_PATH": str(args_path)},
+            extra_args=[
+                "--source-review-status",
+                "pass",
+                "--codex-run-managed-live-interrupt",
+                "--codex-live-interrupt-timeout-secs",
+                "7",
+            ],
         )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["scenario_id"] == "codex-managed-live-interrupt-release-proof-v1"
+        assert payload["scenario_profile"] == "managed-live-interrupt"
+        assert payload["verdict"] == "green"
+        source_args = json.loads(args_path.read_text(encoding="utf-8"))
+        assert "--run-managed-live-interrupt" in source_args
+        assert (
+            source_args[source_args.index("--live-interrupt-timeout-secs") + 1] == "7"
+        )
+        assert payload["operation_evidence"]["interrupt"]["status"] == "pass"
+        assert payload["operation_evidence"]["interrupt"]["level"] == "live_token"
+        assert (
+            payload["normalized"]["operation_evidence"]["interrupt"]["level"]
+            == "live_token"
+        )
+        assert (
+            payload["normalized"]["canaries"]["managed_live_interrupt"]["status"]
+            == "pass"
+        )
+        assert (
+            payload["normalized"]["canaries"]["managed_live_interrupt"][
+                "last_turn_status"
+            ]
+            == "interrupted"
+        )
+
+
+def test_codex_release_proof_blocks_failed_managed_live_interrupt() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "codex",
+            env={"FAKE_CODEX_INTERRUPT_FAIL": "1"},
+            extra_args=[
+                "--source-review-status",
+                "pass",
+                "--codex-run-managed-live-interrupt",
+            ],
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "fake_codex_interrupt_failed"
+        assert payload["operation_evidence"]["interrupt"]["status"] == "fail"
+        assert payload["normalized"]["canaries"]["managed_live_interrupt"][
+            "failure_code"
+        ] == ("fake_codex_interrupt_failed")
 
 
 def test_codex_managed_live_send_preflight_reports_missing_credentials() -> None:
@@ -857,8 +990,14 @@ def test_codex_managed_live_send_preflight_reports_missing_credentials() -> None
         checks = {check["name"]: check for check in payload["checks"]}
         assert checks["provider_binary"]["status"] == "pass"
         assert "message" not in checks["provider_binary"]
-        assert checks["codex_api_url"]["failure_code"] == "codex_runtime_host_api_url_missing"
-        assert checks["codex_agents_token"]["failure_code"] == "codex_runtime_host_agents_token_missing"
+        assert (
+            checks["codex_api_url"]["failure_code"]
+            == "codex_runtime_host_api_url_missing"
+        )
+        assert (
+            checks["codex_agents_token"]["failure_code"]
+            == "codex_runtime_host_agents_token_missing"
+        )
 
 
 def test_codex_managed_live_send_preflight_redacts_credentials() -> None:
@@ -953,8 +1092,14 @@ def test_antigravity_release_proof_can_attach_real_agy_send_evidence() -> None:
         assert payload["verdict"] == "green"
         assert payload["operation_evidence"]["send_input"]["status"] == "pass"
         assert payload["operation_evidence"]["send_input"]["level"] == "live_token"
-        assert payload["normalized"]["operation_evidence"]["send_input"]["level"] == "live_token"
-        assert payload["normalized"]["canaries"]["antigravity_real_agy_send"]["status"] == "pass"
+        assert (
+            payload["normalized"]["operation_evidence"]["send_input"]["level"]
+            == "live_token"
+        )
+        assert (
+            payload["normalized"]["canaries"]["antigravity_real_agy_send"]["status"]
+            == "pass"
+        )
         assert Path(payload["artifacts"]["antigravity_control_artifact"]).exists()
 
 
@@ -975,9 +1120,9 @@ def test_antigravity_release_proof_blocks_failed_real_agy_send_evidence() -> Non
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "fake_antigravity_send_failed"
         assert payload["operation_evidence"]["send_input"]["status"] == "fail"
-        assert payload["normalized"]["canaries"]["antigravity_real_agy_send"]["failure_code"] == (
-            "fake_antigravity_send_failed"
-        )
+        assert payload["normalized"]["canaries"]["antigravity_real_agy_send"][
+            "failure_code"
+        ] == ("fake_antigravity_send_failed")
 
 
 def test_opencode_release_proof_can_attach_real_tool_evidence() -> None:
@@ -1006,9 +1151,19 @@ def test_opencode_release_proof_can_attach_real_tool_evidence() -> None:
         assert payload["scenario_profile"] == "real-tool"
         assert payload["verdict"] == "green"
         assert payload["operation_evidence"]["transcript_binding"]["status"] == "pass"
-        assert payload["operation_evidence"]["transcript_binding"]["level"] == "live_token"
-        assert payload["normalized"]["operation_evidence"]["transcript_binding"]["level"] == "live_token"
-        assert payload["normalized"]["canaries"]["opencode_real_tool_result_shape"]["status"] == "pass"
+        assert (
+            payload["operation_evidence"]["transcript_binding"]["level"] == "live_token"
+        )
+        assert (
+            payload["normalized"]["operation_evidence"]["transcript_binding"]["level"]
+            == "live_token"
+        )
+        assert (
+            payload["normalized"]["canaries"]["opencode_real_tool_result_shape"][
+                "status"
+            ]
+            == "pass"
+        )
         assert Path(payload["artifacts"]["opencode_control_artifact"]).exists()
 
 
@@ -1029,9 +1184,9 @@ def test_opencode_release_proof_blocks_failed_real_tool_evidence() -> None:
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "fake_opencode_tool_failed"
         assert payload["operation_evidence"]["transcript_binding"]["status"] == "fail"
-        assert payload["normalized"]["canaries"]["opencode_real_tool_result_shape"]["failure_code"] == (
-            "fake_opencode_tool_failed"
-        )
+        assert payload["normalized"]["canaries"]["opencode_real_tool_result_shape"][
+            "failure_code"
+        ] == ("fake_opencode_tool_failed")
 
 
 def test_claude_release_proof_can_attach_real_print_evidence() -> None:
@@ -1060,9 +1215,17 @@ def test_claude_release_proof_can_attach_real_print_evidence() -> None:
         assert payload["scenario_profile"] == "real-print"
         assert payload["verdict"] == "green"
         assert payload["operation_evidence"]["live_token_behavior"]["status"] == "pass"
-        assert payload["operation_evidence"]["live_token_behavior"]["level"] == "live_token"
-        assert payload["normalized"]["operation_evidence"]["live_token_behavior"]["level"] == "live_token"
-        assert payload["normalized"]["canaries"]["claude_real_print"]["status"] == "pass"
+        assert (
+            payload["operation_evidence"]["live_token_behavior"]["level"]
+            == "live_token"
+        )
+        assert (
+            payload["normalized"]["operation_evidence"]["live_token_behavior"]["level"]
+            == "live_token"
+        )
+        assert (
+            payload["normalized"]["canaries"]["claude_real_print"]["status"] == "pass"
+        )
         assert Path(payload["artifacts"]["claude_control_artifact"]).exists()
 
 
@@ -1083,9 +1246,9 @@ def test_claude_release_proof_blocks_failed_real_print_evidence() -> None:
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "fake_claude_real_print_failed"
         assert payload["operation_evidence"]["live_token_behavior"]["status"] == "fail"
-        assert payload["normalized"]["canaries"]["claude_real_print"]["failure_code"] == (
-            "fake_claude_real_print_failed"
-        )
+        assert payload["normalized"]["canaries"]["claude_real_print"][
+            "failure_code"
+        ] == ("fake_claude_real_print_failed")
 
 
 def test_claude_real_print_wrapper_catches_real_control_api_error() -> None:
@@ -1118,15 +1281,20 @@ def test_claude_real_print_wrapper_catches_real_control_api_error() -> None:
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "claude_real_print_api_error"
         assert payload["operation_evidence"]["live_token_behavior"]["status"] == "fail"
-        assert payload["normalized"]["canaries"]["claude_real_print"]["failure_code"] == (
-            "claude_real_print_api_error"
-        )
+        assert payload["normalized"]["canaries"]["claude_real_print"][
+            "failure_code"
+        ] == ("claude_real_print_api_error")
 
 
-def test_claude_machine_live_proof_uses_distinct_scenario_and_operation_evidence() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir, _fake_claude_machine_live_server() as (
-        server,
-        requests,
+def test_claude_machine_live_proof_uses_distinct_scenario_and_operation_evidence() -> (
+    None
+):
+    with (
+        tempfile.TemporaryDirectory() as temp_dir,
+        _fake_claude_machine_live_server() as (
+            server,
+            requests,
+        ),
     ):
         root = Path(temp_dir)
         _write_fake_repo(root / "repo")
@@ -1153,9 +1321,17 @@ def test_claude_machine_live_proof_uses_distinct_scenario_and_operation_evidence
         assert payload["scenario_profile"] == "machine-live"
         assert payload["verdict"] == "green"
         assert payload["failure_code"] is None
-        assert payload["operation_evidence"]["send_input"]["level"] == "manual_live_token"
-        assert payload["operation_evidence"]["transcript_binding"]["level"] == "manual_live_token"
-        assert payload["operation_evidence"]["steer_active_turn"]["level"] == "manual_live_token"
+        assert (
+            payload["operation_evidence"]["send_input"]["level"] == "manual_live_token"
+        )
+        assert (
+            payload["operation_evidence"]["transcript_binding"]["level"]
+            == "manual_live_token"
+        )
+        assert (
+            payload["operation_evidence"]["steer_active_turn"]["level"]
+            == "manual_live_token"
+        )
         canary = payload["normalized"]["canaries"]["claude_machine_live_proof"]
         assert canary["status"] == "pass"
         assert canary["device_id"] == "cinder"
@@ -1199,17 +1375,24 @@ def test_claude_machine_live_proof_preflight_reports_missing_credentials() -> No
         checks = {check["name"]: check for check in payload["checks"]}
         assert checks["provider_binary"]["status"] == "pass"
         assert "message" not in checks["provider_binary"]
-        assert checks["claude_api_url"]["failure_code"] == "claude_runtime_host_api_url_missing"
+        assert (
+            checks["claude_api_url"]["failure_code"]
+            == "claude_runtime_host_api_url_missing"
+        )
         assert checks["claude_agents_token"]["failure_code"] == (
             "claude_runtime_host_agents_token_missing"
         )
-        assert checks["claude_device_id"]["failure_code"] == "claude_runtime_host_device_id_missing"
+        assert (
+            checks["claude_device_id"]["failure_code"]
+            == "claude_runtime_host_device_id_missing"
+        )
 
 
 def test_claude_machine_live_proof_blocks_failed_operation() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir, _fake_claude_machine_live_server(
-        mode="failed"
-    ) as (server, requests):
+    with (
+        tempfile.TemporaryDirectory() as temp_dir,
+        _fake_claude_machine_live_server(mode="failed") as (server, requests),
+    ):
         root = Path(temp_dir)
         _write_fake_repo(root / "repo")
         (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
@@ -1243,9 +1426,12 @@ def test_claude_machine_live_proof_blocks_failed_operation() -> None:
 
 
 def test_claude_machine_live_proof_does_not_mask_red_source_canary() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir, _fake_claude_machine_live_server() as (
-        server,
-        requests,
+    with (
+        tempfile.TemporaryDirectory() as temp_dir,
+        _fake_claude_machine_live_server() as (
+            server,
+            requests,
+        ),
     ):
         root = Path(temp_dir)
         _write_fake_repo(root / "repo")
@@ -1273,7 +1459,10 @@ def test_claude_machine_live_proof_does_not_mask_red_source_canary() -> None:
         assert result.returncode == 1
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "claude_command_contract_missing"
-        assert payload["normalized"]["canaries"]["claude_machine_live_proof"]["status"] == "pass"
+        assert (
+            payload["normalized"]["canaries"]["claude_machine_live_proof"]["status"]
+            == "pass"
+        )
         assert [request["method"] for request in requests] == ["POST", "GET"]
 
 
@@ -1325,7 +1514,9 @@ def test_claude_release_proof_red_when_session_flag_missing() -> None:
         assert result.returncode == 1
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "claude_command_contract_missing"
-        assert payload["normalized"]["claude"]["launch_flags_missing"] == ["--session-id"]
+        assert payload["normalized"]["claude"]["launch_flags_missing"] == [
+            "--session-id"
+        ]
         assert payload["normalized"]["claude"]["launch_flags_failure_code"] == (
             "claude_command_contract_missing"
         )
@@ -1390,6 +1581,8 @@ def main() -> int:
         test_codex_managed_live_send_uses_distinct_scenario,
         test_codex_release_proof_can_attach_real_tool_evidence,
         test_codex_release_proof_blocks_failed_real_tool_evidence,
+        test_codex_managed_live_interrupt_uses_distinct_scenario,
+        test_codex_release_proof_blocks_failed_managed_live_interrupt,
         test_codex_managed_live_send_preflight_reports_missing_credentials,
         test_codex_managed_live_send_preflight_redacts_credentials,
         test_preflight_reports_missing_provider_binary_as_red,

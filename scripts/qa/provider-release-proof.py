@@ -46,7 +46,9 @@ def _now_iso() -> str:
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -104,6 +106,7 @@ def _compact_codex_canary(info: dict[str, Any]) -> dict[str, Any]:
         "output_exact_match",
         "command_event_count",
         "agent_message_count",
+        "last_turn_status",
     ):
         if info.get(key) is not None:
             compact[key] = info.get(key)
@@ -149,7 +152,8 @@ def _normalize_source_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
     normalized: dict[str, Any] = {
         "artifact_kind": artifact.get("artifact_kind"),
         "provider": provider,
-        "provider_version": artifact.get("provider_version") or artifact.get("codex_version"),
+        "provider_version": artifact.get("provider_version")
+        or artifact.get("codex_version"),
         "verdict": artifact.get("verdict"),
         "failure_code": artifact.get("failure_code"),
         "canaries": {
@@ -159,7 +163,9 @@ def _normalize_source_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
         },
         "operation_evidence": {
             name: _compact_operation(info)
-            for name, info in sorted(dict(artifact.get("operation_evidence") or {}).items())
+            for name, info in sorted(
+                dict(artifact.get("operation_evidence") or {}).items()
+            )
             if isinstance(info, dict)
         },
     }
@@ -176,8 +182,16 @@ def _normalize_source_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
         }
     if provider == "claude":
         canaries = dict(artifact.get("canaries") or {})
-        command_shape = canaries.get("command_shape") if isinstance(canaries.get("command_shape"), dict) else {}
-        channels_shape = canaries.get("channels_shape") if isinstance(canaries.get("channels_shape"), dict) else {}
+        command_shape = (
+            canaries.get("command_shape")
+            if isinstance(canaries.get("command_shape"), dict)
+            else {}
+        )
+        channels_shape = (
+            canaries.get("channels_shape")
+            if isinstance(canaries.get("channels_shape"), dict)
+            else {}
+        )
         detached_pty_shape = (
             canaries.get("detached_pty_shape")
             if isinstance(canaries.get("detached_pty_shape"), dict)
@@ -250,7 +264,11 @@ def _classify(
         )
     if verdict == "green":
         return "green", None, str(recommendation or "upgrade_allowed")
-    return "yellow", "provider_release_proof_unknown_verdict", "investigate_before_upgrade"
+    return (
+        "yellow",
+        "provider_release_proof_unknown_verdict",
+        "investigate_before_upgrade",
+    )
 
 
 def _redact_argv(argv: Any, secrets: list[str] | None = None) -> Any:
@@ -294,6 +312,8 @@ def _command_evidence(
 def _scenario_profile(args: argparse.Namespace) -> str:
     if args.provider == "codex" and args.codex_run_real_tool:
         return "real-tool"
+    if args.provider == "codex" and args.codex_run_managed_live_interrupt:
+        return "managed-live-interrupt"
     if args.provider == "codex" and args.codex_run_managed_live_send:
         return "managed-live-send"
     if args.provider == "claude" and args.claude_run_machine_live_proof:
@@ -346,6 +366,7 @@ def _proof_preflight(args: argparse.Namespace) -> dict[str, Any]:
         args.codex_run_managed_tui_attach
         or args.codex_run_detached_ui
         or args.codex_run_managed_live_send
+        or args.codex_run_managed_live_interrupt
     ):
         checks.append(
             _preflight_check(
@@ -394,10 +415,20 @@ def _proof_preflight(args: argparse.Namespace) -> dict[str, Any]:
     failure_code = None
     recommendation = "upgrade_allowed"
     if failed:
-        first_code = str(failed[0].get("failure_code") or "provider_release_proof_preflight_failed")
+        first_code = str(
+            failed[0].get("failure_code") or "provider_release_proof_preflight_failed"
+        )
         verdict = "red" if first_code in red_codes else "yellow"
-        failure_code = first_code if verdict == "red" else "provider_release_proof_prerequisites_missing"
-        recommendation = "block_upgrade_recommendation" if verdict == "red" else "investigate_before_upgrade"
+        failure_code = (
+            first_code
+            if verdict == "red"
+            else "provider_release_proof_prerequisites_missing"
+        )
+        recommendation = (
+            "block_upgrade_recommendation"
+            if verdict == "red"
+            else "investigate_before_upgrade"
+        )
     return {
         "schema_version": SCHEMA_VERSION,
         "artifact_kind": "provider_release_proof_preflight",
@@ -413,7 +444,9 @@ def _proof_preflight(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def _run_source_canary(args: argparse.Namespace, raw_dir: Path) -> tuple[dict[str, Any], dict[str, str], int | None]:
+def _run_source_canary(
+    args: argparse.Namespace, raw_dir: Path
+) -> tuple[dict[str, Any], dict[str, str], int | None]:
     raw_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = raw_dir / "stdout.log"
     stderr_path = raw_dir / "stderr.log"
@@ -466,8 +499,22 @@ def _run_source_canary(args: argparse.Namespace, raw_dir: Path) -> tuple[dict[st
             argv.append("--run-detached-ui")
         if args.codex_run_managed_live_send:
             argv.append("--run-managed-live-send")
+        if args.codex_run_managed_live_interrupt:
+            argv.extend(
+                [
+                    "--run-managed-live-interrupt",
+                    "--live-interrupt-timeout-secs",
+                    str(args.codex_live_interrupt_timeout_secs),
+                ]
+            )
         if args.codex_run_real_tool:
-            argv.extend(["--run-real-tool", "--real-tool-timeout-secs", str(args.codex_real_tool_timeout_secs)])
+            argv.extend(
+                [
+                    "--run-real-tool",
+                    "--real-tool-timeout-secs",
+                    str(args.codex_real_tool_timeout_secs),
+                ]
+            )
     else:
         raise ValueError(f"unsupported provider: {args.provider}")
 
@@ -582,7 +629,9 @@ def _run_source_canary(args: argparse.Namespace, raw_dir: Path) -> tuple[dict[st
     return source, raw_artifacts, result.returncode
 
 
-def _merge_antigravity_real_send_proof(source: dict[str, Any], control: dict[str, Any]) -> dict[str, Any]:
+def _merge_antigravity_real_send_proof(
+    source: dict[str, Any], control: dict[str, Any]
+) -> dict[str, Any]:
     merged = dict(source)
     canaries = dict(merged.get("canaries") or {})
     operation_evidence = dict(merged.get("operation_evidence") or {})
@@ -593,19 +642,25 @@ def _merge_antigravity_real_send_proof(source: dict[str, Any], control: dict[str
             "provider-control-e2e did not emit an Antigravity canary result.",
         )
     canaries["antigravity_real_agy_send"] = antigravity
-    for operation, evidence in dict(antigravity.get("operation_evidence") or {}).items():
+    for operation, evidence in dict(
+        antigravity.get("operation_evidence") or {}
+    ).items():
         if isinstance(operation, str) and isinstance(evidence, dict):
             operation_evidence[operation] = evidence
     merged["canaries"] = canaries
     merged["operation_evidence"] = operation_evidence
     if antigravity.get("status") == "fail":
         merged["verdict"] = "red"
-        merged["failure_code"] = str(antigravity.get("failure_code") or "antigravity_real_agy_send_failed")
+        merged["failure_code"] = str(
+            antigravity.get("failure_code") or "antigravity_real_agy_send_failed"
+        )
         merged["recommendation"] = "block_upgrade_recommendation"
     return merged
 
 
-def _merge_opencode_real_tool_proof(source: dict[str, Any], control: dict[str, Any]) -> dict[str, Any]:
+def _merge_opencode_real_tool_proof(
+    source: dict[str, Any], control: dict[str, Any]
+) -> dict[str, Any]:
     merged = dict(source)
     canaries = dict(merged.get("canaries") or {})
     operation_evidence = dict(merged.get("operation_evidence") or {})
@@ -623,12 +678,16 @@ def _merge_opencode_real_tool_proof(source: dict[str, Any], control: dict[str, A
     merged["operation_evidence"] = operation_evidence
     if opencode.get("status") == "fail":
         merged["verdict"] = "red"
-        merged["failure_code"] = str(opencode.get("failure_code") or "opencode_real_tool_proof_failed")
+        merged["failure_code"] = str(
+            opencode.get("failure_code") or "opencode_real_tool_proof_failed"
+        )
         merged["recommendation"] = "block_upgrade_recommendation"
     return merged
 
 
-def _merge_claude_real_print_proof(source: dict[str, Any], control: dict[str, Any]) -> dict[str, Any]:
+def _merge_claude_real_print_proof(
+    source: dict[str, Any], control: dict[str, Any]
+) -> dict[str, Any]:
     merged = dict(source)
     canaries = dict(merged.get("canaries") or {})
     operation_evidence = dict(merged.get("operation_evidence") or {})
@@ -646,12 +705,16 @@ def _merge_claude_real_print_proof(source: dict[str, Any], control: dict[str, An
     merged["operation_evidence"] = operation_evidence
     if claude.get("status") == "fail":
         merged["verdict"] = "red"
-        merged["failure_code"] = str(claude.get("failure_code") or "claude_real_print_proof_failed")
+        merged["failure_code"] = str(
+            claude.get("failure_code") or "claude_real_print_proof_failed"
+        )
         merged["recommendation"] = "block_upgrade_recommendation"
     return merged
 
 
-def _merge_claude_machine_live_proof(source: dict[str, Any], machine: dict[str, Any]) -> dict[str, Any]:
+def _merge_claude_machine_live_proof(
+    source: dict[str, Any], machine: dict[str, Any]
+) -> dict[str, Any]:
     merged = dict(source)
     canaries = dict(merged.get("canaries") or {})
     operation_evidence = dict(merged.get("operation_evidence") or {})
@@ -674,7 +737,9 @@ def _merge_claude_machine_live_proof(source: dict[str, Any], machine: dict[str, 
     source_verdict = str(source.get("verdict") or "").lower()
     if machine_verdict == "red":
         merged["verdict"] = "red"
-        merged["failure_code"] = str(machine.get("failure_code") or "claude_machine_live_proof_failed")
+        merged["failure_code"] = str(
+            machine.get("failure_code") or "claude_machine_live_proof_failed"
+        )
         merged["recommendation"] = "block_upgrade_recommendation"
     elif source_verdict != "red" and machine_verdict == "green":
         merged["verdict"] = "green"
@@ -682,7 +747,9 @@ def _merge_claude_machine_live_proof(source: dict[str, Any], machine: dict[str, 
         merged["recommendation"] = "upgrade_allowed"
     elif source_verdict != "red" and machine_verdict == "yellow":
         merged["verdict"] = "yellow"
-        merged["failure_code"] = str(machine.get("failure_code") or "claude_machine_live_proof_warn")
+        merged["failure_code"] = str(
+            machine.get("failure_code") or "claude_machine_live_proof_warn"
+        )
         merged["recommendation"] = "investigate_before_upgrade"
     return merged
 
@@ -754,9 +821,16 @@ def _request_json(
     except (TimeoutError, urllib.error.URLError) as exc:
         return 0, {"detail": {"code": "request_error", "message": str(exc)}}
     except json.JSONDecodeError:
-        return 502, {"detail": {"code": "invalid_json", "message": "response was not JSON"}}
+        return 502, {
+            "detail": {"code": "invalid_json", "message": "response was not JSON"}
+        }
     if not isinstance(payload, dict):
-        return 502, {"detail": {"code": "invalid_json", "message": "response was not a JSON object"}}
+        return 502, {
+            "detail": {
+                "code": "invalid_json",
+                "message": "response was not a JSON object",
+            }
+        }
     return int(status or 200), payload
 
 
@@ -812,12 +886,17 @@ def _poll_operation(
                 "operation_id": operation_id,
             }
         if operation_status in {"failed", "timed_out"}:
-            error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+            error = (
+                payload.get("error") if isinstance(payload.get("error"), dict) else {}
+            )
             code = str(error.get("code") or "provider_live_operation_failed")
             return 502, {
                 "detail": {
                     "code": code,
-                    "message": str(error.get("message") or f"provider live proof operation {operation_status}"),
+                    "message": str(
+                        error.get("message")
+                        or f"provider live proof operation {operation_status}"
+                    ),
                 },
                 "operation_id": operation_id,
             }
@@ -1238,16 +1317,24 @@ def _run_opencode_real_tool_proof(
 
 def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
     args.repo_root = args.repo_root.expanduser().resolve()
-    args.evidence_root = (args.evidence_root or Path.cwd() / "provider-release-proof-evidence").expanduser()
-    args.artifact = (args.artifact or args.evidence_root / "provider-release-proof.json").expanduser()
+    args.evidence_root = (
+        args.evidence_root or Path.cwd() / "provider-release-proof-evidence"
+    ).expanduser()
+    args.artifact = (
+        args.artifact or args.evidence_root / "provider-release-proof.json"
+    ).expanduser()
     if args.provider_bin is not None:
         args.provider_bin = args.provider_bin.expanduser()
     if args.provider == "codex":
         args.codex_api_url = args.codex_api_url or os.getenv(CODEX_API_URL_ENV)
-        args.codex_agents_token = args.codex_agents_token or os.getenv(CODEX_AGENTS_TOKEN_ENV)
+        args.codex_agents_token = args.codex_agents_token or os.getenv(
+            CODEX_AGENTS_TOKEN_ENV
+        )
     if args.provider == "claude":
         args.claude_api_url = args.claude_api_url or os.getenv(CLAUDE_API_URL_ENV)
-        args.claude_agents_token = args.claude_agents_token or os.getenv(CLAUDE_AGENTS_TOKEN_ENV)
+        args.claude_agents_token = args.claude_agents_token or os.getenv(
+            CLAUDE_AGENTS_TOKEN_ENV
+        )
         args.claude_device_id = args.claude_device_id or os.getenv(CLAUDE_DEVICE_ID_ENV)
     preflight = _proof_preflight(args)
     if args.preflight_only:
@@ -1260,24 +1347,40 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
     normalized_dir.mkdir(parents=True, exist_ok=True)
     source_artifact, raw_artifacts, returncode = _run_source_canary(args, raw_dir)
     if args.provider == "claude" and args.claude_run_machine_live_proof:
-        machine_artifact, machine_artifacts, machine_returncode = _run_claude_machine_live_proof(args, raw_dir)
+        machine_artifact, machine_artifacts, machine_returncode = (
+            _run_claude_machine_live_proof(args, raw_dir)
+        )
         raw_artifacts.update(machine_artifacts)
-        source_artifact = _merge_claude_machine_live_proof(source_artifact, machine_artifact)
+        source_artifact = _merge_claude_machine_live_proof(
+            source_artifact, machine_artifact
+        )
         returncode = returncode or machine_returncode
     if args.provider == "claude" and args.claude_run_real_print:
-        control_artifact, control_artifacts, control_returncode = _run_claude_real_print_proof(args, raw_dir)
+        control_artifact, control_artifacts, control_returncode = (
+            _run_claude_real_print_proof(args, raw_dir)
+        )
         raw_artifacts.update(control_artifacts)
-        source_artifact = _merge_claude_real_print_proof(source_artifact, control_artifact)
+        source_artifact = _merge_claude_real_print_proof(
+            source_artifact, control_artifact
+        )
         returncode = returncode or control_returncode
     if args.provider == "opencode" and args.opencode_run_real_tool:
-        control_artifact, control_artifacts, control_returncode = _run_opencode_real_tool_proof(args, raw_dir)
+        control_artifact, control_artifacts, control_returncode = (
+            _run_opencode_real_tool_proof(args, raw_dir)
+        )
         raw_artifacts.update(control_artifacts)
-        source_artifact = _merge_opencode_real_tool_proof(source_artifact, control_artifact)
+        source_artifact = _merge_opencode_real_tool_proof(
+            source_artifact, control_artifact
+        )
         returncode = returncode or control_returncode
     if args.provider == "antigravity" and args.antigravity_run_real_agy_send:
-        control_artifact, control_artifacts, control_returncode = _run_antigravity_real_send_proof(args, raw_dir)
+        control_artifact, control_artifacts, control_returncode = (
+            _run_antigravity_real_send_proof(args, raw_dir)
+        )
         raw_artifacts.update(control_artifacts)
-        source_artifact = _merge_antigravity_real_send_proof(source_artifact, control_artifact)
+        source_artifact = _merge_antigravity_real_send_proof(
+            source_artifact, control_artifact
+        )
         returncode = returncode or control_returncode
     normalized = _normalize_source_artifact(source_artifact)
     normalized_path = normalized_dir / "contract.json"
@@ -1288,7 +1391,9 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
         source_canary_returncode=returncode,
     )
     contract = _load_provider_contract(args.repo_root, args.provider)
-    contract_operations = dict(contract.get("operation_evidence") or {}) if contract else {}
+    contract_operations = (
+        dict(contract.get("operation_evidence") or {}) if contract else {}
+    )
     provider_version = (
         args.provider_version
         or normalized.get("provider_version")
@@ -1334,7 +1439,11 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
         "source_canary_returncode": returncode,
         "canaries": {
             "source_canary": {
-                "status": "pass" if verdict == "green" else "fail" if verdict == "red" else "warn",
+                "status": "pass"
+                if verdict == "green"
+                else "fail"
+                if verdict == "red"
+                else "warn",
                 "verdict": source_artifact.get("verdict"),
                 "failure_code": source_artifact.get("failure_code"),
                 "artifact_path": raw_artifacts["source_artifact"],
@@ -1384,7 +1493,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--codex-run-managed-tui-attach", action="store_true")
     parser.add_argument("--codex-run-detached-ui", action="store_true")
     parser.add_argument("--codex-run-managed-live-send", action="store_true")
+    parser.add_argument("--codex-run-managed-live-interrupt", action="store_true")
     parser.add_argument("--codex-run-real-tool", action="store_true")
+    parser.add_argument("--codex-live-interrupt-timeout-secs", type=int, default=45)
     parser.add_argument("--codex-real-tool-timeout-secs", type=int, default=180)
     parser.add_argument("--codex-api-url")
     parser.add_argument("--codex-agents-token")
@@ -1421,7 +1532,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"provider release proof: {artifact['provider']} {artifact['verdict']}")
         if artifact.get("artifact_path"):
             print(f"artifact: {artifact['artifact_path']}")
-        artifacts = artifact.get("artifacts") if isinstance(artifact.get("artifacts"), dict) else {}
+        artifacts = (
+            artifact.get("artifacts")
+            if isinstance(artifact.get("artifacts"), dict)
+            else {}
+        )
         if artifacts.get("evidence_root"):
             print(f"evidence_root: {artifacts['evidence_root']}")
         if artifact.get("failure_code"):

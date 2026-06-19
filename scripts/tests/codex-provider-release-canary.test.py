@@ -170,7 +170,10 @@ if args[:2] == ["codex-bridge", "send"]:
         raise SystemExit(1)
     turn_id = "turn_live_fake"
     text = arg_value("--text", "")
-    if os.environ.get("FAKE_LIVE_SEND_STUCK") == "1":
+    if "LONGHOUSE_CODEX_INTERRUPT_CANARY_" in text:
+        state["active_turn_id"] = turn_id
+        state["last_turn_status"] = None
+    elif os.environ.get("FAKE_LIVE_SEND_STUCK") == "1":
         state["active_turn_id"] = turn_id
         state["last_turn_status"] = None
     else:
@@ -211,6 +214,19 @@ if args[:2] == ["codex-bridge", "send"]:
         "turn_status": "inProgress",
     }
     print(json.dumps(payload) if "--json" in args else f"turn_id: {turn_id}")
+    raise SystemExit(0)
+
+if args[:2] == ["codex-bridge", "interrupt"]:
+    session_id = arg_value("--session-id")
+    state_root = Path(arg_value("--state-root"))
+    state_file = state_root / f"{session_id}.json"
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    if os.environ.get("FAKE_LIVE_INTERRUPT_FAIL") == "1":
+        print("fake interrupt failed", file=sys.stderr)
+        raise SystemExit(1)
+    state["active_turn_id"] = None
+    state["last_turn_status"] = "completed" if os.environ.get("FAKE_LIVE_INTERRUPT_COMPLETED") == "1" else "interrupted"
+    state_file.write_text(json.dumps(state), encoding="utf-8")
     raise SystemExit(0)
 
 if args and args[0] == "codex-app-server-canary":
@@ -435,7 +451,12 @@ def test_full_fake_canary_can_go_green() -> None:
         result, payload = _run_canary(
             root,
             fixture,
-            ["--run-all-live", "--source-review-status", "pass"],
+            [
+                "--run-all-live",
+                "--run-managed-live-interrupt",
+                "--source-review-status",
+                "pass",
+            ],
         )
         assert result.returncode == 0, result.stderr + result.stdout
         assert payload["schema_version"] == 1
@@ -445,6 +466,7 @@ def test_full_fake_canary_can_go_green() -> None:
         for canary in payload["canaries"].values():
             assert canary["status"] == "pass"
         assert set(payload["operation_evidence"]) == {
+            "interrupt",
             "launch_local",
             "launch_remote",
             "reattach",
@@ -453,14 +475,29 @@ def test_full_fake_canary_can_go_green() -> None:
             "tail_output",
             "transcript_binding",
         }
-        assert payload["operation_evidence"]["launch_local"]["canary"] == "managed_tui_attach"
+        assert (
+            payload["operation_evidence"]["launch_local"]["canary"]
+            == "managed_tui_attach"
+        )
         assert payload["operation_evidence"]["launch_remote"]["canary"] == "detached_ui"
         assert payload["operation_evidence"]["reattach"]["level"] == "live_no_token"
-        assert payload["operation_evidence"]["send_input"]["canary"] == "managed_live_send"
+        assert (
+            payload["operation_evidence"]["send_input"]["canary"] == "managed_live_send"
+        )
         assert payload["operation_evidence"]["send_input"]["level"] == "live_token"
-        assert payload["operation_evidence"]["run_once"]["canary"] == "codex_real_tool_result_shape"
+        assert (
+            payload["operation_evidence"]["interrupt"]["canary"]
+            == "managed_live_interrupt"
+        )
+        assert payload["operation_evidence"]["interrupt"]["level"] == "live_token"
+        assert (
+            payload["operation_evidence"]["run_once"]["canary"]
+            == "codex_real_tool_result_shape"
+        )
         assert payload["operation_evidence"]["run_once"]["level"] == "live_token"
-        assert payload["operation_evidence"]["transcript_binding"]["level"] == "live_token"
+        assert (
+            payload["operation_evidence"]["transcript_binding"]["level"] == "live_token"
+        )
         assert payload["operation_evidence"]["tail_output"]["status"] == "pass"
 
         codex_args = json.loads(fixture["codex_args"].read_text(encoding="utf-8"))
@@ -468,7 +505,7 @@ def test_full_fake_canary_can_go_green() -> None:
         assert "--dangerously-bypass-approvals-and-sandbox" in codex_args
 
         stop_lines = fixture["calls"].read_text(encoding="utf-8").splitlines()
-        assert len(stop_lines) == 3
+        assert len(stop_lines) == 4
 
 
 def test_real_tool_exec_canary_proves_command_execution_shape() -> None:
@@ -478,7 +515,13 @@ def test_real_tool_exec_canary_proves_command_execution_shape() -> None:
         result, payload = _run_canary(
             root,
             fixture,
-            ["--run-real-tool", "--real-tool-timeout-secs", "5", "--source-review-status", "pass"],
+            [
+                "--run-real-tool",
+                "--real-tool-timeout-secs",
+                "5",
+                "--source-review-status",
+                "pass",
+            ],
         )
 
         assert result.returncode == 0, result.stderr + result.stdout
@@ -492,7 +535,9 @@ def test_real_tool_exec_canary_proves_command_execution_shape() -> None:
         assert canary["matching_command_event"]["type"] == "command_execution"
         assert canary["done_text_event"]["type"] == "agent_message"
         assert payload["operation_evidence"]["run_once"]["level"] == "live_token"
-        assert payload["operation_evidence"]["transcript_binding"]["level"] == "live_token"
+        assert (
+            payload["operation_evidence"]["transcript_binding"]["level"] == "live_token"
+        )
 
 
 def test_real_tool_exec_canary_fails_without_marker_output() -> None:
@@ -502,7 +547,13 @@ def test_real_tool_exec_canary_fails_without_marker_output() -> None:
         result, payload = _run_canary(
             root,
             fixture,
-            ["--run-real-tool", "--real-tool-timeout-secs", "5", "--source-review-status", "pass"],
+            [
+                "--run-real-tool",
+                "--real-tool-timeout-secs",
+                "5",
+                "--source-review-status",
+                "pass",
+            ],
             {"FAKE_REAL_TOOL_MARKER_MISSING": "1"},
         )
 
@@ -544,7 +595,10 @@ def test_managed_live_send_marker_in_user_prompt_only_is_red() -> None:
         )
         assert result.returncode == 1
         assert payload["failure_code"] == "managed_live_send_marker_missing"
-        assert "assistant transcript" in payload["canaries"]["managed_live_send"]["message"]
+        assert (
+            "assistant transcript"
+            in payload["canaries"]["managed_live_send"]["message"]
+        )
 
 
 def test_managed_live_send_failure_redacts_token() -> None:
@@ -559,7 +613,9 @@ def test_managed_live_send_failure_redacts_token() -> None:
         )
         assert result.returncode == 1
         assert payload["failure_code"] == "managed_live_send_failed"
-        evidence_blob = json.dumps(payload["canaries"]["managed_live_send"].get("evidence") or {})
+        evidence_blob = json.dumps(
+            payload["canaries"]["managed_live_send"].get("evidence") or {}
+        )
         assert "secret-token" not in evidence_blob
         assert "<redacted>" in evidence_blob
 
@@ -599,7 +655,64 @@ def test_managed_live_send_non_completed_turn_is_red() -> None:
         )
         assert result.returncode == 1
         assert payload["failure_code"] == "managed_live_send_turn_not_completed"
-        assert payload["canaries"]["managed_live_send"]["state"]["last_turn_status"] == "failed"
+        assert (
+            payload["canaries"]["managed_live_send"]["state"]["last_turn_status"]
+            == "failed"
+        )
+
+
+def test_managed_live_interrupt_canary_passes_after_interrupted_state() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fixture = _fixture(root)
+        result, payload = _run_canary(
+            root,
+            fixture,
+            ["--run-managed-live-interrupt", "--source-review-status", "pass"],
+        )
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["verdict"] == "green"
+        assert payload["canaries"]["managed_live_interrupt"]["status"] == "pass"
+        assert (
+            payload["canaries"]["managed_live_interrupt"]["last_turn_status"]
+            == "interrupted"
+        )
+        assert payload["operation_evidence"]["interrupt"]["status"] == "pass"
+        assert payload["operation_evidence"]["interrupt"]["level"] == "live_token"
+
+
+def test_managed_live_interrupt_command_failure_is_red() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fixture = _fixture(root)
+        result, payload = _run_canary(
+            root,
+            fixture,
+            ["--run-managed-live-interrupt", "--source-review-status", "pass"],
+            {"FAKE_LIVE_INTERRUPT_FAIL": "1"},
+        )
+        assert result.returncode == 1
+        assert payload["failure_code"] == "managed_live_interrupt_failed"
+        assert payload["canaries"]["managed_live_interrupt"]["status"] == "fail"
+        assert payload["operation_evidence"]["interrupt"]["status"] == "fail"
+
+
+def test_managed_live_interrupt_completed_turn_is_red() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fixture = _fixture(root)
+        result, payload = _run_canary(
+            root,
+            fixture,
+            ["--run-managed-live-interrupt", "--source-review-status", "pass"],
+            {"FAKE_LIVE_INTERRUPT_COMPLETED": "1"},
+        )
+        assert result.returncode == 1
+        assert payload["failure_code"] == "managed_live_interrupt_not_interrupted"
+        assert (
+            payload["canaries"]["managed_live_interrupt"]["state"]["last_turn_status"]
+            == "completed"
+        )
 
 
 def test_raw_fresh_remote_warning_is_yellow() -> None:
@@ -618,12 +731,17 @@ def test_raw_fresh_remote_warning_is_yellow() -> None:
         assert set(payload["operation_evidence"]) == {"tail_output"}
         assert payload["operation_evidence"]["tail_output"]["status"] == "warn"
         assert payload["operation_evidence"]["tail_output"]["level"] == "live_no_token"
-        assert "No active thread is available." in payload["canaries"]["raw_fresh_remote"]["evidence"]
+        assert (
+            "No active thread is available."
+            in payload["canaries"]["raw_fresh_remote"]["evidence"]
+        )
         fingerprints = payload["canaries"]["raw_fresh_remote"]["protocol_fingerprints"]
         assert fingerprints["responses"]["initialize"]["platformFamily"] == "str"
         assert fingerprints["responses"]["thread/start"]["thread"]["id"] == "str"
         assert fingerprints["notifications"]["thread/started"]["thread"]["id"] == "str"
-        assert fingerprints["notifications"]["turn/completed"]["turn"]["status"] == "str"
+        assert (
+            fingerprints["notifications"]["turn/completed"]["turn"]["status"] == "str"
+        )
 
 
 def test_raw_fresh_remote_failure_preserves_protocol_fingerprints() -> None:
@@ -641,8 +759,16 @@ def test_raw_fresh_remote_failure_preserves_protocol_fingerprints() -> None:
         assert payload["failure_code"] == "raw_fresh_remote_failed"
         raw = payload["canaries"]["raw_fresh_remote"]
         assert raw["status"] == "fail"
-        assert raw["protocol_fingerprints"]["responses"]["initialize"]["platformFamily"] == "str"
-        assert raw["protocol_fingerprints"]["notifications"]["turn/completed"]["turn"]["status"] == "str"
+        assert (
+            raw["protocol_fingerprints"]["responses"]["initialize"]["platformFamily"]
+            == "str"
+        )
+        assert (
+            raw["protocol_fingerprints"]["notifications"]["turn/completed"]["turn"][
+                "status"
+            ]
+            == "str"
+        )
 
 
 def test_managed_tui_attach_active_thread_error_is_red() -> None:
@@ -691,6 +817,7 @@ def test_requested_managed_bridge_lanes_without_credentials_are_yellow() -> None
                 "--run-managed-tui-attach",
                 "--run-detached-ui",
                 "--run-managed-live-send",
+                "--run-managed-live-interrupt",
                 "--source-review-status",
                 "pass",
             ],
@@ -700,16 +827,37 @@ def test_requested_managed_bridge_lanes_without_credentials_are_yellow() -> None
         assert payload["verdict"] == "yellow"
         assert payload["failure_code"] == "insufficient_coverage"
         assert payload["canaries"]["managed_tui_attach"]["status"] == "not_run"
-        assert payload["canaries"]["managed_tui_attach"]["failure_code"] == "managed_bridge_credentials_missing"
-        assert payload["canaries"]["managed_tui_attach"]["missing"] == ["--api-url", "--agents-token"]
+        assert (
+            payload["canaries"]["managed_tui_attach"]["failure_code"]
+            == "managed_bridge_credentials_missing"
+        )
+        assert payload["canaries"]["managed_tui_attach"]["missing"] == [
+            "--api-url",
+            "--agents-token",
+        ]
         assert payload["canaries"]["detached_ui"]["status"] == "not_run"
-        assert payload["canaries"]["detached_ui"]["failure_code"] == "managed_bridge_credentials_missing"
+        assert (
+            payload["canaries"]["detached_ui"]["failure_code"]
+            == "managed_bridge_credentials_missing"
+        )
         assert payload["canaries"]["managed_live_send"]["status"] == "not_run"
-        assert payload["canaries"]["managed_live_send"]["failure_code"] == "managed_bridge_credentials_missing"
+        assert (
+            payload["canaries"]["managed_live_send"]["failure_code"]
+            == "managed_bridge_credentials_missing"
+        )
+        assert payload["canaries"]["managed_live_interrupt"]["status"] == "not_run"
+        assert (
+            payload["canaries"]["managed_live_interrupt"]["failure_code"]
+            == "managed_bridge_credentials_missing"
+        )
         assert payload["operation_evidence"]["launch_local"]["status"] == "not_run"
-        assert payload["operation_evidence"]["launch_local"]["failure_code"] == "managed_bridge_credentials_missing"
+        assert (
+            payload["operation_evidence"]["launch_local"]["failure_code"]
+            == "managed_bridge_credentials_missing"
+        )
         assert payload["operation_evidence"]["launch_remote"]["status"] == "not_run"
         assert payload["operation_evidence"]["reattach"]["status"] == "not_run"
+        assert payload["operation_evidence"]["interrupt"]["status"] == "not_run"
 
 
 def test_forbidden_longhouse_codex_path_is_red() -> None:
@@ -731,7 +879,9 @@ def test_forbidden_longhouse_codex_path_is_red() -> None:
         assert payload["operation_evidence"]["launch_local"]["level"] == "none"
 
 
-def test_codex_launch_local_failure_evidence_is_not_overwritten_by_later_canary() -> None:
+def test_codex_launch_local_failure_evidence_is_not_overwritten_by_later_canary() -> (
+    None
+):
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fixture = _fixture(root)
@@ -744,7 +894,10 @@ def test_codex_launch_local_failure_evidence_is_not_overwritten_by_later_canary(
         )
         assert result.returncode == 1
         assert payload["operation_evidence"]["launch_local"]["status"] == "fail"
-        assert payload["operation_evidence"]["launch_local"]["failure_code"] == "longhouse_codex_launcher"
+        assert (
+            payload["operation_evidence"]["launch_local"]["failure_code"]
+            == "longhouse_codex_launcher"
+        )
         assert payload["operation_evidence"]["reattach"]["status"] == "pass"
 
 
@@ -763,7 +916,9 @@ def test_longhouse_codex_bin_env_requires_explicit_override() -> None:
         assert payload["failure_code"] == "codex_bin_override_set"
 
 
-def test_release_artifact_can_use_upstream_version_without_local_binary_identity() -> None:
+def test_release_artifact_can_use_upstream_version_without_local_binary_identity() -> (
+    None
+):
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fixture = _fixture(root)
@@ -787,7 +942,9 @@ def test_release_artifact_can_use_upstream_version_without_local_binary_identity
         assert payload["codex_version"] == "rust-v0.134.0"
         assert payload["provider_version"] == "rust-v0.134.0"
         assert payload["canaries"]["binary_identity"]["status"] == "not_run"
-        assert payload["source_review"]["note"] == "release triage report is in report.md"
+        assert (
+            payload["source_review"]["note"] == "release triage report is in report.md"
+        )
 
 
 def main() -> int:
@@ -800,6 +957,9 @@ def main() -> int:
         test_managed_live_send_failure_redacts_token,
         test_managed_live_send_timeout_is_red,
         test_managed_live_send_non_completed_turn_is_red,
+        test_managed_live_interrupt_canary_passes_after_interrupted_state,
+        test_managed_live_interrupt_command_failure_is_red,
+        test_managed_live_interrupt_completed_turn_is_red,
         test_raw_fresh_remote_warning_is_yellow,
         test_raw_fresh_remote_failure_preserves_protocol_fingerprints,
         test_managed_tui_attach_active_thread_error_is_red,

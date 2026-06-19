@@ -416,6 +416,17 @@ def build_operation_evidence(
     if managed_live_send:
         evidence["send_input"] = managed_live_send
 
+    managed_live_interrupt = _canary_operation_entry(
+        contract,
+        "interrupt",
+        canary_name="managed_live_interrupt",
+        canary=canaries.get("managed_live_interrupt") or {},
+        level="live_token",
+        source="scripts/qa/codex-provider-release-canary.py managed_live_interrupt",
+    )
+    if managed_live_interrupt:
+        evidence["interrupt"] = managed_live_interrupt
+
     real_tool = canaries.get("codex_real_tool_result_shape") or {}
     for operation, item in dict(real_tool.get("operation_evidence") or {}).items():
         if isinstance(operation, str) and isinstance(item, dict):
@@ -1044,6 +1055,141 @@ def run_managed_live_send(args: argparse.Namespace, evidence_root: Path, codex_b
             (root / "stop.json").write_text(json.dumps(stop, indent=2), encoding="utf-8")
 
 
+def run_managed_live_interrupt(args: argparse.Namespace, evidence_root: Path, codex_bin: str) -> dict[str, Any]:
+    root = evidence_root / "managed-live-interrupt"
+    root.mkdir(parents=True, exist_ok=True)
+    credentials_gap = _managed_bridge_credentials_gap(args)
+    if credentials_gap is not None:
+        return credentials_gap
+    isolation_root: Path | None = None
+    session_id: str | None = None
+    try:
+        summary, start_result, isolation_root = _start_bridge(
+            args,
+            evidence_root=root,
+            codex_bin=codex_bin,
+            launch_mode="detached_ui",
+        )
+        session_id = str(summary.get("session_id") or "")
+        state_file = Path(str(summary.get("state_file") or ""))
+        thread_id = str(summary.get("thread_id") or "")
+        if not session_id or not thread_id or not state_file.exists():
+            return _fail(
+                "managed_live_interrupt_incomplete_start",
+                "managed live-interrupt bridge start did not return session_id, thread_id, and state_file",
+                evidence_root=str(root),
+                summary=summary,
+                start=_command_evidence(start_result, secrets=[args.agents_token]),
+            )
+
+        marker = f"LONGHOUSE_CODEX_INTERRUPT_CANARY_{uuid.uuid4().hex}"
+        prompt = (
+            f"Start your answer with {marker}. Do not use tools. Write a very long "
+            "answer of at least 6000 words about why deterministic release canaries "
+            "matter, and continue until interrupted."
+        )
+        send_result = _run(
+            [
+                _resolve_executable(args.engine, "longhouse-engine") or "longhouse-engine",
+                "codex-bridge",
+                "send",
+                "--session-id",
+                session_id,
+                "--text",
+                prompt,
+                "--state-root",
+                str(_bridge_state_root(isolation_root)),
+                "--json",
+            ],
+            cwd=args.repo_root,
+            timeout=args.live_interrupt_timeout_secs + 20,
+        )
+        (root / "send.stdout").write_text(send_result.stdout, encoding="utf-8")
+        (root / "send.stderr").write_text(send_result.stderr, encoding="utf-8")
+        if send_result.returncode != 0:
+            return _fail(
+                "managed_live_interrupt_send_failed",
+                "codex-bridge send failed before managed live-interrupt canary could interrupt",
+                evidence_root=str(root),
+                evidence=_command_evidence(send_result, secrets=[args.agents_token]),
+            )
+
+        deadline = time.monotonic() + args.live_interrupt_timeout_secs
+        state = _read_json(state_file)
+        while not state.get("active_turn_id") and not _terminal_turn_state(state) and time.monotonic() < deadline:
+            time.sleep(0.5)
+            state = _read_json(state_file)
+        if not state.get("active_turn_id"):
+            return _fail(
+                "managed_live_interrupt_no_active_turn",
+                ("managed live-interrupt turn did not expose an active_turn_id " "before reaching terminal state or timeout"),
+                evidence_root=str(root),
+                state=state,
+            )
+
+        interrupt_result = _run(
+            [
+                _resolve_executable(args.engine, "longhouse-engine") or "longhouse-engine",
+                "codex-bridge",
+                "interrupt",
+                "--session-id",
+                session_id,
+                "--state-root",
+                str(_bridge_state_root(isolation_root)),
+            ],
+            cwd=args.repo_root,
+            timeout=30,
+        )
+        (root / "interrupt.stdout").write_text(interrupt_result.stdout, encoding="utf-8")
+        (root / "interrupt.stderr").write_text(interrupt_result.stderr, encoding="utf-8")
+        if interrupt_result.returncode != 0:
+            return _fail(
+                "managed_live_interrupt_failed",
+                "codex-bridge interrupt failed during managed live-interrupt canary",
+                evidence_root=str(root),
+                evidence=_command_evidence(interrupt_result, secrets=[args.agents_token]),
+                state=state,
+            )
+
+        state = _read_json(state_file)
+        while not _terminal_turn_state(state) and time.monotonic() < deadline:
+            time.sleep(0.5)
+            state = _read_json(state_file)
+        if not _terminal_turn_state(state):
+            return _fail(
+                "managed_live_interrupt_timeout",
+                ("managed live-interrupt turn did not reach a terminal state " f"within {args.live_interrupt_timeout_secs}s"),
+                evidence_root=str(root),
+                state=state,
+            )
+        if state.get("last_turn_status") not in {"interrupted", "cancelled"}:
+            return _fail(
+                "managed_live_interrupt_not_interrupted",
+                "managed live-interrupt turn reached a terminal state that was not interrupted/cancelled",
+                evidence_root=str(root),
+                state=state,
+            )
+        try:
+            send_summary = _load_json_stdout(send_result)
+        except ValueError:
+            send_summary = {}
+        return _status(
+            "pass",
+            evidence_root=str(root),
+            state_file=str(state_file),
+            thread_id=thread_id,
+            marker=marker,
+            send_summary=send_summary,
+            last_turn_status=state.get("last_turn_status"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _fail("managed_live_interrupt_exception", str(exc), evidence_root=str(root))
+    finally:
+        if session_id and isolation_root:
+            stop = _stop_bridge(args, session_id, isolation_root)
+            (root / "stop.json").write_text(json.dumps(stop, indent=2), encoding="utf-8")
+
+
 def _codex_exec_json_events(stdout: str) -> tuple[list[dict[str, Any]], list[str]]:
     events: list[dict[str, Any]] = []
     invalid_lines: list[str] = []
@@ -1078,7 +1224,7 @@ def run_real_tool_exec(args: argparse.Namespace, evidence_root: Path, codex_bin:
     stderr_path = root / "codex-exec.stderr.log"
     marker = f"LONGHOUSE_CODEX_REAL_TOOL_{uuid.uuid4().hex}"
     command = f"printf '{marker}\\n'"
-    prompt = "Use the shell tool to run this exact command and no other command: " f"{command}. Then reply exactly DONE."
+    prompt = f"Use the shell tool to run this exact command and no other command: {command}. Then reply exactly DONE."
     argv = [
         codex_bin,
         "exec",
@@ -1180,6 +1326,7 @@ def _profile_requested(args: argparse.Namespace) -> bool:
             args.run_managed_tui_attach,
             args.run_detached_ui,
             args.run_managed_live_send,
+            args.run_managed_live_interrupt,
             args.run_real_tool,
         )
     )
@@ -1244,6 +1391,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-managed-tui-attach", action="store_true")
     parser.add_argument("--run-detached-ui", action="store_true")
     parser.add_argument("--run-managed-live-send", action="store_true")
+    parser.add_argument("--run-managed-live-interrupt", action="store_true")
     parser.add_argument("--run-real-tool", action="store_true")
     parser.add_argument("--run-all-live", action="store_true")
     parser.add_argument(
@@ -1261,6 +1409,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fake-app-server-timeout-secs", type=int, default=120)
     parser.add_argument("--bridge-start-timeout-secs", type=int, default=30)
     parser.add_argument("--live-send-timeout-secs", type=int, default=60)
+    parser.add_argument("--live-interrupt-timeout-secs", type=int, default=45)
     parser.add_argument("--real-tool-timeout-secs", type=int, default=180)
     parser.add_argument("--remote-tui-grace-ms", type=int, default=3000)
     parser.add_argument("--tui-record-secs", type=int, default=8)
@@ -1336,6 +1485,11 @@ def run_codex_provider_release_canary(args: argparse.Namespace | Mapping[str, An
         run_managed_live_send(args, evidence_root, codex_bin)
         if args.run_managed_live_send
         else _status("not_run", reason="pass --run-managed-live-send to exercise this canary")
+    )
+    canaries["managed_live_interrupt"] = (
+        run_managed_live_interrupt(args, evidence_root, codex_bin)
+        if args.run_managed_live_interrupt
+        else _status("not_run", reason="pass --run-managed-live-interrupt to exercise this canary")
     )
     canaries["codex_real_tool_result_shape"] = (
         run_real_tool_exec(args, evidence_root, codex_bin)

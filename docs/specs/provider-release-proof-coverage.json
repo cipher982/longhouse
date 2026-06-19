@@ -415,10 +415,14 @@
             "covered": "partial",
             "test_evidence": [
                 "engine/src/codex_bridge.rs",
-                "engine/src/codex_app_server_canary.rs"
+                "engine/src/codex_app_server_canary.rs",
+                "server/zerg/qa/codex_provider_release_canary.py",
+                "scripts/qa/provider-release-proof.py",
+                "scripts/tests/codex-provider-release-canary.test.py",
+                "scripts/tests/provider-release-proof.test.py"
             ],
-            "proof_boundary": "hermetic",
-            "fake_or_real": "fake",
+            "proof_boundary": "hermetic_or_live_token",
+            "fake_or_real": "mixed",
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "none",

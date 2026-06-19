@@ -80,6 +80,7 @@ CODEX_RUN_RAW_FRESH_REMOTE=1 \
 CODEX_RUN_MANAGED_TUI_ATTACH=1 \
 CODEX_RUN_DETACHED_UI=1 \
 CODEX_RUN_MANAGED_LIVE_SEND=1 \
+CODEX_RUN_MANAGED_LIVE_INTERRUPT=1 \
 CODEX_RUN_REAL_TOOL=1 \
 make provider-release-proof \
   PROVIDER=codex \
@@ -95,7 +96,12 @@ Today the managed Codex bridge lanes need Runtime Host credentials. Without
 `CODEX_API_URL` and `CODEX_AGENTS_TOKEN`, those lanes must report
 `status=not_run` and
 `failure_code=managed_bridge_credentials_missing`; that is a coverage gap, not
-an upstream break. `CODEX_RUN_MANAGED_LIVE_SEND=1` spends a real managed Codex
+an upstream break. When accepting a profile baseline, run one of
+`CODEX_RUN_MANAGED_LIVE_SEND`, `CODEX_RUN_MANAGED_LIVE_INTERRUPT`, or
+`CODEX_RUN_REAL_TOOL` at a time unless `SCENARIO_ID` is explicitly overriding
+the proof bucket.
+
+`CODEX_RUN_MANAGED_LIVE_SEND=1` spends a real managed Codex
 turn and records `operation_evidence.send_input` at `level=live_token` only
 after the turn completes and transcript/state evidence contains the unique
 canary marker. Proofs with this flag use scenario
@@ -103,6 +109,13 @@ canary marker. Proofs with this flag use scenario
 `codex-release-proof-v1` remains the no-token managed/protocol baseline. Do not
 accept a Codex baseline while the managed attach, detached UI, or live-send
 lanes are still missing if the baseline is intended to protect those surfaces.
+
+`CODEX_RUN_MANAGED_LIVE_INTERRUPT=1` spends a real managed Codex turn and
+records `operation_evidence.interrupt` at `level=live_token` only after
+`codex-bridge interrupt` succeeds and bridge state reaches `interrupted` or
+`cancelled`. Proofs with this flag use scenario
+`codex-managed-live-interrupt-release-proof-v1`. No accepted baseline exists
+yet; run it manually before wiring a Sauron release-watch gate.
 
 `CODEX_RUN_REAL_TOOL=1` spends a real local `codex exec --json` turn and records
 `operation_evidence.run_once` plus `operation_evidence.transcript_binding` at

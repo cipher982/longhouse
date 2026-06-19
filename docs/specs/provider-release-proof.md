@@ -195,7 +195,7 @@ accepted baseline yet, and full resume/tool coverage remains missing.
 | ingest into Longhouse | partial | hook/outbox tests, shipper E2E | fixture/hermetic | `make test`, `make test-shipper-e2e` | no dedicated release proof | no | partial |
 | timeline/session projection | partial | session capabilities/messages/views | hermetic | `make test` | no | no | partial |
 | send input | partial | engine bridge IPC turn/start tests; `codex-provider-release-canary.py --run-managed-live-send` starts a managed detached bridge, sends a unique marker, waits for completion, and checks transcript/state evidence | hermetic/live_token when explicitly run; fake wrapper in CI | `make test`, engine tests, wrapper fake-engine test | Sauron canary when configured | release-proof yes (`codex-managed-live-send-release-proof-v1`, codex-cli 0.139.0) | partial |
-| interrupt/abort/steer | partial | engine bridge interrupt/steer tests | hermetic | `make test`, engine tests | Sauron canary when configured | no | partial |
+| interrupt/abort/steer | partial | engine bridge interrupt/steer tests; `provider-release-proof.py --codex-run-managed-live-interrupt` starts a managed detached bridge, sends a long active turn, calls `codex-bridge interrupt`, and requires terminal `interrupted`/`cancelled` state | hermetic/live_token when explicitly run; fake wrapper in CI | `make test`, engine tests, wrapper fake-engine test | Sauron canary when configured; real-interrupt proof not env-gated in release-watch yet | no | yes when explicitly run |
 | reattach/resume | partial | managed TUI attach canary; resume path tests | hermetic/live_no_token | `validate-provider-cli-canaries` | yes | release-proof yes (`codex-release-proof-v1`, codex-cli 0.139.0) | partial |
 | tool/tool-result shape | partial | Codex parser fixtures and `provider-release-proof.py --codex-run-real-tool` capture real `codex exec --json` `command_execution` events with marker output and a DONE agent message | live_token when explicitly run; fake wrapper/parser fixture | wrapper fake-Codex test plus parser tests | env-gated proof/diff when `AGENT_RELEASE_CODEX_REAL_TOOL=1` | release-proof yes (`codex-real-tool-release-proof-v1`, codex-cli 0.139.0) | yes |
 | live-token behavior | partial | `codex-provider-release-canary.py --run-managed-live-send`; `provider-release-proof.py --codex-run-managed-live-send` can attach the evidence to a release proof | managed Runtime Host live_token when explicitly run; fake wrapper in CI | wrapper fake-engine test | yes; production Sauron has `AGENT_RELEASE_CODEX_CANARY_LIVE=1` and Runtime Host credentials configured | release-proof yes (`codex-managed-live-send-release-proof-v1`, codex-cli 0.139.0) | yes |
@@ -236,6 +236,15 @@ has now been accepted and promoted to Sauron production. Production Sauron has
 the Codex live-send release-watch credentials configured; a no-spend preflight
 inside the `sauron` container on 2026-06-19 selected
 `codex-managed-live-send-release-proof-v1` and returned green.
+
+The managed live-interrupt lane is now available as an explicit opt-in proof.
+It spends a real managed Codex turn only when Runtime Host credentials are
+provided, starts a deliberately long active turn, calls `codex-bridge
+interrupt`, and records `operation_evidence.interrupt` at `level=live_token`
+only if bridge state reaches `interrupted` or `cancelled`. This lane uses
+scenario `codex-managed-live-interrupt-release-proof-v1`. No green real
+baseline has been accepted yet, and Sauron release-watch does not have a
+dedicated env gate for this proof yet.
 
 Accepted baseline evidence, 2026-06-19: Codex `codex-cli 0.139.0` was run with
 fake app-server, raw-fresh-remote, managed TUI attach, and detached-ui lanes
@@ -370,11 +379,12 @@ Optional variables:
 - `TIMEOUT_SECS` bounds the wrapped source canary.
 - `CODEX_RUN_FAKE_APP_SERVER`, `CODEX_RUN_RAW_FRESH_REMOTE`,
   `CODEX_RUN_MANAGED_TUI_ATTACH`, `CODEX_RUN_DETACHED_UI`,
-  `CODEX_RUN_MANAGED_LIVE_SEND`, and `CODEX_RUN_REAL_TOOL` enable opt-in Codex
-  canary lanes.
+  `CODEX_RUN_MANAGED_LIVE_SEND`, `CODEX_RUN_MANAGED_LIVE_INTERRUPT`, and
+  `CODEX_RUN_REAL_TOOL` enable opt-in Codex canary lanes.
 - `SCENARIO_ID`/`--scenario-id` can override the proof bucket for manual
   experiments; otherwise Codex managed live-send uses
-  `codex-managed-live-send-release-proof-v1`, Codex real-tool uses
+  `codex-managed-live-send-release-proof-v1`, Codex managed live-interrupt uses
+  `codex-managed-live-interrupt-release-proof-v1`, Codex real-tool uses
   `codex-real-tool-release-proof-v1`, Antigravity real-agy send uses
   `antigravity-real-agy-send-release-proof-v1`, and default proofs use
   `{provider}-release-proof-v1`.
@@ -649,9 +659,10 @@ should not by itself count as contract drift.
    `claude-real-print-release-proof-v1`, then accept a green real-print
    baseline; after that, add Claude managed-session binding proof beyond
    no-token launch shape.
-2. Add Codex interrupt coverage beyond the accepted send-input/tool baselines,
-   then decide whether to enable `AGENT_RELEASE_CODEX_REAL_TOOL=1` in
-   production Sauron by default.
+2. Run and accept a real Codex
+   `codex-managed-live-interrupt-release-proof-v1` baseline, then wire an
+   env-gated Sauron release-watch path for it. Separately decide whether to
+   enable `AGENT_RELEASE_CODEX_REAL_TOOL=1` in production Sauron by default.
 3. Decide whether to enable `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` in
    production Sauron; the accepted baseline exists, but the default release
    watch still avoids real `agy` token spend.
