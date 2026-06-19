@@ -1048,9 +1048,11 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
             assert Path(payload["artifacts"]["action_matrix"]).exists()
             assert Path(payload["artifacts"]["control_surface"]).exists()
             universal = payload["normalized"]["universal_harness"]
-            assert universal["result_count"] == 8
+            assert universal["result_count"] == 10
             assert "action_matrix" in universal["scenarios"]
             assert "control_surface" in universal["scenarios"]
+            assert "session_projection" in universal["scenarios"]
+            assert "timeline_projection" in universal["scenarios"]
             assert "parse_ingest_project" in universal["scenarios"]
             assert (
                 payload["normalized"]["canaries"]["universal_probe_identity"]["status"]
@@ -1072,6 +1074,30 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
             )
             assert (
                 payload["normalized"]["canaries"]["universal_parse_ingest_project"][
+                    "status"
+                ]
+                == "pass"
+            )
+            assert (
+                payload["normalized"]["canaries"]["universal_session_projection"][
+                    "status"
+                ]
+                == "pass"
+            )
+            assert (
+                payload["normalized"]["canaries"]["universal_timeline_projection"][
+                    "status"
+                ]
+                == "pass"
+            )
+            assert (
+                payload["operation_evidence"]["universal_session_projection"][
+                    "status"
+                ]
+                == "pass"
+            )
+            assert (
+                payload["operation_evidence"]["universal_timeline_projection"][
                     "status"
                 ]
                 == "pass"

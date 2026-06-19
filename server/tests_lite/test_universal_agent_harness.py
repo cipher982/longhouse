@@ -427,6 +427,56 @@ def test_db_ingest_project_uses_real_longhouse_sqlite_for_all_providers(tmp_path
         assert "universal db ingest hello" in db_snapshot["export_jsonl"]
 
 
+def test_projection_scenarios_emit_comparable_artifacts_for_all_providers(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=uah.SUPPORTED_PROVIDERS,
+            scenarios=("session_projection", "timeline_projection"),
+            evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
+        )
+    )
+
+    assert payload["verdict"] == "green"
+    assert len(payload["results"]) == len(uah.SUPPORTED_PROVIDERS) * 2
+    for result in payload["results"]:
+        assert result["status"] == "pass"
+        assert result["scenario"] in {"session_projection", "timeline_projection"}
+        evidence_root = Path(result["evidence_root"])
+        assert Path(result["data"]["session_projection_path"]).is_file()
+        assert Path(result["data"]["timeline_projection_path"]).is_file()
+        assert Path(result["data"]["canonical_events_path"]).is_file()
+        session = json.loads(
+            (evidence_root / "longhouse" / "session-projection.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        timeline = json.loads(
+            (evidence_root / "longhouse" / "timeline-projection.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert session["provider"] == result["provider"]
+        assert session["provider_session_id"].startswith(
+            f"universal-{result['provider']}-{result['scenario']}"
+        )
+        assert session["has_user"] is True
+        assert session["has_assistant"] is True
+        assert timeline["event_count"] == 3
+        assert timeline["preview_text"] == "universal projection hello"
+        if result["scenario"] == "session_projection":
+            assert result["data"]["operation_evidence"]["session_projection"][
+                "status"
+            ] == "pass"
+        else:
+            assert result["data"]["operation_evidence"]["timeline_projection"][
+                "status"
+            ] == "pass"
+        assert result["data"]["operation_evidence"]["transcript_binding"][
+            "status"
+        ] == "pass"
+
+
 def test_codex_run_prompt_once_writes_safe_projection(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(

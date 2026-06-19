@@ -199,6 +199,13 @@ calls the existing managed-live-send canary. OpenCode calls the real-print
 hook-inbox injection canary. These paths project user and assistant marker rows
 and DB-ingest the live-token evidence when their live lane is configured.
 
+`session_projection` and `timeline_projection` are now first-class universal
+scenarios for all four providers. They are hermetic projection proofs: each
+adapter emits the same canonical provider events, Longhouse session projection,
+timeline projection, and operation evidence. They prove the shared projection
+surface is wired through the harness and release proof; provider-live lanes add
+stronger raw evidence when they run.
+
 ## Capabilities And Profiles
 
 Capabilities are the vocabulary scenarios use to decide what is required:
@@ -271,6 +278,8 @@ Universal scenarios:
 | `collect_raw_evidence` | P0 | stdout/stderr/provider logs/transcripts are persisted on success and failure. |
 | `parse_ingest_project` | P0 | Raw evidence becomes canonical events, ingests into Longhouse, and projects a session/timeline. |
 | `db_ingest_project` | P0 | Canonical events ingest through `AgentsStore` into an isolated SQLite DB, then session events/counts/export/timeline reads prove durable Longhouse projection. |
+| `session_projection` | P0 | Canonical events project into the stable session-detail shape for every provider. |
+| `timeline_projection` | P0 | Canonical events project into the stable timeline/card shape for every provider. |
 | `tool_call_result` | P1 | Tool call/result events are paired and attributed; workspace side effects match the fixture. |
 | `interrupt_cancel` | P1 | A long active turn can be interrupted without corrupting session evidence. |
 | `resume_reattach` | P1 | A prior session can be resumed or explicitly reports an unsupported gap. |
@@ -456,17 +465,20 @@ shape:
 5. `control_surface` emits the same launch/send/steer/pause/interrupt/resume/
    terminate/tail/runtime/transcript/tool rows for every provider and is
    captured as a normalized release-proof artifact.
-6. `run_prompt_once` has a safe Codex/OpenAI projection and typed
+6. `session_projection` and `timeline_projection` are first-class universal
+   scenarios for every provider and are included in default release-proof
+   universal harness runs.
+7. `run_prompt_once` has a safe Codex/OpenAI projection and typed
    `unsupported_gap` results for unsafe providers.
-7. Codex/OpenAI and OpenCode have first no-token/session-safe
+8. Codex/OpenAI and OpenCode have first no-token/session-safe
    `launch_managed_session` and `send_receive` projections behind the universal
    runner.
-8. OpenCode has the first real no-token `managed_session_e2e` lane. It calls the
+9. OpenCode has the first real no-token `managed_session_e2e` lane. It calls the
    existing provider-live canary to prove server startup, schema, session
    create/get, `prompt_async noReply`, transcript marker recovery, process
    reattach, and abort behavior, then writes canonical Longhouse-style
    event/session/timeline projections.
-9. That OpenCode lane now feeds the provider-live raw rows through isolated
+10. That OpenCode lane now feeds the provider-live raw rows through isolated
    Longhouse SQLite ingest and verifies durable events, session counts, export
    JSONL, query lookup, timeline listing, and preserved provider-session
    binding.

@@ -154,7 +154,9 @@
             "covered": "partial",
             "test_evidence": [
                 "server/tests_lite/test_session_processing.py",
-                "server/tests_lite/test_session_capabilities.py"
+                "server/tests_lite/test_session_capabilities.py",
+                "server/tests_lite/test_universal_agent_harness.py",
+                "scripts/tests/provider-release-proof.test.py"
             ],
             "proof_boundary": "hermetic",
             "fake_or_real": "fake",
@@ -379,7 +381,9 @@
             "covered": "partial",
             "test_evidence": [
                 "server/tests_lite/test_session_processing.py",
-                "server/tests_lite/test_session_capabilities.py"
+                "server/tests_lite/test_session_capabilities.py",
+                "server/tests_lite/test_universal_agent_harness.py",
+                "scripts/tests/provider-release-proof.test.py"
             ],
             "proof_boundary": "hermetic",
             "fake_or_real": "fake",
@@ -620,6 +624,7 @@
             "covered": "partial",
             "test_evidence": [
                 "server/tests_lite/test_session_capabilities.py",
+                "server/tests_lite/test_universal_agent_harness.py",
                 "scripts/tests/provider-live-canary.test.py",
                 "scripts/tests/provider-release-proof.test.py"
             ],
@@ -851,7 +856,9 @@
             "surface": "timeline/session projection",
             "covered": "partial",
             "test_evidence": [
-                "server/tests_lite/test_session_capabilities.py"
+                "server/tests_lite/test_session_capabilities.py",
+                "server/tests_lite/test_universal_agent_harness.py",
+                "scripts/tests/provider-release-proof.test.py"
             ],
             "proof_boundary": "hermetic",
             "fake_or_real": "fake",

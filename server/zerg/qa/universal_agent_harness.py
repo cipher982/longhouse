@@ -40,6 +40,8 @@ SCENARIOS = (
     "control_surface",
     "parse_ingest_project",
     "db_ingest_project",
+    "session_projection",
+    "timeline_projection",
     "run_prompt_once",
     "launch_managed_session",
     "send_receive",
@@ -78,6 +80,8 @@ MVP_METHODS = (
     "collect_evidence",
     "decode_normalize",
     "db_ingest_project",
+    "session_projection",
+    "timeline_projection",
     "launch_managed_session",
     "send_receive",
     "managed_session_e2e",
@@ -448,6 +452,10 @@ class AgentHarnessAdapter(Protocol):
     def decode_normalize(self, package: "EvidencePackage", fixture_path: Path) -> dict[str, Any]: ...
 
     def db_ingest_project(self, package: "EvidencePackage", fixture_path: Path | None) -> dict[str, Any]: ...
+
+    def session_projection(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def timeline_projection(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def launch_managed_session(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
@@ -827,6 +835,26 @@ class UniversalProviderAdapter:
             package.write_json("assertions/db_ingest_project.json", payload)
             return payload
         return ingest_canonical_events_into_longhouse_db(package=package, provider=self.config.provider, rows=rows)
+
+    def session_projection(self, package: EvidencePackage) -> dict[str, Any]:
+        payload = self._write_projection_surface(
+            package,
+            scenario="session_projection",
+            operation="session_projection",
+            canary="universal_session_projection",
+        )
+        package.write_json("assertions/session_projection.json", payload)
+        return payload
+
+    def timeline_projection(self, package: EvidencePackage) -> dict[str, Any]:
+        payload = self._write_projection_surface(
+            package,
+            scenario="timeline_projection",
+            operation="timeline_projection",
+            canary="universal_timeline_projection",
+        )
+        package.write_json("assertions/timeline_projection.json", payload)
+        return payload
 
     def launch_managed_session(self, package: EvidencePackage) -> dict[str, Any]:
         if "launch_managed_session" not in self.config.safe_managed_session_scenarios:
@@ -2404,6 +2432,36 @@ class UniversalProviderAdapter:
     def _session_id(self, package: EvidencePackage) -> str:
         return f"universal-{self.config.provider}-{package.scenario}"
 
+    def _write_projection_surface(
+        self,
+        package: EvidencePackage,
+        *,
+        scenario: str,
+        operation: str,
+        canary: str,
+    ) -> dict[str, Any]:
+        operations = {
+            operation: {
+                "status": STATUS_PASS,
+                "level": "hermetic",
+                "canary": canary,
+                "source": "universal harness canonical event projection",
+            },
+            "transcript_binding": {
+                "status": STATUS_PASS,
+                "level": "hermetic",
+                "canary": canary,
+                "source": "universal harness canonical event/session projection",
+            },
+        }
+        payload = self._write_session_projection(
+            package,
+            raw_events=default_projection_rows(),
+            operations=operations,
+        )
+        payload["scenario"] = scenario
+        return payload
+
     def _write_message_exchange(
         self,
         package: EvidencePackage,
@@ -2808,6 +2866,26 @@ def default_db_ingest_rows() -> list[dict[str, Any]]:
             "type": "assistant",
             "role": "assistant",
             "text": "universal db ingest done",
+        },
+    ]
+
+
+def default_projection_rows() -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "user",
+            "role": "user",
+            "text": "universal projection hello",
+        },
+        {
+            "type": "assistant",
+            "role": "assistant",
+            "text": "universal projection reply",
+        },
+        {
+            "type": "system",
+            "role": "system",
+            "text": "universal projection runtime idle",
         },
     ]
 
@@ -4234,6 +4312,30 @@ def run_db_ingest_project(
     )
 
 
+def run_session_projection(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.session_projection(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="session_projection",
+        package=package,
+        payload=payload,
+    )
+
+
+def run_timeline_projection(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.timeline_projection(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="timeline_projection",
+        package=package,
+        payload=payload,
+    )
+
+
 def run_prompt_once(adapter: AgentHarnessAdapter, package: EvidencePackage, prompt: str | None) -> ScenarioResult:
     adapter.prepare(package)
     payload = adapter.run_prompt(package, prompt or "Reply with exactly: LONGHOUSE UNIVERSAL HARNESS")
@@ -4337,6 +4439,8 @@ SCENARIO_RUNNERS = {
     "control_surface": run_control_surface,
     "parse_ingest_project": run_parse_ingest_project,
     "db_ingest_project": run_db_ingest_project,
+    "session_projection": run_session_projection,
+    "timeline_projection": run_timeline_projection,
     "run_prompt_once": run_prompt_once,
     "launch_managed_session": run_launch_managed_session,
     "send_receive": run_send_receive,
