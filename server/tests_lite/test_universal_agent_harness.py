@@ -1003,10 +1003,110 @@ def test_codex_tool_call_result_uses_real_tool_canary(tmp_path: Path, monkeypatc
     assert db_snapshot["timeline"]["matched"] is True
 
 
+def test_opencode_tool_call_result_uses_real_tool_canary(tmp_path: Path, monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_control_canary(
+        *,
+        provider: str,
+        artifact_path: Path,
+        evidence_root: Path,
+        extra_args: list[str] | None = None,
+        extra_env: dict[str, str] | None = None,
+    ) -> dict[str, object]:
+        calls.append(
+            {
+                "provider": provider,
+                "artifact_path": artifact_path,
+                "evidence_root": evidence_root,
+                "extra_args": extra_args,
+                "extra_env": extra_env,
+            }
+        )
+        return {
+            "schema_version": 1,
+            "provider": "opencode",
+            "verdict": "green",
+            "failure_code": None,
+            "canaries": {
+                "opencode": {
+                    "status": "pass",
+                    "provider_version": "opencode 9.9.9",
+                    "session_ids": ["ses_opencode_tool"],
+                    "marker": "LONGHOUSE_OPENCODE_TOOL_fake",
+                    "tool_name": "bash",
+                    "tool_call_id": "tool_call_opencode_fake",
+                    "tool_state_status": "completed",
+                    "matching_tool_event": {
+                        "type": "tool_use",
+                        "sessionID": "ses_opencode_tool",
+                        "part_type": "tool",
+                        "tool": "bash",
+                        "callID_present": True,
+                        "state_status": "completed",
+                        "input_keys": ["command"],
+                        "command_exact_match": True,
+                        "output_exact_match": True,
+                        "metadata_output_exact_match": True,
+                    },
+                    "done_text_event": {
+                        "type": "text",
+                        "sessionID": "ses_opencode_tool",
+                        "part_type": "text",
+                        "text_exact_match": True,
+                    },
+                    "operation_evidence": {
+                        "transcript_binding": {
+                            "status": "pass",
+                            "level": "live_token",
+                            "canary": "opencode_real_tool_result_shape",
+                        }
+                    },
+                }
+            },
+        }
+
+    monkeypatch.setattr(uah, "run_provider_control_e2e_canary", fake_control_canary)
+    fake_opencode = _fake_bins(tmp_path)["opencode"]
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("opencode",),
+            scenarios=("tool_call_result",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"opencode": fake_opencode},
+        )
+    )
+
+    assert calls
+    assert calls[0]["provider"] == "opencode"
+    assert calls[0]["extra_args"] == ["--opencode-run-real-tool"]
+    assert calls[0]["extra_env"] == {"LONGHOUSE_OPENCODE_BIN": str(fake_opencode)}
+    result = payload["results"][0]
+    assert payload["verdict"] == "green"
+    assert result["status"] == "pass"
+    assert result["data"]["source_artifact_kind"] == "provider_control_e2e_canary"
+    assert result["data"]["synthetic"] is False
+    assert result["data"]["operation_evidence"]["tool_call_result"]["status"] == "pass"
+    assert result["data"]["operation_evidence"]["tool_call_result"]["level"] == "live_token"
+    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
+
+    evidence_root = Path(result["evidence_root"])
+    raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
+    assert "opencode_real_tool_result_shape" in raw_events
+    assert "tool_call_opencode_fake" in raw_events
+    session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
+    assert session["provider_session_id"] == "ses_opencode_tool"
+    assert session["operation_statuses"]["tool_call_result"]["status"] == "pass"
+    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
+    assert db_snapshot["ingest_result"]["events_inserted"] == 3
+    assert db_snapshot["session_counts"]["tool_calls"] == 1
+    assert db_snapshot["timeline"]["matched"] is True
+
+
 def test_tool_call_result_is_typed_gap_for_unmigrated_providers(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
-            providers=("claude", "opencode", "antigravity"),
+            providers=("claude", "antigravity"),
             scenarios=("tool_call_result",),
             evidence_root=tmp_path / "evidence",
             provider_bins=_fake_bins(tmp_path),
@@ -1014,7 +1114,7 @@ def test_tool_call_result_is_typed_gap_for_unmigrated_providers(tmp_path: Path) 
     )
 
     assert payload["verdict"] == "yellow"
-    assert {result["provider"] for result in payload["results"]} == {"claude", "opencode", "antigravity"}
+    assert {result["provider"] for result in payload["results"]} == {"claude", "antigravity"}
     assert {result["status"] for result in payload["results"]} == {"unsupported_gap"}
     assert {result["failure_code"] for result in payload["results"]} == {"tool_call_result_adapter_missing"}
 

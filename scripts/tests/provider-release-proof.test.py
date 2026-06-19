@@ -123,6 +123,7 @@ import base64
 import http.server
 import json
 import os
+import re
 import signal
 import sys
 from pathlib import Path
@@ -138,6 +139,45 @@ if args == ["attach", "--help"]:
     print("-s, --session session id")
     print("-p, --password defaults to OPENCODE_SERVER_PASSWORD")
     print("-u, --username defaults to OPENCODE_SERVER_USERNAME")
+    raise SystemExit(0)
+
+if args and args[0] == "run":
+    prompt = args[-1]
+    match = re.search(r"printf '([^']+)'", prompt)
+    marker = match.group(1) if match else "MISSING_MARKER"
+    session_id = "ses_fake_opencode_tool"
+    message_id = "msg_fake_opencode_tool"
+    print(json.dumps({
+        "type": "tool_use",
+        "timestamp": 1781861712131,
+        "sessionID": session_id,
+        "part": {
+            "id": "prt_fake_tool",
+            "messageID": message_id,
+            "sessionID": session_id,
+            "type": "tool",
+            "tool": "bash",
+            "callID": "call_fake_tool",
+            "state": {
+                "status": "completed",
+                "input": {"command": "printf '" + marker + "'"},
+                "output": marker,
+                "metadata": {"output": marker, "exit": 0, "truncated": False},
+            },
+        },
+    }))
+    print(json.dumps({
+        "type": "text",
+        "timestamp": 1781861714070,
+        "sessionID": session_id,
+        "part": {
+            "id": "prt_fake_text",
+            "messageID": "msg_fake_text",
+            "sessionID": session_id,
+            "type": "text",
+            "text": "DONE",
+        },
+    }))
     raise SystemExit(0)
 
 if not args or args[0] != "serve":
@@ -1232,6 +1272,62 @@ def test_codex_release_proof_can_attach_universal_tool_call_result_e2e() -> None
         )
         assert "call_fake_tool" in raw_events
         assert "codex_real_tool_result_shape" in raw_events
+        db_snapshot = _read_json(evidence_root / "longhouse" / "db-ingest-result.json")
+        assert db_snapshot["ingest_result"]["events_inserted"] == 3
+        assert db_snapshot["session_counts"]["tool_calls"] == 1
+        assert db_snapshot["timeline"]["matched"] is True
+
+
+def test_opencode_release_proof_can_attach_universal_tool_call_result_e2e() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        _write_fake_opencode_server_bin(root)
+
+        result, payload = _run_proof(
+            root,
+            "opencode",
+            extra_args=[
+                "--run-universal-harness",
+                "--universal-scenario",
+                "tool_call_result",
+            ],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["verdict"] == "green"
+        assert (
+            payload["normalized"]["canaries"]["universal_tool_call_result"]["status"]
+            == "pass"
+        )
+        assert (
+            payload["operation_evidence"]["universal_tool_call_result"]["status"]
+            == "pass"
+        )
+        assert (
+            payload["operation_evidence"]["universal_tool_call_result"]["level"]
+            == "live_token"
+        )
+        assert payload["operation_evidence"]["universal_db_ingest"]["status"] == "pass"
+
+        universal_artifact = _read_json(
+            Path(payload["artifacts"]["universal_harness_artifact"])
+        )
+        result_row = universal_artifact["results"][0]
+        assert result_row["provider"] == "opencode"
+        assert result_row["scenario"] == "tool_call_result"
+        assert result_row["status"] == "pass"
+        assert (
+            result_row["data"]["source_artifact_kind"] == "provider_control_e2e_canary"
+        )
+        assert result_row["data"]["synthetic"] is False
+
+        evidence_root = Path(result_row["evidence_root"])
+        raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(
+            encoding="utf-8"
+        )
+        assert "call_fake_tool" in raw_events
+        assert "opencode_real_tool_result_shape" in raw_events
         db_snapshot = _read_json(evidence_root / "longhouse" / "db-ingest-result.json")
         assert db_snapshot["ingest_result"]["events_inserted"] == 3
         assert db_snapshot["session_counts"]["tool_calls"] == 1
@@ -2472,6 +2568,7 @@ def main() -> int:
         test_codex_release_proof_can_attach_universal_interrupt_credentials_gap,
         test_codex_release_proof_can_attach_universal_live_token_credentials_gap,
         test_codex_release_proof_can_attach_universal_tool_call_result_e2e,
+        test_opencode_release_proof_can_attach_universal_tool_call_result_e2e,
         test_opencode_release_proof_can_attach_real_universal_managed_session_e2e,
         test_opencode_release_proof_can_attach_universal_resume_reattach_e2e,
         test_claude_release_proof_can_attach_universal_provider_live_contract_e2e,

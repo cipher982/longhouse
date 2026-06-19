@@ -921,6 +921,8 @@ class UniversalProviderAdapter:
     def tool_call_result(self, package: EvidencePackage) -> dict[str, Any]:
         if self.config.provider == "codex":
             return self._run_codex_tool_call_result(package)
+        if self.config.provider == "opencode":
+            return self._run_opencode_tool_call_result(package)
         payload = self._unsupported_payload(
             "tool_call_result",
             "tool_call_result_adapter_missing",
@@ -1503,6 +1505,97 @@ class UniversalProviderAdapter:
         elif db_status != STATUS_PASS:
             payload["failure_code"] = db_ingest.get("failure_code") or "tool_call_result_db_ingest_failed"
             payload["message"] = "Codex real-tool call/result evidence did not pass Longhouse DB ingest assertions."
+        package.write_json("assertions/tool_call_result.json", payload)
+        return payload
+
+    def _run_opencode_tool_call_result(self, package: EvidencePackage) -> dict[str, Any]:
+        binary, source = self._resolve_binary()
+        if binary is None:
+            payload = {
+                "status": STATUS_FAIL,
+                "failure_code": "provider_binary_not_found",
+                "message": "opencode binary was not found for tool_call_result",
+                "binary_source": source,
+            }
+            package.write_json("assertions/tool_call_result.json", payload)
+            return payload
+
+        control_evidence_root = package.path("raw", "provider-control-e2e-evidence")
+        control_artifact_path = package.path("raw", "provider-control-e2e.json")
+        control_artifact = run_provider_control_e2e_canary(
+            provider="opencode",
+            artifact_path=control_artifact_path,
+            evidence_root=control_evidence_root,
+            extra_args=["--opencode-run-real-tool"],
+            extra_env={"LONGHOUSE_OPENCODE_BIN": str(binary)},
+        )
+        if not control_artifact_path.is_file():
+            package.write_json("raw/provider-control-e2e.json", control_artifact)
+        package.write_json("raw/provider-control-e2e-inline.json", control_artifact)
+
+        operation_evidence = opencode_tool_call_result_operation_evidence(control_artifact)
+        raw_events = opencode_tool_call_result_raw_events(control_artifact)
+        provider_session_id = _first_opencode_control_session_id(control_artifact) or self._session_id(package)
+        projection = self._write_session_projection(
+            package,
+            raw_events=raw_events,
+            operations=operation_evidence,
+            provider_session_id=provider_session_id,
+        )
+        db_ingest = ingest_canonical_events_into_longhouse_db(
+            package=package,
+            provider=self.config.provider,
+            rows=raw_events,
+            provider_session_id=provider_session_id,
+        )
+        operation_evidence.update(
+            {
+                str(operation): dict(evidence)
+                for operation, evidence in dict(db_ingest.get("operation_evidence") or {}).items()
+                if isinstance(evidence, Mapping)
+            }
+        )
+        session_projection_path = package.path("longhouse", "session-projection.json")
+        try:
+            session_projection = json.loads(session_projection_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            session_projection = {}
+        if isinstance(session_projection, dict):
+            session_projection["operation_statuses"] = operation_evidence
+            package.write_json("longhouse/session-projection.json", session_projection)
+
+        verdict = str(control_artifact.get("verdict") or "red")
+        tool_status = str((operation_evidence.get("tool_call_result") or {}).get("status") or STATUS_FAIL)
+        db_status = str(db_ingest.get("status") or STATUS_FAIL)
+        payload = {
+            **projection,
+            "status": STATUS_PASS if verdict == "green" and tool_status == STATUS_PASS and db_status == STATUS_PASS else STATUS_FAIL,
+            "scenario": "tool_call_result",
+            "provider_version": _opencode_control_canary(control_artifact).get("provider_version"),
+            "provider_control_artifact_path": str(control_artifact_path),
+            "provider_control_evidence_root": str(control_evidence_root),
+            "provider_control_verdict": verdict,
+            "source_artifact_kind": "provider_control_e2e_canary",
+            "synthetic": False,
+            "operation_evidence": operation_evidence,
+            "longhouse_ingest": {
+                "status": db_status,
+                "failure_code": db_ingest.get("failure_code"),
+                "db_snapshot_path": db_ingest.get("db_snapshot_path"),
+                "session_projection_path": db_ingest.get("session_projection_path"),
+                "timeline_projection_path": db_ingest.get("timeline_projection_path"),
+            },
+        }
+        if verdict != "green" or tool_status != STATUS_PASS:
+            payload["failure_code"] = (
+                control_artifact.get("failure_code")
+                or _opencode_control_canary(control_artifact).get("failure_code")
+                or "opencode_tool_call_result_failed"
+            )
+            payload["message"] = "OpenCode real-tool call/result canary did not pass."
+        elif db_status != STATUS_PASS:
+            payload["failure_code"] = db_ingest.get("failure_code") or "tool_call_result_db_ingest_failed"
+            payload["message"] = "OpenCode real-tool call/result evidence did not pass Longhouse DB ingest assertions."
         package.write_json("assertions/tool_call_result.json", payload)
         return payload
 
@@ -2924,6 +3017,87 @@ def codex_tool_call_result_raw_events(artifact: Mapping[str, Any]) -> list[dict[
     return rows
 
 
+def _opencode_control_canary(artifact: Mapping[str, Any]) -> dict[str, Any]:
+    canary = dict(dict(artifact.get("canaries") or {}).get("opencode") or {})
+    return canary
+
+
+def _first_opencode_control_session_id(artifact: Mapping[str, Any]) -> str | None:
+    canary = _opencode_control_canary(artifact)
+    session_ids = canary.get("session_ids")
+    if isinstance(session_ids, list):
+        for session_id in session_ids:
+            cleaned = _clean_optional_str(session_id)
+            if cleaned:
+                return cleaned
+    tool_event = canary.get("matching_tool_event")
+    if isinstance(tool_event, Mapping):
+        return _clean_optional_str(tool_event.get("sessionID"))
+    done_event = canary.get("done_text_event")
+    if isinstance(done_event, Mapping):
+        return _clean_optional_str(done_event.get("sessionID"))
+    return None
+
+
+def opencode_tool_call_result_raw_events(artifact: Mapping[str, Any]) -> list[dict[str, Any]]:
+    tool = _opencode_control_canary(artifact)
+    provider_session_id = _first_opencode_control_session_id(artifact) or "opencode-tool-call-result"
+    matching_event = tool.get("matching_tool_event")
+    matching_event = matching_event if isinstance(matching_event, Mapping) else {}
+    done_event = tool.get("done_text_event")
+    done_event = done_event if isinstance(done_event, Mapping) else {}
+    marker = str(tool.get("marker") or "marker-unavailable")
+    tool_call_id = str(tool.get("tool_call_id") or "opencode-real-tool-result-shape")
+    tool_name = str(tool.get("tool_name") or matching_event.get("tool") or "bash")
+    command = f"printf '{marker}'"
+    output = marker if matching_event.get("output_exact_match") or tool.get("status") == STATUS_PASS else ""
+    rows: list[dict[str, Any]] = []
+    if tool:
+        rows.append(
+            {
+                "type": "assistant",
+                "role": "assistant",
+                "text": "OpenCode requested a shell command through the real-tool canary.",
+                "provider_session_id": provider_session_id,
+                "source_canary": "opencode_real_tool_result_shape",
+                "tool_name": tool_name,
+                "tool_input_json": {"command": command},
+                "tool_call_id": tool_call_id,
+                "command_status": tool.get("tool_state_status") or matching_event.get("state_status"),
+                "command_exact_match": matching_event.get("command_exact_match"),
+                "evidence_origin": "provider_control_e2e_canary",
+            }
+        )
+        rows.append(
+            {
+                "type": "tool",
+                "role": "tool",
+                "text": output,
+                "provider_session_id": provider_session_id,
+                "source_canary": "opencode_real_tool_result_shape",
+                "tool_name": tool_name,
+                "tool_output_text": output,
+                "tool_call_id": tool_call_id,
+                "output_exact_match": matching_event.get("output_exact_match"),
+                "metadata_output_exact_match": matching_event.get("metadata_output_exact_match"),
+                "evidence_origin": "provider_control_e2e_canary",
+            }
+        )
+    if done_event or tool.get("status") == STATUS_PASS:
+        rows.append(
+            {
+                "type": "assistant",
+                "role": "assistant",
+                "text": "DONE",
+                "provider_session_id": provider_session_id,
+                "source_canary": "opencode_real_tool_result_shape",
+                "text_exact_match": done_event.get("text_exact_match"),
+                "evidence_origin": "provider_control_e2e_canary",
+            }
+        )
+    return rows
+
+
 def codex_live_token_streaming_operation_evidence(artifact: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     operation_evidence = {
         str(operation): dict(evidence)
@@ -2943,6 +3117,24 @@ def codex_live_token_streaming_operation_evidence(artifact: Mapping[str, Any]) -
         "status": status,
         "level": "live_token" if status == STATUS_PASS else "none",
         "canary": "managed_live_send",
+        "failure_code": failure_code,
+    }
+    return operation_evidence
+
+
+def opencode_tool_call_result_operation_evidence(artifact: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    tool = _opencode_control_canary(artifact)
+    operation_evidence = {
+        str(operation): dict(evidence)
+        for operation, evidence in dict(tool.get("operation_evidence") or {}).items()
+        if isinstance(evidence, Mapping)
+    }
+    status = STATUS_PASS if tool.get("status") == "pass" else STATUS_FAIL
+    failure_code = None if status == STATUS_PASS else str(tool.get("failure_code") or "opencode_tool_call_result_failed")
+    operation_evidence["tool_call_result"] = {
+        "status": status,
+        "level": "live_token" if status == STATUS_PASS else "none",
+        "canary": "opencode_real_tool_result_shape",
         "failure_code": failure_code,
     }
     return operation_evidence
@@ -2990,6 +3182,8 @@ def run_provider_control_e2e_canary(
     provider: str,
     artifact_path: Path,
     evidence_root: Path,
+    extra_args: list[str] | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     repo_root = default_repo_root()
     script = repo_root / "scripts" / "qa" / "provider-control-e2e-canary.py"
@@ -3006,8 +3200,10 @@ def run_provider_control_e2e_canary(
             "--evidence-root",
             str(evidence_root),
             "--json",
+            *(extra_args or []),
         ],
         cwd=str(repo_root),
+        env={**os.environ, **(extra_env or {})},
         text=True,
         capture_output=True,
         check=False,
