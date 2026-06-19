@@ -56,6 +56,15 @@ EXIT_SETUP_FAILED = 78
 _CLAUDE_TERMINAL_POST_TIMEOUT_SECS = 2.0
 _CLAUDE_TERMINAL_SOURCE = "claude_channel_wrapper"
 _CLAUDE_REMOTE_LAUNCH_LOG_DIR = "claude-channel-launch"
+_CLAUDE_SUBPROCESS_ENV_BLOCKLIST = ("CLAUDE_CONFIG_DIR",)
+
+
+def _claude_subprocess_env(**extra: str) -> dict[str, str]:
+    env = os.environ.copy()
+    for key in _CLAUDE_SUBPROCESS_ENV_BLOCKLIST:
+        env.pop(key, None)
+    env.update(extra)
+    return env
 
 
 def _run_claude_auth_status() -> subprocess.CompletedProcess[str]:
@@ -63,6 +72,7 @@ def _run_claude_auth_status() -> subprocess.CompletedProcess[str]:
         ["claude", "auth", "status", "--json"],
         check=False,
         capture_output=True,
+        env=_claude_subprocess_env(),
         text=True,
         timeout=5,
     )
@@ -134,6 +144,7 @@ def _verify_claude_channel_mcp_server(*, workspace_path: Path, timeout_secs: flo
             cwd=str(workspace_path),
             check=False,
             capture_output=True,
+            env=_claude_subprocess_env(),
             text=True,
             timeout=timeout_secs,
         )
@@ -331,8 +342,7 @@ def _run_native_claude_tui(
         resume=False,
         hook_url=base_url,
     )
-    env = os.environ.copy()
-    env["LONGHOUSE_HOOK_TOKEN"] = token
+    env = _claude_subprocess_env(LONGHOUSE_HOOK_TOKEN=token)
     completed = subprocess.run(shlex.split(command), check=False, cwd=str(cwd), env=env)
     exit_code = int(completed.returncode)
     _post_claude_terminal_signal(
@@ -403,8 +413,7 @@ def _launch_detached_native_claude_channel(
     process: subprocess.Popen | None = None
     try:
         pty_command = _build_detached_claude_pty_command(command, log_path)
-        env = os.environ.copy()
-        env["LONGHOUSE_HOOK_TOKEN"] = token
+        env = _claude_subprocess_env(LONGHOUSE_HOOK_TOKEN=token)
         process = subprocess.Popen(
             pty_command,
             cwd=str(cwd),

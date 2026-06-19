@@ -636,6 +636,17 @@ def test_collect_claude_launch_env_filters_empty_values(monkeypatch):
     }
 
 
+def test_claude_subprocess_env_removes_longhouse_claude_config_dir(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/longhouse-owned-claude-dir")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+
+    env = claude_cli._claude_subprocess_env(LONGHOUSE_HOOK_TOKEN="token")
+
+    assert "CLAUDE_CONFIG_DIR" not in env
+    assert env["ANTHROPIC_MODEL"] == "claude-sonnet-4-6"
+    assert env["LONGHOUSE_HOOK_TOKEN"] == "token"
+
+
 def test_launch_env_requires_flag_capable_claude_path_when_explicit_launch_env_requests_it():
     assert claude_cli._launch_env_requires_flag_capable_claude_path({}) is False
     assert claude_cli._launch_env_requires_flag_capable_claude_path({"AWS_PROFILE": "zh-qa-engineer"}) is False
