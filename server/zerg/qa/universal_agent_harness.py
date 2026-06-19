@@ -1327,6 +1327,8 @@ class UniversalProviderAdapter:
     def resume_reattach(self, package: EvidencePackage) -> dict[str, Any]:
         if self.config.provider == "opencode":
             return self._run_opencode_resume_reattach(package)
+        if self.config.provider == "codex":
+            return self._run_codex_resume_reattach(package)
         payload = self._unsupported_payload(
             "resume_reattach",
             "resume_reattach_adapter_missing",
@@ -3880,16 +3882,23 @@ class UniversalProviderAdapter:
         package.write_json("assertions/live_token_streaming.json", payload)
         return payload
 
-    def _run_codex_managed_session_e2e(self, package: EvidencePackage) -> dict[str, Any]:
+    def _run_codex_managed_session_canary_projection(
+        self,
+        package: EvidencePackage,
+        *,
+        scenario: str,
+        assertion_name: str,
+        require_operation: str | None = None,
+    ) -> dict[str, Any]:
         binary, source = self._resolve_binary()
         if binary is None:
             payload = {
                 "status": STATUS_FAIL,
                 "failure_code": "provider_binary_not_found",
-                "message": "codex binary was not found for managed_session_e2e",
+                "message": f"codex binary was not found for {scenario}",
                 "binary_source": source,
             }
-            package.write_json("assertions/managed_session_e2e.json", payload)
+            package.write_json(f"assertions/{assertion_name}.json", payload)
             return payload
 
         from zerg.qa.codex_provider_release_canary import run_codex_provider_release_canary
@@ -3951,7 +3960,7 @@ class UniversalProviderAdapter:
         payload = {
             **projection,
             "status": STATUS_PASS if verdict == "green" and db_status == STATUS_PASS else STATUS_FAIL,
-            "scenario": "managed_session_e2e",
+            "scenario": scenario,
             "provider_version": canary_artifact.get("provider_version"),
             "codex_canary_artifact_path": str(canary_artifact_path),
             "codex_canary_evidence_root": str(canary_evidence_root),
@@ -3970,16 +3979,37 @@ class UniversalProviderAdapter:
         if credentials_gap:
             payload["status"] = STATUS_UNSUPPORTED_GAP
             payload["failure_code"] = "codex_managed_bridge_credentials_missing"
-            payload["message"] = "Codex managed-session e2e requires Runtime Host credentials."
+            payload["message"] = f"Codex {scenario} requires Runtime Host credentials."
             payload["missing"] = credentials_gap
         elif verdict != "green":
             payload["failure_code"] = canary_artifact.get("failure_code") or "codex_provider_release_canary_failed"
             payload["message"] = "Codex provider release canary did not pass."
         elif db_status != STATUS_PASS:
-            payload["failure_code"] = db_ingest.get("failure_code") or "managed_session_e2e_db_ingest_failed"
+            payload["failure_code"] = db_ingest.get("failure_code") or f"{scenario}_db_ingest_failed"
             payload["message"] = "Codex canary evidence did not pass Longhouse DB ingest assertions."
-        package.write_json("assertions/managed_session_e2e.json", payload)
+        if require_operation and not credentials_gap and verdict == "green" and db_status == STATUS_PASS:
+            operation_status = str((operation_evidence.get(require_operation) or {}).get("status") or STATUS_FAIL)
+            if operation_status != STATUS_PASS:
+                payload["status"] = STATUS_FAIL
+                payload["failure_code"] = f"codex_{require_operation}_evidence_missing"
+                payload["message"] = f"Codex canary did not produce passing {require_operation} evidence."
+        package.write_json(f"assertions/{assertion_name}.json", payload)
         return payload
+
+    def _run_codex_managed_session_e2e(self, package: EvidencePackage) -> dict[str, Any]:
+        return self._run_codex_managed_session_canary_projection(
+            package,
+            scenario="managed_session_e2e",
+            assertion_name="managed_session_e2e",
+        )
+
+    def _run_codex_resume_reattach(self, package: EvidencePackage) -> dict[str, Any]:
+        return self._run_codex_managed_session_canary_projection(
+            package,
+            scenario="resume_reattach",
+            assertion_name="resume_reattach",
+            require_operation="reattach",
+        )
 
     def _run_antigravity_managed_session_e2e(self, package: EvidencePackage) -> dict[str, Any]:
         control_evidence_root = package.path("raw", "provider-control-e2e-evidence")

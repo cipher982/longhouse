@@ -1120,10 +1120,138 @@ def test_opencode_resume_reattach_uses_process_restart_canary(tmp_path: Path) ->
     assert db_snapshot["timeline"]["matched"] is True
 
 
+def test_codex_resume_reattach_uses_provider_release_canary(tmp_path: Path, monkeypatch) -> None:
+    from zerg.qa import codex_provider_release_canary
+
+    calls: list[dict[str, object]] = []
+
+    def fake_canary(args: dict[str, object]) -> dict[str, object]:
+        calls.append(args)
+        return {
+            "artifact_kind": "provider_release_canary",
+            "provider": "codex",
+            "provider_version": "codex 9.9.9-e2e",
+            "verdict": "green",
+            "failure_code": None,
+            "canaries": {
+                "managed_tui_attach": {
+                    "status": "pass",
+                    "thread_id": "thread_codex_resume_reattach",
+                    "state_file": "/tmp/codex-state.json",
+                },
+                "detached_ui": {
+                    "status": "pass",
+                    "thread_id": "thread_codex_resume_reattach",
+                    "ipc_socket": "/tmp/codex-state.sock",
+                },
+            },
+            "operation_evidence": {
+                "launch_local": {
+                    "status": "pass",
+                    "level": "live_no_token",
+                    "canary": "managed_tui_attach",
+                },
+                "launch_remote": {
+                    "status": "pass",
+                    "level": "live_no_token",
+                    "canary": "detached_ui",
+                },
+                "reattach": {
+                    "status": "pass",
+                    "level": "live_no_token",
+                    "canary": "managed_tui_attach",
+                },
+            },
+        }
+
+    monkeypatch.setattr(codex_provider_release_canary, "run_codex_provider_release_canary", fake_canary)
+    fake_codex = _fake_bins(tmp_path)["codex"]
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("codex",),
+            scenarios=("resume_reattach",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"codex": fake_codex},
+        )
+    )
+
+    assert calls
+    assert calls[0]["codex_bin"] == str(fake_codex)
+    assert calls[0]["run_managed_tui_attach"] is True
+    assert calls[0]["run_detached_ui"] is True
+    result = payload["results"][0]
+    assert payload["verdict"] == "green"
+    assert result["status"] == "pass"
+    assert result["data"]["scenario"] == "resume_reattach"
+    assert result["data"]["source_artifact_kind"] == "provider_release_canary"
+    assert result["data"]["operation_evidence"]["reattach"]["status"] == "pass"
+    assert result["data"]["operation_evidence"]["reattach"]["level"] == "live_no_token"
+    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
+
+    evidence_root = Path(result["evidence_root"])
+    assert (evidence_root / "assertions" / "resume_reattach.json").is_file()
+    raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
+    assert "codex_provider_release_canary" in raw_events
+    assert "thread_codex_resume_reattach" in raw_events
+    session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
+    assert session["provider_session_id"] == "thread_codex_resume_reattach"
+    assert session["operation_statuses"]["reattach"]["status"] == "pass"
+
+
+def test_codex_resume_reattach_reports_credentials_gap(tmp_path: Path, monkeypatch) -> None:
+    from zerg.qa import codex_provider_release_canary
+
+    def fake_canary(_args: dict[str, object]) -> dict[str, object]:
+        return {
+            "artifact_kind": "provider_release_canary",
+            "provider": "codex",
+            "provider_version": "codex 9.9.9-e2e",
+            "verdict": "yellow",
+            "failure_code": "insufficient_coverage",
+            "canaries": {
+                "managed_tui_attach": {
+                    "status": "not_run",
+                    "failure_code": "managed_bridge_credentials_missing",
+                    "missing": ["--api-url", "--agents-token"],
+                },
+                "detached_ui": {
+                    "status": "not_run",
+                    "failure_code": "managed_bridge_credentials_missing",
+                    "missing": ["--api-url", "--agents-token"],
+                },
+            },
+            "operation_evidence": {
+                "reattach": {
+                    "status": "not_run",
+                    "level": "none",
+                    "canary": "managed_tui_attach",
+                    "failure_code": "managed_bridge_credentials_missing",
+                },
+            },
+        }
+
+    monkeypatch.setattr(codex_provider_release_canary, "run_codex_provider_release_canary", fake_canary)
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("codex",),
+            scenarios=("resume_reattach",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"codex": _fake_bins(tmp_path)["codex"]},
+        )
+    )
+
+    result = payload["results"][0]
+    assert payload["verdict"] == "yellow"
+    assert result["status"] == "unsupported_gap"
+    assert result["failure_code"] == "codex_managed_bridge_credentials_missing"
+    assert result["data"]["scenario"] == "resume_reattach"
+    assert result["data"]["missing"] == ["--agents-token", "--api-url"]
+
+
 def test_resume_reattach_is_typed_gap_for_unmigrated_providers(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
-            providers=("claude", "codex", "antigravity"),
+            providers=("claude", "antigravity"),
             scenarios=("resume_reattach",),
             evidence_root=tmp_path / "evidence",
             provider_bins=_fake_bins(tmp_path),
@@ -1131,7 +1259,7 @@ def test_resume_reattach_is_typed_gap_for_unmigrated_providers(tmp_path: Path) -
     )
 
     assert payload["verdict"] == "yellow"
-    assert {result["provider"] for result in payload["results"]} == {"claude", "codex", "antigravity"}
+    assert {result["provider"] for result in payload["results"]} == {"claude", "antigravity"}
     assert {result["status"] for result in payload["results"]} == {"unsupported_gap"}
     assert {result["failure_code"] for result in payload["results"]} == {"resume_reattach_adapter_missing"}
 

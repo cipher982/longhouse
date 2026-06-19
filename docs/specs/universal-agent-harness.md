@@ -180,7 +180,10 @@ DB-ingests them; live send and steer remain explicit blocked operations until
 the live-token Claude contract is promoted. Codex calls the provider-release
 canary for `managed_tui_attach` and `detached_ui`, then DB-ingests those
 launch/reattach rows when Runtime Host credentials are available; without those
-credentials it returns a typed `unsupported_gap`. Antigravity calls the
+credentials it returns a typed `unsupported_gap`. Codex `resume_reattach` uses
+the same provider-release canary and requires a passing reattach row, so the
+dedicated action now reports evidence when Runtime Host credentials are present
+and the same typed credentials gap otherwise. Antigravity calls the
 provider-control hook/inbox canary, projects external-event channel rows, and
 DB-ingests them. The default all-provider fake/no-token release smoke includes
 this scenario, so routine CI/Sauron smoke artifacts must show Claude, OpenCode,
@@ -553,6 +556,10 @@ shape:
    Longhouse SQLite ingest and verifies durable events, session counts, export
    JSONL, query lookup, timeline listing, and preserved provider-session
    binding.
+10. Codex `resume_reattach` now calls the existing provider-release canary,
+   requires passing reattach evidence, and DB-ingests the resulting rows when
+   Runtime Host credentials are present; without credentials it reports the
+   typed Runtime Host credentials gap.
 10. Claude, Codex, and OpenCode `interrupt_cancel` are executable universal
    control scenarios. Claude calls the provider-control channel canary and
    DB-ingests no-token send/steer/SIGINT evidence. Codex calls the
