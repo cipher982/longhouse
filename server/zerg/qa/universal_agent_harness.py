@@ -39,6 +39,7 @@ SCENARIOS = (
     "collect_raw_evidence",
     "action_matrix",
     "control_surface",
+    "full_action_suite",
     "parse_ingest_project",
     "db_ingest_project",
     "session_projection",
@@ -127,6 +128,60 @@ MVP_CAPABILITIES = (
 )
 PROFILES = ("fixture_replay", "live_no_token")
 SAFE_MANAGED_SESSION_SCENARIOS = ("launch_managed_session", "send_receive")
+FULL_ACTION_SUITE_SCENARIOS = (
+    "probe_identity",
+    "collect_raw_evidence",
+    "parse_ingest_project",
+    "db_ingest_project",
+    "session_projection",
+    "timeline_projection",
+    "run_prompt_once",
+    "launch_managed_session",
+    "send_receive",
+    "steer_active_turn",
+    "pause_request_detect",
+    "answer_pause_request",
+    "interrupt_cancel",
+    "resume_reattach",
+    "terminate_cleanup",
+    "tail_output",
+    "runtime_phase",
+    "transcript_binding",
+    "multi_turn_continuity",
+    "external_event_channel",
+    "permission_prompt",
+    "crash_timeout_cleanup",
+    "old_new_release_diff",
+)
+ACTION_EXECUTION_SCENARIO_BY_ID = {
+    "provider_identity": ("probe_identity",),
+    "launch_local": ("launch_managed_session",),
+    "launch_remote": (),
+    "run_once": ("run_prompt_once",),
+    "session_identity": ("launch_managed_session", "resume_reattach"),
+    "send_message": ("send_receive",),
+    "steer_active_turn": ("steer_active_turn",),
+    "pause_request_detect": ("pause_request_detect",),
+    "answer_pause_request": ("answer_pause_request",),
+    "interrupt_cancel": ("interrupt_cancel",),
+    "resume_reattach": ("resume_reattach",),
+    "terminate_cleanup": ("terminate_cleanup",),
+    "tail_output": ("tail_output",),
+    "runtime_phase": ("runtime_phase",),
+    "transcript_binding": ("transcript_binding",),
+    "multi_turn_continuity": ("multi_turn_continuity",),
+    "external_event_channel": ("external_event_channel",),
+    "permission_prompt": ("permission_prompt",),
+    "crash_timeout_cleanup": ("crash_timeout_cleanup",),
+    "tool_call_result": (),
+    "raw_evidence_capture": ("collect_raw_evidence",),
+    "parse_normalize": ("parse_ingest_project",),
+    "db_ingest": ("db_ingest_project",),
+    "session_projection": ("session_projection",),
+    "timeline_projection": ("timeline_projection",),
+    "baseline_compare": (),
+    "old_new_release_diff": ("old_new_release_diff",),
+}
 
 
 @dataclass(frozen=True)
@@ -1071,13 +1126,17 @@ class UniversalProviderAdapter:
             return self._run_claude_steer_active_turn(package)
         contract = contract_for_provider(self.config.provider)
         if contract is not None and contract.steer_active_turn:
+            message = " ".join(
+                [
+                    "steer_active_turn is supported by the provider contract,",
+                    "but is not yet backed by a universal provider adapter.",
+                ]
+            )
             payload = {
                 "status": STATUS_BLOCKED,
                 "scenario": "steer_active_turn",
                 "failure_code": "steer_active_turn_adapter_missing",
-                "message": (
-                    "steer_active_turn is supported by the provider contract, " "but is not yet backed by a universal provider adapter."
-                ),
+                "message": message,
                 "operation_evidence": {
                     "steer_active_turn": {
                         "status": STATUS_BLOCKED,
@@ -1523,6 +1582,12 @@ class UniversalProviderAdapter:
         baseline_root: Path | None,
     ) -> dict[str, Any]:
         if old_proof_path is None or new_proof_path is None:
+            next_step = " ".join(
+                [
+                    "Generate old/new provider release-proof artifacts, then rerun with",
+                    "--old-proof-artifact and --new-proof-artifact.",
+                ]
+            )
             payload = {
                 "status": STATUS_BLOCKED,
                 "scenario": "old_new_release_diff",
@@ -1536,7 +1601,7 @@ class UniversalProviderAdapter:
                         "failure_code": "old_new_proof_artifacts_required",
                     }
                 },
-                "next": "Generate old/new provider release-proof artifacts, then rerun with --old-proof-artifact and --new-proof-artifact.",
+                "next": next_step,
             }
             package.write_json("assertions/old_new_release_diff.json", payload)
             return payload
@@ -1735,7 +1800,10 @@ class UniversalProviderAdapter:
                         "question": "Which implementation approach should the agent use?",
                         "multiSelect": False,
                         "options": [
-                            {"label": "Small adapter path", "description": "Keep this provider-specific change narrow."},
+                            {
+                                "label": "Small adapter path",
+                                "description": "Keep this provider-specific change narrow.",
+                            },
                             {"label": "Broad refactor", "description": "Reshape the whole provider bridge."},
                         ],
                     }
@@ -1796,12 +1864,13 @@ class UniversalProviderAdapter:
                 _json_safe(serialize_pause_request_projection(row, can_respond=row.can_respond))
                 for row in list_pause_requests_for_session(db, session.id)
             ]
+            can_respond_matches_provider_contract = bool((pending_projection or {}).get("can_respond")) == can_respond
             pending_assertions = {
                 "runtime_phase_needs_user": state is not None and state.phase == "needs_user",
                 "active_pause_request_visible": active is not None,
                 "pause_request_pending": active is not None and active.status == "pending",
                 "question_payload_projected": bool((pending_projection or {}).get("questions")),
-                "can_respond_matches_provider_contract": bool((pending_projection or {}).get("can_respond")) == can_respond,
+                "can_respond_matches_provider_contract": can_respond_matches_provider_contract,
             }
 
             resolved_projection = None
@@ -1832,9 +1901,10 @@ class UniversalProviderAdapter:
                     .order_by(SessionPauseRequest.created_at.asc())
                     .all()
                 )
-                all_rows_after_response = [
-                    _json_safe(serialize_pause_request_projection(row, can_respond=row.can_respond)) for row in rows_after
-                ]
+                all_rows_after_response = []
+                for row in rows_after:
+                    projection = serialize_pause_request_projection(row, can_respond=row.can_respond)
+                    all_rows_after_response.append(_json_safe(projection))
                 resolved_projection = _json_safe(serialize_pause_request_projection(resolved, can_respond=can_respond))
                 response_assertions = {
                     "pause_request_resolved": resolved is not None and resolved.status == "resolved",
@@ -1927,15 +1997,31 @@ class UniversalProviderAdapter:
                 payload["message"] = "Longhouse did not project a pending structured pause request."
             return payload
 
+        if service_pass:
+            answer_failure_code = "answer_pause_provider_delivery_unproven"
+        else:
+            answer_failure_code = "answer_pause_request_service_failed"
+        answer_message = (
+            " ".join(
+                [
+                    "Longhouse resolved the pause request, but provider-held live answer delivery",
+                    "still needs a token/live canary.",
+                ]
+            )
+            if service_pass
+            else "Longhouse pause-request response service assertions failed."
+        )
+        next_step = " ".join(
+            [
+                "Promote with a live provider-held structured-question canary that proves the answer",
+                "reaches the provider runtime.",
+            ]
+        )
         payload = {
             "status": STATUS_BLOCKED if service_pass else STATUS_FAIL,
             "scenario": scenario,
-            "failure_code": "answer_pause_provider_delivery_unproven" if service_pass else "answer_pause_request_service_failed",
-            "message": (
-                "Longhouse resolved the pause request, but provider-held live answer delivery still needs a token/live canary."
-                if service_pass
-                else "Longhouse pause-request response service assertions failed."
-            ),
+            "failure_code": answer_failure_code,
+            "message": answer_message,
             "db_path": str(db_path),
             "db_summary_path": str(db_summary_path),
             "runtime_key": db_summary["runtime_key"],
@@ -1957,7 +2043,7 @@ class UniversalProviderAdapter:
                     "status": STATUS_BLOCKED if service_pass else STATUS_FAIL,
                     "level": "live_token_required",
                     "canary": "universal_answer_pause_request",
-                    "failure_code": "answer_pause_provider_delivery_unproven" if service_pass else "answer_pause_request_service_failed",
+                    "failure_code": answer_failure_code,
                 },
                 "pause_request_detect": {
                     "status": STATUS_PASS if pending_pass else STATUS_FAIL,
@@ -1971,7 +2057,7 @@ class UniversalProviderAdapter:
                     "failure_code": None if service_pass else "answer_pause_request_service_failed",
                 },
             },
-            "next": "Promote with a live provider-held structured-question canary that proves the answer reaches the provider runtime.",
+            "next": next_step,
         }
         return payload
 
@@ -4074,6 +4160,87 @@ def _operation_from_action_row(row: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _action_rows_from_result(result: ScenarioResult) -> list[dict[str, Any]]:
+    data = result.data or {}
+    rows = data.get("actions") if isinstance(data, Mapping) else None
+    if not isinstance(rows, list):
+        return []
+    return [dict(row) for row in rows if isinstance(row, Mapping)]
+
+
+def _full_action_suite_coverage(
+    *,
+    provider: str,
+    matrix_actions: list[dict[str, Any]],
+    results_by_scenario: Mapping[str, ScenarioResult],
+) -> list[dict[str, Any]]:
+    matrix_by_action = {str(row.get("action_id")): row for row in matrix_actions}
+    coverage: list[dict[str, Any]] = []
+    for action in ACTION_DEFINITIONS:
+        matrix = matrix_by_action.get(action.action_id)
+        scenarios = ACTION_EXECUTION_SCENARIO_BY_ID.get(action.action_id, ())
+        scenario_results = [results_by_scenario[name] for name in scenarios if name in results_by_scenario]
+        scenario_statuses = {result.scenario: result.status for result in scenario_results}
+        scenario_failure_codes = {}
+        for result in scenario_results:
+            if result.failure_code:
+                scenario_failure_codes[result.scenario] = result.failure_code
+        coverage_kind = "executable_scenario" if scenarios else "matrix_contract"
+        if matrix is None:
+            coverage_status = "missing"
+            failure_code = "action_matrix_row_missing"
+        elif scenario_results:
+            coverage_status = _worst_status([result.status for result in scenario_results])
+            failure_code = _first_failure_code(scenario_results)
+        else:
+            matrix_status = str(matrix.get("status") or STATUS_FAIL)
+            coverage_status = matrix_status if matrix_status in STATUSES else STATUS_FAIL
+            failure_code = str(matrix.get("failure_code") or "") or None
+        coverage.append(
+            {
+                "action_id": action.action_id,
+                "provider": provider,
+                "category": action.category,
+                "coverage_kind": coverage_kind,
+                "coverage_status": coverage_status,
+                "failure_code": failure_code,
+                "matrix_status": matrix.get("status") if matrix else None,
+                "matrix_failure_code": matrix.get("failure_code") if matrix else None,
+                "matrix_support": matrix.get("support") if matrix else None,
+                "matrix_support_reason": matrix.get("support_reason") if matrix else None,
+                "scenario_ids": list(scenarios),
+                "scenario_statuses": scenario_statuses,
+                "scenario_failure_codes": scenario_failure_codes,
+                "required_evidence": action.required_evidence,
+            }
+        )
+    return coverage
+
+
+def _worst_status(statuses: Iterable[str]) -> str:
+    seen = list(statuses)
+    if any(status == STATUS_FAIL for status in seen):
+        return STATUS_FAIL
+    if any(status == STATUS_BLOCKED for status in seen):
+        return STATUS_BLOCKED
+    if any(status == STATUS_UNSUPPORTED_GAP for status in seen):
+        return STATUS_UNSUPPORTED_GAP
+    if any(status == STATUS_FLAKY for status in seen):
+        return STATUS_FLAKY
+    if any(status == STATUS_XFAIL_WITH_EXPIRY for status in seen):
+        return STATUS_XFAIL_WITH_EXPIRY
+    if any(status == STATUS_NOT_APPLICABLE for status in seen):
+        return STATUS_NOT_APPLICABLE
+    return STATUS_PASS
+
+
+def _first_failure_code(results: Iterable[ScenarioResult]) -> str | None:
+    for result in results:
+        if result.failure_code:
+            return result.failure_code
+    return None
+
+
 def default_db_ingest_rows() -> list[dict[str, Any]]:
     return [
         {
@@ -4422,9 +4589,11 @@ def project_session(events: Iterable[Mapping[str, Any]], *, provider: str) -> di
 
 def project_timeline(events: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     rows = list(events)
+    preview_text = next((str(row.get("text")) for row in rows if str(row.get("text") or "").strip()), None)
     return {
         "schema_version": 1,
         "event_count": len(rows),
+        "preview_text": preview_text,
         "items": [
             {
                 "index": row.get("index"),
@@ -5506,6 +5675,109 @@ def run_control_surface(adapter: AgentHarnessAdapter, package: EvidencePackage) 
     )
 
 
+def run_full_action_suite(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    parse_fixture = package.write_text(
+        "input/parse-fixture.jsonl",
+        "\n".join(json.dumps(row, sort_keys=True) for row in default_db_ingest_rows()) + "\n",
+    )
+    sub_evidence_root = package.path("subruns")
+    child_results: list[ScenarioResult] = []
+    action_matrix_result = run_scenario(
+        adapter,
+        "action_matrix",
+        evidence_root=sub_evidence_root,
+    )
+    child_results.append(action_matrix_result)
+    for scenario in FULL_ACTION_SUITE_SCENARIOS:
+        child_results.append(
+            run_scenario(
+                adapter,
+                scenario,
+                evidence_root=sub_evidence_root,
+                fixture_path=parse_fixture if scenario == "parse_ingest_project" else None,
+            )
+        )
+    adapter.cleanup(package)
+
+    matrix_actions = _action_rows_from_result(action_matrix_result)
+    child_results_by_scenario = {result.scenario: result for result in child_results}
+    action_coverage = _full_action_suite_coverage(
+        provider=adapter.config.provider,
+        matrix_actions=matrix_actions,
+        results_by_scenario=child_results_by_scenario,
+    )
+    missing_actions = [row["action_id"] for row in action_coverage if row["coverage_status"] == "missing"]
+    failed_scenarios = [result for result in child_results if result.status == STATUS_FAIL]
+    yellow_scenarios = [result for result in child_results if result.status in YELLOW_STATUSES]
+    failed_actions = [row for row in action_coverage if row["coverage_status"] == STATUS_FAIL]
+    yellow_actions = [row for row in action_coverage if row["coverage_status"] in YELLOW_STATUSES]
+
+    status = STATUS_PASS
+    failure_code = None
+    message = None
+    if failed_scenarios or failed_actions or missing_actions:
+        status = STATUS_FAIL
+        failure_code = "full_action_suite_failed"
+        message = "One or more universal action-suite scenario executions failed or an action lost coverage."
+    elif yellow_scenarios or yellow_actions:
+        status = STATUS_BLOCKED
+        failure_code = "full_action_suite_has_explicit_gaps"
+        message = "The full action suite ran, but some actions remain blocked or unsupported by provider contracts."
+
+    artifact = {
+        "schema_version": SCHEMA_VERSION,
+        "artifact_kind": "universal_agent_harness_full_action_suite",
+        "provider": adapter.config.provider,
+        "generated_at": utc_now(),
+        "scenario_ids": ["action_matrix", *FULL_ACTION_SUITE_SCENARIOS],
+        "action_ids": list(ACTIONS),
+        "missing_actions": missing_actions,
+        "scenario_status_counts": _status_counts(result.status for result in child_results),
+        "action_coverage_status_counts": _status_counts(
+            row["coverage_status"] for row in action_coverage if row["coverage_status"] in STATUSES
+        ),
+        "actions": action_coverage,
+        "results": [result.to_json() for result in child_results],
+    }
+    artifact_path = package.write_json("assertions/full-action-suite.json", artifact)
+    operation_evidence = {
+        "full_action_suite": {
+            "status": status,
+            "level": "portable_no_token",
+            "canary": "universal_full_action_suite",
+            "failure_code": failure_code,
+        }
+    }
+    payload = {
+        "status": status,
+        "scenario": "full_action_suite",
+        "failure_code": failure_code,
+        "message": message,
+        "full_action_suite_path": str(artifact_path),
+        "scenario_count": len(child_results),
+        "action_count": len(action_coverage),
+        "scenario_ids": artifact["scenario_ids"],
+        "action_ids": artifact["action_ids"],
+        "missing_actions": missing_actions,
+        "scenario_status_counts": artifact["scenario_status_counts"],
+        "action_coverage_status_counts": artifact["action_coverage_status_counts"],
+        "actions": action_coverage,
+        "operation_evidence": operation_evidence,
+    }
+    if failure_code is None:
+        payload.pop("failure_code")
+    if message is None:
+        payload.pop("message")
+    package.write_json("assertions/full_action_suite.json", payload)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="full_action_suite",
+        package=package,
+        payload=payload,
+    )
+
+
 def run_parse_ingest_project(
     adapter: AgentHarnessAdapter,
     package: EvidencePackage,
@@ -5826,6 +6098,7 @@ SCENARIO_RUNNERS = {
     "collect_raw_evidence": run_collect_raw_evidence,
     "action_matrix": run_action_matrix,
     "control_surface": run_control_surface,
+    "full_action_suite": run_full_action_suite,
     "parse_ingest_project": run_parse_ingest_project,
     "db_ingest_project": run_db_ingest_project,
     "session_projection": run_session_projection,
@@ -5988,8 +6261,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--fixture-path", type=Path, help="JSONL fixture for parse_ingest_project.")
     parser.add_argument("--prompt", help="Prompt for run_prompt_once.")
-    parser.add_argument("--old-proof-artifact", type=Path, help="Old provider release-proof artifact for old_new_release_diff.")
-    parser.add_argument("--new-proof-artifact", type=Path, help="New provider release-proof artifact for old_new_release_diff.")
+    parser.add_argument(
+        "--old-proof-artifact",
+        type=Path,
+        help="Old provider release-proof artifact for old_new_release_diff.",
+    )
+    parser.add_argument(
+        "--new-proof-artifact",
+        type=Path,
+        help="New provider release-proof artifact for old_new_release_diff.",
+    )
     parser.add_argument("--baseline-root", type=Path, help="Baseline root passed through to old_new_release_diff.")
     parser.add_argument("--json", action="store_true", help="Emit JSON artifact to stdout.")
     return parser

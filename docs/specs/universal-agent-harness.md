@@ -211,6 +211,15 @@ timeline projection, and operation evidence. They prove the shared projection
 surface is wired through the harness and release proof; provider-live lanes add
 stronger raw evidence when they run.
 
+`full_action_suite` is an opt-in portable aggregate scenario. It runs the
+action matrix plus the safe no-token control/observe scenarios, writes a single
+coverage artifact, and verifies that every abstract action id is either covered
+by an executable scenario result or by an explicit matrix/contract row. It keeps
+real tool-call, live-token, and staged old/new prerequisites out of the portable
+bundle; those remain stronger opt-in lanes. A blocked suite is expected while
+permission prompts, live answer-pause delivery, and some provider-specific
+control lanes are still explicit gaps.
+
 ## Capabilities And Profiles
 
 Capabilities are the vocabulary scenarios use to decide what is required:

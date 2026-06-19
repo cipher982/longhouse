@@ -97,6 +97,24 @@ scripts/qa/universal-agent-harness.py \
   --json
 ```
 
+Run the portable full action suite for one provider:
+
+```bash
+scripts/qa/provider-release-proof.py \
+  --provider claude \
+  --provider-bin "$(command -v claude)" \
+  --artifact /tmp/claude-full-action-suite.json \
+  --evidence-root /tmp/claude-full-action-suite-evidence \
+  --run-universal-harness \
+  --universal-scenario full_action_suite \
+  --json
+```
+
+`full_action_suite` is intentionally portable/no-token. It executes the shared
+Longhouse control and observation surface, then records explicit blocked or
+unsupported rows for actions that require live provider-held prompts, real tool
+execution, token-spending live turns, or staged old/new proof artifacts.
+
 OpenCode has the first real provider-safe universal e2e lane:
 
 ```bash

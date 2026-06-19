@@ -61,6 +61,7 @@ UNIVERSAL_SCENARIOS = (
     "collect_raw_evidence",
     "action_matrix",
     "control_surface",
+    "full_action_suite",
     "parse_ingest_project",
     "db_ingest_project",
     "session_projection",
@@ -757,6 +758,7 @@ def _run_universal_harness(
         scenario
         in {
             "db_ingest_project",
+            "full_action_suite",
             "managed_session_e2e",
             "steer_active_turn",
             "pause_request_detect",

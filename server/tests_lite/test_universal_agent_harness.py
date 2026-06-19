@@ -688,6 +688,49 @@ def test_control_surface_keeps_unsupported_and_live_token_rows_explicit(tmp_path
     assert by_provider["antigravity"]["send_message"]["evidence_level"] == "live_token"
 
 
+def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path: Path) -> None:
+    bins = _fake_bins(tmp_path)
+    bins["opencode"] = _fake_opencode_server(tmp_path / "bin" / "opencode")
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=uah.SUPPORTED_PROVIDERS,
+            scenarios=("full_action_suite",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins=bins,
+            prompt="ping",
+        )
+    )
+
+    assert payload["verdict"] == "yellow"
+    assert {result["provider"] for result in payload["results"]} == set(uah.SUPPORTED_PROVIDERS)
+    for result in payload["results"]:
+        assert result["scenario"] == "full_action_suite"
+        assert result["status"] == "blocked"
+        assert result["failure_code"] == "full_action_suite_has_explicit_gaps"
+        assert result["data"]["action_ids"] == list(uah.ACTIONS)
+        assert result["data"]["action_count"] == len(uah.ACTIONS)
+        assert result["data"]["missing_actions"] == []
+        assert "action_matrix" in result["data"]["scenario_ids"]
+        assert "interrupt_cancel" in result["data"]["scenario_ids"]
+        assert "answer_pause_request" in result["data"]["scenario_ids"]
+        assert "old_new_release_diff" in result["data"]["scenario_ids"]
+
+        evidence_root = Path(result["evidence_root"])
+        suite = json.loads((evidence_root / "assertions" / "full-action-suite.json").read_text(encoding="utf-8"))
+        assert suite["action_ids"] == list(uah.ACTIONS)
+        assert suite["missing_actions"] == []
+        assert len(suite["results"]) == 1 + len(uah.FULL_ACTION_SUITE_SCENARIOS)
+        coverage = {row["action_id"]: row for row in suite["actions"]}
+        assert set(coverage) == set(uah.ACTIONS)
+        assert coverage["send_message"]["coverage_kind"] == "executable_scenario"
+        assert coverage["send_message"]["scenario_ids"] == ["send_receive"]
+        assert coverage["pause_request_detect"]["coverage_status"] == "pass"
+        assert coverage["permission_prompt"]["coverage_status"] == "blocked"
+        assert coverage["tool_call_result"]["coverage_kind"] == "matrix_contract"
+        assert coverage["baseline_compare"]["coverage_kind"] == "matrix_contract"
+        assert coverage["old_new_release_diff"]["coverage_status"] == "blocked"
+
+
 def test_db_ingest_project_uses_real_longhouse_sqlite_for_all_providers(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
@@ -732,35 +775,19 @@ def test_projection_scenarios_emit_comparable_artifacts_for_all_providers(tmp_pa
         assert Path(result["data"]["session_projection_path"]).is_file()
         assert Path(result["data"]["timeline_projection_path"]).is_file()
         assert Path(result["data"]["canonical_events_path"]).is_file()
-        session = json.loads(
-            (evidence_root / "longhouse" / "session-projection.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        timeline = json.loads(
-            (evidence_root / "longhouse" / "timeline-projection.json").read_text(
-                encoding="utf-8"
-            )
-        )
+        session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
+        timeline = json.loads((evidence_root / "longhouse" / "timeline-projection.json").read_text(encoding="utf-8"))
         assert session["provider"] == result["provider"]
-        assert session["provider_session_id"].startswith(
-            f"universal-{result['provider']}-{result['scenario']}"
-        )
+        assert session["provider_session_id"].startswith(f"universal-{result['provider']}-{result['scenario']}")
         assert session["has_user"] is True
         assert session["has_assistant"] is True
         assert timeline["event_count"] == 3
         assert timeline["preview_text"] == "universal projection hello"
         if result["scenario"] == "session_projection":
-            assert result["data"]["operation_evidence"]["session_projection"][
-                "status"
-            ] == "pass"
+            assert result["data"]["operation_evidence"]["session_projection"]["status"] == "pass"
         else:
-            assert result["data"]["operation_evidence"]["timeline_projection"][
-                "status"
-            ] == "pass"
-        assert result["data"]["operation_evidence"]["transcript_binding"][
-            "status"
-        ] == "pass"
+            assert result["data"]["operation_evidence"]["timeline_projection"]["status"] == "pass"
+        assert result["data"]["operation_evidence"]["transcript_binding"]["status"] == "pass"
 
 
 def test_codex_run_prompt_once_writes_safe_projection(tmp_path: Path) -> None:
@@ -2483,9 +2510,7 @@ def test_script_entrypoint_runs_all_provider_fake_no_token_release_surface(tmp_p
     )
     provider_bin_args = [f"{provider}={path}" for provider, path in fake_bins.items()]
     scenario_args = [item for scenario in scenarios for item in ("--scenario", scenario)]
-    provider_args = [
-        item for provider_bin in provider_bin_args for item in ("--provider-bin", provider_bin)
-    ]
+    provider_args = [item for provider_bin in provider_bin_args for item in ("--provider-bin", provider_bin)]
 
     result = subprocess.run(
         [

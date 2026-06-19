@@ -1549,6 +1549,48 @@ def test_release_proof_can_attach_universal_db_ingest_project() -> None:
         assert "universal db ingest hello" in db_snapshot["export_jsonl"]
 
 
+def test_release_proof_can_attach_universal_full_action_suite() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        _write_fake_provider_bin(root, "2.9.9-fake (Claude Code)")
+
+        result, payload = _run_proof(
+            root,
+            "claude",
+            extra_args=[
+                "--run-universal-harness",
+                "--universal-scenario",
+                "full_action_suite",
+            ],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["verdict"] == "green"
+        assert (
+            payload["normalized"]["canaries"]["universal_full_action_suite"][
+                "status"
+            ]
+            == "warn"
+        )
+        assert (
+            payload["operation_evidence"]["universal_full_action_suite"]["status"]
+            == "blocked"
+        )
+        universal_artifact = _read_json(
+            Path(payload["artifacts"]["universal_harness_artifact"])
+        )
+        suite_result = universal_artifact["results"][0]
+        assert suite_result["scenario"] == "full_action_suite"
+        assert suite_result["status"] == "blocked"
+        assert suite_result["data"]["missing_actions"] == []
+        assert suite_result["data"]["action_ids"]
+        suite = _read_json(Path(suite_result["data"]["full_action_suite_path"]))
+        assert suite["action_ids"] == suite_result["data"]["action_ids"]
+        assert suite["missing_actions"] == []
+        assert "interrupt_cancel" in suite["scenario_ids"]
+
+
 def test_codex_release_proof_can_attach_universal_interrupt_credentials_gap() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -3489,6 +3531,7 @@ def main() -> int:
         test_release_proof_can_attach_universal_harness_for_all_providers,
         test_release_proof_exposes_universal_session_evidence_for_codex_and_opencode,
         test_release_proof_can_attach_universal_db_ingest_project,
+        test_release_proof_can_attach_universal_full_action_suite,
         test_codex_release_proof_can_attach_universal_interrupt_credentials_gap,
         test_claude_release_proof_can_attach_universal_interrupt_cancel_e2e,
         test_claude_release_proof_can_attach_universal_steer_active_turn_e2e,
