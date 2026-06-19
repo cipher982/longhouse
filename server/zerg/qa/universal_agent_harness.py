@@ -893,6 +893,8 @@ class UniversalProviderAdapter:
             package.write_json("assertions/managed_session_e2e.json", payload)
             return payload
         if self.config.provider != "opencode":
+            if self.config.provider == "claude":
+                return self._run_claude_managed_session_e2e(package)
             if self.config.provider == "codex":
                 return self._run_codex_managed_session_e2e(package)
             if self.config.provider == "antigravity":
@@ -1001,6 +1003,100 @@ class UniversalProviderAdapter:
         elif db_verdict != STATUS_PASS:
             payload["failure_code"] = db_ingest.get("failure_code") or "managed_session_e2e_db_ingest_failed"
             payload["message"] = "OpenCode provider-live evidence did not pass Longhouse DB ingest assertions."
+        package.write_json("assertions/managed_session_e2e.json", payload)
+        return payload
+
+    def _run_claude_managed_session_e2e(self, package: EvidencePackage) -> dict[str, Any]:
+        binary, source = self._resolve_binary()
+        if binary is None:
+            payload = {
+                "status": STATUS_FAIL,
+                "failure_code": "provider_binary_not_found",
+                "message": "claude binary was not found for managed_session_e2e",
+                "binary_source": source,
+            }
+            package.write_json("assertions/managed_session_e2e.json", payload)
+            return payload
+
+        from zerg.qa.provider_live_canary import run_provider_live_canary
+
+        live_evidence_root = package.path("raw", "provider-live-evidence")
+        live_artifact_path = package.path("raw", "provider-live-canary.json")
+        live_artifact = run_provider_live_canary(
+            {
+                "provider": "claude",
+                "provider_bin": str(binary),
+                "artifact": live_artifact_path,
+                "evidence_root": live_evidence_root,
+                "wait_ready_secs": 15.0,
+                "json": False,
+            }
+        )
+        package.write_json("raw/provider-live-canary-inline.json", live_artifact)
+        operation_evidence = claude_provider_live_operation_evidence(live_artifact)
+        provider_session_id = str(live_artifact.get("provider_session_id") or self._session_id(package))
+        raw_events = claude_provider_live_raw_events(live_artifact, provider_session_id=provider_session_id)
+        projection = self._write_session_projection(
+            package,
+            raw_events=raw_events,
+            operations=operation_evidence,
+            provider_session_id=provider_session_id,
+        )
+        db_ingest = ingest_canonical_events_into_longhouse_db(
+            package=package,
+            provider=self.config.provider,
+            rows=raw_events,
+            provider_session_id=provider_session_id,
+        )
+        operation_evidence.update(
+            {
+                str(operation): dict(evidence)
+                for operation, evidence in dict(db_ingest.get("operation_evidence") or {}).items()
+                if isinstance(evidence, Mapping)
+            }
+        )
+        session_projection_path = package.path("longhouse", "session-projection.json")
+        try:
+            session_projection = json.loads(session_projection_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            session_projection = {}
+        if isinstance(session_projection, dict):
+            session_projection["operation_statuses"] = operation_evidence
+            package.write_json("longhouse/session-projection.json", session_projection)
+
+        live_verdict = str(live_artifact.get("verdict") or "red")
+        db_verdict = str(db_ingest.get("status") or STATUS_FAIL)
+        status = STATUS_PASS if live_verdict == "green" and db_verdict == STATUS_PASS else STATUS_FAIL
+        if live_verdict == "yellow" and db_verdict == STATUS_PASS:
+            status = STATUS_BLOCKED
+        payload = {
+            **projection,
+            "status": status,
+            "scenario": "managed_session_e2e",
+            "provider_version": live_artifact.get("provider_version"),
+            "provider_live_artifact_path": str(live_artifact_path),
+            "provider_live_evidence_root": str(live_evidence_root),
+            "provider_live_verdict": live_verdict,
+            "source_artifact_kind": live_artifact.get("artifact_kind"),
+            "synthetic": False,
+            "operation_evidence": operation_evidence,
+            "longhouse_ingest": {
+                "status": db_verdict,
+                "failure_code": db_ingest.get("failure_code"),
+                "db_snapshot_path": db_ingest.get("db_snapshot_path"),
+                "session_projection_path": db_ingest.get("session_projection_path"),
+                "timeline_projection_path": db_ingest.get("timeline_projection_path"),
+            },
+        }
+        if live_verdict == "red":
+            payload["failure_code"] = live_artifact.get("failure_code") or "provider_live_canary_failed"
+            payload["message"] = "Claude provider-live no-token canary did not pass."
+        elif live_verdict == "yellow":
+            payload["failure_code"] = live_artifact.get("failure_code") or "claude_provider_live_unconfirmed"
+            payload["message"] = "Claude provider-live no-token canary is recognized but not fully confirmed."
+        elif db_verdict != STATUS_PASS:
+            payload["failure_code"] = db_ingest.get("failure_code") or "managed_session_e2e_db_ingest_failed"
+            payload["message"] = "Claude provider-live evidence did not pass Longhouse DB ingest assertions."
         package.write_json("assertions/managed_session_e2e.json", payload)
         return payload
 
@@ -1995,6 +2091,119 @@ def opencode_provider_live_raw_events(artifact: Mapping[str, Any]) -> list[dict[
     return rows
 
 
+def claude_provider_live_raw_events(artifact: Mapping[str, Any], *, provider_session_id: str) -> list[dict[str, Any]]:
+    canaries = dict(artifact.get("canaries") or {})
+    rows: list[dict[str, Any]] = []
+    binary_identity = dict(canaries.get("binary_identity") or {})
+    command_shape = dict(canaries.get("command_shape") or {})
+    channels_shape = dict(canaries.get("channels_shape") or {})
+    detached_pty = dict(canaries.get("detached_pty_shape") or {})
+    provider_version = artifact.get("provider_version") or binary_identity.get("version")
+    if binary_identity:
+        rows.append(
+            {
+                "type": "session_start",
+                "role": "system",
+                "text": f"Claude binary identity captured: {provider_version}",
+                "provider_session_id": provider_session_id,
+                "source_canary": "binary_identity",
+                "status": binary_identity.get("status"),
+                "provider_version": provider_version,
+                "evidence_origin": "provider_live_canary",
+            }
+        )
+    if command_shape:
+        rows.append(
+            {
+                "type": "launch_contract",
+                "role": "system",
+                "text": "Claude launch/session command contract checked.",
+                "provider_session_id": provider_session_id,
+                "source_canary": "command_shape",
+                "status": command_shape.get("status"),
+                "missing": command_shape.get("missing"),
+                "failure_code": command_shape.get("failure_code"),
+                "evidence_origin": "provider_live_canary",
+            }
+        )
+    if channels_shape:
+        rows.append(
+            {
+                "type": "external_event_channel",
+                "role": "system",
+                "text": "Claude development channel contract checked.",
+                "provider_session_id": provider_session_id,
+                "source_canary": "channels_shape",
+                "status": channels_shape.get("status"),
+                "missing": channels_shape.get("missing"),
+                "reason": channels_shape.get("reason"),
+                "failure_code": channels_shape.get("failure_code"),
+                "evidence_origin": "provider_live_canary",
+            }
+        )
+    if detached_pty:
+        rows.append(
+            {
+                "type": "runtime_phase",
+                "role": "system",
+                "text": "Claude detached PTY wrapper contract checked.",
+                "provider_session_id": provider_session_id,
+                "source_canary": "detached_pty_shape",
+                "status": detached_pty.get("status"),
+                "platform": detached_pty.get("platform"),
+                "script_path": detached_pty.get("script_path"),
+                "failure_code": detached_pty.get("failure_code"),
+                "evidence_origin": "provider_live_canary",
+            }
+        )
+    return rows
+
+
+def claude_provider_live_operation_evidence(artifact: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    operation_evidence = {
+        str(operation): dict(evidence)
+        for operation, evidence in dict(artifact.get("operation_evidence") or {}).items()
+        if isinstance(evidence, Mapping)
+    }
+    canaries = dict(artifact.get("canaries") or {})
+    channels_shape = dict(canaries.get("channels_shape") or {})
+    pty_shape = dict(canaries.get("detached_pty_shape") or {})
+    channel_status = STATUS_PASS if channels_shape.get("status") == "pass" else STATUS_FAIL
+    pty_status = STATUS_PASS if pty_shape.get("status") == "pass" else STATUS_FAIL
+    if channels_shape.get("status") == "warn":
+        channel_status = STATUS_BLOCKED
+    operation_evidence.setdefault(
+        "external_event_channel",
+        {
+            "status": channel_status,
+            "level": "live_no_token" if channel_status == STATUS_PASS else "none",
+            "canary": "claude_development_channels_contract",
+            "failure_code": channels_shape.get("failure_code") or channels_shape.get("reason"),
+        },
+    )
+    operation_evidence.setdefault(
+        "runtime_phase",
+        {
+            "status": pty_status,
+            "level": "live_no_token" if pty_status == STATUS_PASS else "none",
+            "canary": "claude_detached_pty_shape",
+            "failure_code": pty_shape.get("failure_code"),
+        },
+    )
+    for operation in ("send_input", "steer_active_turn"):
+        operation_evidence.setdefault(
+            operation,
+            {
+                "status": STATUS_BLOCKED,
+                "level": "live_token_required",
+                "canary": "claude_live_token_contract",
+                "failure_code": "claude_live_token_contract_not_run",
+                "next": "Run the explicit Claude live-token provider-live contract before gating live send/steer.",
+            },
+        )
+    return operation_evidence
+
+
 def codex_provider_release_raw_events(artifact: Mapping[str, Any]) -> list[dict[str, Any]]:
     canaries = dict(artifact.get("canaries") or {})
     managed_tui = dict(canaries.get("managed_tui_attach") or {})
@@ -2212,7 +2421,9 @@ def provider_configs() -> dict[str, AdapterConfig]:
         safe_run_prompt_once = False
         safe_managed_session_scenarios: tuple[str, ...] = ()
         real_managed_session_e2e = False
-        if provider == "codex":
+        if provider == "claude":
+            real_managed_session_e2e = True
+        elif provider == "codex":
             safe_run_prompt_once = True
             safe_managed_session_scenarios = SAFE_MANAGED_SESSION_SCENARIOS
             real_managed_session_e2e = True

@@ -160,14 +160,16 @@ abstract `action_result` method, so every provider emits a result for every
 action id instead of silently skipping unsupported or unimplemented behavior.
 
 `managed_session_e2e` is adapter-specific today. OpenCode calls the provider-live
-server/session canary and DB-ingests the resulting rows. Codex calls the
-provider-release canary for `managed_tui_attach` and `detached_ui`, then
-DB-ingests those launch/reattach rows when Runtime Host credentials are
-available; without those credentials it returns a typed `unsupported_gap`.
-Antigravity calls the provider-control hook/inbox canary, projects
-external-event channel rows, and DB-ingests them. That proves hook/inbox input
-delivery and Stop/force-continue behavior; it does not prove interrupt,
-reattach, or tool-result semantics.
+server/session canary and DB-ingests the resulting rows. Claude calls the
+provider-live no-token command/channel/PTY contract, projects those rows, and
+DB-ingests them; live send and steer remain explicit blocked operations until
+the live-token Claude contract is promoted. Codex calls the provider-release
+canary for `managed_tui_attach` and `detached_ui`, then DB-ingests those
+launch/reattach rows when Runtime Host credentials are available; without those
+credentials it returns a typed `unsupported_gap`. Antigravity calls the
+provider-control hook/inbox canary, projects external-event channel rows, and
+DB-ingests them. That proves hook/inbox input delivery and Stop/force-continue
+behavior; it does not prove interrupt, reattach, or tool-result semantics.
 
 ## Capabilities And Profiles
 
@@ -396,7 +398,7 @@ rewritten to call the shared scenario runner.
 | --- | --- | --- |
 | `server/zerg/services/managed_provider_contracts.py` and `server/zerg/config/managed_provider_contracts.json` | Capability/profile declaration | Reusable vocabulary; extend rather than replace. |
 | `scripts/qa/provider-release-proof.py` | Proof wrapper, normalization, baseline artifact generation | Reusable shell; should eventually call universal runner instead of provider-specific canary scripts. |
-| `server/zerg/qa/provider_live_canary.py` Claude binary/channel/PTY checks | `probe_identity`, `launch_managed_session`, `collect_raw_evidence` | Migration candidate; PTY/channel mechanics become Claude adapter internals. |
+| `server/zerg/qa/provider_live_canary.py` Claude binary/channel/PTY checks | `probe_identity`, `launch_managed_session`, `collect_raw_evidence` | Migrated into Claude `managed_session_e2e`; live-token send/steer still need promotion. |
 | `server/zerg/qa/managed_claude_live.py` | `send_receive`, `live_token_streaming`, `interrupt_cancel`, `multi_turn_continuity` | Migration candidate; PTY loop and channel readiness are Claude adapter internals. |
 | `server/zerg/qa/codex_provider_release_canary.py` | `probe_identity`, `run_prompt_once`, `launch_managed_session`, `resume_reattach`, `send_receive`, `interrupt_cancel`, `tool_call_result` | Migration candidate; app-server/bridge mechanics are Codex adapter internals. |
 | `server/zerg/qa/provider_live_canary.py` OpenCode server/schema/session checks | `launch_managed_session`, `send_receive`, `resume_reattach`, `interrupt_cancel`, `parse_ingest_project` | Migration candidate; server startup/schema probing are OpenCode adapter internals or evidence collectors. |
@@ -441,6 +443,6 @@ shape:
 11. Existing one-off canaries remain compatibility lanes until each behavior is
    migrated and baselined.
 
-Next implementation target: migrate Codex managed mechanics, Claude PTY/channel
-mechanics, and Antigravity hook/inbox mechanics behind the same
-runner.
+Next implementation target: migrate Codex live send/interrupt/control mechanics,
+Claude live-token send/steer mechanics, and Antigravity real-agy send/control
+mechanics behind the same runner.

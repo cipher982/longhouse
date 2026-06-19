@@ -44,6 +44,42 @@ raise SystemExit(2)
     )
 
 
+def _write_fake_claude_provider_live_bin(root: Path) -> None:
+    _write_exe(
+        root / "fake-provider",
+        r"""#!/usr/bin/env python3
+import json
+import os
+import sys
+
+args = sys.argv[1:]
+if args == ["--version"]:
+    print("2.9.9-fake (Claude Code)")
+    raise SystemExit(0)
+
+if args == ["--help"]:
+    if os.environ.get("FAKE_CLAUDE_MISSING_SESSION_ID") == "1":
+        print("--resume --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
+        raise SystemExit(0)
+    print("--session-id --resume --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
+    raise SystemExit(0)
+
+if args == ["--dangerously-load-development-channels", "server:longhouse-channel", "--help"]:
+    if os.environ.get("FAKE_CLAUDE_CHANNELS_MISSING") == "1":
+        print("unknown option --dangerously-load-development-channels", file=sys.stderr)
+        raise SystemExit(1)
+    if os.environ.get("FAKE_CLAUDE_CHANNELS_UNCONFIRMED") == "1":
+        print("--session-id --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
+        raise SystemExit(0)
+    print("--session-id --resume --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
+    raise SystemExit(0)
+
+print("unexpected fake claude args: " + json.dumps(args), file=sys.stderr)
+raise SystemExit(2)
+""",
+    )
+
+
 def _write_fake_opencode_server_bin(root: Path) -> None:
     _write_exe(
         root / "fake-provider",
@@ -988,6 +1024,51 @@ def test_opencode_release_proof_can_attach_real_universal_managed_session_e2e() 
         assert '"synthetic": true' not in raw_events
 
 
+def test_claude_release_proof_can_attach_universal_provider_live_contract_e2e() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        _write_fake_claude_provider_live_bin(root)
+
+        result, payload = _run_proof(
+            root,
+            "claude",
+            extra_args=[
+                "--run-universal-harness",
+                "--universal-scenario",
+                "managed_session_e2e",
+            ],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["verdict"] == "green"
+        assert payload["normalized"]["canaries"]["universal_managed_session_e2e"]["status"] == "pass"
+        assert payload["operation_evidence"]["universal_launch_local"]["level"] == "live_no_token"
+        assert payload["operation_evidence"]["universal_external_event_channel"]["status"] == "pass"
+        assert payload["operation_evidence"]["universal_runtime_phase"]["status"] == "pass"
+        assert payload["operation_evidence"]["universal_send_input"]["status"] == "blocked"
+        assert payload["operation_evidence"]["universal_send_input"]["level"] == "live_token_required"
+        assert payload["operation_evidence"]["universal_steer_active_turn"]["status"] == "blocked"
+        assert payload["operation_evidence"]["universal_db_ingest"]["status"] == "pass"
+
+        universal_artifact = _read_json(Path(payload["artifacts"]["universal_harness_artifact"]))
+        e2e_result = universal_artifact["results"][0]
+        assert e2e_result["scenario"] == "managed_session_e2e"
+        assert e2e_result["status"] == "pass"
+        assert e2e_result["data"]["source_artifact_kind"] == "provider_live_canary"
+        assert e2e_result["data"]["synthetic"] is False
+        assert e2e_result["data"]["longhouse_ingest"]["status"] == "pass"
+
+        evidence_root = Path(e2e_result["evidence_root"])
+        assert (evidence_root / "raw" / "provider-live-canary.json").is_file()
+        db_snapshot = _read_json(evidence_root / "longhouse" / "db-ingest-result.json")
+        assert db_snapshot["ingest_result"]["events_inserted"] == 4
+        assert db_snapshot["timeline"]["matched"] is True
+        raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
+        assert "provider_live_canary" in raw_events
+        assert "channels_shape" in raw_events
+
+
 def test_antigravity_release_proof_can_attach_universal_hook_inbox_e2e() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -1925,6 +2006,7 @@ def main() -> int:
         test_release_proof_exposes_universal_session_evidence_for_codex_and_opencode,
         test_release_proof_can_attach_universal_db_ingest_project,
         test_opencode_release_proof_can_attach_real_universal_managed_session_e2e,
+        test_claude_release_proof_can_attach_universal_provider_live_contract_e2e,
         test_antigravity_release_proof_can_attach_universal_hook_inbox_e2e,
         test_opencode_release_proof_blocks_on_source_canary_red,
         test_opencode_release_proof_blocks_green_artifact_from_failed_source_canary,

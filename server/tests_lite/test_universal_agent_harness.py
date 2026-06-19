@@ -47,6 +47,45 @@ EXPECTED_ADAPTER_CLASS_BY_PROVIDER = {
 }
 
 
+def _fake_claude_provider_live(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        r"""#!/usr/bin/env python3
+import json
+import os
+import sys
+
+args = sys.argv[1:]
+if args == ["--version"]:
+    print("2.9.9-fake (Claude Code)")
+    raise SystemExit(0)
+
+if args == ["--help"]:
+    if os.environ.get("FAKE_CLAUDE_MISSING_SESSION_ID") == "1":
+        print("--resume --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
+        raise SystemExit(0)
+    print("--session-id --resume --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
+    raise SystemExit(0)
+
+if args == ["--dangerously-load-development-channels", "server:longhouse-channel", "--help"]:
+    if os.environ.get("FAKE_CLAUDE_CHANNELS_MISSING") == "1":
+        print("unknown option --dangerously-load-development-channels", file=sys.stderr)
+        raise SystemExit(1)
+    if os.environ.get("FAKE_CLAUDE_CHANNELS_UNCONFIRMED") == "1":
+        print("--session-id --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
+        raise SystemExit(0)
+    print("--session-id --resume --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
+    raise SystemExit(0)
+
+print("unexpected fake claude args: " + json.dumps(args), file=sys.stderr)
+raise SystemExit(2)
+""",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
 def _fake_opencode_server(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -522,6 +561,70 @@ def test_opencode_managed_session_e2e_uses_real_provider_live_canary(tmp_path: P
     db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
     assert db_snapshot["ingest_result"]["events_inserted"] == 4
     assert db_snapshot["timeline"]["matched"] is True
+
+
+def test_claude_managed_session_e2e_uses_provider_live_contract_canary(tmp_path: Path) -> None:
+    fake_claude = _fake_claude_provider_live(tmp_path / "bin" / "claude")
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("claude",),
+            scenarios=("managed_session_e2e",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"claude": fake_claude},
+        )
+    )
+
+    result = payload["results"][0]
+    assert payload["verdict"] == "green"
+    assert result["status"] == "pass"
+    assert result["data"]["source_artifact_kind"] == "provider_live_canary"
+    assert result["data"]["synthetic"] is False
+    assert result["data"]["longhouse_ingest"]["status"] == "pass"
+    assert result["data"]["operation_evidence"]["launch_local"]["level"] == "live_no_token"
+    assert result["data"]["operation_evidence"]["external_event_channel"]["status"] == "pass"
+    assert result["data"]["operation_evidence"]["runtime_phase"]["status"] == "pass"
+    assert result["data"]["operation_evidence"]["send_input"]["status"] == "blocked"
+    assert result["data"]["operation_evidence"]["send_input"]["level"] == "live_token_required"
+    assert result["data"]["operation_evidence"]["steer_active_turn"]["status"] == "blocked"
+    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
+
+    evidence_root = Path(result["evidence_root"])
+    provider_live = json.loads((evidence_root / "raw" / "provider-live-canary.json").read_text(encoding="utf-8"))
+    assert provider_live["verdict"] == "green"
+    assert provider_live["canaries"]["command_shape"]["status"] == "pass"
+    assert provider_live["canaries"]["channels_shape"]["status"] == "pass"
+    raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
+    canonical_events = (evidence_root / "events" / "canonical-longhouse-events.jsonl").read_text(encoding="utf-8")
+    assert "provider_live_canary" in raw_events
+    assert "channels_shape" in canonical_events
+    session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
+    assert session["provider"] == "claude"
+    assert session["operation_statuses"]["send_input"]["failure_code"] == "claude_live_token_contract_not_run"
+    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
+    assert db_snapshot["ingest_result"]["events_inserted"] == 4
+    assert db_snapshot["timeline"]["matched"] is True
+
+
+def test_claude_managed_session_e2e_fails_when_channel_contract_breaks(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("FAKE_CLAUDE_CHANNELS_MISSING", "1")
+    fake_claude = _fake_claude_provider_live(tmp_path / "bin" / "claude")
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("claude",),
+            scenarios=("managed_session_e2e",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"claude": fake_claude},
+        )
+    )
+
+    result = payload["results"][0]
+    assert payload["verdict"] == "red"
+    assert result["status"] == "fail"
+    assert result["failure_code"] == "claude_development_channels_contract_missing"
+    assert result["data"]["operation_evidence"]["external_event_channel"]["status"] == "fail"
 
 
 def test_codex_managed_session_e2e_uses_provider_release_canary(tmp_path: Path, monkeypatch) -> None:
