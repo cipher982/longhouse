@@ -116,8 +116,8 @@ records `operation_evidence.interrupt` at `level=live_token` only after
 `cancelled`. Proofs with this flag use scenario
 `codex-managed-live-interrupt-release-proof-v1`. An accepted baseline exists
 for `codex-cli 0.139.0`. Sauron can request this same proof/diff scenario with
-`AGENT_RELEASE_CODEX_MANAGED_LIVE_INTERRUPT=1`, but production does not enable
-that gate by default.
+`AGENT_RELEASE_CODEX_MANAGED_LIVE_INTERRUPT=1`. Production Sauron now enables
+that gate with Runtime Host credentials configured.
 
 `CODEX_RUN_REAL_TOOL=1` spends a real local `codex exec --json` turn and records
 `operation_evidence.run_once` plus `operation_evidence.transcript_binding` at
@@ -488,14 +488,14 @@ an accepted baseline.
   `codex-cli 0.139.0`. The proof showed managed TUI attach, detached-UI launch,
   reattach, and `operation_evidence.interrupt.level=live_token`. Sauron has an
   opt-in proof/diff pass-through with
-  `AGENT_RELEASE_CODEX_MANAGED_LIVE_INTERRUPT=1`, but production does not
-  enable it by default.
+  `AGENT_RELEASE_CODEX_MANAGED_LIVE_INTERRUPT=1`; production Sauron enables it
+  after promoting the accepted baseline.
 - Codex/OpenAI real-tool: accepted local baseline
   `codex-real-tool-release-proof-v1`, provider version `codex-cli 0.139.0`.
   The accepted proof showed real `codex exec --json` completed
   `command_execution` events, exact marker output, a DONE `agent_message`, and
   `operation_evidence.run_once/transcript_binding.level=live_token`. This
-  baseline is promoted to production Sauron, and Sauron jobs `50ed09f` can run
+  baseline is promoted to production Sauron, and Sauron jobs `3a8d4ba` can run
   it in release-watch with `AGENT_RELEASE_CODEX_REAL_TOOL=1`. Production Sauron
   leaves that token-spending lane off by default.
 - Sauron baseline inventory guard: live in production as
