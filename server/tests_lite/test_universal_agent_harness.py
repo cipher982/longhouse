@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from zerg.qa import universal_agent_harness as uah
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -775,6 +777,7 @@ def test_control_surface_keeps_unsupported_and_live_token_rows_explicit(tmp_path
     assert by_provider["antigravity"]["send_message"]["evidence_level"] == "live_token"
 
 
+@pytest.mark.timeout(30)
 def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path: Path) -> None:
     bins = _fake_bins(tmp_path)
     bins["opencode"] = _fake_opencode_server(tmp_path / "bin" / "opencode")
@@ -802,7 +805,11 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
     assert execution_rows["send_message"]["providers"]["claude"]["coverage_kind"] == "executable_scenario"
     assert execution_rows["send_message"]["providers"]["codex"]["scenario_ids"] == ["send_receive"]
     assert execution_rows["baseline_compare"]["providers"]["opencode"]["coverage_status"] == "pass"
-    assert execution_rows["tool_call_result"]["providers"]["antigravity"]["coverage_kind"] == "matrix_contract"
+    assert execution_rows["tool_call_result"]["providers"]["antigravity"]["coverage_kind"] == "executable_scenario"
+    assert execution_rows["tool_call_result"]["providers"]["antigravity"]["coverage_status"] == "pass"
+    assert execution_rows["tool_call_result"]["providers"]["antigravity"]["scenario_ids"] == [
+        "tool_call_result_projection"
+    ]
     assert execution_rows["permission_prompt"]["providers"]["claude"]["coverage_status"] == "blocked"
     assert (
         execution_matrix["provider_coverage_kind_counts"]["claude"]["executable_scenario"]
@@ -818,6 +825,7 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
         assert "action_matrix" in result["data"]["scenario_ids"]
         assert "adapter_conformance" in result["data"]["scenario_ids"]
         assert "interrupt_cancel" in result["data"]["scenario_ids"]
+        assert "tool_call_result_projection" in result["data"]["scenario_ids"]
         assert "answer_pause_request" in result["data"]["scenario_ids"]
         assert "baseline_compare" in result["data"]["scenario_ids"]
         assert "old_new_release_diff" in result["data"]["scenario_ids"]
@@ -833,7 +841,11 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
         assert coverage["send_message"]["scenario_ids"] == ["send_receive"]
         assert coverage["pause_request_detect"]["coverage_status"] == "pass"
         assert coverage["permission_prompt"]["coverage_status"] == "blocked"
-        assert coverage["tool_call_result"]["coverage_kind"] == "matrix_contract"
+        assert coverage["tool_call_result"]["coverage_kind"] == "executable_scenario"
+        assert coverage["tool_call_result"]["coverage_status"] == "pass"
+        assert coverage["tool_call_result"]["scenario_ids"] == [
+            "tool_call_result_projection"
+        ]
         assert coverage["baseline_compare"]["coverage_kind"] == "executable_scenario"
         assert coverage["baseline_compare"]["coverage_status"] == "pass"
         assert coverage["baseline_compare"]["scenario_ids"] == ["baseline_compare"]

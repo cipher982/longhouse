@@ -195,11 +195,16 @@ Host credentials are present. Without those credentials it returns a typed
 and DB-ingests abort evidence. Antigravity currently returns a typed adapter gap
 for this scenario.
 
-`tool_call_result` is also an executable universal scenario. Codex routes it to
-the existing Codex real-tool canary; OpenCode routes it to the provider-control
-real-tool canary. Both project a tool call row, a linked tool result row, and
-the final assistant response row, then DB-ingest the linkage. Other providers
-currently return typed adapter gaps for this scenario.
+`tool_call_result_projection` is the portable no-token executable scenario for
+the abstract `tool_call_result` action. It emits a paired tool call/result
+fixture for every provider, DB-ingests it, and proves Longhouse can preserve
+call ids, names, inputs, outputs, and the session/timeline projection. The
+stronger `tool_call_result` live scenario still exists separately: Codex routes
+it to the existing Codex real-tool canary, and OpenCode routes it to the
+provider-control real-tool canary. Those live lanes project a tool call row, a
+linked tool result row, and the final assistant response row, then DB-ingest the
+linkage. Other providers currently return typed adapter gaps for the stronger
+live scenario.
 
 `resume_reattach` is an executable universal scenario for OpenCode. It calls the
 provider-live process-restart reattach canary, projects the recovered session
@@ -225,10 +230,12 @@ action matrix plus the safe no-token control/observe scenarios, writes a single
 coverage artifact, and verifies that every abstract action id is either covered
 by an executable scenario result or by an explicit matrix/contract row. It now
 executes `baseline_compare` through the same provider-release-proof baseline
-diff CLI used by release watch. It keeps real tool-call, live-token, and staged
-old/new prerequisites out of the portable bundle; those remain stronger opt-in
-lanes. A blocked suite is expected while permission prompts, live answer-pause
-delivery, and some provider-specific control lanes are still explicit gaps.
+diff CLI used by release watch, and executes `tool_call_result` through the
+portable `tool_call_result_projection` DB-ingest lane. It keeps live-token
+provider tool execution and staged old/new prerequisites out of the portable
+bundle; those remain stronger opt-in lanes. A blocked suite is expected while
+permission prompts, live answer-pause delivery, and some provider-specific
+control lanes are still explicit gaps.
 
 When an all-provider run includes `full_action_suite`, the harness also writes
 `provider-execution-coverage-matrix.json`. This is different from

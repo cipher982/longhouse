@@ -1631,8 +1631,12 @@ def test_release_proof_can_attach_universal_full_action_suite() -> None:
             "executable_scenario"
         )
         assert execution_actions["tool_call_result"]["coverage_kind"] == (
-            "matrix_contract"
+            "executable_scenario"
         )
+        assert execution_actions["tool_call_result"]["coverage_status"] == "pass"
+        assert execution_actions["tool_call_result"]["scenario_ids"] == [
+            "tool_call_result_projection"
+        ]
         universal_artifact = _read_json(
             Path(payload["artifacts"]["universal_harness_artifact"])
         )

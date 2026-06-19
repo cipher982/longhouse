@@ -54,6 +54,7 @@ SCENARIOS = (
     "pause_request_detect",
     "answer_pause_request",
     "interrupt_cancel",
+    "tool_call_result_projection",
     "tool_call_result",
     "resume_reattach",
     "terminate_cleanup",
@@ -147,6 +148,7 @@ FULL_ACTION_SUITE_SCENARIOS = (
     "pause_request_detect",
     "answer_pause_request",
     "interrupt_cancel",
+    "tool_call_result_projection",
     "resume_reattach",
     "terminate_cleanup",
     "tail_output",
@@ -179,7 +181,7 @@ ACTION_EXECUTION_SCENARIO_BY_ID = {
     "external_event_channel": ("external_event_channel",),
     "permission_prompt": ("permission_prompt",),
     "crash_timeout_cleanup": ("crash_timeout_cleanup",),
-    "tool_call_result": (),
+    "tool_call_result": ("tool_call_result_projection",),
     "raw_evidence_capture": ("collect_raw_evidence",),
     "parse_normalize": ("parse_ingest_project",),
     "db_ingest": ("db_ingest_project",),
@@ -6341,6 +6343,75 @@ def run_tool_call_result(adapter: AgentHarnessAdapter, package: EvidencePackage)
     )
 
 
+def run_tool_call_result_projection(
+    adapter: AgentHarnessAdapter,
+    package: EvidencePackage,
+) -> ScenarioResult:
+    adapter.prepare(package)
+    rows = default_db_ingest_rows()
+    provider_session_id = f"universal-tool-call-result-{adapter.config.provider}"
+    db_ingest = ingest_canonical_events_into_longhouse_db(
+        package=package,
+        provider=adapter.config.provider,
+        rows=rows,
+        provider_session_id=provider_session_id,
+    )
+    operation_evidence = {
+        str(operation): dict(evidence)
+        for operation, evidence in dict(db_ingest.get("operation_evidence") or {}).items()
+        if isinstance(evidence, Mapping)
+    }
+    db_status = str(db_ingest.get("status") or STATUS_FAIL)
+    tool_evidence = {
+        "status": db_status,
+        "level": "hermetic" if db_status == STATUS_PASS else "none",
+        "canary": "universal_tool_call_result_projection",
+        "failure_code": None if db_status == STATUS_PASS else db_ingest.get("failure_code") or "tool_call_result_projection_failed",
+    }
+    operation_evidence["tool_call_result"] = tool_evidence
+    operation_evidence["transcript_binding"] = {
+        "status": db_status,
+        "level": "hermetic" if db_status == STATUS_PASS else "none",
+        "canary": "universal_tool_call_result_projection",
+        "failure_code": tool_evidence["failure_code"],
+    }
+    session_projection_path = package.path("longhouse", "session-projection.json")
+    try:
+        session_projection = json.loads(session_projection_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        session_projection = {}
+    if isinstance(session_projection, dict):
+        session_projection["operation_statuses"] = operation_evidence
+        package.write_json("longhouse/session-projection.json", session_projection)
+
+    payload = {
+        "status": db_status,
+        "scenario": "tool_call_result_projection",
+        "provider_session_id": provider_session_id,
+        "raw_event_count": len(rows),
+        "synthetic": True,
+        "operation_evidence": operation_evidence,
+        "longhouse_ingest": {
+            "status": db_status,
+            "failure_code": db_ingest.get("failure_code"),
+            "db_snapshot_path": db_ingest.get("db_snapshot_path"),
+            "session_projection_path": db_ingest.get("session_projection_path"),
+            "timeline_projection_path": db_ingest.get("timeline_projection_path"),
+        },
+    }
+    if db_status != STATUS_PASS:
+        payload["failure_code"] = db_ingest.get("failure_code") or "tool_call_result_projection_failed"
+        payload["message"] = "Hermetic tool call/result projection did not pass Longhouse DB ingest assertions."
+    package.write_json("assertions/tool_call_result_projection.json", payload)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="tool_call_result_projection",
+        package=package,
+        payload=payload,
+    )
+
+
 def run_resume_reattach(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
     adapter.prepare(package)
     payload = adapter.resume_reattach(package)
@@ -6531,6 +6602,7 @@ SCENARIO_RUNNERS = {
     "pause_request_detect": run_pause_request_detect,
     "answer_pause_request": run_answer_pause_request,
     "interrupt_cancel": run_interrupt_cancel,
+    "tool_call_result_projection": run_tool_call_result_projection,
     "tool_call_result": run_tool_call_result,
     "resume_reattach": run_resume_reattach,
     "terminate_cleanup": run_terminate_cleanup,
