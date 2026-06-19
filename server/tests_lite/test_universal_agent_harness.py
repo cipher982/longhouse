@@ -789,6 +789,102 @@ def test_codex_interrupt_cancel_reports_runtime_host_credentials_gap(tmp_path: P
     assert result["data"]["operation_evidence"]["interrupt"]["level"] == "live_token_required"
 
 
+def test_codex_tool_call_result_uses_real_tool_canary(tmp_path: Path, monkeypatch) -> None:
+    from zerg.qa import codex_provider_release_canary
+
+    calls: list[dict[str, object]] = []
+
+    def fake_canary(args: dict[str, object]) -> dict[str, object]:
+        calls.append(args)
+        return {
+            "artifact_kind": "codex_provider_release_canary",
+            "provider": "codex",
+            "codex_version": "codex-cli 9.9.9",
+            "verdict": "green",
+            "failure_code": None,
+            "canaries": {
+                "codex_real_tool_result_shape": {
+                    "status": "pass",
+                    "marker": "LONGHOUSE_CODEX_REAL_TOOL_fake",
+                    "command": "printf 'LONGHOUSE_CODEX_REAL_TOOL_fake\\n'",
+                    "command_status": "completed",
+                    "command_exit_code": 0,
+                    "command_exact_match": True,
+                    "output_exact_match": True,
+                    "matching_command_event": {
+                        "id": "call_fake_tool",
+                        "type": "command_execution",
+                        "status": "completed",
+                        "exit_code": 0,
+                        "command": "printf 'LONGHOUSE_CODEX_REAL_TOOL_fake\\n'",
+                        "aggregated_output": "LONGHOUSE_CODEX_REAL_TOOL_fake\n",
+                    },
+                    "done_text_event": {"type": "agent_message", "text": "DONE"},
+                }
+            },
+            "operation_evidence": {
+                "run_once": {
+                    "status": "pass",
+                    "level": "live_token",
+                    "canary": "codex_real_tool_result_shape",
+                },
+                "transcript_binding": {
+                    "status": "pass",
+                    "level": "live_token",
+                    "canary": "codex_real_tool_result_shape",
+                },
+            },
+        }
+
+    monkeypatch.setattr(codex_provider_release_canary, "run_codex_provider_release_canary", fake_canary)
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("codex",),
+            scenarios=("tool_call_result",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"codex": _fake_bins(tmp_path)["codex"]},
+        )
+    )
+
+    assert calls
+    assert calls[0]["run_real_tool"] is True
+    assert calls[0]["source_review_status"] == "pass"
+    result = payload["results"][0]
+    assert payload["verdict"] == "green"
+    assert result["status"] == "pass"
+    assert result["data"]["scenario"] == "tool_call_result"
+    assert result["data"]["operation_evidence"]["tool_call_result"]["status"] == "pass"
+    assert result["data"]["operation_evidence"]["tool_call_result"]["level"] == "live_token"
+    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
+
+    evidence_root = Path(result["evidence_root"])
+    raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
+    assert "call_fake_tool" in raw_events
+    assert "LONGHOUSE_CODEX_REAL_TOOL_fake" in raw_events
+    session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
+    assert session["operation_statuses"]["tool_call_result"]["status"] == "pass"
+    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
+    assert db_snapshot["ingest_result"]["events_inserted"] == 3
+    assert db_snapshot["session_counts"]["tool_calls"] == 1
+    assert db_snapshot["timeline"]["matched"] is True
+
+
+def test_tool_call_result_is_typed_gap_for_unmigrated_providers(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("claude", "opencode", "antigravity"),
+            scenarios=("tool_call_result",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
+        )
+    )
+
+    assert payload["verdict"] == "yellow"
+    assert {result["provider"] for result in payload["results"]} == {"claude", "opencode", "antigravity"}
+    assert {result["status"] for result in payload["results"]} == {"unsupported_gap"}
+    assert {result["failure_code"] for result in payload["results"]} == {"tool_call_result_adapter_missing"}
+
+
 def test_codex_managed_session_e2e_reports_credentials_gap(tmp_path: Path, monkeypatch) -> None:
     from zerg.qa import codex_provider_release_canary
 

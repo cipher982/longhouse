@@ -80,6 +80,41 @@ raise SystemExit(2)
     )
 
 
+def _write_fake_codex_real_tool_bin(root: Path) -> None:
+    _write_exe(
+        root / "fake-provider",
+        r"""#!/usr/bin/env python3
+import json
+import re
+import sys
+
+args = sys.argv[1:]
+if args == ["--version"]:
+    print("codex-cli 9.9.9")
+    raise SystemExit(0)
+
+if args[:2] == ["exec", "--json"]:
+    prompt = args[-1] if args else ""
+    match = re.search(r"LONGHOUSE_CODEX_REAL_TOOL_[A-Za-z0-9_]+", prompt)
+    marker = match.group(0) if match else "LONGHOUSE_CODEX_REAL_TOOL_missing"
+    command = f"printf '{marker}\\n'"
+    print(json.dumps({"item": {
+        "id": "call_fake_tool",
+        "type": "command_execution",
+        "status": "completed",
+        "exit_code": 0,
+        "command": command,
+        "aggregated_output": marker + "\n",
+    }}))
+    print(json.dumps({"item": {"type": "agent_message", "text": "DONE"}}))
+    raise SystemExit(0)
+
+print("unexpected fake codex args: " + json.dumps(args), file=sys.stderr)
+raise SystemExit(2)
+""",
+    )
+
+
 def _write_fake_opencode_server_bin(root: Path) -> None:
     _write_exe(
         root / "fake-provider",
@@ -1007,6 +1042,48 @@ def test_codex_release_proof_can_attach_universal_interrupt_credentials_gap() ->
         assert result_row["status"] == "unsupported_gap"
         assert result_row["failure_code"] == "codex_managed_bridge_credentials_missing"
         assert result_row["data"]["missing"] == ["--agents-token", "--api-url"]
+
+
+def test_codex_release_proof_can_attach_universal_tool_call_result_e2e() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        _write_fake_codex_real_tool_bin(root)
+
+        result, payload = _run_proof(
+            root,
+            "codex",
+            extra_args=[
+                "--source-review-status",
+                "pass",
+                "--run-universal-harness",
+                "--universal-scenario",
+                "tool_call_result",
+            ],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["verdict"] == "green"
+        assert payload["normalized"]["canaries"]["universal_tool_call_result"]["status"] == "pass"
+        assert payload["operation_evidence"]["universal_tool_call_result"]["status"] == "pass"
+        assert payload["operation_evidence"]["universal_tool_call_result"]["level"] == "live_token"
+        assert payload["operation_evidence"]["universal_db_ingest"]["status"] == "pass"
+
+        universal_artifact = _read_json(Path(payload["artifacts"]["universal_harness_artifact"]))
+        result_row = universal_artifact["results"][0]
+        assert result_row["scenario"] == "tool_call_result"
+        assert result_row["status"] == "pass"
+        assert result_row["data"]["source_artifact_kind"] == "provider_release_canary"
+        assert result_row["data"]["synthetic"] is False
+
+        evidence_root = Path(result_row["evidence_root"])
+        raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
+        assert "call_fake_tool" in raw_events
+        assert "codex_real_tool_result_shape" in raw_events
+        db_snapshot = _read_json(evidence_root / "longhouse" / "db-ingest-result.json")
+        assert db_snapshot["ingest_result"]["events_inserted"] == 3
+        assert db_snapshot["session_counts"]["tool_calls"] == 1
+        assert db_snapshot["timeline"]["matched"] is True
 
 
 def test_opencode_release_proof_can_attach_real_universal_managed_session_e2e() -> None:
@@ -2036,6 +2113,7 @@ def main() -> int:
         test_release_proof_exposes_universal_session_evidence_for_codex_and_opencode,
         test_release_proof_can_attach_universal_db_ingest_project,
         test_codex_release_proof_can_attach_universal_interrupt_credentials_gap,
+        test_codex_release_proof_can_attach_universal_tool_call_result_e2e,
         test_opencode_release_proof_can_attach_real_universal_managed_session_e2e,
         test_claude_release_proof_can_attach_universal_provider_live_contract_e2e,
         test_antigravity_release_proof_can_attach_universal_hook_inbox_e2e,

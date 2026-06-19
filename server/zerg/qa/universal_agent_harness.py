@@ -45,6 +45,7 @@ SCENARIOS = (
     "send_receive",
     "managed_session_e2e",
     "interrupt_cancel",
+    "tool_call_result",
 )
 
 STATUS_PASS = "pass"
@@ -79,6 +80,7 @@ MVP_METHODS = (
     "send_receive",
     "managed_session_e2e",
     "interrupt_cancel",
+    "tool_call_result",
     "cleanup",
 )
 MVP_CAPABILITIES = (
@@ -448,6 +450,8 @@ class AgentHarnessAdapter(Protocol):
     def send_receive(self, package: "EvidencePackage", prompt: str) -> dict[str, Any]: ...
 
     def interrupt_cancel(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def tool_call_result(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def managed_session_e2e(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
@@ -906,6 +910,25 @@ class UniversalProviderAdapter:
         package.write_json("assertions/interrupt_cancel.json", payload)
         return payload
 
+    def tool_call_result(self, package: EvidencePackage) -> dict[str, Any]:
+        if self.config.provider == "codex":
+            return self._run_codex_tool_call_result(package)
+        payload = self._unsupported_payload(
+            "tool_call_result",
+            "tool_call_result_adapter_missing",
+            "tool_call_result is not yet backed by a universal provider adapter for this provider.",
+        )
+        payload["operation_evidence"] = {
+            "tool_call_result": {
+                "status": STATUS_UNSUPPORTED_GAP,
+                "level": "none",
+                "canary": "universal_tool_call_result",
+                "failure_code": "tool_call_result_adapter_missing",
+            }
+        }
+        package.write_json("assertions/tool_call_result.json", payload)
+        return payload
+
     def managed_session_e2e(self, package: EvidencePackage) -> dict[str, Any]:
         if not self.config.real_managed_session_e2e:
             payload = self._unsupported_payload(
@@ -1241,6 +1264,99 @@ class UniversalProviderAdapter:
             payload["failure_code"] = db_ingest.get("failure_code") or "interrupt_cancel_db_ingest_failed"
             payload["message"] = "Codex interrupt evidence did not pass Longhouse DB ingest assertions."
         package.write_json("assertions/interrupt_cancel.json", payload)
+        return payload
+
+    def _run_codex_tool_call_result(self, package: EvidencePackage) -> dict[str, Any]:
+        binary, source = self._resolve_binary()
+        if binary is None:
+            payload = {
+                "status": STATUS_FAIL,
+                "failure_code": "provider_binary_not_found",
+                "message": "codex binary was not found for tool_call_result",
+                "binary_source": source,
+            }
+            package.write_json("assertions/tool_call_result.json", payload)
+            return payload
+
+        from zerg.qa.codex_provider_release_canary import run_codex_provider_release_canary
+
+        canary_evidence_root = package.path("raw", "codex-real-tool-canary-evidence")
+        canary_artifact_path = package.path("raw", "codex-provider-release-canary.json")
+        canary_artifact = run_codex_provider_release_canary(
+            {
+                "codex_bin": str(binary),
+                "artifact": canary_artifact_path,
+                "evidence_root": canary_evidence_root,
+                "repo_root": default_repo_root(),
+                "source_review_status": "pass",
+                "skip_static_contract": True,
+                "run_real_tool": True,
+            }
+        )
+        if not canary_artifact_path.is_file():
+            package.write_json("raw/codex-provider-release-canary.json", canary_artifact)
+        package.write_json("raw/codex-provider-release-canary-inline.json", canary_artifact)
+
+        operation_evidence = codex_tool_call_result_operation_evidence(canary_artifact)
+        raw_events = codex_tool_call_result_raw_events(canary_artifact)
+        provider_session_id = _first_codex_thread_id(canary_artifact) or self._session_id(package)
+        projection = self._write_session_projection(
+            package,
+            raw_events=raw_events,
+            operations=operation_evidence,
+            provider_session_id=provider_session_id,
+        )
+        db_ingest = ingest_canonical_events_into_longhouse_db(
+            package=package,
+            provider=self.config.provider,
+            rows=raw_events,
+            provider_session_id=provider_session_id,
+        )
+        operation_evidence.update(
+            {
+                str(operation): dict(evidence)
+                for operation, evidence in dict(db_ingest.get("operation_evidence") or {}).items()
+                if isinstance(evidence, Mapping)
+            }
+        )
+        session_projection_path = package.path("longhouse", "session-projection.json")
+        try:
+            session_projection = json.loads(session_projection_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            session_projection = {}
+        if isinstance(session_projection, dict):
+            session_projection["operation_statuses"] = operation_evidence
+            package.write_json("longhouse/session-projection.json", session_projection)
+
+        verdict = str(canary_artifact.get("verdict") or "red")
+        tool_status = str((operation_evidence.get("tool_call_result") or {}).get("status") or STATUS_FAIL)
+        db_status = str(db_ingest.get("status") or STATUS_FAIL)
+        payload = {
+            **projection,
+            "status": STATUS_PASS if verdict == "green" and tool_status == STATUS_PASS and db_status == STATUS_PASS else STATUS_FAIL,
+            "scenario": "tool_call_result",
+            "provider_version": canary_artifact.get("codex_version") or canary_artifact.get("provider_version"),
+            "codex_canary_artifact_path": str(canary_artifact_path),
+            "codex_canary_evidence_root": str(canary_evidence_root),
+            "codex_canary_verdict": verdict,
+            "source_artifact_kind": canary_artifact.get("artifact_kind"),
+            "synthetic": False,
+            "operation_evidence": operation_evidence,
+            "longhouse_ingest": {
+                "status": db_status,
+                "failure_code": db_ingest.get("failure_code"),
+                "db_snapshot_path": db_ingest.get("db_snapshot_path"),
+                "session_projection_path": db_ingest.get("session_projection_path"),
+                "timeline_projection_path": db_ingest.get("timeline_projection_path"),
+            },
+        }
+        if verdict != "green" or tool_status != STATUS_PASS:
+            payload["failure_code"] = canary_artifact.get("failure_code") or "codex_tool_call_result_failed"
+            payload["message"] = "Codex real-tool call/result canary did not pass."
+        elif db_status != STATUS_PASS:
+            payload["failure_code"] = db_ingest.get("failure_code") or "tool_call_result_db_ingest_failed"
+            payload["message"] = "Codex real-tool call/result evidence did not pass Longhouse DB ingest assertions."
+        package.write_json("assertions/tool_call_result.json", payload)
         return payload
 
     def _run_codex_managed_session_e2e(self, package: EvidencePackage) -> dict[str, Any]:
@@ -2440,6 +2556,83 @@ def codex_interrupt_cancel_raw_events(artifact: Mapping[str, Any]) -> list[dict[
     return rows
 
 
+def codex_tool_call_result_raw_events(artifact: Mapping[str, Any]) -> list[dict[str, Any]]:
+    canaries = dict(artifact.get("canaries") or {})
+    tool = dict(canaries.get("codex_real_tool_result_shape") or {})
+    provider_session_id = _first_codex_thread_id(artifact) or "codex-tool-call-result"
+    command_event = tool.get("matching_command_event")
+    command_event = command_event if isinstance(command_event, Mapping) else {}
+    done_event = tool.get("done_text_event")
+    done_event = done_event if isinstance(done_event, Mapping) else {}
+    tool_call_id = str(command_event.get("id") or "codex-real-tool-result-shape")
+    command = command_event.get("command") or tool.get("command")
+    output = command_event.get("aggregated_output")
+    if output is None and tool.get("output_exact_match"):
+        output = f"{tool.get('marker', 'marker-unavailable')}\n"
+    rows: list[dict[str, Any]] = []
+    if tool:
+        rows.append(
+            {
+                "type": "assistant",
+                "role": "assistant",
+                "text": "Codex requested a shell command through the real-tool canary.",
+                "provider_session_id": provider_session_id,
+                "source_canary": "codex_real_tool_result_shape",
+                "tool_name": "shell",
+                "tool_input_json": {"command": command},
+                "tool_call_id": tool_call_id,
+                "command_status": tool.get("command_status") or command_event.get("status"),
+                "command_exit_code": tool.get("command_exit_code") or command_event.get("exit_code"),
+                "evidence_origin": "codex_provider_release_canary",
+            }
+        )
+        rows.append(
+            {
+                "type": "tool",
+                "role": "tool",
+                "text": str(output or ""),
+                "provider_session_id": provider_session_id,
+                "source_canary": "codex_real_tool_result_shape",
+                "tool_name": "shell",
+                "tool_output_text": str(output or ""),
+                "tool_call_id": tool_call_id,
+                "command_exact_match": tool.get("command_exact_match"),
+                "output_exact_match": tool.get("output_exact_match"),
+                "evidence_origin": "codex_provider_release_canary",
+            }
+        )
+    if done_event or tool.get("status") == "pass":
+        rows.append(
+            {
+                "type": "assistant",
+                "role": "assistant",
+                "text": str(done_event.get("text") or "DONE"),
+                "provider_session_id": provider_session_id,
+                "source_canary": "codex_real_tool_result_shape",
+                "evidence_origin": "codex_provider_release_canary",
+            }
+        )
+    return rows
+
+
+def codex_tool_call_result_operation_evidence(artifact: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    operation_evidence = {
+        str(operation): dict(evidence)
+        for operation, evidence in dict(artifact.get("operation_evidence") or {}).items()
+        if isinstance(evidence, Mapping)
+    }
+    tool = dict(dict(artifact.get("canaries") or {}).get("codex_real_tool_result_shape") or {})
+    status = STATUS_PASS if tool.get("status") == "pass" else STATUS_FAIL
+    failure_code = None if status == STATUS_PASS else str(tool.get("failure_code") or "codex_tool_call_result_failed")
+    operation_evidence["tool_call_result"] = {
+        "status": status,
+        "level": "live_token" if status == STATUS_PASS else "none",
+        "canary": "codex_real_tool_result_shape",
+        "failure_code": failure_code,
+    }
+    return operation_evidence
+
+
 def _codex_canary_credentials_gap(artifact: Mapping[str, Any], canary_names: tuple[str, ...]) -> list[str]:
     canaries = dict(artifact.get("canaries") or {})
     missing: set[str] = set()
@@ -2791,6 +2984,18 @@ def run_interrupt_cancel(adapter: AgentHarnessAdapter, package: EvidencePackage)
     )
 
 
+def run_tool_call_result(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.tool_call_result(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="tool_call_result",
+        package=package,
+        payload=payload,
+    )
+
+
 def run_managed_session_e2e(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
     adapter.prepare(package)
     payload = adapter.managed_session_e2e(package)
@@ -2815,6 +3020,7 @@ SCENARIO_RUNNERS = {
     "send_receive": run_send_receive,
     "managed_session_e2e": run_managed_session_e2e,
     "interrupt_cancel": run_interrupt_cancel,
+    "tool_call_result": run_tool_call_result,
 }
 
 

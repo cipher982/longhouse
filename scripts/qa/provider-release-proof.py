@@ -60,6 +60,7 @@ UNIVERSAL_SCENARIOS = (
     "send_receive",
     "managed_session_e2e",
     "interrupt_cancel",
+    "tool_call_result",
 )
 UNIVERSAL_YELLOW_STATUSES = {
     "unsupported_gap",
@@ -685,7 +686,10 @@ def _run_universal_harness(
     artifact_path = evidence_root / "universal-agent-harness.json"
     scenarios = _universal_scenarios(args)
     harness_script = Path(__file__).resolve().with_name("universal-agent-harness.py")
-    if any(scenario in {"db_ingest_project", "managed_session_e2e"} for scenario in scenarios):
+    if any(
+        scenario in {"db_ingest_project", "managed_session_e2e", "interrupt_cancel", "tool_call_result"}
+        for scenario in scenarios
+    ):
         harness_project = _repo_root_from_script() / "server"
         argv = [
             "uv",
