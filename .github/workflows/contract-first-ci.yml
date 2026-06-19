@@ -111,6 +111,15 @@ jobs:
       timeout-minutes: 8
       run: make validate-provider-cli-canaries
 
+    - name: Upload provider release proof artifacts
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: provider-release-proof-validation-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .build/canaries/provider-release-proof-universal-smoke/**
+        if-no-files-found: ignore
+        retention-days: 7
+
     - name: Validate ship monitor
       timeout-minutes: 2
       run: make validate-ship-monitor

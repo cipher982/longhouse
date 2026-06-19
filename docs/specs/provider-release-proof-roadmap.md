@@ -364,6 +364,7 @@ evidence path is recorded and the relevant doc, test, or proof command exists.
 | H49 | Add all-provider support-matrix artifact | Done | +0 | `provider-support-matrix.json` transposes action-matrix rows into one provider-by-action grid and `provider-release-proof.py` attaches the current provider slice as `provider_support_matrix`; this improves auditability without changing the grand score |
 | H50 | Add CI-friendly universal fake/no-token smoke command | Done | +0 | `provider-release-proof-universal-smoke.py` and `make provider-release-proof-universal-smoke` generate disposable fake provider binaries, run the all-provider universal harness, and emit a support matrix; this makes the existing smoke easy to schedule without changing live/staged coverage |
 | H51 | Gate provider validation on the all-provider universal smoke | Done | +1 | `make validate-provider-cli-canaries` now runs the default `provider-release-proof-universal-smoke` target, and the Make target uses the `server` uv environment so `contract-first-ci` exercises the shared provider action surface without secrets |
+| H52 | Preserve universal smoke artifacts from CI | Done | +0 | `contract-first-ci` uploads `.build/canaries/provider-release-proof-universal-smoke/**` after provider validation so yellow/red evidence can be inspected from GitHub Actions; this improves debuggability without adding release-sensitive coverage |
 
 ## Score Update Rules
 

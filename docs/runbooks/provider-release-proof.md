@@ -84,7 +84,9 @@ P0 projection regressed.
 changes to provider release-proof scripts, contracts, or validation plumbing
 exercise the all-provider abstract action surface before merge. Set `JSON=1` on
 the Make target only when you want the full inline artifact in stdout; the
-artifact path remains the durable evidence source.
+artifact path remains the durable evidence source. The primary CI workflow
+uploads `.build/canaries/provider-release-proof-universal-smoke/**` as a
+short-retention artifact after provider validation, including failed runs.
 
 Run the DB-backed universal ingest lane explicitly:
 
