@@ -343,6 +343,7 @@ validate-provider-cli-canaries: ## @internal Provider release canary wrapper tes
 	@python3 scripts/tests/provider-live-canary.test.py
 	@python3 scripts/tests/provider-live-proof-publish.test.py
 	@python3 scripts/tests/provider-live-route-e2e.test.py
+	@$(MAKE) provider-release-proof-universal-smoke
 
 provider-release-proof: ## Emit provider release proof artifact; set PROVIDER=... and optional PROVIDER_BIN=...
 	@set -eu; \
@@ -438,11 +439,12 @@ provider-release-proof-staged-old-new: ## Run old/new staged provider binaries t
 
 provider-release-proof-universal-smoke: ## Run all-provider fake/no-token universal release-proof smoke
 	@set -eu; \
-	set -- scripts/qa/provider-release-proof-universal-smoke.py --json; \
+	set -- scripts/qa/provider-release-proof-universal-smoke.py; \
 	if [ -n "$(ARTIFACT)" ]; then set -- "$$@" --artifact "$(ARTIFACT)"; fi; \
 	if [ -n "$(EVIDENCE_ROOT)" ]; then set -- "$$@" --evidence-root "$(EVIDENCE_ROOT)"; fi; \
+	if [ -n "$(JSON)" ]; then set -- "$$@" --json; fi; \
 	if [ -n "$(UNIVERSAL_SCENARIO)" ]; then for scenario in $(UNIVERSAL_SCENARIO); do set -- "$$@" --scenario "$$scenario"; done; fi; \
-	python3 "$$@"
+	uv run --project server python "$$@"
 
 provider-release-proof-status: ## Inspect accepted proof baseline; set PROVIDER=... and SCENARIO_ID=...
 	@set -eu; \

@@ -80,6 +80,12 @@ and writes a support matrix artifact. `yellow` is expected while known
 unsupported or blocked rows remain explicit; `red` means the shared harness or a
 P0 projection regressed.
 
+`make validate-provider-cli-canaries` runs the same default smoke in CI, so
+changes to provider release-proof scripts, contracts, or validation plumbing
+exercise the all-provider abstract action surface before merge. Set `JSON=1` on
+the Make target only when you want the full inline artifact in stdout; the
+artifact path remains the durable evidence source.
+
 Run the DB-backed universal ingest lane explicitly:
 
 ```bash
