@@ -1609,9 +1609,36 @@ def test_release_proof_can_attach_universal_full_action_suite() -> None:
             payload["operation_evidence"]["universal_full_action_suite"]["status"]
             == "blocked"
         )
+        assert Path(payload["artifacts"]["provider_execution_coverage_matrix"]).exists()
+        provider_execution = payload["provider_execution_coverage_matrix"]
+        assert (
+            provider_execution["artifact_kind"]
+            == "provider_release_proof_provider_execution_coverage_matrix"
+        )
+        assert provider_execution["provider"] == "claude"
+        assert provider_execution["action_count"] > 20
+        assert provider_execution["execution_coverage_matrix_path"]
+        assert provider_execution["coverage_kind_counts"]["executable_scenario"] > 0
+        assert provider_execution["coverage_kind_counts"]["matrix_contract"] > 0
+        assert (
+            payload["normalized"]["provider_execution_coverage_matrix"]["action_count"]
+            == provider_execution["action_count"]
+        )
+        execution_actions = {
+            row["action_id"]: row for row in provider_execution["actions"]
+        }
+        assert execution_actions["send_message"]["coverage_kind"] == (
+            "executable_scenario"
+        )
+        assert execution_actions["tool_call_result"]["coverage_kind"] == (
+            "matrix_contract"
+        )
         universal_artifact = _read_json(
             Path(payload["artifacts"]["universal_harness_artifact"])
         )
+        assert Path(
+            universal_artifact["provider_execution_coverage_matrix_path"]
+        ).exists()
         suite_result = universal_artifact["results"][0]
         assert suite_result["scenario"] == "full_action_suite"
         assert suite_result["status"] == "blocked"

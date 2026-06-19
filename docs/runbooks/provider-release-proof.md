@@ -145,6 +145,12 @@ portable bundle does execute `baseline_compare` by generating comparable
 synthetic release-proof envelopes and invoking the same baseline diff CLI used
 by release watch.
 
+When this scenario is attached to a release proof, the proof writes
+`provider_execution_coverage_matrix` beside `provider_support_matrix`. Use the
+execution matrix to distinguish scenario-backed proof from matrix-only contract
+coverage; `provider-release-proof-maturity.py --universal-artifact ...`
+summarizes both views without changing release safety by itself.
+
 OpenCode has the first real provider-safe universal e2e lane:
 
 ```bash

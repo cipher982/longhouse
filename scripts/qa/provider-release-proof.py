@@ -329,6 +329,22 @@ def _normalize_source_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
             )
             if provider_support_matrix.get(key) is not None
         }
+    provider_execution_coverage_matrix = artifact.get(
+        "provider_execution_coverage_matrix"
+    )
+    if isinstance(provider_execution_coverage_matrix, dict):
+        normalized["provider_execution_coverage_matrix"] = {
+            key: provider_execution_coverage_matrix.get(key)
+            for key in (
+                "artifact_kind",
+                "provider",
+                "action_count",
+                "coverage_status_counts",
+                "coverage_kind_counts",
+                "execution_coverage_matrix_path",
+            )
+            if provider_execution_coverage_matrix.get(key) is not None
+        }
     return normalized
 
 
@@ -1005,6 +1021,12 @@ def _merge_universal_harness(
         universal,
         provider=str(source.get("provider") or ""),
     )
+    provider_execution_coverage_summary = (
+        _universal_provider_execution_coverage_summary(
+            universal,
+            provider=str(source.get("provider") or ""),
+        )
+    )
     for result in provider_results:
         scenario = str(result.get("scenario") or "unknown")
         status = str(result.get("status") or "fail")
@@ -1058,6 +1080,10 @@ def _merge_universal_harness(
         merged["control_surface"] = control_surface_summary
     if provider_support_summary is not None:
         merged["provider_support_matrix"] = provider_support_summary
+    if provider_execution_coverage_summary is not None:
+        merged["provider_execution_coverage_matrix"] = (
+            provider_execution_coverage_summary
+        )
     if universal_projection is not None:
         merged["universal_session_projection"] = universal_projection
         if not isinstance(merged.get("session_projection"), dict):
@@ -1117,6 +1143,61 @@ def _universal_provider_support_summary(
         "action_count": len(provider_actions),
         "status_counts": _status_counts_from_strings(statuses),
         "support_matrix_path": universal.get("provider_support_matrix_path"),
+        "actions": provider_actions,
+    }
+
+
+def _universal_provider_execution_coverage_summary(
+    universal: dict[str, Any],
+    *,
+    provider: str,
+) -> dict[str, Any] | None:
+    execution_matrix = universal.get("provider_execution_coverage_matrix")
+    if not isinstance(execution_matrix, dict):
+        return None
+    actions = execution_matrix.get("actions")
+    if not isinstance(actions, list):
+        return None
+    provider_actions: list[dict[str, Any]] = []
+    coverage_statuses: list[str] = []
+    coverage_kinds: list[str] = []
+    for row in actions:
+        if not isinstance(row, dict):
+            continue
+        providers = row.get("providers")
+        if not isinstance(providers, dict):
+            continue
+        provider_cell = providers.get(provider)
+        if not isinstance(provider_cell, dict):
+            continue
+        coverage_status = str(provider_cell.get("coverage_status") or "")
+        if coverage_status in UNIVERSAL_YELLOW_STATUSES or coverage_status in {
+            "pass",
+            "fail",
+        }:
+            coverage_statuses.append(coverage_status)
+        coverage_kind = str(provider_cell.get("coverage_kind") or "")
+        if coverage_kind:
+            coverage_kinds.append(coverage_kind)
+        provider_actions.append(
+            {
+                "action_id": row.get("action_id"),
+                "category": row.get("category"),
+                "contract_operation": row.get("contract_operation"),
+                **provider_cell,
+            }
+        )
+    if not provider_actions:
+        return None
+    return {
+        "artifact_kind": "provider_release_proof_provider_execution_coverage_matrix",
+        "provider": provider,
+        "action_count": len(provider_actions),
+        "coverage_status_counts": _status_counts_from_strings(coverage_statuses),
+        "coverage_kind_counts": _status_counts_from_strings(coverage_kinds),
+        "execution_coverage_matrix_path": universal.get(
+            "provider_execution_coverage_matrix_path"
+        ),
         "actions": provider_actions,
     }
 
@@ -1987,6 +2068,9 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
     action_matrix_path = normalized_dir / "action_matrix.json"
     control_surface_path = normalized_dir / "control_surface.json"
     provider_support_matrix_path = normalized_dir / "provider_support_matrix.json"
+    provider_execution_coverage_matrix_path = (
+        normalized_dir / "provider_execution_coverage_matrix.json"
+    )
     provider_contract = {
         "artifact_kind": "provider_release_proof_provider_contract",
         "provider": args.provider,
@@ -2037,12 +2121,29 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
         if isinstance(source_artifact.get("provider_support_matrix"), dict)
         else None,
     }
+    provider_execution_coverage_matrix_artifact = {
+        "artifact_kind": "provider_release_proof_provider_execution_coverage_matrix",
+        "provider": args.provider,
+        "provider_version": provider_version,
+        "status": "captured"
+        if isinstance(source_artifact.get("provider_execution_coverage_matrix"), dict)
+        else "not_captured",
+        "provider_execution_coverage_matrix": source_artifact.get(
+            "provider_execution_coverage_matrix"
+        )
+        if isinstance(source_artifact.get("provider_execution_coverage_matrix"), dict)
+        else None,
+    }
     _write_json(provider_contract_path, provider_contract)
     _write_json(operation_evidence_path, operation_evidence_artifact)
     _write_json(session_projection_path, session_projection)
     _write_json(action_matrix_path, action_matrix_artifact)
     _write_json(control_surface_path, control_surface_artifact)
     _write_json(provider_support_matrix_path, provider_support_matrix_artifact)
+    _write_json(
+        provider_execution_coverage_matrix_path,
+        provider_execution_coverage_matrix_artifact,
+    )
     artifact = {
         "schema_version": SCHEMA_VERSION,
         "artifact_kind": "provider_release_proof",
@@ -2073,6 +2174,9 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
         "action_matrix": source_artifact.get("action_matrix"),
         "control_surface": source_artifact.get("control_surface"),
         "provider_support_matrix": source_artifact.get("provider_support_matrix"),
+        "provider_execution_coverage_matrix": source_artifact.get(
+            "provider_execution_coverage_matrix"
+        ),
         "normalized": normalized,
         "contract_operations": contract_operations,
         "artifacts": {
@@ -2084,6 +2188,9 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
             "action_matrix": str(action_matrix_path),
             "control_surface": str(control_surface_path),
             "provider_support_matrix": str(provider_support_matrix_path),
+            "provider_execution_coverage_matrix": str(
+                provider_execution_coverage_matrix_path
+            ),
             "evidence_root": str(args.evidence_root),
         },
     }

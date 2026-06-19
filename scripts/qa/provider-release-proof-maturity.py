@@ -219,6 +219,10 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
     scenario_status_counts: dict[str, int] = {}
     action_pass = 0
     action_total = 0
+    execution_pass = 0
+    execution_total = 0
+    executable_scenario_total = 0
+    matrix_contract_total = 0
     loaded_artifacts: list[str] = []
     errors: list[dict[str, str]] = []
 
@@ -241,6 +245,7 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
                 {
                     "scenario_status_counts": {},
                     "action_matrix": None,
+                    "execution_coverage": None,
                 },
             )
             provider_entry["scenario_status_counts"][status] = (
@@ -263,6 +268,79 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
                 "status_counts": dict(status_counts),
                 "pass_percent": _pct(pass_count, action_count),
             }
+        execution_matrix = artifact.get("provider_execution_coverage_matrix")
+        if not isinstance(execution_matrix, dict):
+            continue
+        execution_actions = execution_matrix.get("actions")
+        if not isinstance(execution_actions, list):
+            continue
+        provider_execution_totals: dict[str, dict[str, Any]] = {}
+        for row in execution_actions:
+            if not isinstance(row, dict):
+                continue
+            row_providers = row.get("providers")
+            if not isinstance(row_providers, dict):
+                continue
+            for provider, cell in row_providers.items():
+                if not isinstance(cell, dict):
+                    continue
+                coverage_status = str(cell.get("coverage_status") or "missing")
+                coverage_kind = str(cell.get("coverage_kind") or "unknown")
+                provider_key = str(provider)
+                totals = provider_execution_totals.setdefault(
+                    provider_key,
+                    {
+                        "action_count": 0,
+                        "pass": 0,
+                        "coverage_status_counts": {},
+                        "coverage_kind_counts": {},
+                    },
+                )
+                totals["action_count"] += 1
+                totals["coverage_status_counts"][coverage_status] = (
+                    totals["coverage_status_counts"].get(coverage_status, 0) + 1
+                )
+                totals["coverage_kind_counts"][coverage_kind] = (
+                    totals["coverage_kind_counts"].get(coverage_kind, 0) + 1
+                )
+                execution_total += 1
+                if coverage_status == "pass":
+                    totals["pass"] += 1
+                    execution_pass += 1
+                if coverage_kind == "executable_scenario":
+                    executable_scenario_total += 1
+                elif coverage_kind == "matrix_contract":
+                    matrix_contract_total += 1
+        for provider, totals in provider_execution_totals.items():
+            provider_entry = providers.setdefault(
+                provider,
+                {
+                    "scenario_status_counts": {},
+                    "action_matrix": None,
+                    "execution_coverage": None,
+                },
+            )
+            action_count = int(totals["action_count"] or 0)
+            executable_count = int(
+                totals["coverage_kind_counts"].get("executable_scenario") or 0
+            )
+            matrix_contract_count = int(
+                totals["coverage_kind_counts"].get("matrix_contract") or 0
+            )
+            provider_entry["execution_coverage"] = {
+                "action_count": action_count,
+                "coverage_status_counts": dict(totals["coverage_status_counts"]),
+                "coverage_kind_counts": dict(totals["coverage_kind_counts"]),
+                "pass_percent": _pct(float(totals["pass"]), float(action_count)),
+                "executable_scenario_percent": _pct(
+                    float(executable_count),
+                    float(action_count),
+                ),
+                "matrix_contract_percent": _pct(
+                    float(matrix_contract_count),
+                    float(action_count),
+                ),
+            }
 
     return {
         "status": "checked" if not errors else "partial",
@@ -273,6 +351,18 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
         "scenario_status_counts": scenario_status_counts,
         "action_matrix_pass_percent": _pct(action_pass, action_total)
         if action_total
+        else None,
+        "execution_coverage_pass_percent": _pct(execution_pass, execution_total)
+        if execution_total
+        else None,
+        "executable_scenario_percent": _pct(
+            executable_scenario_total,
+            execution_total,
+        )
+        if execution_total
+        else None,
+        "matrix_contract_percent": _pct(matrix_contract_total, execution_total)
+        if execution_total
         else None,
     }
 

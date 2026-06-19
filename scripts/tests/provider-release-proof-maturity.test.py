@@ -210,6 +210,38 @@ def test_maturity_rollup_summarizes_universal_action_matrix() -> None:
                             "status": "blocked",
                         },
                     ],
+                    "provider_execution_coverage_matrix": {
+                        "artifact_kind": "universal_agent_harness_provider_execution_coverage_matrix",
+                        "providers": ["opencode", "claude"],
+                        "actions": [
+                            {
+                                "action_id": "send_message",
+                                "providers": {
+                                    "opencode": {
+                                        "coverage_kind": "executable_scenario",
+                                        "coverage_status": "pass",
+                                    },
+                                    "claude": {
+                                        "coverage_kind": "executable_scenario",
+                                        "coverage_status": "blocked",
+                                    },
+                                },
+                            },
+                            {
+                                "action_id": "tool_call_result",
+                                "providers": {
+                                    "opencode": {
+                                        "coverage_kind": "matrix_contract",
+                                        "coverage_status": "pass",
+                                    },
+                                    "claude": {
+                                        "coverage_kind": "matrix_contract",
+                                        "coverage_status": "unsupported_gap",
+                                    },
+                                },
+                            },
+                        ],
+                    },
                 }
             ),
             encoding="utf-8",
@@ -230,6 +262,28 @@ def test_maturity_rollup_summarizes_universal_action_matrix() -> None:
             "pass_percent": 50.0,
             "status_counts": {"blocked": 1, "pass": 2, "unsupported_gap": 1},
         }
+        assert payload["universal_harness"]["execution_coverage_pass_percent"] == 50.0
+        assert payload["universal_harness"]["executable_scenario_percent"] == 50.0
+        assert payload["universal_harness"]["matrix_contract_percent"] == 50.0
+        assert payload["universal_harness"]["providers"]["opencode"][
+            "execution_coverage"
+        ] == {
+            "action_count": 2,
+            "coverage_kind_counts": {
+                "executable_scenario": 1,
+                "matrix_contract": 1,
+            },
+            "coverage_status_counts": {"pass": 2},
+            "executable_scenario_percent": 50.0,
+            "matrix_contract_percent": 50.0,
+            "pass_percent": 100.0,
+        }
+        assert (
+            payload["universal_harness"]["providers"]["claude"]["execution_coverage"][
+                "pass_percent"
+            ]
+            == 0.0
+        )
         assert payload["overall"]["composite_inputs"] == [
             "coverage_weighted_percent",
             "action_matrix_pass_percent",
