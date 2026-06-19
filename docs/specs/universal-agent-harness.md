@@ -573,6 +573,10 @@ shape:
    scenario that carries passing `send_input` evidence. This lets Claude's
    channel-control `interrupt_cancel` canary cover the abstract send action
    while `send_receive` still records the no-token response-binding gap.
+10. `session_identity` action coverage uses the same "any mapped scenario"
+   policy. A passing managed launch can prove Longhouse captured provider and
+   Longhouse session identity even when `resume_reattach` remains an explicit
+   separate gap for that provider.
 10. Codex `resume_reattach` now calls the existing provider-release canary,
    requires passing reattach evidence, and DB-ingests the resulting rows when
    Runtime Host credentials are present; without credentials it reports the

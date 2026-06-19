@@ -3171,7 +3171,8 @@ class UniversalProviderAdapter:
             if operation_status != STATUS_PASS:
                 payload["status"] = STATUS_FAIL
                 payload["failure_code"] = f"claude_{require_operation}_evidence_missing"
-                payload["message"] = f"Claude provider-live canary did not produce passing {require_operation} evidence."
+                message = f"Claude provider-live canary did not produce passing {require_operation} evidence."
+                payload["message"] = message
         package.write_json(f"assertions/{assertion_name}.json", payload)
         return payload
 
@@ -4680,7 +4681,7 @@ def _full_action_suite_coverage(
 
 
 def _action_coverage_policy(action_id: str) -> str:
-    if action_id == "send_message":
+    if action_id in {"send_message", "session_identity"}:
         return "any_mapped_scenario"
     return "all_mapped_scenarios"
 
@@ -6422,7 +6423,10 @@ def run_launch_remote_projection(
             run_id=None,
         ),
     }
-    projections = {name: _json_safe(project_remote_launch_lifecycle(attempt).__dict__) for name, attempt in attempts.items()}
+    projections: dict[str, Any] = {}
+    for name, attempt in attempts.items():
+        projection = project_remote_launch_lifecycle(attempt)
+        projections[name] = _json_safe(projection.__dict__)
     assertions = {
         "dispatched_projects_launching_unknown": projections["dispatched"]["state"] == "launching_unknown",
         "adopted_projects_live": projections["adopted"]["state"] == "live",
@@ -6551,11 +6555,14 @@ def run_tool_call_result_projection(
         if isinstance(evidence, Mapping)
     }
     db_status = str(db_ingest.get("status") or STATUS_FAIL)
+    tool_failure_code = None
+    if db_status != STATUS_PASS:
+        tool_failure_code = db_ingest.get("failure_code") or "tool_call_result_projection_failed"
     tool_evidence = {
         "status": db_status,
         "level": "hermetic" if db_status == STATUS_PASS else "none",
         "canary": "universal_tool_call_result_projection",
-        "failure_code": (None if db_status == STATUS_PASS else db_ingest.get("failure_code") or "tool_call_result_projection_failed"),
+        "failure_code": tool_failure_code,
     }
     operation_evidence["tool_call_result"] = tool_evidence
     operation_evidence["transcript_binding"] = {

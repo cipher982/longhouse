@@ -729,23 +729,14 @@ def test_full_action_suite_uses_provider_scoped_old_new_artifacts(tmp_path: Path
     )
 
     assert payload["verdict"] == "yellow"
-    execution_rows = {
-        row["action_id"]: row
-        for row in payload["provider_execution_coverage_matrix"]["actions"]
-    }
-    assert execution_rows["old_new_release_diff"]["coverage_status_counts"] == {
-        "pass": len(providers)
-    }
+    execution_rows = {row["action_id"]: row for row in payload["provider_execution_coverage_matrix"]["actions"]}
+    assert execution_rows["old_new_release_diff"]["coverage_status_counts"] == {"pass": len(providers)}
     for result in payload["results"]:
         suite_path = Path(result["data"]["full_action_suite_path"])
         suite = json.loads(suite_path.read_text(encoding="utf-8"))
-        old_new_result = next(
-            row for row in suite["results"] if row["scenario"] == "old_new_release_diff"
-        )
+        old_new_result = next(row for row in suite["results"] if row["scenario"] == "old_new_release_diff")
         assert old_new_result["status"] == "pass"
-        assert old_new_result["data"]["old_proof_uri"] == str(
-            old_paths[result["provider"]].resolve()
-        )
+        assert old_new_result["data"]["old_proof_uri"] == str(old_paths[result["provider"]].resolve())
         coverage = {row["action_id"]: row for row in suite["actions"]}
         assert coverage["old_new_release_diff"]["coverage_status"] == "pass"
 
@@ -805,10 +796,7 @@ def test_launch_remote_projection_runs_for_supported_providers(tmp_path: Path) -
     antigravity = by_provider["antigravity"]
     assert antigravity["status"] == "unsupported_gap"
     assert antigravity["failure_code"] == "launch_remote_unsupported"
-    assert (
-        antigravity["data"]["operation_evidence"]["launch_remote"]["status"]
-        == "unsupported_gap"
-    )
+    assert antigravity["data"]["operation_evidence"]["launch_remote"]["status"] == "unsupported_gap"
 
 
 def test_control_surface_emits_same_control_actions_for_all_providers(tmp_path: Path) -> None:
@@ -905,11 +893,29 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
         "send_receive",
         "interrupt_cancel",
     ]
+    assert execution_rows["session_identity"]["providers"]["claude"]["coverage_status"] == "pass"
+    assert execution_rows["session_identity"]["providers"]["claude"]["coverage_policy"] == "any_mapped_scenario"
+    assert execution_rows["session_identity"]["providers"]["claude"]["scenario_ids"] == [
+        "launch_managed_session",
+        "resume_reattach",
+    ]
+    assert execution_rows["session_identity"]["providers"]["claude"]["scenario_statuses"] == {
+        "launch_managed_session": "pass",
+        "resume_reattach": "unsupported_gap",
+    }
+    assert execution_rows["session_identity"]["providers"]["claude"]["scenario_failure_codes"] == {
+        "resume_reattach": "resume_reattach_adapter_missing",
+    }
+    assert execution_rows["session_identity"]["providers"]["codex"]["coverage_status"] == "pass"
+    assert execution_rows["session_identity"]["providers"]["codex"]["scenario_statuses"] == {
+        "launch_managed_session": "pass",
+        "resume_reattach": "unsupported_gap",
+    }
+    assert execution_rows["resume_reattach"]["providers"]["claude"]["coverage_status"] == "unsupported_gap"
+    assert execution_rows["resume_reattach"]["providers"]["codex"]["coverage_status"] == "unsupported_gap"
     assert execution_rows["launch_remote"]["providers"]["claude"]["coverage_kind"] == "executable_scenario"
     assert execution_rows["launch_remote"]["providers"]["claude"]["coverage_status"] == "pass"
-    assert execution_rows["launch_remote"]["providers"]["claude"]["scenario_ids"] == [
-        "launch_remote_projection"
-    ]
+    assert execution_rows["launch_remote"]["providers"]["claude"]["scenario_ids"] == ["launch_remote_projection"]
     assert execution_rows["launch_remote"]["providers"]["antigravity"]["coverage_status"] == "unsupported_gap"
     assert execution_rows["baseline_compare"]["providers"]["opencode"]["coverage_status"] == "pass"
     assert execution_rows["tool_call_result"]["providers"]["antigravity"]["coverage_kind"] == "executable_scenario"
@@ -918,10 +924,9 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
         "tool_call_result_projection"
     ]
     assert execution_rows["permission_prompt"]["providers"]["claude"]["coverage_status"] == "blocked"
-    assert (
-        execution_matrix["provider_coverage_kind_counts"]["claude"]["executable_scenario"]
-        > execution_matrix["provider_coverage_kind_counts"]["claude"].get("matrix_contract", 0)
-    )
+    assert execution_matrix["provider_coverage_kind_counts"]["claude"]["executable_scenario"] > execution_matrix[
+        "provider_coverage_kind_counts"
+    ]["claude"].get("matrix_contract", 0)
     for result in payload["results"]:
         assert result["scenario"] == "full_action_suite"
         assert result["status"] == "blocked"
@@ -947,6 +952,11 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
         assert set(coverage) == set(uah.ACTIONS)
         assert coverage["send_message"]["coverage_kind"] == "executable_scenario"
         assert coverage["send_message"]["scenario_ids"] == ["send_receive", "interrupt_cancel"]
+        assert coverage["session_identity"]["coverage_kind"] == "executable_scenario"
+        assert coverage["session_identity"]["scenario_ids"] == [
+            "launch_managed_session",
+            "resume_reattach",
+        ]
         if result["provider"] == "claude":
             assert coverage["send_message"]["coverage_status"] == "pass"
             assert coverage["send_message"]["scenario_statuses"] == {
@@ -956,17 +966,22 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
             assert coverage["send_message"]["scenario_failure_codes"] == {
                 "send_receive": "send_receive_not_safe_no_token",
             }
+            assert coverage["session_identity"]["coverage_status"] == "pass"
+            assert coverage["session_identity"]["scenario_failure_codes"] == {
+                "resume_reattach": "resume_reattach_adapter_missing",
+            }
+        if result["provider"] == "codex":
+            assert coverage["session_identity"]["coverage_status"] == "pass"
+            assert coverage["session_identity"]["scenario_failure_codes"] == {
+                "resume_reattach": "codex_managed_bridge_credentials_missing",
+            }
         assert coverage["launch_remote"]["coverage_kind"] == "executable_scenario"
-        assert coverage["launch_remote"]["scenario_ids"] == [
-            "launch_remote_projection"
-        ]
+        assert coverage["launch_remote"]["scenario_ids"] == ["launch_remote_projection"]
         assert coverage["pause_request_detect"]["coverage_status"] == "pass"
         assert coverage["permission_prompt"]["coverage_status"] == "blocked"
         assert coverage["tool_call_result"]["coverage_kind"] == "executable_scenario"
         assert coverage["tool_call_result"]["coverage_status"] == "pass"
-        assert coverage["tool_call_result"]["scenario_ids"] == [
-            "tool_call_result_projection"
-        ]
+        assert coverage["tool_call_result"]["scenario_ids"] == ["tool_call_result_projection"]
         assert coverage["baseline_compare"]["coverage_kind"] == "executable_scenario"
         assert coverage["baseline_compare"]["coverage_status"] == "pass"
         assert coverage["baseline_compare"]["scenario_ids"] == ["baseline_compare"]

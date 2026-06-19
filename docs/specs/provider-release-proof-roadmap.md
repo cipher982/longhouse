@@ -174,6 +174,10 @@ Implemented:
   that proves send input. Claude's channel-control `interrupt_cancel` canary
   proves no-token `send_input`, while the unsupported `send_receive` response
   binding gap remains visible in scenario status/failure metadata.
+- `session_identity` execution coverage now also uses any mapped executable
+  scenario. A passing managed launch can cover provider/Longhouse session
+  identity while `resume_reattach` remains a separate explicit gap when it is
+  unsupported or credential-gated.
 - The default all-provider fake/no-token smoke now includes
   `managed_session_e2e`. In routine CI/Sauron smoke artifacts, Claude,
   OpenCode, and Antigravity must pass their provider-specific managed-session
@@ -396,6 +400,7 @@ evidence path is recorded and the relevant doc, test, or proof command exists.
 | H60 | Promote Claude launch behind the universal adapter | Done | +1 | `launch_managed_session` now routes Claude through the provider-live no-token command/channel/PTY contract canary, requires `launch_local` evidence, DB-ingests the rows, and keeps Claude send/receive as an explicit no-token gap |
 | H61 | Count mapped send-input evidence without hiding response gaps | Done | +0 | `send_message` execution coverage now accepts any mapped executable scenario that proves send input, so Claude's channel-control `interrupt_cancel` evidence can cover the abstract send action while `send_receive_not_safe_no_token` remains recorded in scenario metadata |
 | H62 | Make default smoke prove provider-scoped old/new diff coverage | Done | +1 | `full_action_suite` now receives old/new proof artifacts, `HarnessOptions` accepts provider-scoped proof paths, and the default universal smoke generates synthetic old/new proof pairs for Claude, Codex, OpenCode, and Antigravity so the execution coverage matrix records `old_new_release_diff=pass` for every provider |
+| H63 | Count mapped session identity evidence without hiding reattach gaps | Done | +0 | `session_identity` execution coverage now accepts any mapped executable scenario that proves provider/Longhouse session identity, so Claude and Codex managed-launch evidence can cover the abstract identity action while `resume_reattach` still records adapter-missing or credential-gated gaps |
 
 ## Score Update Rules
 
