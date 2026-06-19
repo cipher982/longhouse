@@ -496,7 +496,8 @@ def _opencode_session_projection(
         }
         for name in sorted(operation_evidence)
     }
-    required_operations_pass = all((operation_evidence.get(name) or {}).get("status") == "pass" for name in required_operations)
+    operation_passed = {name: (operation_evidence.get(name) or {}).get("status") == "pass" for name in required_operations}
+    required_operations_pass = all(operation_passed.values())
     status = "captured" if required_operations_pass else "partial"
     checks = {
         name: _compact_session_projection_check(canary)
