@@ -660,6 +660,107 @@ def test_codex_managed_session_e2e_reports_credentials_gap(tmp_path: Path, monke
     assert result["data"]["missing"] == ["--agents-token", "--api-url"]
 
 
+def test_antigravity_managed_session_e2e_uses_hook_inbox_canary(tmp_path: Path, monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_control_canary(*, provider: str, artifact_path: Path, evidence_root: Path) -> dict[str, object]:
+        calls.append(
+            {
+                "provider": provider,
+                "artifact_path": artifact_path,
+                "evidence_root": evidence_root,
+            }
+        )
+        return {
+            "schema_version": 1,
+            "provider": "antigravity",
+            "verdict": "green",
+            "failure_code": None,
+            "canaries": {
+                "antigravity": {
+                    "status": "pass",
+                    "session_id": "antigravity-canary-session",
+                    "pre_injection": {"injectSteps": [{"userMessage": "pre invocation canary input"}]},
+                    "post_injection": {
+                        "injectSteps": [{"userMessage": "post invocation canary input"}],
+                        "terminationBehavior": "force_continue",
+                    },
+                    "stop_decision": {"decision": "continue"},
+                }
+            },
+        }
+
+    monkeypatch.setattr(uah, "run_provider_control_e2e_canary", fake_control_canary)
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("antigravity",),
+            scenarios=("managed_session_e2e",),
+            evidence_root=tmp_path / "evidence",
+        )
+    )
+
+    assert calls
+    assert calls[0]["provider"] == "antigravity"
+    result = payload["results"][0]
+    assert payload["verdict"] == "green"
+    assert result["status"] == "pass"
+    assert result["data"]["source_artifact_kind"] == "provider_control_e2e_canary"
+    assert result["data"]["synthetic"] is False
+    assert result["data"]["operation_evidence"]["external_event_channel"]["status"] == "pass"
+    assert result["data"]["operation_evidence"]["send_input"]["level"] == "hermetic"
+    assert result["data"]["operation_evidence"]["runtime_phase"]["canary"] == (
+        "provider_control_e2e_antigravity_hook_inbox"
+    )
+    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
+
+    evidence_root = Path(result["evidence_root"])
+    assert (evidence_root / "raw" / "provider-control-e2e.json").is_file()
+    raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
+    assert "provider_control_e2e_canary" in raw_events
+    assert "force_continue" in raw_events
+    session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
+    assert session["provider_session_id"] == "antigravity-canary-session"
+    assert session["operation_statuses"]["external_event_channel"]["status"] == "pass"
+    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
+    assert db_snapshot["ingest_result"]["events_inserted"] == 4
+    assert db_snapshot["timeline"]["matched"] is True
+
+
+def test_antigravity_managed_session_e2e_fails_when_hook_inbox_canary_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def fake_control_canary(*, provider: str, artifact_path: Path, evidence_root: Path) -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "provider": provider,
+            "verdict": "red",
+            "failure_code": "antigravity_post_claim_failed",
+            "canaries": {
+                "antigravity": {
+                    "status": "fail",
+                    "failure_code": "antigravity_post_claim_failed",
+                    "session_id": "antigravity-canary-session",
+                }
+            },
+        }
+
+    monkeypatch.setattr(uah, "run_provider_control_e2e_canary", fake_control_canary)
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("antigravity",),
+            scenarios=("managed_session_e2e",),
+            evidence_root=tmp_path / "evidence",
+        )
+    )
+
+    result = payload["results"][0]
+    assert payload["verdict"] == "red"
+    assert result["status"] == "fail"
+    assert result["failure_code"] == "antigravity_post_claim_failed"
+    assert result["data"]["operation_evidence"]["external_event_channel"]["status"] == "fail"
+
+
 def test_opencode_managed_session_e2e_fails_when_real_canary_fails(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("FAKE_OPENCODE_DROP_PROMPT_ASYNC", "1")
     fake_opencode = _fake_opencode_server(tmp_path / "bin" / "opencode")

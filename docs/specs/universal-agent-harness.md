@@ -164,6 +164,10 @@ server/session canary and DB-ingests the resulting rows. Codex calls the
 provider-release canary for `managed_tui_attach` and `detached_ui`, then
 DB-ingests those launch/reattach rows when Runtime Host credentials are
 available; without those credentials it returns a typed `unsupported_gap`.
+Antigravity calls the provider-control hook/inbox canary, projects
+external-event channel rows, and DB-ingests them. That proves hook/inbox input
+delivery and Stop/force-continue behavior; it does not prove interrupt,
+reattach, or tool-result semantics.
 
 ## Capabilities And Profiles
 

@@ -988,6 +988,48 @@ def test_opencode_release_proof_can_attach_real_universal_managed_session_e2e() 
         assert '"synthetic": true' not in raw_events
 
 
+def test_antigravity_release_proof_can_attach_universal_hook_inbox_e2e() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        _write_fake_provider_bin(root, "agy 9.9.9")
+
+        result, payload = _run_proof(
+            root,
+            "antigravity",
+            extra_args=[
+                "--run-universal-harness",
+                "--universal-scenario",
+                "managed_session_e2e",
+            ],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["verdict"] == "green"
+        assert payload["normalized"]["canaries"]["universal_managed_session_e2e"]["status"] == "pass"
+        assert payload["operation_evidence"]["universal_external_event_channel"]["status"] == "pass"
+        assert payload["operation_evidence"]["universal_send_input"]["level"] == "hermetic"
+        assert payload["operation_evidence"]["universal_runtime_phase"]["status"] == "pass"
+        assert payload["operation_evidence"]["universal_db_ingest"]["status"] == "pass"
+
+        universal_artifact = _read_json(Path(payload["artifacts"]["universal_harness_artifact"]))
+        e2e_result = universal_artifact["results"][0]
+        assert e2e_result["scenario"] == "managed_session_e2e"
+        assert e2e_result["status"] == "pass"
+        assert e2e_result["data"]["source_artifact_kind"] == "provider_control_e2e_canary"
+        assert e2e_result["data"]["synthetic"] is False
+        assert e2e_result["data"]["longhouse_ingest"]["status"] == "pass"
+
+        evidence_root = Path(e2e_result["evidence_root"])
+        assert (evidence_root / "raw" / "provider-control-e2e.json").is_file()
+        db_snapshot = _read_json(evidence_root / "longhouse" / "db-ingest-result.json")
+        assert db_snapshot["ingest_result"]["events_inserted"] == 4
+        assert db_snapshot["timeline"]["matched"] is True
+        raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
+        assert "provider_control_e2e_canary" in raw_events
+        assert "force_continue" in raw_events
+
+
 def test_opencode_release_proof_blocks_on_source_canary_red() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -1883,6 +1925,7 @@ def main() -> int:
         test_release_proof_exposes_universal_session_evidence_for_codex_and_opencode,
         test_release_proof_can_attach_universal_db_ingest_project,
         test_opencode_release_proof_can_attach_real_universal_managed_session_e2e,
+        test_antigravity_release_proof_can_attach_universal_hook_inbox_e2e,
         test_opencode_release_proof_blocks_on_source_canary_red,
         test_opencode_release_proof_blocks_green_artifact_from_failed_source_canary,
         test_opencode_release_proof_blocks_when_source_artifact_missing,

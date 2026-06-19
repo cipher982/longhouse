@@ -336,6 +336,13 @@ def write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.write_text(json.dumps(dict(payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _read_json(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path} did not contain a JSON object")
+    return payload
+
+
 def read_json_lines(path: Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for raw in path.read_text(encoding="utf-8").splitlines():
@@ -888,6 +895,8 @@ class UniversalProviderAdapter:
         if self.config.provider != "opencode":
             if self.config.provider == "codex":
                 return self._run_codex_managed_session_e2e(package)
+            if self.config.provider == "antigravity":
+                return self._run_antigravity_managed_session_e2e(package)
             payload = self._unsupported_payload(
                 "managed_session_e2e",
                 "managed_session_e2e_adapter_missing",
@@ -1093,6 +1102,80 @@ class UniversalProviderAdapter:
         elif db_status != STATUS_PASS:
             payload["failure_code"] = db_ingest.get("failure_code") or "managed_session_e2e_db_ingest_failed"
             payload["message"] = "Codex canary evidence did not pass Longhouse DB ingest assertions."
+        package.write_json("assertions/managed_session_e2e.json", payload)
+        return payload
+
+    def _run_antigravity_managed_session_e2e(self, package: EvidencePackage) -> dict[str, Any]:
+        control_evidence_root = package.path("raw", "provider-control-e2e-evidence")
+        control_artifact_path = package.path("raw", "provider-control-e2e.json")
+        control_artifact = run_provider_control_e2e_canary(
+            provider="antigravity",
+            artifact_path=control_artifact_path,
+            evidence_root=control_evidence_root,
+        )
+        if not control_artifact_path.is_file():
+            package.write_json("raw/provider-control-e2e.json", control_artifact)
+        package.write_json("raw/provider-control-e2e-inline.json", control_artifact)
+
+        antigravity = dict(dict(control_artifact.get("canaries") or {}).get("antigravity") or {})
+        raw_events = antigravity_control_raw_events(antigravity)
+        provider_session_id = str(antigravity.get("session_id") or self._session_id(package))
+        operation_evidence = antigravity_control_operation_evidence(antigravity)
+        projection = self._write_session_projection(
+            package,
+            raw_events=raw_events,
+            operations=operation_evidence,
+            provider_session_id=provider_session_id,
+        )
+        db_ingest = ingest_canonical_events_into_longhouse_db(
+            package=package,
+            provider=self.config.provider,
+            rows=raw_events,
+            provider_session_id=provider_session_id,
+        )
+        operation_evidence.update(
+            {
+                str(operation): dict(evidence)
+                for operation, evidence in dict(db_ingest.get("operation_evidence") or {}).items()
+                if isinstance(evidence, Mapping)
+            }
+        )
+        session_projection_path = package.path("longhouse", "session-projection.json")
+        try:
+            session_projection = json.loads(session_projection_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            session_projection = {}
+        if isinstance(session_projection, dict):
+            session_projection["operation_statuses"] = operation_evidence
+            package.write_json("longhouse/session-projection.json", session_projection)
+
+        verdict = str(control_artifact.get("verdict") or "red")
+        canary_status = str(antigravity.get("status") or "fail")
+        db_status = str(db_ingest.get("status") or STATUS_FAIL)
+        payload = {
+            **projection,
+            "status": STATUS_PASS if verdict == "green" and canary_status == "pass" and db_status == STATUS_PASS else STATUS_FAIL,
+            "scenario": "managed_session_e2e",
+            "provider_control_artifact_path": str(control_artifact_path),
+            "provider_control_evidence_root": str(control_evidence_root),
+            "provider_control_verdict": verdict,
+            "source_artifact_kind": "provider_control_e2e_canary",
+            "synthetic": False,
+            "operation_evidence": operation_evidence,
+            "longhouse_ingest": {
+                "status": db_status,
+                "failure_code": db_ingest.get("failure_code"),
+                "db_snapshot_path": db_ingest.get("db_snapshot_path"),
+                "session_projection_path": db_ingest.get("session_projection_path"),
+                "timeline_projection_path": db_ingest.get("timeline_projection_path"),
+            },
+        }
+        if canary_status != "pass":
+            payload["failure_code"] = antigravity.get("failure_code") or control_artifact.get("failure_code")
+            payload["message"] = "Antigravity hook/inbox provider-control canary did not pass."
+        elif db_status != STATUS_PASS:
+            payload["failure_code"] = db_ingest.get("failure_code") or "managed_session_e2e_db_ingest_failed"
+            payload["message"] = "Antigravity hook/inbox evidence did not pass Longhouse DB ingest assertions."
         package.write_json("assertions/managed_session_e2e.json", payload)
         return payload
 
@@ -1985,6 +2068,138 @@ def _codex_managed_bridge_credentials_gap(artifact: Mapping[str, Any]) -> list[s
     return sorted(missing)
 
 
+def run_provider_control_e2e_canary(
+    *,
+    provider: str,
+    artifact_path: Path,
+    evidence_root: Path,
+) -> dict[str, Any]:
+    repo_root = default_repo_root()
+    script = repo_root / "scripts" / "qa" / "provider-control-e2e-canary.py"
+    result = subprocess.run(
+        [
+            os.environ.get("PYTHON", "python3"),
+            str(script),
+            "--repo-root",
+            str(repo_root),
+            "--provider",
+            provider,
+            "--artifact",
+            str(artifact_path),
+            "--evidence-root",
+            str(evidence_root),
+            "--json",
+        ],
+        cwd=str(repo_root),
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=120,
+    )
+    if artifact_path.is_file():
+        try:
+            return _read_json(artifact_path)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            return {
+                "schema_version": 1,
+                "provider": provider,
+                "verdict": "red",
+                "failure_code": "provider_control_e2e_invalid_json",
+                "message": f"{type(exc).__name__}: {exc}",
+                "command": command_evidence(result),
+            }
+    return {
+        "schema_version": 1,
+        "provider": provider,
+        "verdict": "red",
+        "failure_code": "provider_control_e2e_missing_artifact",
+        "message": "provider-control-e2e exited without writing an artifact.",
+        "command": command_evidence(result),
+    }
+
+
+def antigravity_control_raw_events(canary: Mapping[str, Any]) -> list[dict[str, Any]]:
+    session_id = str(canary.get("session_id") or "antigravity-hook-inbox-e2e")
+    rows: list[dict[str, Any]] = []
+    rows.append(
+        {
+            "type": "session_start",
+            "role": "system",
+            "text": "Antigravity hook inbox session observed by provider-control canary.",
+            "provider_session_id": session_id,
+            "source_canary": "antigravity_hook_inbox",
+            "status": canary.get("status"),
+            "evidence_origin": "provider_control_e2e_canary",
+        }
+    )
+    pre = canary.get("pre_injection")
+    if isinstance(pre, Mapping):
+        rows.append(
+            {
+                "type": "user",
+                "role": "user",
+                "text": "pre invocation canary input",
+                "provider_session_id": session_id,
+                "source_canary": "antigravity_pre_injection",
+                "inject_steps": pre.get("injectSteps"),
+                "evidence_origin": "provider_control_e2e_canary",
+            }
+        )
+    post = canary.get("post_injection")
+    if isinstance(post, Mapping):
+        rows.append(
+            {
+                "type": "user",
+                "role": "user",
+                "text": "post invocation canary input",
+                "provider_session_id": session_id,
+                "source_canary": "antigravity_post_injection",
+                "termination_behavior": post.get("terminationBehavior"),
+                "inject_steps": post.get("injectSteps"),
+                "evidence_origin": "provider_control_e2e_canary",
+            }
+        )
+    stop = canary.get("stop_decision")
+    if isinstance(stop, Mapping):
+        rows.append(
+            {
+                "type": "runtime_phase",
+                "role": "system",
+                "text": f"Antigravity Stop hook decision: {stop.get('decision')}",
+                "provider_session_id": session_id,
+                "source_canary": "antigravity_stop_decision",
+                "decision": stop.get("decision"),
+                "evidence_origin": "provider_control_e2e_canary",
+            }
+        )
+    return rows
+
+
+def antigravity_control_operation_evidence(canary: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    status = STATUS_PASS if canary.get("status") == "pass" else STATUS_FAIL
+    failure_code = None if status == STATUS_PASS else str(canary.get("failure_code") or "antigravity_hook_inbox_failed")
+    return {
+        "external_event_channel": {
+            "status": status,
+            "level": "hermetic",
+            "canary": "provider_control_e2e_antigravity_hook_inbox",
+            "failure_code": failure_code,
+        },
+        "send_input": {
+            "status": status,
+            "level": "hermetic",
+            "canary": "provider_control_e2e_antigravity_hook_inbox",
+            "failure_code": failure_code,
+        },
+        "runtime_phase": {
+            "status": status,
+            "level": "hermetic",
+            "canary": "provider_control_e2e_antigravity_hook_inbox",
+            "failure_code": failure_code,
+        },
+    }
+
+
 def provider_configs() -> dict[str, AdapterConfig]:
     providers = set(managed_provider_names()) | set(SUPPORTED_PROVIDERS)
     configs: dict[str, AdapterConfig] = {}
@@ -2003,6 +2218,8 @@ def provider_configs() -> dict[str, AdapterConfig]:
             real_managed_session_e2e = True
         elif provider == "opencode":
             safe_managed_session_scenarios = SAFE_MANAGED_SESSION_SCENARIOS
+            real_managed_session_e2e = True
+        elif provider == "antigravity":
             real_managed_session_e2e = True
         configs[provider] = AdapterConfig(
             provider=provider,
