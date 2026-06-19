@@ -121,6 +121,12 @@ Accept this as a baseline only after confirming the artifact shows
 `level=live_token` and the model-visible marker came from the injected
 Longhouse inbox message.
 
+Sauron can pass this same scenario through Antigravity release-watch by setting
+`AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1`. Leave that production gate off
+until a reviewed green `antigravity-real-agy-send-release-proof-v1` baseline is
+accepted; otherwise release-watch will spend real `agy` turns without a trusted
+baseline to compare against.
+
 ## Read A Proof
 
 Key top-level fields:
@@ -295,7 +301,9 @@ argv, raw command evidence, or published fallback artifacts.
   in the `sauron` container on 2026-06-19 returned green for
   `codex-managed-live-send-release-proof-v1`.
 - Antigravity real-agy send: no accepted baseline yet for
-  `antigravity-real-agy-send-release-proof-v1`.
+  `antigravity-real-agy-send-release-proof-v1`. Sauron has an env-gated
+  release-watch pass-through for this scenario, but production Sauron is not
+  configured with `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1`.
 
 ## Promotion Checklist
 

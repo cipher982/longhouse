@@ -280,11 +280,11 @@ tool/tool-result transcript shape or live-token model-visible behavior.
 | transcript/log parse | partial | hook transcript binding tests | hermetic | `make test` | no | no | partial |
 | ingest into Longhouse | partial | hook outbox/runtime tests | hermetic | `make test` | no | no | partial |
 | timeline/session projection | partial | session capabilities for Antigravity transport | hermetic | `make test` | no | no | partial |
-| send input | partial | `provider-control-e2e-canary.py --antigravity-real-agy-send`; `provider-release-proof.py --antigravity-run-real-agy-send` can attach that send evidence to a release proof; Sauron release-watch preserves staged `agy` proof/differential evidence | live_token when explicitly run; fake wrapper in CI | wrapper test in CI uses fake agy | profile/live plus proof/diff without the live-token flag | no | partial |
+| send input | partial | `provider-control-e2e-canary.py --antigravity-real-agy-send`; `provider-release-proof.py --antigravity-run-real-agy-send` can attach that send evidence to a release proof; Sauron release-watch preserves staged `agy` proof/differential evidence and can request the real-send scenario behind `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` | live_token when explicitly run; fake wrapper in CI | wrapper test in CI uses fake agy | profile/live plus opt-in real-send proof/diff when configured | no | partial |
 | interrupt/abort/steer | no | unsupported in manifest | none | no | no | no | no |
 | reattach/resume | no | unsupported in manifest | none | no | no | no | no |
 | tool/tool-result shape | no | no provider transcript parser golden found | none | no | no | no | no |
-| live-token behavior | partial | real agy send canary exists and `provider-release-proof.py --antigravity-run-real-agy-send` can attach it; CI covers the adapter with fake agy | live_token manual/configured plus fake adapter | fake-wrapper CI only | no | no | no |
+| live-token behavior | partial | real agy send canary exists and `provider-release-proof.py --antigravity-run-real-agy-send` can attach it; CI covers the adapter with fake agy; Sauron release-watch has an env-gated pass-through but production is not enabled | live_token manual/configured plus fake adapter | fake-wrapper CI plus Sauron plumbing tests | not configured in production | no | no |
 
 Antigravity should stay narrow: on 2026-06-19, `agy 1.0.8` produced a green
 `antigravity-release-proof-v1` artifact and a fresh rerun diffed green/match
@@ -295,8 +295,11 @@ does not prove model-visible send, reattach/resume, tool/tool-result shape, or
 live-token behavior. A separate opt-in proof flag can attach the manual real
 `agy` send canary to a release proof under scenario
 `antigravity-real-agy-send-release-proof-v1`, but no accepted baseline includes
-it yet. The next useful step is accepting a reviewed real-`agy` proof baseline
-for send, then keeping unsupported operations explicit.
+it yet. Sauron has an explicit `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1`
+gate that passes this scenario through golden-envelope and old/new differential
+runs, but production Sauron is not configured for that gate. The next useful
+step is accepting a reviewed real-`agy` proof baseline for send, then deciding
+whether to enable the scheduled release-watch gate.
 
 ### Legacy Google JSON Imports
 
@@ -605,8 +608,8 @@ should not by itself count as contract drift.
 2. Configure durable Runtime Host credentials for scheduled Codex live-send
    release-watch, or keep that lane explicitly preflight/yellow when credentials
    are absent.
-3. Decide whether Antigravity real-agy send belongs in scheduled release-watch
-   or remains an opt-in live-token proof, then accept the matching baseline.
+3. Accept a reviewed Antigravity real-agy send baseline, then decide whether to
+   enable `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` in production Sauron.
 4. Add OpenCode tool/tool-result and live-token proof, which are currently the
    provider's two uncovered release-sensitive surfaces.
 5. Add model-visible live-token proof for the remaining partial Claude, Codex,

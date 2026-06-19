@@ -789,7 +789,11 @@
             "covered": "partial",
             "test_evidence": [
                 "scripts/tests/provider-control-e2e-canary.test.py",
-                "scripts/tests/provider-release-proof.test.py"
+                "scripts/tests/provider-release-proof.test.py",
+                "Sauron:jobs/agents/release_triage/provider_status.py",
+                "Sauron:jobs/agents/release_envelope/__init__.py",
+                "Sauron:tests/test_agent_release_provider_status.py",
+                "Sauron:tests/test_agent_release_envelope.py"
             ],
             "proof_boundary": "manual_live_token_or_fake",
             "fake_or_real": "mixed",
