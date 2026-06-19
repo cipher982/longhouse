@@ -199,20 +199,49 @@ found. `diff.status=different` with `verdict=red` is a release-risk signal.
 
 ## Promote To Sauron
 
-Promote a local accepted provider baseline to the Sauron production container
-only after a green proof, green status, and green diff.
+Promote local accepted provider baselines to the Sauron production container
+only after a green proof, green status, and green diff. Copy the full baseline
+store, not just `accepted.json`; archived artifacts under `versions/` are part
+of the integrity check.
 
 ```bash
-COPYFILE_DISABLE=1 tar --no-xattrs \
+COPYFILE_DISABLE=1 tar \
+  --exclude='._*' \
+  --exclude='.DS_Store' \
   -C "$HOME/.local/share/longhouse/provider-release-proofs" \
-  -cf - opencode \
-  | ssh clifford "docker exec -u 0 -i sauron sh -lc 'mkdir -p /data/provider-release-proofs && tar -C /data/provider-release-proofs -xf -'"
+  -czf /tmp/provider-release-proofs.tar.gz .
+
+cat /tmp/provider-release-proofs.tar.gz \
+  | ssh clifford "docker exec -i sauron sh -lc '
+      set -eu
+      ts=\$(date -u +%Y%m%dT%H%M%SZ)
+      base=/data/provider-release-proofs
+      [ ! -d \"\$base\" ] || mv \"\$base\" \"\$base.backup.\$ts\"
+      mkdir -p \"\$base\"
+      tar -xzf - -C \"\$base\"
+      test \"\$(find \"\$base\" \\( -name \"._*\" -o -name \".DS_Store\" \\) -print | wc -l | tr -d \" \")\" = 0
+    '"
 ```
 
-Verify from inside the Sauron container:
+Verify all accepted scenarios from inside the Sauron container:
 
 ```bash
-ssh clifford "docker exec sauron sh -lc 'cd /data/jobs && python3 -m jobs.agents.release_envelope status --provider opencode --scenario-id opencode-release-proof-v1 --baseline-root /data/provider-release-proofs --json'"
+ssh clifford 'docker exec -i sauron sh -lc "cd /data/jobs && PYTHONPATH=. python3 -"' <<'PY'
+from jobs.agents.release_envelope import baseline_status
+
+for provider, scenario_id in [
+    ('antigravity', 'antigravity-release-proof-v1'),
+    ('claude', 'claude-release-proof-v1'),
+    ('codex', 'codex-release-proof-v1'),
+    ('codex', 'codex-managed-live-send-release-proof-v1'),
+    ('opencode', 'opencode-release-proof-v1'),
+]:
+    status = baseline_status(provider=provider, scenario_id=scenario_id)
+    assert status['accepted'] is True, status
+    assert status['verdict'] == 'green', status
+    assert status['missing_archived_artifacts'] == [], status
+    print(provider, scenario_id, status['provider_version'], 'green')
+PY
 ```
 
 The status should be `verdict=green`, `accepted=true`, and
@@ -255,8 +284,11 @@ argv, raw command evidence, or published fallback artifacts.
   version `agy 1.0.8`.
 - Codex/OpenAI: accepted baseline `codex-release-proof-v1`, provider version
   `codex-cli 0.139.0`.
-- Codex/OpenAI live-send: no accepted baseline yet for
-  `codex-managed-live-send-release-proof-v1`.
+- Codex/OpenAI live-send: accepted baseline
+  `codex-managed-live-send-release-proof-v1`, provider version
+  `codex-cli 0.139.0`. The accepted proof store is promoted to production
+  Sauron and verifies green, but scheduled live execution still requires
+  Runtime Host URL/token credentials.
 - Antigravity real-agy send: no accepted baseline yet for
   `antigravity-real-agy-send-release-proof-v1`.
 

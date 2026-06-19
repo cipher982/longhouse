@@ -70,14 +70,14 @@ Machine-validated coverage map:
 | Rows running in Longhouse CI | 43 |
 | Rows running in Sauron release-watch | 29 |
 | Rows with accepted parser-fixture baselines | 4 |
-| Rows with accepted release-proof baselines | 20 |
+| Rows with accepted release-proof baselines | 22 |
 
 Provider shape:
 
 | Provider | Yes | Partial | No | CI rows | Sauron rows | Release baselines |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Claude Code | 2 | 11 | 0 | 11 | 5 | 3 |
-| Codex/OpenAI | 4 | 9 | 0 | 12 | 8 | 5 |
+| Codex/OpenAI | 4 | 9 | 0 | 12 | 8 | 7 |
 | OpenCode | 4 | 7 | 2 | 11 | 11 | 9 |
 | Antigravity | 1 | 9 | 3 | 9 | 5 | 3 |
 
@@ -178,11 +178,11 @@ binding, transcript, send/steer, resume, and live-token proof are still missing.
 | transcript/log parse | yes | engine Codex golden + adversarial parser tests | fixture | `make test-engine` | source review only | parser fixture yes; release-proof no | yes for parser drift |
 | ingest into Longhouse | partial | hook/outbox tests, shipper E2E | fixture/hermetic | `make test`, `make test-shipper-e2e` | no dedicated release proof | no | partial |
 | timeline/session projection | partial | session capabilities/messages/views | hermetic | `make test` | no | no | partial |
-| send input | partial | engine bridge IPC turn/start tests; `codex-provider-release-canary.py --run-managed-live-send` starts a managed detached bridge, sends a unique marker, waits for completion, and checks transcript/state evidence | hermetic/live_token when explicitly run; fake wrapper in CI | `make test`, engine tests, wrapper fake-engine test | Sauron canary when configured | no | partial |
+| send input | partial | engine bridge IPC turn/start tests; `codex-provider-release-canary.py --run-managed-live-send` starts a managed detached bridge, sends a unique marker, waits for completion, and checks transcript/state evidence | hermetic/live_token when explicitly run; fake wrapper in CI | `make test`, engine tests, wrapper fake-engine test | Sauron canary when configured | release-proof yes (`codex-managed-live-send-release-proof-v1`, codex-cli 0.139.0) | partial |
 | interrupt/abort/steer | partial | engine bridge interrupt/steer tests | hermetic | `make test`, engine tests | Sauron canary when configured | no | partial |
 | reattach/resume | partial | managed TUI attach canary; resume path tests | hermetic/live_no_token | `validate-provider-cli-canaries` | yes | release-proof yes (`codex-release-proof-v1`, codex-cli 0.139.0) | partial |
 | tool/tool-result shape | partial | Codex parser fixtures and tool-call tests | fixture/hermetic | `make test`, `make test-engine` | source review only | parser fixture yes; release-proof no | partial |
-| live-token behavior | partial | `codex-provider-release-canary.py --run-managed-live-send`; `provider-release-proof.py --codex-run-managed-live-send` can attach the evidence to a release proof | managed Runtime Host live_token when explicitly run; fake wrapper in CI | wrapper fake-engine test | conditional release-watch only when `AGENT_RELEASE_CODEX_CANARY_LIVE=1` and credentials exist | no | no |
+| live-token behavior | partial | `codex-provider-release-canary.py --run-managed-live-send`; `provider-release-proof.py --codex-run-managed-live-send` can attach the evidence to a release proof | managed Runtime Host live_token when explicitly run; fake wrapper in CI | wrapper fake-engine test | conditional release-watch only when `AGENT_RELEASE_CODEX_CANARY_LIVE=1` and credentials exist | release-proof yes (`codex-managed-live-send-release-proof-v1`, codex-cli 0.139.0) | no |
 
 Codex is the strongest existing provider lane. Sauron now produces a
 Longhouse-owned proof artifact and proof-baseline diff for source-reviewed
@@ -215,8 +215,9 @@ provided, records `operation_evidence.send_input` at `level=live_token`, and
 fails red if the turn does not complete or the provider transcript/state does
 not contain the unique canary marker. This lane uses scenario
 `codex-managed-live-send-release-proof-v1` so it cannot be confused with the
-default no-token `codex-release-proof-v1` baseline. No accepted baseline
-includes this lane yet.
+default no-token `codex-release-proof-v1` baseline. A green live-send baseline
+has now been accepted and promoted to Sauron production; scheduled live
+execution still requires Runtime Host URL/token credentials.
 
 Accepted baseline evidence, 2026-06-19: Codex `codex-cli 0.139.0` was run with
 fake app-server, raw-fresh-remote, managed TUI attach, and detached-ui lanes
@@ -225,6 +226,17 @@ in the artifact tree, baseline acceptance/status were green with
 `missing_archived_artifacts=[]`, and a fresh rerun diffed green/match against
 the accepted baseline. The accepted local dogfood baseline is under
 `~/.local/share/longhouse/provider-release-proofs/codex/codex-release-proof-v1/`.
+
+Accepted live-send baseline evidence, 2026-06-19: Codex `codex-cli 0.139.0`
+was run against the dogfood Runtime Host with
+`--codex-run-managed-live-send`. The proof was green,
+`operation_evidence.send_input` was `level=live_token`, the temporary device
+token was verified revoked, baseline status was green with
+`missing_archived_artifacts=[]`, and a diff against the accepted artifact was
+green/match. The accepted local dogfood baseline is under
+`~/.local/share/longhouse/provider-release-proofs/codex/codex-managed-live-send-release-proof-v1/`
+and the complete accepted store was promoted to Sauron production
+`/data/provider-release-proofs`.
 
 ### OpenCode
 
@@ -588,8 +600,9 @@ should not by itself count as contract drift.
 ## Next Work
 
 1. Add Claude managed-session binding proof beyond no-token launch shape.
-2. Accept a reviewed Codex `codex-managed-live-send-release-proof-v1` baseline
-   after running the Runtime Host credentialed lane.
+2. Configure durable Runtime Host credentials for scheduled Codex live-send
+   release-watch, or keep that lane explicitly preflight/yellow when credentials
+   are absent.
 3. Decide whether Antigravity real-agy send belongs in scheduled release-watch
    or remains an opt-in live-token proof, then accept the matching baseline.
 4. Add OpenCode tool/tool-result and live-token proof, which are currently the
