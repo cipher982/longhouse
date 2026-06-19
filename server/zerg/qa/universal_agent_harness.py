@@ -759,6 +759,14 @@ class UniversalProviderAdapter:
                 "run_prompt_once_not_safe_no_token",
                 "run_prompt_once is not yet safe to claim without a token-spending provider run.",
             )
+            payload["operation_evidence"] = {
+                "run_once": {
+                    "status": STATUS_UNSUPPORTED_GAP,
+                    "level": "none",
+                    "canary": "universal_run_prompt_once",
+                    "failure_code": "run_prompt_once_not_safe_no_token",
+                }
+            }
         else:
             probe = self.probe(package)
             if probe.get("status") != STATUS_PASS:
@@ -972,6 +980,14 @@ class UniversalProviderAdapter:
                 "managed_session_not_safe_no_token",
                 "launch_managed_session is not yet backed by a no-token/session-safe universal adapter.",
             )
+            payload["operation_evidence"] = {
+                "launch_local": {
+                    "status": STATUS_UNSUPPORTED_GAP,
+                    "level": "none",
+                    "canary": "universal_launch_managed_session",
+                    "failure_code": "managed_session_not_safe_no_token",
+                }
+            }
             package.write_json("assertions/launch_managed_session.json", payload)
             return payload
         probe = self.probe(package)
@@ -1013,6 +1029,20 @@ class UniversalProviderAdapter:
                 "send_receive_not_safe_no_token",
                 "send_receive is not yet backed by a no-token/session-safe universal adapter.",
             )
+            payload["operation_evidence"] = {
+                "send_input": {
+                    "status": STATUS_UNSUPPORTED_GAP,
+                    "level": "none",
+                    "canary": "universal_send_receive",
+                    "failure_code": "send_receive_not_safe_no_token",
+                },
+                "transcript_binding": {
+                    "status": STATUS_UNSUPPORTED_GAP,
+                    "level": "none",
+                    "canary": "universal_send_receive",
+                    "failure_code": "send_receive_not_safe_no_token",
+                },
+            }
             package.write_json("assertions/send_receive.json", payload)
             return payload
         probe = self.probe(package)

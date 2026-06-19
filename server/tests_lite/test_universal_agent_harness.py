@@ -2461,3 +2461,108 @@ def test_script_entrypoint_runs_all_provider_action_e2e(tmp_path: Path) -> None:
         assert surface_actions["send_message"]["category"] == "control"
         assert surface_actions["tail_output"]["category"] == "observe"
         assert "old_new_release_diff" not in surface_actions
+
+
+def test_script_entrypoint_runs_all_provider_fake_no_token_release_surface(tmp_path: Path) -> None:
+    fake_bins = _fake_bins(tmp_path)
+    artifact_root = tmp_path / "all-provider-safe-release-surface"
+    scenarios = (
+        "probe_identity",
+        "collect_raw_evidence",
+        "session_projection",
+        "timeline_projection",
+        "run_prompt_once",
+        "launch_managed_session",
+        "send_receive",
+        "pause_request_detect",
+        "tail_output",
+        "runtime_phase",
+        "transcript_binding",
+        "multi_turn_continuity",
+        "crash_timeout_cleanup",
+    )
+    provider_bin_args = [f"{provider}={path}" for provider, path in fake_bins.items()]
+    scenario_args = [item for scenario in scenarios for item in ("--scenario", scenario)]
+    provider_args = [
+        item for provider_bin in provider_bin_args for item in ("--provider-bin", provider_bin)
+    ]
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "qa" / "universal-agent-harness.py"),
+            "--evidence-root",
+            str(artifact_root),
+            "--prompt",
+            "Longhouse release-proof fake/no-token CLI smoke.",
+            "--json",
+            *scenario_args,
+            *provider_args,
+        ],
+        cwd=str(REPO_ROOT),
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=90,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["artifact_kind"] == uah.ARTIFACT_KIND
+    assert payload["providers"] == list(uah.SUPPORTED_PROVIDERS)
+    assert payload["scenarios"] == list(scenarios)
+    assert payload["verdict"] == "yellow"
+    assert len(payload["results"]) == len(uah.SUPPORTED_PROVIDERS) * len(scenarios)
+    assert (artifact_root / "universal-agent-harness.json").is_file()
+
+    by_key = {(item["provider"], item["scenario"]): item for item in payload["results"]}
+    expected_gaps = {
+        ("claude", "run_prompt_once"): "run_prompt_once_not_safe_no_token",
+        ("claude", "launch_managed_session"): "managed_session_not_safe_no_token",
+        ("claude", "send_receive"): "send_receive_not_safe_no_token",
+        ("opencode", "run_prompt_once"): "run_prompt_once_not_safe_no_token",
+        ("antigravity", "run_prompt_once"): "run_prompt_once_not_safe_no_token",
+        ("antigravity", "launch_managed_session"): "managed_session_not_safe_no_token",
+        ("antigravity", "send_receive"): "send_receive_not_safe_no_token",
+    }
+    for provider in uah.SUPPORTED_PROVIDERS:
+        for scenario in scenarios:
+            result_item = by_key[(provider, scenario)]
+            expected_gap = expected_gaps.get((provider, scenario))
+            if expected_gap:
+                assert result_item["status"] == "unsupported_gap"
+                assert result_item["failure_code"] == expected_gap
+            else:
+                assert result_item["status"] == "pass"
+            evidence_root = Path(result_item["evidence_root"])
+            assert evidence_root.is_dir()
+
+        run_prompt = by_key[(provider, "run_prompt_once")]
+        if provider == "codex":
+            assert run_prompt["data"]["operation_evidence"]["run_once"]["status"] == "pass"
+            assert Path(run_prompt["data"]["raw_events_path"]).is_file()
+        else:
+            assert run_prompt["data"]["operation_evidence"]["run_once"]["status"] == "unsupported_gap"
+
+        send_receive = by_key[(provider, "send_receive")]
+        if provider in {"codex", "opencode"}:
+            assert send_receive["data"]["operation_evidence"]["send_input"]["status"] == "pass"
+            assert send_receive["data"]["operation_evidence"]["transcript_binding"]["status"] == "pass"
+        else:
+            assert send_receive["data"]["operation_evidence"]["send_input"]["status"] == "unsupported_gap"
+
+        pause = by_key[(provider, "pause_request_detect")]
+        assert pause["data"]["operation_evidence"]["pause_request_detect"]["status"] == "pass"
+        assert pause["data"]["assertions"]["pause_request_pending"] is True
+
+        runtime = by_key[(provider, "runtime_phase")]
+        assert runtime["data"]["operation_evidence"]["runtime_phase"]["status"] == "pass"
+        assert runtime["data"]["runtime_state"]["phase"] == "idle"
+
+        continuity = by_key[(provider, "multi_turn_continuity")]
+        assert continuity["data"]["continuity_assertions"]["turn_count"] == 2
+        assert continuity["data"]["continuity_assertions"]["provider_session_id_stable"] is True
+
+        crash = by_key[(provider, "crash_timeout_cleanup")]
+        assert crash["data"]["cleanup_assertions"]["owned_processes_remaining"] == 0
+        assert Path(crash["data"]["diagnostics_path"]).is_file()

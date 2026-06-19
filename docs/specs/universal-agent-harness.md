@@ -485,7 +485,12 @@ shape:
 8. Codex/OpenAI and OpenCode have first no-token/session-safe
    `launch_managed_session` and `send_receive` projections behind the universal
    runner.
-9. OpenCode has the first real no-token `managed_session_e2e` lane. It calls the
+9. The CLI entrypoint has a broad all-provider fake/no-token smoke that runs
+   identity, evidence capture, projections, run/send/session, pause detection,
+   tail/runtime/transcript, multi-turn continuity, and crash cleanup in one
+   command. Implemented scenarios must pass; unsafe provider mechanics must
+   report operation-level `unsupported_gap` evidence.
+10. OpenCode has the first real no-token `managed_session_e2e` lane. It calls the
    existing provider-live canary to prove server startup, schema, session
    create/get, `prompt_async noReply`, transcript marker recovery, process
    reattach, and abort behavior, then writes canonical Longhouse-style
