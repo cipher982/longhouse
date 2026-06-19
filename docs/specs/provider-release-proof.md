@@ -51,7 +51,7 @@ What is missing:
 
 ## Audit Snapshot - 2026-06-19
 
-This snapshot reflects the Longhouse audit through `11002c7ec`, Sauron jobs
+This snapshot reflects the Longhouse audit through `50343ddff`, Sauron jobs
 `4791001`, and the 2026-06-19 accepted-baseline promotions after Gemini was
 removed as a release-watch provider and Antigravity became the canonical Google
 lane. The release-watch/proof scope is Claude Code, Codex/OpenAI, OpenCode, and
