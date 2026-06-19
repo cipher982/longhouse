@@ -229,6 +229,52 @@ def test_provider_release_proof_universal_smoke_make_emits_all_provider_artifact
         assert execution_matrix["missing_provider_actions"] == []
 
 
+def test_provider_release_proof_universal_smoke_default_runs_managed_session_e2e() -> (
+    None
+):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        artifact = root / "universal-smoke.json"
+        evidence_root = root / "evidence"
+
+        result = _run_make(
+            [
+                "provider-release-proof-universal-smoke",
+                f"ARTIFACT={artifact}",
+                f"EVIDENCE_ROOT={evidence_root}",
+            ]
+        )
+
+        assert result.returncode == 0, result.stderr
+        payload = _read_json(artifact)
+        assert payload["verdict"] == "yellow"
+        assert "managed_session_e2e" in payload["scenarios"]
+        assert payload["result_count"] == len(payload["providers"]) * len(
+            payload["scenarios"]
+        )
+
+        universal = _read_json(Path(payload["universal_harness_artifact"]))
+        managed_results = {
+            row["provider"]: row
+            for row in universal["results"]
+            if row["scenario"] == "managed_session_e2e"
+        }
+        assert set(managed_results) == {
+            "claude",
+            "codex",
+            "opencode",
+            "antigravity",
+        }
+        assert managed_results["claude"]["status"] == "pass"
+        assert managed_results["opencode"]["status"] == "pass"
+        assert managed_results["antigravity"]["status"] == "pass"
+        assert managed_results["codex"]["status"] == "unsupported_gap"
+        assert (
+            managed_results["codex"]["failure_code"]
+            == "codex_managed_bridge_credentials_missing"
+        )
+
+
 def test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_yellow() -> (
     None
 ):
@@ -447,6 +493,7 @@ def main() -> int:
         test_provider_release_proof_status_all_make_reports_inventory_missing_baseline,
         test_provider_release_proof_maturity_make_emits_rollup,
         test_provider_release_proof_universal_smoke_make_emits_all_provider_artifact,
+        test_provider_release_proof_universal_smoke_default_runs_managed_session_e2e,
         test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_yellow,
         test_provider_release_proof_make_passes_scenario_id_override,
         test_provider_release_proof_make_runs_preflight_only,

@@ -41,6 +41,7 @@ DEFAULT_SCENARIOS = (
     "transcript_binding",
     "multi_turn_continuity",
     "crash_timeout_cleanup",
+    "managed_session_e2e",
 )
 FAKE_VERSION_BY_PROVIDER = {
     "claude": "2.9.9-fake (Claude Code)",
@@ -209,6 +210,39 @@ server.serve_forever()
 """
 
 
+def _fake_claude_provider_live_script() -> str:
+    return r"""#!/usr/bin/env python3
+import json
+import os
+import sys
+
+args = sys.argv[1:]
+if args == ["--version"]:
+    print("2.9.9-fake (Claude Code)")
+    raise SystemExit(0)
+
+if args == ["--help"]:
+    if os.environ.get("FAKE_CLAUDE_MISSING_SESSION_ID") == "1":
+        print("--resume --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
+        raise SystemExit(0)
+    print("--session-id --resume --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
+    raise SystemExit(0)
+
+if args == ["--dangerously-load-development-channels", "server:longhouse-channel", "--help"]:
+    if os.environ.get("FAKE_CLAUDE_CHANNELS_MISSING") == "1":
+        print("unknown option --dangerously-load-development-channels", file=sys.stderr)
+        raise SystemExit(1)
+    if os.environ.get("FAKE_CLAUDE_CHANNELS_UNCONFIRMED") == "1":
+        print("--session-id --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
+        raise SystemExit(0)
+    print("--session-id --resume --dangerously-skip-permissions --mcp-config --strict-mcp-config --permission-mode")
+    raise SystemExit(0)
+
+print("unexpected fake claude args: " + json.dumps(args), file=sys.stderr)
+raise SystemExit(2)
+"""
+
+
 def utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
@@ -233,6 +267,11 @@ def write_fake_provider_bins(root: Path) -> dict[str, Path]:
         path = bin_root / FAKE_BINARY_BY_PROVIDER[provider]
         if provider == "opencode":
             path.write_text(_fake_opencode_server_script(), encoding="utf-8")
+            path.chmod(0o755)
+            result[provider] = path
+            continue
+        if provider == "claude":
+            path.write_text(_fake_claude_provider_live_script(), encoding="utf-8")
             path.chmod(0o755)
             result[provider] = path
             continue

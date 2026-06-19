@@ -182,8 +182,13 @@ canary for `managed_tui_attach` and `detached_ui`, then DB-ingests those
 launch/reattach rows when Runtime Host credentials are available; without those
 credentials it returns a typed `unsupported_gap`. Antigravity calls the
 provider-control hook/inbox canary, projects external-event channel rows, and
-DB-ingests them. That proves hook/inbox input delivery and Stop/force-continue
-behavior; it does not prove interrupt, reattach, or tool-result semantics.
+DB-ingests them. The default all-provider fake/no-token release smoke includes
+this scenario, so routine CI/Sauron smoke artifacts must show Claude, OpenCode,
+and Antigravity passing their provider-specific managed-session lanes while
+Codex reports the typed Runtime Host credentials gap when credentials are not
+configured. That proves hook/inbox input delivery and Stop/force-continue
+behavior for Antigravity; it does not prove interrupt, reattach, or tool-result
+semantics.
 
 `interrupt_cancel` is a dedicated universal control scenario. Claude routes it
 to the provider-control channel canary, proves normal send metadata, steer
@@ -535,9 +540,10 @@ shape:
    runner.
 9. The CLI entrypoint has a broad all-provider fake/no-token smoke that runs
    identity, evidence capture, projections, run/send/session, pause detection,
-   tail/runtime/transcript, multi-turn continuity, and crash cleanup in one
-   command. Implemented scenarios must pass; unsafe provider mechanics must
-   report operation-level `unsupported_gap` evidence.
+   tail/runtime/transcript, multi-turn continuity, crash cleanup, and
+   provider-specific `managed_session_e2e` lanes in one command. Implemented
+   scenarios must pass; unsafe provider mechanics must report operation-level
+   `unsupported_gap` evidence.
 10. OpenCode has the first real no-token `managed_session_e2e` lane. It calls the
    existing provider-live canary to prove server startup, schema, session
    create/get, `prompt_async noReply`, transcript marker recovery, process
