@@ -1244,7 +1244,7 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
             assert Path(payload["artifacts"]["action_matrix"]).exists()
             assert Path(payload["artifacts"]["control_surface"]).exists()
             universal = payload["normalized"]["universal_harness"]
-            assert universal["result_count"] == 14
+            assert universal["result_count"] == 16
             assert "action_matrix" in universal["scenarios"]
             assert "control_surface" in universal["scenarios"]
             assert "session_projection" in universal["scenarios"]
@@ -1254,6 +1254,8 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
             assert "tail_output" in universal["scenarios"]
             assert "runtime_phase" in universal["scenarios"]
             assert "transcript_binding" in universal["scenarios"]
+            assert "multi_turn_continuity" in universal["scenarios"]
+            assert "crash_timeout_cleanup" in universal["scenarios"]
             assert (
                 payload["normalized"]["canaries"]["universal_probe_identity"]["status"]
                 == "pass"
@@ -1311,6 +1313,18 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
                 == "pass"
             )
             assert (
+                payload["normalized"]["canaries"]["universal_multi_turn_continuity"][
+                    "status"
+                ]
+                == "pass"
+            )
+            assert (
+                payload["normalized"]["canaries"]["universal_crash_timeout_cleanup"][
+                    "status"
+                ]
+                == "pass"
+            )
+            assert (
                 payload["operation_evidence"]["universal_session_projection"][
                     "status"
                 ]
@@ -1338,6 +1352,18 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
             )
             assert (
                 payload["operation_evidence"]["universal_transcript_binding"][
+                    "status"
+                ]
+                == "pass"
+            )
+            assert (
+                payload["operation_evidence"]["universal_multi_turn_continuity"][
+                    "status"
+                ]
+                == "pass"
+            )
+            assert (
+                payload["operation_evidence"]["universal_crash_timeout_cleanup"][
                     "status"
                 ]
                 == "pass"

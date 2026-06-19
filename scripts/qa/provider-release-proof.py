@@ -53,6 +53,8 @@ DEFAULT_UNIVERSAL_SCENARIOS = (
     "tail_output",
     "runtime_phase",
     "transcript_binding",
+    "multi_turn_continuity",
+    "crash_timeout_cleanup",
 )
 UNIVERSAL_SCENARIOS = (
     "probe_identity",
