@@ -41,6 +41,7 @@ CLAUDE_MACHINE_LIVE_REQUIRED_OPERATIONS = (
 )
 DEFAULT_UNIVERSAL_SCENARIOS = (
     "probe_identity",
+    "adapter_conformance",
     "collect_raw_evidence",
     "action_matrix",
     "control_surface",
@@ -58,6 +59,7 @@ DEFAULT_UNIVERSAL_SCENARIOS = (
 )
 UNIVERSAL_SCENARIOS = (
     "probe_identity",
+    "adapter_conformance",
     "collect_raw_evidence",
     "action_matrix",
     "control_surface",
@@ -1815,9 +1817,13 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
     if args.universal_fixture_path is not None:
         args.universal_fixture_path = args.universal_fixture_path.expanduser()
     if args.universal_old_proof_artifact is not None:
-        args.universal_old_proof_artifact = args.universal_old_proof_artifact.expanduser()
+        args.universal_old_proof_artifact = (
+            args.universal_old_proof_artifact.expanduser()
+        )
     if args.universal_new_proof_artifact is not None:
-        args.universal_new_proof_artifact = args.universal_new_proof_artifact.expanduser()
+        args.universal_new_proof_artifact = (
+            args.universal_new_proof_artifact.expanduser()
+        )
     if args.universal_baseline_root is not None:
         args.universal_baseline_root = args.universal_baseline_root.expanduser()
     if args.provider == "codex":

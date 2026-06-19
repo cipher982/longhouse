@@ -484,6 +484,40 @@ def test_adapter_registry_uses_concrete_provider_adapters(tmp_path: Path) -> Non
         assert "action_result" in adapter.config.methods
 
 
+def test_adapter_conformance_runs_for_all_providers(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=uah.SUPPORTED_PROVIDERS,
+            scenarios=("adapter_conformance",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
+        )
+    )
+
+    assert payload["verdict"] == "green"
+    assert {result["provider"] for result in payload["results"]} == set(uah.SUPPORTED_PROVIDERS)
+    for result in payload["results"]:
+        assert result["scenario"] == "adapter_conformance"
+        assert result["status"] == "pass"
+        assert result["data"]["action_ids"] == list(uah.ACTIONS)
+        assert result["data"]["scenario_ids"] == list(uah.SCENARIOS)
+        assert result["data"]["method_count"] == len(uah.MVP_METHODS)
+        assert result["data"]["failures"] == {
+            "missing_declared_methods": [],
+            "extra_declared_methods": [],
+            "missing_callable_methods": [],
+            "wrong_adapter_class": False,
+            "unmapped_actions": [],
+            "extra_action_mappings": [],
+            "mapped_unknown_scenarios": [],
+            "missing_scenario_runners": [],
+            "extra_scenario_runners": [],
+        }
+        assert all(row["declared"] and row["callable"] for row in result["data"]["methods"])
+        evidence_root = Path(result["evidence_root"])
+        assert (evidence_root / "assertions" / "adapter-conformance.json").is_file()
+
+
 def test_action_matrix_emits_same_longhouse_actions_for_all_providers(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
@@ -711,6 +745,7 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
         assert result["data"]["action_count"] == len(uah.ACTIONS)
         assert result["data"]["missing_actions"] == []
         assert "action_matrix" in result["data"]["scenario_ids"]
+        assert "adapter_conformance" in result["data"]["scenario_ids"]
         assert "interrupt_cancel" in result["data"]["scenario_ids"]
         assert "answer_pause_request" in result["data"]["scenario_ids"]
         assert "old_new_release_diff" in result["data"]["scenario_ids"]

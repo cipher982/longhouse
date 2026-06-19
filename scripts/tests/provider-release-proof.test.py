@@ -1004,7 +1004,9 @@ def _write_release_proof(
     stderr = artifact_dir / "stderr.log"
     normalized_contract = artifact_dir / "normalized" / "contract.json"
     provider_contract = artifact_dir / "normalized" / "provider_contract.json"
-    operation_evidence_artifact = artifact_dir / "normalized" / "operation_evidence.json"
+    operation_evidence_artifact = (
+        artifact_dir / "normalized" / "operation_evidence.json"
+    )
     session_projection = artifact_dir / "normalized" / "session_projection.json"
     action_matrix = artifact_dir / "normalized" / "action_matrix.json"
     control_surface = artifact_dir / "normalized" / "control_surface.json"
@@ -1135,9 +1137,15 @@ def _write_release_proof(
     stderr.write_text("", encoding="utf-8")
     normalized_contract.parent.mkdir(parents=True, exist_ok=True)
     normalized_contract.write_text(json.dumps(normalized), encoding="utf-8")
-    provider_contract.write_text(json.dumps(provider_contract_payload), encoding="utf-8")
-    operation_evidence_artifact.write_text(json.dumps(operation_evidence_payload), encoding="utf-8")
-    session_projection.write_text(json.dumps(session_projection_payload), encoding="utf-8")
+    provider_contract.write_text(
+        json.dumps(provider_contract_payload), encoding="utf-8"
+    )
+    operation_evidence_artifact.write_text(
+        json.dumps(operation_evidence_payload), encoding="utf-8"
+    )
+    session_projection.write_text(
+        json.dumps(session_projection_payload), encoding="utf-8"
+    )
     action_matrix.write_text(json.dumps(action_matrix_payload), encoding="utf-8")
     control_surface.write_text(json.dumps(control_surface_payload), encoding="utf-8")
     proof = {
@@ -1244,7 +1252,8 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
             assert Path(payload["artifacts"]["action_matrix"]).exists()
             assert Path(payload["artifacts"]["control_surface"]).exists()
             universal = payload["normalized"]["universal_harness"]
-            assert universal["result_count"] == 16
+            assert universal["result_count"] == 17
+            assert "adapter_conformance" in universal["scenarios"]
             assert "action_matrix" in universal["scenarios"]
             assert "control_surface" in universal["scenarios"]
             assert "session_projection" in universal["scenarios"]
@@ -1258,6 +1267,12 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
             assert "crash_timeout_cleanup" in universal["scenarios"]
             assert (
                 payload["normalized"]["canaries"]["universal_probe_identity"]["status"]
+                == "pass"
+            )
+            assert (
+                payload["normalized"]["canaries"]["universal_adapter_conformance"][
+                    "status"
+                ]
                 == "pass"
             )
             assert (
@@ -1325,15 +1340,11 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
                 == "pass"
             )
             assert (
-                payload["operation_evidence"]["universal_session_projection"][
-                    "status"
-                ]
+                payload["operation_evidence"]["universal_session_projection"]["status"]
                 == "pass"
             )
             assert (
-                payload["operation_evidence"]["universal_timeline_projection"][
-                    "status"
-                ]
+                payload["operation_evidence"]["universal_timeline_projection"]["status"]
                 == "pass"
             )
             assert (
@@ -1351,9 +1362,7 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
                 == "pass"
             )
             assert (
-                payload["operation_evidence"]["universal_transcript_binding"][
-                    "status"
-                ]
+                payload["operation_evidence"]["universal_transcript_binding"]["status"]
                 == "pass"
             )
             assert (
@@ -1366,6 +1375,10 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
                 payload["operation_evidence"]["universal_crash_timeout_cleanup"][
                     "status"
                 ]
+                == "pass"
+            )
+            assert (
+                payload["operation_evidence"]["universal_adapter_conformance"]["status"]
                 == "pass"
             )
             assert payload["normalized"]["canaries"]["universal_run_prompt_once"][
@@ -1430,9 +1443,7 @@ def test_release_proof_can_attach_universal_old_new_release_diff() -> None:
             == "pass"
         )
         assert (
-            payload["operation_evidence"]["universal_old_new_release_diff"][
-                "status"
-            ]
+            payload["operation_evidence"]["universal_old_new_release_diff"]["status"]
             == "pass"
         )
         assert (
@@ -1568,9 +1579,7 @@ def test_release_proof_can_attach_universal_full_action_suite() -> None:
         assert result.returncode == 0, result.stderr + result.stdout
         assert payload["verdict"] == "green"
         assert (
-            payload["normalized"]["canaries"]["universal_full_action_suite"][
-                "status"
-            ]
+            payload["normalized"]["canaries"]["universal_full_action_suite"]["status"]
             == "warn"
         )
         assert (
@@ -1783,9 +1792,7 @@ def test_codex_release_proof_can_attach_universal_answer_pause_request_service_g
             == "warn"
         )
         assert (
-            payload["operation_evidence"]["universal_answer_pause_request"][
-                "status"
-            ]
+            payload["operation_evidence"]["universal_answer_pause_request"]["status"]
             == "blocked"
         )
         assert (
@@ -1793,9 +1800,9 @@ def test_codex_release_proof_can_attach_universal_answer_pause_request_service_g
             == "live_token_required"
         )
         assert (
-            payload["operation_evidence"][
-                "universal_longhouse_pause_response_service"
-            ]["status"]
+            payload["operation_evidence"]["universal_longhouse_pause_response_service"][
+                "status"
+            ]
             == "pass"
         )
         universal_artifact = _read_json(
@@ -1805,9 +1812,7 @@ def test_codex_release_proof_can_attach_universal_answer_pause_request_service_g
         assert result_row["provider"] == "codex"
         assert result_row["scenario"] == "answer_pause_request"
         assert result_row["status"] == "blocked"
-        assert (
-            result_row["failure_code"] == "answer_pause_provider_delivery_unproven"
-        )
+        assert result_row["failure_code"] == "answer_pause_provider_delivery_unproven"
         assert result_row["data"]["longhouse_response_service"]["status"] == "pass"
         evidence_root = Path(result_row["evidence_root"])
         resolved = _read_json(
@@ -1817,9 +1822,7 @@ def test_codex_release_proof_can_attach_universal_answer_pause_request_service_g
         assert resolved["active_after_response"] is None
 
 
-def test_antigravity_release_proof_can_attach_universal_terminate_cleanup_gap() -> (
-    None
-):
+def test_antigravity_release_proof_can_attach_universal_terminate_cleanup_gap() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         _write_fake_repo(root / "repo")
@@ -1838,9 +1841,7 @@ def test_antigravity_release_proof_can_attach_universal_terminate_cleanup_gap() 
         assert result.returncode == 0, result.stderr + result.stdout
         assert payload["verdict"] == "green"
         assert (
-            payload["normalized"]["canaries"]["universal_terminate_cleanup"][
-                "status"
-            ]
+            payload["normalized"]["canaries"]["universal_terminate_cleanup"]["status"]
             == "warn"
         )
         assert (
@@ -2485,7 +2486,9 @@ def test_antigravity_release_proof_can_attach_universal_hook_inbox_e2e() -> None
         assert "force_continue" in raw_events
 
 
-def test_antigravity_release_proof_can_attach_universal_external_event_channel_e2e() -> None:
+def test_antigravity_release_proof_can_attach_universal_external_event_channel_e2e() -> (
+    None
+):
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         _write_fake_repo(root / "repo")
@@ -2510,9 +2513,7 @@ def test_antigravity_release_proof_can_attach_universal_external_event_channel_e
             == "pass"
         )
         assert (
-            payload["operation_evidence"]["universal_external_event_channel"][
-                "status"
-            ]
+            payload["operation_evidence"]["universal_external_event_channel"]["status"]
             == "pass"
         )
         assert payload["operation_evidence"]["universal_db_ingest"]["status"] == "pass"
@@ -2524,8 +2525,7 @@ def test_antigravity_release_proof_can_attach_universal_external_event_channel_e
         assert result_row["scenario"] == "external_event_channel"
         assert result_row["status"] == "pass"
         assert (
-            result_row["data"]["source_artifact_kind"]
-            == "provider_control_e2e_canary"
+            result_row["data"]["source_artifact_kind"] == "provider_control_e2e_canary"
         )
         evidence_root = Path(result_row["evidence_root"])
         raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(

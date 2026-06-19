@@ -36,6 +36,7 @@ ARTIFACT_KIND = "universal_agent_harness_run"
 SUPPORTED_PROVIDERS = ("claude", "codex", "opencode", "antigravity")
 SCENARIOS = (
     "probe_identity",
+    "adapter_conformance",
     "collect_raw_evidence",
     "action_matrix",
     "control_surface",
@@ -87,6 +88,7 @@ YELLOW_STATUSES = (STATUS_UNSUPPORTED_GAP, STATUS_BLOCKED, STATUS_FLAKY, STATUS_
 MVP_METHODS = (
     "prepare",
     "probe",
+    "adapter_conformance",
     "action_result",
     "action_matrix",
     "control_surface",
@@ -130,6 +132,7 @@ PROFILES = ("fixture_replay", "live_no_token")
 SAFE_MANAGED_SESSION_SCENARIOS = ("launch_managed_session", "send_receive")
 FULL_ACTION_SUITE_SCENARIOS = (
     "probe_identity",
+    "adapter_conformance",
     "collect_raw_evidence",
     "parse_ingest_project",
     "db_ingest_project",
@@ -565,6 +568,8 @@ class AgentHarnessAdapter(Protocol):
 
     def probe(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
+    def adapter_conformance(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
     def action_result(
         self,
         package: "EvidencePackage",
@@ -758,6 +763,72 @@ class UniversalProviderAdapter:
                 "command": evidence,
             }
         package.write_json("assertions/probe.json", payload)
+        return payload
+
+    def adapter_conformance(self, package: EvidencePackage) -> dict[str, Any]:
+        declared_methods = set(self.config.methods)
+        required_methods = set(MVP_METHODS)
+        method_rows = []
+        for method_name in MVP_METHODS:
+            method = getattr(self, method_name, None)
+            method_rows.append(
+                {
+                    "method": method_name,
+                    "declared": method_name in declared_methods,
+                    "callable": callable(method),
+                }
+            )
+        expected_class = ADAPTER_CLASS_BY_PROVIDER.get(self.config.provider, UniversalProviderAdapter).__name__
+        action_mapping_keys = set(ACTION_EXECUTION_SCENARIO_BY_ID)
+        unmapped_actions = sorted(set(ACTIONS) - action_mapping_keys)
+        extra_action_mappings = sorted(action_mapping_keys - set(ACTIONS))
+        mapped_unknown_scenarios = sorted(
+            {scenario for scenarios in ACTION_EXECUTION_SCENARIO_BY_ID.values() for scenario in scenarios if scenario not in SCENARIOS}
+        )
+        missing_scenario_runners = sorted(set(SCENARIOS) - set(SCENARIO_RUNNERS))
+        extra_scenario_runners = sorted(set(SCENARIO_RUNNERS) - set(SCENARIOS))
+        failures = {
+            "missing_declared_methods": sorted(required_methods - declared_methods),
+            "extra_declared_methods": sorted(declared_methods - required_methods),
+            "missing_callable_methods": sorted(row["method"] for row in method_rows if not row["callable"]),
+            "wrong_adapter_class": type(self).__name__ != expected_class,
+            "unmapped_actions": unmapped_actions,
+            "extra_action_mappings": extra_action_mappings,
+            "mapped_unknown_scenarios": mapped_unknown_scenarios,
+            "missing_scenario_runners": missing_scenario_runners,
+            "extra_scenario_runners": extra_scenario_runners,
+        }
+        passed = not any(bool(value) for value in failures.values())
+        payload = {
+            "status": STATUS_PASS if passed else STATUS_FAIL,
+            "scenario": "adapter_conformance",
+            "provider": self.config.provider,
+            "adapter_class": type(self).__name__,
+            "expected_adapter_class": expected_class,
+            "method_count": len(MVP_METHODS),
+            "methods": method_rows,
+            "capabilities": list(self.config.capabilities),
+            "profiles": list(self.config.profiles),
+            "action_count": len(ACTIONS),
+            "action_ids": list(ACTIONS),
+            "scenario_count": len(SCENARIOS),
+            "scenario_ids": list(SCENARIOS),
+            "action_execution_scenarios": {action_id: list(scenarios) for action_id, scenarios in ACTION_EXECUTION_SCENARIO_BY_ID.items()},
+            "failures": failures,
+            "operation_evidence": {
+                "adapter_conformance": {
+                    "status": STATUS_PASS if passed else STATUS_FAIL,
+                    "level": "hermetic",
+                    "canary": "universal_adapter_conformance",
+                    "failure_code": None if passed else "adapter_conformance_failed",
+                }
+            },
+        }
+        if not passed:
+            payload["failure_code"] = "adapter_conformance_failed"
+            payload["message"] = "Provider adapter no longer conforms to the universal harness contract."
+        package.write_json("assertions/adapter-conformance.json", payload)
+        package.write_json("assertions/adapter_conformance.json", payload)
         return payload
 
     def action_result(
@@ -5639,6 +5710,18 @@ def run_probe_identity(adapter: AgentHarnessAdapter, package: EvidencePackage) -
     )
 
 
+def run_adapter_conformance(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.adapter_conformance(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="adapter_conformance",
+        package=package,
+        payload=payload,
+    )
+
+
 def run_collect_raw_evidence(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
     adapter.prepare(package)
     payload = adapter.collect_evidence(package)
@@ -6095,6 +6178,7 @@ def run_managed_session_e2e(adapter: AgentHarnessAdapter, package: EvidencePacka
 
 SCENARIO_RUNNERS = {
     "probe_identity": run_probe_identity,
+    "adapter_conformance": run_adapter_conformance,
     "collect_raw_evidence": run_collect_raw_evidence,
     "action_matrix": run_action_matrix,
     "control_surface": run_control_surface,

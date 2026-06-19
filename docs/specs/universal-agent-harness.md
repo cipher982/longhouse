@@ -80,6 +80,7 @@ Required adapter responsibilities:
 | --- | --- |
 | `prepare` | Create an isolated workspace, resolve/stage the provider binary or version, write provider config, and record environment metadata. |
 | `probe` | Report provider name, binary path, version, channel, adapter version, platform, declared capabilities, and auth/account status where available. |
+| `adapter_conformance` | Prove the concrete adapter class implements the universal method set, action ids, scenario runner map, and action-to-scenario map. |
 | `run_prompt` | Run a one-shot prompt and capture raw stdout/stderr/provider exports. |
 | `start_session` | Start a managed interactive session and return a stable session handle with provider ids and evidence paths. |
 | `send_input` | Deliver text or structured input to an active managed session. |
@@ -283,6 +284,7 @@ Universal scenarios:
 | Scenario | Severity | Required proof |
 | --- | --- | --- |
 | `probe_identity` | P0 | Version, binary path, adapter version, platform, declared/observed capabilities. |
+| `adapter_conformance` | P0 | Concrete provider adapter class, method table, action ids, scenario ids, and action-to-scenario mapping match the universal contract. |
 | `action_matrix` | P0 | Every provider emits the same Longhouse action ids with explicit pass/fail/unsupported/blocked status and proof source. |
 | `control_surface` | P0 | Every provider emits the same control/observation action subset with concrete pass/fail/unsupported/blocked evidence rows. |
 | `run_prompt_once` | P0 | One-shot prompt exits cleanly, emits evidence, and produces a model or fixture response. |
@@ -475,7 +477,7 @@ shape:
 1. Adapter protocol/data classes and scenario result schema exist.
 2. MVP adapters exist for Claude Code, Codex/OpenAI, OpenCode, and
    Antigravity.
-3. `probe_identity`, `collect_raw_evidence`, and fixture
+3. `probe_identity`, `adapter_conformance`, `collect_raw_evidence`, and fixture
    `parse_ingest_project` run through shared scenario code.
 4. `provider-release-proof.py --run-universal-harness` attaches the universal
    run artifact, normalized universal canaries, and prefixed universal
