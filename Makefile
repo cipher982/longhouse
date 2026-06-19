@@ -12,6 +12,9 @@ SOURCE_REVIEW_NOTE ?= Provider release proof invoked from Makefile.
 BASELINE_ROOT ?= .provider-release-proofs
 CODEX_API_URL ?=
 CODEX_AGENTS_TOKEN ?=
+CLAUDE_API_URL ?=
+CLAUDE_AGENTS_TOKEN ?=
+CLAUDE_DEVICE_ID ?=
 
 .PHONY: help dev dev-demo stop test test-ios test-ios-session-open ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-runner test-e2e test-e2e-core test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-ios-api validate-makefile validate-build-identity validate-managed-codex-contract validate-managed-session-contract validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-status regen-ws generate-sdk generate-ios-api qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e provider-live-route-e2e-opencode-transcript reprovision deploy-status launch-readiness ship-watch ship release ui-capture marketing-screenshots demo-render qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-synthetic-bench test-shipper-synthetic-live-bench test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check observability-up observability-down
 
@@ -360,6 +363,9 @@ provider-release-proof: ## Emit provider release proof artifact; set PROVIDER=..
 	if [ -n "$(CODEX_RUN_DETACHED_UI)" ]; then set -- "$$@" --codex-run-detached-ui; fi; \
 	if [ -n "$(CODEX_RUN_MANAGED_LIVE_SEND)" ]; then set -- "$$@" --codex-run-managed-live-send; fi; \
 	if [ -n "$(CODEX_API_URL)" ]; then set -- "$$@" --codex-api-url "$(CODEX_API_URL)"; fi; \
+	if [ -n "$(CLAUDE_RUN_MACHINE_LIVE_PROOF)" ]; then set -- "$$@" --claude-run-machine-live-proof; fi; \
+	if [ -n "$(CLAUDE_API_URL)" ]; then set -- "$$@" --claude-api-url "$(CLAUDE_API_URL)"; fi; \
+	if [ -n "$(CLAUDE_DEVICE_ID)" ]; then set -- "$$@" --claude-device-id "$(CLAUDE_DEVICE_ID)"; fi; \
 	if [ -n "$(ANTIGRAVITY_RUN_REAL_AGY_SEND)" ]; then set -- "$$@" --antigravity-run-real-agy-send; fi; \
 	python3 "$$@"
 

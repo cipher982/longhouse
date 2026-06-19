@@ -283,12 +283,37 @@ Codex Runtime Host tokens are read from environment variables and passed to
 nested proof commands through `CODEX_AGENTS_TOKEN`; they should not appear in
 argv, raw command evidence, or published fallback artifacts.
 
+Claude Runtime Host machine-live proof is an explicit opt-in scenario:
+
+```bash
+CLAUDE_AGENTS_TOKEN=... \
+scripts/qa/provider-release-proof.py \
+  --provider claude \
+  --provider-bin /path/to/claude \
+  --provider-version "Claude Code 2.1.181" \
+  --claude-run-machine-live-proof \
+  --claude-api-url https://your-longhouse-runtime \
+  --claude-device-id cinder \
+  --artifact /tmp/claude-machine-live-proof.json \
+  --evidence-root /tmp/claude-machine-live-proof-evidence \
+  --json
+```
+
+This uses scenario `claude-machine-live-release-proof-v1`, posts to the Runtime
+Host `provider-live-proof` operation, polls for completion, and attaches
+machine-live `send_input`, `transcript_binding`, and `steer_active_turn`
+operation evidence. The agents token is read from `CLAUDE_AGENTS_TOKEN` and
+should not appear in the artifact tree.
+
 ## Current Provider State
 
 - OpenCode: accepted baseline `opencode-release-proof-v1`, provider version
   `opencode 1.16.2`.
 - Claude Code: accepted scoped baseline `claude-release-proof-v1`, provider
   version `claude 2.1.161`.
+- Claude Code machine-live: no accepted baseline yet for
+  `claude-machine-live-release-proof-v1`; the Longhouse wrapper can run it when
+  Runtime Host URL/token/device credentials are supplied.
 - Antigravity: accepted scoped baseline `antigravity-release-proof-v1`, provider
   version `agy 1.0.8`.
 - Codex/OpenAI: accepted baseline `codex-release-proof-v1`, provider version

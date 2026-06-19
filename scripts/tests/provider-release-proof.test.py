@@ -3,11 +3,14 @@
 
 from __future__ import annotations
 
+import contextlib
+import http.server
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -23,6 +26,117 @@ def _write_exe(path: Path, text: str) -> Path:
 
 def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+@contextlib.contextmanager
+def _fake_claude_machine_live_server(*, mode: str = "success"):
+    requests: list[dict] = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args) -> None:
+            return
+
+        def _write(self, status: int, payload: dict) -> None:
+            raw = json.dumps(payload).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def do_POST(self) -> None:
+            length = int(self.headers.get("Content-Length") or "0")
+            body = json.loads(self.rfile.read(length).decode("utf-8"))
+            requests.append(
+                {
+                    "method": "POST",
+                    "path": self.path,
+                    "token": self.headers.get("X-Agents-Token"),
+                    "body": body,
+                }
+            )
+            self._write(
+                202,
+                {
+                    "operation_id": "op_claude_machine_live",
+                    "status_url": "/api/agents/operations/op_claude_machine_live",
+                },
+            )
+
+        def do_GET(self) -> None:
+            requests.append(
+                {
+                    "method": "GET",
+                    "path": self.path,
+                    "token": self.headers.get("X-Agents-Token"),
+                }
+            )
+            if mode == "failed":
+                self._write(
+                    200,
+                    {
+                        "status": "failed",
+                        "error": {
+                            "code": "provider_live_operation_failed",
+                            "message": "Machine Agent control channel is offline",
+                        },
+                    },
+                )
+                return
+            self._write(
+                200,
+                {
+                    "status": "succeeded",
+                    "command_id": "cmd_claude_machine_live",
+                    "result": {
+                        "provider": "claude",
+                        "transport": "provider_live_proof",
+                        "publish": True,
+                        "exit_code": 0,
+                        "artifact": {
+                            "artifact_kind": "provider_live_canary",
+                            "provider": "claude",
+                            "provider_version": "Claude Code 2.9.9",
+                            "verdict": "green",
+                            "failure_code": None,
+                            "recommendation": "upgrade_allowed",
+                            "canaries": {"live_contract": {"status": "pass"}},
+                            "operation_evidence": {
+                                "launch_local": {
+                                    "status": "pass",
+                                    "level": "live_no_token",
+                                    "source": "fake machine proof launch",
+                                },
+                                "send_input": {
+                                    "status": "pass",
+                                    "level": "manual_live_token",
+                                    "source": "fake machine proof send",
+                                },
+                                "transcript_binding": {
+                                    "status": "pass",
+                                    "level": "manual_live_token",
+                                    "source": "fake machine proof transcript",
+                                },
+                                "steer_active_turn": {
+                                    "status": "pass",
+                                    "level": "manual_live_token",
+                                    "source": "fake machine proof steer",
+                                },
+                            },
+                        },
+                    },
+                },
+            )
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server, requests
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
 
 
 def _write_fake_repo(root: Path) -> None:
@@ -710,6 +824,159 @@ def test_antigravity_release_proof_blocks_failed_real_agy_send_evidence() -> Non
         )
 
 
+def test_claude_machine_live_proof_uses_distinct_scenario_and_operation_evidence() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir, _fake_claude_machine_live_server() as (
+        server,
+        requests,
+    ):
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+        api_url = f"http://127.0.0.1:{server.server_port}"
+
+        result, payload = _run_proof(
+            root,
+            "claude",
+            extra_args=[
+                "--provider-version",
+                "Claude Code 2.9.9",
+                "--claude-run-machine-live-proof",
+                "--claude-api-url",
+                api_url,
+                "--claude-device-id",
+                "cinder",
+            ],
+            env={"CLAUDE_AGENTS_TOKEN": "secret-token"},
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["scenario_id"] == "claude-machine-live-release-proof-v1"
+        assert payload["scenario_profile"] == "machine-live"
+        assert payload["verdict"] == "green"
+        assert payload["failure_code"] is None
+        assert payload["operation_evidence"]["send_input"]["level"] == "manual_live_token"
+        assert payload["operation_evidence"]["transcript_binding"]["level"] == "manual_live_token"
+        assert payload["operation_evidence"]["steer_active_turn"]["level"] == "manual_live_token"
+        canary = payload["normalized"]["canaries"]["claude_machine_live_proof"]
+        assert canary["status"] == "pass"
+        assert canary["device_id"] == "cinder"
+        assert canary["command_id"] == "cmd_claude_machine_live"
+        assert canary["operation_id"] == "op_claude_machine_live"
+        assert Path(payload["artifacts"]["claude_machine_live_artifact"]).exists()
+        assert "secret-token" not in json.dumps(payload)
+        assert [request["method"] for request in requests] == ["POST", "GET"]
+        assert requests[0]["path"] == "/api/agents/machines/cinder/provider-live-proof"
+        assert requests[0]["token"] == "secret-token"
+        assert requests[0]["body"]["run_live_token_contract"] is True
+        assert requests[0]["body"]["expected_provider_version"] == "Claude Code 2.9.9"
+
+
+def test_claude_machine_live_proof_preflight_reports_missing_credentials() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "claude",
+            env={
+                "CLAUDE_API_URL": "",
+                "CLAUDE_AGENTS_TOKEN": "",
+                "CLAUDE_DEVICE_ID": "",
+            },
+            extra_args=[
+                "--preflight-only",
+                "--claude-run-machine-live-proof",
+            ],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["artifact_kind"] == "provider_release_proof_preflight"
+        assert payload["scenario_id"] == "claude-machine-live-release-proof-v1"
+        assert payload["scenario_profile"] == "machine-live"
+        assert payload["verdict"] == "yellow"
+        assert payload["failure_code"] == "provider_release_proof_prerequisites_missing"
+        checks = {check["name"]: check for check in payload["checks"]}
+        assert checks["provider_binary"]["status"] == "pass"
+        assert checks["claude_api_url"]["failure_code"] == "claude_runtime_host_api_url_missing"
+        assert checks["claude_agents_token"]["failure_code"] == (
+            "claude_runtime_host_agents_token_missing"
+        )
+        assert checks["claude_device_id"]["failure_code"] == "claude_runtime_host_device_id_missing"
+
+
+def test_claude_machine_live_proof_blocks_failed_operation() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir, _fake_claude_machine_live_server(
+        mode="failed"
+    ) as (server, requests):
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+        api_url = f"http://127.0.0.1:{server.server_port}"
+
+        result, payload = _run_proof(
+            root,
+            "claude",
+            extra_args=[
+                "--provider-version",
+                "Claude Code 2.9.9",
+                "--claude-run-machine-live-proof",
+                "--claude-api-url",
+                api_url,
+                "--claude-device-id",
+                "cinder",
+            ],
+            env={"CLAUDE_AGENTS_TOKEN": "secret-token"},
+        )
+
+        assert result.returncode == 1
+        assert payload["scenario_id"] == "claude-machine-live-release-proof-v1"
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "claude_machine_live_proof_failed"
+        canary = payload["normalized"]["canaries"]["claude_machine_live_proof"]
+        assert canary["status"] == "fail"
+        assert canary["failure_code"] == "claude_machine_live_proof_failed"
+        assert "Machine Agent control channel is offline" in canary["message"]
+        assert "secret-token" not in json.dumps(payload)
+        assert [request["method"] for request in requests] == ["POST", "GET"]
+
+
+def test_claude_machine_live_proof_does_not_mask_red_source_canary() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir, _fake_claude_machine_live_server() as (
+        server,
+        requests,
+    ):
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+        api_url = f"http://127.0.0.1:{server.server_port}"
+
+        result, payload = _run_proof(
+            root,
+            "claude",
+            extra_args=[
+                "--provider-version",
+                "Claude Code 2.9.9",
+                "--claude-run-machine-live-proof",
+                "--claude-api-url",
+                api_url,
+                "--claude-device-id",
+                "cinder",
+            ],
+            env={
+                "CLAUDE_AGENTS_TOKEN": "secret-token",
+                "FAKE_CLAUDE_MISSING_SESSION_ID": "1",
+            },
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "claude_command_contract_missing"
+        assert payload["normalized"]["canaries"]["claude_machine_live_proof"]["status"] == "pass"
+        assert [request["method"] for request in requests] == ["POST", "GET"]
+
+
 def test_claude_release_proof_normalizes_no_token_contract_shape() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -827,6 +1094,10 @@ def main() -> int:
         test_explicit_scenario_id_overrides_profile_default,
         test_antigravity_release_proof_can_attach_real_agy_send_evidence,
         test_antigravity_release_proof_blocks_failed_real_agy_send_evidence,
+        test_claude_machine_live_proof_uses_distinct_scenario_and_operation_evidence,
+        test_claude_machine_live_proof_preflight_reports_missing_credentials,
+        test_claude_machine_live_proof_blocks_failed_operation,
+        test_claude_machine_live_proof_does_not_mask_red_source_canary,
         test_claude_release_proof_normalizes_no_token_contract_shape,
         test_claude_release_proof_red_when_session_flag_missing,
         test_claude_release_proof_preserves_development_channel_failure_code,

@@ -80,7 +80,7 @@
                 "Sauron:jobs/agents/release_triage/provider_status.py",
                 "Sauron:tests/test_agent_release_provider_status.py"
             ],
-            "proof_boundary": "hermetic_or_launch_flag_shape",
+            "proof_boundary": "hermetic_or_launch_flag_shape_or_machine_live",
             "fake_or_real": "mixed",
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
@@ -153,10 +153,11 @@
             "covered": "partial",
             "test_evidence": [
                 "server/tests_lite/test_claude_channel_bridge.py",
-                "scripts/tests/provider-control-e2e-canary.test.py"
+                "scripts/tests/provider-control-e2e-canary.test.py",
+                "scripts/tests/provider-release-proof.test.py"
             ],
-            "proof_boundary": "hermetic",
-            "fake_or_real": "fake",
+            "proof_boundary": "hermetic_or_machine_live_token",
+            "fake_or_real": "mixed",
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "none",
@@ -168,12 +169,13 @@
             "covered": "partial",
             "test_evidence": [
                 "server/tests_lite/test_claude_channel_bridge.py",
-                "Makefile:managed-claude-poc"
+                "Makefile:managed-claude-poc",
+                "scripts/tests/provider-release-proof.test.py"
             ],
-            "proof_boundary": "hermetic_plus_manual_live_token",
+            "proof_boundary": "hermetic_plus_manual_live_token_or_machine_live_token",
             "fake_or_real": "mixed",
             "runs_in_ci": true,
-            "runs_in_sauron_release_watch": false,
+            "runs_in_sauron_release_watch": true,
             "accepted_baseline": "none",
             "failure_actionable": true
         },
@@ -211,14 +213,15 @@
             "surface": "live-token behavior",
             "covered": "partial",
             "test_evidence": [
-                "Makefile:managed-claude-poc"
+                "Makefile:managed-claude-poc",
+                "scripts/tests/provider-release-proof.test.py"
             ],
-            "proof_boundary": "manual_live_token",
-            "fake_or_real": "real",
-            "runs_in_ci": false,
-            "runs_in_sauron_release_watch": false,
+            "proof_boundary": "manual_live_token_or_machine_live_token",
+            "fake_or_real": "mixed",
+            "runs_in_ci": true,
+            "runs_in_sauron_release_watch": true,
             "accepted_baseline": "none",
-            "failure_actionable": false
+            "failure_actionable": true
         },
         {
             "provider": "codex",
