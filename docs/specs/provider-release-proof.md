@@ -416,6 +416,9 @@ Optional variables:
   artifact. `--universal-scenario` selects scenarios, `--universal-fixture-path`
   enables fixture replay, and `--universal-prompt` supplies the prompt/input
   used by universal prompt/session scenarios.
+- OpenCode `--universal-scenario managed_session_e2e` is the first real
+  no-token universal provider lane; it still marks DB ingest as a blocked next
+  gate.
 
 The equivalent direct script entrypoint is:
 

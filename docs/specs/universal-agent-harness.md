@@ -160,6 +160,7 @@ Universal scenarios:
 | `run_prompt_once` | P0 | One-shot prompt exits cleanly, emits evidence, and produces a model or fixture response. |
 | `launch_managed_session` | P0 | Managed session starts, exposes a session handle, and has raw evidence. |
 | `send_receive` | P0 | Input reaches the correct active session and a response is observed. |
+| `managed_session_e2e` | P0 | Real provider-safe managed/session mechanics run, raw provider/control evidence is captured, and canonical session/timeline projection is produced. |
 | `collect_raw_evidence` | P0 | stdout/stderr/provider logs/transcripts are persisted on success and failure. |
 | `parse_ingest_project` | P0 | Raw evidence becomes canonical events, ingests into Longhouse, and projects a session/timeline. |
 | `tool_call_result` | P1 | Tool call/result events are paired and attributed; workspace side effects match the fixture. |
@@ -344,10 +345,18 @@ shape:
 6. Codex/OpenAI and OpenCode have first no-token/session-safe
    `launch_managed_session` and `send_receive` projections behind the universal
    runner.
-7. Evidence packages are written for pass, fail, and unsupported results.
-8. Existing one-off canaries remain compatibility lanes until each behavior is
+7. OpenCode has the first real no-token `managed_session_e2e` lane. It calls the
+   existing provider-live canary to prove server startup, schema, session
+   create/get, `prompt_async noReply`, transcript marker recovery, process
+   reattach, and abort behavior, then writes canonical Longhouse-style
+   event/session/timeline projections.
+8. Full DB ingest is still explicit `blocked` evidence for that lane; it is not
+   silently counted as done.
+9. Evidence packages are written for pass, fail, and unsupported results.
+10. Existing one-off canaries remain compatibility lanes until each behavior is
    migrated and baselined.
 
-Next implementation target: replace the projection-only managed/session lanes
-with real adapter calls to the existing no-token mechanics, then migrate
-control/live-token/tool/resume scenarios behind the same runner.
+Next implementation target: promote OpenCode `managed_session_e2e` into real DB
+ingest/session/timeline assertions, then migrate Codex managed mechanics, Claude
+PTY/channel mechanics, and Antigravity hook/inbox mechanics behind the same
+runner.

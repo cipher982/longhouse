@@ -39,6 +39,24 @@ managed-session projections. Provider-specific canaries remain compatibility
 lanes for real control/live-token behavior until those mechanics are migrated
 behind adapters.
 
+OpenCode has the first real provider-safe universal e2e lane:
+
+```bash
+scripts/qa/provider-release-proof.py \
+  --provider opencode \
+  --provider-bin /path/to/opencode \
+  --artifact /tmp/opencode-e2e-proof.json \
+  --evidence-root /tmp/opencode-e2e-proof-evidence \
+  --run-universal-harness \
+  --universal-scenario managed_session_e2e \
+  --json
+```
+
+That lane calls the existing no-token provider-live canary and attaches raw
+OpenCode server/session/schema evidence plus canonical event/session/timeline
+projection. It still reports DB ingest as a blocked next gate rather than
+counting database round-trip coverage as done.
+
 ## Baseline Stores
 
 Use the store that matches the caller:

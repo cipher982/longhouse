@@ -44,6 +44,162 @@ raise SystemExit(2)
     )
 
 
+def _write_fake_opencode_server_bin(root: Path) -> None:
+    _write_exe(
+        root / "fake-provider",
+        r"""#!/usr/bin/env python3
+import base64
+import http.server
+import json
+import os
+import signal
+import sys
+from pathlib import Path
+from urllib.parse import urlparse
+
+args = sys.argv[1:]
+if args == ["--version"]:
+    print("opencode 9.9.9-release-e2e-fake")
+    raise SystemExit(0)
+
+if args == ["attach", "--help"]:
+    print("opencode attach <url>")
+    print("-s, --session session id")
+    print("-p, --password defaults to OPENCODE_SERVER_PASSWORD")
+    print("-u, --username defaults to OPENCODE_SERVER_USERNAME")
+    raise SystemExit(0)
+
+if not args or args[0] != "serve":
+    print("unexpected fake opencode args: " + json.dumps(args), file=sys.stderr)
+    raise SystemExit(2)
+
+username = os.environ.get("OPENCODE_SERVER_USERNAME", "opencode")
+password = os.environ.get("OPENCODE_SERVER_PASSWORD", "")
+provider_session_id = "ses_fake_release_universal_e2e"
+state_path = Path.cwd() / ".fake-opencode-state.json"
+
+def load_messages():
+    try:
+        payload = json.loads(state_path.read_text())
+    except Exception:
+        return []
+    messages = payload.get("messages")
+    return messages if isinstance(messages, list) else []
+
+messages = load_messages()
+
+def save_state():
+    state_path.write_text(json.dumps({"messages": messages}))
+
+def make_doc():
+    return {
+        "openapi": "3.1.0",
+        "paths": {
+            "/global/health": {"get": {"operationId": "global.health"}},
+            "/session": {"post": {"operationId": "session.create"}},
+            "/session/{sessionID}": {"get": {"operationId": "session.get"}},
+            "/session/{sessionID}/message": {
+                "get": {"operationId": "session.messages"},
+                "post": {"operationId": "session.prompt"},
+            },
+            "/session/{sessionID}/prompt_async": {
+                "post": {
+                    "operationId": "session.prompt_async",
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "noReply": {"type": "boolean"},
+                                        "parts": {"type": "array"},
+                                    },
+                                }
+                            }
+                        }
+                    },
+                }
+            },
+            "/session/{sessionID}/abort": {"post": {"operationId": "session.abort"}},
+        },
+    }
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *_args):
+        return
+
+    def _json(self, payload, status=200):
+        data = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _empty(self):
+        self.send_response(204)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _authorized(self):
+        expected = "Basic " + base64.b64encode(f"{username}:{password}".encode()).decode()
+        return self.headers.get("Authorization") == expected
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        if not self._authorized():
+            self._json({"error": "forbidden"}, 403)
+            return
+        if self.path == "/global/health":
+            self._json({"healthy": True})
+            return
+        if self.path == "/doc":
+            self._json(make_doc())
+            return
+        if self.path == f"/session/{provider_session_id}":
+            self._json({"id": provider_session_id})
+            return
+        if parsed.path == f"/session/{provider_session_id}/message":
+            self._json(messages)
+            return
+        self._json({"error": "not found"}, 404)
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        if not self._authorized():
+            self._json({"error": "forbidden"}, 403)
+            return
+        if parsed.path == "/session":
+            self._json({
+                "id": provider_session_id,
+                "cost": 0,
+                "tokens": {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+            })
+            return
+        if parsed.path == f"/session/{provider_session_id}/prompt_async":
+            length = int(self.headers.get("Content-Length") or "0")
+            body = self.rfile.read(length) if length else b"{}"
+            payload = json.loads(body.decode("utf-8") or "{}")
+            messages.append({
+                "info": {"id": "msg_fake_user", "sessionID": provider_session_id, "role": "user"},
+                "parts": payload.get("parts") or [],
+            })
+            save_state()
+            self._empty()
+            return
+        if parsed.path == f"/session/{provider_session_id}/abort":
+            self._json(True)
+            return
+        self._json({"error": "not found"}, 404)
+
+server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+print(f"opencode server listening on http://127.0.0.1:{server.server_address[1]}", flush=True)
+server.serve_forever()
+""",
+    )
+
+
 @contextlib.contextmanager
 def _fake_claude_machine_live_server(*, mode: str = "success"):
     requests: list[dict] = []
@@ -737,6 +893,47 @@ def test_release_proof_exposes_universal_session_evidence_for_codex_and_opencode
             session = _read_json(session_path)
             assert session["has_user"] is True
             assert session["has_assistant"] is True
+
+
+def test_opencode_release_proof_can_attach_real_universal_managed_session_e2e() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        _write_fake_opencode_server_bin(root)
+
+        result, payload = _run_proof(
+            root,
+            "opencode",
+            extra_args=[
+                "--run-universal-harness",
+                "--universal-scenario",
+                "managed_session_e2e",
+            ],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["verdict"] == "green"
+        assert payload["normalized"]["canaries"]["universal_managed_session_e2e"]["status"] == "pass"
+        assert payload["operation_evidence"]["universal_send_input"]["level"] == "live_no_token"
+        assert (
+            payload["operation_evidence"]["universal_send_input"]["canary"] == "opencode_prompt_async_no_reply_delivery"
+        )
+        assert payload["operation_evidence"]["universal_transcript_binding"]["level"] == "live_no_token"
+
+        universal_artifact = _read_json(Path(payload["artifacts"]["universal_harness_artifact"]))
+        e2e_result = universal_artifact["results"][0]
+        assert e2e_result["scenario"] == "managed_session_e2e"
+        assert e2e_result["status"] == "pass"
+        assert e2e_result["data"]["source_artifact_kind"] == "provider_live_canary"
+        assert e2e_result["data"]["synthetic"] is False
+        assert e2e_result["data"]["longhouse_ingest"]["status"] == "blocked"
+
+        evidence_root = Path(e2e_result["evidence_root"])
+        assert (evidence_root / "raw" / "provider-live-canary.json").is_file()
+        assert (evidence_root / "raw" / "provider-live-evidence" / "opencode-server.log").is_file()
+        raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
+        assert "provider_live_canary" in raw_events
+        assert '"synthetic": true' not in raw_events
 
 
 def test_opencode_release_proof_blocks_on_source_canary_red() -> None:
@@ -1632,6 +1829,7 @@ def main() -> int:
         test_opencode_release_proof_normalizes_source_canary,
         test_release_proof_can_attach_universal_harness_for_all_providers,
         test_release_proof_exposes_universal_session_evidence_for_codex_and_opencode,
+        test_opencode_release_proof_can_attach_real_universal_managed_session_e2e,
         test_opencode_release_proof_blocks_on_source_canary_red,
         test_opencode_release_proof_blocks_green_artifact_from_failed_source_canary,
         test_opencode_release_proof_blocks_when_source_artifact_missing,

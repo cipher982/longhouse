@@ -53,6 +53,7 @@ UNIVERSAL_SCENARIOS = (
     "run_prompt_once",
     "launch_managed_session",
     "send_receive",
+    "managed_session_e2e",
 )
 UNIVERSAL_YELLOW_STATUSES = {
     "unsupported_gap",

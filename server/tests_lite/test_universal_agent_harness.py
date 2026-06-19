@@ -39,6 +39,166 @@ def _fake_bins(tmp_path: Path) -> dict[str, Path]:
     }
 
 
+def _fake_opencode_server(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        r"""#!/usr/bin/env python3
+import base64
+import http.server
+import json
+import os
+import signal
+import sys
+from pathlib import Path
+from urllib.parse import urlparse
+
+args = sys.argv[1:]
+if args == ["--version"]:
+    print("opencode 9.9.9-e2e-fake")
+    raise SystemExit(0)
+
+if args == ["attach", "--help"]:
+    print("opencode attach <url>")
+    print("-s, --session session id")
+    print("-p, --password defaults to OPENCODE_SERVER_PASSWORD")
+    print("-u, --username defaults to OPENCODE_SERVER_USERNAME")
+    raise SystemExit(0)
+
+if not args or args[0] != "serve":
+    print("unexpected fake opencode args: " + json.dumps(args), file=sys.stderr)
+    raise SystemExit(2)
+
+username = os.environ.get("OPENCODE_SERVER_USERNAME", "opencode")
+password = os.environ.get("OPENCODE_SERVER_PASSWORD", "")
+provider_session_id = "ses_fake_universal_e2e"
+state_path = Path.cwd() / ".fake-opencode-state.json"
+
+def load_messages():
+    try:
+        payload = json.loads(state_path.read_text())
+    except Exception:
+        return []
+    messages = payload.get("messages")
+    return messages if isinstance(messages, list) else []
+
+messages = load_messages()
+
+def save_state():
+    state_path.write_text(json.dumps({"messages": messages}))
+
+def make_doc():
+    return {
+        "openapi": "3.1.0",
+        "paths": {
+            "/global/health": {"get": {"operationId": "global.health"}},
+            "/session": {"post": {"operationId": "session.create"}},
+            "/session/{sessionID}": {"get": {"operationId": "session.get"}},
+            "/session/{sessionID}/message": {
+                "get": {"operationId": "session.messages"},
+                "post": {"operationId": "session.prompt"},
+            },
+            "/session/{sessionID}/prompt_async": {
+                "post": {
+                    "operationId": "session.prompt_async",
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "noReply": {"type": "boolean"},
+                                        "parts": {"type": "array"},
+                                    },
+                                }
+                            }
+                        }
+                    },
+                }
+            },
+            "/session/{sessionID}/abort": {"post": {"operationId": "session.abort"}},
+        },
+    }
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *_args):
+        return
+
+    def _json(self, payload, status=200):
+        data = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _empty(self):
+        self.send_response(204)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _authorized(self):
+        expected = "Basic " + base64.b64encode(f"{username}:{password}".encode()).decode()
+        return self.headers.get("Authorization") == expected
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        if not self._authorized():
+            self._json({"error": "forbidden"}, 403)
+            return
+        if self.path == "/global/health":
+            self._json({"healthy": True})
+            return
+        if self.path == "/doc":
+            self._json(make_doc())
+            return
+        if self.path == f"/session/{provider_session_id}":
+            self._json({"id": provider_session_id})
+            return
+        if parsed.path == f"/session/{provider_session_id}/message":
+            self._json(messages)
+            return
+        self._json({"error": "not found"}, 404)
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        if not self._authorized():
+            self._json({"error": "forbidden"}, 403)
+            return
+        if parsed.path == "/session":
+            self._json({
+                "id": provider_session_id,
+                "cost": 0,
+                "tokens": {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+            })
+            return
+        if parsed.path == f"/session/{provider_session_id}/prompt_async":
+            length = int(self.headers.get("Content-Length") or "0")
+            body = self.rfile.read(length) if length else b"{}"
+            payload = json.loads(body.decode("utf-8") or "{}")
+            if os.environ.get("FAKE_OPENCODE_DROP_PROMPT_ASYNC") != "1":
+                messages.append({
+                    "info": {"id": "msg_fake_user", "sessionID": provider_session_id, "role": "user"},
+                    "parts": payload.get("parts") or [],
+                })
+                save_state()
+            self._empty()
+            return
+        if parsed.path == f"/session/{provider_session_id}/abort":
+            self._json(True)
+            return
+        self._json({"error": "not found"}, 404)
+
+server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+print(f"opencode server listening on http://127.0.0.1:{server.server_address[1]}", flush=True)
+server.serve_forever()
+""",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
 def test_adapter_registry_loads_all_four_provider_mvp_adapters(tmp_path: Path) -> None:
     registry = uah.adapter_registry(_fake_bins(tmp_path))
 
@@ -164,6 +324,65 @@ def test_managed_session_scenarios_are_typed_gaps_for_other_providers(tmp_path: 
     }
 
 
+def test_opencode_managed_session_e2e_uses_real_provider_live_canary(tmp_path: Path) -> None:
+    fake_opencode = _fake_opencode_server(tmp_path / "bin" / "opencode")
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("opencode",),
+            scenarios=("managed_session_e2e",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"opencode": fake_opencode},
+        )
+    )
+
+    result = payload["results"][0]
+    assert payload["verdict"] == "green"
+    assert result["status"] == "pass"
+    assert result["data"]["source_artifact_kind"] == "provider_live_canary"
+    assert result["data"]["synthetic"] is False
+    assert result["data"]["longhouse_ingest"]["status"] == "blocked"
+
+    evidence_root = Path(result["evidence_root"])
+    provider_live = json.loads((evidence_root / "raw" / "provider-live-canary.json").read_text(encoding="utf-8"))
+    assert provider_live["verdict"] == "green"
+    assert provider_live["canaries"]["prompt_async_no_reply_delivery"]["status"] == "pass"
+    assert (evidence_root / "raw" / "provider-live-evidence" / "opencode-server.log").is_file()
+    assert (evidence_root / "raw" / "provider-live-evidence" / "opencode-doc-paths.json").is_file()
+
+    raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
+    canonical_events = (evidence_root / "events" / "canonical-longhouse-events.jsonl").read_text(encoding="utf-8")
+    assert "provider_live_canary" in raw_events
+    assert '"synthetic": true' not in raw_events
+    assert "prompt_async_no_reply_delivery" in canonical_events
+
+    session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
+    assert session["provider_session_id"] == "ses_fake_universal_e2e"
+    assert session["operation_statuses"]["send_input"]["level"] == "live_no_token"
+    assert session["operation_statuses"]["transcript_binding"]["canary"] == "opencode_prompt_async_no_reply_delivery"
+
+
+def test_opencode_managed_session_e2e_fails_when_real_canary_fails(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("FAKE_OPENCODE_DROP_PROMPT_ASYNC", "1")
+    fake_opencode = _fake_opencode_server(tmp_path / "bin" / "opencode")
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("opencode",),
+            scenarios=("managed_session_e2e",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"opencode": fake_opencode},
+        )
+    )
+
+    result = payload["results"][0]
+    assert payload["verdict"] == "red"
+    assert result["status"] == "fail"
+    assert result["failure_code"] == "opencode_prompt_async_delivery_not_observed"
+    evidence_root = Path(result["evidence_root"])
+    provider_live = json.loads((evidence_root / "raw" / "provider-live-canary.json").read_text(encoding="utf-8"))
+    assert provider_live["verdict"] == "red"
+    assert provider_live["operation_evidence"]["send_input"]["status"] == "fail"
+
+
 def test_collect_raw_evidence_runs_for_all_providers_without_launching(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
@@ -251,6 +470,7 @@ def test_scenario_runner_does_not_branch_on_provider_names() -> None:
             uah.run_prompt_once,
             uah.run_launch_managed_session,
             uah.run_send_receive,
+            uah.run_managed_session_e2e,
         )
     )
 

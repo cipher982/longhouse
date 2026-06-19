@@ -1,7 +1,7 @@
-"""Universal provider harness MVP for release-proof scenarios.
+"""Universal provider harness for release-proof scenarios.
 
-This module is intentionally small: it establishes the shared adapter/scenario
-shape without migrating the existing provider-specific canaries yet.
+This module owns the shared adapter/scenario shape. Provider-specific mechanics
+stay behind adapters while universal scenarios produce comparable evidence.
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ SCENARIOS = (
     "run_prompt_once",
     "launch_managed_session",
     "send_receive",
+    "managed_session_e2e",
 )
 
 STATUS_PASS = "pass"
@@ -64,6 +65,7 @@ MVP_METHODS = (
     "decode_normalize",
     "launch_managed_session",
     "send_receive",
+    "managed_session_e2e",
     "cleanup",
 )
 MVP_CAPABILITIES = (
@@ -72,6 +74,7 @@ MVP_CAPABILITIES = (
     "canonical_parse",
     "managed_session",
     "message_exchange",
+    "provider_safe_e2e",
     "cleanup",
 )
 PROFILES = ("fixture_replay", "live_no_token")
@@ -118,6 +121,7 @@ class AdapterConfig:
     methods: tuple[str, ...] = MVP_METHODS
     safe_run_prompt_once: bool = False
     safe_managed_session_scenarios: tuple[str, ...] = ()
+    real_managed_session_e2e: bool = False
 
 
 @dataclass(frozen=True)
@@ -172,6 +176,8 @@ class AgentHarnessAdapter(Protocol):
     def launch_managed_session(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def send_receive(self, package: "EvidencePackage", prompt: str) -> dict[str, Any]: ...
+
+    def managed_session_e2e(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def cleanup(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
@@ -449,9 +455,94 @@ class UniversalProviderAdapter:
         package.write_json("assertions/send_receive.json", payload)
         return payload
 
+    def managed_session_e2e(self, package: EvidencePackage) -> dict[str, Any]:
+        if not self.config.real_managed_session_e2e:
+            payload = self._unsupported_payload(
+                "managed_session_e2e",
+                "managed_session_e2e_not_migrated",
+                "No real no-token managed-session e2e adapter is implemented for this provider yet.",
+            )
+            package.write_json("assertions/managed_session_e2e.json", payload)
+            return payload
+        if self.config.provider != "opencode":
+            payload = self._unsupported_payload(
+                "managed_session_e2e",
+                "managed_session_e2e_adapter_missing",
+                "Only the OpenCode real no-token managed-session e2e adapter is implemented.",
+            )
+            package.write_json("assertions/managed_session_e2e.json", payload)
+            return payload
+        return self._run_opencode_managed_session_e2e(package)
+
     def cleanup(self, package: EvidencePackage) -> dict[str, Any]:
         payload = {"status": STATUS_PASS, "message": "MVP cleanup completed; no managed process was launched."}
         package.write_json("assertions/cleanup.json", payload)
+        return payload
+
+    def _run_opencode_managed_session_e2e(self, package: EvidencePackage) -> dict[str, Any]:
+        binary, source = self._resolve_binary()
+        if binary is None:
+            payload = {
+                "status": STATUS_FAIL,
+                "failure_code": "provider_binary_not_found",
+                "message": "opencode binary was not found for managed_session_e2e",
+                "binary_source": source,
+            }
+            package.write_json("assertions/managed_session_e2e.json", payload)
+            return payload
+
+        from zerg.qa.provider_live_canary import run_provider_live_canary
+
+        live_evidence_root = package.path("raw", "provider-live-evidence")
+        live_artifact_path = package.path("raw", "provider-live-canary.json")
+        live_artifact = run_provider_live_canary(
+            {
+                "provider": "opencode",
+                "provider_bin": str(binary),
+                "artifact": live_artifact_path,
+                "evidence_root": live_evidence_root,
+                "wait_ready_secs": 15.0,
+                "json": False,
+            }
+        )
+        package.write_json("raw/provider-live-canary-inline.json", live_artifact)
+        operation_evidence = {
+            str(operation): dict(evidence)
+            for operation, evidence in dict(live_artifact.get("operation_evidence") or {}).items()
+            if isinstance(evidence, Mapping)
+        }
+        raw_events = opencode_provider_live_raw_events(live_artifact)
+        projection = self._write_session_projection(
+            package,
+            raw_events=raw_events,
+            operations=operation_evidence,
+            provider_session_id=str(
+                (live_artifact.get("session_projection") or {}).get("provider_session_id") or self._session_id(package)
+            ),
+        )
+        live_verdict = str(live_artifact.get("verdict") or "red")
+        ingest_gap_message = "This lane currently proves raw provider evidence and canonical "
+        ingest_gap_message += "projection; DB ingest promotion is the next gate."
+        payload = {
+            **projection,
+            "status": STATUS_PASS if live_verdict == "green" else STATUS_FAIL,
+            "scenario": "managed_session_e2e",
+            "provider_version": live_artifact.get("provider_version"),
+            "provider_live_artifact_path": str(live_artifact_path),
+            "provider_live_evidence_root": str(live_evidence_root),
+            "provider_live_verdict": live_verdict,
+            "source_artifact_kind": live_artifact.get("artifact_kind"),
+            "synthetic": False,
+            "longhouse_ingest": {
+                "status": STATUS_BLOCKED,
+                "failure_code": "db_ingest_not_in_universal_e2e_slice",
+                "message": ingest_gap_message,
+            },
+        }
+        if live_verdict != "green":
+            payload["failure_code"] = live_artifact.get("failure_code") or "provider_live_canary_failed"
+            payload["message"] = "OpenCode provider-live no-token canary did not pass."
+        package.write_json("assertions/managed_session_e2e.json", payload)
         return payload
 
     def _unsupported_payload(self, scenario: str, failure_code: str, message: str) -> dict[str, Any]:
@@ -518,6 +609,7 @@ class UniversalProviderAdapter:
         *,
         raw_events: Iterable[Mapping[str, Any]],
         operations: Mapping[str, Mapping[str, Any]],
+        provider_session_id: str | None = None,
     ) -> dict[str, Any]:
         rows = [dict(row) for row in raw_events]
         raw_path = package.write_text(
@@ -531,9 +623,10 @@ class UniversalProviderAdapter:
             "events/canonical-longhouse-events.jsonl",
             "\n".join(json.dumps(row, sort_keys=True) for row in canonical) + "\n",
         )
+        session_id = provider_session_id or self._session_id(package)
         session_projection = {
             **project_session(canonical, provider=self.config.provider),
-            "provider_session_id": self._session_id(package),
+            "provider_session_id": session_id,
             "operation_statuses": dict(operations),
         }
         timeline_projection = project_timeline(canonical)
@@ -541,7 +634,7 @@ class UniversalProviderAdapter:
         package.write_json("longhouse/timeline-projection.json", timeline_projection)
         return {
             "status": STATUS_PASS,
-            "provider_session_id": self._session_id(package),
+            "provider_session_id": session_id,
             "raw_event_count": len(rows),
             "canonical_event_count": len(canonical),
             "raw_events_path": str(raw_path),
@@ -572,6 +665,7 @@ def adapter_snapshot(config: AdapterConfig) -> dict[str, Any]:
         "capabilities": list(config.capabilities),
         "profiles": list(config.profiles),
         "methods": list(config.methods),
+        "real_managed_session_e2e": config.real_managed_session_e2e,
     }
 
 
@@ -623,6 +717,74 @@ def project_timeline(events: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def opencode_provider_live_raw_events(artifact: Mapping[str, Any]) -> list[dict[str, Any]]:
+    canaries = dict(artifact.get("canaries") or {})
+    session_create = dict(canaries.get("session_create") or {})
+    prompt_async = dict(canaries.get("prompt_async_no_reply_delivery") or {})
+    reattach = dict(canaries.get("process_restart_reattach_contract") or {})
+    abort = dict(canaries.get("session_abort") or {})
+    provider_session_id = str(
+        session_create.get("provider_session_id")
+        or prompt_async.get("provider_session_id")
+        or reattach.get("provider_session_id")
+        or abort.get("provider_session_id")
+        or ""
+    )
+    rows: list[dict[str, Any]] = []
+    if session_create:
+        rows.append(
+            {
+                "type": "session_start",
+                "role": "system",
+                "text": "OpenCode server bridge created a provider session.",
+                "provider_session_id": provider_session_id,
+                "source_canary": "session_create",
+                "tokens": session_create.get("tokens"),
+                "cost": session_create.get("cost"),
+                "evidence_origin": "provider_live_canary",
+            }
+        )
+    if prompt_async:
+        marker_sha = prompt_async.get("message_marker_sha256")
+        rows.append(
+            {
+                "type": "user",
+                "role": "user",
+                "text": f"OpenCode prompt_async noReply marker sha256:{marker_sha}",
+                "provider_session_id": provider_session_id,
+                "source_canary": "prompt_async_no_reply_delivery",
+                "message_marker_sha256": marker_sha,
+                "observed_message_count": prompt_async.get("observed_message_count"),
+                "evidence_origin": "provider_live_canary",
+            }
+        )
+    if reattach:
+        rows.append(
+            {
+                "type": "session_reattach",
+                "role": "system",
+                "text": "OpenCode restarted server recovered the provider session and marker transcript.",
+                "provider_session_id": provider_session_id,
+                "source_canary": "process_restart_reattach_contract",
+                "message_marker_sha256": reattach.get("message_marker_sha256"),
+                "observed_message_count": reattach.get("observed_message_count"),
+                "evidence_origin": "provider_live_canary",
+            }
+        )
+    if abort:
+        rows.append(
+            {
+                "type": "interrupt",
+                "role": "system",
+                "text": "OpenCode session.abort accepted a request against the provider session.",
+                "provider_session_id": provider_session_id,
+                "source_canary": "session_abort",
+                "evidence_origin": "provider_live_canary",
+            }
+        )
+    return rows
+
+
 def provider_configs() -> dict[str, AdapterConfig]:
     providers = set(managed_provider_names()) | set(SUPPORTED_PROVIDERS)
     configs: dict[str, AdapterConfig] = {}
@@ -634,17 +796,20 @@ def provider_configs() -> dict[str, AdapterConfig]:
             binary_env = binary_env or "LONGHOUSE_CLAUDE_BIN"
         safe_run_prompt_once = False
         safe_managed_session_scenarios: tuple[str, ...] = ()
+        real_managed_session_e2e = False
         if provider == "codex":
             safe_run_prompt_once = True
             safe_managed_session_scenarios = SAFE_MANAGED_SESSION_SCENARIOS
         elif provider == "opencode":
             safe_managed_session_scenarios = SAFE_MANAGED_SESSION_SCENARIOS
+            real_managed_session_e2e = True
         configs[provider] = AdapterConfig(
             provider=provider,
             binary_name=PROVIDER_CLI_BINARY_BY_PROVIDER.get(provider, provider),
             binary_env=binary_env,
             safe_run_prompt_once=safe_run_prompt_once,
             safe_managed_session_scenarios=safe_managed_session_scenarios,
+            real_managed_session_e2e=real_managed_session_e2e,
         )
     return configs
 
@@ -762,6 +927,18 @@ def run_send_receive(adapter: AgentHarnessAdapter, package: EvidencePackage, pro
     )
 
 
+def run_managed_session_e2e(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.managed_session_e2e(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="managed_session_e2e",
+        package=package,
+        payload=payload,
+    )
+
+
 SCENARIO_RUNNERS = {
     "probe_identity": run_probe_identity,
     "collect_raw_evidence": run_collect_raw_evidence,
@@ -769,6 +946,7 @@ SCENARIO_RUNNERS = {
     "run_prompt_once": run_prompt_once,
     "launch_managed_session": run_launch_managed_session,
     "send_receive": run_send_receive,
+    "managed_session_e2e": run_managed_session_e2e,
 }
 
 
