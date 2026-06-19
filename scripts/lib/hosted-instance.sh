@@ -364,7 +364,7 @@ lh_hosted_prepare_control_plane_auth() {
   if [[ -z "${CONTROL_PLANE_ADMIN_TOKEN:-}" ]] && command -v ssh &>/dev/null; then
     local _container
     _container="$(ssh -o ConnectTimeout=3 -o BatchMode=yes zerg \
-      "docker ps --filter label=coolify.serviceName=longhouse-control-plane --format '{{.Names}}' | head -1" 2>/dev/null || true)"
+      "docker ps --filter name=^longhouse-control-plane$ --format '{{.Names}}' | head -1" 2>/dev/null || true)"
     if [[ -n "$_container" ]]; then
       CONTROL_PLANE_ADMIN_TOKEN="$(ssh -o ConnectTimeout=3 -o BatchMode=yes zerg \
         "docker exec $_container python -c 'from control_plane.config import settings; print(settings.admin_token)'" 2>/dev/null || true)"

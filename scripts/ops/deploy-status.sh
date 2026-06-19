@@ -26,13 +26,13 @@ read_container() {
     echo "$sha $status"
 }
 
-# Demo runtime — Coolify container with randomized name
-demo_raw=$(read_container "demo" "--filter 'label=coolify.serviceName=longhouse-demo'")
+# Demo runtime — direct container
+demo_raw=$(read_container "demo" "--filter 'name=^longhouse-demo$'")
 demo_sha=$(echo "$demo_raw" | awk '{print $1}')
 demo_uptime=$(echo "$demo_raw" | cut -d' ' -f2-)
 
-# Control plane — Coolify container
-cp_raw=$(read_container "control-plane" "--filter 'label=coolify.serviceName=longhouse-control-plane'")
+# Control plane — direct container
+cp_raw=$(read_container "control-plane" "--filter 'name=^longhouse-control-plane$'")
 cp_sha=$(echo "$cp_raw" | awk '{print $1}')
 cp_uptime=$(echo "$cp_raw" | cut -d' ' -f2-)
 
@@ -81,11 +81,20 @@ else
     canary_health="-"
 fi
 
-if [[ "$demo_sha" == "-" && "$demo_health" != "unreachable" ]]; then
-    demo_sha=$(health_sha "https://longhouse.ai/api/health")
+demo_health_sha="-"
+if [[ "$demo_health" != "unreachable" ]]; then
+    demo_health_sha=$(health_sha "https://longhouse.ai/api/health")
 fi
-if [[ "$canary_sha" == "-" && "$canary_health" != "unreachable" && "$CANARY_HEALTH_URL" != "" ]]; then
-    canary_sha=$(health_sha "$CANARY_HEALTH_URL")
+if [[ "$demo_health_sha" != "-" ]]; then
+    demo_sha="$demo_health_sha"
+fi
+
+canary_health_sha="-"
+if [[ "$canary_health" != "unreachable" && "$CANARY_HEALTH_URL" != "" ]]; then
+    canary_health_sha=$(health_sha "$CANARY_HEALTH_URL")
+fi
+if [[ "$canary_health_sha" != "-" ]]; then
+    canary_sha="$canary_health_sha"
 fi
 
 # --- Local HEAD for comparison ------------------------------------------------

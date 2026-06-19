@@ -164,7 +164,7 @@ jobs:
 
       - name: Deploy public demo runtime
         run: |
-          ./scripts/ops/coolify-deploy.sh \
+          ./scripts/ops/runtime-deploy.sh \
             longhouse-demo \
             --docker-image "${{ needs.gate.outputs.runtime_image_name }}" \
             --docker-tag "${{ needs.gate.outputs.runtime_image_tag }}" \
