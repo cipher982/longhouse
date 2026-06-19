@@ -4,6 +4,12 @@
 **Owner:** Longhouse
 **Last updated:** 2026-06-19
 
+MVP implementation:
+
+- `server/zerg/qa/universal_agent_harness.py`
+- `scripts/qa/universal-agent-harness.py`
+- `server/tests_lite/test_universal_agent_harness.py`
+
 Longhouse provider release proofing should not grow as four separate test
 families for Claude Code, Codex/OpenAI, OpenCode, and Antigravity. The target is
 one universal agent-harness contract, one scenario runner, and provider
@@ -319,17 +325,22 @@ rewritten to call the shared scenario runner.
 | Shipper/ingest/session projection tests | `parse_ingest_project`, `timeline_projection` | Reusable Longhouse assertions under the runner. |
 | Sauron release-envelope/provider-status jobs | Private invocation and reporting | Sauron-owned runner/reporting; should consume universal artifacts, not provider-specific semantics. |
 
-## Phase 2 Implementation Target
+## Phase 2 Implementation Status
 
-The next implementation phase should build the smallest useful slice of the
-universal runner:
+The first implementation slice exists. It intentionally proves the skeleton
+without spending tokens or migrating managed-session behavior:
 
-1. Define adapter protocol/data classes and scenario result schema.
-2. Implement `probe_identity`, `collect_raw_evidence`, and fixture
-   `parse_ingest_project` scenarios.
-3. Wire two adapters first, preferably Codex and OpenCode, to prove the API is
-   not Claude-shaped.
-4. Make `provider-release-proof.py` able to consume the universal runner output
-   for those scenarios while preserving the existing artifact fields.
-5. Keep existing one-off canaries as compatibility lanes until each scenario is
+1. Adapter protocol/data classes and scenario result schema exist.
+2. MVP adapters exist for Claude Code, Codex/OpenAI, OpenCode, and
+   Antigravity.
+3. `probe_identity`, `collect_raw_evidence`, and fixture
+   `parse_ingest_project` run through shared scenario code.
+4. `run_prompt_once` returns a typed `unsupported_gap` in the MVP profile
+   instead of silently skipping or spending tokens.
+5. Evidence packages are written for pass, fail, and unsupported results.
+6. Existing one-off canaries remain compatibility lanes until each behavior is
    migrated and baselined.
+
+Next implementation target: make `provider-release-proof.py` consume universal
+runner output for the MVP scenarios, then migrate managed launch/send/timeline
+scenarios behind adapters.

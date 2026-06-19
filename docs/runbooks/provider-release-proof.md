@@ -10,6 +10,21 @@ provider-agnostic harness target lives in
 `docs/specs/universal-agent-harness.md`. Use this page when running, accepting,
 diffing, or interpreting proof artifacts.
 
+The first universal harness MVP can be run directly:
+
+```bash
+scripts/qa/universal-agent-harness.py \
+  --provider codex \
+  --scenario probe_identity \
+  --evidence-root /tmp/longhouse-universal-harness \
+  --json
+```
+
+This MVP is a no-token runner skeleton. It proves adapter loading, provider
+identity probing, raw evidence writing, and fixture replay. Managed
+launch/send/control scenarios still live in the existing provider-specific
+canaries until they are migrated behind adapters.
+
 ## Baseline Stores
 
 Use the store that matches the caller:

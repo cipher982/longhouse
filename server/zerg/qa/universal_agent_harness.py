@@ -1,0 +1,701 @@
+"""Universal provider harness MVP for release-proof scenarios.
+
+This module is intentionally small: it establishes the shared adapter/scenario
+shape without migrating the existing provider-specific canaries yet.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shutil
+import subprocess
+from collections.abc import Iterable
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import UTC
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+from typing import Protocol
+
+from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
+from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
+from zerg.qa.repo_root import default_repo_root
+from zerg.services.managed_provider_contracts import contract_for_provider
+from zerg.services.managed_provider_contracts import managed_provider_names
+
+SCHEMA_VERSION = 1
+ARTIFACT_KIND = "universal_agent_harness_run"
+SUPPORTED_PROVIDERS = ("claude", "codex", "opencode", "antigravity")
+SCENARIOS = ("probe_identity", "collect_raw_evidence", "parse_ingest_project", "run_prompt_once")
+
+STATUS_PASS = "pass"
+STATUS_FAIL = "fail"
+STATUS_UNSUPPORTED_GAP = "unsupported_gap"
+STATUS_NOT_APPLICABLE = "not_applicable"
+STATUS_BLOCKED = "blocked"
+STATUS_FLAKY = "flaky"
+STATUS_XFAIL_WITH_EXPIRY = "xfail_with_expiry"
+STATUSES = (
+    STATUS_PASS,
+    STATUS_FAIL,
+    STATUS_UNSUPPORTED_GAP,
+    STATUS_NOT_APPLICABLE,
+    STATUS_BLOCKED,
+    STATUS_FLAKY,
+    STATUS_XFAIL_WITH_EXPIRY,
+)
+YELLOW_STATUSES = (STATUS_UNSUPPORTED_GAP, STATUS_BLOCKED, STATUS_FLAKY, STATUS_XFAIL_WITH_EXPIRY)
+
+MVP_METHODS = ("prepare", "probe", "run_prompt", "collect_evidence", "decode_normalize", "cleanup")
+MVP_CAPABILITIES = ("identity", "raw_evidence", "canonical_parse", "cleanup")
+PROFILES = ("fixture_replay", "live_no_token")
+
+
+def utc_now() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(dict(payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def read_json_lines(path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        if not raw.strip():
+            continue
+        value = json.loads(raw)
+        if not isinstance(value, dict):
+            raise ValueError(f"{path} contains a non-object JSONL row")
+        rows.append(value)
+    return rows
+
+
+def command_evidence(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    return {
+        "argv": list(result.args) if isinstance(result.args, list) else result.args,
+        "returncode": result.returncode,
+        "stdout": result.stdout or "",
+        "stderr": result.stderr or "",
+    }
+
+
+@dataclass(frozen=True)
+class AdapterConfig:
+    provider: str
+    binary_name: str
+    binary_env: str | None
+    capabilities: tuple[str, ...] = MVP_CAPABILITIES
+    profiles: tuple[str, ...] = PROFILES
+    methods: tuple[str, ...] = MVP_METHODS
+
+
+@dataclass(frozen=True)
+class HarnessOptions:
+    providers: tuple[str, ...]
+    scenarios: tuple[str, ...]
+    evidence_root: Path
+    provider_bins: Mapping[str, Path] | None = None
+    fixture_path: Path | None = None
+    prompt: str | None = None
+
+
+@dataclass(frozen=True)
+class ScenarioResult:
+    provider: str
+    scenario: str
+    status: str
+    evidence_root: Path
+    message: str | None = None
+    failure_code: str | None = None
+    data: Mapping[str, Any] | None = None
+
+    def to_json(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "provider": self.provider,
+            "scenario": self.scenario,
+            "status": self.status,
+            "evidence_root": str(self.evidence_root),
+        }
+        if self.message:
+            payload["message"] = self.message
+        if self.failure_code:
+            payload["failure_code"] = self.failure_code
+        if self.data:
+            payload["data"] = dict(self.data)
+        return payload
+
+
+class AgentHarnessAdapter(Protocol):
+    config: AdapterConfig
+
+    def prepare(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def probe(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def run_prompt(self, package: "EvidencePackage", prompt: str) -> dict[str, Any]: ...
+
+    def collect_evidence(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def decode_normalize(self, package: "EvidencePackage", fixture_path: Path) -> dict[str, Any]: ...
+
+    def cleanup(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+
+class EvidencePackage:
+    def __init__(self, *, root: Path, provider: str, scenario: str) -> None:
+        self.root = root / provider / scenario
+        self.provider = provider
+        self.scenario = scenario
+
+    def path(self, *parts: str) -> Path:
+        return self.root.joinpath(*parts)
+
+    def write_json(self, relative_path: str, payload: Mapping[str, Any]) -> Path:
+        path = self.path(*relative_path.split("/"))
+        write_json(path, payload)
+        return path
+
+    def write_text(self, relative_path: str, text: str) -> Path:
+        path = self.path(*relative_path.split("/"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def initialize(self, *, adapter: AdapterConfig) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.write_json(
+            "manifest.json",
+            {
+                "schema_version": SCHEMA_VERSION,
+                "artifact_kind": "universal_agent_harness_evidence",
+                "provider": self.provider,
+                "scenario": self.scenario,
+                "adapter": adapter_snapshot(adapter),
+                "generated_at": utc_now(),
+            },
+        )
+
+
+class UniversalProviderAdapter:
+    def __init__(self, config: AdapterConfig, *, provider_bin: Path | None = None) -> None:
+        self.config = config
+        self.provider_bin = provider_bin
+
+    def prepare(self, package: EvidencePackage) -> dict[str, Any]:
+        package.initialize(adapter=self.config)
+        workspace = package.path("workspace")
+        workspace.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "status": STATUS_PASS,
+            "workspace": str(workspace),
+            "provider": self.config.provider,
+            "methods": list(self.config.methods),
+            "capabilities": list(self.config.capabilities),
+        }
+        package.write_json("assertions/prepare.json", payload)
+        return payload
+
+    def probe(self, package: EvidencePackage) -> dict[str, Any]:
+        binary, source = self._resolve_binary()
+        contract = contract_for_provider(self.config.provider)
+        base = {
+            "provider": self.config.provider,
+            "binary_name": self.config.binary_name,
+            "binary_env": self.config.binary_env,
+            "binary_source": source,
+            "declared_capabilities": list(self.config.capabilities),
+            "declared_profiles": list(self.config.profiles),
+            "mvp_methods": list(self.config.methods),
+            "managed_contract": {
+                "managed_transport": str(contract.managed_transport) if contract else None,
+                "control_plane": contract.control_plane if contract else None,
+                "machine_control_supports": list(contract.machine_control_supports) if contract else [],
+            },
+        }
+        if binary is None:
+            payload = {
+                **base,
+                "status": STATUS_FAIL,
+                "failure_code": "provider_binary_not_found",
+                "message": f"{self.config.binary_name} binary was not found",
+            }
+            package.write_json("assertions/probe.json", payload)
+            package.write_json(
+                "raw/version-command.json",
+                {"argv": [self.config.binary_name, "--version"], "error": payload["message"]},
+            )
+            return payload
+        result = subprocess.run(
+            [str(binary), "--version"],
+            text=True,
+            capture_output=True,
+            timeout=8,
+            check=False,
+        )
+        evidence = command_evidence(result)
+        package.write_json("raw/version-command.json", evidence)
+        package.write_text("raw/stdout.log", result.stdout or "")
+        package.write_text("raw/stderr.log", result.stderr or "")
+        version = (result.stdout or result.stderr or "").strip()
+        if result.returncode != 0 or not version:
+            payload = {
+                **base,
+                "status": STATUS_FAIL,
+                "path": str(binary),
+                "failure_code": "provider_version_failed",
+                "message": f"{self.config.binary_name} --version failed",
+                "command": evidence,
+            }
+        else:
+            payload = {
+                **base,
+                "status": STATUS_PASS,
+                "path": str(binary),
+                "version": version,
+                "command": evidence,
+            }
+        package.write_json("assertions/probe.json", payload)
+        return payload
+
+    def run_prompt(self, package: EvidencePackage, prompt: str) -> dict[str, Any]:
+        package.write_text("input/prompt.txt", prompt)
+        payload = {
+            "status": STATUS_UNSUPPORTED_GAP,
+            "failure_code": "run_prompt_not_in_mvp",
+            "message": "run_prompt is intentionally not implemented in the MVP adapter profile.",
+            "next": "Implement through provider-specific managed/session adapter methods in a later phase.",
+        }
+        package.write_json("assertions/run_prompt.json", payload)
+        return payload
+
+    def collect_evidence(self, package: EvidencePackage) -> dict[str, Any]:
+        files = sorted(str(path.relative_to(package.root)) for path in package.root.rglob("*") if path.is_file())
+        payload = {
+            "status": STATUS_PASS,
+            "files": files,
+            "required_dirs": ["raw", "events", "longhouse", "assertions"],
+        }
+        for dirname in payload["required_dirs"]:
+            package.path(str(dirname)).mkdir(parents=True, exist_ok=True)
+        package.write_json("assertions/collect_raw_evidence.json", payload)
+        return payload
+
+    def decode_normalize(self, package: EvidencePackage, fixture_path: Path) -> dict[str, Any]:
+        try:
+            rows = read_json_lines(fixture_path)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            payload = {
+                "status": STATUS_FAIL,
+                "failure_code": "fixture_decode_failed",
+                "message": f"{type(exc).__name__}: {exc}",
+            }
+            package.write_json("assertions/parse_ingest_project.json", payload)
+            return payload
+
+        raw_path = package.write_text(
+            "events/provider-raw-events.jsonl",
+            "\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n",
+        )
+        canonical: list[dict[str, Any]] = []
+        for index, row in enumerate(rows):
+            canonical.append(canonical_event_from_fixture(row, provider=self.config.provider, index=index))
+        canonical_path = package.write_text(
+            "events/canonical-longhouse-events.jsonl",
+            "\n".join(json.dumps(row, sort_keys=True) for row in canonical) + "\n",
+        )
+        unknown_path = package.write_text(
+            "events/unknown-provider-events.jsonl",
+            "\n".join(json.dumps(row, sort_keys=True) for row in rows if row.get("type") == "unknown") + "\n",
+        )
+        session_projection = project_session(canonical, provider=self.config.provider)
+        timeline_projection = project_timeline(canonical)
+        package.write_json("longhouse/session-projection.json", session_projection)
+        package.write_json("longhouse/timeline-projection.json", timeline_projection)
+        payload = {
+            "status": STATUS_PASS,
+            "fixture_path": str(fixture_path),
+            "raw_event_count": len(rows),
+            "canonical_event_count": len(canonical),
+            "raw_events_path": str(raw_path),
+            "canonical_events_path": str(canonical_path),
+            "unknown_events_path": str(unknown_path),
+            "session_projection_path": str(package.path("longhouse", "session-projection.json")),
+            "timeline_projection_path": str(package.path("longhouse", "timeline-projection.json")),
+        }
+        package.write_json("assertions/parse_ingest_project.json", payload)
+        return payload
+
+    def cleanup(self, package: EvidencePackage) -> dict[str, Any]:
+        payload = {"status": STATUS_PASS, "message": "MVP cleanup completed; no managed process was launched."}
+        package.write_json("assertions/cleanup.json", payload)
+        return payload
+
+    def _resolve_binary(self) -> tuple[Path | None, str]:
+        if self.provider_bin is not None:
+            path = self.provider_bin.expanduser()
+            return (path, "provider_bin") if path.is_file() else (None, "provider_bin_missing")
+        if self.config.binary_env:
+            raw = os.environ.get(self.config.binary_env)
+            if raw:
+                path = Path(raw).expanduser()
+                return (path, self.config.binary_env) if path.is_file() else (None, f"{self.config.binary_env}_missing")
+        path = shutil.which(self.config.binary_name)
+        return (Path(path), "PATH") if path else (None, "missing")
+
+
+def adapter_snapshot(config: AdapterConfig) -> dict[str, Any]:
+    return {
+        "provider": config.provider,
+        "binary_name": config.binary_name,
+        "binary_env": config.binary_env,
+        "capabilities": list(config.capabilities),
+        "profiles": list(config.profiles),
+        "methods": list(config.methods),
+    }
+
+
+def canonical_event_from_fixture(row: Mapping[str, Any], *, provider: str, index: int) -> dict[str, Any]:
+    role = row.get("role")
+    if role is None and row.get("type") in {"user", "assistant", "tool"}:
+        role = row.get("type")
+    text = row.get("text")
+    if text is None and isinstance(row.get("message"), Mapping):
+        text = row["message"].get("text") or row["message"].get("content")
+    return {
+        "schema_version": 1,
+        "provider": provider,
+        "index": index,
+        "type": str(row.get("type") or "unknown"),
+        "role": str(role or row.get("type") or "unknown"),
+        "text": str(text or ""),
+        "provider_event": dict(row),
+    }
+
+
+def project_session(events: Iterable[Mapping[str, Any]], *, provider: str) -> dict[str, Any]:
+    rows = list(events)
+    roles = [str(row.get("role") or "unknown") for row in rows]
+    return {
+        "schema_version": 1,
+        "provider": provider,
+        "event_count": len(rows),
+        "roles": roles,
+        "has_user": "user" in roles,
+        "has_assistant": "assistant" in roles,
+    }
+
+
+def project_timeline(events: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    rows = list(events)
+    return {
+        "schema_version": 1,
+        "event_count": len(rows),
+        "items": [
+            {
+                "index": row.get("index"),
+                "type": row.get("type"),
+                "role": row.get("role"),
+                "text": row.get("text"),
+            }
+            for row in rows
+        ],
+    }
+
+
+def provider_configs() -> dict[str, AdapterConfig]:
+    providers = set(managed_provider_names()) | set(SUPPORTED_PROVIDERS)
+    configs: dict[str, AdapterConfig] = {}
+    for provider in SUPPORTED_PROVIDERS:
+        if provider not in providers:
+            continue
+        binary_env = PROVIDER_CLI_ENV_BY_PROVIDER.get(provider)
+        if provider == "claude":
+            binary_env = binary_env or "LONGHOUSE_CLAUDE_BIN"
+        configs[provider] = AdapterConfig(
+            provider=provider,
+            binary_name=PROVIDER_CLI_BINARY_BY_PROVIDER.get(provider, provider),
+            binary_env=binary_env,
+        )
+    return configs
+
+
+def adapter_registry(provider_bins: Mapping[str, Path] | None = None) -> dict[str, AgentHarnessAdapter]:
+    bins = dict(provider_bins or {})
+    registry: dict[str, AgentHarnessAdapter] = {}
+    for provider, config in provider_configs().items():
+        registry[provider] = UniversalProviderAdapter(config, provider_bin=bins.get(provider))
+    return registry
+
+
+def scenario_result(
+    *,
+    provider: str,
+    scenario: str,
+    package: EvidencePackage,
+    payload: Mapping[str, Any],
+) -> ScenarioResult:
+    status = str(payload.get("status") or STATUS_FAIL)
+    if status not in STATUSES:
+        status = STATUS_FAIL
+    return ScenarioResult(
+        provider=provider,
+        scenario=scenario,
+        status=status,
+        evidence_root=package.root,
+        message=str(payload.get("message")) if payload.get("message") else None,
+        failure_code=str(payload.get("failure_code")) if payload.get("failure_code") else None,
+        data={key: value for key, value in payload.items() if key not in {"status", "message", "failure_code"}},
+    )
+
+
+def run_probe_identity(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.probe(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="probe_identity",
+        package=package,
+        payload=payload,
+    )
+
+
+def run_collect_raw_evidence(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.collect_evidence(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="collect_raw_evidence",
+        package=package,
+        payload=payload,
+    )
+
+
+def run_parse_ingest_project(
+    adapter: AgentHarnessAdapter,
+    package: EvidencePackage,
+    fixture_path: Path | None,
+) -> ScenarioResult:
+    adapter.prepare(package)
+    if fixture_path is None:
+        payload = {
+            "status": STATUS_BLOCKED,
+            "failure_code": "fixture_required",
+            "message": "parse_ingest_project requires --fixture-path.",
+        }
+        package.write_json("assertions/parse_ingest_project.json", payload)
+    else:
+        payload = adapter.decode_normalize(package, fixture_path)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="parse_ingest_project",
+        package=package,
+        payload=payload,
+    )
+
+
+def run_prompt_once(adapter: AgentHarnessAdapter, package: EvidencePackage, prompt: str | None) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.run_prompt(package, prompt or "Reply with exactly: LONGHOUSE UNIVERSAL HARNESS")
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="run_prompt_once",
+        package=package,
+        payload=payload,
+    )
+
+
+SCENARIO_RUNNERS = {
+    "probe_identity": run_probe_identity,
+    "collect_raw_evidence": run_collect_raw_evidence,
+    "parse_ingest_project": run_parse_ingest_project,
+    "run_prompt_once": run_prompt_once,
+}
+
+
+def run_scenario(
+    adapter: AgentHarnessAdapter,
+    scenario: str,
+    *,
+    evidence_root: Path,
+    fixture_path: Path | None = None,
+    prompt: str | None = None,
+) -> ScenarioResult:
+    if scenario not in SCENARIO_RUNNERS:
+        package = EvidencePackage(root=evidence_root, provider=adapter.config.provider, scenario=scenario)
+        package.initialize(adapter=adapter.config)
+        payload = {
+            "status": STATUS_FAIL,
+            "failure_code": "unknown_scenario",
+            "message": f"Unsupported scenario: {scenario}",
+        }
+        package.write_json("assertions/scenario.json", payload)
+        return scenario_result(provider=adapter.config.provider, scenario=scenario, package=package, payload=payload)
+    package = EvidencePackage(root=evidence_root, provider=adapter.config.provider, scenario=scenario)
+    runner = SCENARIO_RUNNERS[scenario]
+    if scenario == "parse_ingest_project":
+        return runner(adapter, package, fixture_path)  # type: ignore[misc]
+    if scenario == "run_prompt_once":
+        return runner(adapter, package, prompt)  # type: ignore[misc]
+    return runner(adapter, package)  # type: ignore[misc]
+
+
+def verdict_for_results(results: Iterable[ScenarioResult]) -> str:
+    statuses = [result.status for result in results]
+    if any(status == STATUS_FAIL for status in statuses):
+        return "red"
+    if any(status in YELLOW_STATUSES for status in statuses):
+        return "yellow"
+    return "green"
+
+
+def run_harness(options: HarnessOptions) -> dict[str, Any]:
+    registry = adapter_registry(options.provider_bins)
+    results: list[ScenarioResult] = []
+    for provider in options.providers:
+        adapter = registry.get(provider)
+        if adapter is None:
+            package = EvidencePackage(root=options.evidence_root, provider=provider, scenario="adapter_load")
+            payload = {
+                "status": STATUS_FAIL,
+                "failure_code": "unknown_provider",
+                "message": f"Unsupported provider: {provider}",
+            }
+            package.write_json("assertions/adapter_load.json", payload)
+            results.append(
+                scenario_result(
+                    provider=provider,
+                    scenario="adapter_load",
+                    package=package,
+                    payload=payload,
+                )
+            )
+            continue
+        for scenario in options.scenarios:
+            results.append(
+                run_scenario(
+                    adapter,
+                    scenario,
+                    evidence_root=options.evidence_root,
+                    fixture_path=options.fixture_path,
+                    prompt=options.prompt,
+                )
+            )
+
+    payload = {
+        "schema_version": SCHEMA_VERSION,
+        "artifact_kind": ARTIFACT_KIND,
+        "generated_at": utc_now(),
+        "providers": list(options.providers),
+        "scenarios": list(options.scenarios),
+        "evidence_root": str(options.evidence_root),
+        "verdict": verdict_for_results(results),
+        "results": [result.to_json() for result in results],
+    }
+    write_json(options.evidence_root / "universal-agent-harness.json", payload)
+    return payload
+
+
+def parse_provider_bins(values: Iterable[str] | None, providers: tuple[str, ...]) -> dict[str, Path]:
+    result: dict[str, Path] = {}
+    for value in values or ():
+        if "=" in value:
+            provider, raw_path = value.split("=", 1)
+            result[provider.strip()] = Path(raw_path).expanduser()
+        elif len(providers) == 1:
+            result[providers[0]] = Path(value).expanduser()
+        else:
+            message = "--provider-bin PATH is only allowed with one provider; use provider=PATH for multi-provider runs"
+            raise ValueError(message)
+    return result
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Run universal agent harness MVP scenarios.")
+    parser.add_argument(
+        "--provider",
+        action="append",
+        choices=SUPPORTED_PROVIDERS,
+        help="Provider to run. Repeatable; defaults to all.",
+    )
+    parser.add_argument(
+        "--scenario",
+        action="append",
+        choices=SCENARIOS,
+        help="Scenario to run. Repeatable; defaults to probe_identity.",
+    )
+    parser.add_argument(
+        "--provider-bin",
+        action="append",
+        help="Provider binary override: PATH for one provider or provider=PATH.",
+    )
+    parser.add_argument(
+        "--evidence-root",
+        type=Path,
+        help="Evidence root. Defaults to .build/canaries/universal-agent-harness/<timestamp>.",
+    )
+    parser.add_argument("--fixture-path", type=Path, help="JSONL fixture for parse_ingest_project.")
+    parser.add_argument("--prompt", help="Prompt for run_prompt_once.")
+    parser.add_argument("--json", action="store_true", help="Emit JSON artifact to stdout.")
+    return parser
+
+
+def default_evidence_root() -> Path:
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return default_repo_root() / ".build/canaries/universal-agent-harness" / timestamp
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    providers = tuple(args.provider or SUPPORTED_PROVIDERS)
+    scenarios = tuple(args.scenario or ("probe_identity",))
+    try:
+        provider_bins = parse_provider_bins(args.provider_bin, providers)
+    except ValueError as exc:
+        parser.error(str(exc))
+    artifact = run_harness(
+        HarnessOptions(
+            providers=providers,
+            scenarios=scenarios,
+            evidence_root=(args.evidence_root or default_evidence_root()).expanduser(),
+            provider_bins=provider_bins,
+            fixture_path=args.fixture_path.expanduser() if args.fixture_path else None,
+            prompt=args.prompt,
+        )
+    )
+    if args.json:
+        print(json.dumps(artifact, indent=2, sort_keys=True))
+    else:
+        print(f"verdict: {artifact['verdict']}")
+        print(f"artifact: {Path(artifact['evidence_root']) / 'universal-agent-harness.json'}")
+    return 1 if artifact.get("verdict") == "red" else 0
+
+
+__all__ = [
+    "ARTIFACT_KIND",
+    "SCENARIOS",
+    "STATUSES",
+    "SUPPORTED_PROVIDERS",
+    "AdapterConfig",
+    "AgentHarnessAdapter",
+    "EvidencePackage",
+    "HarnessOptions",
+    "ScenarioResult",
+    "adapter_registry",
+    "provider_configs",
+    "run_harness",
+    "run_scenario",
+]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
