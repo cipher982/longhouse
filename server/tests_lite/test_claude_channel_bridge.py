@@ -196,6 +196,12 @@ def test_claude_channel_bridge_emits_channel_notification_after_init(tmp_path):
         assert init_response["id"] == 1
         assert init_response["result"]["capabilities"]["experimental"] == {"claude/channel": {}}
 
+        process.stdin.write(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}) + "\n")
+        process.stdin.flush()
+        tools_response = json.loads(stdout_lines.get(timeout=5.0))
+        assert tools_response["id"] == 2
+        assert tools_response["result"]["tools"] == []
+
         state = wait_for_claude_channel_state(session_id=session_id, state_root=state_root, timeout_secs=5.0)
         assert state["session_id"] == session_id
         assert state["provider_session_id"] == provider_session_id

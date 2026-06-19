@@ -124,6 +124,9 @@ class _ChannelBridgeServer(Server[None, mcp_types.ServerRequest]):
         self._initialized = asyncio.Event()
         self._http_server: _BridgeHTTPServer | None = None
         self._http_thread: threading.Thread | None = None
+        self.list_tools()(self._list_tools)
+        self.list_resources()(self._list_resources)
+        self.list_prompts()(self._list_prompts)
         self.notification_handlers[mcp_types.InitializedNotification] = self._handle_initialized
 
     @property
@@ -138,6 +141,15 @@ class _ChannelBridgeServer(Server[None, mcp_types.ServerRequest]):
     async def _handle_initialized(self, _notification: mcp_types.InitializedNotification) -> None:
         self._initialized.set()
         self._write_state()
+
+    async def _list_tools(self) -> list[mcp_types.Tool]:
+        return []
+
+    async def _list_resources(self) -> list[mcp_types.Resource]:
+        return []
+
+    async def _list_prompts(self) -> list[mcp_types.Prompt]:
+        return []
 
     def _build_state(self) -> _BridgeState:
         port = int(self._http_server.server_address[1]) if self._http_server else self._requested_port
