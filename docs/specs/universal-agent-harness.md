@@ -367,7 +367,7 @@ Universal scenarios:
 | `tool_call_result` | P1 | Tool call/result events are paired and attributed; workspace side effects match the fixture. |
 | `steer_active_turn` | P1 | Active-turn steering reaches the provider control lane or reports an explicit unsupported/blocked gap. |
 | `pause_request_detect` | P1 | Runtime `needs_user` plus provider question evidence projects to a pending Longhouse pause request. |
-| `answer_pause_request` | P1 | Longhouse answer/resolve service works, or provider-held live answer delivery reports an explicit blocked/unsupported gap. |
+| `answer_pause_request` | P1 | Longhouse answer/resolve service and managed answer dispatch work, or provider-held live answer delivery reports an explicit blocked/unsupported gap. |
 | `interrupt_cancel` | P1 | A long active turn can be interrupted without corrupting session evidence. |
 | `resume_reattach` | P1 | A prior session can be resumed or explicitly reports an unsupported gap. |
 | `terminate_cleanup` | P1 | Termination/cleanup projects owned-resource cleanup or reports an explicit unsupported gap. |

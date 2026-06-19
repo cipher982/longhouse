@@ -2279,9 +2279,15 @@ class UniversalProviderAdapter:
         from zerg.services.session_pause_requests import serialize_pause_request_projection
         from zerg.services.session_runtime import RuntimeEventIngest
         from zerg.services.session_runtime import ingest_runtime_events
+        from zerg.session_execution_home import ManagedSessionTransport
+        from zerg.session_execution_home import SessionExecutionHome
 
         scenario = "answer_pause_request" if answer else "pause_request_detect"
         can_respond = _provider_answer_pause_supported(self.config.provider)
+        managed_transport = {
+            "claude": ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value,
+            "codex": ManagedSessionTransport.CODEX_APP_SERVER.value,
+        }.get(self.config.provider)
         now = datetime(2026, 6, 19, 12, 0, tzinfo=UTC)
         db_path = package.path("longhouse", "pause-request-service.sqlite")
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2300,6 +2306,10 @@ class UniversalProviderAdapter:
                 last_activity_at=now,
                 user_messages=1,
                 assistant_messages=0,
+                execution_home=SessionExecutionHome.MANAGED_LOCAL.value if managed_transport else None,
+                managed_transport=managed_transport,
+                provider_session_id=f"{self.config.provider}-pause-answer-session" if managed_transport else None,
+                managed_session_name=f"{self.config.provider}-pause-answer-proof" if managed_transport else None,
             )
             db.add(session)
             db.flush()
@@ -2390,7 +2400,91 @@ class UniversalProviderAdapter:
             active_after_response = None
             all_rows_after_response: list[dict[str, Any] | None] = []
             response_assertions: dict[str, bool] = {}
+            answer_dispatch: dict[str, Any] | None = None
             if answer and active is not None:
+                if can_respond:
+                    from zerg.services import managed_local_control as control
+
+                    calls: list[dict[str, Any]] = []
+
+                    async def fake_dispatch(**kwargs: Any) -> SimpleNamespace:
+                        calls.append(
+                            {
+                                "owner_id": kwargs.get("owner_id"),
+                                "timeout_secs": kwargs.get("timeout_secs"),
+                                "command_type": kwargs.get("command_type"),
+                                "payload": kwargs.get("payload"),
+                                "commis_id": kwargs.get("commis_id"),
+                                "run_id": kwargs.get("run_id"),
+                                "provider": getattr(kwargs.get("session"), "provider", None),
+                                "managed_transport": getattr(kwargs.get("session"), "managed_transport", None),
+                            }
+                        )
+                        return SimpleNamespace(
+                            ok=True,
+                            transport="engine_channel",
+                            data={
+                                "exit_code": 0,
+                                "stdout": "",
+                                "stderr": "",
+                                "pause_response": {
+                                    "request_key": active.request_key,
+                                    "decision": "answer",
+                                    "answers": {"approach": "Small adapter path"},
+                                },
+                            },
+                            error=None,
+                        )
+
+                    original_dispatch = control.dispatch_managed_control_command
+                    original_transport_error = control._managed_control_transport_error
+                    control.dispatch_managed_control_command = fake_dispatch
+                    control._managed_control_transport_error = lambda *_args, **_kwargs: None
+                    try:
+                        dispatch_result = asyncio.run(
+                            control.answer_pause_request_on_managed_local_session(
+                                db=db,
+                                owner_id=1,
+                                session=session,
+                                request_key=active.request_key,
+                                decision="answer",
+                                answers={"approach": "Small adapter path"},
+                                message="Use the small adapter path.",
+                                commis_id=f"universal-{self.config.provider}-answer-pause",
+                            )
+                        )
+                    finally:
+                        control.dispatch_managed_control_command = original_dispatch
+                        control._managed_control_transport_error = original_transport_error
+
+                    request = calls[0] if calls else {}
+                    expected_payload = {
+                        "provider": self.config.provider,
+                        "request_key": active.request_key,
+                        "decision": "answer",
+                        "answers": {"approach": "Small adapter path"},
+                        "message": "Use the small adapter path.",
+                    }
+                    dispatch_assertions = {
+                        "command_dispatched": bool(calls),
+                        "command_type_matches": request.get("command_type") == "session.answer_pause",
+                        "payload_matches": request.get("payload") == expected_payload,
+                        "provider_matches": request.get("provider") == self.config.provider,
+                        "transport_matches": request.get("managed_transport") == managed_transport,
+                        "result_ok": dispatch_result.ok is True,
+                        "exit_code_zero": dispatch_result.exit_code == 0,
+                        "response_data_projected": bool(dispatch_result.response_data),
+                    }
+                    answer_dispatch = {
+                        "calls": calls,
+                        "result": {
+                            "ok": dispatch_result.ok,
+                            "exit_code": dispatch_result.exit_code,
+                            "error": dispatch_result.error,
+                            "response_data": dispatch_result.response_data,
+                        },
+                        "assertions": dispatch_assertions,
+                    }
                 resolved = resolve_pause_request(
                     db,
                     pause_request_id=active.id,
@@ -2474,6 +2568,8 @@ class UniversalProviderAdapter:
                     }
                 ),
             )
+            if answer_dispatch is not None:
+                package.write_json("raw/answer-pause-dispatch.json", _json_safe(answer_dispatch))
 
         pending_pass = all(pending_assertions.values())
         service_pass = not answer or (pending_pass and all(response_assertions.values()))
@@ -2510,28 +2606,25 @@ class UniversalProviderAdapter:
                 payload["message"] = "Longhouse did not project a pending structured pause request."
             return payload
 
-        if service_pass:
-            answer_failure_code = "answer_pause_provider_delivery_unproven"
-        else:
+        dispatch_assertions = dict((answer_dispatch or {}).get("assertions") or {})
+        dispatch_pass = bool(dispatch_assertions) and all(dispatch_assertions.values())
+        answer_failure_code = None
+        if not service_pass:
             answer_failure_code = "answer_pause_request_service_failed"
-        answer_message = (
-            " ".join(
-                [
-                    "Longhouse resolved the pause request, but provider-held live answer delivery",
-                    "still needs a token/live canary.",
-                ]
-            )
-            if service_pass
-            else "Longhouse pause-request response service assertions failed."
-        )
+        elif can_respond and not dispatch_pass:
+            answer_failure_code = "answer_pause_dispatch_failed"
+        answer_message = "Longhouse pause-request response service assertions failed."
+        if service_pass and can_respond and not dispatch_pass:
+            answer_message = "Longhouse managed-local pause answer dispatch assertions failed."
         next_step = " ".join(
             [
                 "Promote with a live provider-held structured-question canary that proves the answer",
                 "reaches the provider runtime.",
             ]
         )
+        answer_status = STATUS_PASS if service_pass and (not can_respond or dispatch_pass) else STATUS_FAIL
         payload = {
-            "status": STATUS_BLOCKED if service_pass else STATUS_FAIL,
+            "status": answer_status,
             "scenario": scenario,
             "failure_code": answer_failure_code,
             "message": answer_message,
@@ -2551,12 +2644,28 @@ class UniversalProviderAdapter:
                 "canary": "universal_answer_pause_request_service",
                 "failure_code": None if service_pass else "answer_pause_request_service_failed",
             },
+            "managed_answer_dispatch": {
+                "status": STATUS_PASS if dispatch_pass else STATUS_FAIL,
+                "level": "hermetic",
+                "canary": "universal_answer_pause_dispatch",
+                "failure_code": None if dispatch_pass else "answer_pause_dispatch_failed",
+                "assertions": dispatch_assertions,
+                "dispatch_path": str(package.path("raw", "answer-pause-dispatch.json")),
+            }
+            if can_respond
+            else None,
             "operation_evidence": {
                 "answer_pause_request": {
-                    "status": STATUS_BLOCKED if service_pass else STATUS_FAIL,
-                    "level": "live_token_required",
-                    "canary": "universal_answer_pause_request",
+                    "status": answer_status,
+                    "level": "hermetic" if answer_status == STATUS_PASS else "none",
+                    "canary": "universal_answer_pause_dispatch" if can_respond else "universal_answer_pause_request",
                     "failure_code": answer_failure_code,
+                },
+                "live_answer_delivery": {
+                    "status": STATUS_BLOCKED,
+                    "level": "live_token_required",
+                    "canary": "universal_answer_pause_provider_delivery",
+                    "failure_code": "answer_pause_provider_delivery_unproven",
                 },
                 "pause_request_detect": {
                     "status": STATUS_PASS if pending_pass else STATUS_FAIL,
@@ -2572,6 +2681,12 @@ class UniversalProviderAdapter:
             },
             "next": next_step,
         }
+        if answer_status == STATUS_PASS:
+            payload.pop("failure_code", None)
+            payload["message"] = (
+                "Longhouse resolved the pause request and dispatched a managed-local pause answer; "
+                "provider-held live answer delivery remains a stronger gate."
+            )
         return payload
 
     def _write_observation_projection(
@@ -5192,6 +5307,23 @@ def _derived_action_status(*, action: ActionDefinition, provider: str) -> dict[s
             "message": f"{provider} steer_active_turn behavior needs a provider-specific canary.",
             "proof_scope": "managed_control_steer",
             "next": "Add a live active-turn steer canary, or keep unsupported without a stable provider semantic.",
+        }
+    if action.action_id == "answer_pause_request":
+        if provider in {"claude", "codex"}:
+            return {
+                "status": STATUS_PASS,
+                "evidence_level": "hermetic",
+                "proof_scope": "universal_answer_pause_dispatch",
+                "source": "zerg.services.managed_local_control.answer_pause_request_on_managed_local_session",
+                "canary": "universal_answer_pause_dispatch",
+                "next": "Promote with a live provider-held structured-question canary.",
+            }
+        return {
+            "status": STATUS_UNSUPPORTED_GAP,
+            "failure_code": "answer_pause_request_unsupported",
+            "message": f"{provider} does not expose stable answer-pause machine-control semantics.",
+            "proof_scope": "machine_control.answer_pause",
+            "next": "Keep unsupported until the provider exposes answer-pause semantics.",
         }
     if action.action_id == "external_event_channel":
         return {

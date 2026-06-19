@@ -936,6 +936,8 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
     assert execution_rows["permission_prompt"]["providers"]["claude"]["coverage_status"] == "blocked"
     assert execution_rows["permission_prompt"]["providers"]["opencode"]["coverage_status"] == "pass"
     assert execution_rows["permission_prompt"]["providers"]["opencode"]["scenario_ids"] == ["permission_prompt"]
+    assert execution_rows["answer_pause_request"]["providers"]["claude"]["coverage_status"] == "pass"
+    assert execution_rows["answer_pause_request"]["providers"]["codex"]["coverage_status"] == "pass"
     assert execution_matrix["provider_coverage_kind_counts"]["claude"]["executable_scenario"] > execution_matrix[
         "provider_coverage_kind_counts"
     ]["claude"].get("matrix_contract", 0)
@@ -1903,7 +1905,7 @@ def test_pause_request_detect_projects_pending_question_for_all_providers(tmp_pa
         assert (evidence_root / "longhouse" / "pause-request-pending.json").is_file()
 
 
-def test_answer_pause_request_resolves_longhouse_service_but_blocks_provider_delivery(tmp_path: Path) -> None:
+def test_answer_pause_request_resolves_service_and_dispatches_managed_answer(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
             providers=("claude", "codex"),
@@ -1912,14 +1914,26 @@ def test_answer_pause_request_resolves_longhouse_service_but_blocks_provider_del
         )
     )
 
-    assert payload["verdict"] == "yellow"
+    assert payload["verdict"] == "green"
     for result in payload["results"]:
-        assert result["status"] == "blocked"
-        assert result["failure_code"] == "answer_pause_provider_delivery_unproven"
+        assert result["status"] == "pass"
         data = result["data"]
         assert data["longhouse_response_service"]["status"] == "pass"
-        assert data["operation_evidence"]["answer_pause_request"]["status"] == "blocked"
-        assert data["operation_evidence"]["answer_pause_request"]["level"] == "live_token_required"
+        assert data["managed_answer_dispatch"]["status"] == "pass"
+        assert data["managed_answer_dispatch"]["assertions"] == {
+            "command_dispatched": True,
+            "command_type_matches": True,
+            "exit_code_zero": True,
+            "payload_matches": True,
+            "provider_matches": True,
+            "response_data_projected": True,
+            "result_ok": True,
+            "transport_matches": True,
+        }
+        assert data["operation_evidence"]["answer_pause_request"]["status"] == "pass"
+        assert data["operation_evidence"]["answer_pause_request"]["level"] == "hermetic"
+        assert data["operation_evidence"]["live_answer_delivery"]["status"] == "blocked"
+        assert data["operation_evidence"]["live_answer_delivery"]["level"] == "live_token_required"
         assert data["operation_evidence"]["longhouse_pause_response_service"]["status"] == "pass"
         assert data["resolved_pause_request"]["status"] == "resolved"
         assert data["active_after_response"] is None
@@ -1927,6 +1941,7 @@ def test_answer_pause_request_resolves_longhouse_service_but_blocks_provider_del
         assert data["assertions"]["active_pause_request_cleared"] is True
         evidence_root = Path(result["evidence_root"])
         assert (evidence_root / "longhouse" / "pause-request-resolved.json").is_file()
+        assert (evidence_root / "raw" / "answer-pause-dispatch.json").is_file()
 
 
 def test_answer_pause_request_reports_explicit_provider_gaps(tmp_path: Path) -> None:
