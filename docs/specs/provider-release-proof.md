@@ -105,9 +105,9 @@ static/app-server protocol shape, managed TUI attach, detached-ui launch, raw
 remote protocol fingerprints, and launch/remote/reattach operation evidence.
 This is still not a complete release gate: Claude still lacks managed-session
 binding and live-token proof, Codex still lacks accepted-baseline-backed
-send/interrupt/tool/live-token proof, Antigravity still lacks model-visible
-send/reattach/tool proof, and OpenCode still lacks tool/tool-result and
-live-token proof.
+interrupt/tool proof beyond its accepted live-send lane, Antigravity still lacks
+model-visible send/reattach/tool proof, and OpenCode still lacks
+tool/tool-result and live-token proof.
 
 ## Coverage Legend
 
