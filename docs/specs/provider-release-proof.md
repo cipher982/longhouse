@@ -21,6 +21,8 @@ Sauron should watch releases, stage binaries, call the Longhouse proof lane,
 archive artifacts, compare baselines, and alert. Longhouse owns the provider
 contract scenarios and the meaning of pass/fail.
 
+Operator runbook: `docs/runbooks/provider-release-proof.md`.
+
 ## Current Answer
 
 Longhouse has broad CI and several provider canaries, but CI is not yet an
