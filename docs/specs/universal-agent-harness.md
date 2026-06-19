@@ -206,10 +206,12 @@ to the provider-control channel canary, proves normal send metadata, steer
 metadata, and SIGINT delivery against an owned fake provider process, then
 DB-ingests the resulting no-token control rows. Codex routes it to the existing
 managed-live-interrupt canary and DB-ingests interrupt evidence when Runtime
-Host credentials are present. Without those credentials it returns a typed
-`unsupported_gap`. OpenCode routes it to the provider-live session.abort canary
-and DB-ingests abort evidence. Antigravity currently returns a typed adapter gap
-for this scenario.
+Host credentials are present. Without those credentials it falls back to a
+hermetic `interrupt_managed_local_session` dispatch proof, records the
+managed-live-interrupt credentials gap as blocked evidence, and keeps live
+provider interruption as the stronger promotion gate. OpenCode routes it to the
+provider-live session.abort canary and DB-ingests abort evidence. Antigravity
+currently returns a typed adapter gap for this scenario.
 
 `tool_call_result_projection` is the portable no-token executable scenario for
 the abstract `tool_call_result` action. It emits a paired tool call/result
@@ -595,9 +597,10 @@ shape:
 10. Claude, Codex, and OpenCode `interrupt_cancel` are executable universal
    control scenarios. Claude calls the provider-control channel canary and
    DB-ingests no-token send/steer/SIGINT evidence. Codex calls the
-   managed-live-interrupt canary and returns an explicit Runtime Host
-   credentials gap when not configured. OpenCode calls the provider-live
-   session.abort canary. All pass lanes DB-ingest their evidence.
+   managed-live-interrupt canary when configured; without Runtime Host
+   credentials it proves `session.interrupt` managed-local dispatch hermetically
+   and records the live canary gate as blocked evidence. OpenCode calls the
+   provider-live session.abort canary. Live pass lanes DB-ingest their evidence.
 11. Claude and Codex `steer_active_turn` are executable universal control
    scenarios. Claude calls the provider-control channel canary, evaluates the
    steer metadata path directly, and DB-ingests the resulting no-token control

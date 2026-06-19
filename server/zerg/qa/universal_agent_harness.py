@@ -3575,27 +3575,13 @@ class UniversalProviderAdapter:
         package.write_json("raw/codex-provider-release-canary-inline.json", canary_artifact)
         credentials_gap = _codex_canary_credentials_gap(canary_artifact, ("managed_live_interrupt",))
         if credentials_gap:
-            payload = {
-                "status": STATUS_UNSUPPORTED_GAP,
-                "scenario": "interrupt_cancel",
-                "failure_code": "codex_managed_bridge_credentials_missing",
-                "message": "Codex interrupt_cancel requires Runtime Host credentials.",
-                "missing": credentials_gap,
-                "codex_canary_artifact_path": str(canary_artifact_path),
-                "codex_canary_evidence_root": str(canary_evidence_root),
-                "source_artifact_kind": canary_artifact.get("artifact_kind"),
-                "synthetic": False,
-                "operation_evidence": {
-                    "interrupt": {
-                        "status": STATUS_UNSUPPORTED_GAP,
-                        "level": "live_token_required",
-                        "canary": "managed_live_interrupt",
-                        "failure_code": "codex_managed_bridge_credentials_missing",
-                    }
-                },
-            }
-            package.write_json("assertions/interrupt_cancel.json", payload)
-            return payload
+            return self._run_codex_interrupt_dispatch_proof(
+                package,
+                credentials_gap=credentials_gap,
+                canary_artifact_path=canary_artifact_path,
+                canary_evidence_root=canary_evidence_root,
+                source_artifact_kind=canary_artifact.get("artifact_kind"),
+            )
 
         operation_evidence = {
             str(operation): dict(evidence)
@@ -3661,6 +3647,171 @@ class UniversalProviderAdapter:
         elif db_status != STATUS_PASS:
             payload["failure_code"] = db_ingest.get("failure_code") or "interrupt_cancel_db_ingest_failed"
             payload["message"] = "Codex interrupt evidence did not pass Longhouse DB ingest assertions."
+        package.write_json("assertions/interrupt_cancel.json", payload)
+        return payload
+
+    def _run_codex_interrupt_dispatch_proof(
+        self,
+        package: EvidencePackage,
+        *,
+        credentials_gap: list[str],
+        canary_artifact_path: Path,
+        canary_evidence_root: Path,
+        source_artifact_kind: object,
+    ) -> dict[str, Any]:
+        os.environ.setdefault("TESTING", "1")
+        os.environ.setdefault("DATABASE_URL", f"sqlite:///{package.path('longhouse', 'settings-bootstrap.sqlite')}")
+
+        from zerg.database import initialize_database
+        from zerg.database import make_engine
+        from zerg.database import make_sessionmaker
+        from zerg.models.agents import AgentSession
+        from zerg.services import managed_local_control as control
+        from zerg.session_execution_home import ManagedSessionTransport
+        from zerg.session_execution_home import SessionExecutionHome
+
+        db_path = package.path("longhouse", "codex-interrupt-dispatch.sqlite")
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        engine = make_engine(f"sqlite:///{db_path}")
+        initialize_database(engine)
+        session_factory = make_sessionmaker(engine)
+        now = datetime(2026, 6, 19, 12, 0, tzinfo=UTC)
+        calls: list[dict[str, Any]] = []
+        codex_transport = ManagedSessionTransport.CODEX_APP_SERVER.value
+
+        async def fake_dispatch(**kwargs: Any) -> SimpleNamespace:
+            calls.append(
+                {
+                    "owner_id": kwargs.get("owner_id"),
+                    "timeout_secs": kwargs.get("timeout_secs"),
+                    "command_type": kwargs.get("command_type"),
+                    "payload": kwargs.get("payload"),
+                    "commis_id": kwargs.get("commis_id"),
+                    "run_id": kwargs.get("run_id"),
+                    "provider": getattr(kwargs.get("session"), "provider", None),
+                    "managed_transport": getattr(kwargs.get("session"), "managed_transport", None),
+                }
+            )
+            return SimpleNamespace(
+                ok=True,
+                transport="engine_channel",
+                data={"exit_code": 0, "stdout": "interrupted", "stderr": ""},
+                error=None,
+            )
+
+        original_dispatch = control.dispatch_managed_control_command
+        original_transport_error = control._managed_control_transport_error
+        control.dispatch_managed_control_command = fake_dispatch
+        control._managed_control_transport_error = lambda *_args, **_kwargs: None
+        try:
+            with session_factory() as db:
+                session = AgentSession(
+                    provider="codex",
+                    environment="test",
+                    project="universal-agent-harness",
+                    device_id="universal-harness",
+                    cwd=str(package.path("workspace")),
+                    started_at=now - timedelta(minutes=5),
+                    last_activity_at=now,
+                    provider_session_id="codex-interrupt-transport-session",
+                    user_messages=1,
+                    assistant_messages=1,
+                    execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
+                    managed_transport=ManagedSessionTransport.CODEX_APP_SERVER.value,
+                    managed_session_name="codex-interrupt-transport-proof",
+                )
+                db.add(session)
+                db.flush()
+                result = asyncio.run(
+                    control.interrupt_managed_local_session(
+                        db=db,
+                        owner_id=1,
+                        session=session,
+                        commis_id="universal-codex-interrupt",
+                    )
+                )
+        finally:
+            control.dispatch_managed_control_command = original_dispatch
+            control._managed_control_transport_error = original_transport_error
+
+        request = calls[0] if calls else {}
+        assertions = {
+            "command_dispatched": bool(calls),
+            "command_type_matches": request.get("command_type") == "session.interrupt",
+            "payload_empty": request.get("payload") == {},
+            "provider_is_codex": request.get("provider") == "codex",
+            "transport_is_codex_app_server": request.get("managed_transport") == codex_transport,
+            "result_ok": result.ok is True,
+            "exit_code_zero": result.exit_code == 0,
+        }
+        passed = all(assertions.values())
+        raw_path = package.write_json(
+            "raw/codex-interrupt-dispatch.json",
+            {
+                "db_path": str(db_path),
+                "credentials_gap": credentials_gap,
+                "codex_canary_artifact_path": str(canary_artifact_path),
+                "codex_canary_evidence_root": str(canary_evidence_root),
+                "calls": calls,
+                "result": {
+                    "ok": result.ok,
+                    "exit_code": result.exit_code,
+                    "error": result.error,
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                },
+                "assertions": assertions,
+            },
+        )
+        operations = {
+            "interrupt": {
+                "status": STATUS_PASS if passed else STATUS_FAIL,
+                "level": "hermetic",
+                "canary": "codex_managed_local_interrupt_dispatch",
+                "failure_code": None if passed else "codex_interrupt_dispatch_failed",
+                "source": "zerg.services.managed_local_control.interrupt_managed_local_session",
+            },
+            "live_interrupt_canary": {
+                "status": STATUS_BLOCKED,
+                "level": "live_token_required",
+                "canary": "managed_live_interrupt",
+                "failure_code": "codex_managed_bridge_credentials_missing",
+            },
+        }
+        payload = self._write_session_projection(
+            package,
+            raw_events=(
+                {
+                    "type": "system",
+                    "role": "system",
+                    "text": "Codex managed-local interrupt dispatch command completed.",
+                    "provider_session_id": "codex-interrupt-transport-session",
+                    "source_canary": "codex_managed_local_interrupt_dispatch",
+                    "evidence_origin": "managed_local_control_transport_proof",
+                },
+            ),
+            operations=operations,
+            provider_session_id="codex-interrupt-transport-session",
+        )
+        payload.update(
+            {
+                "status": STATUS_PASS if passed else STATUS_FAIL,
+                "scenario": "interrupt_cancel",
+                "assertions": assertions,
+                "raw_interrupt_dispatch_path": str(raw_path),
+                "codex_canary_artifact_path": str(canary_artifact_path),
+                "codex_canary_evidence_root": str(canary_evidence_root),
+                "source_artifact_kind": source_artifact_kind,
+                "missing_live_credentials": credentials_gap,
+                "proof_scope": "codex_managed_local_interrupt_dispatch",
+                "synthetic": False,
+                "operation_evidence": operations,
+                "next": "Promote with managed-live Codex interrupt canary when Runtime Host credentials are present.",
+            }
+        )
+        if not passed:
+            payload["failure_code"] = "codex_interrupt_dispatch_failed"
+            payload["message"] = "Codex interrupt dispatch proof did not pass."
         package.write_json("assertions/interrupt_cancel.json", payload)
         return payload
 

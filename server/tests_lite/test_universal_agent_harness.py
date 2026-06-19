@@ -988,6 +988,8 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
                 "resume_reattach": "codex_managed_bridge_credentials_missing",
                 "managed_session_e2e": "codex_managed_bridge_credentials_missing",
             }
+            assert coverage["interrupt_cancel"]["coverage_status"] == "pass"
+            assert coverage["interrupt_cancel"]["scenario_failure_codes"] == {}
         if result["provider"] == "antigravity":
             assert coverage["send_message"]["coverage_status"] == "pass"
             assert coverage["session_identity"]["coverage_status"] == "pass"
@@ -1638,7 +1640,7 @@ def test_codex_interrupt_cancel_uses_managed_live_interrupt_canary(tmp_path: Pat
     assert db_snapshot["timeline"]["matched"] is True
 
 
-def test_codex_interrupt_cancel_reports_runtime_host_credentials_gap(tmp_path: Path) -> None:
+def test_codex_interrupt_cancel_falls_back_to_hermetic_dispatch_when_credentials_missing(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
             providers=("codex",),
@@ -1649,11 +1651,23 @@ def test_codex_interrupt_cancel_reports_runtime_host_credentials_gap(tmp_path: P
     )
 
     result = payload["results"][0]
-    assert payload["verdict"] == "yellow"
-    assert result["status"] == "unsupported_gap"
-    assert result["failure_code"] == "codex_managed_bridge_credentials_missing"
-    assert result["data"]["missing"] == ["--agents-token", "--api-url"]
-    assert result["data"]["operation_evidence"]["interrupt"]["level"] == "live_token_required"
+    assert payload["verdict"] == "green"
+    assert result["status"] == "pass"
+    assert result["data"]["missing_live_credentials"] == ["--agents-token", "--api-url"]
+    assert result["data"]["operation_evidence"]["interrupt"]["status"] == "pass"
+    assert result["data"]["operation_evidence"]["interrupt"]["level"] == "hermetic"
+    assert result["data"]["operation_evidence"]["interrupt"]["canary"] == "codex_managed_local_interrupt_dispatch"
+    assert result["data"]["operation_evidence"]["live_interrupt_canary"]["status"] == "blocked"
+    assert result["data"]["assertions"] == {
+        "command_dispatched": True,
+        "command_type_matches": True,
+        "exit_code_zero": True,
+        "payload_empty": True,
+        "provider_is_codex": True,
+        "result_ok": True,
+        "transport_is_codex_app_server": True,
+    }
+    assert Path(result["data"]["raw_interrupt_dispatch_path"]).is_file()
 
 
 def test_claude_interrupt_cancel_uses_channel_control_canary(tmp_path: Path, monkeypatch) -> None:
