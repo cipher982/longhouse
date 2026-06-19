@@ -63,6 +63,7 @@ UNIVERSAL_SCENARIOS = (
     "launch_managed_session",
     "send_receive",
     "managed_session_e2e",
+    "steer_active_turn",
     "interrupt_cancel",
     "tool_call_result",
     "resume_reattach",
@@ -741,6 +742,7 @@ def _run_universal_harness(
         in {
             "db_ingest_project",
             "managed_session_e2e",
+            "steer_active_turn",
             "interrupt_cancel",
             "tool_call_result",
             "resume_reattach",

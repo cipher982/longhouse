@@ -47,6 +47,7 @@ SCENARIOS = (
     "launch_managed_session",
     "send_receive",
     "managed_session_e2e",
+    "steer_active_turn",
     "interrupt_cancel",
     "tool_call_result",
     "resume_reattach",
@@ -87,6 +88,7 @@ MVP_METHODS = (
     "launch_managed_session",
     "send_receive",
     "managed_session_e2e",
+    "steer_active_turn",
     "interrupt_cancel",
     "tool_call_result",
     "resume_reattach",
@@ -466,6 +468,8 @@ class AgentHarnessAdapter(Protocol):
     def launch_managed_session(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def send_receive(self, package: "EvidencePackage", prompt: str) -> dict[str, Any]: ...
+
+    def steer_active_turn(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def interrupt_cancel(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
@@ -942,6 +946,44 @@ class UniversalProviderAdapter:
         package.write_json("assertions/send_receive.json", payload)
         return payload
 
+    def steer_active_turn(self, package: EvidencePackage) -> dict[str, Any]:
+        if self.config.provider == "claude":
+            return self._run_claude_steer_active_turn(package)
+        contract = contract_for_provider(self.config.provider)
+        if contract is not None and contract.steer_active_turn:
+            payload = {
+                "status": STATUS_BLOCKED,
+                "scenario": "steer_active_turn",
+                "failure_code": "steer_active_turn_adapter_missing",
+                "message": (
+                    "steer_active_turn is supported by the provider contract, " "but is not yet backed by a universal provider adapter."
+                ),
+                "operation_evidence": {
+                    "steer_active_turn": {
+                        "status": STATUS_BLOCKED,
+                        "level": "none",
+                        "canary": "universal_steer_active_turn",
+                        "failure_code": "steer_active_turn_adapter_missing",
+                    }
+                },
+            }
+        else:
+            payload = self._unsupported_payload(
+                "steer_active_turn",
+                "steer_active_turn_unsupported",
+                "This provider does not expose stable active-turn steering semantics.",
+            )
+            payload["operation_evidence"] = {
+                "steer_active_turn": {
+                    "status": STATUS_UNSUPPORTED_GAP,
+                    "level": "none",
+                    "canary": "universal_steer_active_turn",
+                    "failure_code": "steer_active_turn_unsupported",
+                }
+            }
+        package.write_json("assertions/steer_active_turn.json", payload)
+        return payload
+
     def interrupt_cancel(self, package: EvidencePackage) -> dict[str, Any]:
         if self.config.provider == "claude":
             return self._run_claude_interrupt_cancel(package)
@@ -1403,6 +1445,31 @@ class UniversalProviderAdapter:
             payload["failure_code"] = db_ingest.get("failure_code") or "interrupt_cancel_db_ingest_failed"
             payload["message"] = "Claude interrupt evidence did not pass Longhouse DB ingest assertions."
         package.write_json("assertions/interrupt_cancel.json", payload)
+        return payload
+
+    def _run_claude_steer_active_turn(self, package: EvidencePackage) -> dict[str, Any]:
+        payload = dict(self._run_claude_interrupt_cancel(package))
+        operation_evidence = {
+            str(operation): dict(evidence)
+            for operation, evidence in dict(payload.get("operation_evidence") or {}).items()
+            if isinstance(evidence, Mapping)
+        }
+        steer_status = str((operation_evidence.get("steer_active_turn") or {}).get("status") or STATUS_FAIL)
+        db_status = str(((payload.get("longhouse_ingest") or {}).get("status")) or STATUS_FAIL)
+        verdict = str(payload.get("provider_control_verdict") or "red")
+        passed = verdict == "green" and steer_status == STATUS_PASS and db_status == STATUS_PASS
+        payload["status"] = STATUS_PASS if passed else STATUS_FAIL
+        payload["scenario"] = "steer_active_turn"
+        if passed:
+            payload.pop("failure_code", None)
+            payload.pop("message", None)
+        elif verdict != "green" or steer_status != STATUS_PASS:
+            payload["failure_code"] = payload.get("failure_code") or "claude_steer_active_turn_failed"
+            payload["message"] = "Claude channel steer canary did not pass."
+        else:
+            payload["failure_code"] = payload.get("failure_code") or "steer_active_turn_db_ingest_failed"
+            payload["message"] = "Claude steer evidence did not pass Longhouse DB ingest assertions."
+        package.write_json("assertions/steer_active_turn.json", payload)
         return payload
 
     def _run_opencode_interrupt_cancel(self, package: EvidencePackage) -> dict[str, Any]:
@@ -4557,6 +4624,18 @@ def run_send_receive(adapter: AgentHarnessAdapter, package: EvidencePackage, pro
     )
 
 
+def run_steer_active_turn(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.steer_active_turn(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="steer_active_turn",
+        package=package,
+        payload=payload,
+    )
+
+
 def run_interrupt_cancel(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
     adapter.prepare(package)
     payload = adapter.interrupt_cancel(package)
@@ -4653,6 +4732,7 @@ SCENARIO_RUNNERS = {
     "launch_managed_session": run_launch_managed_session,
     "send_receive": run_send_receive,
     "managed_session_e2e": run_managed_session_e2e,
+    "steer_active_turn": run_steer_active_turn,
     "interrupt_cancel": run_interrupt_cancel,
     "tool_call_result": run_tool_call_result,
     "resume_reattach": run_resume_reattach,

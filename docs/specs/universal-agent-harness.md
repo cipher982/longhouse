@@ -286,6 +286,7 @@ Universal scenarios:
 | `session_projection` | P0 | Canonical events project into the stable session-detail shape for every provider. |
 | `timeline_projection` | P0 | Canonical events project into the stable timeline/card shape for every provider. |
 | `tool_call_result` | P1 | Tool call/result events are paired and attributed; workspace side effects match the fixture. |
+| `steer_active_turn` | P1 | Active-turn steering reaches the provider control lane or reports an explicit unsupported/blocked gap. |
 | `interrupt_cancel` | P1 | A long active turn can be interrupted without corrupting session evidence. |
 | `resume_reattach` | P1 | A prior session can be resumed or explicitly reports an unsupported gap. |
 | `multi_turn_continuity` | P1 | Follow-up input depends on prior turn state and stays in the same session. |
@@ -493,34 +494,38 @@ shape:
    managed-live-interrupt canary and returns an explicit Runtime Host
    credentials gap when not configured. OpenCode calls the provider-live
    session.abort canary. All pass lanes DB-ingest their evidence.
-11. Codex and OpenCode `tool_call_result` are executable universal observation
+11. Claude `steer_active_turn` is an executable universal control scenario. It
+   calls the provider-control channel canary, evaluates the steer metadata path
+   directly, DB-ingests the resulting no-token control rows, and reports Codex,
+   OpenCode, and Antigravity gaps explicitly.
+12. Codex and OpenCode `tool_call_result` are executable universal observation
    scenarios. They call their existing real-tool canaries, DB-ingest linked tool
    call/result rows, and expose `universal_tool_call_result` evidence through
    release proof.
-12. OpenCode `resume_reattach` is an executable universal session-continuity
+13. OpenCode `resume_reattach` is an executable universal session-continuity
    scenario. It calls the provider-live process-restart reattach canary,
    DB-ingests reattach evidence, and exposes `universal_reattach` evidence
    through release proof.
-13. Claude `live_token_streaming` is an executable universal one-shot
+14. Claude `live_token_streaming` is an executable universal one-shot
    live-token scenario. It calls real print, DB-ingests prompt/result marker
    rows, and exposes `universal_live_token_streaming` evidence through release
    proof without claiming managed-session steer.
-14. Codex `live_token_streaming` is an executable universal live-token
+15. Codex `live_token_streaming` is an executable universal live-token
    scenario. It calls managed live-send, DB-ingests user/assistant marker rows
    when Runtime Host credentials are present, and exposes live-token credential
    gaps as yellow release-proof evidence.
-15. Antigravity `live_token_streaming` is an executable universal live-token
+16. Antigravity `live_token_streaming` is an executable universal live-token
    scenario. It calls real-agy hook-inbox injection, DB-ingests the queued user
    message plus marker response, and exposes `universal_live_token_streaming`
    evidence through release proof.
-16. OpenCode `live_token_streaming` is an executable universal live-token
+17. OpenCode `live_token_streaming` is an executable universal live-token
    scenario. It calls real-print `opencode run --format json`, DB-ingests the
    prompt/result marker rows, and exposes `universal_live_token_streaming`
    evidence through release proof.
-17. Evidence packages are written for pass, fail, and unsupported results.
-18. Existing one-off canaries remain compatibility lanes until each behavior is
+18. Evidence packages are written for pass, fail, and unsupported results.
+19. Existing one-off canaries remain compatibility lanes until each behavior is
    migrated and baselined.
 
-Next implementation target: migrate Claude managed live-token send/steer
-mechanics and the remaining Codex, OpenCode, and Antigravity control gaps behind
-the same runner.
+Next implementation target: migrate Claude managed live-token send mechanics
+and the remaining Codex, OpenCode, and Antigravity control gaps behind the same
+runner.

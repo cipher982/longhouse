@@ -1247,6 +1247,99 @@ def test_claude_interrupt_cancel_uses_channel_control_canary(tmp_path: Path, mon
     assert db_snapshot["timeline"]["matched"] is True
 
 
+def test_claude_steer_active_turn_uses_channel_control_canary(tmp_path: Path, monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_control_canary(
+        *,
+        provider: str,
+        artifact_path: Path,
+        evidence_root: Path,
+        extra_args: list[str] | None = None,
+        extra_env: dict[str, str] | None = None,
+    ) -> dict[str, object]:
+        calls.append(
+            {
+                "provider": provider,
+                "artifact_path": artifact_path,
+                "evidence_root": evidence_root,
+                "extra_args": extra_args,
+                "extra_env": extra_env,
+            }
+        )
+        return {
+            "schema_version": 1,
+            "provider": "claude",
+            "verdict": "green",
+            "failure_code": None,
+            "canaries": {
+                "claude": {
+                    "status": "pass",
+                    "session_id": "claude-channel-steer-session",
+                    "send_meta": {
+                        "injected_by": "longhouse",
+                        "longhouse_session_id": "claude-channel-steer-session",
+                    },
+                    "steer_meta": {
+                        "injected_by": "longhouse",
+                        "intent": "steer",
+                        "longhouse_session_id": "claude-channel-steer-session",
+                    },
+                    "interrupt_marker": str(tmp_path / "interrupted.txt"),
+                }
+            },
+        }
+
+    monkeypatch.setattr(uah, "run_provider_control_e2e_canary", fake_control_canary)
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("claude",),
+            scenarios=("steer_active_turn",),
+            evidence_root=tmp_path / "evidence",
+        )
+    )
+
+    assert calls
+    assert calls[0]["provider"] == "claude"
+    result = payload["results"][0]
+    assert payload["verdict"] == "green"
+    assert result["status"] == "pass"
+    assert result["data"]["scenario"] == "steer_active_turn"
+    assert result["data"]["source_artifact_kind"] == "provider_control_e2e_canary"
+    assert result["data"]["operation_evidence"]["steer_active_turn"]["status"] == "pass"
+    assert result["data"]["operation_evidence"]["steer_active_turn"]["level"] == "live_no_token"
+    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
+
+    evidence_root = Path(result["evidence_root"])
+    assert (evidence_root / "assertions" / "steer_active_turn.json").is_file()
+    raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
+    assert "steer from provider control canary" in raw_events
+    session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
+    assert session["provider_session_id"] == "claude-channel-steer-session"
+    assert session["operation_statuses"]["steer_active_turn"]["level"] == "live_no_token"
+
+
+def test_steer_active_turn_reports_explicit_provider_gaps(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("codex", "opencode", "antigravity"),
+            scenarios=("steer_active_turn",),
+            evidence_root=tmp_path / "evidence",
+        )
+    )
+
+    by_provider = {result["provider"]: result for result in payload["results"]}
+    assert payload["verdict"] == "yellow"
+    assert by_provider["codex"]["status"] == "blocked"
+    assert by_provider["codex"]["failure_code"] == "steer_active_turn_adapter_missing"
+    assert by_provider["codex"]["data"]["operation_evidence"]["steer_active_turn"]["status"] == "blocked"
+    for provider in ("opencode", "antigravity"):
+        result = by_provider[provider]
+        assert result["status"] == "unsupported_gap"
+        assert result["failure_code"] == "steer_active_turn_unsupported"
+        assert result["data"]["operation_evidence"]["steer_active_turn"]["status"] == "unsupported_gap"
+
+
 def test_opencode_interrupt_cancel_uses_session_abort_canary(tmp_path: Path) -> None:
     fake_opencode = _fake_opencode_server(tmp_path / "bin" / "opencode")
     payload = uah.run_harness(
