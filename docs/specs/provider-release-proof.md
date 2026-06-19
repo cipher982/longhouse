@@ -321,6 +321,10 @@ Optional variables:
   `codex-managed-live-send-release-proof-v1`, Antigravity real-agy send uses
   `antigravity-real-agy-send-release-proof-v1`, and default proofs use
   `{provider}-release-proof-v1`.
+- `PREFLIGHT_ONLY=1`/`--preflight-only` emits
+  `artifact_kind=provider_release_proof_preflight` without running a provider
+  canary. It verifies binary presence and live-lane Runtime Host credential
+  presence without spending a model turn or exposing token values.
 
 The equivalent direct script entrypoint is:
 
@@ -355,6 +359,21 @@ It emits:
     "operation_evidence": "...",
     "session_projection": "..."
   }
+}
+```
+
+With `--preflight-only`, it emits:
+
+```json
+{
+  "schema_version": 1,
+  "artifact_kind": "provider_release_proof_preflight",
+  "provider": "codex",
+  "scenario_id": "codex-managed-live-send-release-proof-v1",
+  "scenario_profile": "managed-live-send",
+  "verdict": "yellow",
+  "failure_code": "provider_release_proof_prerequisites_missing",
+  "checks": []
 }
 ```
 

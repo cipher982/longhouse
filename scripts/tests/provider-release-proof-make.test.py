@@ -148,12 +148,39 @@ def test_provider_release_proof_make_passes_scenario_id_override() -> None:
         assert proof_payload["scenario_profile"] == "default"
 
 
+def test_provider_release_proof_make_runs_preflight_only() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        proof = root / "preflight.json"
+        evidence = root / "evidence"
+
+        proof_result = _run_make(
+            [
+                "provider-release-proof",
+                "PROVIDER=codex",
+                "PROVIDER_VERSION=codex-test-0",
+                "CODEX_RUN_MANAGED_LIVE_SEND=1",
+                "PREFLIGHT_ONLY=1",
+                f"ARTIFACT={proof}",
+                f"EVIDENCE_ROOT={evidence}",
+            ]
+        )
+
+        assert proof_result.returncode == 0, proof_result.stderr
+        proof_payload = _read_json(proof)
+        assert proof_payload["artifact_kind"] == "provider_release_proof_preflight"
+        assert proof_payload["scenario_id"] == "codex-managed-live-send-release-proof-v1"
+        assert proof_payload["failure_code"] == "provider_release_proof_prerequisites_missing"
+        assert not (evidence / "raw").exists()
+
+
 def main() -> int:
     tests = [
         test_provider_release_proof_make_requires_provider,
         test_provider_release_proof_status_make_requires_provider_and_scenario,
         test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_yellow,
         test_provider_release_proof_make_passes_scenario_id_override,
+        test_provider_release_proof_make_runs_preflight_only,
     ]
     for test in tests:
         test()

@@ -563,6 +563,76 @@ def test_codex_managed_live_send_uses_distinct_scenario() -> None:
         assert "--run-managed-live-send" in source_args
 
 
+def test_codex_managed_live_send_preflight_reports_missing_credentials() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "codex",
+            env={"CODEX_API_URL": "", "CODEX_AGENTS_TOKEN": ""},
+            extra_args=[
+                "--preflight-only",
+                "--codex-run-managed-live-send",
+            ],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["artifact_kind"] == "provider_release_proof_preflight"
+        assert payload["scenario_id"] == "codex-managed-live-send-release-proof-v1"
+        assert payload["scenario_profile"] == "managed-live-send"
+        assert payload["verdict"] == "yellow"
+        assert payload["failure_code"] == "provider_release_proof_prerequisites_missing"
+        checks = {check["name"]: check for check in payload["checks"]}
+        assert checks["provider_binary"]["status"] == "pass"
+        assert checks["codex_api_url"]["failure_code"] == "codex_runtime_host_api_url_missing"
+        assert checks["codex_agents_token"]["failure_code"] == "codex_runtime_host_agents_token_missing"
+
+
+def test_codex_managed_live_send_preflight_redacts_credentials() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "codex",
+            extra_args=[
+                "--preflight-only",
+                "--codex-run-managed-live-send",
+                "--codex-api-url",
+                "http://longhouse.test",
+                "--codex-agents-token",
+                "secret-token",
+            ],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["verdict"] == "green"
+        assert "secret-token" not in json.dumps(payload)
+        assert {check["status"] for check in payload["checks"]} == {"pass"}
+
+
+def test_preflight_reports_missing_provider_binary_as_red() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+
+        result, payload = _run_proof(
+            root,
+            "opencode",
+            extra_args=["--preflight-only"],
+        )
+
+        assert result.returncode == 1
+        assert payload["artifact_kind"] == "provider_release_proof_preflight"
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "provider_binary_not_found"
+
+
 def test_explicit_scenario_id_overrides_profile_default() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -751,6 +821,9 @@ def main() -> int:
         test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest,
         test_codex_release_proof_redacts_token_from_command_evidence,
         test_codex_managed_live_send_uses_distinct_scenario,
+        test_codex_managed_live_send_preflight_reports_missing_credentials,
+        test_codex_managed_live_send_preflight_redacts_credentials,
+        test_preflight_reports_missing_provider_binary_as_red,
         test_explicit_scenario_id_overrides_profile_default,
         test_antigravity_release_proof_can_attach_real_agy_send_evidence,
         test_antigravity_release_proof_blocks_failed_real_agy_send_evidence,

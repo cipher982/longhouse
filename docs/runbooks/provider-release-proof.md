@@ -81,6 +81,22 @@ Sauron release-watch reuses `AGENT_RELEASE_LONGHOUSE_API_URL` and
 `AGENT_RELEASE_LONGHOUSE_AGENTS_TOKEN` for the same Codex managed bridge proof
 when `AGENT_RELEASE_CODEX_CANARY_LIVE=1`.
 
+Run the no-spend preflight before trying to accept a live-send baseline:
+
+```bash
+CODEX_RUN_MANAGED_LIVE_SEND=1 \
+PREFLIGHT_ONLY=1 \
+make provider-release-proof \
+  PROVIDER=codex \
+  ARTIFACT=/tmp/codex-live-preflight.json
+```
+
+`artifact_kind=provider_release_proof_preflight` with
+`failure_code=provider_release_proof_prerequisites_missing` means the live proof
+scenario is correctly selected, but the Runtime Host URL/token or binary
+prerequisites are not present. The preflight records only pass/fail presence
+checks and never includes token material.
+
 Antigravity has an optional live-token send proof:
 
 ```bash
@@ -111,6 +127,8 @@ Key top-level fields:
 - `verdict=yellow`: the proof found an honest gap, missing baseline, missing
   credential, or insufficient coverage. Do not accept it as a trusted baseline.
 - `verdict=red`: block the upgrade until the failure is understood.
+- `artifact_kind=provider_release_proof_preflight`: prerequisite-only artifact;
+  use it for readiness checks, not baseline acceptance.
 - `failure_code`: the actionable reason for yellow/red.
 - `source_canary_returncode`: `0` for green/yellow source canaries, `1` for red.
 - `artifacts`: raw stdout/stderr plus normalized comparable proof files.

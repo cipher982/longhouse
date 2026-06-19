@@ -281,6 +281,78 @@ def _scenario_id(args: argparse.Namespace) -> str:
     return f"{args.provider}-{profile}-release-proof-v1"
 
 
+def _preflight_check(
+    name: str,
+    ok: bool,
+    *,
+    failure_code: str | None = None,
+    message: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"name": name, "status": "pass" if ok else "fail"}
+    if not ok and failure_code:
+        payload["failure_code"] = failure_code
+    if message:
+        payload["message"] = message
+    return payload
+
+
+def _proof_preflight(args: argparse.Namespace) -> dict[str, Any]:
+    checks: list[dict[str, Any]] = []
+    if args.provider_bin is not None:
+        checks.append(
+            _preflight_check(
+                "provider_binary",
+                args.provider_bin.exists(),
+                failure_code="provider_binary_not_found",
+                message=f"Provider binary not found: {args.provider_bin}",
+            )
+        )
+    if args.provider == "codex" and (
+        args.codex_run_managed_tui_attach
+        or args.codex_run_detached_ui
+        or args.codex_run_managed_live_send
+    ):
+        checks.append(
+            _preflight_check(
+                "codex_api_url",
+                bool(args.codex_api_url),
+                failure_code="codex_runtime_host_api_url_missing",
+                message="Set CODEX_API_URL or pass --codex-api-url.",
+            )
+        )
+        checks.append(
+            _preflight_check(
+                "codex_agents_token",
+                bool(args.codex_agents_token),
+                failure_code="codex_runtime_host_agents_token_missing",
+                message="Set CODEX_AGENTS_TOKEN or pass --codex-agents-token.",
+            )
+        )
+    failed = [check for check in checks if check.get("status") == "fail"]
+    red_codes = {"provider_binary_not_found"}
+    verdict = "green"
+    failure_code = None
+    recommendation = "upgrade_allowed"
+    if failed:
+        first_code = str(failed[0].get("failure_code") or "provider_release_proof_preflight_failed")
+        verdict = "red" if first_code in red_codes else "yellow"
+        failure_code = first_code if verdict == "red" else "provider_release_proof_prerequisites_missing"
+        recommendation = "block_upgrade_recommendation" if verdict == "red" else "investigate_before_upgrade"
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "artifact_kind": "provider_release_proof_preflight",
+        "provider": args.provider,
+        "provider_version": args.provider_version,
+        "generated_at": _now_iso(),
+        "scenario_id": _scenario_id(args),
+        "scenario_profile": _scenario_profile(args),
+        "verdict": verdict,
+        "failure_code": failure_code,
+        "recommendation": recommendation,
+        "checks": checks,
+    }
+
+
 def _run_source_canary(args: argparse.Namespace, raw_dir: Path) -> tuple[dict[str, Any], dict[str, str], int | None]:
     raw_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = raw_dir / "stdout.log"
@@ -588,6 +660,11 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
     if args.provider == "codex":
         args.codex_api_url = args.codex_api_url or os.getenv(CODEX_API_URL_ENV)
         args.codex_agents_token = args.codex_agents_token or os.getenv(CODEX_AGENTS_TOKEN_ENV)
+    preflight = _proof_preflight(args)
+    if args.preflight_only:
+        preflight["artifact_path"] = str(args.artifact)
+        _write_json(args.artifact, preflight)
+        return preflight
 
     raw_dir = args.evidence_root / "raw"
     normalized_dir = args.evidence_root / "normalized"
@@ -646,6 +723,7 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
         "scenario_id": _scenario_id(args),
         "scenario_profile": _scenario_profile(args),
         "scenario_version": 1,
+        "preflight": preflight,
         "verdict": verdict,
         "failure_code": failure_code,
         "recommendation": recommendation,
@@ -684,6 +762,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--artifact", type=Path)
     parser.add_argument("--evidence-root", type=Path)
     parser.add_argument("--scenario-id")
+    parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--timeout-secs", type=int, default=180)
     parser.add_argument(
         "--source-review-status",
@@ -716,8 +795,11 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(artifact, indent=2, sort_keys=True))
     else:
         print(f"provider release proof: {artifact['provider']} {artifact['verdict']}")
-        print(f"artifact: {artifact['artifact_path']}")
-        print(f"evidence_root: {artifact['artifacts']['evidence_root']}")
+        if artifact.get("artifact_path"):
+            print(f"artifact: {artifact['artifact_path']}")
+        artifacts = artifact.get("artifacts") if isinstance(artifact.get("artifacts"), dict) else {}
+        if artifacts.get("evidence_root"):
+            print(f"evidence_root: {artifacts['evidence_root']}")
         if artifact.get("failure_code"):
             print(f"failure_code: {artifact['failure_code']}")
     return 1 if artifact["verdict"] == "red" else 0
