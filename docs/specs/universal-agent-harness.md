@@ -148,10 +148,15 @@ provider/action at the recorded evidence level. It does not automatically mean
 the current invocation spent tokens or drove a live model turn. The row's
 `evidence_level` and `proof_scope` are the important qualifiers.
 
-`old_new_release_diff` is now a first-class artifact-diff proof row: it passes
-when the release-proof baseline tool can compare explicit old and new proof
-artifacts. It is not yet automatic provider-version staging/install; that
-belongs to the release runner that produces the two proof artifacts.
+`old_new_release_diff` is now a first-class executable artifact-diff scenario:
+it is `blocked` without explicit proof artifacts and `pass` or `fail` when the
+release-proof baseline tool compares old/new proof artifacts. Run it directly
+with `scripts/qa/universal-agent-harness.py --scenario old_new_release_diff
+--old-proof-artifact OLD --new-proof-artifact NEW`, or attach it to
+`provider-release-proof.py --run-universal-harness` with
+`--universal-old-proof-artifact` and `--universal-new-proof-artifact`.
+It is not yet automatic provider-version staging/install; that belongs to the
+release runner that produces the two proof artifacts.
 
 The registry uses concrete provider adapter classes:
 `ClaudeCodeHarnessAdapter`, `CodexOpenAIHarnessAdapter`,

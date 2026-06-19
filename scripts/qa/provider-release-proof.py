@@ -67,6 +67,7 @@ UNIVERSAL_SCENARIOS = (
     "tool_call_result",
     "resume_reattach",
     "live_token_streaming",
+    "old_new_release_diff",
 )
 UNIVERSAL_YELLOW_STATUSES = {
     "unsupported_gap",
@@ -717,6 +718,12 @@ def _universal_scenarios(args: argparse.Namespace) -> tuple[str, ...]:
     scenarios = list(args.universal_scenario or DEFAULT_UNIVERSAL_SCENARIOS)
     if args.universal_fixture_path and "parse_ingest_project" not in scenarios:
         scenarios.append("parse_ingest_project")
+    if (
+        args.universal_old_proof_artifact
+        and args.universal_new_proof_artifact
+        and "old_new_release_diff" not in scenarios
+    ):
+        scenarios.append("old_new_release_diff")
     return tuple(dict.fromkeys(scenarios))
 
 
@@ -773,6 +780,12 @@ def _run_universal_harness(
         argv.extend(["--fixture-path", str(args.universal_fixture_path)])
     if args.universal_prompt:
         argv.extend(["--prompt", args.universal_prompt])
+    if args.universal_old_proof_artifact:
+        argv.extend(["--old-proof-artifact", str(args.universal_old_proof_artifact)])
+    if args.universal_new_proof_artifact:
+        argv.extend(["--new-proof-artifact", str(args.universal_new_proof_artifact)])
+    if args.universal_baseline_root:
+        argv.extend(["--baseline-root", str(args.universal_baseline_root)])
 
     raw_artifacts = {
         "universal_harness_artifact": str(artifact_path),
@@ -1777,6 +1790,12 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
         args.provider_bin = args.provider_bin.expanduser()
     if args.universal_fixture_path is not None:
         args.universal_fixture_path = args.universal_fixture_path.expanduser()
+    if args.universal_old_proof_artifact is not None:
+        args.universal_old_proof_artifact = args.universal_old_proof_artifact.expanduser()
+    if args.universal_new_proof_artifact is not None:
+        args.universal_new_proof_artifact = args.universal_new_proof_artifact.expanduser()
+    if args.universal_baseline_root is not None:
+        args.universal_baseline_root = args.universal_baseline_root.expanduser()
     if args.provider == "codex":
         args.codex_api_url = args.codex_api_url or os.getenv(CODEX_API_URL_ENV)
         args.codex_agents_token = args.codex_agents_token or os.getenv(
@@ -1991,6 +2010,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--universal-prompt", help="Prompt for universal prompt/session scenarios."
+    )
+    parser.add_argument(
+        "--universal-old-proof-artifact",
+        type=Path,
+        help="Old provider release-proof artifact for universal old_new_release_diff.",
+    )
+    parser.add_argument(
+        "--universal-new-proof-artifact",
+        type=Path,
+        help="New provider release-proof artifact for universal old_new_release_diff.",
+    )
+    parser.add_argument(
+        "--universal-baseline-root",
+        type=Path,
+        help="Baseline root passed to universal old_new_release_diff.",
     )
     parser.add_argument("--codex-run-fake-app-server", action="store_true")
     parser.add_argument("--codex-run-raw-fresh-remote", action="store_true")

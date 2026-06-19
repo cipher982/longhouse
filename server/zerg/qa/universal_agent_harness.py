@@ -12,6 +12,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from collections.abc import Iterable
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -50,6 +51,7 @@ SCENARIOS = (
     "tool_call_result",
     "resume_reattach",
     "live_token_streaming",
+    "old_new_release_diff",
 )
 
 STATUS_PASS = "pass"
@@ -89,6 +91,7 @@ MVP_METHODS = (
     "tool_call_result",
     "resume_reattach",
     "live_token_streaming",
+    "old_new_release_diff",
     "cleanup",
 )
 MVP_CAPABILITIES = (
@@ -397,6 +400,9 @@ class HarnessOptions:
     provider_bins: Mapping[str, Path] | None = None
     fixture_path: Path | None = None
     prompt: str | None = None
+    old_proof_path: Path | None = None
+    new_proof_path: Path | None = None
+    baseline_root: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -468,6 +474,15 @@ class AgentHarnessAdapter(Protocol):
     def resume_reattach(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def live_token_streaming(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def old_new_release_diff(
+        self,
+        package: "EvidencePackage",
+        *,
+        old_proof_path: Path | None,
+        new_proof_path: Path | None,
+        baseline_root: Path | None,
+    ) -> dict[str, Any]: ...
 
     def managed_session_e2e(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
@@ -1019,6 +1034,176 @@ class UniversalProviderAdapter:
             },
         }
         package.write_json("assertions/live_token_streaming.json", payload)
+        return payload
+
+    def old_new_release_diff(
+        self,
+        package: EvidencePackage,
+        *,
+        old_proof_path: Path | None,
+        new_proof_path: Path | None,
+        baseline_root: Path | None,
+    ) -> dict[str, Any]:
+        if old_proof_path is None or new_proof_path is None:
+            payload = {
+                "status": STATUS_BLOCKED,
+                "scenario": "old_new_release_diff",
+                "failure_code": "old_new_proof_artifacts_required",
+                "message": ("old_new_release_diff requires explicit old and new provider release-proof artifacts."),
+                "operation_evidence": {
+                    "old_new_release_diff": {
+                        "status": STATUS_BLOCKED,
+                        "level": "artifact_diff",
+                        "canary": "provider_release_proof_old_new_diff",
+                        "failure_code": "old_new_proof_artifacts_required",
+                    }
+                },
+                "next": "Generate old/new provider release-proof artifacts, then rerun with --old-proof-artifact and --new-proof-artifact.",
+            }
+            package.write_json("assertions/old_new_release_diff.json", payload)
+            return payload
+        return self._run_old_new_release_diff(
+            package,
+            old_proof_path=old_proof_path,
+            new_proof_path=new_proof_path,
+            baseline_root=baseline_root,
+        )
+
+    def _run_old_new_release_diff(
+        self,
+        package: EvidencePackage,
+        *,
+        old_proof_path: Path,
+        new_proof_path: Path,
+        baseline_root: Path | None,
+    ) -> dict[str, Any]:
+        baseline_script = default_repo_root() / "scripts" / "qa" / "provider-release-proof-baseline.py"
+        artifact_path = package.path("assertions", "old-new-release-diff.json")
+        root = baseline_root or package.path("baseline-store")
+        stdout_path = package.path("raw", "old-new-release-diff-stdout.log")
+        stderr_path = package.path("raw", "old-new-release-diff-stderr.log")
+        command_path = package.path("raw", "old-new-release-diff-command.json")
+        argv = [
+            sys.executable,
+            str(baseline_script),
+            "old-new",
+            "--old",
+            str(old_proof_path),
+            "--new",
+            str(new_proof_path),
+            "--baseline-root",
+            str(root),
+            "--artifact",
+            str(artifact_path),
+            "--json",
+        ]
+
+        if not baseline_script.is_file():
+            payload = {
+                "status": STATUS_BLOCKED,
+                "scenario": "old_new_release_diff",
+                "failure_code": "old_new_diff_tool_missing",
+                "message": f"Baseline diff tool was not found at {baseline_script}.",
+                "old_proof_uri": str(old_proof_path),
+                "new_proof_uri": str(new_proof_path),
+                "operation_evidence": {
+                    "old_new_release_diff": {
+                        "status": STATUS_BLOCKED,
+                        "level": "artifact_diff",
+                        "canary": "provider_release_proof_old_new_diff",
+                        "failure_code": "old_new_diff_tool_missing",
+                    }
+                },
+            }
+            package.write_json("assertions/old_new_release_diff.json", payload)
+            return payload
+
+        try:
+            result = subprocess.run(
+                argv,
+                cwd=str(default_repo_root()),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        except OSError as exc:
+            stdout_path.parent.mkdir(parents=True, exist_ok=True)
+            stdout_path.write_text("", encoding="utf-8")
+            stderr_path.write_text(f"{type(exc).__name__}: {exc}", encoding="utf-8")
+            command_payload = {
+                "argv": argv,
+                "returncode": None,
+                "stdout": "",
+                "stderr": f"{type(exc).__name__}: {exc}",
+            }
+            write_json(command_path, command_payload)
+            payload = {
+                "status": STATUS_FAIL,
+                "scenario": "old_new_release_diff",
+                "failure_code": "old_new_diff_exec_failed",
+                "message": f"{type(exc).__name__}: {exc}",
+                "old_proof_uri": str(old_proof_path),
+                "new_proof_uri": str(new_proof_path),
+                "raw_command_path": str(command_path),
+                "operation_evidence": {
+                    "old_new_release_diff": {
+                        "status": STATUS_FAIL,
+                        "level": "artifact_diff",
+                        "canary": "provider_release_proof_old_new_diff",
+                        "failure_code": "old_new_diff_exec_failed",
+                    }
+                },
+            }
+            package.write_json("assertions/old_new_release_diff.json", payload)
+            return payload
+
+        stdout_path.parent.mkdir(parents=True, exist_ok=True)
+        stdout_path.write_text(result.stdout or "", encoding="utf-8")
+        stderr_path.write_text(result.stderr or "", encoding="utf-8")
+        write_json(command_path, command_evidence(result))
+
+        try:
+            diff_payload = _read_json(artifact_path)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            diff_payload = {
+                "artifact_kind": "provider_release_proof_old_new_diff",
+                "verdict": "red",
+                "failure_code": "old_new_diff_artifact_missing",
+                "message": f"{type(exc).__name__}: {exc}",
+                "old_proof_uri": str(old_proof_path),
+                "new_proof_uri": str(new_proof_path),
+            }
+
+        verdict = str(diff_payload.get("verdict") or "red")
+        status = STATUS_PASS if result.returncode == 0 and verdict == "green" else STATUS_FAIL
+        failure_code = None
+        if status != STATUS_PASS:
+            failure_code = str(diff_payload.get("failure_code") or "old_new_release_diff_failed")
+        payload = {
+            "status": status,
+            "scenario": "old_new_release_diff",
+            "old_proof_uri": str(diff_payload.get("old_proof_uri") or old_proof_path),
+            "new_proof_uri": str(diff_payload.get("new_proof_uri") or new_proof_path),
+            "old_new_diff_artifact_path": str(artifact_path),
+            "raw_command_path": str(command_path),
+            "stdout_path": str(stdout_path),
+            "stderr_path": str(stderr_path),
+            "provider_release_proof_old_new_verdict": verdict,
+            "diff": diff_payload.get("diff"),
+            "staging": diff_payload.get("staging"),
+            "operation_evidence": {
+                "old_new_release_diff": {
+                    "status": status,
+                    "level": "artifact_diff",
+                    "canary": "provider_release_proof_old_new_diff",
+                    "failure_code": failure_code,
+                }
+            },
+        }
+        if failure_code:
+            payload["failure_code"] = failure_code
+            payload["message"] = "Old/new provider release-proof artifacts diverged."
+        package.write_json("assertions/old_new_release_diff.json", payload)
         return payload
 
     def managed_session_e2e(self, package: EvidencePackage) -> dict[str, Any]:
@@ -4420,6 +4605,29 @@ def run_live_token_streaming(adapter: AgentHarnessAdapter, package: EvidencePack
     )
 
 
+def run_old_new_release_diff(
+    adapter: AgentHarnessAdapter,
+    package: EvidencePackage,
+    old_proof_path: Path | None,
+    new_proof_path: Path | None,
+    baseline_root: Path | None,
+) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.old_new_release_diff(
+        package,
+        old_proof_path=old_proof_path,
+        new_proof_path=new_proof_path,
+        baseline_root=baseline_root,
+    )
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="old_new_release_diff",
+        package=package,
+        payload=payload,
+    )
+
+
 def run_managed_session_e2e(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
     adapter.prepare(package)
     payload = adapter.managed_session_e2e(package)
@@ -4449,6 +4657,7 @@ SCENARIO_RUNNERS = {
     "tool_call_result": run_tool_call_result,
     "resume_reattach": run_resume_reattach,
     "live_token_streaming": run_live_token_streaming,
+    "old_new_release_diff": run_old_new_release_diff,
 }
 
 
@@ -4459,6 +4668,9 @@ def run_scenario(
     evidence_root: Path,
     fixture_path: Path | None = None,
     prompt: str | None = None,
+    old_proof_path: Path | None = None,
+    new_proof_path: Path | None = None,
+    baseline_root: Path | None = None,
 ) -> ScenarioResult:
     if scenario not in SCENARIO_RUNNERS:
         package = EvidencePackage(root=evidence_root, provider=adapter.config.provider, scenario=scenario)
@@ -4480,6 +4692,8 @@ def run_scenario(
         return runner(adapter, package, prompt)  # type: ignore[misc]
     if scenario == "send_receive":
         return runner(adapter, package, prompt)  # type: ignore[misc]
+    if scenario == "old_new_release_diff":
+        return runner(adapter, package, old_proof_path, new_proof_path, baseline_root)  # type: ignore[misc]
     return runner(adapter, package)  # type: ignore[misc]
 
 
@@ -4522,6 +4736,9 @@ def run_harness(options: HarnessOptions) -> dict[str, Any]:
                     evidence_root=options.evidence_root,
                     fixture_path=options.fixture_path,
                     prompt=options.prompt,
+                    old_proof_path=options.old_proof_path,
+                    new_proof_path=options.new_proof_path,
+                    baseline_root=options.baseline_root,
                 )
             )
 
@@ -4579,6 +4796,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--fixture-path", type=Path, help="JSONL fixture for parse_ingest_project.")
     parser.add_argument("--prompt", help="Prompt for run_prompt_once.")
+    parser.add_argument("--old-proof-artifact", type=Path, help="Old provider release-proof artifact for old_new_release_diff.")
+    parser.add_argument("--new-proof-artifact", type=Path, help="New provider release-proof artifact for old_new_release_diff.")
+    parser.add_argument("--baseline-root", type=Path, help="Baseline root passed through to old_new_release_diff.")
     parser.add_argument("--json", action="store_true", help="Emit JSON artifact to stdout.")
     return parser
 
@@ -4605,6 +4825,9 @@ def main(argv: list[str] | None = None) -> int:
             provider_bins=provider_bins,
             fixture_path=args.fixture_path.expanduser() if args.fixture_path else None,
             prompt=args.prompt,
+            old_proof_path=args.old_proof_artifact.expanduser() if args.old_proof_artifact else None,
+            new_proof_path=args.new_proof_artifact.expanduser() if args.new_proof_artifact else None,
+            baseline_root=args.baseline_root.expanduser() if args.baseline_root else None,
         )
     )
     if args.json:

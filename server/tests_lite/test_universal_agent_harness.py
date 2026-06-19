@@ -39,6 +39,202 @@ def _fake_bins(tmp_path: Path) -> dict[str, Path]:
     }
 
 
+def _proof_verdict_for_status(status: str) -> str:
+    if status == "pass":
+        return "green"
+    if status == "warn":
+        return "yellow"
+    return "red"
+
+
+def _proof_failure_for_status(status: str) -> str | None:
+    if status == "pass":
+        return None
+    if status == "warn":
+        return "fake_warning"
+    return "fake_drift"
+
+
+def _write_release_proof(
+    root: Path,
+    name: str,
+    *,
+    status: str = "pass",
+    version: str = "1.2.3",
+    provider: str = "opencode",
+    scenario_id: str = "opencode-release-proof-v1",
+) -> Path:
+    proof_dir = root / name
+    artifact_dir = proof_dir / "evidence"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    source_artifact = artifact_dir / "source.json"
+    stdout = artifact_dir / "stdout.log"
+    stderr = artifact_dir / "stderr.log"
+    normalized_contract = artifact_dir / "normalized" / "contract.json"
+    provider_contract = artifact_dir / "normalized" / "provider_contract.json"
+    operation_evidence_artifact = artifact_dir / "normalized" / "operation_evidence.json"
+    session_projection = artifact_dir / "normalized" / "session_projection.json"
+    action_matrix = artifact_dir / "normalized" / "action_matrix.json"
+    control_surface = artifact_dir / "normalized" / "control_surface.json"
+    action_rows = [
+        {
+            "action_id": "send_message",
+            "category": "control",
+            "status": status,
+            "support": True,
+            "support_reason": "contract.send_input",
+            "required_evidence": "hermetic",
+            "evidence_level": "live_no_token",
+            "proof_scope": "managed_provider_contract",
+            "contract_operation": "send_input",
+            "canary": "server_contract",
+            "failure_code": _proof_failure_for_status(status),
+            "raw_artifacts": [f"/tmp/{name}/volatile-action-path.json"],
+        },
+        {
+            "action_id": "old_new_release_diff",
+            "category": "release_diff",
+            "status": "blocked",
+            "support": True,
+            "support_reason": "provider_release_proof",
+            "required_evidence": "live_no_token",
+            "proof_scope": "release_diff_runner",
+            "failure_code": "old_new_release_runner_missing",
+        },
+    ]
+    normalized = {
+        "artifact_kind": "provider_release_proof",
+        "provider": provider,
+        "provider_version": f"{provider} {version}",
+        "verdict": _proof_verdict_for_status(status),
+        "failure_code": _proof_failure_for_status(status),
+        "canaries": {"server_contract": {"status": status}},
+        "operation_evidence": {
+            "send_input": {
+                "status": status,
+                "level": "live_no_token",
+                "canary": "server_contract",
+            }
+        },
+    }
+    provider_contract_payload = {
+        "artifact_kind": "provider_release_proof_provider_contract",
+        "provider": provider,
+        "provider_version": f"{provider} {version}",
+        "contract_operations": {
+            "send_input": {
+                "level": "live_no_token",
+                "source": "fake server_contract",
+            }
+        },
+    }
+    operation_evidence_payload = {
+        "artifact_kind": "provider_release_proof_operation_evidence",
+        "provider": provider,
+        "provider_version": f"{provider} {version}",
+        "operation_evidence": normalized["operation_evidence"],
+    }
+    session_projection_payload = {
+        "artifact_kind": "provider_release_proof_session_projection",
+        "provider": provider,
+        "provider_version": f"{provider} {version}",
+        "status": "captured",
+        "projection": {
+            "artifact_kind": "provider_live_session_projection",
+            "provider": provider,
+            "status": "captured",
+            "provider_session_id": f"volatile-{name}-{version}",
+            "classification_sidecar_path": f"/tmp/{name}/sidecar.json",
+            "checks": {
+                "session_create": {
+                    "status": "pass",
+                    "provider_session_id": f"volatile-{name}-{version}",
+                    "elapsed_ms": 7,
+                },
+                "prompt_async_no_reply_delivery": {
+                    "status": status,
+                    "message_marker_sha256": f"volatile-{name}",
+                    "elapsed_ms": 11,
+                },
+            },
+            "operation_statuses": {
+                "send_input": {
+                    "status": status,
+                    "level": "live_no_token",
+                    "canary": "server_contract",
+                }
+            },
+        },
+    }
+    action_matrix_payload = {
+        "artifact_kind": "provider_release_proof_action_matrix",
+        "provider": provider,
+        "provider_version": f"{provider} {version}",
+        "status": "captured",
+        "action_matrix": {
+            "artifact_kind": "provider_release_proof_action_matrix",
+            "provider": provider,
+            "action_count": len(action_rows),
+            "action_ids": [row["action_id"] for row in action_rows],
+            "status_counts": {"blocked": 1, status: 1},
+            "action_matrix_path": f"/tmp/{name}/volatile-action-matrix.json",
+            "raw_inputs_path": f"/tmp/{name}/volatile-action-inputs.json",
+            "actions": action_rows,
+        },
+    }
+    control_surface_payload = {
+        "artifact_kind": "provider_release_proof_control_surface",
+        "provider": provider,
+        "provider_version": f"{provider} {version}",
+        "status": "captured",
+        "control_surface": {
+            "artifact_kind": "provider_release_proof_control_surface",
+            "provider": provider,
+            "action_count": 1,
+            "action_ids": ["send_message"],
+            "status_counts": {status: 1},
+            "control_surface_path": f"/tmp/{name}/volatile-control-surface.json",
+            "raw_inputs_path": f"/tmp/{name}/volatile-control-inputs.json",
+            "actions": [action_rows[0]],
+        },
+    }
+    source_artifact.write_text(json.dumps({"raw": True}), encoding="utf-8")
+    stdout.write_text("stdout\n", encoding="utf-8")
+    stderr.write_text("", encoding="utf-8")
+    normalized_contract.parent.mkdir(parents=True, exist_ok=True)
+    normalized_contract.write_text(json.dumps(normalized), encoding="utf-8")
+    provider_contract.write_text(json.dumps(provider_contract_payload), encoding="utf-8")
+    operation_evidence_artifact.write_text(json.dumps(operation_evidence_payload), encoding="utf-8")
+    session_projection.write_text(json.dumps(session_projection_payload), encoding="utf-8")
+    action_matrix.write_text(json.dumps(action_matrix_payload), encoding="utf-8")
+    control_surface.write_text(json.dumps(control_surface_payload), encoding="utf-8")
+    proof = {
+        "schema_version": 1,
+        "artifact_kind": "provider_release_proof",
+        "provider": provider,
+        "provider_version": f"{provider} {version}",
+        "scenario_id": scenario_id,
+        "scenario_version": 1,
+        "verdict": _proof_verdict_for_status(status),
+        "failure_code": _proof_failure_for_status(status),
+        "normalized": normalized,
+        "artifacts": {
+            "source_artifact": str(source_artifact),
+            "stdout": str(stdout),
+            "stderr": str(stderr),
+            "normalized_contract": str(normalized_contract),
+            "provider_contract": str(provider_contract),
+            "operation_evidence": str(operation_evidence_artifact),
+            "session_projection": str(session_projection),
+            "action_matrix": str(action_matrix),
+            "control_surface": str(control_surface),
+        },
+    }
+    proof_path = proof_dir / "proof.json"
+    proof_path.write_text(json.dumps(proof), encoding="utf-8")
+    return proof_path
+
+
 EXPECTED_ADAPTER_CLASS_BY_PROVIDER = {
     "claude": "ClaudeCodeHarnessAdapter",
     "codex": "CodexOpenAIHarnessAdapter",
@@ -349,6 +545,89 @@ def test_action_matrix_marks_provider_specific_unsupported_actions(tmp_path: Pat
     assert by_provider["antigravity"]["interrupt_cancel"]["status"] == "unsupported_gap"
     assert by_provider["antigravity"]["send_message"]["status"] == "pass"
     assert by_provider["antigravity"]["send_message"]["evidence_level"] == "live_token"
+
+
+def test_old_new_release_diff_blocks_without_explicit_artifacts(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=uah.SUPPORTED_PROVIDERS,
+            scenarios=("old_new_release_diff",),
+            evidence_root=tmp_path / "evidence",
+        )
+    )
+
+    assert payload["verdict"] == "yellow"
+    assert len(payload["results"]) == len(uah.SUPPORTED_PROVIDERS)
+    for result in payload["results"]:
+        assert result["scenario"] == "old_new_release_diff"
+        assert result["status"] == "blocked"
+        assert result["failure_code"] == "old_new_proof_artifacts_required"
+        operation = result["data"]["operation_evidence"]["old_new_release_diff"]
+        assert operation["status"] == "blocked"
+        assert operation["level"] == "artifact_diff"
+        assert operation["canary"] == "provider_release_proof_old_new_diff"
+
+
+def test_old_new_release_diff_compares_explicit_proof_artifacts(tmp_path: Path) -> None:
+    old = _write_release_proof(tmp_path, "old")
+    new = _write_release_proof(tmp_path, "new", version="1.2.4")
+
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("opencode",),
+            scenarios=("old_new_release_diff",),
+            evidence_root=tmp_path / "evidence",
+            old_proof_path=old,
+            new_proof_path=new,
+            baseline_root=tmp_path / "baselines",
+        )
+    )
+
+    result = payload["results"][0]
+    data = result["data"]
+    assert payload["verdict"] == "green"
+    assert result["status"] == "pass"
+    assert "failure_code" not in result
+    assert data["provider_release_proof_old_new_verdict"] == "green"
+    assert data["diff"]["status"] == "match"
+    assert data["staging"]["status"] == "explicit_proof_artifacts"
+    assert Path(data["old_new_diff_artifact_path"]).is_file()
+    assert Path(data["raw_command_path"]).is_file()
+    operation = data["operation_evidence"]["old_new_release_diff"]
+    assert operation["status"] == "pass"
+    assert operation["level"] == "artifact_diff"
+
+
+def test_old_new_release_diff_fails_on_proof_artifact_drift(tmp_path: Path) -> None:
+    old = _write_release_proof(tmp_path, "old")
+    new = _write_release_proof(tmp_path, "new", version="1.2.4")
+    new_payload = json.loads(new.read_text(encoding="utf-8"))
+    action_matrix_path = Path(new_payload["artifacts"]["action_matrix"])
+    action_matrix = json.loads(action_matrix_path.read_text(encoding="utf-8"))
+    action_matrix["action_matrix"]["actions"][0]["status"] = "fail"
+    action_matrix["action_matrix"]["actions"][0]["failure_code"] = "send_message_regressed"
+    action_matrix_path.write_text(json.dumps(action_matrix), encoding="utf-8")
+
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("opencode",),
+            scenarios=("old_new_release_diff",),
+            evidence_root=tmp_path / "evidence",
+            old_proof_path=old,
+            new_proof_path=new,
+            baseline_root=tmp_path / "baselines",
+        )
+    )
+
+    result = payload["results"][0]
+    assert payload["verdict"] == "red"
+    assert result["status"] == "fail"
+    assert result["failure_code"] == "provider_release_proof_drift"
+    assert result["data"]["provider_release_proof_old_new_verdict"] == "red"
+    assert result["data"]["diff"]["status"] == "different"
+    operation = result["data"]["operation_evidence"]["old_new_release_diff"]
+    assert operation["status"] == "fail"
+    assert operation["failure_code"] == "provider_release_proof_drift"
 
 
 def test_control_surface_emits_same_control_actions_for_all_providers(tmp_path: Path) -> None:
