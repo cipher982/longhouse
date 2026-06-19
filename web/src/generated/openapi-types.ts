@@ -1583,6 +1583,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/auth/refresh-runtime-token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh Runtime Token
+         * @description Proxy a CP runtime token refresh for iOS/hosted native clients.
+         *
+         *     iOS stores the CP-issued bearer in keychain and sends it on every request.
+         *     The token has a 1-hour lifetime, so the client proactively refreshes ~60s
+         *     before expiry and retries with refresh on a 401. This route forwards the
+         *     current bearer to the CP's /api/identity/refresh-runtime-token and returns
+         *     the re-minted token. No local validation — the CP is the issuer and is the
+         *     authority on token validity (including the refresh leeway window).
+         */
+        post: operations["refresh_runtime_token_auth_refresh_runtime_token_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/auth/google/gmail/start": {
         parameters: {
             query?: never;
@@ -14549,6 +14576,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_runtime_token_auth_refresh_runtime_token_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };
