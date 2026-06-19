@@ -483,37 +483,56 @@ def test_claude_channel_state_file_rejects_non_uuid_session_id(tmp_path):
         build_claude_channel_state_file(session_id="../../escape", state_root=tmp_path)
 
 
-def test_run_claude_auth_status_uses_bare_claude(monkeypatch):
-    calls: list[list[str]] = []
+def test_resolve_claude_command_prefers_explicit_env(monkeypatch):
+    monkeypatch.setenv(claude_cli._CLAUDE_BIN_ENV, "/opt/longhouse/claude")
+    monkeypatch.setattr(
+        claude_cli.shutil,
+        "which",
+        lambda _command: (_ for _ in ()).throw(AssertionError("PATH lookup should not be used")),
+    )
+
+    assert claude_cli._resolve_claude_command() == "/opt/longhouse/claude"
+
+
+def test_run_claude_auth_status_resolves_claude_and_scrubs_longhouse_config(monkeypatch):
+    calls: list[dict] = []
 
     def fake_run(cmd, **kwargs):
-        calls.append(list(cmd))
+        calls.append({"cmd": list(cmd), **kwargs})
         return SimpleNamespace(
             returncode=0,
             stdout='{"loggedIn": true, "authMethod": "third_party", "apiProvider": "bedrock"}',
             stderr="",
         )
 
+    monkeypatch.delenv(claude_cli._CLAUDE_BIN_ENV, raising=False)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/longhouse-owned-claude-dir")
+    monkeypatch.setattr(claude_cli.shutil, "which", lambda command: "/opt/homebrew/bin/claude" if command == "claude" else None)
     monkeypatch.setattr(claude_cli.subprocess, "run", fake_run)
 
     completed = claude_cli._run_claude_auth_status()
 
     assert completed.returncode == 0
-    assert calls == [["claude", "auth", "status", "--json"]]
+    assert calls[0]["cmd"] == ["/opt/homebrew/bin/claude", "auth", "status", "--json"]
+    assert "CLAUDE_CONFIG_DIR" not in calls[0]["env"]
 
 
 def test_verify_claude_channel_mcp_server_uses_effective_workspace_config(monkeypatch, tmp_path):
-    calls: list[tuple[list[str], str]] = []
+    calls: list[tuple[list[str], str, dict[str, str]]] = []
 
     def fake_run(cmd, **kwargs):
-        calls.append((list(cmd), kwargs["cwd"]))
+        calls.append((list(cmd), kwargs["cwd"], kwargs["env"]))
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
+    monkeypatch.setenv(claude_cli._CLAUDE_BIN_ENV, "/opt/longhouse/claude")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/longhouse-owned-claude-dir")
     monkeypatch.setattr(claude_cli.subprocess, "run", fake_run)
 
     claude_cli._verify_claude_channel_mcp_server(workspace_path=tmp_path)
 
-    assert calls == [(["claude", "mcp", "get", "longhouse-channel"], str(tmp_path))]
+    assert calls[0][0] == ["/opt/longhouse/claude", "mcp", "get", "longhouse-channel"]
+    assert calls[0][1] == str(tmp_path)
+    assert "CLAUDE_CONFIG_DIR" not in calls[0][2]
 
 
 def test_verify_claude_channel_mcp_server_raises_actionable_setup_error(monkeypatch, tmp_path):
@@ -720,6 +739,30 @@ def test_detect_native_claude_channels_available_true_for_any_logged_in_auth(mon
 
     assert available is True
     assert detail == "authMethod=third_party, apiProvider=bedrock"
+
+
+def test_detect_native_claude_channels_available_reports_auth_timeout(monkeypatch):
+    def fake_auth_status():
+        raise claude_cli.subprocess.TimeoutExpired(cmd="claude auth status", timeout=5)
+
+    monkeypatch.setattr(claude_cli, "_run_claude_auth_status", fake_auth_status)
+
+    available, detail = claude_cli._detect_native_claude_channels_available()
+
+    assert available is False
+    assert detail == "claude auth status timed out after 5s"
+
+
+def test_detect_native_claude_channels_available_reports_auth_os_error(monkeypatch):
+    def fake_auth_status():
+        raise FileNotFoundError("claude")
+
+    monkeypatch.setattr(claude_cli, "_run_claude_auth_status", fake_auth_status)
+
+    available, detail = claude_cli._detect_native_claude_channels_available()
+
+    assert available is False
+    assert detail == "claude auth status unavailable: FileNotFoundError: claude"
 
 
 def test_claude_command_rejects_launch_envs_that_disable_native_channels(monkeypatch, tmp_path):

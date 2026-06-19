@@ -57,6 +57,7 @@ _CLAUDE_TERMINAL_POST_TIMEOUT_SECS = 2.0
 _CLAUDE_TERMINAL_SOURCE = "claude_channel_wrapper"
 _CLAUDE_REMOTE_LAUNCH_LOG_DIR = "claude-channel-launch"
 _CLAUDE_SUBPROCESS_ENV_BLOCKLIST = ("CLAUDE_CONFIG_DIR",)
+_CLAUDE_BIN_ENV = "LONGHOUSE_CLAUDE_BIN"
 
 
 def _claude_subprocess_env(**extra: str) -> dict[str, str]:
@@ -67,9 +68,16 @@ def _claude_subprocess_env(**extra: str) -> dict[str, str]:
     return env
 
 
+def _resolve_claude_command() -> str:
+    explicit = str(os.environ.get(_CLAUDE_BIN_ENV) or "").strip()
+    if explicit:
+        return explicit
+    return shutil.which("claude") or "claude"
+
+
 def _run_claude_auth_status() -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["claude", "auth", "status", "--json"],
+        [_resolve_claude_command(), "auth", "status", "--json"],
         check=False,
         capture_output=True,
         env=_claude_subprocess_env(),
@@ -81,8 +89,10 @@ def _run_claude_auth_status() -> subprocess.CompletedProcess[str]:
 def _detect_native_claude_channels_available() -> tuple[bool, str]:
     try:
         completed = _run_claude_auth_status()
-    except (OSError, subprocess.TimeoutExpired):
-        return False, "claude auth status unavailable"
+    except subprocess.TimeoutExpired as exc:
+        return False, f"claude auth status timed out after {exc.timeout}s"
+    except OSError as exc:
+        return False, f"claude auth status unavailable: {type(exc).__name__}: {exc}"
 
     if completed.returncode != 0:
         stderr = (completed.stderr or "").strip()
@@ -140,7 +150,7 @@ def _resolve_claude_dir(config_dir: Path | None) -> Path:
 def _verify_claude_channel_mcp_server(*, workspace_path: Path, timeout_secs: float = 15.0) -> None:
     try:
         completed = subprocess.run(
-            ["claude", "mcp", "get", CLAUDE_CHANNEL_SERVER_NAME],
+            [_resolve_claude_command(), "mcp", "get", CLAUDE_CHANNEL_SERVER_NAME],
             cwd=str(workspace_path),
             check=False,
             capture_output=True,
@@ -341,6 +351,7 @@ def _run_native_claude_tui(
         cwd=str(cwd),
         resume=False,
         hook_url=base_url,
+        claude_command=_resolve_claude_command(),
     )
     env = _claude_subprocess_env(LONGHOUSE_HOOK_TOKEN=token)
     completed = subprocess.run(shlex.split(command), check=False, cwd=str(cwd), env=env)
@@ -408,6 +419,7 @@ def _launch_detached_native_claude_channel(
         cwd=str(cwd),
         resume=resume,
         hook_url=base_url,
+        claude_command=_resolve_claude_command(),
     )
     log_path = _remote_launch_log_path(session_id=session_id, config_dir=config_dir)
     process: subprocess.Popen | None = None
@@ -573,7 +585,7 @@ def _finalize_native_claude_launch(
             cwd=cwd,
             config_dir=config_dir,
             launch_mode="tui",
-            provider_binary_path=shutil.which("claude"),
+            provider_binary_path=_resolve_claude_command(),
             provider_binary_source=PROVIDER_CLI_SOURCE_PATH,
             control_kind="claude_channel_bridge",
             config_dir_is_provider_home=True,
