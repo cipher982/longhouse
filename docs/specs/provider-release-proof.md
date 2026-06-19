@@ -723,6 +723,35 @@ should not by itself count as contract drift. The old/new command records
 `staging.status=explicit_proof_artifacts` because it compares the supplied
 artifacts rather than staging provider binaries itself.
 
+For staged binaries, Longhouse can produce both proof artifacts and then run the
+same old/new diff:
+
+```bash
+make provider-release-proof-staged-old-new \
+  PROVIDER=opencode \
+  OLD_PROVIDER_BIN=/tmp/opencode-old/opencode \
+  OLD_PROVIDER_VERSION="opencode 1.2.3" \
+  NEW_PROVIDER_BIN=/tmp/opencode-new/opencode \
+  NEW_PROVIDER_VERSION="opencode 1.2.4" \
+  ARTIFACT=/tmp/staged-old-new-proof.json
+```
+
+Equivalent direct script:
+
+```bash
+scripts/qa/provider-release-proof-old-new.py \
+  --provider opencode \
+  --old-provider-bin /tmp/opencode-old/opencode \
+  --old-provider-version "opencode 1.2.3" \
+  --new-provider-bin /tmp/opencode-new/opencode \
+  --new-provider-version "opencode 1.2.4" \
+  --json
+```
+
+This command records `staging.status=staged_provider_binaries`. Longhouse still
+does not install provider versions itself; Sauron or another private runner owns
+that policy and passes the staged binary paths in.
+
 ## Next Work
 
 1. Deploy the Claude Runtime Host/Machine Agent live-token proof path, rerun

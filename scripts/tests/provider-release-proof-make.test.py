@@ -56,6 +56,29 @@ def test_provider_release_proof_old_new_make_requires_old_and_new() -> None:
     assert "NEW is required" in missing_new.stderr
 
 
+def test_provider_release_proof_staged_old_new_make_requires_provider_and_bins() -> None:
+    missing_provider = _run_make(["provider-release-proof-staged-old-new"])
+
+    assert missing_provider.returncode == 2
+    assert "PROVIDER is required" in missing_provider.stderr
+
+    missing_old = _run_make(["provider-release-proof-staged-old-new", "PROVIDER=opencode"])
+
+    assert missing_old.returncode == 2
+    assert "OLD_PROVIDER_BIN is required" in missing_old.stderr
+
+    missing_new = _run_make(
+        [
+            "provider-release-proof-staged-old-new",
+            "PROVIDER=opencode",
+            "OLD_PROVIDER_BIN=/tmp/old-opencode",
+        ]
+    )
+
+    assert missing_new.returncode == 2
+    assert "NEW_PROVIDER_BIN is required" in missing_new.stderr
+
+
 def test_provider_release_proof_status_all_make_reports_inventory_missing_baseline() -> (
     None
 ):
@@ -372,6 +395,7 @@ def main() -> int:
         test_provider_release_proof_make_requires_provider,
         test_provider_release_proof_status_make_requires_provider_and_scenario,
         test_provider_release_proof_old_new_make_requires_old_and_new,
+        test_provider_release_proof_staged_old_new_make_requires_provider_and_bins,
         test_provider_release_proof_status_all_make_reports_inventory_missing_baseline,
         test_provider_release_proof_maturity_make_emits_rollup,
         test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_yellow,

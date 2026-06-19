@@ -2,7 +2,7 @@
 
 **Status:** Active roadmap
 **Last updated:** 2026-06-19
-**Current grand-epic score:** 78/100
+**Current grand-epic score:** 80/100
 
 This roadmap tracks the migration from one-off provider canaries and release
 emails to a full end-to-end release regression CI. The design target is
@@ -17,12 +17,12 @@ Do not quote a score without naming the axis.
 | --- | --- | ---: |
 | Existing Longhouse CI/test maturity | Internal Longhouse confidence before this release-proof epic: parser tests, bridge tests, shipper tests, backend/engine/frontend tests | 45/100 |
 | Release-watch proofing before recent work | Sauron release emails plus limited/fake provider checks | 20/100 |
-| Release-watch proofing after recent work | Longhouse proof lanes, coverage matrix, baseline tooling, Sauron invocation, universal harness attachment, concrete provider adapter action rows, first real OpenCode no-token e2e lane, OpenCode `interrupt_cancel`, `resume_reattach`, `tool_call_result`, and `live_token_streaming` lanes, Claude provider-live no-token contract plus channel interrupt/steer lanes, Codex managed-session e2e adapter lane, first universal `interrupt_cancel` control lane, first universal `steer_active_turn` lane, first universal `tool_call_result` lane, executable all-provider `pause_request_detect`, `tail_output`, `runtime_phase`, `transcript_binding`, `multi_turn_continuity`, and `crash_timeout_cleanup` scenarios, executable answer-pause Longhouse service proof with live-provider delivery gap, opt-in `terminate_cleanup` scenario with Antigravity unsupported gap, Antigravity `external_event_channel` scenario backed by hook/inbox proof, all-provider explicit `permission_prompt` blocked gap, all-provider `live_token_streaming` adapter lanes, Antigravity hook/inbox e2e adapter lane, universal action/control-surface/session/timeline projection artifacts, action/control baseline diff, executable universal old/new proof-artifact diff, broad all-provider fake/no-token CLI smoke across implemented and explicit-gap scenarios, broader default release-proof universal profile, hermetic DB ingest proof, provider-live/control DB round-trips, computed maturity rollups from coverage/baseline/universal artifacts, and Sauron baseline-guard consumption of those maturity rollups | 78/100 |
+| Release-watch proofing after recent work | Longhouse proof lanes, coverage matrix, baseline tooling, Sauron invocation, universal harness attachment, concrete provider adapter action rows, first real OpenCode no-token e2e lane, OpenCode `interrupt_cancel`, `resume_reattach`, `tool_call_result`, and `live_token_streaming` lanes, Claude provider-live no-token contract plus channel interrupt/steer lanes, Codex managed-session e2e adapter lane, first universal `interrupt_cancel` control lane, first universal `steer_active_turn` lane, first universal `tool_call_result` lane, executable all-provider `pause_request_detect`, `tail_output`, `runtime_phase`, `transcript_binding`, `multi_turn_continuity`, and `crash_timeout_cleanup` scenarios, executable answer-pause Longhouse service proof with live-provider delivery gap, opt-in `terminate_cleanup` scenario with Antigravity unsupported gap, Antigravity `external_event_channel` scenario backed by hook/inbox proof, all-provider explicit `permission_prompt` blocked gap, all-provider `live_token_streaming` adapter lanes, Antigravity hook/inbox e2e adapter lane, universal action/control-surface/session/timeline projection artifacts, action/control baseline diff, executable universal old/new proof-artifact diff, staged-binary old/new proof runner, broad all-provider fake/no-token CLI smoke across implemented and explicit-gap scenarios, broader default release-proof universal profile, hermetic DB ingest proof, provider-live/control DB round-trips, computed maturity rollups from coverage/baseline/universal artifacts, and Sauron baseline-guard consumption of those maturity rollups | 80/100 |
 | Universal harness plumbing only | Adapter protocol, concrete provider adapter classes, runner, evidence package, action matrix, control-surface scenario, session/timeline projection scenarios, action/control/explicit-old-new baseline diff, executable `old_new_release_diff` scenario, all-provider fake/no-token CLI e2e, DB ingest scenario, all-provider pause/request, observation, multi-turn, crash-cleanup, and permission-gap scenarios, Antigravity `external_event_channel` scenario, opt-in `terminate_cleanup` scenario, Claude/Codex/OpenCode/Antigravity managed-session e2e promotion, Claude/Codex/OpenCode `interrupt_cancel` scenarios, Claude `steer_active_turn` scenario, Codex/OpenCode `tool_call_result` and `live_token_streaming` scenarios, OpenCode `resume_reattach` scenario, Claude and Antigravity `live_token_streaming` scenarios, proof-artifact attachment, broader default release-proof universal profile, and computed maturity rollups, excluding all-provider-live/staged-old-new/Sauron completion | 98/100 |
 
 The apparent drop from 45 to 25/35 was a denominator change: internal CI
 maturity was being compared with the larger release-proofing product. The fair
-movement for this epic is release-watch proofing before/after: roughly 20 -> 78.
+movement for this epic is release-watch proofing before/after: roughly 20 -> 80.
 
 ## Ownership Boundary
 
@@ -45,10 +45,10 @@ provider compatibility.
 | Coverage inventory | 10 | 10 | 52 provider/surface rows tracked, computed universal action rows in harness artifacts, and `provider-release-proof-maturity.py` emits coverage/provider/baseline/action-matrix rollups |
 | Universal harness architecture | 15 | 15 | Shared runner, concrete provider adapter classes, adapter-owned action rows, evidence packages, universal action/control-surface/session/timeline projection scenarios, DB ingest scenario, pause/question service scenarios, observation/cleanup scenarios, remaining spec-surface scenarios, and proof attachment exist; one real OpenCode e2e lane exists |
 | Longhouse proof artifact/core commands | 15 | 15 | Proof artifacts, normalized contracts, action-matrix/control-surface/DB-ingest/maturity artifacts, broad all-provider fake/no-token CLI e2e, accept/status/diff/maturity commands exist; OpenCode e2e DB artifacts flow through release proof; universal default profile now includes continuity and crash/timeout cleanup |
-| Baselines and differential confidence | 15 | 6 | Accepted baseline machinery exists and now compares universal action/control artifacts plus explicit old/new proof artifacts through both the baseline CLI and universal harness; durable/auditable old/new release source of truth is unsettled |
+| Baselines and differential confidence | 15 | 8 | Accepted baseline machinery exists and now compares universal action/control artifacts plus explicit old/new proof artifacts through both the baseline CLI and universal harness; staged-binary old/new runner can produce both sides and diff them; durable/auditable provider-version install source of truth is still unsettled |
 | Sauron private runner/reporting | 10 | 3 | Sauron can call Longhouse lanes and the daily baseline guard consumes Longhouse maturity rollups; private alert/noise policy is not migrated to universal artifacts |
 | Provider real e2e migration | 25 | 22 | OpenCode has first real no-token universal e2e lane with provider-live evidence fed through Longhouse DB ingest; OpenCode `interrupt_cancel` now routes to the session.abort canary and DB-ingests abort evidence; OpenCode `resume_reattach` now routes to the process-restart reattach canary and DB-ingests reattach evidence; OpenCode `tool_call_result` now routes to the real-tool canary and DB-ingests tool call/result linkage; OpenCode `live_token_streaming` now routes to a real-print `opencode run --format json` marker canary and DB-ingests marker evidence; Claude provider-live no-token command/channel/PTY contract now DB-ingests through universal `managed_session_e2e`; Claude `interrupt_cancel` now routes to the channel-control canary, proves send/meta steer/SIGINT against an owned fake provider process, and DB-ingests control rows; Claude `steer_active_turn` now routes to the same channel-control canary but evaluates steer evidence directly; Claude `live_token_streaming` now routes to real-print one-shot live-token proof and DB-ingests marker evidence; Codex managed-session e2e calls the existing Codex canary and reports Runtime Host credential gaps explicitly; Codex `interrupt_cancel` now routes to the managed-live-interrupt canary and reports credentials gaps explicitly; Codex `tool_call_result` now routes to the real-tool canary and DB-ingests tool call/result linkage; Codex `live_token_streaming` now routes to managed live-send and reports credential gaps explicitly; Antigravity hook/inbox e2e calls provider-control and DB-ingests external-event evidence; Antigravity `live_token_streaming` now routes to real-agy hook-inbox injection and DB-ingests marker evidence; cross-provider managed live send/steer and live answer-pause delivery remain incomplete |
-| **Total** | **100** | **78** |  |
+| **Total** | **100** | **80** |  |
 
 ## Provider-agnostic Phases
 
@@ -225,8 +225,9 @@ Implemented:
   without explicit proof artifacts, compares old/new proof artifacts through
   `provider-release-proof-baseline.py old-new`, and can be attached to
   `provider-release-proof.py --run-universal-harness`.
-- Automatic staged old/new provider install and live-token behavior remain
-  explicit future gates.
+- Provider-version install/fetch policy and live-token behavior remain explicit
+  future gates; Longhouse can already diff staged old/new binaries once a
+  private runner supplies their paths.
 
 Deliverables:
 
@@ -331,7 +332,7 @@ evidence path is recorded and the relevant doc, test, or proof command exists.
 | H17 | Add first real provider-safe universal e2e lane | Done | +4 | OpenCode `managed_session_e2e` in `server/zerg/qa/universal_agent_harness.py`, tested through `provider-release-proof.py` |
 | H18 | Define and emit the full universal Longhouse action matrix for every provider | Done | +4 | `action_matrix` scenario in `server/zerg/qa/universal_agent_harness.py`, `server/tests_lite/test_universal_agent_harness.py` |
 | H19 | Attach action-matrix output to provider release-proof artifacts | Done | +2 | `scripts/qa/provider-release-proof.py`, `scripts/tests/provider-release-proof.test.py` |
-| H20 | Promote action-matrix blocked rows into real DB ingest, baseline compare, and old/new release diff lanes | Partial | +6 | DB ingest, baseline compare, and explicit old/new proof-artifact diff are promoted; automatic staged old/new provider install remains future work |
+| H20 | Promote action-matrix blocked rows into real DB ingest, baseline compare, and old/new release diff lanes | Partial | +6 | DB ingest, baseline compare, explicit old/new proof-artifact diff, and staged-binary old/new runner are promoted; provider-version install/fetch policy remains future work |
 | H21 | Add hermetic DB ingest/product-surface proof behind the universal harness | Done | +3 | `db_ingest_project` scenario and release-proof wrapper test |
 | H22 | Feed OpenCode provider-live managed-session evidence through Longhouse DB ingest | Done | +2 | `managed_session_e2e` now writes `longhouse/db-ingest-result.json` and release-proof asserts `universal_db_ingest=pass` |
 | H23 | Add provider-agnostic control-surface artifact to release proofs | Done | +1 | `control_surface` scenario and normalized `control_surface.json` release-proof artifact |
@@ -357,6 +358,7 @@ evidence path is recorded and the relevant doc, test, or proof command exists.
 | H43 | Promote Claude active-turn steer to executable universal scenario | Done | +1 | `steer_active_turn` routes Claude to provider-control channel steer evidence, DB-ingests no-token control rows, and reports Codex/OpenCode/Antigravity steer gaps explicitly |
 | H44 | Add broad all-provider fake/no-token CLI smoke | Done | +1 | `test_script_entrypoint_runs_all_provider_fake_no_token_release_surface` drives 13 scenarios across Claude Code, Codex/OpenAI, OpenCode, and Antigravity in one CLI invocation, proving pass artifacts and operation-level unsupported gaps |
 | H45 | Promote continuity and crash cleanup into default release-proof profile | Done | +1 | `DEFAULT_UNIVERSAL_SCENARIOS` now includes `multi_turn_continuity` and `crash_timeout_cleanup`; the all-provider release-proof wrapper test requires their merged canaries and operation evidence |
+| H46 | Add staged-binary old/new proof runner | Done | +2 | `provider-release-proof-old-new.py` runs old and new staged provider binaries through `provider-release-proof.py`, then delegates to `provider-release-proof-baseline.py old-new`; Make and tests cover the new entrypoint |
 
 ## Score Update Rules
 
@@ -381,8 +383,8 @@ When updating this roadmap:
 The next implementation goal should finish Phase 3's real adapter migration,
 then move into Phase 4 control/live-token scenarios:
 
-1. Add sandboxed provider-version staging/install that generates the old and
-   new proof artifacts automatically for every provider lane.
+1. Add private/Sauron provider-version install staging that feeds
+   `provider-release-proof-staged-old-new` with audited old/new binary paths.
 2. Migrate Codex live send/control canaries into universal scenarios instead of
    only release-proof profile flags.
 3. Bring Claude live-token send mechanics behind adapters instead of only

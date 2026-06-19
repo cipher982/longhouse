@@ -16,7 +16,7 @@ CLAUDE_API_URL ?=
 CLAUDE_AGENTS_TOKEN ?=
 CLAUDE_DEVICE_ID ?=
 
-.PHONY: help dev dev-demo stop test test-ios test-ios-session-open ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-runner test-e2e test-e2e-core test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-ios-api validate-makefile validate-build-identity validate-managed-codex-contract validate-managed-session-contract validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-old-new provider-release-proof-status provider-release-proof-status-all provider-release-proof-maturity regen-ws generate-sdk generate-ios-api qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e provider-live-route-e2e-opencode-transcript reprovision deploy-status launch-readiness ship-watch ship release ui-capture marketing-screenshots demo-render qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-synthetic-bench test-shipper-synthetic-live-bench test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check observability-up observability-down
+.PHONY: help dev dev-demo stop test test-ios test-ios-session-open ios-marketing test-mobile-chat test-mobile-chat-stress test-mobile-chat-replay test-ios-helper test-frontend test-engine test-runner test-e2e test-e2e-core test-e2e-a11y test-e2e-single test-ci test-full install-engine install-cli validate validate-ws validate-sdk validate-ios-api validate-makefile validate-build-identity validate-managed-codex-contract validate-managed-session-contract validate-provider-cli-canaries validate-ship-monitor provider-release-proof provider-release-proof-accept provider-release-proof-diff provider-release-proof-old-new provider-release-proof-staged-old-new provider-release-proof-status provider-release-proof-status-all provider-release-proof-maturity regen-ws generate-sdk generate-ios-api qa-live hosted-shipper-mixed-bench qa-unmanaged render-canary session-propagation-sla managed-claude-truth-probe managed-claude-poc provider-live-route-e2e provider-live-route-e2e-opencode-transcript reprovision deploy-status launch-readiness ship-watch ship release ui-capture marketing-screenshots demo-render qa-ui-workbench qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-visual-compare test-shipper-e2e test-shipper-synthetic-bench test-shipper-synthetic-live-bench test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check observability-up observability-down
 
 # ---------------------------------------------------------------------------
 # Help
@@ -336,6 +336,7 @@ validate-provider-cli-canaries: ## @internal Provider release canary wrapper tes
 	@python3 scripts/tests/provider-release-proof-coverage.test.py
 	@python3 scripts/tests/provider-release-proof.test.py
 	@python3 scripts/tests/provider-release-proof-baseline.test.py
+	@python3 scripts/tests/provider-release-proof-old-new.test.py
 	@python3 scripts/tests/provider-release-proof-maturity.test.py
 	@python3 scripts/tests/provider-release-proof-make.test.py
 	@python3 scripts/tests/provider-control-e2e-canary.test.py
@@ -409,6 +410,30 @@ provider-release-proof-old-new: ## Diff explicit old/new provider proof artifact
 		--baseline-root "$(BASELINE_ROOT)" \
 		--json; \
 	if [ -n "$(ARTIFACT)" ]; then set -- "$$@" --artifact "$(ARTIFACT)"; fi; \
+	python3 "$$@"
+
+provider-release-proof-staged-old-new: ## Run old/new staged provider binaries then diff; set PROVIDER=..., OLD_PROVIDER_BIN=..., NEW_PROVIDER_BIN=...
+	@set -eu; \
+	if [ -z "$(PROVIDER)" ]; then echo "PROVIDER is required" >&2; exit 2; fi; \
+	if [ -z "$(OLD_PROVIDER_BIN)" ]; then echo "OLD_PROVIDER_BIN is required" >&2; exit 2; fi; \
+	if [ -z "$(NEW_PROVIDER_BIN)" ]; then echo "NEW_PROVIDER_BIN is required" >&2; exit 2; fi; \
+	set -- scripts/qa/provider-release-proof-old-new.py \
+		--provider "$(PROVIDER)" \
+		--old-provider-bin "$(OLD_PROVIDER_BIN)" \
+		--new-provider-bin "$(NEW_PROVIDER_BIN)" \
+		--baseline-root "$(BASELINE_ROOT)" \
+		--source-review-status "$(SOURCE_REVIEW_STATUS)" \
+		--source-review-note "$(SOURCE_REVIEW_NOTE)" \
+		--json; \
+	if [ -n "$(OLD_PROVIDER_VERSION)" ]; then set -- "$$@" --old-provider-version "$(OLD_PROVIDER_VERSION)"; fi; \
+	if [ -n "$(NEW_PROVIDER_VERSION)" ]; then set -- "$$@" --new-provider-version "$(NEW_PROVIDER_VERSION)"; fi; \
+	if [ -n "$(ARTIFACT)" ]; then set -- "$$@" --artifact "$(ARTIFACT)"; fi; \
+	if [ -n "$(EVIDENCE_ROOT)" ]; then set -- "$$@" --evidence-root "$(EVIDENCE_ROOT)"; fi; \
+	if [ -n "$(TIMEOUT_SECS)" ]; then set -- "$$@" --timeout-secs "$(TIMEOUT_SECS)"; fi; \
+	if [ -n "$(SKIP_UNIVERSAL_HARNESS)" ]; then set -- "$$@" --skip-universal-harness; fi; \
+	if [ -n "$(UNIVERSAL_SCENARIO)" ]; then set -- "$$@" --universal-scenario "$(UNIVERSAL_SCENARIO)"; fi; \
+	if [ -n "$(UNIVERSAL_FIXTURE_PATH)" ]; then set -- "$$@" --universal-fixture-path "$(UNIVERSAL_FIXTURE_PATH)"; fi; \
+	if [ -n "$(UNIVERSAL_PROMPT)" ]; then set -- "$$@" --universal-prompt "$(UNIVERSAL_PROMPT)"; fi; \
 	python3 "$$@"
 
 provider-release-proof-status: ## Inspect accepted proof baseline; set PROVIDER=... and SCENARIO_ID=...
