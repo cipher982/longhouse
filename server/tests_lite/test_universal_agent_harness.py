@@ -230,6 +230,60 @@ def test_probe_identity_runs_for_all_providers_through_shared_scenario(tmp_path:
         assert probe["version"]
 
 
+def test_action_matrix_emits_same_longhouse_actions_for_all_providers(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=uah.SUPPORTED_PROVIDERS,
+            scenarios=("action_matrix",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
+        )
+    )
+
+    assert payload["verdict"] == "yellow"
+    assert {result["provider"] for result in payload["results"]} == set(uah.SUPPORTED_PROVIDERS)
+    for result in payload["results"]:
+        assert result["scenario"] == "action_matrix"
+        assert result["status"] == "blocked"
+        assert result["data"]["action_ids"] == list(uah.ACTIONS)
+        assert result["data"]["action_count"] == len(uah.ACTIONS)
+        actions = {row["action_id"]: row for row in result["data"]["actions"]}
+        assert set(actions) == set(uah.ACTIONS)
+        assert actions["send_message"]["category"] == "control"
+        assert actions["steer_active_turn"]["category"] == "control"
+        assert actions["pause_request_detect"]["category"] == "observe"
+        assert actions["answer_pause_request"]["category"] == "control"
+        assert actions["interrupt_cancel"]["contract_operation"] == "interrupt"
+        assert actions["raw_evidence_capture"]["status"] == "pass"
+        assert actions["parse_normalize"]["status"] == "pass"
+        assert actions["db_ingest"]["status"] == "blocked"
+        assert actions["old_new_release_diff"]["status"] == "blocked"
+        assert Path(result["data"]["action_matrix_path"]).is_file()
+
+
+def test_action_matrix_marks_provider_specific_unsupported_actions(tmp_path: Path) -> None:
+    bins = _fake_bins(tmp_path)
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("opencode", "antigravity"),
+            scenarios=("action_matrix",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"opencode": bins["opencode"], "antigravity": bins["antigravity"]},
+        )
+    )
+
+    by_provider = {
+        result["provider"]: {row["action_id"]: row for row in result["data"]["actions"]}
+        for result in payload["results"]
+    }
+    assert by_provider["opencode"]["steer_active_turn"]["status"] == "unsupported_gap"
+    assert by_provider["opencode"]["answer_pause_request"]["status"] == "unsupported_gap"
+    assert by_provider["antigravity"]["launch_remote"]["status"] == "unsupported_gap"
+    assert by_provider["antigravity"]["interrupt_cancel"]["status"] == "unsupported_gap"
+    assert by_provider["antigravity"]["send_message"]["status"] == "pass"
+    assert by_provider["antigravity"]["send_message"]["evidence_level"] == "live_token"
+
+
 def test_codex_run_prompt_once_writes_safe_projection(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(

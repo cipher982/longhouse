@@ -850,16 +850,23 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
             assert result.returncode == 0, result.stderr + result.stdout
             assert Path(payload["artifacts"]["universal_harness_artifact"]).exists()
             assert Path(payload["artifacts"]["universal_harness_evidence_root"]).is_dir()
+            assert Path(payload["artifacts"]["action_matrix"]).exists()
             universal = payload["normalized"]["universal_harness"]
-            assert universal["result_count"] == 6
+            assert universal["result_count"] == 7
+            assert "action_matrix" in universal["scenarios"]
             assert "parse_ingest_project" in universal["scenarios"]
             assert payload["normalized"]["canaries"]["universal_probe_identity"]["status"] == "pass"
             assert payload["normalized"]["canaries"]["universal_collect_raw_evidence"]["status"] == "pass"
+            assert payload["normalized"]["canaries"]["universal_action_matrix"]["status"] == "warn"
             assert payload["normalized"]["canaries"]["universal_parse_ingest_project"]["status"] == "pass"
             assert payload["normalized"]["canaries"]["universal_run_prompt_once"]["status"] in {
                 "pass",
                 "warn",
             }
+            action_matrix = payload["action_matrix"]
+            assert action_matrix["action_count"] > 10
+            assert action_matrix["action_ids"]
+            assert payload["normalized"]["action_matrix"]["status_counts"]["blocked"] >= 1
 
 
 def test_release_proof_exposes_universal_session_evidence_for_codex_and_opencode() -> None:

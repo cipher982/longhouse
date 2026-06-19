@@ -35,6 +35,8 @@ What exists:
 - backend, engine, frontend, runner, and Playwright E2E suites
 - managed-provider contract manifest:
   `server/zerg/config/managed_provider_contracts.json`
+- universal provider action matrix:
+  `scripts/qa/universal-agent-harness.py --scenario action_matrix`
 - provider canary validation lane:
   `make validate-provider-cli-canaries`
 - parser goldens for Claude, Codex, and Antigravity legacy JSON imports:
@@ -46,7 +48,7 @@ What exists:
 
 What is missing:
 
-- raw-to-normalized proof fixtures for all release-sensitive surfaces
+- DB-ingest-backed proof fixtures for all release-sensitive surfaces
 - full managed-session/live-token proof for every release-sensitive surface
 - scheduled old/new differentials from the accepted baseline store rather than
   only candidate or directly staged old/new artifacts
@@ -110,6 +112,14 @@ keeps its real-tool token lane production-gated, Antigravity still lacks
 interrupt/reattach/tool proof beyond its accepted live-send lane, and OpenCode
 still lacks production-enabled managed live-token proof beyond its accepted
 env-gated real-tool lane.
+
+Universal action-matrix implication: Longhouse can now emit one comparable
+control/observe/projection table for Claude Code, Codex/OpenAI, OpenCode, and
+Antigravity. That table is not a complete live proof. It intentionally leaves
+DB ingest, baseline compare, and old/new release diff rows blocked until those
+lanes are executable, and it marks provider-specific unsupported actions such
+as Antigravity interrupt/reattach or OpenCode active-turn steer as
+`unsupported_gap`.
 
 ## Coverage Legend
 

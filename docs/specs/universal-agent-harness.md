@@ -94,6 +94,58 @@ Required adapter responsibilities:
 Adapters may declare unsupported capabilities. A claimed capability that fails
 its scenario is a contract failure, not an unsupported gap.
 
+## Universal Action Matrix
+
+The harness now has an `action_matrix` scenario. It emits the same Longhouse
+action ids for every provider, even when a provider cannot support an action.
+This is the bridge between "agent harnesses are fungible" and "provider
+mechanics are not."
+
+Current action ids:
+
+```text
+provider_identity
+launch_local
+launch_remote
+run_once
+session_identity
+send_message
+steer_active_turn
+pause_request_detect
+answer_pause_request
+interrupt_cancel
+resume_reattach
+terminate_cleanup
+tail_output
+runtime_phase
+transcript_binding
+tool_call_result
+raw_evidence_capture
+parse_normalize
+db_ingest
+session_projection
+timeline_projection
+baseline_compare
+old_new_release_diff
+```
+
+Each row includes:
+
+| Field | Meaning |
+| --- | --- |
+| `support` / `support_reason` | Whether the provider can support the action and which contract/capability says so. |
+| `status` | Current proof state: `pass`, `fail`, `unsupported_gap`, `blocked`, etc. |
+| `required_evidence` | The minimum evidence level this action should eventually have. |
+| `evidence_level` | The strongest recorded proof level for the action today, when present. |
+| `proof_scope` | Where the current proof comes from: version command, managed-provider contract, parser tests, DB lane, release diff runner, etc. |
+| `contract_evidence` | The existing managed-provider contract evidence, when the action maps to a contract operation. |
+| `next` | The next promotion gate when a row is unsupported or blocked. |
+
+`pass` in the matrix means Longhouse has a named proof source for that
+provider/action at the recorded evidence level. It does not automatically mean
+the current invocation spent tokens or drove a live model turn. The row's
+`evidence_level` and `proof_scope` are the important qualifiers.
+
 ## Capabilities And Profiles
 
 Capabilities are the vocabulary scenarios use to decide what is required:
@@ -157,6 +209,7 @@ Universal scenarios:
 | Scenario | Severity | Required proof |
 | --- | --- | --- |
 | `probe_identity` | P0 | Version, binary path, adapter version, platform, declared/observed capabilities. |
+| `action_matrix` | P0 | Every provider emits the same Longhouse action ids with explicit pass/fail/unsupported/blocked status and proof source. |
 | `run_prompt_once` | P0 | One-shot prompt exits cleanly, emits evidence, and produces a model or fixture response. |
 | `launch_managed_session` | P0 | Managed session starts, exposes a session handle, and has raw evidence. |
 | `send_receive` | P0 | Input reaches the correct active session and a response is observed. |

@@ -2,7 +2,7 @@
 
 **Status:** Active roadmap
 **Last updated:** 2026-06-19
-**Current grand-epic score:** 38/100
+**Current grand-epic score:** 42/100
 
 This roadmap tracks the migration from one-off provider canaries and release
 emails to a full end-to-end release regression CI. The design target is
@@ -17,12 +17,12 @@ Do not quote a score without naming the axis.
 | --- | --- | ---: |
 | Existing Longhouse CI/test maturity | Internal Longhouse confidence before this release-proof epic: parser tests, bridge tests, shipper tests, backend/engine/frontend tests | 45/100 |
 | Release-watch proofing before recent work | Sauron release emails plus limited/fake provider checks | 20/100 |
-| Release-watch proofing after recent work | Longhouse proof lanes, coverage matrix, baseline tooling, Sauron invocation, universal harness attachment, and first real OpenCode no-token e2e lane | 38/100 |
-| Universal harness plumbing only | Adapter protocol, runner, evidence package, and proof-artifact attachment, excluding full provider/DB/old-new/Sauron completion | 61/100 |
+| Release-watch proofing after recent work | Longhouse proof lanes, coverage matrix, baseline tooling, Sauron invocation, universal harness attachment, first real OpenCode no-token e2e lane, and universal action matrix artifacts | 42/100 |
+| Universal harness plumbing only | Adapter protocol, runner, evidence package, action matrix, and proof-artifact attachment, excluding full provider/DB/old-new/Sauron completion | 67/100 |
 
 The apparent drop from 45 to 25/35 was a denominator change: internal CI
 maturity was being compared with the larger release-proofing product. The fair
-movement for this epic is release-watch proofing before/after: roughly 20 -> 38.
+movement for this epic is release-watch proofing before/after: roughly 20 -> 42.
 
 ## Ownership Boundary
 
@@ -42,13 +42,13 @@ provider compatibility.
 | Area | Points | Current | State |
 | --- | ---: | ---: | --- |
 | Scope, ownership, and provider set | 10 | 7 | Longhouse/Sauron boundary is documented; providers are Claude Code, Codex/OpenAI, OpenCode, Antigravity |
-| Coverage inventory | 10 | 6 | 52 provider/surface rows tracked, but rollups are still hand-maintained rather than computed from scenario state |
-| Universal harness architecture | 15 | 7 | Shared runner, evidence packages, and proof attachment exist; one real OpenCode e2e lane exists |
-| Longhouse proof artifact/core commands | 15 | 7 | Proof artifacts, normalized contracts, accept/status/diff commands exist; universal artifacts are comparable but not yet full CI gates |
+| Coverage inventory | 10 | 7 | 52 provider/surface rows tracked plus computed universal action rows in harness artifacts; maturity rollups are still not a product command |
+| Universal harness architecture | 15 | 9 | Shared runner, evidence packages, universal action matrix, and proof attachment exist; one real OpenCode e2e lane exists |
+| Longhouse proof artifact/core commands | 15 | 8 | Proof artifacts, normalized contracts, action-matrix artifacts, accept/status/diff commands exist; universal artifacts are comparable but not yet full CI gates |
 | Baselines and differential confidence | 15 | 3 | Accepted baseline machinery exists; durable/auditable old/new release source of truth is unsettled |
 | Sauron private runner/reporting | 10 | 2 | Sauron can call Longhouse lanes, but private alert/noise policy is not migrated to universal artifacts |
 | Provider real e2e migration | 25 | 6 | OpenCode has first real no-token universal e2e lane; other providers and DB ingest remain unmigrated |
-| **Total** | **100** | **38** |  |
+| **Total** | **100** | **42** |  |
 
 ## Provider-agnostic Phases
 
@@ -77,7 +77,8 @@ Implemented:
 - Scenario result schema.
 - Shared evidence package writer.
 - Universal scenarios for `probe_identity`, `collect_raw_evidence`,
-  `parse_ingest_project`, and typed-unsupported `run_prompt_once`.
+  `action_matrix`, `parse_ingest_project`, and typed-unsupported
+  `run_prompt_once`.
 - MVP adapters for Claude Code, Codex/OpenAI, OpenCode, and Antigravity.
 - CLI entrypoint: `scripts/qa/universal-agent-harness.py`.
 
@@ -111,8 +112,15 @@ Implemented:
   normalized universal summary/canaries, and prefixed universal operation
   evidence.
 - `probe_identity`, `collect_raw_evidence`, `parse_ingest_project`,
-  `run_prompt_once`, `launch_managed_session`, and `send_receive` can be
-  included in the release-proof output.
+  `action_matrix`, `run_prompt_once`, `launch_managed_session`, and
+  `send_receive` can be included in the release-proof output.
+- `action_matrix` emits the same 23 Longhouse action ids for every provider:
+  identity, launch, run-once, session identity, send, steer, pause
+  detect/answer, interrupt/cancel, resume/reattach, terminate, tail/runtime,
+  transcript/tool-result, raw capture, parse, DB ingest, projections, baseline
+  compare, and old/new release diff.
+- `provider-release-proof.py --run-universal-harness` now captures the action
+  matrix in normalized artifacts and exposes its status counts.
 - Codex/OpenAI and OpenCode expose first no-token/session-safe
   `launch_managed_session` and `send_receive` projections through the universal
   runner.
@@ -213,6 +221,9 @@ evidence path is recorded and the relevant doc, test, or proof command exists.
 | H15 | Update Sauron to invoke universal lanes and apply private alert policy | Not started | +5 | Future Sauron tests/artifacts |
 | H16 | Feed universal runner output into `provider-release-proof.py` | Done | +4 | `scripts/qa/provider-release-proof.py`, `scripts/tests/provider-release-proof.test.py` |
 | H17 | Add first real provider-safe universal e2e lane | Done | +4 | OpenCode `managed_session_e2e` in `server/zerg/qa/universal_agent_harness.py`, tested through `provider-release-proof.py` |
+| H18 | Define and emit the full universal Longhouse action matrix for every provider | Done | +4 | `action_matrix` scenario in `server/zerg/qa/universal_agent_harness.py`, `server/tests_lite/test_universal_agent_harness.py` |
+| H19 | Attach action-matrix output to provider release-proof artifacts | Done | +2 | `scripts/qa/provider-release-proof.py`, `scripts/tests/provider-release-proof.test.py` |
+| H20 | Promote action-matrix blocked rows into real DB ingest and old/new release diff lanes | Not started | +6 | Future DB/release-diff artifacts |
 
 ## Score Update Rules
 
@@ -239,14 +250,16 @@ then move into Phase 4 control/live-token scenarios:
 
 1. Promote OpenCode `managed_session_e2e` from canonical projection into DB
    ingest/session/timeline assertions.
-2. Replace the current Codex projection-only session lane with real adapter
+2. Replace action-matrix `db_ingest`, `baseline_compare`, and
+   `old_new_release_diff` blocked rows with executable lanes.
+3. Replace the current Codex projection-only session lane with real adapter
    calls to the existing no-token canary mechanics where possible.
-3. Bring Claude PTY/channel and Antigravity hook/inbox mechanics behind
+4. Bring Claude PTY/channel and Antigravity hook/inbox mechanics behind
    adapters instead of only compatibility canaries.
-4. Migrate `interrupt_cancel`, `resume_reattach`, `tool_call_result`, and
+5. Migrate `interrupt_cancel`, `resume_reattach`, `tool_call_result`, and
    control-plane send/interrupt evidence behind universal scenarios.
-5. Add computed maturity rollups from universal scenario artifacts.
-6. Migrate `run_prompt_once`, `launch_managed_session`, `send_receive`, and
+6. Add computed maturity rollups from universal scenario artifacts.
+7. Migrate `run_prompt_once`, `launch_managed_session`, `send_receive`, and
    `timeline_projection` behind adapters.
-7. Keep provider-specific canaries as compatibility lanes until their behavior
+8. Keep provider-specific canaries as compatibility lanes until their behavior
    is migrated and baselined.

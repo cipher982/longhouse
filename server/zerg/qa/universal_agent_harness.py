@@ -32,6 +32,7 @@ SUPPORTED_PROVIDERS = ("claude", "codex", "opencode", "antigravity")
 SCENARIOS = (
     "probe_identity",
     "collect_raw_evidence",
+    "action_matrix",
     "parse_ingest_project",
     "run_prompt_once",
     "launch_managed_session",
@@ -60,6 +61,7 @@ YELLOW_STATUSES = (STATUS_UNSUPPORTED_GAP, STATUS_BLOCKED, STATUS_FLAKY, STATUS_
 MVP_METHODS = (
     "prepare",
     "probe",
+    "action_matrix",
     "run_prompt",
     "collect_evidence",
     "decode_normalize",
@@ -79,6 +81,229 @@ MVP_CAPABILITIES = (
 )
 PROFILES = ("fixture_replay", "live_no_token")
 SAFE_MANAGED_SESSION_SCENARIOS = ("launch_managed_session", "send_receive")
+
+
+@dataclass(frozen=True)
+class ActionDefinition:
+    action_id: str
+    title: str
+    category: str
+    contract_operation: str | None
+    support_kind: str
+    required_evidence: str
+    description: str
+
+
+ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
+    ActionDefinition(
+        "provider_identity",
+        "Provider Identity",
+        "identity",
+        None,
+        "harness",
+        "binary_version",
+        "Resolve the provider adapter, binary identity, version command, and managed-provider contract.",
+    ),
+    ActionDefinition(
+        "launch_local",
+        "Launch Local Session",
+        "control",
+        "launch_local",
+        "contract_bool",
+        "live_no_token",
+        "Start or attach a managed session on the same machine without spending model tokens.",
+    ),
+    ActionDefinition(
+        "launch_remote",
+        "Launch Remote Session",
+        "control",
+        "launch_remote",
+        "contract_bool",
+        "hermetic",
+        "Launch or continue a managed session through the Runtime Host/Machine Agent control plane.",
+    ),
+    ActionDefinition(
+        "run_once",
+        "Run Prompt Once",
+        "control",
+        "run_once",
+        "contract_bool",
+        "hermetic",
+        "Run a bounded one-shot provider prompt and bind it to Longhouse evidence.",
+    ),
+    ActionDefinition(
+        "session_identity",
+        "Session Identity",
+        "control",
+        "reattach",
+        "session_identity",
+        "hermetic",
+        "Preserve and verify provider session identity across Longhouse projections.",
+    ),
+    ActionDefinition(
+        "send_message",
+        "Send Message",
+        "control",
+        "send_input",
+        "contract_bool",
+        "hermetic",
+        "Deliver a user message into a managed provider session.",
+    ),
+    ActionDefinition(
+        "steer_active_turn",
+        "Steer Active Turn",
+        "control",
+        "steer_active_turn",
+        "contract_bool",
+        "live_token",
+        "Inject mid-turn steering text while a provider turn is active.",
+    ),
+    ActionDefinition(
+        "pause_request_detect",
+        "Detect Pause Request",
+        "observe",
+        "runtime_phase",
+        "pause_request",
+        "hermetic",
+        "Detect provider/user-question pause states and project them as answerable pause requests.",
+    ),
+    ActionDefinition(
+        "answer_pause_request",
+        "Answer Pause Request",
+        "control",
+        None,
+        "machine_capability:answer_pause",
+        "hermetic",
+        "Send an answer/reject/cancel decision for a pending provider question.",
+    ),
+    ActionDefinition(
+        "interrupt_cancel",
+        "Interrupt Or Cancel",
+        "control",
+        "interrupt",
+        "contract_bool",
+        "hermetic",
+        "Interrupt an active provider turn or cancel a queued Longhouse input.",
+    ),
+    ActionDefinition(
+        "resume_reattach",
+        "Resume Or Reattach",
+        "control",
+        "reattach",
+        "contract_bool",
+        "live_no_token",
+        "Reconnect to a prior provider session and verify the same transcript/session identity.",
+    ),
+    ActionDefinition(
+        "terminate_cleanup",
+        "Terminate Cleanup",
+        "control",
+        "terminate",
+        "contract_bool",
+        "hermetic",
+        "Stop the managed provider process/control path and clean up owned resources.",
+    ),
+    ActionDefinition(
+        "tail_output",
+        "Tail Output",
+        "observe",
+        "tail_output",
+        "contract_bool",
+        "hermetic",
+        "Observe fresh provider output or transcript tails without taking ownership away from the provider.",
+    ),
+    ActionDefinition(
+        "runtime_phase",
+        "Runtime Phase",
+        "observe",
+        "runtime_phase",
+        "contract_bool",
+        "hermetic",
+        "Project provider runtime phase signals such as running, idle, needs_user, or blocked.",
+    ),
+    ActionDefinition(
+        "transcript_binding",
+        "Transcript Binding",
+        "observe",
+        "transcript_binding",
+        "contract_bool",
+        "hermetic",
+        "Bind raw provider output to canonical Longhouse events and the session it came from.",
+    ),
+    ActionDefinition(
+        "tool_call_result",
+        "Tool Call Result",
+        "observe",
+        "transcript_binding",
+        "tool_result",
+        "hermetic",
+        "Parse provider tool calls/results without losing ids, names, inputs, content, or error state.",
+    ),
+    ActionDefinition(
+        "raw_evidence_capture",
+        "Raw Evidence Capture",
+        "evidence",
+        None,
+        "harness",
+        "hermetic",
+        "Persist raw command output, provider events, logs, and canary artifacts before judging them.",
+    ),
+    ActionDefinition(
+        "parse_normalize",
+        "Parse And Normalize",
+        "evidence",
+        None,
+        "harness",
+        "hermetic",
+        "Convert raw provider events into canonical Longhouse event rows while preserving unknowns.",
+    ),
+    ActionDefinition(
+        "db_ingest",
+        "Database Ingest",
+        "projection",
+        None,
+        "longhouse_db",
+        "hermetic",
+        "Insert canonical events into the Longhouse DB and verify durable query/read surfaces.",
+    ),
+    ActionDefinition(
+        "session_projection",
+        "Session Projection",
+        "projection",
+        None,
+        "harness",
+        "hermetic",
+        "Build the session-detail projection from canonical events and managed-control state.",
+    ),
+    ActionDefinition(
+        "timeline_projection",
+        "Timeline Projection",
+        "projection",
+        None,
+        "harness",
+        "hermetic",
+        "Build the timeline/card projection from canonical events and managed-control state.",
+    ),
+    ActionDefinition(
+        "baseline_compare",
+        "Baseline Compare",
+        "release_diff",
+        None,
+        "release_proof",
+        "hermetic",
+        "Compare current provider proof artifacts with stored expected behavior baselines.",
+    ),
+    ActionDefinition(
+        "old_new_release_diff",
+        "Old/New Release Diff",
+        "release_diff",
+        None,
+        "release_proof",
+        "live_no_token",
+        "Run old and new provider releases through the same matrix and flag divergent behavior.",
+    ),
+)
+ACTIONS = tuple(action.action_id for action in ACTION_DEFINITIONS)
 
 
 def utc_now() -> str:
@@ -166,6 +391,8 @@ class AgentHarnessAdapter(Protocol):
     def prepare(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def probe(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def action_matrix(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def run_prompt(self, package: "EvidencePackage", prompt: str) -> dict[str, Any]: ...
 
@@ -337,6 +564,51 @@ class UniversalProviderAdapter:
         for dirname in payload["required_dirs"]:
             package.path(str(dirname)).mkdir(parents=True, exist_ok=True)
         package.write_json("assertions/collect_raw_evidence.json", payload)
+        return payload
+
+    def action_matrix(self, package: EvidencePackage) -> dict[str, Any]:
+        probe = self.probe(package)
+        files = sorted(str(path.relative_to(package.root)) for path in package.root.rglob("*") if path.is_file())
+        rows = self._build_action_matrix_rows(package=package, probe=probe, files=files)
+        action_matrix = {
+            "schema_version": SCHEMA_VERSION,
+            "artifact_kind": "universal_agent_harness_action_matrix",
+            "provider": self.config.provider,
+            "generated_at": utc_now(),
+            "actions": rows,
+            "action_ids": [row["action_id"] for row in rows],
+            "status_counts": _status_counts(row["status"] for row in rows),
+        }
+        action_matrix_path = package.write_json("assertions/action-matrix.json", action_matrix)
+        raw_path = package.write_json(
+            "raw/action-matrix-inputs.json",
+            {
+                "provider": self.config.provider,
+                "probe": probe,
+                "files": files,
+                "contract": _contract_snapshot(self.config.provider),
+            },
+        )
+        operation_evidence: dict[str, dict[str, Any]] = {}
+        for action, row in zip(ACTION_DEFINITIONS, rows, strict=True):
+            if action.contract_operation and row.get("status") == STATUS_PASS:
+                operation_evidence.setdefault(str(action.contract_operation), _operation_from_action_row(row))
+        matrix_status = STATUS_PASS
+        if any(row["status"] == STATUS_FAIL for row in rows):
+            matrix_status = STATUS_FAIL
+        elif any(row["status"] in YELLOW_STATUSES for row in rows):
+            matrix_status = STATUS_BLOCKED
+        payload = {
+            "status": matrix_status,
+            "action_count": len(rows),
+            "action_ids": [row["action_id"] for row in rows],
+            "action_matrix_path": str(action_matrix_path),
+            "raw_inputs_path": str(raw_path),
+            "status_counts": action_matrix["status_counts"],
+            "actions": rows,
+            "operation_evidence": operation_evidence,
+        }
+        package.write_json("assertions/action_matrix.json", payload)
         return payload
 
     def decode_normalize(self, package: EvidencePackage, fixture_path: Path) -> dict[str, Any]:
@@ -556,6 +828,50 @@ class UniversalProviderAdapter:
             "next": next_step,
         }
 
+    def _build_action_matrix_rows(
+        self,
+        *,
+        package: EvidencePackage,
+        probe: Mapping[str, Any],
+        files: Iterable[str],
+    ) -> list[dict[str, Any]]:
+        contract = contract_for_provider(self.config.provider)
+        file_list = list(files)
+        rows: list[dict[str, Any]] = []
+        for action in ACTION_DEFINITIONS:
+            support, support_reason = _action_support(self.config.provider, action, contract)
+            contract_evidence = (
+                dict(contract.operation_evidence_for(action.contract_operation))
+                if contract is not None and action.contract_operation
+                else {}
+            )
+            row = {
+                "action_id": action.action_id,
+                "title": action.title,
+                "category": action.category,
+                "provider": self.config.provider,
+                "support": support,
+                "support_reason": support_reason,
+                "required_evidence": action.required_evidence,
+                "description": action.description,
+                "contract_operation": action.contract_operation,
+                "contract_evidence": contract_evidence,
+            }
+            row.update(
+                _action_status(
+                    action=action,
+                    support=support,
+                    support_reason=support_reason,
+                    contract_evidence=contract_evidence,
+                    provider=self.config.provider,
+                    probe=probe,
+                    files=file_list,
+                    package=package,
+                )
+            )
+            rows.append(row)
+        return rows
+
     def _session_id(self, package: EvidencePackage) -> str:
         return f"universal-{self.config.provider}-{package.scenario}"
 
@@ -666,6 +982,231 @@ def adapter_snapshot(config: AdapterConfig) -> dict[str, Any]:
         "profiles": list(config.profiles),
         "methods": list(config.methods),
         "real_managed_session_e2e": config.real_managed_session_e2e,
+    }
+
+
+def _status_counts(statuses: Iterable[str]) -> dict[str, int]:
+    counts = {status: 0 for status in STATUSES}
+    for status in statuses:
+        key = status if status in counts else STATUS_FAIL
+        counts[key] += 1
+    return {key: value for key, value in counts.items() if value}
+
+
+def _contract_snapshot(provider: str) -> dict[str, Any] | None:
+    contract = contract_for_provider(provider)
+    if contract is None:
+        return None
+    return {
+        "provider": contract.provider,
+        "managed_transport": contract.managed_transport.value,
+        "control_plane": contract.control_plane,
+        "control_planes": list(contract.control_planes),
+        "machine_control_supports": list(contract.machine_control_supports),
+        "operations": {
+            "launch_local": contract.launch_local,
+            "launch_remote": contract.launch_remote,
+            "run_once": contract.run_once,
+            "reattach": contract.reattach,
+            "send_input": contract.send_input,
+            "interrupt": contract.interrupt,
+            "steer_active_turn": contract.steer_active_turn,
+            "terminate": contract.terminate,
+            "tail_output": contract.tail_output,
+            "runtime_phase": contract.runtime_phase,
+            "transcript_binding": contract.transcript_binding,
+            "can_resume": contract.can_resume,
+        },
+        "operation_evidence": {key: dict(value) for key, value in contract.operation_evidence.items()},
+    }
+
+
+def _action_support(provider: str, action: ActionDefinition, contract: Any) -> tuple[bool, str]:
+    if action.support_kind == "harness":
+        return True, "universal_harness"
+    if action.support_kind == "release_proof":
+        return True, "provider_release_proof"
+    if action.support_kind == "longhouse_db":
+        return True, "longhouse_db"
+    if contract is None:
+        return False, "managed_provider_contract_missing"
+    if action.support_kind == "contract_bool":
+        operation = str(action.contract_operation or "")
+        return bool(getattr(contract, operation, False)), f"contract.{operation}"
+    if action.support_kind == "session_identity":
+        supported = bool(contract.launch_local or contract.reattach or contract.can_resume)
+        return supported, "contract.launch_local_or_reattach"
+    if action.support_kind == "pause_request":
+        capability = f"{provider}.answer_pause"
+        runtime_pause_supported = bool(contract.runtime_phase and contract.transcript_binding)
+        supported = capability in contract.machine_control_supports or runtime_pause_supported
+        return supported, "machine_control.answer_pause_or_runtime_pause_projection"
+    if action.support_kind == "machine_capability:answer_pause":
+        return f"{provider}.answer_pause" in contract.machine_control_supports, "machine_control.answer_pause"
+    if action.support_kind == "tool_result":
+        return bool(contract.transcript_binding), "contract.transcript_binding"
+    return False, f"unknown_support_kind:{action.support_kind}"
+
+
+def _action_status(
+    *,
+    action: ActionDefinition,
+    support: bool,
+    support_reason: str,
+    contract_evidence: Mapping[str, Any],
+    provider: str,
+    probe: Mapping[str, Any],
+    files: list[str],
+    package: EvidencePackage,
+) -> dict[str, Any]:
+    if not support:
+        return {
+            "status": STATUS_UNSUPPORTED_GAP,
+            "failure_code": f"{action.action_id}_unsupported",
+            "message": f"{provider} does not currently support {action.action_id}.",
+            "proof_scope": support_reason,
+            "next": "Leave unsupported unless the provider exposes stable semantics and Longhouse adds a contract row.",
+        }
+
+    if action.action_id == "provider_identity":
+        if probe.get("status") == STATUS_PASS:
+            return {
+                "status": STATUS_PASS,
+                "evidence_level": "live_no_token",
+                "proof_scope": "version_command",
+                "canary": "universal_probe_identity",
+                "raw_artifacts": [str(package.path("raw", "version-command.json"))],
+            }
+        return {
+            "status": STATUS_FAIL,
+            "failure_code": str(probe.get("failure_code") or "provider_identity_failed"),
+            "message": str(probe.get("message") or "Provider identity probe failed."),
+            "proof_scope": "version_command",
+        }
+
+    harness_pass_actions = {
+        "raw_evidence_capture": ("hermetic", "universal_collect_raw_evidence", "universal_harness_file_manifest"),
+        "parse_normalize": ("hermetic", "universal_parse_ingest_project", "universal_harness_parser_projection"),
+        "session_projection": ("hermetic", "universal_session_projection", "universal_harness_projection"),
+        "timeline_projection": ("hermetic", "universal_timeline_projection", "universal_harness_projection"),
+    }
+    if action.action_id in harness_pass_actions:
+        level, canary, scope = harness_pass_actions[action.action_id]
+        return {
+            "status": STATUS_PASS,
+            "evidence_level": level,
+            "proof_scope": scope,
+            "canary": canary,
+            "raw_artifacts": [str(package.path(item)) for item in files],
+        }
+
+    if action.action_id == "db_ingest":
+        next_step = "".join(
+            [
+                "Add a fixture-backed DB ingest lane that verifies session detail, ",
+                "timeline, search, and export reads.",
+            ]
+        )
+        return {
+            "status": STATUS_BLOCKED,
+            "failure_code": "db_ingest_release_lane_missing",
+            "message": "The universal harness projects canonical events but does not yet insert them into a test DB.",
+            "proof_scope": "longhouse_db",
+            "next": next_step,
+        }
+
+    if action.action_id == "baseline_compare":
+        message = "".join(
+            [
+                "Provider release proof has baseline scripts, but the universal action matrix ",
+                "does not yet read a stored baseline.",
+            ]
+        )
+        return {
+            "status": STATUS_BLOCKED,
+            "failure_code": "baseline_compare_not_attached_to_action_matrix",
+            "message": message,
+            "proof_scope": "provider_release_proof_baseline",
+            "next": "Attach provider-release-proof-baseline artifacts to each action row.",
+        }
+
+    if action.action_id == "old_new_release_diff":
+        return {
+            "status": STATUS_BLOCKED,
+            "failure_code": "old_new_release_runner_missing",
+            "message": "The harness does not yet install and run old/new provider releases side by side.",
+            "proof_scope": "release_diff_runner",
+            "next": "Add sandboxed old/new provider install, run both through this matrix, and diff action rows.",
+        }
+
+    if action.action_id in {"pause_request_detect", "answer_pause_request", "tool_call_result"}:
+        return _derived_action_status(action=action, provider=provider)
+
+    level = str(contract_evidence.get("level") or "").strip()
+    source = str(contract_evidence.get("source") or "").strip()
+    if level and level != "none" and source:
+        return {
+            "status": STATUS_PASS,
+            "evidence_level": level,
+            "proof_scope": "managed_provider_contract",
+            "source": source,
+            "next": contract_evidence.get("next"),
+            "canary": _contract_canary_name(source),
+        }
+    return {
+        "status": STATUS_BLOCKED,
+        "failure_code": f"{action.action_id}_proof_missing",
+        "message": f"{provider} supports {action.action_id}, but no release-proof evidence source is recorded.",
+        "proof_scope": "managed_provider_contract",
+        "next": "Add operation evidence to managed_provider_contracts.json or implement a provider canary lane.",
+    }
+
+
+def _derived_action_status(*, action: ActionDefinition, provider: str) -> dict[str, Any]:
+    if action.action_id == "pause_request_detect":
+        return {
+            "status": STATUS_PASS,
+            "evidence_level": "hermetic",
+            "proof_scope": "session_pause_request_projection",
+            "source": "server/zerg/services/session_pause_requests.py plus session_chat pause-request API tests",
+            "canary": "session_pause_request_projection_tests",
+            "next": "Promote with provider-specific live structured-question canaries.",
+        }
+    if action.action_id == "tool_call_result":
+        return {
+            "status": STATUS_PASS,
+            "evidence_level": "hermetic",
+            "proof_scope": "shipper_parser_tool_result",
+            "source": "server/tests_lite/test_shipper_parser_tool_results.py and provider parser fixtures",
+            "canary": "shipper_parser_tool_results",
+            "next": "Promote with live provider tool-call/result canaries per provider.",
+        }
+    message = "".join(
+        [
+            f"{provider} advertises {action.action_id}, ",
+            "but the universal matrix has no direct canary evidence yet.",
+        ]
+    )
+    return {
+        "status": STATUS_BLOCKED,
+        "failure_code": f"{action.action_id}_provider_canary_missing",
+        "message": message,
+        "proof_scope": "machine_control.answer_pause",
+        "next": "Add a managed-session pause request e2e that creates, lists, answers, and resolves one request.",
+    }
+
+
+def _contract_canary_name(source: str) -> str:
+    cleaned = source.split()[0].replace("/", "_").replace(".", "_").replace("-", "_")
+    return cleaned[:80] or "managed_provider_contract"
+
+
+def _operation_from_action_row(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "status": row.get("status"),
+        "level": row.get("evidence_level"),
+        "canary": row.get("canary"),
+        "failure_code": row.get("failure_code"),
     }
 
 
@@ -867,6 +1408,18 @@ def run_collect_raw_evidence(adapter: AgentHarnessAdapter, package: EvidencePack
     )
 
 
+def run_action_matrix(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.action_matrix(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="action_matrix",
+        package=package,
+        payload=payload,
+    )
+
+
 def run_parse_ingest_project(
     adapter: AgentHarnessAdapter,
     package: EvidencePackage,
@@ -942,6 +1495,7 @@ def run_managed_session_e2e(adapter: AgentHarnessAdapter, package: EvidencePacka
 SCENARIO_RUNNERS = {
     "probe_identity": run_probe_identity,
     "collect_raw_evidence": run_collect_raw_evidence,
+    "action_matrix": run_action_matrix,
     "parse_ingest_project": run_parse_ingest_project,
     "run_prompt_once": run_prompt_once,
     "launch_managed_session": run_launch_managed_session,
@@ -1113,6 +1667,8 @@ def main(argv: list[str] | None = None) -> int:
 
 __all__ = [
     "ARTIFACT_KIND",
+    "ACTIONS",
+    "ACTION_DEFINITIONS",
     "SCENARIOS",
     "STATUSES",
     "SUPPORTED_PROVIDERS",

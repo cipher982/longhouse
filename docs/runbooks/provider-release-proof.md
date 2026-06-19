@@ -34,10 +34,31 @@ scripts/qa/provider-release-proof.py \
 
 The current universal lane is no-token. It proves adapter loading, provider
 identity probing, raw evidence writing, fixture replay when a fixture is
-supplied, a safe Codex run-prompt projection, and first Codex/OpenCode
-managed-session projections. Provider-specific canaries remain compatibility
-lanes for real control/live-token behavior until those mechanics are migrated
-behind adapters.
+supplied, a universal action matrix, a safe Codex run-prompt projection, and
+first Codex/OpenCode managed-session projections. Provider-specific canaries
+remain compatibility lanes for real control/live-token behavior until those
+mechanics are migrated behind adapters.
+
+The default attached universal harness includes `action_matrix`. That matrix
+emits the same Longhouse action ids for every provider, including send,
+steer, pause detect/answer, interrupt/cancel, resume/reattach, terminate,
+raw-evidence capture, parse/normalize, DB ingest, session/timeline projection,
+baseline compare, and old/new release diff. Rows that are not genuinely proven
+remain `blocked` or `unsupported_gap`; this is expected until those lanes are
+promoted.
+
+Run only the action matrix:
+
+```bash
+scripts/qa/universal-agent-harness.py \
+  --provider claude \
+  --provider codex \
+  --provider opencode \
+  --provider antigravity \
+  --scenario action_matrix \
+  --evidence-root /tmp/longhouse-action-matrix \
+  --json
+```
 
 OpenCode has the first real provider-safe universal e2e lane:
 
