@@ -95,10 +95,18 @@ def _compact_protocol_fingerprints(info: dict[str, Any]) -> dict[str, Any] | Non
 
 def _compact_codex_canary(info: dict[str, Any]) -> dict[str, Any]:
     compact = _compact_status(info)
-    if info.get("reason") is not None:
-        compact["reason"] = info.get("reason")
-    if info.get("version") is not None:
-        compact["version"] = info.get("version")
+    for key in (
+        "reason",
+        "version",
+        "command_status",
+        "command_exit_code",
+        "command_exact_match",
+        "output_exact_match",
+        "command_event_count",
+        "agent_message_count",
+    ):
+        if info.get(key) is not None:
+            compact[key] = info.get(key)
     protocol_fingerprints = _compact_protocol_fingerprints(info)
     if protocol_fingerprints is not None:
         compact["protocol_fingerprints"] = protocol_fingerprints
@@ -284,6 +292,8 @@ def _command_evidence(
 
 
 def _scenario_profile(args: argparse.Namespace) -> str:
+    if args.provider == "codex" and args.codex_run_real_tool:
+        return "real-tool"
     if args.provider == "codex" and args.codex_run_managed_live_send:
         return "managed-live-send"
     if args.provider == "claude" and args.claude_run_machine_live_proof:
@@ -456,6 +466,8 @@ def _run_source_canary(args: argparse.Namespace, raw_dir: Path) -> tuple[dict[st
             argv.append("--run-detached-ui")
         if args.codex_run_managed_live_send:
             argv.append("--run-managed-live-send")
+        if args.codex_run_real_tool:
+            argv.extend(["--run-real-tool", "--real-tool-timeout-secs", str(args.codex_real_tool_timeout_secs)])
     else:
         raise ValueError(f"unsupported provider: {args.provider}")
 
@@ -1372,6 +1384,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--codex-run-managed-tui-attach", action="store_true")
     parser.add_argument("--codex-run-detached-ui", action="store_true")
     parser.add_argument("--codex-run-managed-live-send", action="store_true")
+    parser.add_argument("--codex-run-real-tool", action="store_true")
+    parser.add_argument("--codex-real-tool-timeout-secs", type=int, default=180)
     parser.add_argument("--codex-api-url")
     parser.add_argument("--codex-agents-token")
     parser.add_argument("--claude-run-machine-live-proof", action="store_true")

@@ -416,6 +416,11 @@ def build_operation_evidence(
     if managed_live_send:
         evidence["send_input"] = managed_live_send
 
+    real_tool = canaries.get("codex_real_tool_result_shape") or {}
+    for operation, item in dict(real_tool.get("operation_evidence") or {}).items():
+        if isinstance(operation, str) and isinstance(item, dict):
+            evidence[operation] = item
+
     return evidence
 
 
@@ -1039,6 +1044,158 @@ def run_managed_live_send(args: argparse.Namespace, evidence_root: Path, codex_b
             (root / "stop.json").write_text(json.dumps(stop, indent=2), encoding="utf-8")
 
 
+def _codex_exec_json_events(stdout: str) -> tuple[list[dict[str, Any]], list[str]]:
+    events: list[dict[str, Any]] = []
+    invalid_lines: list[str] = []
+    for line in stdout.splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        if not text.startswith("{"):
+            invalid_lines.append(text[:200])
+            continue
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError:
+            invalid_lines.append(text[:200])
+            continue
+        if isinstance(value, dict):
+            events.append(value)
+    return events, invalid_lines
+
+
+def _codex_exec_item(event: dict[str, Any]) -> dict[str, Any]:
+    item = event.get("item")
+    return item if isinstance(item, dict) else {}
+
+
+def run_real_tool_exec(args: argparse.Namespace, evidence_root: Path, codex_bin: str) -> dict[str, Any]:
+    root = evidence_root / "real-tool-exec"
+    root.mkdir(parents=True, exist_ok=True)
+    workspace = root / "workspace"
+    workspace.mkdir(exist_ok=True)
+    stdout_path = root / "codex-exec.stdout.jsonl"
+    stderr_path = root / "codex-exec.stderr.log"
+    marker = f"LONGHOUSE_CODEX_REAL_TOOL_{uuid.uuid4().hex}"
+    command = f"printf '{marker}\\n'"
+    prompt = "Use the shell tool to run this exact command and no other command: " f"{command}. Then reply exactly DONE."
+    argv = [
+        codex_bin,
+        "exec",
+        "--json",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--skip-git-repo-check",
+        "-C",
+        str(workspace),
+    ]
+    if args.model:
+        argv.extend(["--model", args.model])
+    argv.append(prompt)
+
+    result = _run(argv, cwd=args.repo_root, timeout=max(args.real_tool_timeout_secs, 45))
+    stdout_path.write_text(result.stdout, encoding="utf-8")
+    stderr_path.write_text(result.stderr, encoding="utf-8")
+    events, invalid_lines = _codex_exec_json_events(result.stdout)
+    command_events = [_codex_exec_item(event) for event in events if _codex_exec_item(event).get("type") == "command_execution"]
+    completed_command_events = [
+        item
+        for item in command_events
+        if item.get("status") == "completed"
+        and item.get("exit_code") == 0
+        and marker in str(item.get("command") or "")
+        and str(item.get("aggregated_output") or "") == f"{marker}\n"
+    ]
+    agent_messages = [_codex_exec_item(event) for event in events if _codex_exec_item(event).get("type") == "agent_message"]
+    done_messages = [item for item in agent_messages if str(item.get("text") or "").strip() == "DONE"]
+    evidence = {
+        "evidence_root": str(root),
+        "stdout": str(stdout_path),
+        "stderr": str(stderr_path),
+        "returncode": result.returncode,
+        "marker": marker,
+        "command": command,
+        "event_count": len(events),
+        "invalid_line_count": len(invalid_lines),
+        "invalid_lines": invalid_lines[:3],
+        "command_event_count": len(command_events),
+        "agent_message_count": len(agent_messages),
+        "matching_command_event": completed_command_events[0] if completed_command_events else None,
+        "done_text_event": done_messages[0] if done_messages else None,
+    }
+    if result.returncode != 0:
+        return _fail(
+            "codex_real_tool_run_failed",
+            "real codex exec --json did not complete successfully",
+            **evidence,
+            command_evidence=_command_evidence(result),
+        )
+    if not events:
+        return _fail(
+            "codex_real_tool_jsonl_missing",
+            "real codex exec --json did not emit JSONL events on stdout",
+            **evidence,
+        )
+    if not completed_command_events:
+        return _fail(
+            "codex_real_tool_shape_missing",
+            "real codex exec --json did not emit the expected completed command_execution event with marker output",
+            **evidence,
+        )
+    if not done_messages:
+        return _fail(
+            "codex_real_tool_done_text_missing",
+            "real codex exec --json did not emit a DONE agent_message after the tool call",
+            **evidence,
+        )
+    command_event = completed_command_events[0]
+    return _status(
+        "pass",
+        operation_evidence={
+            "run_once": {
+                "status": "pass",
+                "level": "live_token",
+                "source": "codex exec --json emitted a completed command_execution event with marker output",
+                "canary": "codex_real_tool_result_shape",
+            },
+            "transcript_binding": {
+                "status": "pass",
+                "level": "live_token",
+                "source": "codex exec --json emitted command_execution and DONE agent_message JSONL events",
+                "canary": "codex_real_tool_result_shape",
+            },
+        },
+        command_status=command_event.get("status"),
+        command_exit_code=command_event.get("exit_code"),
+        command_exact_match=marker in str(command_event.get("command") or ""),
+        output_exact_match=str(command_event.get("aggregated_output") or "") == f"{marker}\n",
+        **evidence,
+    )
+
+
+def _profile_requested(args: argparse.Namespace) -> bool:
+    return any(
+        (
+            args.run_fake_app_server,
+            args.run_raw_fresh_remote,
+            args.run_managed_tui_attach,
+            args.run_detached_ui,
+            args.run_managed_live_send,
+            args.run_real_tool,
+        )
+    )
+
+
+def _mark_unrequested_optional_canaries_skipped(
+    args: argparse.Namespace,
+    canaries: dict[str, dict[str, Any]],
+) -> None:
+    if not _profile_requested(args):
+        return
+    for canary in canaries.values():
+        if canary.get("status") == "not_run" and not canary.get("failure_code"):
+            canary["status"] = "skipped"
+
+
 def classify_artifact(
     canaries: dict[str, dict[str, Any]],
     source_review: dict[str, Any],
@@ -1087,6 +1244,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-managed-tui-attach", action="store_true")
     parser.add_argument("--run-detached-ui", action="store_true")
     parser.add_argument("--run-managed-live-send", action="store_true")
+    parser.add_argument("--run-real-tool", action="store_true")
     parser.add_argument("--run-all-live", action="store_true")
     parser.add_argument(
         "--source-review-status",
@@ -1103,6 +1261,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fake-app-server-timeout-secs", type=int, default=120)
     parser.add_argument("--bridge-start-timeout-secs", type=int, default=30)
     parser.add_argument("--live-send-timeout-secs", type=int, default=60)
+    parser.add_argument("--real-tool-timeout-secs", type=int, default=180)
     parser.add_argument("--remote-tui-grace-ms", type=int, default=3000)
     parser.add_argument("--tui-record-secs", type=int, default=8)
     return parser
@@ -1138,6 +1297,7 @@ def run_codex_provider_release_canary(args: argparse.Namespace | Mapping[str, An
         args.run_managed_tui_attach = True
         args.run_detached_ui = True
         args.run_managed_live_send = True
+        args.run_real_tool = True
 
     canaries: dict[str, dict[str, Any]] = {}
     canaries["binary_identity"] = (
@@ -1177,6 +1337,12 @@ def run_codex_provider_release_canary(args: argparse.Namespace | Mapping[str, An
         if args.run_managed_live_send
         else _status("not_run", reason="pass --run-managed-live-send to exercise this canary")
     )
+    canaries["codex_real_tool_result_shape"] = (
+        run_real_tool_exec(args, evidence_root, codex_bin)
+        if args.run_real_tool
+        else _status("not_run", reason="pass --run-real-tool to exercise this canary")
+    )
+    _mark_unrequested_optional_canaries_skipped(args, canaries)
 
     source_review = {
         "status": args.source_review_status,

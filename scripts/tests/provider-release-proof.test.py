@@ -412,15 +412,25 @@ if os.environ.get("FAKE_CODEX_SKIP_ARTIFACT") == "1":
     raise SystemExit(0)
 
 source_review_status = value("--source-review-status", "missing")
+run_real_tool = "--run-real-tool" in args
+real_tool_status = "fail" if os.environ.get("FAKE_CODEX_REAL_TOOL_FAIL") == "1" else "pass"
+real_tool_failure_code = "fake_codex_real_tool_failed" if real_tool_status == "fail" else None
+verdict = "yellow" if source_review_status == "not_run" else "green"
+failure_code = "insufficient_coverage" if source_review_status == "not_run" else None
+recommendation = "investigate_before_upgrade" if source_review_status == "not_run" else "upgrade_allowed"
+if run_real_tool and real_tool_status == "fail":
+    verdict = "red"
+    failure_code = real_tool_failure_code
+    recommendation = "block_upgrade_recommendation"
 artifact = {
     "artifact_kind": "codex_provider_release_canary",
     "provider": "codex",
     "codex_version": value("--provider-version", "codex 9.9.9"),
     "codex_bin": value("--codex-bin"),
     "longhouse_commit": "abc123",
-    "verdict": "yellow" if source_review_status == "not_run" else "green",
-    "failure_code": "insufficient_coverage" if source_review_status == "not_run" else None,
-    "recommendation": "investigate_before_upgrade" if source_review_status == "not_run" else "upgrade_allowed",
+    "verdict": verdict,
+    "failure_code": failure_code,
+    "recommendation": recommendation,
     "source_review": {"status": source_review_status, "note": value("--source-review-note", "")},
     "canaries": {
         "binary_identity": {
@@ -448,8 +458,30 @@ artifact = {
         }
     },
 }
+if run_real_tool:
+    artifact["canaries"]["codex_real_tool_result_shape"] = {
+        "status": real_tool_status,
+        "failure_code": real_tool_failure_code,
+        "command_status": "completed" if real_tool_status == "pass" else None,
+        "command_exit_code": 0 if real_tool_status == "pass" else None,
+        "command_exact_match": real_tool_status == "pass",
+        "output_exact_match": real_tool_status == "pass",
+    }
+    artifact["operation_evidence"]["run_once"] = {
+        "status": real_tool_status,
+        "level": "none" if real_tool_status == "fail" else "live_token",
+        "canary": "codex_real_tool_result_shape",
+        "failure_code": real_tool_failure_code,
+    }
+    artifact["operation_evidence"]["transcript_binding"] = {
+        "status": real_tool_status,
+        "level": "none" if real_tool_status == "fail" else "live_token",
+        "canary": "codex_real_tool_result_shape",
+        "failure_code": real_tool_failure_code,
+    }
 Path(value("--artifact")).parent.mkdir(parents=True, exist_ok=True)
 Path(value("--artifact")).write_text(json.dumps(artifact), encoding="utf-8")
+raise SystemExit(1 if verdict == "red" else 0)
 """,
     )
 
@@ -738,6 +770,66 @@ def test_codex_managed_live_send_uses_distinct_scenario() -> None:
         assert payload["scenario_profile"] == "managed-live-send"
         source_args = json.loads(args_path.read_text(encoding="utf-8"))
         assert "--run-managed-live-send" in source_args
+
+
+def test_codex_release_proof_can_attach_real_tool_evidence() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        args_path = root / "codex-args.json"
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "codex",
+            env={"FAKE_CODEX_ARGS_PATH": str(args_path)},
+            extra_args=[
+                "--source-review-status",
+                "pass",
+                "--codex-run-real-tool",
+                "--codex-real-tool-timeout-secs",
+                "5",
+            ],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["scenario_id"] == "codex-real-tool-release-proof-v1"
+        assert payload["scenario_profile"] == "real-tool"
+        assert payload["verdict"] == "green"
+        source_args = json.loads(args_path.read_text(encoding="utf-8"))
+        assert "--run-real-tool" in source_args
+        assert source_args[source_args.index("--real-tool-timeout-secs") + 1] == "5"
+        assert payload["operation_evidence"]["run_once"]["level"] == "live_token"
+        assert payload["operation_evidence"]["transcript_binding"]["level"] == "live_token"
+        assert payload["normalized"]["operation_evidence"]["run_once"]["level"] == "live_token"
+        assert payload["normalized"]["canaries"]["codex_real_tool_result_shape"]["status"] == "pass"
+        assert payload["normalized"]["canaries"]["codex_real_tool_result_shape"]["command_status"] == "completed"
+
+
+def test_codex_release_proof_blocks_failed_real_tool_evidence() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "codex",
+            env={"FAKE_CODEX_REAL_TOOL_FAIL": "1"},
+            extra_args=[
+                "--source-review-status",
+                "pass",
+                "--codex-run-real-tool",
+            ],
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "fake_codex_real_tool_failed"
+        assert payload["operation_evidence"]["run_once"]["status"] == "fail"
+        assert payload["normalized"]["canaries"]["codex_real_tool_result_shape"]["failure_code"] == (
+            "fake_codex_real_tool_failed"
+        )
 
 
 def test_codex_managed_live_send_preflight_reports_missing_credentials() -> None:
@@ -1296,6 +1388,8 @@ def main() -> int:
         test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest,
         test_codex_release_proof_redacts_token_from_command_evidence,
         test_codex_managed_live_send_uses_distinct_scenario,
+        test_codex_release_proof_can_attach_real_tool_evidence,
+        test_codex_release_proof_blocks_failed_real_tool_evidence,
         test_codex_managed_live_send_preflight_reports_missing_credentials,
         test_codex_managed_live_send_preflight_redacts_credentials,
         test_preflight_reports_missing_provider_binary_as_red,

@@ -71,15 +71,15 @@ Machine-validated coverage map:
 | Covered `no` | 3 |
 | Rows running in Longhouse CI | 46 |
 | Rows running in Sauron release-watch | 33 |
-| Rows with accepted parser-fixture baselines | 4 |
-| Rows with accepted release-proof baselines | 26 |
+| Rows with accepted parser-fixture baselines | 3 |
+| Rows with accepted release-proof baselines | 27 |
 
 Provider shape:
 
 | Provider | Yes | Partial | No | CI rows | Sauron rows | Release baselines |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Claude Code | 2 | 11 | 0 | 12 | 7 | 3 |
-| Codex/OpenAI | 4 | 9 | 0 | 12 | 9 | 7 |
+| Codex/OpenAI | 4 | 9 | 0 | 12 | 9 | 8 |
 | OpenCode | 4 | 9 | 0 | 13 | 12 | 11 |
 | Antigravity | 1 | 9 | 3 | 9 | 5 | 5 |
 
@@ -197,7 +197,7 @@ accepted baseline yet, and full resume/tool coverage remains missing.
 | send input | partial | engine bridge IPC turn/start tests; `codex-provider-release-canary.py --run-managed-live-send` starts a managed detached bridge, sends a unique marker, waits for completion, and checks transcript/state evidence | hermetic/live_token when explicitly run; fake wrapper in CI | `make test`, engine tests, wrapper fake-engine test | Sauron canary when configured | release-proof yes (`codex-managed-live-send-release-proof-v1`, codex-cli 0.139.0) | partial |
 | interrupt/abort/steer | partial | engine bridge interrupt/steer tests | hermetic | `make test`, engine tests | Sauron canary when configured | no | partial |
 | reattach/resume | partial | managed TUI attach canary; resume path tests | hermetic/live_no_token | `validate-provider-cli-canaries` | yes | release-proof yes (`codex-release-proof-v1`, codex-cli 0.139.0) | partial |
-| tool/tool-result shape | partial | Codex parser fixtures and tool-call tests | fixture/hermetic | `make test`, `make test-engine` | source review only | parser fixture yes; release-proof no | partial |
+| tool/tool-result shape | partial | Codex parser fixtures and `provider-release-proof.py --codex-run-real-tool` capture real `codex exec --json` `command_execution` events with marker output and a DONE agent message | live_token when explicitly run; fake wrapper/parser fixture | wrapper fake-Codex test plus parser tests | not yet wired into Sauron release-watch | release-proof yes (`codex-real-tool-release-proof-v1`, codex-cli 0.139.0) | yes for manual proof/diff; release-watch gate remains off |
 | live-token behavior | partial | `codex-provider-release-canary.py --run-managed-live-send`; `provider-release-proof.py --codex-run-managed-live-send` can attach the evidence to a release proof | managed Runtime Host live_token when explicitly run; fake wrapper in CI | wrapper fake-engine test | yes; production Sauron has `AGENT_RELEASE_CODEX_CANARY_LIVE=1` and Runtime Host credentials configured | release-proof yes (`codex-managed-live-send-release-proof-v1`, codex-cli 0.139.0) | yes |
 
 Codex is the strongest existing provider lane. Sauron now produces a
@@ -255,6 +255,16 @@ green/match. The accepted local dogfood baseline is under
 `~/.local/share/longhouse/provider-release-proofs/codex/codex-managed-live-send-release-proof-v1/`
 and the complete accepted store was promoted to Sauron production
 `/data/provider-release-proofs`.
+
+Accepted real-tool baseline evidence, 2026-06-19: Codex `codex-cli 0.139.0`
+was run locally with `--codex-run-real-tool`. The proof was green and captured
+real `codex exec --json` output containing completed `command_execution`
+events, exact marker output, a DONE `agent_message`, and
+`operation_evidence.run_once/transcript_binding.level=live_token`. The accepted
+local dogfood baseline is under
+`~/.local/share/longhouse/provider-release-proofs/codex/codex-real-tool-release-proof-v1/`.
+It has been promoted to production Sauron's baseline store, but it is not yet
+wired into release-watch.
 
 ### OpenCode
 
@@ -635,9 +645,9 @@ should not by itself count as contract drift.
    `claude-real-print-release-proof-v1`, then accept a green real-print
    baseline; after that, add Claude managed-session binding proof beyond
    no-token launch shape.
-2. Keep the scheduled Codex live-send release-watch and Sauron
-   `agent-release-baseline-guard` green, and add Codex interrupt/tool coverage
-   beyond the currently accepted send-input baseline.
+2. Wire an env-gated Codex real-tool release-watch path for
+   `codex-real-tool-release-proof-v1`; then add Codex interrupt coverage beyond
+   the accepted send-input/tool baselines.
 3. Decide whether to enable `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` in
    production Sauron; the accepted baseline exists, but the default release
    watch still avoids real `agy` token spend.

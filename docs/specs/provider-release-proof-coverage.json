@@ -451,15 +451,19 @@
             "covered": "partial",
             "test_evidence": [
                 "engine/tests/golden_parser_contract.rs",
-                "server/tests_lite/test_session_processing.py"
+                "server/tests_lite/test_session_processing.py",
+                "scripts/tests/codex-provider-release-canary.test.py",
+                "scripts/tests/provider-release-proof.test.py"
             ],
-            "proof_boundary": "fixture_or_hermetic",
-            "fake_or_real": "fake",
+            "proof_boundary": "manual_live_token_or_fake",
+            "fake_or_real": "mixed",
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": false,
-            "accepted_baseline": "parser_fixture",
+            "accepted_baseline": "release_proof",
             "failure_actionable": true,
-            "baseline_scenarios": []
+            "baseline_scenarios": [
+                "codex-real-tool-release-proof-v1"
+            ]
         },
         {
             "provider": "codex",
@@ -953,6 +957,14 @@
             "provider_version": "codex-cli 0.139.0",
             "baseline_scope": "managed_runtime_live_send_marker",
             "baseline_boundary": "managed_runtime_live_token_or_fake",
+            "promoted_to_sauron": true
+        },
+        {
+            "provider": "codex",
+            "scenario_id": "codex-real-tool-release-proof-v1",
+            "provider_version": "codex-cli 0.139.0",
+            "baseline_scope": "real_codex_exec_command_execution_shape",
+            "baseline_boundary": "manual_live_token",
             "promoted_to_sauron": true
         },
         {

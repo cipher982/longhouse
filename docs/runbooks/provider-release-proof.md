@@ -80,6 +80,7 @@ CODEX_RUN_RAW_FRESH_REMOTE=1 \
 CODEX_RUN_MANAGED_TUI_ATTACH=1 \
 CODEX_RUN_DETACHED_UI=1 \
 CODEX_RUN_MANAGED_LIVE_SEND=1 \
+CODEX_RUN_REAL_TOOL=1 \
 make provider-release-proof \
   PROVIDER=codex \
   PROVIDER_BIN=/path/to/codex \
@@ -102,6 +103,12 @@ canary marker. Proofs with this flag use scenario
 `codex-release-proof-v1` remains the no-token managed/protocol baseline. Do not
 accept a Codex baseline while the managed attach, detached UI, or live-send
 lanes are still missing if the baseline is intended to protect those surfaces.
+
+`CODEX_RUN_REAL_TOOL=1` spends a real local `codex exec --json` turn and records
+`operation_evidence.run_once` plus `operation_evidence.transcript_binding` at
+`level=live_token` after a completed `command_execution` event emits the exact
+marker output and a DONE `agent_message`. Proofs with this flag use scenario
+`codex-real-tool-release-proof-v1`.
 
 Sauron release-watch reuses `AGENT_RELEASE_CODEX_LONGHOUSE_API_URL` and
 `AGENT_RELEASE_CODEX_LONGHOUSE_AGENTS_TOKEN` for the same Codex managed bridge
@@ -275,6 +282,7 @@ for provider, scenario_id in [
     ('claude', 'claude-release-proof-v1'),
     ('codex', 'codex-release-proof-v1'),
     ('codex', 'codex-managed-live-send-release-proof-v1'),
+    ('codex', 'codex-real-tool-release-proof-v1'),
     ('opencode', 'opencode-release-proof-v1'),
     ('opencode', 'opencode-real-tool-release-proof-v1'),
 ]:
@@ -455,8 +463,15 @@ an accepted baseline.
   credentials for scheduled Codex live-send release-watch; a no-spend preflight
   in the `sauron` container on 2026-06-19 returned green for
   `codex-managed-live-send-release-proof-v1`.
+- Codex/OpenAI real-tool: accepted local baseline
+  `codex-real-tool-release-proof-v1`, provider version `codex-cli 0.139.0`.
+  The accepted proof showed real `codex exec --json` completed
+  `command_execution` events, exact marker output, a DONE `agent_message`, and
+  `operation_evidence.run_once/transcript_binding.level=live_token`. This
+  baseline is promoted to production Sauron, but release-watch is not yet wired
+  to spend this real-tool turn.
 - Sauron baseline inventory guard: live in production as
-  `agent-release-baseline-guard`; on 2026-06-19 it returned 7/7 accepted
+  `agent-release-baseline-guard`; on 2026-06-19 it returned 8/8 accepted
   scenarios green against `/data/provider-release-proofs`.
 - Antigravity real-agy send release-watch: Sauron has an env-gated pass-through
   for this scenario, but production Sauron is not configured with

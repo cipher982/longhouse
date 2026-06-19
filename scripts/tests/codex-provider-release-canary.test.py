@@ -42,6 +42,38 @@ if "resume" in args:
     print("resume attached")
     raise SystemExit(0)
 
+if len(args) >= 2 and args[:2] == ["exec", "--json"]:
+    prompt = args[-1]
+    marker = ""
+    prefix = "LONGHOUSE_CODEX_REAL_TOOL_"
+    if prefix in prompt:
+        marker = prefix + prompt.split(prefix, 1)[1].split("\\n", 1)[0].split("'", 1)[0]
+    if os.environ.get("FAKE_REAL_TOOL_FAIL") == "1":
+        print("fake codex real tool failed", file=sys.stderr)
+        raise SystemExit(1)
+    output = "" if os.environ.get("FAKE_REAL_TOOL_MARKER_MISSING") == "1" else f"{marker}\n"
+    events = [
+        {"type": "thread.started", "thread_id": "thread_fake_real_tool"},
+        {"type": "turn.started"},
+        {
+            "type": "item.completed",
+            "item": {
+                "id": "item_0",
+                "type": "command_execution",
+                "command": f"/bin/zsh -lc \"printf '{marker}\\\\n'\"",
+                "aggregated_output": output,
+                "exit_code": 0,
+                "status": "completed",
+            },
+        },
+    ]
+    if os.environ.get("FAKE_REAL_TOOL_DONE_MISSING") != "1":
+        events.append({"type": "item.completed", "item": {"id": "item_1", "type": "agent_message", "text": "DONE"}})
+    events.append({"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1}})
+    for event in events:
+        print(json.dumps(event))
+    raise SystemExit(0)
+
 print("fake codex command", json.dumps(args))
 raise SystemExit(0)
 """,
@@ -416,25 +448,70 @@ def test_full_fake_canary_can_go_green() -> None:
             "launch_local",
             "launch_remote",
             "reattach",
+            "run_once",
             "send_input",
             "tail_output",
+            "transcript_binding",
         }
         assert payload["operation_evidence"]["launch_local"]["canary"] == "managed_tui_attach"
         assert payload["operation_evidence"]["launch_remote"]["canary"] == "detached_ui"
         assert payload["operation_evidence"]["reattach"]["level"] == "live_no_token"
         assert payload["operation_evidence"]["send_input"]["canary"] == "managed_live_send"
         assert payload["operation_evidence"]["send_input"]["level"] == "live_token"
+        assert payload["operation_evidence"]["run_once"]["canary"] == "codex_real_tool_result_shape"
+        assert payload["operation_evidence"]["run_once"]["level"] == "live_token"
+        assert payload["operation_evidence"]["transcript_binding"]["level"] == "live_token"
         assert payload["operation_evidence"]["tail_output"]["status"] == "pass"
 
-        attach_args = json.loads(fixture["codex_args"].read_text(encoding="utf-8"))
-        assert attach_args[:2] == ["-c", "check_for_update_on_startup=false"]
-        assert "resume" not in attach_args
-        assert "--enable" in attach_args
-        assert "tui_app_server" in attach_args
-        assert "--remote" in attach_args
+        codex_args = json.loads(fixture["codex_args"].read_text(encoding="utf-8"))
+        assert codex_args[:2] == ["exec", "--json"]
+        assert "--dangerously-bypass-approvals-and-sandbox" in codex_args
 
         stop_lines = fixture["calls"].read_text(encoding="utf-8").splitlines()
         assert len(stop_lines) == 3
+
+
+def test_real_tool_exec_canary_proves_command_execution_shape() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fixture = _fixture(root)
+        result, payload = _run_canary(
+            root,
+            fixture,
+            ["--run-real-tool", "--real-tool-timeout-secs", "5", "--source-review-status", "pass"],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["verdict"] == "green"
+        canary = payload["canaries"]["codex_real_tool_result_shape"]
+        assert canary["status"] == "pass"
+        assert canary["command_status"] == "completed"
+        assert canary["command_exit_code"] == 0
+        assert canary["command_exact_match"] is True
+        assert canary["output_exact_match"] is True
+        assert canary["matching_command_event"]["type"] == "command_execution"
+        assert canary["done_text_event"]["type"] == "agent_message"
+        assert payload["operation_evidence"]["run_once"]["level"] == "live_token"
+        assert payload["operation_evidence"]["transcript_binding"]["level"] == "live_token"
+
+
+def test_real_tool_exec_canary_fails_without_marker_output() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fixture = _fixture(root)
+        result, payload = _run_canary(
+            root,
+            fixture,
+            ["--run-real-tool", "--real-tool-timeout-secs", "5", "--source-review-status", "pass"],
+            {"FAKE_REAL_TOOL_MARKER_MISSING": "1"},
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "codex_real_tool_shape_missing"
+        canary = payload["canaries"]["codex_real_tool_result_shape"]
+        assert canary["status"] == "fail"
+        assert canary["matching_command_event"] is None
 
 
 def test_managed_live_send_marker_missing_is_red() -> None:
@@ -716,6 +793,8 @@ def test_release_artifact_can_use_upstream_version_without_local_binary_identity
 def main() -> int:
     tests = [
         test_full_fake_canary_can_go_green,
+        test_real_tool_exec_canary_proves_command_execution_shape,
+        test_real_tool_exec_canary_fails_without_marker_output,
         test_managed_live_send_marker_missing_is_red,
         test_managed_live_send_marker_in_user_prompt_only_is_red,
         test_managed_live_send_failure_redacts_token,
