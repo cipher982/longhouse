@@ -1583,6 +1583,22 @@ class UniversalProviderAdapter:
     def permission_prompt(self, package: EvidencePackage) -> dict[str, Any]:
         if self.config.provider == "opencode":
             return self._run_opencode_permission_prompt(package)
+        if self.config.provider == "antigravity":
+            payload = self._unsupported_payload(
+                "permission_prompt",
+                "permission_prompt_unsupported",
+                "Antigravity does not expose stable provider permission-prompt approve/deny semantics.",
+            )
+            payload["operation_evidence"] = {
+                "permission_prompt": {
+                    "status": STATUS_UNSUPPORTED_GAP,
+                    "level": "none",
+                    "canary": "universal_permission_prompt",
+                    "failure_code": "permission_prompt_unsupported",
+                }
+            }
+            package.write_json("assertions/permission_prompt.json", payload)
+            return payload
         payload = {
             "status": STATUS_BLOCKED,
             "scenario": "permission_prompt",
@@ -5099,7 +5115,7 @@ def _action_support(provider: str, action: ActionDefinition, contract: Any) -> t
     if action.support_kind == "external_event_channel":
         return provider == "antigravity", "provider_control.antigravity_hook_inbox"
     if action.support_kind == "permission_prompt":
-        return True, "provider_permission_prompt_surface"
+        return provider in {"claude", "codex", "opencode"}, "provider_permission_prompt_surface"
     return False, f"unknown_support_kind:{action.support_kind}"
 
 

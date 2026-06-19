@@ -642,10 +642,11 @@ shape:
    evidence through release proof.
 18. OpenCode `permission_prompt` is an executable universal bridge-transport
    scenario. It writes an OpenCode bridge state file, sends
-   `permission-reply` through the real Longhouse bridge command to a held fake
-   upstream permission request, and records the forwarded decision/auth/path
-   evidence. Claude, Codex, and Antigravity still report the explicit live
-   provider-held permission prompt gap.
+`permission-reply` through the real Longhouse bridge command to a held fake
+upstream permission request, and records the forwarded decision/auth/path
+evidence. Claude and Codex still report explicit live provider-held permission
+prompt gaps. Antigravity reports `unsupported_gap` until it exposes stable
+provider permission-prompt semantics.
 19. `full_action_suite` runs `managed_session_e2e` and lets any-mapped abstract
    actions count it only when the result carries the operation evidence required
    by that action. Antigravity hook/inbox e2e now covers abstract

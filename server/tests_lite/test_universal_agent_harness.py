@@ -551,6 +551,9 @@ def test_action_matrix_emits_same_longhouse_actions_for_all_providers(tmp_path: 
         if result["provider"] == "opencode":
             assert actions["permission_prompt"]["status"] == "pass"
             assert actions["permission_prompt"]["canary"] == "opencode_bridge_permission_reply"
+        elif result["provider"] == "antigravity":
+            assert actions["permission_prompt"]["status"] == "unsupported_gap"
+            assert actions["permission_prompt"]["failure_code"] == "permission_prompt_unsupported"
         else:
             assert actions["permission_prompt"]["status"] == "blocked"
             assert actions["permission_prompt"]["failure_code"] == "permission_prompt_canary_missing"
@@ -999,6 +1002,8 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
         assert coverage["pause_request_detect"]["coverage_status"] == "pass"
         if result["provider"] == "opencode":
             assert coverage["permission_prompt"]["coverage_status"] == "pass"
+        elif result["provider"] == "antigravity":
+            assert coverage["permission_prompt"]["coverage_status"] == "unsupported_gap"
         else:
             assert coverage["permission_prompt"]["coverage_status"] == "blocked"
         assert coverage["tool_call_result"]["coverage_kind"] == "executable_scenario"
@@ -2052,6 +2057,10 @@ def test_remaining_surface_scenarios_emit_honest_results_for_all_providers(tmp_p
                 "request_received": True,
             }
             assert Path(permission["data"]["raw_permission_reply_path"]).is_file()
+        elif provider == "antigravity":
+            assert permission["status"] == "unsupported_gap"
+            assert permission["failure_code"] == "permission_prompt_unsupported"
+            assert permission["data"]["operation_evidence"]["permission_prompt"]["status"] == "unsupported_gap"
         else:
             assert permission["status"] == "blocked"
             assert permission["failure_code"] == "permission_prompt_canary_missing"
@@ -3007,7 +3016,10 @@ def test_script_entrypoint_runs_all_provider_action_e2e(tmp_path: Path) -> None:
     assert support_rows["steer_active_turn"]["providers"]["opencode"]["status"] == "unsupported_gap"
     assert support_rows["permission_prompt"]["providers"]["opencode"]["status"] == "pass"
     assert support_rows["permission_prompt"]["providers"]["opencode"]["canary"] == "opencode_bridge_permission_reply"
-    assert support_rows["permission_prompt"]["providers"]["antigravity"]["status"] == "blocked"
+    assert support_rows["permission_prompt"]["providers"]["antigravity"]["status"] == "unsupported_gap"
+    assert (
+        support_rows["permission_prompt"]["providers"]["antigravity"]["failure_code"] == "permission_prompt_unsupported"
+    )
     assert support_matrix["provider_status_counts"]["claude"]["blocked"] >= 1
     assert support_matrix["provider_status_counts"]["opencode"]["unsupported_gap"] >= 1
 
