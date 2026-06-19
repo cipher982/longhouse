@@ -1,6 +1,6 @@
 # Provider Release Proof
 
-**Status:** Phase 1 inventory + Longhouse proof/baseline/diff entrypoints; first OpenCode release-proof baseline accepted locally
+**Status:** Phase 1 inventory + Longhouse proof/baseline/diff entrypoints; OpenCode and scoped Claude release-proof baselines accepted
 **Owner:** David
 **Last updated:** 2026-06-19
 
@@ -40,7 +40,7 @@ What exists:
 
 What is missing:
 
-- accepted release-proof baselines for Claude, Codex, and Antigravity
+- accepted release-proof baselines for Codex and Antigravity
 - raw-to-normalized proof fixtures for all release-sensitive surfaces
 - full managed-session/live-token proof for every release-sensitive surface
 - scheduled old/new differentials from the accepted baseline store rather than
@@ -68,13 +68,13 @@ Machine-validated coverage map:
 | Rows running in Longhouse CI | 41 |
 | Rows running in Sauron release-watch | 29 |
 | Rows with accepted parser-fixture baselines | 4 |
-| Rows with accepted release-proof baselines | 9 |
+| Rows with accepted release-proof baselines | 12 |
 
 Provider shape:
 
 | Provider | Yes | Partial | No | CI rows | Sauron rows | Release baselines |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Claude Code | 2 | 11 | 0 | 11 | 5 | 0 |
+| Claude Code | 2 | 11 | 0 | 11 | 5 | 3 |
 | Codex/OpenAI | 4 | 8 | 1 | 11 | 8 | 0 |
 | OpenCode | 4 | 7 | 2 | 11 | 11 | 9 |
 | Antigravity | 1 | 9 | 3 | 8 | 5 | 0 |
@@ -87,12 +87,13 @@ Known uncovered surfaces:
   shape.
 
 Implication: CI is meaningful for parser, wrapper, profile-canary, and several
-no-token live surfaces, and OpenCode now has one accepted known-good
-release-proof baseline. This is still not a complete release gate: Claude,
-Codex, and Antigravity have no accepted release-proof baselines, OpenCode still
-lacks tool/tool-result and live-token proof, and the Sauron release-watch path
-still needs to consume the accepted baseline store instead of treating
-`baseline_missing` as the normal state.
+no-token live surfaces. OpenCode has an accepted known-good release-proof
+baseline for its no-token server/control proof, and Claude now has an accepted
+scoped no-token baseline for binary identity, channel/status shape, and launch
+flag/PTY shape. This is still not a complete release gate: Codex and
+Antigravity have no accepted release-proof baselines, Claude still lacks
+managed-session binding and live-token proof, and OpenCode still lacks
+tool/tool-result and live-token proof.
 
 ## Coverage Legend
 
@@ -114,7 +115,10 @@ Baseline means an accepted normalized output exists for the release-proof
 surface, not merely a unit-test expected value unless called out.
 For OpenCode, the current `release_proof` baseline is a `live_no_token`
 baseline; it protects provider server/API/control-shape drift, not
-model-visible response quality.
+model-visible response quality. For Claude, the current `release_proof`
+baseline is narrower: it protects CLI binary identity, channel/status shape,
+and launch flag/PTY shape, not model-visible send, steer, transcript binding,
+or resume semantics.
 
 ## Phase 1 Coverage Map
 
@@ -129,9 +133,9 @@ summary; update the JSON first when a provider/surface changes.
 | Surface | Covered | Evidence | Boundary | CI | Sauron release-watch | Baseline | Actionable today |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | install/stage exact version | partial | Sauron stages npm-sourced `@anthropic-ai/claude-code@version` into an isolated artifact root, passes `.bin/claude` to profile/live canaries, and wraps it in Longhouse proof/differential envelopes | isolated npm package | no Longhouse CI; Sauron tests cover it | yes for npm releases | no | yes if staging/version match fails or old/new proof drift is red |
-| binary identity | yes | `provider-live-canary --provider claude`, `provider-release-profile-canary.py` | live_no_token or fake | `validate-provider-cli-canaries` | yes, through provider status | no | yes if binary missing/version fails |
-| auth/status shape | partial | `provider-live-canary --provider claude` binary/auth/channel checks | live_no_token | `validate-provider-cli-canaries` | yes if live proof configured | no | yes if red |
-| launch managed session | partial | `provider-control-e2e-canary.py`, `test_claude_channel_launch_cli.py`, Sauron proof/diff for no-token launch flag shape | hermetic plus exact npm package shape | `validate-provider-cli-canaries`, `make test`; Sauron tests cover release-watch proof wiring | profile/live plus proof/diff for npm releases | no | partial |
+| binary identity | yes | `provider-live-canary --provider claude`, `provider-release-profile-canary.py` | live_no_token or fake | `validate-provider-cli-canaries` | yes, through provider status | release-proof yes (`claude-release-proof-v1`, 2.1.161) | yes if binary missing/version fails |
+| auth/status shape | partial | `provider-live-canary --provider claude` binary/auth/channel checks | live_no_token | `validate-provider-cli-canaries` | yes if live proof configured | release-proof yes (`claude-release-proof-v1`, 2.1.161) | yes if red |
+| launch managed session | partial | `provider-control-e2e-canary.py`, `test_claude_channel_launch_cli.py`, Sauron proof/diff for no-token launch flag shape | hermetic plus exact npm package shape | `validate-provider-cli-canaries`, `make test`; Sauron tests cover release-watch proof wiring | profile/live plus proof/diff for npm releases | release-proof yes for no-token launch/PTY shape (`claude-release-proof-v1`, 2.1.161) | partial |
 | session id/path binding | partial | `test_claude_channel_bridge.py`, hook/session tests | hermetic | `make test` | no dedicated baseline | no | partial |
 | transcript/log parse | yes | engine Claude golden + adversarial parser tests | fixture | `make test-engine` | source review only | parser fixture yes; release-proof no | yes for parser drift |
 | ingest into Longhouse | partial | shipper E2E, Claude hook/outbox tests | fixture/hermetic | `make test`, `make test-shipper-e2e` | no dedicated release proof | no | partial |
@@ -144,8 +148,8 @@ summary; update the JSON first when a provider/surface changes.
 
 Claude risk: high. Closed source and release notes are not enough. Sauron now
 stages exact npm package versions and runs Longhouse proof/differential
-artifacts, but accepted baselines and full managed-session live-token proof are
-still missing.
+artifacts against an accepted scoped no-token baseline. Full managed-session
+binding, transcript, send/steer, resume, and live-token proof are still missing.
 
 ### Codex
 
@@ -518,11 +522,13 @@ should not by itself count as contract drift.
 
 ## Next Work
 
-1. Wire Sauron release-watch to consume the accepted OpenCode baseline store
-   for `opencode-release-proof-v1` instead of reporting `baseline_missing`.
-2. Add Claude managed-session binding proof beyond no-token launch shape.
-3. Decide whether Antigravity real-agy send belongs in scheduled CI or remains
+1. Add Claude managed-session binding proof beyond no-token launch shape.
+2. Promote Codex beyond `insufficient_coverage` by running and hardening the
+   managed TUI attach, detached UI, and raw-fresh remote lanes.
+3. Fix the Antigravity hook-inbox import failure observed in the 2026-06-19
+   readiness probe before accepting any Antigravity baseline.
+4. Decide whether Antigravity real-agy send belongs in scheduled CI or remains
    an opt-in live-token proof.
-4. Accept real Codex and Antigravity baselines once their proof lanes are green
+5. Accept real Codex and Antigravity baselines once their proof lanes are green
    enough to trust.
-5. Start old/new differential proof runs from accepted baselines.
+6. Add model-visible live-token proof for the surfaces still marked partial.

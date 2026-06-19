@@ -178,9 +178,18 @@ def _normalized(proof: dict[str, Any]) -> Any:
 
 def _resolve_artifact_path(value: str, *, proof_path: Path | None) -> Path:
     path = Path(value)
-    if path.is_absolute() or proof_path is None:
+    if not path.is_absolute():
+        if proof_path is None:
+            return path
+        return (proof_path.parent / path).resolve()
+    if path.is_file() or proof_path is None:
         return path
-    return (proof_path.parent / path).resolve()
+    try:
+        version_index = path.parts.index("versions")
+    except ValueError:
+        return path
+    relocated = proof_path.parent.joinpath(*path.parts[version_index:])
+    return relocated
 
 
 def _artifact_paths(proof: dict[str, Any]) -> dict[str, str]:
@@ -379,8 +388,9 @@ def diff_proofs(
     candidate_path = candidate_path.expanduser().resolve()
     candidate = _read_json(candidate_path)
     if base_path is None:
+        base_path = _accepted_path(baseline_root, candidate)
         base = _load_accepted(baseline_root, candidate)
-        base_uri = str(_accepted_path(baseline_root, candidate))
+        base_uri = str(base_path)
     else:
         base_path = base_path.expanduser().resolve()
         base = _read_json(base_path)
@@ -503,18 +513,23 @@ def baseline_status(
     archived_artifacts = accepted.get("archived_artifacts")
     if not isinstance(archived_artifacts, dict):
         archived_artifacts = {}
-    missing = [
-        key
-        for key, value in sorted(archived_artifacts.items())
-        if not isinstance(value, str) or not Path(value).is_file()
-    ]
+    resolved_archived_artifacts: dict[str, str] = {}
+    missing: list[str] = []
+    for key, value in sorted(archived_artifacts.items()):
+        if not isinstance(key, str) or not isinstance(value, str):
+            missing.append(str(key))
+            continue
+        resolved = _resolve_artifact_path(value, proof_path=accepted_path)
+        resolved_archived_artifacts[key] = str(resolved)
+        if not resolved.is_file():
+            missing.append(key)
     proof_verdict = str(accepted.get("verdict") or "").lower()
     payload.update(
         {
             "accepted": True,
             "provider_version": accepted.get("provider_version"),
             "accepted_at": accepted.get("accepted_at") or accepted.get("generated_at"),
-            "archived_artifacts": archived_artifacts,
+            "archived_artifacts": resolved_archived_artifacts,
             "missing_archived_artifacts": missing,
             "verdict": "green" if proof_verdict == "green" and not missing else "yellow",
             "failure_code": None

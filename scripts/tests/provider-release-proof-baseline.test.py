@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -545,6 +546,53 @@ def test_status_reports_accepted_baseline_and_archived_artifacts() -> None:
         assert payload["missing_archived_artifacts"] == []
 
 
+def test_relocated_baseline_store_resolves_archived_artifacts() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        baseline_root = root / "baselines"
+        relocated_root = root / "relocated-baselines"
+        accepted = _write_proof(root, "accepted")
+        candidate = _write_proof(root, "candidate", version="1.2.4")
+        _run(["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)])
+
+        shutil.copytree(baseline_root, relocated_root)
+        shutil.rmtree(baseline_root)
+
+        result, payload = _run(
+            [
+                "status",
+                "--provider",
+                "opencode",
+                "--scenario-id",
+                "opencode-release-proof-v1",
+                "--baseline-root",
+                str(relocated_root),
+            ]
+        )
+
+        assert result.returncode == 0
+        assert payload["accepted"] is True
+        assert payload["verdict"] == "green"
+        assert payload["failure_code"] is None
+        assert payload["missing_archived_artifacts"] == []
+        for path in payload["archived_artifacts"].values():
+            assert str(path).startswith(str(relocated_root))
+
+        diff_result, diff_payload = _run(
+            [
+                "diff",
+                "--candidate",
+                str(candidate),
+                "--baseline-root",
+                str(relocated_root),
+            ]
+        )
+
+        assert diff_result.returncode == 0
+        assert diff_payload["verdict"] == "green"
+        assert diff_payload["diff"]["status"] == "match"
+
+
 def test_status_warns_when_archived_artifact_is_missing() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -590,6 +638,7 @@ def main() -> int:
         test_diff_can_compare_explicit_old_and_new_proofs,
         test_status_reports_missing_baseline_as_yellow,
         test_status_reports_accepted_baseline_and_archived_artifacts,
+        test_relocated_baseline_store_resolves_archived_artifacts,
         test_status_warns_when_archived_artifact_is_missing,
     ]
     for test in tests:
