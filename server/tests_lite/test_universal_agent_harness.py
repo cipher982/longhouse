@@ -916,13 +916,13 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
     assert execution_rows["session_identity"]["providers"]["codex"]["coverage_status"] == "pass"
     assert execution_rows["session_identity"]["providers"]["codex"]["scenario_statuses"] == {
         "launch_managed_session": "pass",
-        "resume_reattach": "unsupported_gap",
+        "resume_reattach": "pass",
         "managed_session_e2e": "unsupported_gap",
     }
     assert execution_rows["session_identity"]["providers"]["antigravity"]["coverage_status"] == "pass"
     assert execution_rows["send_message"]["providers"]["antigravity"]["coverage_status"] == "pass"
     assert execution_rows["resume_reattach"]["providers"]["claude"]["coverage_status"] == "pass"
-    assert execution_rows["resume_reattach"]["providers"]["codex"]["coverage_status"] == "unsupported_gap"
+    assert execution_rows["resume_reattach"]["providers"]["codex"]["coverage_status"] == "pass"
     assert execution_rows["launch_remote"]["providers"]["claude"]["coverage_kind"] == "executable_scenario"
     assert execution_rows["launch_remote"]["providers"]["claude"]["coverage_status"] == "pass"
     assert execution_rows["launch_remote"]["providers"]["claude"]["scenario_ids"] == ["launch_remote_projection"]
@@ -985,7 +985,6 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
         if result["provider"] == "codex":
             assert coverage["session_identity"]["coverage_status"] == "pass"
             assert coverage["session_identity"]["scenario_failure_codes"] == {
-                "resume_reattach": "codex_managed_bridge_credentials_missing",
                 "managed_session_e2e": "codex_managed_bridge_credentials_missing",
             }
             assert coverage["interrupt_cancel"]["coverage_status"] == "pass"
@@ -1349,7 +1348,10 @@ def test_codex_resume_reattach_uses_provider_release_canary(tmp_path: Path, monk
     assert session["operation_statuses"]["reattach"]["status"] == "pass"
 
 
-def test_codex_resume_reattach_reports_credentials_gap(tmp_path: Path, monkeypatch) -> None:
+def test_codex_resume_reattach_falls_back_to_attach_command_when_credentials_missing(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     from zerg.qa import codex_provider_release_canary
 
     def fake_canary(_args: dict[str, object]) -> dict[str, object]:
@@ -1392,11 +1394,24 @@ def test_codex_resume_reattach_reports_credentials_gap(tmp_path: Path, monkeypat
     )
 
     result = payload["results"][0]
-    assert payload["verdict"] == "yellow"
-    assert result["status"] == "unsupported_gap"
-    assert result["failure_code"] == "codex_managed_bridge_credentials_missing"
+    assert payload["verdict"] == "green"
+    assert result["status"] == "pass"
     assert result["data"]["scenario"] == "resume_reattach"
-    assert result["data"]["missing"] == ["--agents-token", "--api-url"]
+    assert result["data"]["missing_live_credentials"] == ["--agents-token", "--api-url"]
+    assert result["data"]["operation_evidence"]["reattach"]["status"] == "pass"
+    assert result["data"]["operation_evidence"]["reattach"]["level"] == "hermetic"
+    assert result["data"]["operation_evidence"]["reattach"]["canary"] == "codex_managed_local_attach_command_shape"
+    assert result["data"]["operation_evidence"]["live_reattach_canary"]["status"] == "blocked"
+    assert result["data"]["assertions"] == {
+        "command_built": True,
+        "execs_engine": True,
+        "requires_codex": True,
+        "requires_longhouse_engine": True,
+        "uses_engine_bridge_attach": True,
+        "uses_longhouse_session_id": True,
+        "uses_zsh_shell": True,
+    }
+    assert Path(result["data"]["raw_reattach_command_path"]).is_file()
 
 
 def test_resume_reattach_uses_claude_command_shape_and_keeps_unmigrated_gap(tmp_path: Path) -> None:

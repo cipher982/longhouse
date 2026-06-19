@@ -4513,6 +4513,14 @@ class UniversalProviderAdapter:
             },
         }
         if credentials_gap:
+            if scenario == "resume_reattach":
+                return self._run_codex_resume_attach_command_proof(
+                    package,
+                    credentials_gap=credentials_gap,
+                    canary_artifact_path=canary_artifact_path,
+                    canary_evidence_root=canary_evidence_root,
+                    source_artifact_kind=canary_artifact.get("artifact_kind"),
+                )
             payload["status"] = STATUS_UNSUPPORTED_GAP
             payload["failure_code"] = "codex_managed_bridge_credentials_missing"
             payload["message"] = f"Codex {scenario} requires Runtime Host credentials."
@@ -4530,6 +4538,97 @@ class UniversalProviderAdapter:
                 payload["failure_code"] = f"codex_{require_operation}_evidence_missing"
                 payload["message"] = f"Codex canary did not produce passing {require_operation} evidence."
         package.write_json(f"assertions/{assertion_name}.json", payload)
+        return payload
+
+    def _run_codex_resume_attach_command_proof(
+        self,
+        package: EvidencePackage,
+        *,
+        credentials_gap: list[str],
+        canary_artifact_path: Path,
+        canary_evidence_root: Path,
+        source_artifact_kind: object,
+    ) -> dict[str, Any]:
+        from zerg.services.managed_local_transport import build_managed_local_attach_command
+        from zerg.session_execution_home import ManagedSessionTransport
+
+        longhouse_session_id = "33333333-3333-4333-8333-333333333333"
+        session = SimpleNamespace(
+            id=longhouse_session_id,
+            managed_transport=ManagedSessionTransport.CODEX_APP_SERVER.value,
+        )
+        command = build_managed_local_attach_command(session=session)
+        assertions = {
+            "command_built": command is not None,
+            "uses_engine_bridge_attach": "codex-bridge attach" in str(command or ""),
+            "uses_longhouse_session_id": f"--session-id {longhouse_session_id}" in str(command or ""),
+            "requires_longhouse_engine": "command -v longhouse-engine" in str(command or ""),
+            "requires_codex": "command -v codex" in str(command or ""),
+            "execs_engine": 'exec "$engine" codex-bridge attach' in str(command or ""),
+            "uses_zsh_shell": str(command or "").startswith("zsh -lc "),
+        }
+        passed = all(assertions.values())
+        raw_path = package.write_json(
+            "raw/codex-reattach-command.json",
+            {
+                "command": command,
+                "longhouse_session_id": longhouse_session_id,
+                "credentials_gap": credentials_gap,
+                "codex_canary_artifact_path": str(canary_artifact_path),
+                "codex_canary_evidence_root": str(canary_evidence_root),
+                "assertions": assertions,
+            },
+        )
+        operations = {
+            "reattach": {
+                "status": STATUS_PASS if passed else STATUS_FAIL,
+                "level": "hermetic",
+                "canary": "codex_managed_local_attach_command_shape",
+                "failure_code": None if passed else "codex_reattach_command_shape_failed",
+                "source": "zerg.services.managed_local_transport.build_managed_local_attach_command",
+            },
+            "live_reattach_canary": {
+                "status": STATUS_BLOCKED,
+                "level": "live_no_token",
+                "canary": "managed_tui_attach",
+                "failure_code": "codex_managed_bridge_credentials_missing",
+            },
+        }
+        payload = self._write_session_projection(
+            package,
+            raw_events=(
+                {
+                    "type": "system",
+                    "role": "system",
+                    "text": "Codex managed-local reattach command shape was built.",
+                    "provider_session_id": longhouse_session_id,
+                    "source_canary": "codex_managed_local_attach_command_shape",
+                    "evidence_origin": "managed_local_transport_command_shape",
+                },
+            ),
+            operations=operations,
+            provider_session_id=longhouse_session_id,
+        )
+        payload.update(
+            {
+                "status": STATUS_PASS if passed else STATUS_FAIL,
+                "scenario": "resume_reattach",
+                "assertions": assertions,
+                "raw_reattach_command_path": str(raw_path),
+                "codex_canary_artifact_path": str(canary_artifact_path),
+                "codex_canary_evidence_root": str(canary_evidence_root),
+                "source_artifact_kind": source_artifact_kind,
+                "missing_live_credentials": credentials_gap,
+                "proof_scope": "codex_managed_local_attach_command_shape",
+                "synthetic": False,
+                "operation_evidence": operations,
+                "next": "Promote with managed Codex process restart and same-thread reattach proof.",
+            }
+        )
+        if not passed:
+            payload["failure_code"] = "codex_reattach_command_shape_failed"
+            payload["message"] = "Codex reattach command shape proof did not pass."
+        package.write_json("assertions/resume_reattach.json", payload)
         return payload
 
     def _run_codex_managed_session_e2e(self, package: EvidencePackage) -> dict[str, Any]:

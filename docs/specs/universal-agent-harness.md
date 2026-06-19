@@ -188,18 +188,19 @@ credentials are available; without those
 credentials it returns a typed `unsupported_gap`. Codex `resume_reattach` uses
 the same provider-release canary and requires a passing reattach row, so the
 dedicated action now reports evidence when Runtime Host credentials are present
-and the same typed credentials gap otherwise. Claude `resume_reattach` proves
-the channel command shape hermetically through `build_claude_channel_exec_command`,
-including `--resume`, session env, development-channel loading, and workspace
-selection; live process restart plus same-session send remains a stronger gate.
-Antigravity calls the provider-control hook/inbox canary, projects
-external-event channel rows, and DB-ingests them. The default all-provider
-fake/no-token release smoke includes this scenario, so routine CI/Sauron smoke
-artifacts must show Claude, OpenCode, and Antigravity passing their
-provider-specific managed-session lanes while Codex reports the typed Runtime
-Host credentials gap when credentials are not configured. That proves
-hook/inbox input delivery and Stop/force-continue behavior for Antigravity; it
-does not prove interrupt, reattach, or tool-result semantics.
+and falls back to a hermetic managed-local attach-command proof otherwise.
+Claude `resume_reattach` proves the channel command shape hermetically through
+`build_claude_channel_exec_command`, including `--resume`, session env,
+development-channel loading, and workspace selection; live process restart plus
+same-session send remains a stronger gate. Antigravity calls the
+provider-control hook/inbox canary, projects external-event channel rows, and
+DB-ingests them. The default all-provider fake/no-token release smoke includes
+this scenario, so routine CI/Sauron smoke artifacts must show Claude, OpenCode,
+and Antigravity passing their provider-specific managed-session lanes while
+Codex reports the typed Runtime Host credentials gap for `managed_session_e2e`
+when credentials are not configured. That proves hook/inbox input delivery and
+Stop/force-continue behavior for Antigravity; it does not prove interrupt,
+reattach, or tool-result semantics.
 
 `interrupt_cancel` is a dedicated universal control scenario. Claude routes it
 to the provider-control channel canary, proves normal send metadata, steer
@@ -228,12 +229,13 @@ live scenario.
 Claude. OpenCode calls the provider-live process-restart reattach canary,
 projects the recovered session and marker transcript rows, and DB-ingests the
 reattach evidence. Codex calls the provider-release canary and DB-ingests
-reattach evidence when Runtime Host credentials are present, otherwise reporting
-the typed credentials gap. Claude builds the channel resume command through
-Longhouse's bridge command builder and asserts the `--resume` flag, Longhouse
-and provider session env, development-channel load, longhouse-channel server
-load, and workspace selection. Antigravity currently returns a typed adapter
-gap for this scenario.
+reattach evidence when Runtime Host credentials are present; without those
+credentials it builds the managed-local Codex attach command and asserts the
+engine bridge, `codex` binary requirement, `longhouse-engine` requirement, and
+session id. Claude builds the channel resume command through Longhouse's bridge
+command builder and asserts the `--resume` flag, Longhouse and provider session
+env, development-channel load, longhouse-channel server load, and workspace
+selection. Antigravity currently returns a typed adapter gap for this scenario.
 
 `live_token_streaming` is an executable universal scenario for Claude, Codex,
 OpenCode, and Antigravity. Claude calls the real-print one-shot canary. Codex
@@ -592,8 +594,9 @@ shape:
    gap for that provider.
 10. Codex `resume_reattach` now calls the existing provider-release canary,
    requires passing reattach evidence, and DB-ingests the resulting rows when
-   Runtime Host credentials are present; without credentials it reports the
-   typed Runtime Host credentials gap.
+   Runtime Host credentials are present; without credentials it proves the
+   managed-local attach command shape hermetically and records the live reattach
+   canary gate as blocked evidence.
 10. Claude, Codex, and OpenCode `interrupt_cancel` are executable universal
    control scenarios. Claude calls the provider-control channel canary and
    DB-ingests no-token send/steer/SIGINT evidence. Codex calls the
