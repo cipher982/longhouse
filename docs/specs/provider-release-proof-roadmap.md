@@ -2,7 +2,7 @@
 
 **Status:** Active roadmap
 **Last updated:** 2026-06-19
-**Current end-state score:** 61/100
+**Current end-state score:** 69/100
 
 This roadmap tracks the migration from one-off provider canaries to a universal
 agent-harness proof system. The design target is
@@ -16,12 +16,12 @@ Do not quote a score without naming the axis.
 | --- | --- | ---: |
 | Existing Longhouse CI/test maturity | Internal Longhouse confidence before this release-proof epic: parser tests, bridge tests, shipper tests, backend/engine/frontend tests | 45/100 |
 | Release-watch proofing before recent work | Sauron release emails plus limited/fake provider checks | 20/100 |
-| Release-watch proofing after recent work | Longhouse proof lanes, coverage matrix, baseline tooling, Sauron invocation, several accepted real/no-token baselines | 48/100 |
-| Universal harness end state | The full provider-agnostic roadmap below | 61/100 |
+| Release-watch proofing after recent work | Longhouse proof lanes, coverage matrix, baseline tooling, Sauron invocation, universal harness attachment, several accepted real/no-token baselines | 55/100 |
+| Universal harness end state | The full provider-agnostic roadmap below | 69/100 |
 
 The apparent drop from 45 to 25/35 was a denominator change: internal CI
 maturity was being compared with the larger release-proofing product. The fair
-movement for this epic is release-watch proofing before/after: roughly 20 -> 48.
+movement for this epic is release-watch proofing before/after: roughly 20 -> 55.
 
 ## Ownership Boundary
 
@@ -42,12 +42,12 @@ provider compatibility.
 | --- | ---: | ---: | --- |
 | Scope, ownership, and provider set | 10 | 8 | Longhouse/Sauron boundary is documented; providers are Claude Code, Codex/OpenAI, OpenCode, Antigravity |
 | Coverage inventory | 10 | 8 | 52 provider/surface rows tracked; needs computed rollups generated from scenario state |
-| Universal harness architecture | 15 | 11 | MVP adapter protocol, scenario result schema, evidence writer, registry, and runner exist |
-| Longhouse proof artifact/core commands | 15 | 11 | Proof artifacts, normalized contracts, accept/status/diff commands exist; still wrap provider-specific canaries |
+| Universal harness architecture | 15 | 13 | Shared runner now covers identity, evidence collection, fixture replay, prompt projection, and first managed/session projections |
+| Longhouse proof artifact/core commands | 15 | 13 | Proof artifacts, normalized contracts, accept/status/diff commands exist; release-proof can attach universal harness artifacts |
 | Baselines and differential confidence | 15 | 5 | Accepted baseline machinery exists; durable/auditable baseline source of truth is unsettled |
 | Sauron private runner/reporting | 10 | 5 | Sauron calls Longhouse lanes and baseline guard exists; alert/noise policy remains private-runner work |
-| Provider adapter/scenario migration | 25 | 13 | All four providers have MVP adapters; managed/control/live-token scenarios are still one-off lanes |
-| **Total** | **100** | **61** |  |
+| Provider adapter/scenario migration | 25 | 17 | All four providers have MVP adapters; Codex/OpenCode have first universal managed/session-safe projections; control/live-token scenarios remain one-off lanes |
+| **Total** | **100** | **69** |  |
 
 ## Provider-agnostic Phases
 
@@ -82,7 +82,6 @@ Implemented:
 
 Remaining before this phase is production-grade:
 
-- Feed universal runner output into `provider-release-proof.py`.
 - Replace provider-specific live/proof canaries scenario by scenario.
 - Add computed maturity rollups from runner artifacts.
 
@@ -100,6 +99,24 @@ Done when adding a provider means implementing adapter methods, not adding
 provider branches to the scenario runner.
 
 ### Phase 3: Managed Session Scenarios
+
+Status: first migration slice implemented.
+
+Implemented:
+
+- `provider-release-proof.py` can run `scripts/qa/universal-agent-harness.py`
+  with `--run-universal-harness`.
+- Release-proof artifacts include universal harness raw artifact paths,
+  normalized universal summary/canaries, and prefixed universal operation
+  evidence.
+- `probe_identity`, `collect_raw_evidence`, `parse_ingest_project`,
+  `run_prompt_once`, `launch_managed_session`, and `send_receive` can be
+  included in the release-proof output.
+- Codex/OpenAI and OpenCode expose first no-token/session-safe
+  `launch_managed_session` and `send_receive` projections through the universal
+  runner.
+- Unsupported unsafe scenarios remain explicit `unsupported_gap` results for
+  providers that do not yet have a safe universal adapter lane.
 
 Deliverables:
 
@@ -183,10 +200,11 @@ evidence path is recorded and the relevant doc, test, or proof command exists.
 | H9 | Implement shared evidence package writer | Done | +5 | `server/zerg/qa/universal_agent_harness.py`, `server/tests_lite/test_universal_agent_harness.py` |
 | H10 | Implement first universal scenarios: `probe_identity`, `collect_raw_evidence`, fixture `parse_ingest_project` | Done | +6 | `scripts/qa/universal-agent-harness.py`, `server/tests_lite/test_universal_agent_harness.py` |
 | H11 | Wire first two adapters through the runner | Done | +6 | MVP adapters now cover all four providers in `server/zerg/qa/universal_agent_harness.py` |
-| H12 | Migrate managed launch/send/timeline scenarios | Not started | +8 | Future universal scenario artifacts |
+| H12 | Migrate managed launch/send/timeline scenarios | Partial | +4 | Codex/OpenCode universal `launch_managed_session` and `send_receive` artifacts in release-proof output |
 | H13 | Migrate control/live-token/tool/resume scenarios | Not started | +8 | Future universal scenario artifacts |
 | H14 | Decide durable accepted-baseline source of truth | Not started | +5 | Future documented store and reproducible status artifact |
 | H15 | Update Sauron to invoke universal lanes and apply private alert policy | Not started | +5 | Future Sauron tests/artifacts |
+| H16 | Feed universal runner output into `provider-release-proof.py` | Done | +4 | `scripts/qa/provider-release-proof.py`, `scripts/tests/provider-release-proof.test.py` |
 
 ## Score Update Rules
 
@@ -208,14 +226,17 @@ When updating this roadmap:
 
 ## Next Gates
 
-The next implementation goal should be Phase 3, not another provider-specific
-canary:
+The next implementation goal should finish Phase 3's real adapter migration,
+then move into Phase 4 control/live-token scenarios:
 
-1. Feed universal runner output into `provider-release-proof.py` while
-   preserving existing artifact fields.
-2. Migrate `run_prompt_once`, `launch_managed_session`, `send_receive`, and
+1. Replace the current Codex/OpenCode projection-only session lane with real
+   adapter calls to the existing no-token canary mechanics where possible.
+2. Bring Claude PTY/channel and Antigravity hook/inbox mechanics behind
+   adapters instead of only compatibility canaries.
+3. Migrate `interrupt_cancel`, `resume_reattach`, `tool_call_result`, and
+   control-plane send/interrupt evidence behind universal scenarios.
+4. Add computed maturity rollups from universal scenario artifacts.
+5. Migrate `run_prompt_once`, `launch_managed_session`, `send_receive`, and
    `timeline_projection` behind adapters.
-3. Start with Codex and OpenCode managed/no-token lanes, then bring Claude PTY
-   and Antigravity hook/inbox mechanics behind adapters.
-4. Keep provider-specific canaries as compatibility lanes until their behavior
+6. Keep provider-specific canaries as compatibility lanes until their behavior
    is migrated and baselined.

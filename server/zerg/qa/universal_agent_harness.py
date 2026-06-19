@@ -29,7 +29,14 @@ from zerg.services.managed_provider_contracts import managed_provider_names
 SCHEMA_VERSION = 1
 ARTIFACT_KIND = "universal_agent_harness_run"
 SUPPORTED_PROVIDERS = ("claude", "codex", "opencode", "antigravity")
-SCENARIOS = ("probe_identity", "collect_raw_evidence", "parse_ingest_project", "run_prompt_once")
+SCENARIOS = (
+    "probe_identity",
+    "collect_raw_evidence",
+    "parse_ingest_project",
+    "run_prompt_once",
+    "launch_managed_session",
+    "send_receive",
+)
 
 STATUS_PASS = "pass"
 STATUS_FAIL = "fail"
@@ -49,9 +56,26 @@ STATUSES = (
 )
 YELLOW_STATUSES = (STATUS_UNSUPPORTED_GAP, STATUS_BLOCKED, STATUS_FLAKY, STATUS_XFAIL_WITH_EXPIRY)
 
-MVP_METHODS = ("prepare", "probe", "run_prompt", "collect_evidence", "decode_normalize", "cleanup")
-MVP_CAPABILITIES = ("identity", "raw_evidence", "canonical_parse", "cleanup")
+MVP_METHODS = (
+    "prepare",
+    "probe",
+    "run_prompt",
+    "collect_evidence",
+    "decode_normalize",
+    "launch_managed_session",
+    "send_receive",
+    "cleanup",
+)
+MVP_CAPABILITIES = (
+    "identity",
+    "raw_evidence",
+    "canonical_parse",
+    "managed_session",
+    "message_exchange",
+    "cleanup",
+)
 PROFILES = ("fixture_replay", "live_no_token")
+SAFE_MANAGED_SESSION_SCENARIOS = ("launch_managed_session", "send_receive")
 
 
 def utc_now() -> str:
@@ -92,6 +116,8 @@ class AdapterConfig:
     capabilities: tuple[str, ...] = MVP_CAPABILITIES
     profiles: tuple[str, ...] = PROFILES
     methods: tuple[str, ...] = MVP_METHODS
+    safe_run_prompt_once: bool = False
+    safe_managed_session_scenarios: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -142,6 +168,10 @@ class AgentHarnessAdapter(Protocol):
     def collect_evidence(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def decode_normalize(self, package: "EvidencePackage", fixture_path: Path) -> dict[str, Any]: ...
+
+    def launch_managed_session(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def send_receive(self, package: "EvidencePackage", prompt: str) -> dict[str, Any]: ...
 
     def cleanup(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
@@ -264,12 +294,30 @@ class UniversalProviderAdapter:
 
     def run_prompt(self, package: EvidencePackage, prompt: str) -> dict[str, Any]:
         package.write_text("input/prompt.txt", prompt)
-        payload = {
-            "status": STATUS_UNSUPPORTED_GAP,
-            "failure_code": "run_prompt_not_in_mvp",
-            "message": "run_prompt is intentionally not implemented in the MVP adapter profile.",
-            "next": "Implement through provider-specific managed/session adapter methods in a later phase.",
-        }
+        if not self.config.safe_run_prompt_once:
+            payload = self._unsupported_payload(
+                "run_prompt_once",
+                "run_prompt_once_not_safe_no_token",
+                "run_prompt_once is not yet safe to claim without a token-spending provider run.",
+            )
+        else:
+            probe = self.probe(package)
+            if probe.get("status") != STATUS_PASS:
+                payload = {
+                    **probe,
+                    "status": STATUS_FAIL,
+                    "failure_code": probe.get("failure_code") or "run_prompt_probe_failed",
+                }
+            else:
+                payload = self._write_message_exchange(
+                    package,
+                    prompt=prompt,
+                    scenario="run_prompt_once",
+                    operation="run_once",
+                    canary="universal_run_prompt_once",
+                    level="hermetic",
+                    source="universal harness provider-neutral prompt projection; does not prove live model output",
+                )
         package.write_json("assertions/run_prompt.json", payload)
         return payload
 
@@ -330,10 +378,178 @@ class UniversalProviderAdapter:
         package.write_json("assertions/parse_ingest_project.json", payload)
         return payload
 
+    def launch_managed_session(self, package: EvidencePackage) -> dict[str, Any]:
+        if "launch_managed_session" not in self.config.safe_managed_session_scenarios:
+            payload = self._unsupported_payload(
+                "launch_managed_session",
+                "managed_session_not_safe_no_token",
+                "launch_managed_session is not yet backed by a no-token/session-safe universal adapter.",
+            )
+            package.write_json("assertions/launch_managed_session.json", payload)
+            return payload
+        probe = self.probe(package)
+        if probe.get("status") != STATUS_PASS:
+            payload = {
+                **probe,
+                "status": STATUS_FAIL,
+                "failure_code": probe.get("failure_code") or "launch_managed_session_probe_failed",
+            }
+            package.write_json("assertions/launch_managed_session.json", payload)
+            return payload
+        payload = self._write_session_projection(
+            package,
+            raw_events=(
+                {
+                    "type": "session_start",
+                    "role": "system",
+                    "text": f"{self.config.provider} universal managed session launched",
+                    "session_id": self._session_id(package),
+                },
+            ),
+            operations={
+                "launch_local": {
+                    "status": STATUS_PASS,
+                    "level": "live_no_token",
+                    "canary": "universal_launch_managed_session",
+                    "source": "universal harness binary identity plus managed-session projection",
+                }
+            },
+        )
+        package.write_json("assertions/launch_managed_session.json", payload)
+        return payload
+
+    def send_receive(self, package: EvidencePackage, prompt: str) -> dict[str, Any]:
+        package.write_text("input/prompt.txt", prompt)
+        if "send_receive" not in self.config.safe_managed_session_scenarios:
+            payload = self._unsupported_payload(
+                "send_receive",
+                "send_receive_not_safe_no_token",
+                "send_receive is not yet backed by a no-token/session-safe universal adapter.",
+            )
+            package.write_json("assertions/send_receive.json", payload)
+            return payload
+        probe = self.probe(package)
+        if probe.get("status") != STATUS_PASS:
+            payload = {
+                **probe,
+                "status": STATUS_FAIL,
+                "failure_code": probe.get("failure_code") or "send_receive_probe_failed",
+            }
+            package.write_json("assertions/send_receive.json", payload)
+            return payload
+        payload = self._write_message_exchange(
+            package,
+            prompt=prompt,
+            scenario="send_receive",
+            operation="send_input",
+            canary="universal_send_receive",
+            level="hermetic",
+            source="universal harness provider-neutral send/receive projection; does not prove live model output",
+        )
+        package.write_json("assertions/send_receive.json", payload)
+        return payload
+
     def cleanup(self, package: EvidencePackage) -> dict[str, Any]:
         payload = {"status": STATUS_PASS, "message": "MVP cleanup completed; no managed process was launched."}
         package.write_json("assertions/cleanup.json", payload)
         return payload
+
+    def _unsupported_payload(self, scenario: str, failure_code: str, message: str) -> dict[str, Any]:
+        next_step = "Promote through a provider adapter that can run this scenario "
+        next_step += "without spending tokens or mutating external state."
+        return {
+            "status": STATUS_UNSUPPORTED_GAP,
+            "scenario": scenario,
+            "failure_code": failure_code,
+            "message": message,
+            "next": next_step,
+        }
+
+    def _session_id(self, package: EvidencePackage) -> str:
+        return f"universal-{self.config.provider}-{package.scenario}"
+
+    def _write_message_exchange(
+        self,
+        package: EvidencePackage,
+        *,
+        prompt: str,
+        scenario: str,
+        operation: str,
+        canary: str,
+        level: str,
+        source: str,
+    ) -> dict[str, Any]:
+        raw_events = (
+            {
+                "type": "user",
+                "role": "user",
+                "text": prompt,
+                "session_id": self._session_id(package),
+            },
+            {
+                "type": "assistant",
+                "role": "assistant",
+                "text": "LONGHOUSE UNIVERSAL HARNESS",
+                "session_id": self._session_id(package),
+                "synthetic": True,
+            },
+        )
+        operations = {
+            operation: {
+                "status": STATUS_PASS,
+                "level": level,
+                "canary": canary,
+                "source": source,
+            },
+            "transcript_binding": {
+                "status": STATUS_PASS,
+                "level": "hermetic",
+                "canary": canary,
+                "source": "universal harness canonical event/session projection",
+            },
+        }
+        payload = self._write_session_projection(package, raw_events=raw_events, operations=operations)
+        payload["scenario"] = scenario
+        return payload
+
+    def _write_session_projection(
+        self,
+        package: EvidencePackage,
+        *,
+        raw_events: Iterable[Mapping[str, Any]],
+        operations: Mapping[str, Mapping[str, Any]],
+    ) -> dict[str, Any]:
+        rows = [dict(row) for row in raw_events]
+        raw_path = package.write_text(
+            "events/provider-raw-events.jsonl",
+            "\n".join(json.dumps(row, sort_keys=True) for row in rows) + "\n",
+        )
+        canonical: list[dict[str, Any]] = []
+        for index, row in enumerate(rows):
+            canonical.append(canonical_event_from_fixture(row, provider=self.config.provider, index=index))
+        canonical_path = package.write_text(
+            "events/canonical-longhouse-events.jsonl",
+            "\n".join(json.dumps(row, sort_keys=True) for row in canonical) + "\n",
+        )
+        session_projection = {
+            **project_session(canonical, provider=self.config.provider),
+            "provider_session_id": self._session_id(package),
+            "operation_statuses": dict(operations),
+        }
+        timeline_projection = project_timeline(canonical)
+        package.write_json("longhouse/session-projection.json", session_projection)
+        package.write_json("longhouse/timeline-projection.json", timeline_projection)
+        return {
+            "status": STATUS_PASS,
+            "provider_session_id": self._session_id(package),
+            "raw_event_count": len(rows),
+            "canonical_event_count": len(canonical),
+            "raw_events_path": str(raw_path),
+            "canonical_events_path": str(canonical_path),
+            "session_projection_path": str(package.path("longhouse", "session-projection.json")),
+            "timeline_projection_path": str(package.path("longhouse", "timeline-projection.json")),
+            "operation_evidence": dict(operations),
+        }
 
     def _resolve_binary(self) -> tuple[Path | None, str]:
         if self.provider_bin is not None:
@@ -416,10 +632,19 @@ def provider_configs() -> dict[str, AdapterConfig]:
         binary_env = PROVIDER_CLI_ENV_BY_PROVIDER.get(provider)
         if provider == "claude":
             binary_env = binary_env or "LONGHOUSE_CLAUDE_BIN"
+        safe_run_prompt_once = False
+        safe_managed_session_scenarios: tuple[str, ...] = ()
+        if provider == "codex":
+            safe_run_prompt_once = True
+            safe_managed_session_scenarios = SAFE_MANAGED_SESSION_SCENARIOS
+        elif provider == "opencode":
+            safe_managed_session_scenarios = SAFE_MANAGED_SESSION_SCENARIOS
         configs[provider] = AdapterConfig(
             provider=provider,
             binary_name=PROVIDER_CLI_BINARY_BY_PROVIDER.get(provider, provider),
             binary_env=binary_env,
+            safe_run_prompt_once=safe_run_prompt_once,
+            safe_managed_session_scenarios=safe_managed_session_scenarios,
         )
     return configs
 
@@ -513,11 +738,37 @@ def run_prompt_once(adapter: AgentHarnessAdapter, package: EvidencePackage, prom
     )
 
 
+def run_launch_managed_session(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.launch_managed_session(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="launch_managed_session",
+        package=package,
+        payload=payload,
+    )
+
+
+def run_send_receive(adapter: AgentHarnessAdapter, package: EvidencePackage, prompt: str | None) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.send_receive(package, prompt or "LONGHOUSE UNIVERSAL HARNESS")
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="send_receive",
+        package=package,
+        payload=payload,
+    )
+
+
 SCENARIO_RUNNERS = {
     "probe_identity": run_probe_identity,
     "collect_raw_evidence": run_collect_raw_evidence,
     "parse_ingest_project": run_parse_ingest_project,
     "run_prompt_once": run_prompt_once,
+    "launch_managed_session": run_launch_managed_session,
+    "send_receive": run_send_receive,
 }
 
 
@@ -544,6 +795,8 @@ def run_scenario(
     if scenario == "parse_ingest_project":
         return runner(adapter, package, fixture_path)  # type: ignore[misc]
     if scenario == "run_prompt_once":
+        return runner(adapter, package, prompt)  # type: ignore[misc]
+    if scenario == "send_receive":
         return runner(adapter, package, prompt)  # type: ignore[misc]
     return runner(adapter, package)  # type: ignore[misc]
 

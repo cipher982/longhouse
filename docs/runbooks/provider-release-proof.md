@@ -20,10 +20,24 @@ scripts/qa/universal-agent-harness.py \
   --json
 ```
 
-This MVP is a no-token runner skeleton. It proves adapter loading, provider
-identity probing, raw evidence writing, and fixture replay. Managed
-launch/send/control scenarios still live in the existing provider-specific
-canaries until they are migrated behind adapters.
+The universal harness can also be attached to a release-proof artifact:
+
+```bash
+scripts/qa/provider-release-proof.py \
+  --provider codex \
+  --provider-bin /path/to/codex \
+  --artifact /tmp/proof.json \
+  --evidence-root /tmp/proof-evidence \
+  --run-universal-harness \
+  --json
+```
+
+The current universal lane is no-token. It proves adapter loading, provider
+identity probing, raw evidence writing, fixture replay when a fixture is
+supplied, a safe Codex run-prompt projection, and first Codex/OpenCode
+managed-session projections. Provider-specific canaries remain compatibility
+lanes for real control/live-token behavior until those mechanics are migrated
+behind adapters.
 
 ## Baseline Stores
 

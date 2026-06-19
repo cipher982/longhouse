@@ -70,7 +70,7 @@ def test_probe_identity_runs_for_all_providers_through_shared_scenario(tmp_path:
         assert probe["version"]
 
 
-def test_unsupported_run_prompt_is_typed_and_writes_evidence(tmp_path: Path) -> None:
+def test_codex_run_prompt_once_writes_safe_projection(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
             providers=("codex",),
@@ -82,12 +82,86 @@ def test_unsupported_run_prompt_is_typed_and_writes_evidence(tmp_path: Path) -> 
     )
 
     result = payload["results"][0]
-    assert payload["verdict"] == "yellow"
-    assert result["status"] == "unsupported_gap"
-    assert result["failure_code"] == "run_prompt_not_in_mvp"
+    assert payload["verdict"] == "green"
+    assert result["status"] == "pass"
     evidence_root = Path(result["evidence_root"])
     assert (evidence_root / "input" / "prompt.txt").read_text(encoding="utf-8") == "hello"
     assert (evidence_root / "assertions" / "run_prompt.json").is_file()
+    session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
+    assert session["has_user"] is True
+    assert session["has_assistant"] is True
+    assert session["operation_statuses"]["run_once"]["status"] == "pass"
+
+
+def test_unsafe_run_prompt_once_is_typed_unsupported_gap(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("claude",),
+            scenarios=("run_prompt_once",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"claude": _fake_bins(tmp_path)["claude"]},
+            prompt="hello",
+        )
+    )
+
+    result = payload["results"][0]
+    assert payload["verdict"] == "yellow"
+    assert result["status"] == "unsupported_gap"
+    assert result["failure_code"] == "run_prompt_once_not_safe_no_token"
+    evidence_root = Path(result["evidence_root"])
+    assert (evidence_root / "input" / "prompt.txt").read_text(encoding="utf-8") == "hello"
+    assert (evidence_root / "assertions" / "run_prompt.json").is_file()
+
+
+def test_managed_session_scenarios_pass_for_codex_and_opencode(tmp_path: Path) -> None:
+    bins = _fake_bins(tmp_path)
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("codex", "opencode"),
+            scenarios=("launch_managed_session", "send_receive"),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"codex": bins["codex"], "opencode": bins["opencode"]},
+            prompt="ping",
+        )
+    )
+
+    assert payload["verdict"] == "green"
+    assert len(payload["results"]) == 4
+    assert all(result["status"] == "pass" for result in payload["results"])
+    for result in payload["results"]:
+        evidence_root = Path(result["evidence_root"])
+        session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
+        assert session["provider"] == result["provider"]
+        assert session["provider_session_id"].startswith(f"universal-{result['provider']}-")
+        if result["scenario"] == "send_receive":
+            assert session["has_user"] is True
+            assert session["has_assistant"] is True
+            assert session["operation_statuses"]["send_input"]["status"] == "pass"
+        else:
+            assert session["operation_statuses"]["launch_local"]["level"] == "live_no_token"
+
+
+def test_managed_session_scenarios_are_typed_gaps_for_other_providers(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("claude", "antigravity"),
+            scenarios=("launch_managed_session", "send_receive"),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={
+                "claude": _fake_bins(tmp_path)["claude"],
+                "antigravity": _fake_bins(tmp_path)["antigravity"],
+            },
+            prompt="ping",
+        )
+    )
+
+    assert payload["verdict"] == "yellow"
+    assert len(payload["results"]) == 4
+    assert {result["status"] for result in payload["results"]} == {"unsupported_gap"}
+    assert {result["failure_code"] for result in payload["results"]} == {
+        "managed_session_not_safe_no_token",
+        "send_receive_not_safe_no_token",
+    }
 
 
 def test_collect_raw_evidence_runs_for_all_providers_without_launching(tmp_path: Path) -> None:
@@ -175,6 +249,8 @@ def test_scenario_runner_does_not_branch_on_provider_names() -> None:
             uah.run_collect_raw_evidence,
             uah.run_parse_ingest_project,
             uah.run_prompt_once,
+            uah.run_launch_managed_session,
+            uah.run_send_receive,
         )
     )
 

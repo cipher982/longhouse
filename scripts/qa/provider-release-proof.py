@@ -39,6 +39,28 @@ CLAUDE_MACHINE_LIVE_REQUIRED_OPERATIONS = (
     "transcript_binding",
     "steer_active_turn",
 )
+DEFAULT_UNIVERSAL_SCENARIOS = (
+    "probe_identity",
+    "collect_raw_evidence",
+    "run_prompt_once",
+    "launch_managed_session",
+    "send_receive",
+)
+UNIVERSAL_SCENARIOS = (
+    "probe_identity",
+    "collect_raw_evidence",
+    "parse_ingest_project",
+    "run_prompt_once",
+    "launch_managed_session",
+    "send_receive",
+)
+UNIVERSAL_YELLOW_STATUSES = {
+    "unsupported_gap",
+    "not_applicable",
+    "blocked",
+    "flaky",
+    "xfail_with_expiry",
+}
 
 
 def _repo_root_from_script() -> Path:
@@ -51,9 +73,7 @@ def _now_iso() -> str:
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -76,11 +96,7 @@ def _load_provider_contract(repo_root: Path, provider: str) -> dict[str, Any] | 
 
 
 def _compact_status(info: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: info.get(key)
-        for key in ("status", "failure_code")
-        if info.get(key) is not None
-    }
+    return {key: info.get(key) for key in ("status", "failure_code") if info.get(key) is not None}
 
 
 def _compact_protocol_fingerprints(info: dict[str, Any]) -> dict[str, Any] | None:
@@ -139,11 +155,7 @@ def _compact_claude_canary(info: dict[str, Any]) -> dict[str, Any]:
 
 
 def _compact_operation(info: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: info.get(key)
-        for key in ("status", "level", "canary", "failure_code")
-        if info.get(key) is not None
-    }
+    return {key: info.get(key) for key in ("status", "level", "canary", "failure_code") if info.get(key) is not None}
 
 
 def _normalize_source_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
@@ -157,8 +169,7 @@ def _normalize_source_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
     normalized: dict[str, Any] = {
         "artifact_kind": artifact.get("artifact_kind"),
         "provider": provider,
-        "provider_version": artifact.get("provider_version")
-        or artifact.get("codex_version"),
+        "provider_version": artifact.get("provider_version") or artifact.get("codex_version"),
         "verdict": artifact.get("verdict"),
         "failure_code": artifact.get("failure_code"),
         "canaries": {
@@ -168,18 +179,14 @@ def _normalize_source_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
         },
         "operation_evidence": {
             name: _compact_operation(info)
-            for name, info in sorted(
-                dict(artifact.get("operation_evidence") or {}).items()
-            )
+            for name, info in sorted(dict(artifact.get("operation_evidence") or {}).items())
             if isinstance(info, dict)
         },
     }
     if artifact.get("provider") == "codex":
         source_review = artifact.get("source_review")
         normalized["source_review"] = {
-            "status": source_review.get("status")
-            if isinstance(source_review, dict)
-            else None
+            "status": source_review.get("status") if isinstance(source_review, dict) else None
         }
         normalized["codex"] = {
             "binary_present": bool(artifact.get("codex_bin")),
@@ -187,20 +194,10 @@ def _normalize_source_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
         }
     if provider == "claude":
         canaries = dict(artifact.get("canaries") or {})
-        command_shape = (
-            canaries.get("command_shape")
-            if isinstance(canaries.get("command_shape"), dict)
-            else {}
-        )
-        channels_shape = (
-            canaries.get("channels_shape")
-            if isinstance(canaries.get("channels_shape"), dict)
-            else {}
-        )
+        command_shape = canaries.get("command_shape") if isinstance(canaries.get("command_shape"), dict) else {}
+        channels_shape = canaries.get("channels_shape") if isinstance(canaries.get("channels_shape"), dict) else {}
         detached_pty_shape = (
-            canaries.get("detached_pty_shape")
-            if isinstance(canaries.get("detached_pty_shape"), dict)
-            else {}
+            canaries.get("detached_pty_shape") if isinstance(canaries.get("detached_pty_shape"), dict) else {}
         )
         normalized["claude"] = {
             "launch_flags_missing": list(command_shape.get("missing") or []),
@@ -213,6 +210,21 @@ def _normalize_source_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
             "detached_pty_failure_code": detached_pty_shape.get("failure_code"),
             "detached_pty_reason": detached_pty_shape.get("reason"),
             "detached_pty_platform": detached_pty_shape.get("platform"),
+        }
+    universal = artifact.get("universal_harness")
+    if isinstance(universal, dict):
+        normalized["universal_harness"] = {
+            key: universal.get(key)
+            for key in (
+                "artifact_kind",
+                "verdict",
+                "providers",
+                "scenarios",
+                "result_count",
+                "failure_count",
+                "unsupported_gap_count",
+            )
+            if universal.get(key) is not None
         }
     return normalized
 
@@ -420,20 +432,10 @@ def _proof_preflight(args: argparse.Namespace) -> dict[str, Any]:
     failure_code = None
     recommendation = "upgrade_allowed"
     if failed:
-        first_code = str(
-            failed[0].get("failure_code") or "provider_release_proof_preflight_failed"
-        )
+        first_code = str(failed[0].get("failure_code") or "provider_release_proof_preflight_failed")
         verdict = "red" if first_code in red_codes else "yellow"
-        failure_code = (
-            first_code
-            if verdict == "red"
-            else "provider_release_proof_prerequisites_missing"
-        )
-        recommendation = (
-            "block_upgrade_recommendation"
-            if verdict == "red"
-            else "investigate_before_upgrade"
-        )
+        failure_code = first_code if verdict == "red" else "provider_release_proof_prerequisites_missing"
+        recommendation = "block_upgrade_recommendation" if verdict == "red" else "investigate_before_upgrade"
     return {
         "schema_version": SCHEMA_VERSION,
         "artifact_kind": "provider_release_proof_preflight",
@@ -449,9 +451,7 @@ def _proof_preflight(args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
-def _run_source_canary(
-    args: argparse.Namespace, raw_dir: Path
-) -> tuple[dict[str, Any], dict[str, str], int | None]:
+def _run_source_canary(args: argparse.Namespace, raw_dir: Path) -> tuple[dict[str, Any], dict[str, str], int | None]:
     raw_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = raw_dir / "stdout.log"
     stderr_path = raw_dir / "stderr.log"
@@ -634,9 +634,242 @@ def _run_source_canary(
     return source, raw_artifacts, result.returncode
 
 
-def _merge_antigravity_real_send_proof(
-    source: dict[str, Any], control: dict[str, Any]
-) -> dict[str, Any]:
+def _universal_scenarios(args: argparse.Namespace) -> tuple[str, ...]:
+    scenarios = list(args.universal_scenario or DEFAULT_UNIVERSAL_SCENARIOS)
+    if args.universal_fixture_path and "parse_ingest_project" not in scenarios:
+        scenarios.append("parse_ingest_project")
+    return tuple(dict.fromkeys(scenarios))
+
+
+def _run_universal_harness(
+    args: argparse.Namespace, raw_dir: Path
+) -> tuple[dict[str, Any], dict[str, str], int | None]:
+    evidence_root = args.evidence_root / "universal-agent-harness"
+    stdout_path = raw_dir / "universal-agent-harness-stdout.log"
+    stderr_path = raw_dir / "universal-agent-harness-stderr.log"
+    artifact_path = evidence_root / "universal-agent-harness.json"
+    scenarios = _universal_scenarios(args)
+    argv = [
+        sys.executable,
+        str(Path(__file__).resolve().with_name("universal-agent-harness.py")),
+        "--provider",
+        args.provider,
+        "--evidence-root",
+        str(evidence_root),
+        "--json",
+    ]
+    for scenario in scenarios:
+        argv.extend(["--scenario", scenario])
+    if args.provider_bin:
+        argv.extend(["--provider-bin", str(args.provider_bin)])
+    if args.universal_fixture_path:
+        argv.extend(["--fixture-path", str(args.universal_fixture_path)])
+    if args.universal_prompt:
+        argv.extend(["--prompt", args.universal_prompt])
+
+    raw_artifacts = {
+        "universal_harness_artifact": str(artifact_path),
+        "universal_harness_stdout": str(stdout_path),
+        "universal_harness_stderr": str(stderr_path),
+        "universal_harness_evidence_root": str(evidence_root),
+    }
+    try:
+        result = subprocess.run(
+            argv,
+            cwd=str(args.repo_root),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=args.timeout_secs,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout_path.write_text(str(exc.stdout or ""), encoding="utf-8")
+        stderr_path.write_text(str(exc.stderr or ""), encoding="utf-8")
+        artifact = {
+            "schema_version": SCHEMA_VERSION,
+            "artifact_kind": "universal_agent_harness_run",
+            "providers": [args.provider],
+            "scenarios": list(scenarios),
+            "evidence_root": str(evidence_root),
+            "verdict": "red",
+            "failure_code": "universal_harness_timeout",
+            "results": [
+                {
+                    "provider": args.provider,
+                    "scenario": "universal_harness",
+                    "status": "fail",
+                    "failure_code": "universal_harness_timeout",
+                    "message": f"universal harness timed out after {args.timeout_secs}s",
+                    "evidence_root": str(evidence_root),
+                }
+            ],
+        }
+        _write_json(artifact_path, artifact)
+        return artifact, raw_artifacts, None
+    except OSError as exc:
+        stdout_path.write_text("", encoding="utf-8")
+        stderr_path.write_text(str(exc), encoding="utf-8")
+        artifact = {
+            "schema_version": SCHEMA_VERSION,
+            "artifact_kind": "universal_agent_harness_run",
+            "providers": [args.provider],
+            "scenarios": list(scenarios),
+            "evidence_root": str(evidence_root),
+            "verdict": "red",
+            "failure_code": "universal_harness_exec_failed",
+            "results": [
+                {
+                    "provider": args.provider,
+                    "scenario": "universal_harness",
+                    "status": "fail",
+                    "failure_code": "universal_harness_exec_failed",
+                    "message": f"{type(exc).__name__}: {exc}",
+                    "evidence_root": str(evidence_root),
+                }
+            ],
+        }
+        _write_json(artifact_path, artifact)
+        return artifact, raw_artifacts, None
+
+    stdout_path.write_text(result.stdout, encoding="utf-8")
+    stderr_path.write_text(result.stderr, encoding="utf-8")
+    if artifact_path.exists():
+        try:
+            artifact = _read_json(artifact_path)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            artifact = {
+                "schema_version": SCHEMA_VERSION,
+                "artifact_kind": "universal_agent_harness_run",
+                "providers": [args.provider],
+                "scenarios": list(scenarios),
+                "evidence_root": str(evidence_root),
+                "verdict": "red",
+                "failure_code": "universal_harness_invalid_json",
+                "results": [
+                    {
+                        "provider": args.provider,
+                        "scenario": "universal_harness",
+                        "status": "fail",
+                        "failure_code": "universal_harness_invalid_json",
+                        "message": f"{type(exc).__name__}: {exc}",
+                        "evidence_root": str(evidence_root),
+                    }
+                ],
+            }
+            _write_json(artifact_path, artifact)
+    else:
+        artifact = {
+            "schema_version": SCHEMA_VERSION,
+            "artifact_kind": "universal_agent_harness_run",
+            "providers": [args.provider],
+            "scenarios": list(scenarios),
+            "evidence_root": str(evidence_root),
+            "verdict": "red",
+            "failure_code": "universal_harness_missing_artifact",
+            "results": [
+                {
+                    "provider": args.provider,
+                    "scenario": "universal_harness",
+                    "status": "fail",
+                    "failure_code": "universal_harness_missing_artifact",
+                    "evidence_root": str(evidence_root),
+                    "command": _command_evidence(result),
+                }
+            ],
+        }
+        _write_json(artifact_path, artifact)
+    return artifact, raw_artifacts, result.returncode
+
+
+def _universal_result_status(status: str) -> str:
+    if status == "pass":
+        return "pass"
+    if status in UNIVERSAL_YELLOW_STATUSES:
+        return "warn"
+    return "fail"
+
+
+def _read_universal_projection(result: dict[str, Any]) -> dict[str, Any] | None:
+    data = result.get("data")
+    if not isinstance(data, dict):
+        return None
+    raw_path = data.get("session_projection_path")
+    if not raw_path:
+        return None
+    try:
+        return _read_json(Path(str(raw_path)))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+
+
+def _merge_universal_harness(source: dict[str, Any], universal: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(source)
+    results = [item for item in universal.get("results") or [] if isinstance(item, dict)]
+    provider_results = [item for item in results if item.get("provider") == source.get("provider")]
+    failure_count = sum(1 for item in provider_results if item.get("status") == "fail")
+    unsupported_gap_count = sum(1 for item in provider_results if item.get("status") in UNIVERSAL_YELLOW_STATUSES)
+    universal_summary = {
+        "artifact_kind": universal.get("artifact_kind"),
+        "verdict": universal.get("verdict"),
+        "providers": list(universal.get("providers") or []),
+        "scenarios": list(universal.get("scenarios") or []),
+        "result_count": len(provider_results),
+        "failure_count": failure_count,
+        "unsupported_gap_count": unsupported_gap_count,
+    }
+    canaries = dict(merged.get("canaries") or {})
+    canaries["universal_agent_harness"] = {
+        "status": "fail"
+        if universal.get("verdict") == "red"
+        else "warn"
+        if universal.get("verdict") == "yellow"
+        else "pass",
+        **universal_summary,
+    }
+    operation_evidence = dict(merged.get("operation_evidence") or {})
+    universal_projection: dict[str, Any] | None = None
+    for result in provider_results:
+        scenario = str(result.get("scenario") or "unknown")
+        status = str(result.get("status") or "fail")
+        canaries[f"universal_{scenario}"] = {
+            "status": _universal_result_status(status),
+            "failure_code": result.get("failure_code"),
+            "message": result.get("message"),
+            "evidence_root": result.get("evidence_root"),
+        }
+        data = result.get("data") if isinstance(result.get("data"), dict) else {}
+        for operation, evidence in dict(data.get("operation_evidence") or {}).items():
+            if not isinstance(evidence, dict):
+                continue
+            key = f"universal_{operation}"
+            operation_evidence[key] = {
+                "status": evidence.get("status") or status,
+                "level": evidence.get("level"),
+                "canary": evidence.get("canary") or f"universal_{scenario}",
+                "failure_code": evidence.get("failure_code"),
+            }
+        if universal_projection is None:
+            universal_projection = _read_universal_projection(result)
+    merged["canaries"] = canaries
+    merged["operation_evidence"] = operation_evidence
+    merged["universal_harness"] = universal_summary
+    if universal_projection is not None:
+        merged["universal_session_projection"] = universal_projection
+        if not isinstance(merged.get("session_projection"), dict):
+            merged["session_projection"] = {
+                "artifact_kind": "universal_agent_harness_session_projection",
+                "provider": source.get("provider"),
+                "status": "captured",
+                "projection": universal_projection,
+            }
+    if universal.get("verdict") == "red":
+        merged["verdict"] = "red"
+        merged["failure_code"] = universal.get("failure_code") or "universal_harness_failed"
+        merged["recommendation"] = "block_upgrade_recommendation"
+    return merged
+
+
+def _merge_antigravity_real_send_proof(source: dict[str, Any], control: dict[str, Any]) -> dict[str, Any]:
     merged = dict(source)
     canaries = dict(merged.get("canaries") or {})
     operation_evidence = dict(merged.get("operation_evidence") or {})
@@ -647,25 +880,19 @@ def _merge_antigravity_real_send_proof(
             "provider-control-e2e did not emit an Antigravity canary result.",
         )
     canaries["antigravity_real_agy_send"] = antigravity
-    for operation, evidence in dict(
-        antigravity.get("operation_evidence") or {}
-    ).items():
+    for operation, evidence in dict(antigravity.get("operation_evidence") or {}).items():
         if isinstance(operation, str) and isinstance(evidence, dict):
             operation_evidence[operation] = evidence
     merged["canaries"] = canaries
     merged["operation_evidence"] = operation_evidence
     if antigravity.get("status") == "fail":
         merged["verdict"] = "red"
-        merged["failure_code"] = str(
-            antigravity.get("failure_code") or "antigravity_real_agy_send_failed"
-        )
+        merged["failure_code"] = str(antigravity.get("failure_code") or "antigravity_real_agy_send_failed")
         merged["recommendation"] = "block_upgrade_recommendation"
     return merged
 
 
-def _merge_opencode_real_tool_proof(
-    source: dict[str, Any], control: dict[str, Any]
-) -> dict[str, Any]:
+def _merge_opencode_real_tool_proof(source: dict[str, Any], control: dict[str, Any]) -> dict[str, Any]:
     merged = dict(source)
     canaries = dict(merged.get("canaries") or {})
     operation_evidence = dict(merged.get("operation_evidence") or {})
@@ -683,16 +910,12 @@ def _merge_opencode_real_tool_proof(
     merged["operation_evidence"] = operation_evidence
     if opencode.get("status") == "fail":
         merged["verdict"] = "red"
-        merged["failure_code"] = str(
-            opencode.get("failure_code") or "opencode_real_tool_proof_failed"
-        )
+        merged["failure_code"] = str(opencode.get("failure_code") or "opencode_real_tool_proof_failed")
         merged["recommendation"] = "block_upgrade_recommendation"
     return merged
 
 
-def _merge_claude_real_print_proof(
-    source: dict[str, Any], control: dict[str, Any]
-) -> dict[str, Any]:
+def _merge_claude_real_print_proof(source: dict[str, Any], control: dict[str, Any]) -> dict[str, Any]:
     merged = dict(source)
     canaries = dict(merged.get("canaries") or {})
     operation_evidence = dict(merged.get("operation_evidence") or {})
@@ -710,16 +933,12 @@ def _merge_claude_real_print_proof(
     merged["operation_evidence"] = operation_evidence
     if claude.get("status") == "fail":
         merged["verdict"] = "red"
-        merged["failure_code"] = str(
-            claude.get("failure_code") or "claude_real_print_proof_failed"
-        )
+        merged["failure_code"] = str(claude.get("failure_code") or "claude_real_print_proof_failed")
         merged["recommendation"] = "block_upgrade_recommendation"
     return merged
 
 
-def _merge_claude_machine_live_proof(
-    source: dict[str, Any], machine: dict[str, Any]
-) -> dict[str, Any]:
+def _merge_claude_machine_live_proof(source: dict[str, Any], machine: dict[str, Any]) -> dict[str, Any]:
     merged = dict(source)
     canaries = dict(merged.get("canaries") or {})
     operation_evidence = dict(merged.get("operation_evidence") or {})
@@ -742,9 +961,7 @@ def _merge_claude_machine_live_proof(
     source_verdict = str(source.get("verdict") or "").lower()
     if machine_verdict == "red":
         merged["verdict"] = "red"
-        merged["failure_code"] = str(
-            machine.get("failure_code") or "claude_machine_live_proof_failed"
-        )
+        merged["failure_code"] = str(machine.get("failure_code") or "claude_machine_live_proof_failed")
         merged["recommendation"] = "block_upgrade_recommendation"
     elif source_verdict != "red" and machine_verdict == "green":
         merged["verdict"] = "green"
@@ -752,9 +969,7 @@ def _merge_claude_machine_live_proof(
         merged["recommendation"] = "upgrade_allowed"
     elif source_verdict != "red" and machine_verdict == "yellow":
         merged["verdict"] = "yellow"
-        merged["failure_code"] = str(
-            machine.get("failure_code") or "claude_machine_live_proof_warn"
-        )
+        merged["failure_code"] = str(machine.get("failure_code") or "claude_machine_live_proof_warn")
         merged["recommendation"] = "investigate_before_upgrade"
     return merged
 
@@ -802,10 +1017,7 @@ def _legacy_live_token_contract_rejected(status: int, payload: dict[str, Any]) -
         loc = item.get("loc")
         if isinstance(loc, list) and len(loc) >= 2 and loc[0] == "body":
             rejected_fields.add(str(loc[1]))
-    return bool(
-        rejected_fields
-        & {"run_live_token_contract", "live_token_timeout_secs"}
-    )
+    return bool(rejected_fields & {"run_live_token_contract", "live_token_timeout_secs"})
 
 
 def _request_json(
@@ -845,9 +1057,7 @@ def _request_json(
     except (TimeoutError, urllib.error.URLError) as exc:
         return 0, {"detail": {"code": "request_error", "message": str(exc)}}
     except json.JSONDecodeError:
-        return 502, {
-            "detail": {"code": "invalid_json", "message": "response was not JSON"}
-        }
+        return 502, {"detail": {"code": "invalid_json", "message": "response was not JSON"}}
     if not isinstance(payload, dict):
         return 502, {
             "detail": {
@@ -910,17 +1120,12 @@ def _poll_operation(
                 "operation_id": operation_id,
             }
         if operation_status in {"failed", "timed_out"}:
-            error = (
-                payload.get("error") if isinstance(payload.get("error"), dict) else {}
-            )
+            error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
             code = str(error.get("code") or "provider_live_operation_failed")
             return 502, {
                 "detail": {
                     "code": code,
-                    "message": str(
-                        error.get("message")
-                        or f"provider live proof operation {operation_status}"
-                    ),
+                    "message": str(error.get("message") or f"provider live proof operation {operation_status}"),
                 },
                 "operation_id": operation_id,
             }
@@ -1050,17 +1255,14 @@ def _run_claude_machine_live_proof(
     if live_artifact.get("verdict") != "red" and missing_operations:
         insufficient_message = (
             "Runtime Host provider-live-proof did not return required "
-            "manual live-token evidence for: "
-            + ", ".join(missing_operations)
+            "manual live-token evidence for: " + ", ".join(missing_operations)
         )
         live_artifact["verdict"] = "yellow"
         live_artifact["failure_code"] = "claude_machine_live_insufficient_coverage"
         live_artifact["recommendation"] = "investigate_before_upgrade"
     canaries = dict(live_artifact.get("canaries") or {})
     verdict = str(live_artifact.get("verdict") or "").lower()
-    canary_status = (
-        "fail" if verdict == "red" else "warn" if verdict == "yellow" else "pass"
-    )
+    canary_status = "fail" if verdict == "red" else "warn" if verdict == "yellow" else "pass"
     canaries["claude_machine_live_proof"] = {
         "status": canary_status,
         "verdict": live_artifact.get("verdict"),
@@ -1071,9 +1273,7 @@ def _run_claude_machine_live_proof(
     }
     if insufficient_message is not None:
         canaries["claude_machine_live_proof"]["message"] = insufficient_message
-        canaries["claude_machine_live_proof"][
-            "missing_operations"
-        ] = missing_operations
+        canaries["claude_machine_live_proof"]["missing_operations"] = missing_operations
     live_artifact["canaries"] = canaries
     returncode = None
     if isinstance(result, dict) and result.get("exit_code") is not None:
@@ -1389,24 +1589,18 @@ def _run_opencode_real_tool_proof(
 
 def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
     args.repo_root = args.repo_root.expanduser().resolve()
-    args.evidence_root = (
-        args.evidence_root or Path.cwd() / "provider-release-proof-evidence"
-    ).expanduser()
-    args.artifact = (
-        args.artifact or args.evidence_root / "provider-release-proof.json"
-    ).expanduser()
+    args.evidence_root = (args.evidence_root or Path.cwd() / "provider-release-proof-evidence").expanduser()
+    args.artifact = (args.artifact or args.evidence_root / "provider-release-proof.json").expanduser()
     if args.provider_bin is not None:
         args.provider_bin = args.provider_bin.expanduser()
+    if args.universal_fixture_path is not None:
+        args.universal_fixture_path = args.universal_fixture_path.expanduser()
     if args.provider == "codex":
         args.codex_api_url = args.codex_api_url or os.getenv(CODEX_API_URL_ENV)
-        args.codex_agents_token = args.codex_agents_token or os.getenv(
-            CODEX_AGENTS_TOKEN_ENV
-        )
+        args.codex_agents_token = args.codex_agents_token or os.getenv(CODEX_AGENTS_TOKEN_ENV)
     if args.provider == "claude":
         args.claude_api_url = args.claude_api_url or os.getenv(CLAUDE_API_URL_ENV)
-        args.claude_agents_token = args.claude_agents_token or os.getenv(
-            CLAUDE_AGENTS_TOKEN_ENV
-        )
+        args.claude_agents_token = args.claude_agents_token or os.getenv(CLAUDE_AGENTS_TOKEN_ENV)
         args.claude_device_id = args.claude_device_id or os.getenv(CLAUDE_DEVICE_ID_ENV)
     preflight = _proof_preflight(args)
     if args.preflight_only:
@@ -1418,41 +1612,30 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
     normalized_dir = args.evidence_root / "normalized"
     normalized_dir.mkdir(parents=True, exist_ok=True)
     source_artifact, raw_artifacts, returncode = _run_source_canary(args, raw_dir)
+    if args.run_universal_harness:
+        universal_artifact, universal_artifacts, universal_returncode = _run_universal_harness(args, raw_dir)
+        raw_artifacts.update(universal_artifacts)
+        source_artifact = _merge_universal_harness(source_artifact, universal_artifact)
+        returncode = returncode or universal_returncode
     if args.provider == "claude" and args.claude_run_machine_live_proof:
-        machine_artifact, machine_artifacts, machine_returncode = (
-            _run_claude_machine_live_proof(args, raw_dir)
-        )
+        machine_artifact, machine_artifacts, machine_returncode = _run_claude_machine_live_proof(args, raw_dir)
         raw_artifacts.update(machine_artifacts)
-        source_artifact = _merge_claude_machine_live_proof(
-            source_artifact, machine_artifact
-        )
+        source_artifact = _merge_claude_machine_live_proof(source_artifact, machine_artifact)
         returncode = returncode or machine_returncode
     if args.provider == "claude" and args.claude_run_real_print:
-        control_artifact, control_artifacts, control_returncode = (
-            _run_claude_real_print_proof(args, raw_dir)
-        )
+        control_artifact, control_artifacts, control_returncode = _run_claude_real_print_proof(args, raw_dir)
         raw_artifacts.update(control_artifacts)
-        source_artifact = _merge_claude_real_print_proof(
-            source_artifact, control_artifact
-        )
+        source_artifact = _merge_claude_real_print_proof(source_artifact, control_artifact)
         returncode = returncode or control_returncode
     if args.provider == "opencode" and args.opencode_run_real_tool:
-        control_artifact, control_artifacts, control_returncode = (
-            _run_opencode_real_tool_proof(args, raw_dir)
-        )
+        control_artifact, control_artifacts, control_returncode = _run_opencode_real_tool_proof(args, raw_dir)
         raw_artifacts.update(control_artifacts)
-        source_artifact = _merge_opencode_real_tool_proof(
-            source_artifact, control_artifact
-        )
+        source_artifact = _merge_opencode_real_tool_proof(source_artifact, control_artifact)
         returncode = returncode or control_returncode
     if args.provider == "antigravity" and args.antigravity_run_real_agy_send:
-        control_artifact, control_artifacts, control_returncode = (
-            _run_antigravity_real_send_proof(args, raw_dir)
-        )
+        control_artifact, control_artifacts, control_returncode = _run_antigravity_real_send_proof(args, raw_dir)
         raw_artifacts.update(control_artifacts)
-        source_artifact = _merge_antigravity_real_send_proof(
-            source_artifact, control_artifact
-        )
+        source_artifact = _merge_antigravity_real_send_proof(source_artifact, control_artifact)
         returncode = returncode or control_returncode
     normalized = _normalize_source_artifact(source_artifact)
     normalized_path = normalized_dir / "contract.json"
@@ -1463,9 +1646,7 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
         source_canary_returncode=returncode,
     )
     contract = _load_provider_contract(args.repo_root, args.provider)
-    contract_operations = (
-        dict(contract.get("operation_evidence") or {}) if contract else {}
-    )
+    contract_operations = dict(contract.get("operation_evidence") or {}) if contract else {}
     provider_version = (
         args.provider_version
         or normalized.get("provider_version")
@@ -1511,11 +1692,7 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
         "source_canary_returncode": returncode,
         "canaries": {
             "source_canary": {
-                "status": "pass"
-                if verdict == "green"
-                else "fail"
-                if verdict == "red"
-                else "warn",
+                "status": "pass" if verdict == "green" else "fail" if verdict == "red" else "warn",
                 "verdict": source_artifact.get("verdict"),
                 "failure_code": source_artifact.get("failure_code"),
                 "artifact_path": raw_artifacts["source_artifact"],
@@ -1560,6 +1737,19 @@ def build_parser() -> argparse.ArgumentParser:
         default="Provider release proof did not include external source-review evidence.",
     )
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--run-universal-harness", action="store_true")
+    parser.add_argument(
+        "--universal-scenario",
+        action="append",
+        choices=UNIVERSAL_SCENARIOS,
+        help="Universal harness scenario to attach. Repeatable; defaults to release-proof MVP scenarios.",
+    )
+    parser.add_argument(
+        "--universal-fixture-path",
+        type=Path,
+        help="JSONL fixture for universal parse_ingest_project.",
+    )
+    parser.add_argument("--universal-prompt", help="Prompt for universal prompt/session scenarios.")
     parser.add_argument("--codex-run-fake-app-server", action="store_true")
     parser.add_argument("--codex-run-raw-fresh-remote", action="store_true")
     parser.add_argument("--codex-run-managed-tui-attach", action="store_true")
@@ -1604,11 +1794,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"provider release proof: {artifact['provider']} {artifact['verdict']}")
         if artifact.get("artifact_path"):
             print(f"artifact: {artifact['artifact_path']}")
-        artifacts = (
-            artifact.get("artifacts")
-            if isinstance(artifact.get("artifacts"), dict)
-            else {}
-        )
+        artifacts = artifact.get("artifacts") if isinstance(artifact.get("artifacts"), dict) else {}
         if artifacts.get("evidence_root"):
             print(f"evidence_root: {artifacts['evidence_root']}")
         if artifact.get("failure_code"):

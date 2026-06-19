@@ -412,6 +412,10 @@ Optional variables:
   `artifact_kind=provider_release_proof_preflight` without running a provider
   canary. It verifies binary presence and live-lane Runtime Host credential
   presence without spending a model turn or exposing token values.
+- `--run-universal-harness` attaches the universal runner output to the proof
+  artifact. `--universal-scenario` selects scenarios, `--universal-fixture-path`
+  enables fixture replay, and `--universal-prompt` supplies the prompt/input
+  used by universal prompt/session scenarios.
 
 The equivalent direct script entrypoint is:
 
@@ -439,6 +443,8 @@ It emits:
   "normalized": {},
   "artifacts": {
     "source_artifact": "...",
+    "universal_harness_artifact": "...",
+    "universal_harness_evidence_root": "...",
     "stdout": "...",
     "stderr": "...",
     "normalized_contract": "...",

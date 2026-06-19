@@ -325,22 +325,29 @@ rewritten to call the shared scenario runner.
 | Shipper/ingest/session projection tests | `parse_ingest_project`, `timeline_projection` | Reusable Longhouse assertions under the runner. |
 | Sauron release-envelope/provider-status jobs | Private invocation and reporting | Sauron-owned runner/reporting; should consume universal artifacts, not provider-specific semantics. |
 
-## Phase 2 Implementation Status
+## Implementation Status
 
-The first implementation slice exists. It intentionally proves the skeleton
-without spending tokens or migrating managed-session behavior:
+The first implementation slices exist. They intentionally avoid token-spending
+provider calls, while proving the shared runner and release-proof attachment
+shape:
 
 1. Adapter protocol/data classes and scenario result schema exist.
 2. MVP adapters exist for Claude Code, Codex/OpenAI, OpenCode, and
    Antigravity.
 3. `probe_identity`, `collect_raw_evidence`, and fixture
    `parse_ingest_project` run through shared scenario code.
-4. `run_prompt_once` returns a typed `unsupported_gap` in the MVP profile
-   instead of silently skipping or spending tokens.
-5. Evidence packages are written for pass, fail, and unsupported results.
-6. Existing one-off canaries remain compatibility lanes until each behavior is
+4. `provider-release-proof.py --run-universal-harness` attaches the universal
+   run artifact, normalized universal canaries, and prefixed universal
+   operation evidence.
+5. `run_prompt_once` has a safe Codex/OpenAI projection and typed
+   `unsupported_gap` results for unsafe providers.
+6. Codex/OpenAI and OpenCode have first no-token/session-safe
+   `launch_managed_session` and `send_receive` projections behind the universal
+   runner.
+7. Evidence packages are written for pass, fail, and unsupported results.
+8. Existing one-off canaries remain compatibility lanes until each behavior is
    migrated and baselined.
 
-Next implementation target: make `provider-release-proof.py` consume universal
-runner output for the MVP scenarios, then migrate managed launch/send/timeline
-scenarios behind adapters.
+Next implementation target: replace the projection-only managed/session lanes
+with real adapter calls to the existing no-token mechanics, then migrate
+control/live-token/tool/resume scenarios behind the same runner.

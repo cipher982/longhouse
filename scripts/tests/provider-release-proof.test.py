@@ -28,6 +28,22 @@ def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _write_fake_provider_bin(root: Path, version: str = "provider 9.9.9") -> None:
+    _write_exe(
+        root / "fake-provider",
+        f"""#!/usr/bin/env python3
+import sys
+
+if sys.argv[1:] == ["--version"]:
+    print({version!r})
+    raise SystemExit(0)
+
+print("unexpected args", sys.argv[1:], file=sys.stderr)
+raise SystemExit(2)
+""",
+    )
+
+
 @contextlib.contextmanager
 def _fake_claude_machine_live_server(*, mode: str = "success"):
     requests: list[dict] = []
@@ -55,9 +71,7 @@ def _fake_claude_machine_live_server(*, mode: str = "success"):
                     "body": body,
                 }
             )
-            if mode == "legacy_extra_forbidden" and body.get(
-                "run_live_token_contract"
-            ):
+            if mode == "legacy_extra_forbidden" and body.get("run_live_token_contract"):
                 self._write(
                     422,
                     {
@@ -190,9 +204,7 @@ def _write_fake_repo(root: Path) -> None:
             }
         ],
     }
-    manifest_path = (
-        root / "server" / "zerg" / "config" / "managed_provider_contracts.json"
-    )
+    manifest_path = root / "server" / "zerg" / "config" / "managed_provider_contracts.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
@@ -643,24 +655,88 @@ def test_opencode_release_proof_normalizes_source_canary() -> None:
         assert payload["normalized"]["canaries"]["server_contract"]["status"] == "pass"
         assert Path(payload["artifacts"]["normalized_contract"]).exists()
         provider_contract = _read_json(Path(payload["artifacts"]["provider_contract"]))
-        operation_evidence = _read_json(
-            Path(payload["artifacts"]["operation_evidence"])
-        )
-        session_projection = _read_json(
-            Path(payload["artifacts"]["session_projection"])
-        )
-        assert (
-            provider_contract["contract_operations"]["send_input"]["level"]
-            == "live_no_token"
-        )
-        assert (
-            operation_evidence["operation_evidence"]["send_input"]["status"] == "pass"
-        )
+        operation_evidence = _read_json(Path(payload["artifacts"]["operation_evidence"]))
+        session_projection = _read_json(Path(payload["artifacts"]["session_projection"]))
+        assert provider_contract["contract_operations"]["send_input"]["level"] == "live_no_token"
+        assert operation_evidence["operation_evidence"]["send_input"]["status"] == "pass"
         assert session_projection["status"] == "captured"
-        assert (
-            session_projection["projection"]["provider_session_id"]
-            == "ses_fake_release_proof"
-        )
+        assert session_projection["projection"]["provider_session_id"] == "ses_fake_release_proof"
+
+
+def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
+    for provider in ("claude", "codex", "opencode", "antigravity"):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _write_fake_repo(root / "repo")
+            _write_fake_provider_bin(root, f"{provider} 9.9.9")
+            fixture = root / "fixture.jsonl"
+            fixture.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"type": "user", "text": "hello"}),
+                        json.dumps({"type": "assistant", "text": "world"}),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            result, payload = _run_proof(
+                root,
+                provider,
+                extra_args=[
+                    "--run-universal-harness",
+                    "--universal-fixture-path",
+                    str(fixture),
+                ],
+            )
+
+            assert result.returncode == 0, result.stderr + result.stdout
+            assert Path(payload["artifacts"]["universal_harness_artifact"]).exists()
+            assert Path(payload["artifacts"]["universal_harness_evidence_root"]).is_dir()
+            universal = payload["normalized"]["universal_harness"]
+            assert universal["result_count"] == 6
+            assert "parse_ingest_project" in universal["scenarios"]
+            assert payload["normalized"]["canaries"]["universal_probe_identity"]["status"] == "pass"
+            assert payload["normalized"]["canaries"]["universal_collect_raw_evidence"]["status"] == "pass"
+            assert payload["normalized"]["canaries"]["universal_parse_ingest_project"]["status"] == "pass"
+            assert payload["normalized"]["canaries"]["universal_run_prompt_once"]["status"] in {
+                "pass",
+                "warn",
+            }
+
+
+def test_release_proof_exposes_universal_session_evidence_for_codex_and_opencode() -> None:
+    for provider in ("codex", "opencode"):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            _write_fake_repo(root / "repo")
+            _write_fake_provider_bin(root, f"{provider} 9.9.9")
+
+            result, payload = _run_proof(
+                root,
+                provider,
+                extra_args=["--run-universal-harness"],
+            )
+
+            assert result.returncode == 0, result.stderr + result.stdout
+            assert payload["normalized"]["canaries"]["universal_launch_managed_session"]["status"] == "pass"
+            assert payload["normalized"]["canaries"]["universal_send_receive"]["status"] == "pass"
+            assert payload["operation_evidence"]["universal_launch_local"]["status"] == "pass"
+            assert payload["operation_evidence"]["universal_send_input"]["status"] == "pass"
+            assert payload["operation_evidence"]["universal_transcript_binding"]["status"] == "pass"
+            operation_evidence = _read_json(Path(payload["artifacts"]["operation_evidence"]))
+            assert operation_evidence["operation_evidence"]["universal_send_input"]["level"] == "hermetic"
+            universal_artifact = _read_json(Path(payload["artifacts"]["universal_harness_artifact"]))
+            send_receive = [
+                item
+                for item in universal_artifact["results"]
+                if item["provider"] == provider and item["scenario"] == "send_receive"
+            ][0]
+            session_path = Path(send_receive["data"]["session_projection_path"])
+            session = _read_json(session_path)
+            assert session["has_user"] is True
+            assert session["has_assistant"] is True
 
 
 def test_opencode_release_proof_blocks_on_source_canary_red() -> None:
@@ -682,9 +758,7 @@ def test_opencode_release_proof_blocks_on_source_canary_red() -> None:
         assert payload["operation_evidence"]["send_input"]["status"] == "fail"
 
 
-def test_opencode_release_proof_blocks_green_artifact_from_failed_source_canary() -> (
-    None
-):
+def test_opencode_release_proof_blocks_green_artifact_from_failed_source_canary() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         _write_fake_repo(root / "repo")
@@ -737,9 +811,7 @@ def test_opencode_release_proof_blocks_when_source_canary_times_out() -> None:
         assert payload["failure_code"] == "provider_release_proof_timeout"
 
 
-def test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest() -> (
-    None
-):
+def test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         args_path = root / "codex-args.json"
@@ -771,9 +843,7 @@ def test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest
         assert result.returncode == 0
         codex_args = json.loads(args_path.read_text(encoding="utf-8"))
         codex_env = json.loads(env_path.read_text(encoding="utf-8"))
-        assert codex_args[codex_args.index("--codex-bin") + 1] == str(
-            root / "fake-provider"
-        )
+        assert codex_args[codex_args.index("--codex-bin") + 1] == str(root / "fake-provider")
         assert codex_args[codex_args.index("--source-review-status") + 1] == "not_run"
         assert "--run-raw-fresh-remote" in codex_args
         assert "--run-managed-tui-attach" in codex_args
@@ -792,13 +862,8 @@ def test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest
             "binary_present": True,
             "longhouse_commit_present": True,
         }
-        assert (
-            payload["normalized"]["canaries"]["binary_identity"]["version"]
-            == "codex 2.0.0"
-        )
-        fingerprints = payload["normalized"]["canaries"]["raw_fresh_remote"][
-            "protocol_fingerprints"
-        ]
+        assert payload["normalized"]["canaries"]["binary_identity"]["version"] == "codex 2.0.0"
+        fingerprints = payload["normalized"]["canaries"]["raw_fresh_remote"]["protocol_fingerprints"]
         assert "path" not in fingerprints
         assert fingerprints["responses"]["initialize"]["platformFamily"] == "str"
         assert Path(payload["artifacts"]["provider_contract"]).exists()
@@ -879,23 +944,10 @@ def test_codex_release_proof_can_attach_real_tool_evidence() -> None:
         assert "--run-real-tool" in source_args
         assert source_args[source_args.index("--real-tool-timeout-secs") + 1] == "5"
         assert payload["operation_evidence"]["run_once"]["level"] == "live_token"
-        assert (
-            payload["operation_evidence"]["transcript_binding"]["level"] == "live_token"
-        )
-        assert (
-            payload["normalized"]["operation_evidence"]["run_once"]["level"]
-            == "live_token"
-        )
-        assert (
-            payload["normalized"]["canaries"]["codex_real_tool_result_shape"]["status"]
-            == "pass"
-        )
-        assert (
-            payload["normalized"]["canaries"]["codex_real_tool_result_shape"][
-                "command_status"
-            ]
-            == "completed"
-        )
+        assert payload["operation_evidence"]["transcript_binding"]["level"] == "live_token"
+        assert payload["normalized"]["operation_evidence"]["run_once"]["level"] == "live_token"
+        assert payload["normalized"]["canaries"]["codex_real_tool_result_shape"]["status"] == "pass"
+        assert payload["normalized"]["canaries"]["codex_real_tool_result_shape"]["command_status"] == "completed"
 
 
 def test_codex_release_proof_blocks_failed_real_tool_evidence() -> None:
@@ -919,9 +971,9 @@ def test_codex_release_proof_blocks_failed_real_tool_evidence() -> None:
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "fake_codex_real_tool_failed"
         assert payload["operation_evidence"]["run_once"]["status"] == "fail"
-        assert payload["normalized"]["canaries"]["codex_real_tool_result_shape"][
-            "failure_code"
-        ] == ("fake_codex_real_tool_failed")
+        assert payload["normalized"]["canaries"]["codex_real_tool_result_shape"]["failure_code"] == (
+            "fake_codex_real_tool_failed"
+        )
 
 
 def test_codex_managed_live_interrupt_uses_distinct_scenario() -> None:
@@ -950,25 +1002,12 @@ def test_codex_managed_live_interrupt_uses_distinct_scenario() -> None:
         assert payload["verdict"] == "green"
         source_args = json.loads(args_path.read_text(encoding="utf-8"))
         assert "--run-managed-live-interrupt" in source_args
-        assert (
-            source_args[source_args.index("--live-interrupt-timeout-secs") + 1] == "7"
-        )
+        assert source_args[source_args.index("--live-interrupt-timeout-secs") + 1] == "7"
         assert payload["operation_evidence"]["interrupt"]["status"] == "pass"
         assert payload["operation_evidence"]["interrupt"]["level"] == "live_token"
-        assert (
-            payload["normalized"]["operation_evidence"]["interrupt"]["level"]
-            == "live_token"
-        )
-        assert (
-            payload["normalized"]["canaries"]["managed_live_interrupt"]["status"]
-            == "pass"
-        )
-        assert (
-            payload["normalized"]["canaries"]["managed_live_interrupt"][
-                "last_turn_status"
-            ]
-            == "interrupted"
-        )
+        assert payload["normalized"]["operation_evidence"]["interrupt"]["level"] == "live_token"
+        assert payload["normalized"]["canaries"]["managed_live_interrupt"]["status"] == "pass"
+        assert payload["normalized"]["canaries"]["managed_live_interrupt"]["last_turn_status"] == "interrupted"
 
 
 def test_codex_release_proof_blocks_failed_managed_live_interrupt() -> None:
@@ -992,9 +1031,9 @@ def test_codex_release_proof_blocks_failed_managed_live_interrupt() -> None:
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "fake_codex_interrupt_failed"
         assert payload["operation_evidence"]["interrupt"]["status"] == "fail"
-        assert payload["normalized"]["canaries"]["managed_live_interrupt"][
-            "failure_code"
-        ] == ("fake_codex_interrupt_failed")
+        assert payload["normalized"]["canaries"]["managed_live_interrupt"]["failure_code"] == (
+            "fake_codex_interrupt_failed"
+        )
 
 
 def test_codex_managed_live_send_preflight_reports_missing_credentials() -> None:
@@ -1022,14 +1061,8 @@ def test_codex_managed_live_send_preflight_reports_missing_credentials() -> None
         checks = {check["name"]: check for check in payload["checks"]}
         assert checks["provider_binary"]["status"] == "pass"
         assert "message" not in checks["provider_binary"]
-        assert (
-            checks["codex_api_url"]["failure_code"]
-            == "codex_runtime_host_api_url_missing"
-        )
-        assert (
-            checks["codex_agents_token"]["failure_code"]
-            == "codex_runtime_host_agents_token_missing"
-        )
+        assert checks["codex_api_url"]["failure_code"] == "codex_runtime_host_api_url_missing"
+        assert checks["codex_agents_token"]["failure_code"] == "codex_runtime_host_agents_token_missing"
 
 
 def test_codex_managed_live_send_preflight_redacts_credentials() -> None:
@@ -1124,14 +1157,8 @@ def test_antigravity_release_proof_can_attach_real_agy_send_evidence() -> None:
         assert payload["verdict"] == "green"
         assert payload["operation_evidence"]["send_input"]["status"] == "pass"
         assert payload["operation_evidence"]["send_input"]["level"] == "live_token"
-        assert (
-            payload["normalized"]["operation_evidence"]["send_input"]["level"]
-            == "live_token"
-        )
-        assert (
-            payload["normalized"]["canaries"]["antigravity_real_agy_send"]["status"]
-            == "pass"
-        )
+        assert payload["normalized"]["operation_evidence"]["send_input"]["level"] == "live_token"
+        assert payload["normalized"]["canaries"]["antigravity_real_agy_send"]["status"] == "pass"
         assert Path(payload["artifacts"]["antigravity_control_artifact"]).exists()
 
 
@@ -1152,9 +1179,9 @@ def test_antigravity_release_proof_blocks_failed_real_agy_send_evidence() -> Non
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "fake_antigravity_send_failed"
         assert payload["operation_evidence"]["send_input"]["status"] == "fail"
-        assert payload["normalized"]["canaries"]["antigravity_real_agy_send"][
-            "failure_code"
-        ] == ("fake_antigravity_send_failed")
+        assert payload["normalized"]["canaries"]["antigravity_real_agy_send"]["failure_code"] == (
+            "fake_antigravity_send_failed"
+        )
 
 
 def test_opencode_release_proof_can_attach_real_tool_evidence() -> None:
@@ -1183,19 +1210,9 @@ def test_opencode_release_proof_can_attach_real_tool_evidence() -> None:
         assert payload["scenario_profile"] == "real-tool"
         assert payload["verdict"] == "green"
         assert payload["operation_evidence"]["transcript_binding"]["status"] == "pass"
-        assert (
-            payload["operation_evidence"]["transcript_binding"]["level"] == "live_token"
-        )
-        assert (
-            payload["normalized"]["operation_evidence"]["transcript_binding"]["level"]
-            == "live_token"
-        )
-        assert (
-            payload["normalized"]["canaries"]["opencode_real_tool_result_shape"][
-                "status"
-            ]
-            == "pass"
-        )
+        assert payload["operation_evidence"]["transcript_binding"]["level"] == "live_token"
+        assert payload["normalized"]["operation_evidence"]["transcript_binding"]["level"] == "live_token"
+        assert payload["normalized"]["canaries"]["opencode_real_tool_result_shape"]["status"] == "pass"
         assert Path(payload["artifacts"]["opencode_control_artifact"]).exists()
 
 
@@ -1216,9 +1233,9 @@ def test_opencode_release_proof_blocks_failed_real_tool_evidence() -> None:
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "fake_opencode_tool_failed"
         assert payload["operation_evidence"]["transcript_binding"]["status"] == "fail"
-        assert payload["normalized"]["canaries"]["opencode_real_tool_result_shape"][
-            "failure_code"
-        ] == ("fake_opencode_tool_failed")
+        assert payload["normalized"]["canaries"]["opencode_real_tool_result_shape"]["failure_code"] == (
+            "fake_opencode_tool_failed"
+        )
 
 
 def test_claude_release_proof_can_attach_real_print_evidence() -> None:
@@ -1247,17 +1264,9 @@ def test_claude_release_proof_can_attach_real_print_evidence() -> None:
         assert payload["scenario_profile"] == "real-print"
         assert payload["verdict"] == "green"
         assert payload["operation_evidence"]["live_token_behavior"]["status"] == "pass"
-        assert (
-            payload["operation_evidence"]["live_token_behavior"]["level"]
-            == "live_token"
-        )
-        assert (
-            payload["normalized"]["operation_evidence"]["live_token_behavior"]["level"]
-            == "live_token"
-        )
-        assert (
-            payload["normalized"]["canaries"]["claude_real_print"]["status"] == "pass"
-        )
+        assert payload["operation_evidence"]["live_token_behavior"]["level"] == "live_token"
+        assert payload["normalized"]["operation_evidence"]["live_token_behavior"]["level"] == "live_token"
+        assert payload["normalized"]["canaries"]["claude_real_print"]["status"] == "pass"
         assert Path(payload["artifacts"]["claude_control_artifact"]).exists()
 
 
@@ -1278,9 +1287,9 @@ def test_claude_release_proof_blocks_failed_real_print_evidence() -> None:
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "fake_claude_real_print_failed"
         assert payload["operation_evidence"]["live_token_behavior"]["status"] == "fail"
-        assert payload["normalized"]["canaries"]["claude_real_print"][
-            "failure_code"
-        ] == ("fake_claude_real_print_failed")
+        assert payload["normalized"]["canaries"]["claude_real_print"]["failure_code"] == (
+            "fake_claude_real_print_failed"
+        )
 
 
 def test_claude_real_print_wrapper_catches_real_control_api_error() -> None:
@@ -1291,9 +1300,7 @@ def test_claude_real_print_wrapper_catches_real_control_api_error() -> None:
         _write_fake_claude_real_print_binary(root / "fake-provider", mode="api_error")
         control_path = repo / "scripts" / "qa" / "provider-control-e2e-canary.py"
         control_path.write_text(
-            (REPO_ROOT / "scripts" / "qa" / "provider-control-e2e-canary.py").read_text(
-                encoding="utf-8"
-            ),
+            (REPO_ROOT / "scripts" / "qa" / "provider-control-e2e-canary.py").read_text(encoding="utf-8"),
             encoding="utf-8",
         )
         control_path.chmod(0o755)
@@ -1313,14 +1320,10 @@ def test_claude_real_print_wrapper_catches_real_control_api_error() -> None:
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "claude_real_print_api_error"
         assert payload["operation_evidence"]["live_token_behavior"]["status"] == "fail"
-        assert payload["normalized"]["canaries"]["claude_real_print"][
-            "failure_code"
-        ] == ("claude_real_print_api_error")
+        assert payload["normalized"]["canaries"]["claude_real_print"]["failure_code"] == ("claude_real_print_api_error")
 
 
-def test_claude_machine_live_proof_uses_distinct_scenario_and_operation_evidence() -> (
-    None
-):
+def test_claude_machine_live_proof_uses_distinct_scenario_and_operation_evidence() -> None:
     with (
         tempfile.TemporaryDirectory() as temp_dir,
         _fake_claude_machine_live_server() as (
@@ -1355,17 +1358,9 @@ def test_claude_machine_live_proof_uses_distinct_scenario_and_operation_evidence
         assert payload["scenario_profile"] == "machine-live"
         assert payload["verdict"] == "green"
         assert payload["failure_code"] is None
-        assert (
-            payload["operation_evidence"]["send_input"]["level"] == "manual_live_token"
-        )
-        assert (
-            payload["operation_evidence"]["transcript_binding"]["level"]
-            == "manual_live_token"
-        )
-        assert (
-            payload["operation_evidence"]["steer_active_turn"]["level"]
-            == "manual_live_token"
-        )
+        assert payload["operation_evidence"]["send_input"]["level"] == "manual_live_token"
+        assert payload["operation_evidence"]["transcript_binding"]["level"] == "manual_live_token"
+        assert payload["operation_evidence"]["steer_active_turn"]["level"] == "manual_live_token"
         canary = payload["normalized"]["canaries"]["claude_machine_live_proof"]
         assert canary["status"] == "pass"
         assert canary["device_id"] == "cinder"
@@ -1380,9 +1375,7 @@ def test_claude_machine_live_proof_uses_distinct_scenario_and_operation_evidence
         assert requests[0]["body"]["expected_provider_version"] == "Claude Code 2.9.9"
 
 
-def test_claude_machine_live_proof_retries_legacy_runtime_host_without_live_token_fields() -> (
-    None
-):
+def test_claude_machine_live_proof_retries_legacy_runtime_host_without_live_token_fields() -> None:
     with (
         tempfile.TemporaryDirectory() as temp_dir,
         _fake_claude_machine_live_server(mode="legacy_extra_forbidden") as (
@@ -1459,17 +1452,9 @@ def test_claude_machine_live_proof_preflight_reports_missing_credentials() -> No
         checks = {check["name"]: check for check in payload["checks"]}
         assert checks["provider_binary"]["status"] == "pass"
         assert "message" not in checks["provider_binary"]
-        assert (
-            checks["claude_api_url"]["failure_code"]
-            == "claude_runtime_host_api_url_missing"
-        )
-        assert checks["claude_agents_token"]["failure_code"] == (
-            "claude_runtime_host_agents_token_missing"
-        )
-        assert (
-            checks["claude_device_id"]["failure_code"]
-            == "claude_runtime_host_device_id_missing"
-        )
+        assert checks["claude_api_url"]["failure_code"] == "claude_runtime_host_api_url_missing"
+        assert checks["claude_agents_token"]["failure_code"] == ("claude_runtime_host_agents_token_missing")
+        assert checks["claude_device_id"]["failure_code"] == "claude_runtime_host_device_id_missing"
 
 
 def test_claude_machine_live_proof_blocks_failed_operation() -> None:
@@ -1543,10 +1528,7 @@ def test_claude_machine_live_proof_does_not_mask_red_source_canary() -> None:
         assert result.returncode == 1
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "claude_command_contract_missing"
-        assert (
-            payload["normalized"]["canaries"]["claude_machine_live_proof"]["status"]
-            == "pass"
-        )
+        assert payload["normalized"]["canaries"]["claude_machine_live_proof"]["status"] == "pass"
         assert [request["method"] for request in requests] == ["POST", "GET"]
 
 
@@ -1598,15 +1580,9 @@ def test_claude_release_proof_red_when_session_flag_missing() -> None:
         assert result.returncode == 1
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "claude_command_contract_missing"
-        assert payload["normalized"]["claude"]["launch_flags_missing"] == [
-            "--session-id"
-        ]
-        assert payload["normalized"]["claude"]["launch_flags_failure_code"] == (
-            "claude_command_contract_missing"
-        )
-        assert payload["operation_evidence"]["launch_local"]["failure_code"] == (
-            "claude_command_contract_missing"
-        )
+        assert payload["normalized"]["claude"]["launch_flags_missing"] == ["--session-id"]
+        assert payload["normalized"]["claude"]["launch_flags_failure_code"] == ("claude_command_contract_missing")
+        assert payload["operation_evidence"]["launch_local"]["failure_code"] == ("claude_command_contract_missing")
 
 
 def test_claude_release_proof_preserves_development_channel_failure_code() -> None:
@@ -1647,15 +1623,15 @@ def test_claude_release_proof_preserves_detached_pty_failure_context() -> None:
         assert result.returncode == 1
         assert payload["failure_code"] == "claude_detached_pty_unavailable"
         assert payload["normalized"]["claude"]["detached_pty_status"] == "fail"
-        assert payload["normalized"]["claude"]["detached_pty_failure_code"] == (
-            "claude_detached_pty_unavailable"
-        )
+        assert payload["normalized"]["claude"]["detached_pty_failure_code"] == ("claude_detached_pty_unavailable")
         assert payload["normalized"]["claude"]["detached_pty_platform"] == "darwin"
 
 
 def main() -> int:
     tests = [
         test_opencode_release_proof_normalizes_source_canary,
+        test_release_proof_can_attach_universal_harness_for_all_providers,
+        test_release_proof_exposes_universal_session_evidence_for_codex_and_opencode,
         test_opencode_release_proof_blocks_on_source_canary_red,
         test_opencode_release_proof_blocks_green_artifact_from_failed_source_canary,
         test_opencode_release_proof_blocks_when_source_artifact_missing,
