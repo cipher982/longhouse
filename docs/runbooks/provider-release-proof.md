@@ -122,10 +122,11 @@ Accept this as a baseline only after confirming the artifact shows
 Longhouse inbox message.
 
 Sauron can pass this same scenario through Antigravity release-watch by setting
-`AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1`. Leave that production gate off
-until a reviewed green `antigravity-real-agy-send-release-proof-v1` baseline is
-accepted; otherwise release-watch will spend real `agy` turns without a trusted
-baseline to compare against.
+`AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1`. The reviewed green
+`antigravity-real-agy-send-release-proof-v1` baseline for `agy 1.0.10` was
+accepted on 2026-06-19. Production Sauron still leaves this gate off by default
+so release-watch does not spend real `agy` turns unless that cost/benefit trade
+has been chosen deliberately.
 
 ## Read A Proof
 
@@ -240,6 +241,7 @@ from jobs.agents.release_envelope import baseline_status
 
 for provider, scenario_id in [
     ('antigravity', 'antigravity-release-proof-v1'),
+    ('antigravity', 'antigravity-real-agy-send-release-proof-v1'),
     ('claude', 'claude-release-proof-v1'),
     ('codex', 'codex-release-proof-v1'),
     ('codex', 'codex-managed-live-send-release-proof-v1'),
@@ -377,6 +379,11 @@ should not appear in the artifact tree.
   Runtime Host URL/token/device credentials are supplied.
 - Antigravity: accepted scoped baseline `antigravity-release-proof-v1`, provider
   version `agy 1.0.8`.
+- Antigravity real-agy send: accepted baseline
+  `antigravity-real-agy-send-release-proof-v1`, provider version `agy 1.0.10`.
+  The accepted proof showed `operation_evidence.send_input.level=live_token`, a
+  claimed Longhouse inbox message, no pending inbox files after the run, and a
+  model-visible injected marker in stdout.
 - Codex/OpenAI: accepted baseline `codex-release-proof-v1`, provider version
   `codex-cli 0.139.0`.
 - Codex/OpenAI live-send: accepted baseline
@@ -387,12 +394,11 @@ should not appear in the artifact tree.
   in the `sauron` container on 2026-06-19 returned green for
   `codex-managed-live-send-release-proof-v1`.
 - Sauron baseline inventory guard: live in production as
-  `agent-release-baseline-guard`; on 2026-06-19 it returned 5/5 accepted
+  `agent-release-baseline-guard`; on 2026-06-19 it returned 6/6 accepted
   scenarios green against `/data/provider-release-proofs`.
-- Antigravity real-agy send: no accepted baseline yet for
-  `antigravity-real-agy-send-release-proof-v1`. Sauron has an env-gated
-  release-watch pass-through for this scenario, but production Sauron is not
-  configured with `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1`.
+- Antigravity real-agy send release-watch: Sauron has an env-gated pass-through
+  for this scenario, but production Sauron is not configured with
+  `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` by default.
 
 ## Promotion Checklist
 

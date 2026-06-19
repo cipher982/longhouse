@@ -701,6 +701,7 @@ def test_codex_managed_live_send_preflight_reports_missing_credentials() -> None
         assert payload["failure_code"] == "provider_release_proof_prerequisites_missing"
         checks = {check["name"]: check for check in payload["checks"]}
         assert checks["provider_binary"]["status"] == "pass"
+        assert "message" not in checks["provider_binary"]
         assert checks["codex_api_url"]["failure_code"] == "codex_runtime_host_api_url_missing"
         assert checks["codex_agents_token"]["failure_code"] == "codex_runtime_host_agents_token_missing"
 
@@ -899,6 +900,7 @@ def test_claude_machine_live_proof_preflight_reports_missing_credentials() -> No
         assert payload["failure_code"] == "provider_release_proof_prerequisites_missing"
         checks = {check["name"]: check for check in payload["checks"]}
         assert checks["provider_binary"]["status"] == "pass"
+        assert "message" not in checks["provider_binary"]
         assert checks["claude_api_url"]["failure_code"] == "claude_runtime_host_api_url_missing"
         assert checks["claude_agents_token"]["failure_code"] == (
             "claude_runtime_host_agents_token_missing"

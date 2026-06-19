@@ -1,6 +1,6 @@
 # Provider Release Proof
 
-**Status:** Phase 1 inventory + Longhouse proof/baseline/diff entrypoints; five accepted release-proof scenarios promoted to Sauron (scoped Claude, Codex default, Codex live-send, OpenCode, scoped Antigravity)
+**Status:** Phase 1 inventory + Longhouse proof/baseline/diff entrypoints; six accepted release-proof scenarios promoted to Sauron (scoped Claude, Codex default, Codex live-send, OpenCode, scoped Antigravity, Antigravity live-send)
 **Owner:** David
 **Last updated:** 2026-06-19
 
@@ -51,12 +51,12 @@ What is missing:
 
 ## Audit Snapshot - 2026-06-19
 
-This snapshot reflects the Longhouse audit through `82deb20d3`, Sauron jobs
-`92f1a62`, and the 2026-06-19 accepted-baseline promotions after Gemini was
+This snapshot reflects the Longhouse audit through `11002c7ec`, Sauron jobs
+`4791001`, and the 2026-06-19 accepted-baseline promotions after Gemini was
 removed as a release-watch provider and Antigravity became the canonical Google
 lane. The release-watch/proof scope is Claude Code, Codex/OpenAI, OpenCode, and
 Antigravity. Sauron's `agent-release-baseline-guard` now checks the promoted
-accepted baseline store daily; the live container guard returned 5/5 green
+accepted baseline store daily; the live container guard returned 6/6 green
 against `/data/provider-release-proofs` on 2026-06-19.
 
 Machine-validated coverage map:
@@ -72,7 +72,7 @@ Machine-validated coverage map:
 | Rows running in Longhouse CI | 44 |
 | Rows running in Sauron release-watch | 32 |
 | Rows with accepted parser-fixture baselines | 4 |
-| Rows with accepted release-proof baselines | 22 |
+| Rows with accepted release-proof baselines | 24 |
 
 Provider shape:
 
@@ -81,7 +81,7 @@ Provider shape:
 | Claude Code | 2 | 11 | 0 | 12 | 7 | 3 |
 | Codex/OpenAI | 4 | 9 | 0 | 12 | 9 | 7 |
 | OpenCode | 4 | 7 | 2 | 11 | 11 | 9 |
-| Antigravity | 1 | 9 | 3 | 9 | 5 | 3 |
+| Antigravity | 1 | 9 | 3 | 9 | 5 | 5 |
 
 `Release baselines` counts rows whose current behavior is compared against an
 accepted Longhouse proof. It does not mean every adjacent setup action is fully
@@ -106,8 +106,8 @@ remote protocol fingerprints, and launch/remote/reattach operation evidence.
 This is still not a complete release gate: Claude still lacks managed-session
 binding and live-token proof, Codex still lacks accepted-baseline-backed
 interrupt/tool proof beyond its accepted live-send lane, Antigravity still lacks
-model-visible send/reattach/tool proof, and OpenCode still lacks
-tool/tool-result and live-token proof.
+interrupt/reattach/tool proof beyond its accepted live-send lane, and OpenCode
+still lacks tool/tool-result and live-token proof.
 
 ## Coverage Legend
 
@@ -291,26 +291,27 @@ tool/tool-result transcript shape or live-token model-visible behavior.
 | transcript/log parse | partial | hook transcript binding tests | hermetic | `make test` | no | no | partial |
 | ingest into Longhouse | partial | hook outbox/runtime tests | hermetic | `make test` | no | no | partial |
 | timeline/session projection | partial | session capabilities for Antigravity transport | hermetic | `make test` | no | no | partial |
-| send input | partial | `provider-control-e2e-canary.py --antigravity-real-agy-send`; `provider-release-proof.py --antigravity-run-real-agy-send` can attach that send evidence to a release proof; Sauron release-watch preserves staged `agy` proof/differential evidence and can request the real-send scenario behind `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` | live_token when explicitly run; fake wrapper in CI | wrapper test in CI uses fake agy | profile/live plus opt-in real-send proof/diff when configured | no | partial |
+| send input | partial | `provider-control-e2e-canary.py --antigravity-real-agy-send`; `provider-release-proof.py --antigravity-run-real-agy-send` attaches that send evidence to a release proof; Sauron release-watch preserves staged `agy` proof/differential evidence and can request the real-send scenario behind `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` | live_token when explicitly run; fake wrapper in CI | wrapper test in CI uses fake agy | profile/live plus opt-in real-send proof/diff when configured | release-proof yes (`antigravity-real-agy-send-release-proof-v1`, 1.0.10) | yes |
 | interrupt/abort/steer | no | unsupported in manifest | none | no | no | no | no |
 | reattach/resume | no | unsupported in manifest | none | no | no | no | no |
 | tool/tool-result shape | no | no provider transcript parser golden found | none | no | no | no | no |
-| live-token behavior | partial | real agy send canary exists and `provider-release-proof.py --antigravity-run-real-agy-send` can attach it; CI covers the adapter with fake agy; Sauron release-watch has an env-gated pass-through but production is not enabled | live_token manual/configured plus fake adapter | fake-wrapper CI plus Sauron plumbing tests | not configured in production | no | no |
+| live-token behavior | partial | real agy send canary exists and `provider-release-proof.py --antigravity-run-real-agy-send` attaches it; CI covers the adapter with fake agy; Sauron release-watch has an env-gated pass-through but production is not enabled | live_token manual/configured plus fake adapter | fake-wrapper CI plus Sauron plumbing tests | not configured in production | release-proof yes (`antigravity-real-agy-send-release-proof-v1`, 1.0.10) | yes for manual proof/diff; production gate remains off |
 
 Antigravity should stay narrow: on 2026-06-19, `agy 1.0.8` produced a green
 `antigravity-release-proof-v1` artifact and a fresh rerun diffed green/match
 against the accepted baseline. The accepted local dogfood baseline is under
 `~/.local/share/longhouse/provider-release-proofs/antigravity/antigravity-release-proof-v1/`.
-This proves the no-token binary/plugin/global-hook/hook-inbox contract. It
-does not prove model-visible send, reattach/resume, tool/tool-result shape, or
-live-token behavior. A separate opt-in proof flag can attach the manual real
-`agy` send canary to a release proof under scenario
-`antigravity-real-agy-send-release-proof-v1`, but no accepted baseline includes
-it yet. Sauron has an explicit `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1`
-gate that passes this scenario through golden-envelope and old/new differential
-runs, but production Sauron is not configured for that gate. The next useful
-step is accepting a reviewed real-`agy` proof baseline for send, then deciding
-whether to enable the scheduled release-watch gate.
+This proves the no-token binary/plugin/global-hook/hook-inbox contract. A
+separate accepted proof, `antigravity-real-agy-send-release-proof-v1`, was
+reviewed on 2026-06-19 for `agy 1.0.10`: the hook claimed one injected inbox
+message, no pending inbox files remained, the injected marker appeared in
+model-visible stdout, and the proof/status/diff path returned green. Together,
+these baselines prove scoped no-token launch shape plus model-visible send
+injection. They do not prove interrupt/abort/steer, reattach/resume, or
+tool/tool-result shape. Sauron has an explicit
+`AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` gate that can pass this scenario
+through golden-envelope and old/new differential runs, but production Sauron is
+not configured to spend real `agy` turns on release-watch by default.
 
 ### Legacy Google JSON Imports
 
@@ -457,8 +458,9 @@ old/new proof drift is a top-level release-risk signal. The diff compares
 normalized Longhouse canary contract fields, not arbitrary binary bytes, so two
 different binaries with identical live-canary shape still match. This does not
 by itself make Antigravity green enough for full model-visible send-input
-confidence, because the scheduled release proof still stops short of the
-manual live-token `agy send` scenario.
+confidence unless `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` is enabled,
+because the default scheduled proof still stops short of spending a real
+live-token `agy send` turn.
 
 Exit-code contract:
 
@@ -619,8 +621,9 @@ should not by itself count as contract drift.
 2. Keep the scheduled Codex live-send release-watch and Sauron
    `agent-release-baseline-guard` green, and add Codex interrupt/tool coverage
    beyond the currently accepted send-input baseline.
-3. Accept a reviewed Antigravity real-agy send baseline, then decide whether to
-   enable `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` in production Sauron.
+3. Decide whether to enable `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` in
+   production Sauron; the accepted baseline exists, but the default release
+   watch still avoids real `agy` token spend.
 4. Add OpenCode tool/tool-result and live-token proof, which are currently the
    provider's two uncovered release-sensitive surfaces.
 5. Add model-visible live-token proof for the remaining partial Claude, Codex,

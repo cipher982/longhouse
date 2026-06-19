@@ -310,7 +310,7 @@ def _preflight_check(
     payload: dict[str, Any] = {"name": name, "status": "pass" if ok else "fail"}
     if not ok and failure_code:
         payload["failure_code"] = failure_code
-    if message:
+    if not ok and message:
         payload["message"] = message
     return payload
 

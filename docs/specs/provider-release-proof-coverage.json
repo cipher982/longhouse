@@ -838,9 +838,11 @@
             "fake_or_real": "mixed",
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
-            "accepted_baseline": "none",
+            "accepted_baseline": "release_proof",
             "failure_actionable": true,
-            "baseline_scenarios": []
+            "baseline_scenarios": [
+                "antigravity-real-agy-send-release-proof-v1"
+            ]
         },
         {
             "provider": "antigravity",
@@ -897,9 +899,11 @@
             "fake_or_real": "mixed",
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": false,
-            "accepted_baseline": "none",
-            "failure_actionable": false,
-            "baseline_scenarios": []
+            "accepted_baseline": "release_proof",
+            "failure_actionable": true,
+            "baseline_scenarios": [
+                "antigravity-real-agy-send-release-proof-v1"
+            ]
         }
     ],
     "accepted_release_proof_scenarios": [
@@ -941,6 +945,14 @@
             "provider_version": "agy 1.0.8",
             "baseline_scope": "scoped_no_token_binary_plugin_hook_inbox_shape",
             "baseline_boundary": "live_no_token_or_fake",
+            "promoted_to_sauron": true
+        },
+        {
+            "provider": "antigravity",
+            "scenario_id": "antigravity-real-agy-send-release-proof-v1",
+            "provider_version": "agy 1.0.10",
+            "baseline_scope": "real_agy_model_visible_send_marker",
+            "baseline_boundary": "manual_live_token",
             "promoted_to_sauron": true
         }
     ]
