@@ -32,6 +32,14 @@ EXPECTED_SURFACES = (
     "tool/tool-result shape",
     "live-token behavior",
 )
+REQUIRED_SCENARIO_FIELDS = {
+    "provider",
+    "scenario_id",
+    "provider_version",
+    "baseline_scope",
+    "baseline_boundary",
+    "promoted_to_sauron",
+}
 REQUIRED_ROW_FIELDS = {
     "provider",
     "surface",
@@ -42,6 +50,7 @@ REQUIRED_ROW_FIELDS = {
     "runs_in_ci",
     "runs_in_sauron_release_watch",
     "accepted_baseline",
+    "baseline_scenarios",
     "failure_actionable",
 }
 ALLOWED_COVERED = {"yes", "partial", "no"}
@@ -136,7 +145,7 @@ def _count(rows: list[dict], **matches: object) -> int:
 def test_coverage_map_has_full_provider_surface_grid() -> None:
     payload = _load()
 
-    assert payload["schema_version"] == 1
+    assert payload["schema_version"] == 2
     assert tuple(payload["providers"]) == EXPECTED_PROVIDERS
     assert tuple(payload["surfaces"]) == EXPECTED_SURFACES
 
@@ -151,8 +160,33 @@ def test_coverage_map_has_full_provider_surface_grid() -> None:
     }
 
 
+def test_accepted_release_proof_scenarios_are_explicit() -> None:
+    payload = _load()
+    scenarios = payload.get("accepted_release_proof_scenarios")
+    assert isinstance(scenarios, list)
+    assert scenarios
+
+    seen: set[tuple[str, str]] = set()
+    for scenario in scenarios:
+        missing = REQUIRED_SCENARIO_FIELDS - set(scenario)
+        assert not missing, f"accepted scenario missing {sorted(missing)}"
+        assert scenario["provider"] in EXPECTED_PROVIDERS, scenario
+        assert scenario["scenario_id"], scenario
+        assert scenario["provider_version"], scenario
+        assert scenario["baseline_scope"], scenario
+        assert scenario["baseline_boundary"], scenario
+        assert isinstance(scenario["promoted_to_sauron"], bool), scenario
+        key = (scenario["provider"], scenario["scenario_id"])
+        assert key not in seen, scenario
+        seen.add(key)
+
+
 def test_coverage_rows_are_auditable() -> None:
     payload = _load()
+    accepted_scenarios = {
+        (scenario["provider"], scenario["scenario_id"])
+        for scenario in payload["accepted_release_proof_scenarios"]
+    }
 
     for row in payload["rows"]:
         missing = REQUIRED_ROW_FIELDS - set(row)
@@ -162,6 +196,7 @@ def test_coverage_rows_are_auditable() -> None:
         assert row["accepted_baseline"] in ALLOWED_BASELINE, row
         assert row["proof_boundary"] in ALLOWED_PROOF_BOUNDARY, row
         assert isinstance(row["test_evidence"], list), row
+        assert isinstance(row["baseline_scenarios"], list), row
         assert isinstance(row["runs_in_ci"], bool), row
         assert isinstance(row["runs_in_sauron_release_watch"], bool), row
         assert isinstance(row["failure_actionable"], bool), row
@@ -173,9 +208,16 @@ def test_coverage_rows_are_auditable() -> None:
             assert row["proof_boundary"] not in {"none", "unsupported"}, row
         if row["covered"] == "no":
             assert row["accepted_baseline"] == "none", row
+            assert row["baseline_scenarios"] == [], row
             assert not row["runs_in_ci"], row
             assert not row["runs_in_sauron_release_watch"], row
             assert row["proof_boundary"] in {"none", "unsupported"}, row
+        if row["accepted_baseline"] == "release_proof":
+            assert row["baseline_scenarios"], row
+            for scenario_id in row["baseline_scenarios"]:
+                assert (row["provider"], scenario_id) in accepted_scenarios, row
+        else:
+            assert row["baseline_scenarios"] == [], row
         has_sauron_evidence = any(str(item).startswith("Sauron:") for item in row["test_evidence"])
         if row["runs_in_sauron_release_watch"] and not has_sauron_evidence:
             assert row["runs_in_ci"], row
@@ -227,6 +269,7 @@ def test_spec_snapshot_tables_match_coverage_json() -> None:
 def main() -> int:
     tests = [
         test_coverage_map_has_full_provider_surface_grid,
+        test_accepted_release_proof_scenarios_are_explicit,
         test_coverage_rows_are_auditable,
         test_spec_snapshot_tables_match_coverage_json,
     ]

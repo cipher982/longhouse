@@ -342,6 +342,10 @@ should not appear in the artifact tree.
 7. Verify Sauron status from inside the container.
 8. Update `docs/specs/provider-release-proof-coverage.json` and
    `docs/specs/provider-release-proof.md` if baseline-backed coverage changed.
+   For schema v2, add the accepted scenario to
+   `accepted_release_proof_scenarios` and reference its `scenario_id` from each
+   covered row's `baseline_scenarios`; the coverage test rejects unreferenced
+   `release_proof` claims.
 
 ## Focused Validation
 

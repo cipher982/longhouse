@@ -143,6 +143,12 @@ The machine-checkable map lives in
 `make validate-provider-cli-canaries`. The tables below are the readable
 summary; update the JSON first when a provider/surface changes.
 
+Schema v2 also records `accepted_release_proof_scenarios` and per-row
+`baseline_scenarios`. A row may claim `Baseline: release-proof yes` only when it
+points at one of those accepted scenarios for the same provider. This keeps the
+matrix honest about the difference between "covered by tests", "release-watch
+runs it", and "a reviewed green proof exists in the accepted baseline store".
+
 ### Claude Code
 
 | Surface | Covered | Evidence | Boundary | CI | Sauron release-watch | Baseline | Actionable today |

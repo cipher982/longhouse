@@ -1,5 +1,5 @@
 {
-    "schema_version": 1,
+    "schema_version": 2,
     "providers": [
         "claude",
         "codex",
@@ -37,7 +37,8 @@
             "runs_in_ci": false,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "none",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "claude",
@@ -52,7 +53,10 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "release_proof",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": [
+                "claude-release-proof-v1"
+            ]
         },
         {
             "provider": "claude",
@@ -67,7 +71,10 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "release_proof",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": [
+                "claude-release-proof-v1"
+            ]
         },
         {
             "provider": "claude",
@@ -85,7 +92,10 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "release_proof",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": [
+                "claude-release-proof-v1"
+            ]
         },
         {
             "provider": "claude",
@@ -100,7 +110,8 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": false,
             "accepted_baseline": "none",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "claude",
@@ -115,7 +126,8 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": false,
             "accepted_baseline": "parser_fixture",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "claude",
@@ -130,7 +142,8 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": false,
             "accepted_baseline": "none",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "claude",
@@ -145,7 +158,8 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": false,
             "accepted_baseline": "none",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "claude",
@@ -161,7 +175,8 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "none",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "claude",
@@ -177,7 +192,8 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "none",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "claude",
@@ -191,7 +207,8 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": false,
             "accepted_baseline": "none",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "claude",
@@ -206,7 +223,8 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": false,
             "accepted_baseline": "parser_fixture",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "claude",
@@ -221,7 +239,8 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "none",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "codex",
@@ -239,7 +258,10 @@
             "runs_in_ci": false,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "release_proof",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": [
+                "codex-release-proof-v1"
+            ]
         },
         {
             "provider": "codex",
@@ -255,7 +277,10 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "release_proof",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": [
+                "codex-release-proof-v1"
+            ]
         },
         {
             "provider": "codex",
@@ -270,7 +295,10 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "release_proof",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": [
+                "codex-release-proof-v1"
+            ]
         },
         {
             "provider": "codex",
@@ -287,7 +315,10 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "release_proof",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": [
+                "codex-release-proof-v1"
+            ]
         },
         {
             "provider": "codex",
@@ -302,7 +333,8 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "none",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "codex",
@@ -317,7 +349,8 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": false,
             "accepted_baseline": "parser_fixture",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "codex",
@@ -332,7 +365,8 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": false,
             "accepted_baseline": "none",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "codex",
@@ -347,7 +381,8 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": false,
             "accepted_baseline": "none",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "codex",
@@ -364,7 +399,10 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "release_proof",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": [
+                "codex-managed-live-send-release-proof-v1"
+            ]
         },
         {
             "provider": "codex",
@@ -379,7 +417,8 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "none",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "codex",
@@ -396,7 +435,10 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "release_proof",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": [
+                "codex-release-proof-v1"
+            ]
         },
         {
             "provider": "codex",
@@ -411,7 +453,8 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": false,
             "accepted_baseline": "parser_fixture",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "codex",
@@ -427,7 +470,10 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "release_proof",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": [
+                "codex-managed-live-send-release-proof-v1"
+            ]
         },
         {
             "provider": "opencode",
@@ -442,7 +488,8 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "none",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "opencode",
@@ -457,7 +504,10 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "release_proof",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": [
+                "opencode-release-proof-v1"
+            ]
         },
         {
             "provider": "opencode",
@@ -471,7 +521,10 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "release_proof",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": [
+                "opencode-release-proof-v1"
+            ]
         },
         {
             "provider": "opencode",
@@ -486,7 +539,10 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "release_proof",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": [
+                "opencode-release-proof-v1"
+            ]
         },
         {
             "provider": "opencode",
@@ -501,7 +557,10 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "release_proof",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": [
+                "opencode-release-proof-v1"
+            ]
         },
         {
             "provider": "opencode",
@@ -515,7 +574,10 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "release_proof",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": [
+                "opencode-release-proof-v1"
+            ]
         },
         {
             "provider": "opencode",
@@ -530,7 +592,8 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "none",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "opencode",
@@ -546,7 +609,10 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "release_proof",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": [
+                "opencode-release-proof-v1"
+            ]
         },
         {
             "provider": "opencode",
@@ -561,7 +627,10 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "release_proof",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": [
+                "opencode-release-proof-v1"
+            ]
         },
         {
             "provider": "opencode",
@@ -575,7 +644,10 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "release_proof",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": [
+                "opencode-release-proof-v1"
+            ]
         },
         {
             "provider": "opencode",
@@ -589,7 +661,10 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "release_proof",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": [
+                "opencode-release-proof-v1"
+            ]
         },
         {
             "provider": "opencode",
@@ -601,7 +676,8 @@
             "runs_in_ci": false,
             "runs_in_sauron_release_watch": false,
             "accepted_baseline": "none",
-            "failure_actionable": false
+            "failure_actionable": false,
+            "baseline_scenarios": []
         },
         {
             "provider": "opencode",
@@ -613,7 +689,8 @@
             "runs_in_ci": false,
             "runs_in_sauron_release_watch": false,
             "accepted_baseline": "none",
-            "failure_actionable": false
+            "failure_actionable": false,
+            "baseline_scenarios": []
         },
         {
             "provider": "antigravity",
@@ -630,7 +707,8 @@
             "runs_in_ci": false,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "none",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "antigravity",
@@ -645,7 +723,10 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "release_proof",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": [
+                "antigravity-release-proof-v1"
+            ]
         },
         {
             "provider": "antigravity",
@@ -659,7 +740,10 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "release_proof",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": [
+                "antigravity-release-proof-v1"
+            ]
         },
         {
             "provider": "antigravity",
@@ -674,7 +758,10 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "release_proof",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": [
+                "antigravity-release-proof-v1"
+            ]
         },
         {
             "provider": "antigravity",
@@ -688,7 +775,8 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": false,
             "accepted_baseline": "none",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "antigravity",
@@ -702,7 +790,8 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": false,
             "accepted_baseline": "none",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "antigravity",
@@ -716,7 +805,8 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": false,
             "accepted_baseline": "none",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "antigravity",
@@ -730,7 +820,8 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": false,
             "accepted_baseline": "none",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "antigravity",
@@ -748,7 +839,8 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "none",
-            "failure_actionable": true
+            "failure_actionable": true,
+            "baseline_scenarios": []
         },
         {
             "provider": "antigravity",
@@ -760,7 +852,8 @@
             "runs_in_ci": false,
             "runs_in_sauron_release_watch": false,
             "accepted_baseline": "none",
-            "failure_actionable": false
+            "failure_actionable": false,
+            "baseline_scenarios": []
         },
         {
             "provider": "antigravity",
@@ -772,7 +865,8 @@
             "runs_in_ci": false,
             "runs_in_sauron_release_watch": false,
             "accepted_baseline": "none",
-            "failure_actionable": false
+            "failure_actionable": false,
+            "baseline_scenarios": []
         },
         {
             "provider": "antigravity",
@@ -784,7 +878,8 @@
             "runs_in_ci": false,
             "runs_in_sauron_release_watch": false,
             "accepted_baseline": "none",
-            "failure_actionable": false
+            "failure_actionable": false,
+            "baseline_scenarios": []
         },
         {
             "provider": "antigravity",
@@ -803,7 +898,50 @@
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": false,
             "accepted_baseline": "none",
-            "failure_actionable": false
+            "failure_actionable": false,
+            "baseline_scenarios": []
+        }
+    ],
+    "accepted_release_proof_scenarios": [
+        {
+            "provider": "claude",
+            "scenario_id": "claude-release-proof-v1",
+            "provider_version": "claude 2.1.161",
+            "baseline_scope": "scoped_no_token_cli_identity_channel_status_launch_shape",
+            "baseline_boundary": "live_no_token_or_fake",
+            "promoted_to_sauron": true
+        },
+        {
+            "provider": "codex",
+            "scenario_id": "codex-release-proof-v1",
+            "provider_version": "codex-cli 0.139.0",
+            "baseline_scope": "no_token_managed_protocol_launch_reattach_shape",
+            "baseline_boundary": "live_no_token_or_fake",
+            "promoted_to_sauron": true
+        },
+        {
+            "provider": "codex",
+            "scenario_id": "codex-managed-live-send-release-proof-v1",
+            "provider_version": "codex-cli 0.139.0",
+            "baseline_scope": "managed_runtime_live_send_marker",
+            "baseline_boundary": "managed_runtime_live_token_or_fake",
+            "promoted_to_sauron": true
+        },
+        {
+            "provider": "opencode",
+            "scenario_id": "opencode-release-proof-v1",
+            "provider_version": "opencode 1.16.2",
+            "baseline_scope": "no_token_server_api_control_shape",
+            "baseline_boundary": "live_no_token",
+            "promoted_to_sauron": true
+        },
+        {
+            "provider": "antigravity",
+            "scenario_id": "antigravity-release-proof-v1",
+            "provider_version": "agy 1.0.8",
+            "baseline_scope": "scoped_no_token_binary_plugin_hook_inbox_shape",
+            "baseline_boundary": "live_no_token_or_fake",
+            "promoted_to_sauron": true
         }
     ]
 }
