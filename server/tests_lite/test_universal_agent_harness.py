@@ -548,8 +548,12 @@ def test_action_matrix_emits_same_longhouse_actions_for_all_providers(tmp_path: 
         assert actions["pause_request_detect"]["category"] == "observe"
         assert actions["answer_pause_request"]["category"] == "control"
         assert actions["multi_turn_continuity"]["category"] == "control"
-        assert actions["permission_prompt"]["status"] == "blocked"
-        assert actions["permission_prompt"]["failure_code"] == "permission_prompt_canary_missing"
+        if result["provider"] == "opencode":
+            assert actions["permission_prompt"]["status"] == "pass"
+            assert actions["permission_prompt"]["canary"] == "opencode_bridge_permission_reply"
+        else:
+            assert actions["permission_prompt"]["status"] == "blocked"
+            assert actions["permission_prompt"]["failure_code"] == "permission_prompt_canary_missing"
         assert actions["crash_timeout_cleanup"]["category"] == "resilience"
         assert actions["crash_timeout_cleanup"]["status"] == "pass"
         assert actions["interrupt_cancel"]["contract_operation"] == "interrupt"
@@ -924,6 +928,8 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
         "tool_call_result_projection"
     ]
     assert execution_rows["permission_prompt"]["providers"]["claude"]["coverage_status"] == "blocked"
+    assert execution_rows["permission_prompt"]["providers"]["opencode"]["coverage_status"] == "pass"
+    assert execution_rows["permission_prompt"]["providers"]["opencode"]["scenario_ids"] == ["permission_prompt"]
     assert execution_matrix["provider_coverage_kind_counts"]["claude"]["executable_scenario"] > execution_matrix[
         "provider_coverage_kind_counts"
     ]["claude"].get("matrix_contract", 0)
@@ -978,7 +984,10 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
         assert coverage["launch_remote"]["coverage_kind"] == "executable_scenario"
         assert coverage["launch_remote"]["scenario_ids"] == ["launch_remote_projection"]
         assert coverage["pause_request_detect"]["coverage_status"] == "pass"
-        assert coverage["permission_prompt"]["coverage_status"] == "blocked"
+        if result["provider"] == "opencode":
+            assert coverage["permission_prompt"]["coverage_status"] == "pass"
+        else:
+            assert coverage["permission_prompt"]["coverage_status"] == "blocked"
         assert coverage["tool_call_result"]["coverage_kind"] == "executable_scenario"
         assert coverage["tool_call_result"]["coverage_status"] == "pass"
         assert coverage["tool_call_result"]["scenario_ids"] == ["tool_call_result_projection"]
@@ -1948,9 +1957,22 @@ def test_remaining_surface_scenarios_emit_honest_results_for_all_providers(tmp_p
         assert multi["data"]["continuity_assertions"]["provider_session_id_stable"] is True
 
         permission = by_key[(provider, "permission_prompt")]
-        assert permission["status"] == "blocked"
-        assert permission["failure_code"] == "permission_prompt_canary_missing"
-        assert permission["data"]["operation_evidence"]["permission_prompt"]["level"] == "live_token_required"
+        if provider == "opencode":
+            assert permission["status"] == "pass"
+            assert permission["data"]["operation_evidence"]["permission_prompt"]["status"] == "pass"
+            assert permission["data"]["operation_evidence"]["permission_prompt"]["level"] == "hermetic"
+            assert permission["data"]["assertions"] == {
+                "auth_header_matches_state": True,
+                "command_returned": True,
+                "decision_forwarded": True,
+                "request_path_matches": True,
+                "request_received": True,
+            }
+            assert Path(permission["data"]["raw_permission_reply_path"]).is_file()
+        else:
+            assert permission["status"] == "blocked"
+            assert permission["failure_code"] == "permission_prompt_canary_missing"
+            assert permission["data"]["operation_evidence"]["permission_prompt"]["level"] == "live_token_required"
 
         crash = by_key[(provider, "crash_timeout_cleanup")]
         assert crash["status"] == "pass"
@@ -2898,6 +2920,8 @@ def test_script_entrypoint_runs_all_provider_action_e2e(tmp_path: Path) -> None:
     assert support_rows["send_message"]["providers"]["codex"]["status"] == "pass"
     assert support_rows["send_message"]["providers"]["claude"]["status"] == "pass"
     assert support_rows["steer_active_turn"]["providers"]["opencode"]["status"] == "unsupported_gap"
+    assert support_rows["permission_prompt"]["providers"]["opencode"]["status"] == "pass"
+    assert support_rows["permission_prompt"]["providers"]["opencode"]["canary"] == "opencode_bridge_permission_reply"
     assert support_rows["permission_prompt"]["providers"]["antigravity"]["status"] == "blocked"
     assert support_matrix["provider_status_counts"]["claude"]["blocked"] >= 1
     assert support_matrix["provider_status_counts"]["opencode"]["unsupported_gap"] >= 1

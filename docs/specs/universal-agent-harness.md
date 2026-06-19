@@ -360,7 +360,7 @@ Universal scenarios:
 | `terminate_cleanup` | P1 | Termination/cleanup projects owned-resource cleanup or reports an explicit unsupported gap. |
 | `multi_turn_continuity` | P1 | Follow-up input depends on prior turn state and stays in the same session. |
 | `live_token_streaming` | P1 | Model-visible behavior works; streaming is verified only when declared. |
-| `permission_prompt` | P2 | Permission approve/deny paths are observable where supported. |
+| `permission_prompt` | P2 | Permission approve/deny paths are observable where supported; OpenCode currently proves the bridge reply transport hermetically, while live held-provider prompts remain a stronger gate. |
 | `external_event_channel` | P2 | Hook/inbox/external input reaches the session where supported. |
 | `crash_timeout_cleanup` | P2 | Timeouts/crashes leave diagnosable artifacts and no orphaned managed process. |
 
@@ -620,8 +620,14 @@ shape:
    scenario. It calls real-print `opencode run --format json`, DB-ingests the
    prompt/result marker rows, and exposes `universal_live_token_streaming`
    evidence through release proof.
-18. Evidence packages are written for pass, fail, and unsupported results.
-19. Existing one-off canaries remain compatibility lanes until each behavior is
+18. OpenCode `permission_prompt` is an executable universal bridge-transport
+   scenario. It writes an OpenCode bridge state file, sends
+   `permission-reply` through the real Longhouse bridge command to a held fake
+   upstream permission request, and records the forwarded decision/auth/path
+   evidence. Claude, Codex, and Antigravity still report the explicit live
+   provider-held permission prompt gap.
+19. Evidence packages are written for pass, fail, and unsupported results.
+20. Existing one-off canaries remain compatibility lanes until each behavior is
    migrated and baselined.
 
 Next implementation target: migrate Claude managed live-token send mechanics
