@@ -52,9 +52,9 @@ SCENARIOS = (
     "timeline_projection",
     "run_prompt_once",
     "launch_managed_session",
+    "managed_session_e2e",
     "launch_remote_projection",
     "send_receive",
-    "managed_session_e2e",
     "steer_active_turn",
     "pause_request_detect",
     "answer_pause_request",
@@ -148,6 +148,7 @@ FULL_ACTION_SUITE_SCENARIOS = (
     "timeline_projection",
     "run_prompt_once",
     "launch_managed_session",
+    "managed_session_e2e",
     "launch_remote_projection",
     "send_receive",
     "steer_active_turn",
@@ -172,8 +173,8 @@ ACTION_EXECUTION_SCENARIO_BY_ID = {
     "launch_local": ("launch_managed_session",),
     "launch_remote": ("launch_remote_projection",),
     "run_once": ("run_prompt_once",),
-    "session_identity": ("launch_managed_session", "resume_reattach"),
-    "send_message": ("send_receive", "interrupt_cancel"),
+    "session_identity": ("launch_managed_session", "resume_reattach", "managed_session_e2e"),
+    "send_message": ("send_receive", "interrupt_cancel", "managed_session_e2e"),
     "steer_active_turn": ("steer_active_turn",),
     "pause_request_detect": ("pause_request_detect",),
     "answer_pause_request": ("answer_pause_request",),
@@ -4811,10 +4812,35 @@ def _action_coverage_policy(action_id: str) -> str:
 
 
 def _scenario_coverage_status(*, action_id: str, results: Iterable[ScenarioResult]) -> str:
-    statuses = [result.status for result in results]
-    if _action_coverage_policy(action_id) == "any_mapped_scenario" and STATUS_PASS in statuses:
+    result_list = list(results)
+    statuses = [result.status for result in result_list]
+    if _action_coverage_policy(action_id) == "any_mapped_scenario" and any(
+        _scenario_result_proves_action(action_id, result) for result in result_list
+    ):
         return STATUS_PASS
     return _worst_status(statuses)
+
+
+def _scenario_result_proves_action(action_id: str, result: ScenarioResult) -> bool:
+    if result.status != STATUS_PASS:
+        return False
+    data = result.data if isinstance(result.data, Mapping) else {}
+    if action_id == "send_message":
+        return _operation_status(data, "send_input") == STATUS_PASS
+    if action_id == "session_identity":
+        return bool(_clean_optional_str(data.get("provider_session_id")))
+    return True
+
+
+def _operation_status(data: Mapping[str, Any], operation: str) -> str | None:
+    evidence = data.get("operation_evidence")
+    if not isinstance(evidence, Mapping):
+        return None
+    row = evidence.get(operation)
+    if not isinstance(row, Mapping):
+        return None
+    status = row.get("status")
+    return str(status) if status is not None else None
 
 
 def _worst_status(statuses: Iterable[str]) -> str:

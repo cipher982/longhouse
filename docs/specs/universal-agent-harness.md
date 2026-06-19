@@ -570,13 +570,15 @@ shape:
    command/channel/PTY contract, requires passing `launch_local` evidence, and
    DB-ingests those rows. Claude send/receive remains an explicit no-token gap.
 10. `send_message` action coverage can be proven by any mapped executable
-   scenario that carries passing `send_input` evidence. This lets Claude's
-   channel-control `interrupt_cancel` canary cover the abstract send action
-   while `send_receive` still records the no-token response-binding gap.
+   scenario that carries passing `send_input` operation evidence. This lets
+   Claude's channel-control `interrupt_cancel` canary and Antigravity's
+   hook/inbox `managed_session_e2e` canary cover the abstract send action while
+   `send_receive` still records the no-token response-binding gap.
 10. `session_identity` action coverage uses the same "any mapped scenario"
-   policy. A passing managed launch can prove Longhouse captured provider and
-   Longhouse session identity even when `resume_reattach` remains an explicit
-   separate gap for that provider.
+   policy, but requires a provider session id. A passing managed launch or
+   managed-session e2e can prove Longhouse captured provider and Longhouse
+   session identity even when `resume_reattach` remains an explicit separate
+   gap for that provider.
 10. Codex `resume_reattach` now calls the existing provider-release canary,
    requires passing reattach evidence, and DB-ingests the resulting rows when
    Runtime Host credentials are present; without credentials it reports the
@@ -626,8 +628,13 @@ shape:
    upstream permission request, and records the forwarded decision/auth/path
    evidence. Claude, Codex, and Antigravity still report the explicit live
    provider-held permission prompt gap.
-19. Evidence packages are written for pass, fail, and unsupported results.
-20. Existing one-off canaries remain compatibility lanes until each behavior is
+19. `full_action_suite` runs `managed_session_e2e` and lets any-mapped abstract
+   actions count it only when the result carries the operation evidence required
+   by that action. Antigravity hook/inbox e2e now covers abstract
+   `send_message` and `session_identity` while its response, interrupt, and
+   reattach gaps remain visible.
+20. Evidence packages are written for pass, fail, and unsupported results.
+21. Existing one-off canaries remain compatibility lanes until each behavior is
    migrated and baselined.
 
 Next implementation target: migrate Claude managed live-token send mechanics

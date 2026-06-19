@@ -171,13 +171,15 @@ Implemented:
   feeds the resulting rows through isolated Longhouse SQLite ingest. Claude
   send/receive remains an explicit no-token gap.
 - `send_message` execution coverage now uses any mapped executable scenario
-  that proves send input. Claude's channel-control `interrupt_cancel` canary
-  proves no-token `send_input`, while the unsupported `send_receive` response
-  binding gap remains visible in scenario status/failure metadata.
+  that carries passing `send_input` operation evidence. Claude's
+  channel-control `interrupt_cancel` canary and Antigravity's hook/inbox
+  `managed_session_e2e` proof can cover abstract send, while unsupported
+  response-binding gaps remain visible in scenario status/failure metadata.
 - `session_identity` execution coverage now also uses any mapped executable
-  scenario. A passing managed launch can cover provider/Longhouse session
-  identity while `resume_reattach` remains a separate explicit gap when it is
-  unsupported or credential-gated.
+  scenario that carries a provider session id. A passing managed launch or
+  managed-session e2e can cover provider/Longhouse session identity while
+  `resume_reattach` remains a separate explicit gap when it is unsupported or
+  credential-gated.
 - OpenCode `permission_prompt` now has a hermetic bridge-transport proof. The
   universal scenario writes an OpenCode bridge state file, sends
   `permission-reply` through Longhouse's bridge command to a fake held
@@ -334,7 +336,7 @@ contract for the provider's declared profile and run the same scenario corpus.
 | Claude Code | 8/10 | MVP adapter runs safe universal scenarios; universal `managed_session_e2e` and `launch_managed_session` now call provider-live no-token command/channel/PTY checks and DB-ingest them; universal `interrupt_cancel` calls the channel-control canary and DB-ingests no-token send/steer/SIGINT rows; universal `steer_active_turn` evaluates that steer evidence directly; universal `live_token_streaming` calls the real-print one-shot live-token canary and DB-ingests marker evidence; managed live-token send still needs promotion | Promote managed Claude live-token send into universal scenarios with bounded failure artifacts |
 | Codex/OpenAI | 9/10 | MVP adapter runs safe universal scenarios; strongest existing lane has staged asset proof, managed live-send/interrupt, real-tool scenarios, accepted baselines; universal `managed_session_e2e` and `resume_reattach` now call the Codex provider-release canary and DB-ingest launch/reattach evidence when Runtime Host credentials are present; universal `interrupt_cancel` calls the managed-live-interrupt canary and reports credentials gaps explicitly; universal `tool_call_result` calls the real-tool canary and DB-ingests call/result linkage; universal `live_token_streaming` calls managed live-send and reports Runtime Host credential gaps explicitly | Replace remaining Codex one-off release-watch invocations with universal scenarios and add staged old/new install proof |
 | OpenCode | 10/10 | First real no-token universal e2e lane calls the provider-live server/session/schema/prompt_async/reattach/abort canary, projects canonical evidence, and round-trips it through Longhouse DB ingest; universal `interrupt_cancel` now calls the session.abort canary directly; universal `resume_reattach` now calls the process-restart reattach canary directly; universal `tool_call_result` now calls provider-control real-tool and DB-ingests call/result linkage; universal `live_token_streaming` now calls provider-control real-print and DB-ingests marker rows | Promote staged old/new release diff for OpenCode in the release runner |
-| Antigravity | 7/10 | MVP adapter runs safe universal scenarios; no-token hook/plugin baseline and live-send baseline exist; universal `managed_session_e2e` now calls provider-control hook/inbox and DB-ingests external-event evidence; universal `live_token_streaming` now calls real-agy hook-inbox injection and DB-ingests marker evidence | Keep interrupt/reattach/tool gaps explicit and add staged old/new release proof |
+| Antigravity | 7/10 | MVP adapter runs safe universal scenarios; no-token hook/plugin baseline and live-send baseline exist; universal `managed_session_e2e` now calls provider-control hook/inbox, DB-ingests external-event evidence, and counts toward abstract `send_message` plus `session_identity` only because it carries passing `send_input` evidence and a provider session id; universal `live_token_streaming` now calls real-agy hook-inbox injection and DB-ingests marker evidence | Keep interrupt/reattach/tool gaps explicit and add staged old/new release proof |
 
 ## Active Task List
 
@@ -407,6 +409,7 @@ evidence path is recorded and the relevant doc, test, or proof command exists.
 | H62 | Make default smoke prove provider-scoped old/new diff coverage | Done | +1 | `full_action_suite` now receives old/new proof artifacts, `HarnessOptions` accepts provider-scoped proof paths, and the default universal smoke generates synthetic old/new proof pairs for Claude, Codex, OpenCode, and Antigravity so the execution coverage matrix records `old_new_release_diff=pass` for every provider |
 | H63 | Count mapped session identity evidence without hiding reattach gaps | Done | +0 | `session_identity` execution coverage now accepts any mapped executable scenario that proves provider/Longhouse session identity, so Claude and Codex managed-launch evidence can cover the abstract identity action while `resume_reattach` still records adapter-missing or credential-gated gaps |
 | H64 | Add OpenCode permission-prompt bridge transport proof | Done | +0 | `permission_prompt` now passes for OpenCode by writing an isolated bridge state file and sending `permission-reply` through Longhouse's OpenCode bridge command to a fake held permission request; Claude/Codex/Antigravity still report live provider-held permission prompt gaps |
+| H65 | Count Antigravity managed-session proof without over-crediting launch-only scenarios | Done | +0 | `full_action_suite` now runs `managed_session_e2e`, `send_message` coverage requires mapped `send_input=pass`, and `session_identity` coverage requires a provider session id; Antigravity hook/inbox e2e now counts for abstract send/session identity while response, interrupt, and reattach gaps stay visible |
 
 ## Score Update Rules
 

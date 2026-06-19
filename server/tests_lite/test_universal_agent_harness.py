@@ -885,10 +885,12 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
     assert execution_rows["send_message"]["providers"]["claude"]["scenario_ids"] == [
         "send_receive",
         "interrupt_cancel",
+        "managed_session_e2e",
     ]
     assert execution_rows["send_message"]["providers"]["claude"]["scenario_statuses"] == {
         "send_receive": "unsupported_gap",
         "interrupt_cancel": "pass",
+        "managed_session_e2e": "pass",
     }
     assert execution_rows["send_message"]["providers"]["claude"]["scenario_failure_codes"] == {
         "send_receive": "send_receive_not_safe_no_token",
@@ -896,16 +898,19 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
     assert execution_rows["send_message"]["providers"]["codex"]["scenario_ids"] == [
         "send_receive",
         "interrupt_cancel",
+        "managed_session_e2e",
     ]
     assert execution_rows["session_identity"]["providers"]["claude"]["coverage_status"] == "pass"
     assert execution_rows["session_identity"]["providers"]["claude"]["coverage_policy"] == "any_mapped_scenario"
     assert execution_rows["session_identity"]["providers"]["claude"]["scenario_ids"] == [
         "launch_managed_session",
         "resume_reattach",
+        "managed_session_e2e",
     ]
     assert execution_rows["session_identity"]["providers"]["claude"]["scenario_statuses"] == {
         "launch_managed_session": "pass",
         "resume_reattach": "unsupported_gap",
+        "managed_session_e2e": "pass",
     }
     assert execution_rows["session_identity"]["providers"]["claude"]["scenario_failure_codes"] == {
         "resume_reattach": "resume_reattach_adapter_missing",
@@ -914,7 +919,10 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
     assert execution_rows["session_identity"]["providers"]["codex"]["scenario_statuses"] == {
         "launch_managed_session": "pass",
         "resume_reattach": "unsupported_gap",
+        "managed_session_e2e": "unsupported_gap",
     }
+    assert execution_rows["session_identity"]["providers"]["antigravity"]["coverage_status"] == "pass"
+    assert execution_rows["send_message"]["providers"]["antigravity"]["coverage_status"] == "pass"
     assert execution_rows["resume_reattach"]["providers"]["claude"]["coverage_status"] == "unsupported_gap"
     assert execution_rows["resume_reattach"]["providers"]["codex"]["coverage_status"] == "unsupported_gap"
     assert execution_rows["launch_remote"]["providers"]["claude"]["coverage_kind"] == "executable_scenario"
@@ -957,17 +965,19 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
         coverage = {row["action_id"]: row for row in suite["actions"]}
         assert set(coverage) == set(uah.ACTIONS)
         assert coverage["send_message"]["coverage_kind"] == "executable_scenario"
-        assert coverage["send_message"]["scenario_ids"] == ["send_receive", "interrupt_cancel"]
+        assert coverage["send_message"]["scenario_ids"] == ["send_receive", "interrupt_cancel", "managed_session_e2e"]
         assert coverage["session_identity"]["coverage_kind"] == "executable_scenario"
         assert coverage["session_identity"]["scenario_ids"] == [
             "launch_managed_session",
             "resume_reattach",
+            "managed_session_e2e",
         ]
         if result["provider"] == "claude":
             assert coverage["send_message"]["coverage_status"] == "pass"
             assert coverage["send_message"]["scenario_statuses"] == {
                 "send_receive": "unsupported_gap",
                 "interrupt_cancel": "pass",
+                "managed_session_e2e": "pass",
             }
             assert coverage["send_message"]["scenario_failure_codes"] == {
                 "send_receive": "send_receive_not_safe_no_token",
@@ -980,7 +990,11 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
             assert coverage["session_identity"]["coverage_status"] == "pass"
             assert coverage["session_identity"]["scenario_failure_codes"] == {
                 "resume_reattach": "codex_managed_bridge_credentials_missing",
+                "managed_session_e2e": "codex_managed_bridge_credentials_missing",
             }
+        if result["provider"] == "antigravity":
+            assert coverage["send_message"]["coverage_status"] == "pass"
+            assert coverage["session_identity"]["coverage_status"] == "pass"
         assert coverage["launch_remote"]["coverage_kind"] == "executable_scenario"
         assert coverage["launch_remote"]["scenario_ids"] == ["launch_remote_projection"]
         assert coverage["pause_request_detect"]["coverage_status"] == "pass"
