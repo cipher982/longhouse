@@ -198,7 +198,7 @@ def test_provider_release_proof_universal_smoke_make_emits_all_provider_artifact
                 "provider-release-proof-universal-smoke",
                 f"ARTIFACT={artifact}",
                 f"EVIDENCE_ROOT={evidence_root}",
-                "UNIVERSAL_SCENARIO=adapter_conformance action_matrix control_surface",
+                "UNIVERSAL_SCENARIO=adapter_conformance action_matrix control_surface full_action_suite",
             ]
         )
 
@@ -211,13 +211,22 @@ def test_provider_release_proof_universal_smoke_make_emits_all_provider_artifact
             "adapter_conformance",
             "action_matrix",
             "control_surface",
+            "full_action_suite",
         ]
-        assert payload["result_count"] == 12
+        assert payload["result_count"] == 16
         assert Path(payload["universal_harness_artifact"]).is_file()
         assert Path(payload["provider_support_matrix_path"]).is_file()
+        assert Path(payload["provider_execution_coverage_matrix_path"]).is_file()
         support_matrix = payload["provider_support_matrix"]
         assert support_matrix["action_count"] > 20
         assert support_matrix["missing_provider_actions"] == []
+        execution_matrix = payload["provider_execution_coverage_matrix"]
+        assert (
+            execution_matrix["artifact_kind"]
+            == "universal_agent_harness_provider_execution_coverage_matrix"
+        )
+        assert execution_matrix["action_count"] == support_matrix["action_count"]
+        assert execution_matrix["missing_provider_actions"] == []
 
 
 def test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_yellow() -> (

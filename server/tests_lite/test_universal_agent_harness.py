@@ -790,6 +790,24 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
 
     assert payload["verdict"] == "yellow"
     assert {result["provider"] for result in payload["results"]} == set(uah.SUPPORTED_PROVIDERS)
+    assert Path(payload["provider_execution_coverage_matrix_path"]).is_file()
+    execution_matrix = payload["provider_execution_coverage_matrix"]
+    assert execution_matrix["artifact_kind"] == "universal_agent_harness_provider_execution_coverage_matrix"
+    assert execution_matrix["providers"] == list(uah.SUPPORTED_PROVIDERS)
+    assert execution_matrix["action_count"] == len(uah.ACTIONS)
+    assert execution_matrix["captured_provider_count"] == len(uah.SUPPORTED_PROVIDERS)
+    assert execution_matrix["missing_provider_actions"] == []
+    execution_rows = {row["action_id"]: row for row in execution_matrix["actions"]}
+    assert set(execution_rows) == set(uah.ACTIONS)
+    assert execution_rows["send_message"]["providers"]["claude"]["coverage_kind"] == "executable_scenario"
+    assert execution_rows["send_message"]["providers"]["codex"]["scenario_ids"] == ["send_receive"]
+    assert execution_rows["baseline_compare"]["providers"]["opencode"]["coverage_status"] == "pass"
+    assert execution_rows["tool_call_result"]["providers"]["antigravity"]["coverage_kind"] == "matrix_contract"
+    assert execution_rows["permission_prompt"]["providers"]["claude"]["coverage_status"] == "blocked"
+    assert (
+        execution_matrix["provider_coverage_kind_counts"]["claude"]["executable_scenario"]
+        > execution_matrix["provider_coverage_kind_counts"]["claude"]["matrix_contract"]
+    )
     for result in payload["results"]:
         assert result["scenario"] == "full_action_suite"
         assert result["status"] == "blocked"

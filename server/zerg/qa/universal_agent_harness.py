@@ -4250,6 +4250,15 @@ def _status_counts(statuses: Iterable[str]) -> dict[str, int]:
     return {key: value for key, value in counts.items() if value}
 
 
+def _value_counts(values: Iterable[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        key = str(value or "")
+        if key:
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
 def _contract_snapshot(provider: str) -> dict[str, Any] | None:
     contract = contract_for_provider(provider)
     if contract is None:
@@ -6678,6 +6687,113 @@ def provider_support_matrix(
     }
 
 
+def provider_execution_coverage_matrix(
+    *,
+    providers: Iterable[str],
+    scenarios: Iterable[str],
+    results: Iterable[ScenarioResult],
+) -> dict[str, Any] | None:
+    coverage_rows_by_provider: dict[str, dict[str, dict[str, Any]]] = {}
+    for result in results:
+        if result.scenario != "full_action_suite":
+            continue
+        rows = result.data.get("actions") if isinstance(result.data, Mapping) else None
+        if not isinstance(rows, list):
+            continue
+        provider_rows: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            action_id = str(row.get("action_id") or "")
+            if action_id:
+                provider_rows[action_id] = dict(row)
+        if provider_rows:
+            coverage_rows_by_provider[result.provider] = provider_rows
+
+    if not coverage_rows_by_provider:
+        return None
+
+    provider_list = list(providers)
+    matrix_rows: list[dict[str, Any]] = []
+    missing_provider_actions: list[dict[str, str]] = []
+    provider_statuses: dict[str, list[str]] = {provider: [] for provider in provider_list}
+    provider_coverage_kinds: dict[str, list[str]] = {provider: [] for provider in provider_list}
+    for action in ACTION_DEFINITIONS:
+        cells: dict[str, dict[str, Any]] = {}
+        for provider in provider_list:
+            row = coverage_rows_by_provider.get(provider, {}).get(action.action_id)
+            if row is None:
+                cells[provider] = {
+                    "coverage_status": "missing",
+                    "failure_code": "full_action_suite_row_missing",
+                }
+                missing_provider_actions.append({"provider": provider, "action_id": action.action_id})
+                continue
+
+            coverage_status = str(row.get("coverage_status") or STATUS_FAIL)
+            coverage_kind = str(row.get("coverage_kind") or "")
+            provider_statuses.setdefault(provider, []).append(coverage_status)
+            provider_coverage_kinds.setdefault(provider, []).append(coverage_kind)
+            cells[provider] = {
+                key: row.get(key)
+                for key in (
+                    "coverage_kind",
+                    "coverage_status",
+                    "failure_code",
+                    "matrix_status",
+                    "matrix_failure_code",
+                    "matrix_support",
+                    "matrix_support_reason",
+                    "scenario_ids",
+                    "scenario_statuses",
+                    "scenario_failure_codes",
+                    "required_evidence",
+                )
+                if row.get(key) is not None
+            }
+        cell_statuses = []
+        cell_coverage_kinds = []
+        for cell in cells.values():
+            if cell.get("coverage_status") in STATUSES:
+                cell_statuses.append(cell["coverage_status"])
+            if cell.get("coverage_kind"):
+                cell_coverage_kinds.append(str(cell["coverage_kind"]))
+        matrix_rows.append(
+            {
+                "action_id": action.action_id,
+                "title": action.title,
+                "category": action.category,
+                "contract_operation": action.contract_operation,
+                "required_evidence": action.required_evidence,
+                "providers": cells,
+                "coverage_status_counts": _status_counts(cell_statuses),
+                "coverage_kind_counts": _value_counts(cell_coverage_kinds),
+            }
+        )
+
+    provider_status_counts = {}
+    for provider, statuses in provider_statuses.items():
+        if statuses:
+            provider_status_counts[provider] = _status_counts(statuses)
+    provider_coverage_kind_counts = {}
+    for provider, coverage_kinds in provider_coverage_kinds.items():
+        if coverage_kinds:
+            provider_coverage_kind_counts[provider] = _value_counts(coverage_kinds)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "artifact_kind": "universal_agent_harness_provider_execution_coverage_matrix",
+        "generated_at": utc_now(),
+        "providers": provider_list,
+        "scenarios": list(scenarios),
+        "action_count": len(matrix_rows),
+        "captured_provider_count": len(coverage_rows_by_provider),
+        "missing_provider_actions": missing_provider_actions,
+        "provider_coverage_status_counts": provider_status_counts,
+        "provider_coverage_kind_counts": provider_coverage_kind_counts,
+        "actions": matrix_rows,
+    }
+
+
 def run_harness(options: HarnessOptions) -> dict[str, Any]:
     registry = adapter_registry(options.provider_bins)
     results: list[ScenarioResult] = []
@@ -6715,6 +6831,11 @@ def run_harness(options: HarnessOptions) -> dict[str, Any]:
             )
 
     support_matrix = provider_support_matrix(providers=options.providers, scenarios=options.scenarios, results=results)
+    execution_coverage_matrix = provider_execution_coverage_matrix(
+        providers=options.providers,
+        scenarios=options.scenarios,
+        results=results,
+    )
     payload = {
         "schema_version": SCHEMA_VERSION,
         "artifact_kind": ARTIFACT_KIND,
@@ -6730,6 +6851,11 @@ def run_harness(options: HarnessOptions) -> dict[str, Any]:
         write_json(matrix_path, support_matrix)
         payload["provider_support_matrix"] = support_matrix
         payload["provider_support_matrix_path"] = str(matrix_path)
+    if execution_coverage_matrix is not None:
+        matrix_path = options.evidence_root / "provider-execution-coverage-matrix.json"
+        write_json(matrix_path, execution_coverage_matrix)
+        payload["provider_execution_coverage_matrix"] = execution_coverage_matrix
+        payload["provider_execution_coverage_matrix_path"] = str(matrix_path)
     write_json(options.evidence_root / "universal-agent-harness.json", payload)
     return payload
 
@@ -6843,6 +6969,8 @@ __all__ = [
     "OpenCodeHarnessAdapter",
     "ScenarioResult",
     "adapter_registry",
+    "provider_execution_coverage_matrix",
+    "provider_support_matrix",
     "provider_configs",
     "run_harness",
     "run_scenario",

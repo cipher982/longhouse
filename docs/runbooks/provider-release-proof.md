@@ -76,17 +76,22 @@ make provider-release-proof-universal-smoke \
 
 This command creates disposable fake provider binaries, runs the shared
 universal harness across Claude Code, Codex/OpenAI, OpenCode, and Antigravity,
-and writes a support matrix artifact. `yellow` is expected while known
-unsupported or blocked rows remain explicit; `red` means the shared harness or a
-P0 projection regressed.
+and writes support and execution coverage matrix artifacts. The support matrix
+comes from `action_matrix` and shows the shared contract surface. The execution
+coverage matrix comes from `full_action_suite` and shows whether each
+provider/action was backed by an executable scenario or only by a typed
+matrix/contract row. `yellow` is expected while known unsupported or blocked
+rows remain explicit; `red` means the shared harness or a P0 projection
+regressed.
 
 `make validate-provider-cli-canaries` runs the same default smoke in CI, so
 changes to provider release-proof scripts, contracts, or validation plumbing
-exercise the all-provider abstract action surface before merge. Set `JSON=1` on
-the Make target only when you want the full inline artifact in stdout; the
-artifact path remains the durable evidence source. The primary CI workflow
-uploads `.build/canaries/provider-release-proof-universal-smoke/**` as a
-short-retention artifact after provider validation, including failed runs.
+exercise the all-provider abstract action surface and the portable execution
+coverage suite before merge. Set `JSON=1` on the Make target only when you want
+the full inline artifact in stdout; the artifact path remains the durable
+evidence source. The primary CI workflow uploads
+`.build/canaries/provider-release-proof-universal-smoke/**` as a short-retention
+artifact after provider validation, including failed runs.
 
 Run the DB-backed universal ingest lane explicitly:
 

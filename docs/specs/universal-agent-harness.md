@@ -230,6 +230,17 @@ old/new prerequisites out of the portable bundle; those remain stronger opt-in
 lanes. A blocked suite is expected while permission prompts, live answer-pause
 delivery, and some provider-specific control lanes are still explicit gaps.
 
+When an all-provider run includes `full_action_suite`, the harness also writes
+`provider-execution-coverage-matrix.json`. This is different from
+`provider-support-matrix.json`: the support matrix transposes provider contract
+rows from `action_matrix`, while the execution coverage matrix transposes
+`full_action_suite` rows and shows whether each provider/action was backed by
+an executable scenario (`coverage_kind=executable_scenario`) or only by the
+explicit matrix contract (`coverage_kind=matrix_contract`). This is the artifact
+to inspect when deciding whether a release smoke actually exercised send,
+steer, pause, cancel, ingest, projection, baseline compare, or old/new diff
+behavior.
+
 ## Capabilities And Profiles
 
 Capabilities are the vocabulary scenarios use to decide what is required:
