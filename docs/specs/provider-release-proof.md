@@ -333,11 +333,11 @@ send/steer behavior in production release-watch.
 | transcript/log parse | partial | hook transcript binding tests | hermetic | `make test` | no | no | partial |
 | ingest into Longhouse | partial | hook outbox/runtime tests | hermetic | `make test` | no | no | partial |
 | timeline/session projection | partial | session capabilities for Antigravity transport | hermetic | `make test` | no | no | partial |
-| send input | partial | `provider-control-e2e-canary.py --antigravity-real-agy-send`; `provider-release-proof.py --antigravity-run-real-agy-send` attaches that send evidence to a release proof; Sauron release-watch preserves staged `agy` proof/differential evidence and can request the real-send scenario behind `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` | live_token when explicitly run; fake wrapper in CI | wrapper test in CI uses fake agy | profile/live plus opt-in real-send proof/diff when configured | release-proof yes (`antigravity-real-agy-send-release-proof-v1`, 1.0.10) | yes |
+| send input | partial | `provider-control-e2e-canary.py --antigravity-real-agy-send`; `provider-release-proof.py --antigravity-run-real-agy-send` attaches that send evidence to a release proof; Sauron release-watch preserves staged `agy` proof/differential evidence and can request the real-send scenario behind `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` | live_token when explicitly run; fake wrapper in CI | wrapper test in CI uses fake agy | yes; production Sauron has `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` configured | release-proof yes (`antigravity-real-agy-send-release-proof-v1`, 1.0.10) | yes |
 | interrupt/abort/steer | no | unsupported in manifest | none | no | no | no | no |
 | reattach/resume | no | unsupported in manifest | none | no | no | no | no |
 | tool/tool-result shape | no | no provider transcript parser golden found | none | no | no | no | no |
-| live-token behavior | partial | real agy send canary exists and `provider-release-proof.py --antigravity-run-real-agy-send` attaches it; CI covers the adapter with fake agy; Sauron release-watch has an env-gated pass-through but production is not enabled | live_token manual/configured plus fake adapter | fake-wrapper CI plus Sauron plumbing tests | not configured in production | release-proof yes (`antigravity-real-agy-send-release-proof-v1`, 1.0.10) | yes for manual proof/diff; production gate remains off |
+| live-token behavior | partial | real agy send canary exists and `provider-release-proof.py --antigravity-run-real-agy-send` attaches it; CI covers the adapter with fake agy; Sauron release-watch has an env-gated pass-through and production now enables it | live_token manual/configured plus fake adapter | fake-wrapper CI plus Sauron plumbing tests | yes; production Sauron has `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` configured | release-proof yes (`antigravity-real-agy-send-release-proof-v1`, 1.0.10) | yes |
 
 Antigravity should stay narrow: on 2026-06-19, `agy 1.0.8` produced a green
 `antigravity-release-proof-v1` artifact and a fresh rerun diffed green/match
@@ -352,8 +352,10 @@ these baselines prove scoped no-token launch shape plus model-visible send
 injection. They do not prove interrupt/abort/steer, reattach/resume, or
 tool/tool-result shape. Sauron has an explicit
 `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` gate that can pass this scenario
-through golden-envelope and old/new differential runs, but production Sauron is
-not configured to spend real `agy` turns on release-watch by default.
+through golden-envelope and old/new differential runs. Production Sauron now
+enables that gate after promoting the accepted baseline; after restarting the
+`sauron` container, importing the jobs manifest from `/data/jobs` loaded
+`/data/secrets.env` and `_antigravity_real_agy_send_enabled()` returned true.
 
 ### Legacy Google JSON Imports
 
@@ -671,9 +673,9 @@ should not by itself count as contract drift.
    `codex-managed-live-interrupt-release-proof-v1` baseline. Separately decide
    whether to enable `AGENT_RELEASE_CODEX_REAL_TOOL=1` in production Sauron by
    default.
-3. Decide whether to enable `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` in
-   production Sauron; the accepted baseline exists, but the default release
-   watch still avoids real `agy` token spend.
+3. `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` is now enabled in production
+   Sauron after accepting and promoting the
+   `antigravity-real-agy-send-release-proof-v1` baseline.
 4. Decide whether to enable scheduled OpenCode real-tool release-watch spend;
    the accepted baseline exists, but the default release watch still avoids
    real OpenCode token spend.

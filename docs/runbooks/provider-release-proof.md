@@ -177,9 +177,9 @@ Longhouse inbox message.
 Sauron can pass this same scenario through Antigravity release-watch by setting
 `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1`. The reviewed green
 `antigravity-real-agy-send-release-proof-v1` baseline for `agy 1.0.10` was
-accepted on 2026-06-19. Production Sauron still leaves this gate off by default
-so release-watch does not spend real `agy` turns unless that cost/benefit trade
-has been chosen deliberately.
+accepted on 2026-06-19. Production Sauron now enables this gate after promoting
+the accepted baseline, so release-watch runs the real-send proof/diff scenario
+for source-reviewed Antigravity releases.
 
 ## Read A Proof
 
@@ -499,11 +499,11 @@ an accepted baseline.
   it in release-watch with `AGENT_RELEASE_CODEX_REAL_TOOL=1`. Production Sauron
   leaves that token-spending lane off by default.
 - Sauron baseline inventory guard: live in production as
-  `agent-release-baseline-guard`; on 2026-06-19 it returned 8/8 accepted
+  `agent-release-baseline-guard`; on 2026-06-19 it returned 9/9 accepted
   scenarios green against `/data/provider-release-proofs`.
 - Antigravity real-agy send release-watch: Sauron has an env-gated pass-through
-  for this scenario, but production Sauron is not configured with
-  `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` by default.
+  for this scenario, and production Sauron now has
+  `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` configured.
 - OpenCode real-tool release-watch: Sauron has an env-gated pass-through for
   this scenario, but production Sauron is not configured with
   `AGENT_RELEASE_OPENCODE_REAL_TOOL=1` by default.
