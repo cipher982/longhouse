@@ -66,6 +66,20 @@ scripts/qa/universal-agent-harness.py \
 This should return `yellow`, not `red`, while unsupported or blocked rows remain
 explicit in the artifact.
 
+Run the CI-friendly all-provider fake/no-token smoke:
+
+```bash
+make provider-release-proof-universal-smoke \
+  ARTIFACT=/tmp/provider-release-proof-universal-smoke.json \
+  EVIDENCE_ROOT=/tmp/provider-release-proof-universal-smoke-evidence
+```
+
+This command creates disposable fake provider binaries, runs the shared
+universal harness across Claude Code, Codex/OpenAI, OpenCode, and Antigravity,
+and writes a support matrix artifact. `yellow` is expected while known
+unsupported or blocked rows remain explicit; `red` means the shared harness or a
+P0 projection regressed.
+
 Run the DB-backed universal ingest lane explicitly:
 
 ```bash

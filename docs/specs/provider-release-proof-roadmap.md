@@ -362,6 +362,7 @@ evidence path is recorded and the relevant doc, test, or proof command exists.
 | H47 | Feed staged old/new runner from Sauron release envelopes | Done | +2 | Sauron `run_provider_differential` prefers Longhouse `provider-release-proof-old-new.py` for default profiles when previous/current binaries are staged, and keeps envelope fallback for profile-specific live/tool lanes |
 | H48 | Add portable full-action-suite aggregate | Done | +0 | `full_action_suite` runs the action matrix plus safe no-token action scenarios, writes per-action coverage, proves no abstract action is missing, and attaches through provider-release-proof; it closes a harness enforcement gap but does not advance private live/staged/Sauron gates |
 | H49 | Add all-provider support-matrix artifact | Done | +0 | `provider-support-matrix.json` transposes action-matrix rows into one provider-by-action grid and `provider-release-proof.py` attaches the current provider slice as `provider_support_matrix`; this improves auditability without changing the grand score |
+| H50 | Add CI-friendly universal fake/no-token smoke command | Done | +0 | `provider-release-proof-universal-smoke.py` and `make provider-release-proof-universal-smoke` generate disposable fake provider binaries, run the all-provider universal harness, and emit a support matrix; this makes the existing smoke easy to schedule without changing live/staged coverage |
 
 ## Score Update Rules
 

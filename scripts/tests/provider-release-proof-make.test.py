@@ -56,13 +56,17 @@ def test_provider_release_proof_old_new_make_requires_old_and_new() -> None:
     assert "NEW is required" in missing_new.stderr
 
 
-def test_provider_release_proof_staged_old_new_make_requires_provider_and_bins() -> None:
+def test_provider_release_proof_staged_old_new_make_requires_provider_and_bins() -> (
+    None
+):
     missing_provider = _run_make(["provider-release-proof-staged-old-new"])
 
     assert missing_provider.returncode == 2
     assert "PROVIDER is required" in missing_provider.stderr
 
-    missing_old = _run_make(["provider-release-proof-staged-old-new", "PROVIDER=opencode"])
+    missing_old = _run_make(
+        ["provider-release-proof-staged-old-new", "PROVIDER=opencode"]
+    )
 
     assert missing_old.returncode == 2
     assert "OLD_PROVIDER_BIN is required" in missing_old.stderr
@@ -179,6 +183,41 @@ def test_provider_release_proof_maturity_make_emits_rollup() -> None:
         assert payload["overall"]["weighted_percent"] == 75.0
         assert payload["provider_rollups"]["opencode"]["weighted_percent"] == 75.0
         assert payload["accepted_baselines"]["status"] == "checked"
+
+
+def test_provider_release_proof_universal_smoke_make_emits_all_provider_artifact() -> (
+    None
+):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        artifact = root / "universal-smoke.json"
+        evidence_root = root / "evidence"
+
+        result = _run_make(
+            [
+                "provider-release-proof-universal-smoke",
+                f"ARTIFACT={artifact}",
+                f"EVIDENCE_ROOT={evidence_root}",
+                "UNIVERSAL_SCENARIO=adapter_conformance action_matrix control_surface",
+            ]
+        )
+
+        assert result.returncode == 0, result.stderr
+        payload = _read_json(artifact)
+        assert payload["artifact_kind"] == "provider_release_proof_universal_smoke"
+        assert payload["verdict"] == "yellow"
+        assert payload["providers"] == ["claude", "codex", "opencode", "antigravity"]
+        assert payload["scenarios"] == [
+            "adapter_conformance",
+            "action_matrix",
+            "control_surface",
+        ]
+        assert payload["result_count"] == 12
+        assert Path(payload["universal_harness_artifact"]).is_file()
+        assert Path(payload["provider_support_matrix_path"]).is_file()
+        support_matrix = payload["provider_support_matrix"]
+        assert support_matrix["action_count"] > 20
+        assert support_matrix["missing_provider_actions"] == []
 
 
 def test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_yellow() -> (
@@ -398,6 +437,7 @@ def main() -> int:
         test_provider_release_proof_staged_old_new_make_requires_provider_and_bins,
         test_provider_release_proof_status_all_make_reports_inventory_missing_baseline,
         test_provider_release_proof_maturity_make_emits_rollup,
+        test_provider_release_proof_universal_smoke_make_emits_all_provider_artifact,
         test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_yellow,
         test_provider_release_proof_make_passes_scenario_id_override,
         test_provider_release_proof_make_runs_preflight_only,
