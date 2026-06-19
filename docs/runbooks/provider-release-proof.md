@@ -58,16 +58,22 @@ make provider-release-proof \
   PROVIDER_BIN=/path/to/codex \
   ARTIFACT=/tmp/codex-proof.json \
   EVIDENCE_ROOT=/tmp/codex-proof-evidence \
-  SOURCE_REVIEW_STATUS=pass
+  SOURCE_REVIEW_STATUS=pass \
+  CODEX_API_URL=https://longhouse.example.com \
+  CODEX_AGENTS_TOKEN=...
 ```
 
 Today the managed Codex bridge lanes need Runtime Host credentials. Without
-`--api-url` and `--agents-token` at the underlying canary boundary, those lanes
-must report `status=not_run` and
+`CODEX_API_URL` and `CODEX_AGENTS_TOKEN`, those lanes must report
+`status=not_run` and
 `failure_code=managed_bridge_credentials_missing`; that is a coverage gap, not
 an upstream break. Do not accept a Codex baseline while the managed attach or
 detached UI lanes are still missing if the baseline is intended to protect those
 surfaces.
+
+Sauron release-watch reuses `AGENT_RELEASE_LONGHOUSE_API_URL` and
+`AGENT_RELEASE_LONGHOUSE_AGENTS_TOKEN` for the same Codex managed bridge proof
+when `AGENT_RELEASE_CODEX_CANARY_LIVE=1`.
 
 ## Read A Proof
 

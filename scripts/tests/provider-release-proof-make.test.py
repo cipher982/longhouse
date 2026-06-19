@@ -59,6 +59,8 @@ def test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_ye
                 "provider-release-proof",
                 "PROVIDER=codex",
                 "PROVIDER_VERSION=codex-test-0",
+                "CODEX_API_URL=http://longhouse.test",
+                "CODEX_AGENTS_TOKEN=secret-token",
                 f"ARTIFACT={proof}",
                 f"EVIDENCE_ROOT={evidence}",
             ]

@@ -262,6 +262,10 @@ def _run_source_canary(args: argparse.Namespace, raw_dir: Path) -> tuple[dict[st
             argv.extend(["--codex-bin", str(args.provider_bin)])
         if args.provider_version:
             argv.extend(["--provider-version", str(args.provider_version)])
+        if args.codex_api_url:
+            argv.extend(["--api-url", args.codex_api_url])
+        if args.codex_agents_token:
+            argv.extend(["--agents-token", args.codex_agents_token])
         if args.codex_run_fake_app_server:
             argv.append("--run-fake-app-server")
         if args.codex_run_raw_fresh_remote:
@@ -483,6 +487,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--codex-run-raw-fresh-remote", action="store_true")
     parser.add_argument("--codex-run-managed-tui-attach", action="store_true")
     parser.add_argument("--codex-run-detached-ui", action="store_true")
+    parser.add_argument("--codex-api-url")
+    parser.add_argument("--codex-agents-token")
     return parser
 
 

@@ -371,6 +371,12 @@ def test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest
                 "--provider-version",
                 "codex 2.0.0",
                 "--codex-run-raw-fresh-remote",
+                "--codex-run-managed-tui-attach",
+                "--codex-run-detached-ui",
+                "--codex-api-url",
+                "http://longhouse.test",
+                "--codex-agents-token",
+                "secret-token",
             ],
         )
 
@@ -379,6 +385,10 @@ def test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest
         assert codex_args[codex_args.index("--codex-bin") + 1] == str(root / "fake-provider")
         assert codex_args[codex_args.index("--source-review-status") + 1] == "not_run"
         assert "--run-raw-fresh-remote" in codex_args
+        assert "--run-managed-tui-attach" in codex_args
+        assert "--run-detached-ui" in codex_args
+        assert codex_args[codex_args.index("--api-url") + 1] == "http://longhouse.test"
+        assert codex_args[codex_args.index("--agents-token") + 1] == "secret-token"
         assert payload["provider"] == "codex"
         assert payload["provider_version"] == "codex 2.0.0"
         assert payload["verdict"] == "yellow"
