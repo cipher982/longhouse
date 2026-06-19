@@ -1,6 +1,6 @@
 # Provider Release Proof
 
-**Status:** Phase 1 inventory + Longhouse proof/baseline/diff entrypoints; OpenCode and scoped Claude release-proof baselines accepted
+**Status:** Phase 1 inventory + Longhouse proof/baseline/diff entrypoints; OpenCode, scoped Claude, and scoped Antigravity release-proof baselines accepted
 **Owner:** David
 **Last updated:** 2026-06-19
 
@@ -40,7 +40,7 @@ What exists:
 
 What is missing:
 
-- accepted release-proof baselines for Codex and Antigravity
+- an accepted release-proof baseline for Codex
 - raw-to-normalized proof fixtures for all release-sensitive surfaces
 - full managed-session/live-token proof for every release-sensitive surface
 - scheduled old/new differentials from the accepted baseline store rather than
@@ -49,11 +49,12 @@ What is missing:
 ## Audit Snapshot - 2026-06-18
 
 This snapshot reflects the Longhouse audit through `8b5426a84`, Sauron jobs
-`6f1a212`, and the 2026-06-19 local OpenCode baseline promotion after Gemini
-was removed as a release-watch provider and Antigravity became the canonical
-Google lane. Later Sauron surface-target commits are unrelated to provider
-release-proofing; the release-watch/proof scope remains Claude Code,
-Codex/OpenAI, OpenCode, and Antigravity.
+`6f1a212`, and the 2026-06-19 local OpenCode, scoped Claude, and scoped
+Antigravity baseline promotions after Gemini was removed as a release-watch
+provider and Antigravity became the canonical Google lane. Later Sauron
+surface-target commits are unrelated to provider release-proofing; the
+release-watch/proof scope remains Claude Code, Codex/OpenAI, OpenCode, and
+Antigravity.
 
 Machine-validated coverage map:
 
@@ -68,7 +69,7 @@ Machine-validated coverage map:
 | Rows running in Longhouse CI | 41 |
 | Rows running in Sauron release-watch | 29 |
 | Rows with accepted parser-fixture baselines | 4 |
-| Rows with accepted release-proof baselines | 12 |
+| Rows with accepted release-proof baselines | 15 |
 
 Provider shape:
 
@@ -77,7 +78,7 @@ Provider shape:
 | Claude Code | 2 | 11 | 0 | 11 | 5 | 3 |
 | Codex/OpenAI | 4 | 8 | 1 | 11 | 8 | 0 |
 | OpenCode | 4 | 7 | 2 | 11 | 11 | 9 |
-| Antigravity | 1 | 9 | 3 | 8 | 5 | 0 |
+| Antigravity | 1 | 9 | 3 | 8 | 5 | 3 |
 
 Known uncovered surfaces:
 
@@ -88,12 +89,14 @@ Known uncovered surfaces:
 
 Implication: CI is meaningful for parser, wrapper, profile-canary, and several
 no-token live surfaces. OpenCode has an accepted known-good release-proof
-baseline for its no-token server/control proof, and Claude now has an accepted
-scoped no-token baseline for binary identity, channel/status shape, and launch
-flag/PTY shape. This is still not a complete release gate: Codex and
-Antigravity have no accepted release-proof baselines, Claude still lacks
-managed-session binding and live-token proof, and OpenCode still lacks
-tool/tool-result and live-token proof.
+baseline for its no-token server/control proof, Claude has an accepted scoped
+no-token baseline for binary identity, channel/status shape, and launch
+flag/PTY shape, and Antigravity has an accepted scoped no-token baseline for
+binary identity, plugin/global hook shape, and hook-inbox launch mechanics.
+This is still not a complete release gate: Codex has no accepted release-proof
+baseline, Claude still lacks managed-session binding and live-token proof,
+Antigravity still lacks model-visible send/reattach/tool proof, and OpenCode
+still lacks tool/tool-result and live-token proof.
 
 ## Coverage Legend
 
@@ -118,7 +121,10 @@ baseline; it protects provider server/API/control-shape drift, not
 model-visible response quality. For Claude, the current `release_proof`
 baseline is narrower: it protects CLI binary identity, channel/status shape,
 and launch flag/PTY shape, not model-visible send, steer, transcript binding,
-or resume semantics.
+or resume semantics. For Antigravity, the current `release_proof` baseline is
+also scoped: it protects binary identity, plugin/global hook shape, and
+hook-inbox launch mechanics, not model-visible send, reattach, tools, or
+live-token behavior.
 
 ## Phase 1 Coverage Map
 
@@ -224,9 +230,9 @@ tool/tool-result transcript shape or live-token model-visible behavior.
 | Surface | Covered | Evidence | Boundary | CI | Sauron release-watch | Baseline | Actionable today |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | install/stage exact version | partial | Sauron stages the exact Antigravity GitHub release asset, passes it to profile/live canaries, and wraps it in Longhouse proof/differential envelopes | real release asset | no Longhouse CI; Sauron tests cover it | yes for source-reviewed releases | no | yes if staging/version match fails or old/new proof drift is red |
-| binary identity | yes | `provider-live-canary --provider antigravity`, profile canary | live_no_token or fake | `validate-provider-cli-canaries` | yes | no | yes |
-| auth/status shape | partial | version/help/plugin/global hook checks | live_no_token | `validate-provider-cli-canaries` | yes | no | partial |
-| launch managed session | partial | hook/plugin checks only | live_no_token/hermetic | `validate-provider-cli-canaries` | profile/live only | no | partial |
+| binary identity | yes | `provider-live-canary --provider antigravity`, profile canary | live_no_token or fake | `validate-provider-cli-canaries` | yes | release-proof yes (`antigravity-release-proof-v1`, 1.0.8) | yes |
+| auth/status shape | partial | version/help/plugin/global hook checks | live_no_token | `validate-provider-cli-canaries` | yes | release-proof yes (`antigravity-release-proof-v1`, 1.0.8) | partial |
+| launch managed session | partial | hook/plugin plus hook-inbox claim checks | live_no_token/hermetic | `validate-provider-cli-canaries` | profile/live only | release-proof yes for no-token hook-inbox shape (`antigravity-release-proof-v1`, 1.0.8) | partial |
 | session id/path binding | partial | hook binding tests | hermetic | `make test` | no | no | partial |
 | transcript/log parse | partial | hook transcript binding tests | hermetic | `make test` | no | no | partial |
 | ingest into Longhouse | partial | hook outbox/runtime tests | hermetic | `make test` | no | no | partial |
@@ -237,11 +243,14 @@ tool/tool-result transcript shape or live-token model-visible behavior.
 | tool/tool-result shape | no | no provider transcript parser golden found | none | no | no | no | no |
 | live-token behavior | partial | real agy send canary exists but is not a scheduled CI/release lane | live_token manual/configured | fake-wrapper CI only | no | no | no |
 
-Antigravity should stay narrow: Sauron now stages current and previous release
-assets and runs Longhouse proof/differential artifacts, but the release proof
-still inherits the current canary maturity. The next useful step is proving the
-hook inbox actually changes the model-visible turn, then keeping unsupported
-operations explicit.
+Antigravity should stay narrow: on 2026-06-19, `agy 1.0.8` produced a green
+`antigravity-release-proof-v1` artifact and a fresh rerun diffed green/match
+against the accepted baseline. The accepted local dogfood baseline is under
+`~/.local/share/longhouse/provider-release-proofs/antigravity/antigravity-release-proof-v1/`.
+This proves the no-token binary/plugin/global-hook/hook-inbox contract. It
+does not prove model-visible send, reattach/resume, tool/tool-result shape, or
+live-token behavior. The next useful step is proving the hook inbox actually
+changes the model-visible turn, then keeping unsupported operations explicit.
 
 ### Legacy Google JSON Imports
 

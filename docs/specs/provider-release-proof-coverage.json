@@ -635,7 +635,7 @@
             "fake_or_real": "mixed",
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
-            "accepted_baseline": "none",
+            "accepted_baseline": "release_proof",
             "failure_actionable": true
         },
         {
@@ -649,7 +649,7 @@
             "fake_or_real": "mixed",
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
-            "accepted_baseline": "none",
+            "accepted_baseline": "release_proof",
             "failure_actionable": true
         },
         {
@@ -664,7 +664,7 @@
             "fake_or_real": "mixed",
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
-            "accepted_baseline": "none",
+            "accepted_baseline": "release_proof",
             "failure_actionable": true
         },
         {

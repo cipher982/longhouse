@@ -496,7 +496,8 @@ def _opencode_session_projection(
         }
         for name in sorted(operation_evidence)
     }
-    status = "captured" if all((operation_evidence.get(name) or {}).get("status") == "pass" for name in required_operations) else "partial"
+    required_operations_pass = all((operation_evidence.get(name) or {}).get("status") == "pass" for name in required_operations)
+    status = "captured" if required_operations_pass else "partial"
     checks = {
         name: _compact_session_projection_check(canary)
         for name, canary in sorted(canaries.items())
@@ -1428,12 +1429,12 @@ def _run_antigravity_hook_inbox_contract(root: Path) -> dict[str, Any]:
     """
 
     try:
-        from zerg.cli.antigravity import _ANTIGRAVITY_HOOK_SCRIPT_NAME
-        from zerg.cli.antigravity import _ensure_antigravity_runtime_plugin
-        from zerg.cli.antigravity_channel import antigravity_inbox_dir
-        from zerg.cli.antigravity_channel import antigravity_state_dir
-        from zerg.cli.antigravity_channel import enqueue_antigravity_message
-        from zerg.cli.antigravity_channel import wait_for_antigravity_message_claim
+        from zerg.services.antigravity_hook_inbox import _ANTIGRAVITY_HOOK_SCRIPT_NAME
+        from zerg.services.antigravity_hook_inbox import _ensure_antigravity_runtime_plugin
+        from zerg.services.antigravity_hook_inbox import antigravity_inbox_dir
+        from zerg.services.antigravity_hook_inbox import antigravity_state_dir
+        from zerg.services.antigravity_hook_inbox import enqueue_antigravity_message
+        from zerg.services.antigravity_hook_inbox import wait_for_antigravity_message_claim
     except Exception as exc:
         return _fail("antigravity_hook_import_failed", f"{type(exc).__name__}: {exc}")
 
