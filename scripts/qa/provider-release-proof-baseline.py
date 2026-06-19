@@ -19,6 +19,13 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 DEFAULT_BASELINE_ROOT = Path(".provider-release-proofs")
+COMPARABLE_ARTIFACT_KEYS = (
+    "provider_contract",
+    "operation_evidence",
+    "session_projection",
+)
+STABLE_OPERATION_KEYS = ("status", "level", "canary", "failure_code")
+STABLE_CHECK_KEYS = ("status", "failure_code")
 
 
 def _now_iso() -> str:
@@ -169,14 +176,193 @@ def _normalized(proof: dict[str, Any]) -> Any:
     return comparable
 
 
-def _diff_normalized(base: Any, candidate: Any) -> dict[str, Any]:
+def _resolve_artifact_path(value: str, *, proof_path: Path | None) -> Path:
+    path = Path(value)
+    if path.is_absolute() or proof_path is None:
+        return path
+    return (proof_path.parent / path).resolve()
+
+
+def _artifact_paths(proof: dict[str, Any]) -> dict[str, str]:
+    paths: dict[str, str] = {}
+    artifacts = proof.get("artifacts")
+    if isinstance(artifacts, dict):
+        paths.update({key: value for key, value in artifacts.items() if isinstance(key, str) and isinstance(value, str)})
+    archived_artifacts = proof.get("archived_artifacts")
+    if isinstance(archived_artifacts, dict):
+        paths.update(
+            {key: value for key, value in archived_artifacts.items() if isinstance(key, str) and isinstance(value, str)}
+        )
+    return paths
+
+
+def _artifact_json(
+    proof: dict[str, Any],
+    key: str,
+    *,
+    proof_path: Path | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    value = _artifact_paths(proof).get(key)
+    if not value:
+        return None, {
+            "artifact": key,
+            "failure_code": "comparable_artifact_reference_missing",
+            "message": f"Proof does not reference comparable artifact {key}.",
+        }
+    path = _resolve_artifact_path(value, proof_path=proof_path)
+    try:
+        return _read_json(path), None
+    except FileNotFoundError:
+        return None, {
+            "artifact": key,
+            "failure_code": "comparable_artifact_missing",
+            "path": str(path),
+            "message": f"Comparable artifact {key} is missing.",
+        }
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        return None, {
+            "artifact": key,
+            "failure_code": "comparable_artifact_unreadable",
+            "path": str(path),
+            "message": f"Comparable artifact {key} could not be read: {type(exc).__name__}: {exc}",
+        }
+
+
+def _stable_operation(info: Any) -> dict[str, Any]:
+    if not isinstance(info, dict):
+        return {}
+    return {key: info.get(key) for key in STABLE_OPERATION_KEYS if info.get(key) is not None}
+
+
+def _stable_check(info: Any) -> dict[str, Any]:
+    if not isinstance(info, dict):
+        return {}
+    return {key: info.get(key) for key in STABLE_CHECK_KEYS if info.get(key) is not None}
+
+
+def _stable_operation_map(payload: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        name: _stable_operation(info)
+        for name, info in sorted(payload.items())
+        if isinstance(name, str) and isinstance(info, dict)
+    }
+
+
+def _stable_check_map(payload: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        name: _stable_check(info)
+        for name, info in sorted(payload.items())
+        if isinstance(name, str) and isinstance(info, dict)
+    }
+
+
+def _artifact_shape_errors(key: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
+    checks = {
+        "provider_contract": "contract_operations",
+        "operation_evidence": "operation_evidence",
+    }
+    required_field = checks.get(key)
+    if required_field is None:
+        return []
+    if required_field not in payload:
+        return [
+            {
+                "artifact": key,
+                "field": required_field,
+                "failure_code": "comparable_artifact_field_missing",
+                "message": f"Comparable artifact {key} is missing required field {required_field}.",
+            }
+        ]
+    if not isinstance(payload.get(required_field), dict):
+        return [
+            {
+                "artifact": key,
+                "field": required_field,
+                "failure_code": "comparable_artifact_field_malformed",
+                "message": f"Comparable artifact {key} field {required_field} must be an object.",
+            }
+        ]
+    return []
+
+
+def _stable_session_projection(payload: dict[str, Any]) -> dict[str, Any]:
+    comparable: dict[str, Any] = {
+        key: payload.get(key)
+        for key in ("artifact_kind", "provider", "status")
+        if payload.get(key) is not None
+    }
+    projection = payload.get("projection")
+    if isinstance(projection, dict):
+        comparable["projection"] = {
+            key: projection.get(key)
+            for key in ("artifact_kind", "provider", "status")
+            if projection.get(key) is not None
+        }
+        checks = _stable_check_map(projection.get("checks"))
+        if checks:
+            comparable["projection"]["checks"] = checks
+        operation_statuses = _stable_operation_map(projection.get("operation_statuses"))
+        if operation_statuses:
+            comparable["projection"]["operation_statuses"] = operation_statuses
+    return comparable
+
+
+def _stable_artifact(key: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if key == "provider_contract":
+        return {
+            field: payload.get(field)
+            for field in ("artifact_kind", "provider", "contract_operations")
+            if payload.get(field) is not None
+        }
+    if key == "operation_evidence":
+        return {
+            "artifact_kind": payload.get("artifact_kind"),
+            "provider": payload.get("provider"),
+            "operation_evidence": _stable_operation_map(payload.get("operation_evidence")),
+        }
+    if key == "session_projection":
+        return _stable_session_projection(payload)
+    comparable = json.loads(json.dumps(payload))
+    comparable.pop("provider_version", None)
+    return comparable
+
+
+def _comparable_proof(
+    proof: dict[str, Any],
+    *,
+    proof_path: Path | None,
+    side: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    comparable: dict[str, Any] = {"normalized": _normalized(proof), "artifacts": {}}
+    errors: list[dict[str, Any]] = []
+    for key in COMPARABLE_ARTIFACT_KEYS:
+        payload, error = _artifact_json(proof, key, proof_path=proof_path)
+        if error is not None:
+            error["side"] = side
+            errors.append(error)
+            comparable["artifacts"][key] = {"load_status": "unavailable"}
+            continue
+        if payload is not None:
+            shape_errors = _artifact_shape_errors(key, payload)
+            for error in shape_errors:
+                error["side"] = side
+            errors.extend(shape_errors)
+            comparable["artifacts"][key] = _stable_artifact(key, payload)
+    return comparable, errors
+
+
+def _diff_comparable(base: Any, candidate: Any) -> dict[str, Any]:
     if base == candidate:
         return {"status": "match", "changes": []}
     return {
         "status": "different",
         "changes": [
             {
-                "path": "$.normalized",
+                "path": "$",
                 "previous": base,
                 "current": candidate,
             }
@@ -216,7 +402,18 @@ def diff_proofs(
             recommendation = "investigate_before_upgrade"
         diff = {"status": "not_compared", "changes": []}
     else:
-        diff = _diff_normalized(_normalized(base), _normalized(candidate))
+        base_comparable, base_errors = _comparable_proof(
+            base,
+            proof_path=base_path,
+            side="baseline",
+        )
+        candidate_comparable, candidate_errors = _comparable_proof(
+            candidate,
+            proof_path=candidate_path,
+            side="candidate",
+        )
+        comparable_errors = [*base_errors, *candidate_errors]
+        diff = _diff_comparable(base_comparable, candidate_comparable)
         if candidate_verdict == "red":
             verdict = "red"
             failure_code = str(candidate.get("failure_code") or "candidate_release_proof_failed")
@@ -225,6 +422,10 @@ def diff_proofs(
             verdict = "yellow"
             failure_code = str(candidate.get("failure_code") or "candidate_release_proof_not_green")
             recommendation = "investigate_before_upgrade"
+        elif comparable_errors:
+            verdict = "red"
+            failure_code = "provider_release_proof_comparable_artifacts_unavailable"
+            recommendation = "block_upgrade_recommendation"
         elif diff.get("status") == "match":
             verdict = "green"
             failure_code = None
@@ -233,6 +434,8 @@ def diff_proofs(
             verdict = "red"
             failure_code = "provider_release_proof_drift"
             recommendation = "block_upgrade_recommendation"
+        if comparable_errors:
+            diff["artifact_errors"] = comparable_errors
 
     return {
         "schema_version": SCHEMA_VERSION,

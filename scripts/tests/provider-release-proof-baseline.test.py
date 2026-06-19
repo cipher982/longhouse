@@ -36,6 +36,10 @@ def _write_proof(root: Path, name: str, *, status: str = "pass", version: str = 
     source_artifact = artifact_dir / "source.json"
     stdout = artifact_dir / "stdout.log"
     stderr = artifact_dir / "stderr.log"
+    normalized_contract = artifact_dir / "normalized" / "contract.json"
+    provider_contract = artifact_dir / "normalized" / "provider_contract.json"
+    operation_evidence_artifact = artifact_dir / "normalized" / "operation_evidence.json"
+    session_projection = artifact_dir / "normalized" / "session_projection.json"
     normalized = {
         "artifact_kind": "provider_release_proof",
         "provider": "opencode",
@@ -51,9 +55,63 @@ def _write_proof(root: Path, name: str, *, status: str = "pass", version: str = 
             }
         },
     }
+    provider_contract_payload = {
+        "artifact_kind": "provider_release_proof_provider_contract",
+        "provider": "opencode",
+        "provider_version": f"opencode {version}",
+        "contract_operations": {
+            "send_input": {
+                "level": "live_no_token",
+                "source": "fake server_contract",
+            }
+        },
+    }
+    operation_evidence_payload = {
+        "artifact_kind": "provider_release_proof_operation_evidence",
+        "provider": "opencode",
+        "provider_version": f"opencode {version}",
+        "operation_evidence": normalized["operation_evidence"],
+    }
+    session_projection_payload = {
+        "artifact_kind": "provider_release_proof_session_projection",
+        "provider": "opencode",
+        "provider_version": f"opencode {version}",
+        "status": "captured",
+        "projection": {
+            "artifact_kind": "provider_live_session_projection",
+            "provider": "opencode",
+            "status": "captured",
+            "provider_session_id": f"volatile-{name}-{version}",
+            "classification_sidecar_path": f"/tmp/{name}/sidecar.json",
+            "checks": {
+                "session_create": {
+                    "status": "pass",
+                    "provider_session_id": f"volatile-{name}-{version}",
+                    "elapsed_ms": 7,
+                },
+                "prompt_async_no_reply_delivery": {
+                    "status": status,
+                    "message_marker_sha256": f"volatile-{name}",
+                    "elapsed_ms": 11,
+                },
+            },
+            "operation_statuses": {
+                "send_input": {
+                    "status": status,
+                    "level": "live_no_token",
+                    "canary": "server_contract",
+                }
+            },
+        },
+    }
     source_artifact.write_text(json.dumps({"raw": True}), encoding="utf-8")
     stdout.write_text("stdout\n", encoding="utf-8")
     stderr.write_text("", encoding="utf-8")
+    normalized_contract.parent.mkdir(parents=True, exist_ok=True)
+    normalized_contract.write_text(json.dumps(normalized), encoding="utf-8")
+    provider_contract.write_text(json.dumps(provider_contract_payload), encoding="utf-8")
+    operation_evidence_artifact.write_text(json.dumps(operation_evidence_payload), encoding="utf-8")
+    session_projection.write_text(json.dumps(session_projection_payload), encoding="utf-8")
     proof = {
         "schema_version": 1,
         "artifact_kind": "provider_release_proof",
@@ -68,6 +126,10 @@ def _write_proof(root: Path, name: str, *, status: str = "pass", version: str = 
             "source_artifact": str(source_artifact),
             "stdout": str(stdout),
             "stderr": str(stderr),
+            "normalized_contract": str(normalized_contract),
+            "provider_contract": str(provider_contract),
+            "operation_evidence": str(operation_evidence_artifact),
+            "session_projection": str(session_projection),
         },
     }
     proof_path = proof_dir / "proof.json"
@@ -112,7 +174,14 @@ def test_accept_archives_proof_and_artifacts() -> None:
         assert payload["artifact_kind"] == "provider_release_proof_baseline_acceptance"
         assert Path(payload["accepted_path"]).exists()
         assert Path(payload["version_path"]).exists()
-        assert {"source_artifact", "stdout", "stderr"} <= set(
+        assert {
+            "source_artifact",
+            "stdout",
+            "stderr",
+            "provider_contract",
+            "operation_evidence",
+            "session_projection",
+        } <= set(
             payload["archived_artifacts"]
         )
 
@@ -189,6 +258,135 @@ def test_diff_against_accepted_baseline_detects_drift() -> None:
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "fake_drift"
         assert payload["diff"]["status"] == "different"
+
+
+def test_diff_detects_stable_session_projection_drift() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        baseline_root = root / "baselines"
+        accepted = _write_proof(root, "accepted")
+        candidate = _write_proof(root, "candidate", version="1.2.4")
+        candidate_payload = json.loads(candidate.read_text(encoding="utf-8"))
+        projection_path = Path(candidate_payload["artifacts"]["session_projection"])
+        projection = json.loads(projection_path.read_text(encoding="utf-8"))
+        projection["projection"]["checks"]["prompt_async_no_reply_delivery"]["status"] = "fail"
+        projection["projection"]["checks"]["prompt_async_no_reply_delivery"]["failure_code"] = (
+            "opencode_prompt_async_delivery_not_observed"
+        )
+        projection["projection"]["operation_statuses"]["send_input"]["status"] = "fail"
+        projection["projection"]["operation_statuses"]["send_input"]["failure_code"] = (
+            "opencode_prompt_async_delivery_not_observed"
+        )
+        projection_path.write_text(json.dumps(projection), encoding="utf-8")
+        _run(["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)])
+
+        result, payload = _run(
+            [
+                "diff",
+                "--candidate",
+                str(candidate),
+                "--baseline-root",
+                str(baseline_root),
+            ]
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "provider_release_proof_drift"
+        assert payload["diff"]["status"] == "different"
+        previous = payload["diff"]["changes"][0]["previous"]
+        current = payload["diff"]["changes"][0]["current"]
+        assert (
+            previous["artifacts"]["session_projection"]["projection"]["checks"][
+                "prompt_async_no_reply_delivery"
+            ]["status"]
+            == "pass"
+        )
+        assert (
+            current["artifacts"]["session_projection"]["projection"]["checks"][
+                "prompt_async_no_reply_delivery"
+            ]["failure_code"]
+            == "opencode_prompt_async_delivery_not_observed"
+        )
+
+
+def test_diff_blocks_when_comparable_artifacts_are_missing() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        baseline_root = root / "baselines"
+        accepted = _write_proof(root, "accepted")
+        candidate = _write_proof(root, "candidate", version="1.2.4")
+        _, acceptance = _run(
+            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
+        )
+        Path(acceptance["archived_artifacts"]["session_projection"]).unlink()
+        candidate_payload = json.loads(candidate.read_text(encoding="utf-8"))
+        Path(candidate_payload["artifacts"]["session_projection"]).unlink()
+
+        result, payload = _run(
+            [
+                "diff",
+                "--candidate",
+                str(candidate),
+                "--baseline-root",
+                str(baseline_root),
+            ]
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "provider_release_proof_comparable_artifacts_unavailable"
+        assert payload["diff"]["artifact_errors"] == [
+            {
+                "artifact": "session_projection",
+                "failure_code": "comparable_artifact_missing",
+                "message": "Comparable artifact session_projection is missing.",
+                "path": acceptance["archived_artifacts"]["session_projection"],
+                "side": "baseline",
+            },
+            {
+                "artifact": "session_projection",
+                "failure_code": "comparable_artifact_missing",
+                "message": "Comparable artifact session_projection is missing.",
+                "path": candidate_payload["artifacts"]["session_projection"],
+                "side": "candidate",
+            },
+        ]
+
+
+def test_diff_blocks_when_operation_evidence_artifact_is_malformed() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        baseline_root = root / "baselines"
+        accepted = _write_proof(root, "accepted")
+        candidate = _write_proof(root, "candidate", version="1.2.4")
+        candidate_payload = json.loads(candidate.read_text(encoding="utf-8"))
+        operation_evidence_path = Path(candidate_payload["artifacts"]["operation_evidence"])
+        operation_evidence = json.loads(operation_evidence_path.read_text(encoding="utf-8"))
+        operation_evidence["operation_evidence"] = []
+        operation_evidence_path.write_text(json.dumps(operation_evidence), encoding="utf-8")
+        _run(["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)])
+
+        result, payload = _run(
+            [
+                "diff",
+                "--candidate",
+                str(candidate),
+                "--baseline-root",
+                str(baseline_root),
+            ]
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "provider_release_proof_comparable_artifacts_unavailable"
+        assert {
+            "artifact": "operation_evidence",
+            "failure_code": "comparable_artifact_field_malformed",
+            "field": "operation_evidence",
+            "message": "Comparable artifact operation_evidence field operation_evidence must be an object.",
+            "side": "candidate",
+        } in payload["diff"]["artifact_errors"]
 
 
 def test_diff_reports_missing_baseline_as_yellow() -> None:
@@ -382,6 +580,9 @@ def main() -> int:
         test_accept_refuses_non_green_proof,
         test_diff_against_accepted_baseline_matches,
         test_diff_against_accepted_baseline_detects_drift,
+        test_diff_detects_stable_session_projection_drift,
+        test_diff_blocks_when_comparable_artifacts_are_missing,
+        test_diff_blocks_when_operation_evidence_artifact_is_malformed,
         test_diff_reports_missing_baseline_as_yellow,
         test_diff_reports_yellow_candidate_without_baseline_as_yellow,
         test_diff_reports_red_candidate_without_baseline_as_red,

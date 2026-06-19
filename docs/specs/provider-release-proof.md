@@ -312,6 +312,9 @@ Raw artifacts stay attached for debugging and agent review.
 Only `green` proof artifacts can be accepted as baselines. `yellow` means the
 proof is incomplete or insufficiently trusted, so it must remain visible as a
 release-watch gap instead of becoming `upgrade_allowed` after a matching diff.
+Acceptance archives the referenced raw and normalized artifact files, including
+`provider_contract`, `operation_evidence`, and `session_projection`, so later
+status/diff runs do not depend on temporary proof directories.
 
 Proposed layout for a caller such as Sauron:
 
@@ -391,12 +394,25 @@ The release gate should eventually run:
 ```text
 accepted provider version -> provider-release-proof A
 candidate provider version -> provider-release-proof B
-diff A.normalized vs B.normalized
+diff A.required_contract_fields vs B.required_contract_fields
 ```
 
 Do not diff raw logs byte-for-byte. Ignore timestamps, UUIDs, absolute paths,
 token counts, streaming chunk boundaries, and model prose unless the scenario
 uses an explicit marker string.
+
+The initial diff utility compares the embedded `normalized` contract plus the
+stable portions of the normalized artifact files:
+
+- `provider_contract`: provider and contract operations.
+- `operation_evidence`: operation status, level, canary, and failure code.
+- `session_projection`: captured/not-captured status plus stable check and
+  operation statuses. Volatile provider session ids, sidecar paths, marker
+  hashes, and elapsed timings are preserved in artifacts but ignored for drift.
+
+If a declared comparable artifact is missing, unreadable, or malformed, the
+diff fails closed with `provider_release_proof_comparable_artifacts_unavailable`
+instead of omitting that plane and returning a false match.
 
 Initial utility:
 
