@@ -629,6 +629,7 @@ def test_provider_live_publish_cli_rejects_unsupported_provider(tmp_path: Path) 
             "provider-live",
             "publish",
             "--provider",
+            "gemini",
             "--proof-dir",
             str(tmp_path / "proof"),
         ],
@@ -636,3 +637,4 @@ def test_provider_live_publish_cli_rejects_unsupported_provider(tmp_path: Path) 
 
     assert result.exit_code == 2
     assert "Unsupported provider" in result.output
+    assert "gemini" in result.output
