@@ -299,8 +299,8 @@ Production Sauron leaves this token-spending lane off by default.
 | send input | yes | provider-live canary `prompt_async` noReply marker | live_no_token | `validate-provider-cli-canaries` | yes | release-proof yes (`opencode-release-proof-v1`, 1.16.2) | yes |
 | interrupt/abort/steer | partial | provider-live abort endpoint; steer unsupported | live_no_token | `validate-provider-cli-canaries` | yes for interrupt | release-proof yes for abort (`opencode-release-proof-v1`, 1.16.2); steer remains unsupported | yes for abort, no for steer |
 | reattach/resume | yes | provider-live process restart/session recovery + attach shape | live_no_token | `validate-provider-cli-canaries` | yes | release-proof yes (`opencode-release-proof-v1`, 1.16.2) | yes |
-| tool/tool-result shape | partial | OpenCode SQLite parser unit covers `opencode_tool_call`/`opencode_tool_result`; `provider-release-proof.py --opencode-run-real-tool` captures a real `opencode run --format json` completed bash tool event with callID, structured input, and marker output | manual live_token plus fake wrapper/parser fixture | fake-wrapper CI plus parser unit; Sauron proof/diff plumbing tests | opt-in proof/diff when `AGENT_RELEASE_OPENCODE_REAL_TOOL=1` | release-proof yes (`opencode-real-tool-release-proof-v1`, 1.16.2) | yes for manual/configured proof/diff; production gate remains off |
-| live-token behavior | partial | `provider-control-e2e-canary.py --opencode-run-real-tool`; `provider-release-proof.py --opencode-run-real-tool` attaches real OpenCode tool-use evidence to a release proof | manual live_token plus fake wrapper | fake-wrapper CI plus Sauron plumbing tests | opt-in proof/diff when `AGENT_RELEASE_OPENCODE_REAL_TOOL=1`; not configured in production | release-proof yes (`opencode-real-tool-release-proof-v1`, 1.16.2) | yes for manual/configured proof/diff; production gate remains off |
+| tool/tool-result shape | partial | OpenCode SQLite parser unit covers `opencode_tool_call`/`opencode_tool_result`; `provider-release-proof.py --opencode-run-real-tool` captures a real `opencode run --format json` completed bash tool event with callID, structured input, and marker output | manual live_token plus fake wrapper/parser fixture | fake-wrapper CI plus parser unit; Sauron proof/diff plumbing tests | yes; production Sauron has `AGENT_RELEASE_OPENCODE_REAL_TOOL=1` configured | release-proof yes (`opencode-real-tool-release-proof-v1`, 1.16.2) | yes |
+| live-token behavior | partial | `provider-control-e2e-canary.py --opencode-run-real-tool`; `provider-release-proof.py --opencode-run-real-tool` attaches real OpenCode tool-use evidence to a release proof | manual live_token plus fake wrapper | fake-wrapper CI plus Sauron plumbing tests | yes; production Sauron has `AGENT_RELEASE_OPENCODE_REAL_TOOL=1` configured | release-proof yes (`opencode-real-tool-release-proof-v1`, 1.16.2) | yes |
 
 OpenCode is the first accepted release-proof baseline. On 2026-06-19,
 `opencode 1.16.2` produced a green `opencode-release-proof-v1` artifact and a
@@ -317,9 +317,13 @@ one text response event, and `operation_evidence.transcript_binding.level=live_t
 Together, these baselines prove no-token server/control shape plus scoped
 real-token tool-result event shape. Sauron can request the real-tool scenario in
 golden-envelope and old/new differential release-watch paths with
-`AGENT_RELEASE_OPENCODE_REAL_TOOL=1`, but production does not enable that token
-spend by default. They still do not prove scheduled managed live-token
-send/steer behavior in production release-watch.
+`AGENT_RELEASE_OPENCODE_REAL_TOOL=1`. Production Sauron now enables that gate
+after promoting the accepted baseline; after restarting the `sauron` container,
+importing the jobs manifest from `/data/jobs` loaded `/data/secrets.env`,
+`_opencode_real_tool_enabled()` returned true, and no OpenCode/global Longhouse
+machine-live bridge config was set to bypass local release-asset proof/diff.
+They still do not prove scheduled managed live-token send/steer behavior in
+production release-watch.
 
 ### Antigravity
 
@@ -676,8 +680,8 @@ should not by itself count as contract drift.
 3. `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` is now enabled in production
    Sauron after accepting and promoting the
    `antigravity-real-agy-send-release-proof-v1` baseline.
-4. Decide whether to enable scheduled OpenCode real-tool release-watch spend;
-   the accepted baseline exists, but the default release watch still avoids
-   real OpenCode token spend.
+4. `AGENT_RELEASE_OPENCODE_REAL_TOOL=1` is now enabled in production Sauron
+   after accepting and promoting the `opencode-real-tool-release-proof-v1`
+   baseline.
 5. Add model-visible live-token proof for the remaining partial Claude, Codex,
    OpenCode, and Antigravity surfaces.
