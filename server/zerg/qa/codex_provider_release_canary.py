@@ -34,6 +34,7 @@ _RAW_FRESH_REMOTE_MESSAGE = " ".join(
         "warnings preserve proof but require review.",
     )
 )
+_MANAGED_BRIDGE_CREDENTIALS_MISSING = "managed_bridge_credentials_missing"
 TERMINAL_TURN_METHODS = {
     "turn/completed",
     "turn/failed",
@@ -316,6 +317,17 @@ def _canary_operation_entry(
             message=canary.get("message") or message,
             failure_code=canary.get("failure_code"),
         )
+    if status == "not_run" and canary.get("failure_code"):
+        return _operation_entry(
+            contract,
+            operation,
+            status="not_run",
+            canary=canary_name,
+            level="none",
+            source=source,
+            message=canary.get("message") or message,
+            failure_code=canary.get("failure_code"),
+        )
     if status in pass_statuses:
         return _operation_entry(
             contract,
@@ -586,8 +598,6 @@ def _start_bridge(
     engine = _resolve_executable(args.engine, "longhouse-engine")
     if not engine:
         raise RuntimeError("longhouse-engine binary was not found")
-    if not args.api_url or not args.agents_token:
-        raise RuntimeError("--api-url and --agents-token are required for managed bridge canaries")
 
     session_id = str(uuid.uuid4())
     isolation_root = Path(tempfile.mkdtemp(prefix=f"lhx-{launch_mode[:1]}-", dir="/tmp"))
@@ -647,6 +657,22 @@ def _start_bridge(
     return summary, result, isolation_root
 
 
+def _managed_bridge_credentials_gap(args: argparse.Namespace) -> dict[str, Any] | None:
+    missing = []
+    if not args.api_url:
+        missing.append("--api-url")
+    if not args.agents_token:
+        missing.append("--agents-token")
+    if not missing:
+        return None
+    return _status(
+        "not_run",
+        failure_code=_MANAGED_BRIDGE_CREDENTIALS_MISSING,
+        message="Managed Codex bridge canary requires Runtime Host credentials.",
+        missing=missing,
+    )
+
+
 def _stop_bridge(args: argparse.Namespace, session_id: str, isolation_root: Path) -> dict[str, Any]:
     engine = _resolve_executable(args.engine, "longhouse-engine")
     if not engine:
@@ -695,6 +721,9 @@ def _record_terminal_session(
 def run_managed_tui_attach(args: argparse.Namespace, evidence_root: Path, codex_bin: str) -> dict[str, Any]:
     root = evidence_root / "managed-tui-attach"
     root.mkdir(parents=True, exist_ok=True)
+    credentials_gap = _managed_bridge_credentials_gap(args)
+    if credentials_gap is not None:
+        return credentials_gap
     isolation_root: Path | None = None
     session_id: str | None = None
     try:
@@ -780,6 +809,9 @@ def run_managed_tui_attach(args: argparse.Namespace, evidence_root: Path, codex_
 def run_detached_ui(args: argparse.Namespace, evidence_root: Path, codex_bin: str) -> dict[str, Any]:
     root = evidence_root / "detached-ui"
     root.mkdir(parents=True, exist_ok=True)
+    credentials_gap = _managed_bridge_credentials_gap(args)
+    if credentials_gap is not None:
+        return credentials_gap
     isolation_root: Path | None = None
     session_id: str | None = None
     try:

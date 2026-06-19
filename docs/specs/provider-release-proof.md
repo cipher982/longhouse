@@ -188,14 +188,18 @@ launch/reattach managed bridge evidence remains missing without the managed
 bridge canaries.
 
 Local smoke evidence, 2026-06-19: Codex `codex-cli 0.139.0` with the same
-fake app-server plus raw-fresh-remote lane still stayed yellow. One run timed
-out after the app-server initialized, started a thread, accepted `turn/start`,
-and waited for completion; the canary now preserves protocol fingerprints even
-on that failure path. A rerun passed raw-fresh-remote and captured stable
+fake app-server plus raw-fresh-remote lane stayed yellow. One run timed out
+after the app-server initialized, started a thread, accepted `turn/start`, and
+waited for completion; the canary now preserves protocol fingerprints even on
+that failure path. A rerun passed raw-fresh-remote and captured stable
 `initialize`, `thread/resume`, `turn/start`, `thread/started`, and
-`turn/completed` protocol fingerprints. This still should not be accepted as a
-baseline because source review was `not_run` and the managed TUI attach plus
-detached-UI lanes require a Runtime Host `--api-url` and `--agents-token`.
+`turn/completed` protocol fingerprints. A later deep proof requested
+`managed_tui_attach` and `detached_ui` without Runtime Host credentials; those
+lanes now emit `status=not_run` with
+`failure_code=managed_bridge_credentials_missing` instead of a red bridge
+exception. This still should not be accepted as a baseline: managed launch,
+remote launch, and reattach remain yellow until the proof is run with a real
+`--api-url` and `--agents-token`.
 
 ### OpenCode
 
@@ -533,11 +537,8 @@ should not by itself count as contract drift.
 
 1. Add Claude managed-session binding proof beyond no-token launch shape.
 2. Promote Codex beyond `insufficient_coverage` by running and hardening the
-   managed TUI attach, detached UI, and raw-fresh remote lanes.
-3. Fix the Antigravity hook-inbox import failure observed in the 2026-06-19
-   readiness probe before accepting any Antigravity baseline.
-4. Decide whether Antigravity real-agy send belongs in scheduled CI or remains
+   managed TUI attach and detached UI lanes with Runtime Host credentials.
+3. Decide whether Antigravity real-agy send belongs in scheduled CI or remains
    an opt-in live-token proof.
-5. Accept real Codex and Antigravity baselines once their proof lanes are green
-   enough to trust.
-6. Add model-visible live-token proof for the surfaces still marked partial.
+4. Accept a real Codex baseline once its proof lane is green enough to trust.
+5. Add model-visible live-token proof for the surfaces still marked partial.

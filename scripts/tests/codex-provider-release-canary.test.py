@@ -289,6 +289,7 @@ def _run_canary(
     fixture: dict[str, Path],
     extra_args: list[str],
     extra_env: dict[str, str] | None = None,
+    include_credentials: bool = True,
 ) -> tuple[subprocess.CompletedProcess[str], dict]:
     artifact = root / "artifact.json"
     evidence = root / "evidence"
@@ -299,33 +300,39 @@ def _run_canary(
     env["FAKE_TUI_STATE_POINTER"] = str(fixture["tui_state_pointer"])
     if extra_env:
         env.update(extra_env)
+    command = [
+        sys.executable,
+        str(CANARY),
+        "--repo-root",
+        str(REPO_ROOT),
+        "--evidence-root",
+        str(evidence),
+        "--artifact",
+        str(artifact),
+        "--engine",
+        str(fixture["engine"]),
+        "--codex-bin",
+        str(fixture["codex"]),
+        "--cargo-bin",
+        str(fixture["cargo"]),
+        "--script-bin",
+        str(fixture["script"]),
+        "--timeout-bin",
+        str(fixture["timeout"]),
+        "--json",
+        *extra_args,
+    ]
+    if include_credentials:
+        command.extend(
+            [
+                "--api-url",
+                "http://longhouse.test",
+                "--agents-token",
+                "secret-token",
+            ]
+        )
     result = subprocess.run(
-        [
-            sys.executable,
-            str(CANARY),
-            "--repo-root",
-            str(REPO_ROOT),
-            "--evidence-root",
-            str(evidence),
-            "--artifact",
-            str(artifact),
-            "--engine",
-            str(fixture["engine"]),
-            "--codex-bin",
-            str(fixture["codex"]),
-            "--cargo-bin",
-            str(fixture["cargo"]),
-            "--script-bin",
-            str(fixture["script"]),
-            "--timeout-bin",
-            str(fixture["timeout"]),
-            "--api-url",
-            "http://longhouse.test",
-            "--agents-token",
-            "secret-token",
-            "--json",
-            *extra_args,
-        ],
+        command,
         cwd=REPO_ROOT,
         env=env,
         text=True,
@@ -452,6 +459,35 @@ def test_managed_tui_attach_requires_thread_after_attach() -> None:
         assert payload["operation_evidence"]["reattach"]["status"] == "fail"
 
 
+def test_requested_managed_bridge_lanes_without_credentials_are_yellow() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        fixture = _fixture(root)
+        result, payload = _run_canary(
+            root,
+            fixture,
+            [
+                "--run-managed-tui-attach",
+                "--run-detached-ui",
+                "--source-review-status",
+                "pass",
+            ],
+            include_credentials=False,
+        )
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["verdict"] == "yellow"
+        assert payload["failure_code"] == "insufficient_coverage"
+        assert payload["canaries"]["managed_tui_attach"]["status"] == "not_run"
+        assert payload["canaries"]["managed_tui_attach"]["failure_code"] == "managed_bridge_credentials_missing"
+        assert payload["canaries"]["managed_tui_attach"]["missing"] == ["--api-url", "--agents-token"]
+        assert payload["canaries"]["detached_ui"]["status"] == "not_run"
+        assert payload["canaries"]["detached_ui"]["failure_code"] == "managed_bridge_credentials_missing"
+        assert payload["operation_evidence"]["launch_local"]["status"] == "not_run"
+        assert payload["operation_evidence"]["launch_local"]["failure_code"] == "managed_bridge_credentials_missing"
+        assert payload["operation_evidence"]["launch_remote"]["status"] == "not_run"
+        assert payload["operation_evidence"]["reattach"]["status"] == "not_run"
+
+
 def test_forbidden_longhouse_codex_path_is_red() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -537,6 +573,7 @@ def main() -> int:
         test_raw_fresh_remote_failure_preserves_protocol_fingerprints,
         test_managed_tui_attach_active_thread_error_is_red,
         test_managed_tui_attach_requires_thread_after_attach,
+        test_requested_managed_bridge_lanes_without_credentials_are_yellow,
         test_forbidden_longhouse_codex_path_is_red,
         test_codex_launch_local_failure_evidence_is_not_overwritten_by_later_canary,
         test_longhouse_codex_bin_env_requires_explicit_override,
