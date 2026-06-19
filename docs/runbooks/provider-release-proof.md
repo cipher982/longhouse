@@ -77,9 +77,12 @@ canary marker. Proofs with this flag use scenario
 accept a Codex baseline while the managed attach, detached UI, or live-send
 lanes are still missing if the baseline is intended to protect those surfaces.
 
-Sauron release-watch reuses `AGENT_RELEASE_LONGHOUSE_API_URL` and
-`AGENT_RELEASE_LONGHOUSE_AGENTS_TOKEN` for the same Codex managed bridge proof
-when `AGENT_RELEASE_CODEX_CANARY_LIVE=1`.
+Sauron release-watch reuses `AGENT_RELEASE_CODEX_LONGHOUSE_API_URL` and
+`AGENT_RELEASE_CODEX_LONGHOUSE_AGENTS_TOKEN` for the same Codex managed bridge
+proof when `AGENT_RELEASE_CODEX_CANARY_LIVE=1`, falling back to the global
+`AGENT_RELEASE_LONGHOUSE_*` variables if provider-specific values are absent.
+Production Sauron has the Codex provider-specific live-send variables
+configured as of 2026-06-19.
 
 Run the no-spend preflight before trying to accept a live-send baseline:
 
@@ -287,8 +290,10 @@ argv, raw command evidence, or published fallback artifacts.
 - Codex/OpenAI live-send: accepted baseline
   `codex-managed-live-send-release-proof-v1`, provider version
   `codex-cli 0.139.0`. The accepted proof store is promoted to production
-  Sauron and verifies green, but scheduled live execution still requires
-  Runtime Host URL/token credentials.
+  Sauron and verifies green. Production Sauron has Runtime Host URL/token
+  credentials for scheduled Codex live-send release-watch; a no-spend preflight
+  in the `sauron` container on 2026-06-19 returned green for
+  `codex-managed-live-send-release-proof-v1`.
 - Antigravity real-agy send: no accepted baseline yet for
   `antigravity-real-agy-send-release-proof-v1`.
 

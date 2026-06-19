@@ -68,7 +68,7 @@ Machine-validated coverage map:
 | Covered `partial` | 36 |
 | Covered `no` | 5 |
 | Rows running in Longhouse CI | 43 |
-| Rows running in Sauron release-watch | 29 |
+| Rows running in Sauron release-watch | 30 |
 | Rows with accepted parser-fixture baselines | 4 |
 | Rows with accepted release-proof baselines | 22 |
 
@@ -77,7 +77,7 @@ Provider shape:
 | Provider | Yes | Partial | No | CI rows | Sauron rows | Release baselines |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Claude Code | 2 | 11 | 0 | 11 | 5 | 3 |
-| Codex/OpenAI | 4 | 9 | 0 | 12 | 8 | 7 |
+| Codex/OpenAI | 4 | 9 | 0 | 12 | 9 | 7 |
 | OpenCode | 4 | 7 | 2 | 11 | 11 | 9 |
 | Antigravity | 1 | 9 | 3 | 9 | 5 | 3 |
 
@@ -182,7 +182,7 @@ binding, transcript, send/steer, resume, and live-token proof are still missing.
 | interrupt/abort/steer | partial | engine bridge interrupt/steer tests | hermetic | `make test`, engine tests | Sauron canary when configured | no | partial |
 | reattach/resume | partial | managed TUI attach canary; resume path tests | hermetic/live_no_token | `validate-provider-cli-canaries` | yes | release-proof yes (`codex-release-proof-v1`, codex-cli 0.139.0) | partial |
 | tool/tool-result shape | partial | Codex parser fixtures and tool-call tests | fixture/hermetic | `make test`, `make test-engine` | source review only | parser fixture yes; release-proof no | partial |
-| live-token behavior | partial | `codex-provider-release-canary.py --run-managed-live-send`; `provider-release-proof.py --codex-run-managed-live-send` can attach the evidence to a release proof | managed Runtime Host live_token when explicitly run; fake wrapper in CI | wrapper fake-engine test | conditional release-watch only when `AGENT_RELEASE_CODEX_CANARY_LIVE=1` and credentials exist | release-proof yes (`codex-managed-live-send-release-proof-v1`, codex-cli 0.139.0) | no |
+| live-token behavior | partial | `codex-provider-release-canary.py --run-managed-live-send`; `provider-release-proof.py --codex-run-managed-live-send` can attach the evidence to a release proof | managed Runtime Host live_token when explicitly run; fake wrapper in CI | wrapper fake-engine test | yes; production Sauron has `AGENT_RELEASE_CODEX_CANARY_LIVE=1` and Runtime Host credentials configured | release-proof yes (`codex-managed-live-send-release-proof-v1`, codex-cli 0.139.0) | yes |
 
 Codex is the strongest existing provider lane. Sauron now produces a
 Longhouse-owned proof artifact and proof-baseline diff for source-reviewed
@@ -216,8 +216,10 @@ fails red if the turn does not complete or the provider transcript/state does
 not contain the unique canary marker. This lane uses scenario
 `codex-managed-live-send-release-proof-v1` so it cannot be confused with the
 default no-token `codex-release-proof-v1` baseline. A green live-send baseline
-has now been accepted and promoted to Sauron production; scheduled live
-execution still requires Runtime Host URL/token credentials.
+has now been accepted and promoted to Sauron production. Production Sauron has
+the Codex live-send release-watch credentials configured; a no-spend preflight
+inside the `sauron` container on 2026-06-19 selected
+`codex-managed-live-send-release-proof-v1` and returned green.
 
 Accepted baseline evidence, 2026-06-19: Codex `codex-cli 0.139.0` was run with
 fake app-server, raw-fresh-remote, managed TUI attach, and detached-ui lanes
