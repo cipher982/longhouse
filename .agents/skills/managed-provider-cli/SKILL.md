@@ -1,6 +1,6 @@
 ---
 name: managed-provider-cli
-description: Longhouse managed provider CLI control paths for Claude, Codex, Gemini, and similar CLIs. Use when investigating or changing managed sessions, provider binary ownership, `longhouse claude`, `longhouse codex`, bridge/relay/hook behavior, local-health liveness, reattach behavior, stale provider runtimes, or AGENTS.md guidance about managed vs unmanaged sessions.
+description: Longhouse managed provider CLI control paths for Claude, Codex, Antigravity, and similar CLIs. Use when investigating or changing managed sessions, provider binary ownership, `longhouse claude`, `longhouse codex`, bridge/relay/hook behavior, local-health liveness, reattach behavior, stale provider runtimes, or AGENTS.md guidance about managed vs unmanaged sessions.
 ---
 
 # Managed Provider CLI
@@ -87,7 +87,7 @@ Hard Codex contract:
 - Machine Agent should only advertise `opencode.*` control support when the
   stock `opencode` binary is present on PATH.
 
-### Gemini And Future CLIs
+### Antigravity And Future CLIs
 
 - Start from the same ownership rule: Longhouse can own the wrapper/control path, but the provider CLI remains user-owned unless the product decision explicitly changes.
 - Do not infer one provider's liveness/control model from another provider. Split behavior when the provider mechanics differ.

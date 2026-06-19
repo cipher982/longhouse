@@ -33,7 +33,7 @@ What exists:
   `server/zerg/config/managed_provider_contracts.json`
 - provider canary validation lane:
   `make validate-provider-cli-canaries`
-- parser goldens for Claude, Codex, and Gemini:
+- parser goldens for Claude, Codex, and Antigravity legacy JSON imports:
   `engine/tests/golden_parser_contract.rs`
 - provider release/live/control canary scripts under `scripts/qa/`
 - Sauron release-watch provider-status publication
@@ -173,28 +173,15 @@ still inherits the current canary maturity. The next useful step is proving the
 hook inbox actually changes the model-visible turn, then keeping unsupported
 operations explicit.
 
-### Gemini CLI
+### Legacy Google JSON Imports
 
-| Surface | Covered | Evidence | Boundary | CI | Sauron release-watch | Baseline | Actionable today |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| install/stage exact version | no | none | none | no | source review only | no | no |
-| binary identity | no | no managed Gemini contract in manifest | none | no | no provider status | no | no |
-| auth/status shape | no | none | none | no | no | no | no |
-| launch managed session | no | managed Gemini not launch-critical today | none | no | no | no | no |
-| session id/path binding | no | none | none | no | no | no | no |
-| transcript/log parse | yes | engine Antigravity legacy JSON golden/adversarial parser tests | fixture | `make test-engine`, `validate-provider-cli-canaries` | parser-fixture proof | parser fixture yes; release-proof no | yes for parser drift |
-| ingest into Longhouse | partial | shipper Gemini fixtures plus parser-fixture proof envelope | fixture | shipper tests, `validate-provider-cli-canaries` | parser-fixture proof | no | partial |
-| timeline/session projection | partial | generic session projection tests plus Gemini fixture session projection artifact | fixture/hermetic | `make test`, `validate-provider-cli-canaries` | parser-fixture proof | no | partial |
-| send input | no | no managed Gemini control path | none | no | no | no | no |
-| interrupt/abort/steer | no | no managed Gemini control path | none | no | no | no | no |
-| reattach/resume | no | no managed Gemini control path | none | no | no | no | no |
-| tool/tool-result shape | partial | Gemini parser/adversarial fixtures, shipper tool-result fixture, and parser-fixture proof envelope | fixture | `make test-engine`, shipper tests, `validate-provider-cli-canaries` | parser-fixture proof | parser fixture yes; release-proof no | yes for fixture drift |
-| live-token behavior | no | none | none | no | no | no | no |
-
-Gemini now has a parser-fixture release-proof envelope and Sauron provider
-status for source-reviewed releases. This is intentionally not exact-version
-staging or managed-control proof; Gemini should remain parser-first until
-managed Gemini control becomes a product surface.
+Gemini CLI is no longer a Longhouse release-proof provider. Antigravity is the
+canonical Google provider lane for launch/control/release-watch. Some older
+Google CLI session JSON files still use `type: "gemini"` and live under
+Antigravity legacy JSON fixtures. Those fixtures remain import compatibility
+evidence for parser and shipper behavior, but they do not create a
+`provider-release-proof --provider gemini` lane and Sauron should not publish a
+`gemini.json` provider-status artifact.
 
 ## Phase 2 Entry Point
 
@@ -270,8 +257,6 @@ Current implementation wraps existing source canaries:
 
 - Claude/OpenCode/Antigravity: `scripts/qa/provider-live-canary.py`
 - Codex: `scripts/qa/codex-provider-release-canary.py`
-- Gemini: parser-fixture proof over committed Gemini session, schema-drift, and
-  tool-result fixtures
 
 Claude npm release-watch ticks now have exact-version package staging in Sauron:
 `@anthropic-ai/claude-code@<version>` is installed under the release artifact
@@ -467,9 +452,8 @@ should not by itself count as contract drift.
 
 ## Next Work
 
-1. Add exact-version staging for Claude Code and Codex release packages.
-2. Add Claude managed-session binding proof beyond no-token launch shape.
-3. Decide whether Antigravity real-agy send belongs in scheduled CI or remains
+1. Add Claude managed-session binding proof beyond no-token launch shape.
+2. Decide whether Antigravity real-agy send belongs in scheduled CI or remains
    an opt-in live-token proof.
-4. Accept the first real OpenCode proof baseline from a known-good version.
-5. Start old/new differential proof runs from accepted baselines.
+3. Accept the first real OpenCode proof baseline from a known-good version.
+4. Start old/new differential proof runs from accepted baselines.
