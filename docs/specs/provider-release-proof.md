@@ -22,6 +22,8 @@ archive artifacts, compare baselines, and alert. Longhouse owns the provider
 contract scenarios and the meaning of pass/fail.
 
 Operator runbook: `docs/runbooks/provider-release-proof.md`.
+Roadmap and scoring: `docs/specs/provider-release-proof-roadmap.md`.
+Universal harness target: `docs/specs/universal-agent-harness.md`.
 
 ## Current Answer
 

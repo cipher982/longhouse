@@ -5,8 +5,10 @@ Longhouse. The supported release-proof providers are Claude Code, Codex/OpenAI,
 OpenCode, and Antigravity. Gemini is not a release-proof provider; legacy
 `gemini` parser fixtures remain import compatibility evidence only.
 
-The design matrix lives in `docs/specs/provider-release-proof.md`. Use this page
-when running, accepting, diffing, or interpreting proof artifacts.
+The design matrix lives in `docs/specs/provider-release-proof.md`. The
+provider-agnostic harness target lives in
+`docs/specs/universal-agent-harness.md`. Use this page when running, accepting,
+diffing, or interpreting proof artifacts.
 
 ## Baseline Stores
 
