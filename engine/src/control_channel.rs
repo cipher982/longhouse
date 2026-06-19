@@ -3056,7 +3056,7 @@ exit 1
                 "session_id": "00000000-0000-0000-0000-000000000003",
                 "command_type": COMMAND_LAUNCH,
                 "payload": {
-                    "provider": "gemini",
+                    "provider": "antigravity",
                     "cwd": "/tmp",
                 },
             }),

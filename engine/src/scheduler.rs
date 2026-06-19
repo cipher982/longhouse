@@ -1404,10 +1404,10 @@ mod tests {
         let mut scheduler = PathScheduler::new(1);
         let path = PathBuf::from("/tmp/a.jsonl");
 
-        scheduler.enqueue(path.clone(), "gemini", WorkPriority::Retry);
+        scheduler.enqueue(path.clone(), "antigravity", WorkPriority::Retry);
         let _ = scheduler.pop_launchable().unwrap();
 
-        scheduler.enqueue(path.clone(), "gemini", WorkPriority::Scan);
+        scheduler.enqueue(path.clone(), "antigravity", WorkPriority::Scan);
         scheduler.complete(&path, Some(WorkPriority::Live));
 
         let rerun = scheduler.pop_launchable().unwrap();

@@ -2193,7 +2193,7 @@ fn provider_name_to_static(provider: &str) -> Option<&'static str> {
         "claude" => Some("claude"),
         "codex" => Some("codex"),
         "antigravity" => Some("antigravity"),
-        "gemini" => Some("gemini"),
+        "gemini" => Some("antigravity"),
         _ => None,
     }
 }

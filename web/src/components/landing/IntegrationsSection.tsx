@@ -37,8 +37,7 @@ export function IntegrationsSection() {
         <p className="landing-providers-foot">
           Codex launch-through-Longhouse is supported; OpenCode supports managed live
           send and interrupt; Antigravity is managed observe-only today. Claude is
-          still the strongest continuation path. Legacy Gemini sessions stay searchable
-          as imports.
+          still the strongest continuation path. Older Google CLI JSON imports remain searchable under Antigravity.
         </p>
       </div>
     </section>

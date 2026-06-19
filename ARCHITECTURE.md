@@ -51,7 +51,7 @@ The project uses some shorthand nouns. The important ones:
 - **Unmanaged session** — imported or discovered (e.g. a bare `claude` run).
   Searchable, sometimes partially live, but not steerable from the browser.
 - **Provider CLI** — an upstream binary you install yourself (`claude`, `codex`,
-  `gemini`/Antigravity, `opencode`). Longhouse launches it through a control
+  Antigravity, `opencode`). Longhouse launches it through a control
   path but does not vendor, pin, or update it.
 - **Wall** — a live overview of current sessions across your machines.
 - **Recall** — semantic/full-text retrieval over past session history.

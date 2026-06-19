@@ -9,7 +9,7 @@ Use this skill when a task touches how Longhouse starts, observes, steers, or re
 
 ## Mental Model
 
-- **Provider CLI**: an upstream executable the user installs separately, such as `claude`, `codex`, or `gemini`.
+- **Provider CLI**: an upstream executable the user installs separately, such as `claude`, `codex`, or `agy`.
 - **Managed session**: Longhouse owns the control path. It does not imply Longhouse owns, vendors, pins, patches, or updates the provider binary.
 - **Unmanaged session**: Longhouse ingests or discovers a bare provider CLI session but does not own a live control path.
 - **Machine Agent**: `longhouse-engine`; ships local events, owns runtime hooks/state, and may run provider-specific bridge processes.

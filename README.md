@@ -145,7 +145,7 @@ Issues: <https://github.com/cipher982/longhouse/issues>
 
 ## Status
 
-Alpha. Actively developed. Claude Code, Codex, Antigravity, and OpenCode sessions sync today; legacy Gemini imports remain supported. Managed launch is live for Claude, Codex, Antigravity, and OpenCode (Antigravity is observe-only; OpenCode supports managed live send but not active-turn steer), and the native iOS companion can page on `needs_user` / `blocked` once APNs is configured.
+Alpha. Actively developed. Claude Code, Codex, Antigravity, and OpenCode sessions sync today. Managed launch is live for Claude, Codex, Antigravity, and OpenCode (Antigravity is observe-only; OpenCode supports managed live send but not active-turn steer), and the native iOS companion can page on `needs_user` / `blocked` once APNs is configured.
 
 Built by [David Rose](https://github.com/cipher982). Apache-2.0.
 

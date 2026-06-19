@@ -3154,7 +3154,7 @@ def test_collect_local_health_includes_activity_summary(monkeypatch, tmp_path: P
         [
             ("/tmp/claude-a.jsonl", "claude", "claude-a", None, recent.isoformat()),
             ("/tmp/codex-b.jsonl", "codex", None, "codex-b", earlier_today.isoformat()),
-            ("/tmp/gemini-c.jsonl", "gemini", "gemini-c", None, before_today.isoformat()),
+            ("/tmp/antigravity-c.jsonl", "antigravity", "antigravity-c", None, before_today.isoformat()),
         ],
     )
 
@@ -3193,7 +3193,7 @@ def test_collect_local_health_includes_activity_summary(monkeypatch, tmp_path: P
             "is_subagent": False,
         },
         {
-            "provider": "gemini",
+            "provider": "antigravity",
             "last_updated": before_today.isoformat(),
             "workspace_label": None,
             "branch": None,

@@ -3,14 +3,6 @@ import SwiftUI
 /// Provider brand glyph — the real logo mark for each AI coding agent, drawn
 /// from vector PDFs in the asset catalog (ProviderCodex, ProviderClaude,
 /// ProviderGemini, ProviderOpencode, ProviderAntigravity).
-///
-/// Mirrors the web `<ProviderGlyph>` (web/src/components/ProviderGlyph.tsx).
-/// Two non-overlapping color channels, same discipline as the web app and the
-/// transcript palette: the glyph carries PROVIDER IDENTITY (the provider's real
-/// brand color, baked into the PDF), while runtime/status color lives on the
-/// liveness dot and never on the glyph.
-///
-/// The PDFs are full-color (Gemini is a real gradient), so the asset uses
 /// `template-rendering-intent = original` and we do NOT apply a tint.
 public struct ProviderGlyph: View {
     public enum Variant {
@@ -29,14 +21,14 @@ public struct ProviderGlyph: View {
     }
 
     private var key: String {
-        (provider ?? "").lowercased()
+        let raw = (provider ?? "").lowercased()
+        return raw == "gemini" ? "antigravity" : raw
     }
 
     private var assetName: String? {
         switch key {
         case "codex", "openai": return "ProviderCodex"
         case "claude": return "ProviderClaude"
-        case "gemini": return "ProviderGemini"
         case "opencode": return "ProviderOpencode"
         case "antigravity": return "ProviderAntigravity"
         default: return nil
@@ -50,7 +42,6 @@ public struct ProviderGlyph: View {
         case "codex", "openai": return Color(white: 0.92)
         case "opencode": return Color(white: 0.78)
         case "antigravity": return Color(red: 0x4F / 255, green: 0x87 / 255, blue: 0xED / 255)
-        case "gemini": return Color(red: 0x8E / 255, green: 0x75 / 255, blue: 0xB2 / 255)
         default: return .secondary
         }
     }
@@ -99,9 +90,8 @@ public func providerDisplayLabel(_ provider: String?) -> String {
     case "codex": return "Codex"
     case "openai": return "OpenAI"
     case "claude": return "Claude"
-    case "gemini": return "Gemini"
     case "opencode": return "OpenCode"
-    case "antigravity": return "Antigravity"
+    case "gemini", "antigravity": return "Antigravity"
     default: return provider.prefix(1).uppercased() + provider.dropFirst()
     }
 }

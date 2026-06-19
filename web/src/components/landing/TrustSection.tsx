@@ -29,7 +29,7 @@ const faqs: FAQ[] = [
   {
     question: "Which providers are strongest today?",
     answer:
-      "Claude is the strongest continuation path today. Codex launches through Longhouse and lands in the archive. Antigravity is the new Google CLI path, with Gemini kept as legacy archive support.",
+      "Claude is the strongest continuation path today. Codex launches through Longhouse and lands in the archive. Antigravity is the Google CLI path Longhouse supports for launch and archive.",
   },
   {
     question: "Where is my data stored?",

@@ -1,6 +1,6 @@
 //! Multi-provider session file discovery.
 //!
-//! Discovers session files across Claude, Codex, Antigravity, and legacy Gemini providers.
+//! Discovers session files across Claude, Codex, and Antigravity providers.
 //! Replaces the Claude-only `bench::discover_session_files()`.
 
 use std::path::{Path, PathBuf};
@@ -63,7 +63,7 @@ fn provider_candidates(home: &Path, claude_root: &Path) -> Vec<ProviderConfig> {
             extension: "db",
         },
         ProviderConfig {
-            name: "gemini",
+            name: "antigravity",
             root: home.join(".gemini").join("tmp"),
             extension: "json",
         },

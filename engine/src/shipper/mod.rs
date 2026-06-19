@@ -732,13 +732,13 @@ fn log_suspicious_empty_parse_with_tracker(
     }
 }
 
-fn should_ack_empty_gemini_document(
+fn should_ack_empty_antigravity_legacy_document(
     provider: &str,
     parse_result: &ParseResult,
     offset: u64,
     new_offset: u64,
 ) -> bool {
-    provider == "gemini"
+    provider == "antigravity"
         && parse_result.events.is_empty()
         && parse_result.source_lines.is_empty()
         && parse_result.candidate_records > 0
@@ -846,7 +846,7 @@ fn full_document_rewrite_hint(path_str: &str) -> compressor::SourceRewindHint {
 }
 
 fn is_full_document_provider(provider: &str) -> bool {
-    provider.eq_ignore_ascii_case("gemini")
+    provider.eq_ignore_ascii_case("antigravity")
 }
 
 pub(crate) fn file_identity_changed_for_cursor(
@@ -1310,7 +1310,7 @@ pub(crate) fn prepare_path_range_with_parse_tracker_and_trace(
         .map(|cap| parse_result.last_good_offset.min(cap))
         .unwrap_or(parse_result.last_good_offset);
 
-    if should_ack_empty_gemini_document(provider, &parse_result, offset, new_offset) {
+    if should_ack_empty_antigravity_legacy_document(provider, &parse_result, offset, new_offset) {
         return Ok(Some(PreparedFile {
             path_str: path_str.clone(),
             offset,
@@ -4772,7 +4772,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prepare_gemini_file_uses_source_line_boundaries_when_archive_is_available() {
+    fn test_prepare_antigravity_legacy_json_file_uses_source_line_boundaries_when_archive_is_available() {
         let (_tmp, conn) = make_db();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session-gemini.json");
@@ -4797,12 +4797,12 @@ mod tests {
         std::fs::write(&path, serde_json::to_vec_pretty(&gemini).unwrap()).unwrap();
 
         let prepared =
-            prepare_file_batches(&path, "gemini", CompressionAlgo::Gzip, &conn, 32, None).unwrap();
-        let prepared = prepared.expect("gemini file should still prepare with source-line archive");
+            prepare_file_batches(&path, "antigravity", CompressionAlgo::Gzip, &conn, 32, None).unwrap();
+        let prepared = prepared.expect("legacy JSON file should still prepare with source-line archive");
 
         assert!(
             prepared.actions.len() > 1,
-            "source-line archive should let gemini split instead of whole-document fallback"
+            "source-line archive should let legacy JSON split instead of whole-document fallback"
         );
         assert!(prepared.actions.iter().all(|action| match action {
             PreparedAction::DeadLetter(item) => !item.reason.contains("whole-document payload"),
@@ -4818,14 +4818,14 @@ mod tests {
 
         let prepared = prepare_file_batches(
             &path,
-            "gemini",
+            "antigravity",
             CompressionAlgo::Gzip,
             &conn,
             5 * 1024 * 1024,
             None,
         )
         .unwrap();
-        let prepared = prepared.expect("gemini file should prepare at normal batch limit");
+        let prepared = prepared.expect("legacy JSON file should prepare at normal batch limit");
         assert_eq!(prepared.actions.len(), 1);
         match prepared.actions.into_iter().next().unwrap() {
             PreparedAction::Ship(item) => {
@@ -4834,14 +4834,14 @@ mod tests {
                 assert_eq!(item.event_count, 2);
             }
             PreparedAction::DeadLetter(_) => {
-                panic!("normal batch limit should ship whole-document gemini payload")
+                panic!("normal batch limit should ship whole-document legacy JSON payload")
             }
-            PreparedAction::AckOnly(_) => panic!("conversation gemini file should not ack-only"),
+            PreparedAction::AckOnly(_) => panic!("conversation legacy JSON file should not ack-only"),
         }
     }
 
     #[test]
-    fn test_prepare_gemini_rewritten_document_rewinds_from_previous_offset() {
+    fn test_prepare_antigravity_legacy_json_rewritten_document_rewinds_from_previous_offset() {
         let (_tmp, conn) = make_db();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session-gemini-rewritten.json");
@@ -4877,20 +4877,20 @@ mod tests {
                 497,
                 "5053c934-f66d-4fea-96af-f95181de5986",
                 "5053c934-f66d-4fea-96af-f95181de5986",
-                "gemini",
+                "antigravity",
             )
             .unwrap();
 
         let prepared = prepare_file_batches(
             &path,
-            "gemini",
+            "antigravity",
             CompressionAlgo::Gzip,
             &conn,
             5 * 1024 * 1024,
             None,
         )
         .unwrap()
-        .expect("rewritten gemini file should prepare from the beginning");
+        .expect("rewritten legacy JSON file should prepare from the beginning");
 
         assert_eq!(prepared.offset, 0);
         assert_eq!(prepared.new_offset, file_len);
@@ -4902,13 +4902,13 @@ mod tests {
                 assert_eq!(item.event_count, 2);
             }
             PreparedAction::AckOnly(_) | PreparedAction::DeadLetter(_) => {
-                panic!("conversation gemini rewrite should ship as a full document")
+                panic!("conversation legacy JSON rewrite should ship as a full document")
             }
         }
     }
 
     #[test]
-    fn test_prepare_gemini_info_file_acknowledges_without_shipping() {
+    fn test_prepare_antigravity_legacy_json_info_file_acknowledges_without_shipping() {
         let (_tmp, conn) = make_db();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session-gemini-info.json");
@@ -4928,24 +4928,24 @@ mod tests {
 
         let prepared = prepare_file_batches(
             &path,
-            "gemini",
+            "antigravity",
             CompressionAlgo::Gzip,
             &conn,
             5 * 1024 * 1024,
             None,
         )
         .unwrap();
-        let prepared = prepared.expect("gemini info file should no longer be skipped");
+        let prepared = prepared.expect("legacy JSON info file should no longer be skipped");
 
         assert_eq!(prepared.actions.len(), 1);
         match prepared.actions.into_iter().next().unwrap() {
             PreparedAction::AckOnly(item) => {
                 assert_eq!(item.offset, 0);
                 assert_eq!(item.new_offset, std::fs::metadata(&path).unwrap().len());
-                assert_eq!(item.provider, "gemini");
+                assert_eq!(item.provider, "antigravity");
             }
             PreparedAction::Ship(_) | PreparedAction::DeadLetter(_) => {
-                panic!("gemini info-only file should be acknowledged without shipping")
+                panic!("legacy JSON info-only file should be acknowledged without shipping")
             }
         }
     }
@@ -4996,14 +4996,14 @@ mod tests {
         let (_tmp, conn) = make_db();
         let client = make_test_client("http://127.0.0.1:9");
         let prepared = PreparedFile {
-            path_str: "/tmp/gemini-info.json".to_string(),
+            path_str: "/tmp/antigravity-legacy-info.json".to_string(),
             offset: 0,
             new_offset: 413,
             has_reply_evidence: false,
             cursor_mode: CursorMode::Archive,
             actions: vec![PreparedAction::AckOnly(AckOnlyItem {
-                path_str: "/tmp/gemini-info.json".to_string(),
-                provider: "gemini".to_string(),
+                path_str: "/tmp/antigravity-legacy-info.json".to_string(),
+                provider: "antigravity".to_string(),
                 offset: 0,
                 new_offset: 413,
                 session_id: "61d59eea-a6ca-4ebf-a6e1-dc25c25296c4".to_string(),
@@ -5017,8 +5017,8 @@ mod tests {
         assert_eq!(outcome.events_shipped, 0);
         assert_eq!(outcome.dead_lettered, 0);
         assert!(outcome.fully_processed);
-        assert_eq!(fs.get_offset("/tmp/gemini-info.json").unwrap(), 413);
-        assert_eq!(fs.get_queued_offset("/tmp/gemini-info.json").unwrap(), 413);
+        assert_eq!(fs.get_offset("/tmp/antigravity-legacy-info.json").unwrap(), 413);
+        assert_eq!(fs.get_queued_offset("/tmp/antigravity-legacy-info.json").unwrap(), 413);
     }
 
     #[tokio::test]

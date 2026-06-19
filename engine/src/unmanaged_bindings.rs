@@ -3,7 +3,7 @@
 //! transcripts.
 //!
 //! The scanner answers one question per unmanaged session the user has open
-//! locally: *is a `claude` / `codex` / `antigravity` / legacy `gemini` process actually holding
+//! locally: *is a `claude` / `codex` / `antigravity` process actually holding
 //! this transcript file right now?*
 //!
 //! That ground truth lets the Runtime Host mark a session's
@@ -16,7 +16,7 @@
 //!      roots via `discovery::discover_all_files`, filtered by mtime.
 //!   2. Enumerate candidate provider-CLI processes with
 //!      `ps -axo pid=,lstart=,command=`. Filter by command basename
-//!      (`claude`, `codex`, `agy`, `gemini`, `opencode`) plus the stock Node-backed
+//!      (`claude`, `codex`, `agy`, `opencode`) plus the stock Node-backed
 //!      launcher shapes (`node .../codex`, `node .../opencode`, etc.) - never
 //!      `longhouse-*` wrappers (those are managed sessions and get their
 //!      own lease surface).
@@ -317,7 +317,7 @@ fn provider_from_argv0_basename(basename: &str) -> Option<&'static str> {
         "claude" => Some("claude"),
         "codex" => Some("codex"),
         "agy" | "antigravity" => Some("antigravity"),
-        "gemini" => Some("gemini"),
+        "gemini" => Some("antigravity"),
         "opencode" => Some("opencode"),
         _ => None,
     }
@@ -656,7 +656,7 @@ mod tests {
             None
         );
         assert_eq!(is_provider_process("claude"), Some("claude"));
-        assert_eq!(is_provider_process("gemini chat"), Some("gemini"));
+        assert_eq!(is_provider_process("gemini chat"), Some("antigravity"));
         assert_eq!(is_provider_process("longhouse-codex --attach"), None);
         assert_eq!(is_provider_process("longhouse-opencode serve"), None);
         assert_eq!(is_provider_process("longhouse-antigravity"), None);

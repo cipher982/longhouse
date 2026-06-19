@@ -1,9 +1,10 @@
 import type { AgentSession } from "../../services/api/agents";
-import { getProviderLabel } from "../providers";
+import { canonicalProvider, getProviderLabel } from "../providers";
 import type { ManagedLaunchSuggestion, SessionInteractionCapabilities, SessionInteractionMode } from "./types";
 import { getSessionOriginLabel } from "./formatters";
 
 function getManagedLaunchSuggestion(provider: string, providerLabel: string): ManagedLaunchSuggestion | null {
+  provider = canonicalProvider(provider);
   if (provider === "claude") {
     return {
       title: "Start the next Claude session through Longhouse",
@@ -25,20 +26,11 @@ function getManagedLaunchSuggestion(provider: string, providerLabel: string): Ma
       command: "longhouse agy",
     };
   }
-  if (provider === "gemini") {
-    return {
-      title: "Start the next Google CLI session with Antigravity",
-      body: "Legacy Gemini sessions stay searchable here. Use Antigravity for new Google CLI sessions so Longhouse can archive them with managed ownership and phase signals.",
-      command: "longhouse agy",
-    };
-  }
   return null;
 }
 
 function getManagedLaunchHint(provider: string, providerLabel: string): string {
-  if (provider === "gemini") {
-    return "Use Antigravity for new Google CLI sessions when you want Longhouse ownership and phase signals.";
-  }
+  provider = canonicalProvider(provider);
   if (provider === "antigravity") {
     return "Launch new Antigravity sessions through Longhouse when you want Longhouse ownership and phase signals.";
   }

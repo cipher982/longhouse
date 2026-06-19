@@ -160,7 +160,7 @@ fn golden_codex_basic() {
 }
 
 #[test]
-fn golden_gemini_basic() {
-    let base = fixtures_dir().join("golden").join("gemini");
+fn golden_antigravity_legacy_json_basic() {
+    let base = fixtures_dir().join("golden").join("antigravity_legacy_json");
     run_golden_test(&base.join("basic.json"), &base.join("basic.expected.json"));
 }

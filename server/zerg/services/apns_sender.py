@@ -63,7 +63,6 @@ PROVIDER_DISPLAY_NAMES = {
     "claude": "Claude",
     "codex": "Codex",
     "cursor": "Cursor",
-    "gemini": "Gemini",
     "antigravity": "Antigravity",
     "openai": "OpenAI",
     "zai": "z.ai",

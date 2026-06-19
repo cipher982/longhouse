@@ -60,11 +60,11 @@ fn parse_events(input_path: &Path) -> (usize, bool) {
 /// Non-string content (object) in one message must NOT drop the entire session.
 /// The messages with valid string content must still be shipped.
 #[test]
-fn gemini_object_content_keeps_string_messages() {
-    let path = fixtures_dir().join("gemini").join("object_content.json");
+fn antigravity_legacy_json_object_content_keeps_string_messages() {
+    let path = fixtures_dir().join("antigravity_legacy_json").join("object_content.json");
     let (count, ok) = parse_events(&path);
     assert!(ok, "engine must exit 0 even with malformed content");
-    // 3 messages: user (string), gemini (object — skip), user (string)
+    // 3 messages: user (string), antigravity_legacy_json (object — skip), user (string)
     // Should preserve the 2 string-content messages
     assert!(
         count >= 2,
@@ -76,11 +76,11 @@ fn gemini_object_content_keeps_string_messages() {
 
 /// Unknown message type is silently skipped; surrounding valid messages are kept.
 #[test]
-fn gemini_unknown_type_skipped_not_fatal() {
-    let path = fixtures_dir().join("gemini").join("unknown_type.json");
+fn antigravity_legacy_json_unknown_type_skipped_not_fatal() {
+    let path = fixtures_dir().join("antigravity_legacy_json").join("unknown_type.json");
     let (count, ok) = parse_events(&path);
     assert!(ok, "engine must exit 0 on unknown message type");
-    // 3 messages: user, system (unknown—skip), gemini
+    // 3 messages: user, system (unknown—skip), antigravity_legacy_json
     assert_eq!(
         count, 2,
         "Expected exactly 2 events (unknown type skipped), got {}",
@@ -90,8 +90,8 @@ fn gemini_unknown_type_skipped_not_fatal() {
 
 /// Empty messages array is legitimate — 0 events, exit 0.
 #[test]
-fn gemini_empty_messages_is_not_an_error() {
-    let path = fixtures_dir().join("gemini").join("empty_messages.json");
+fn antigravity_legacy_json_empty_messages_is_not_an_error() {
+    let path = fixtures_dir().join("antigravity_legacy_json").join("empty_messages.json");
     let (count, ok) = parse_events(&path);
     assert!(ok, "engine must exit 0 on empty messages array");
     assert_eq!(count, 0, "Expected 0 events for empty messages");
@@ -100,10 +100,10 @@ fn gemini_empty_messages_is_not_an_error() {
 /// Truncated JSON (partial write mid-flush) — engine must exit 0, 0 events.
 /// The file is invalid JSON so parse fails; this is expected and must be silent.
 #[test]
-fn gemini_truncated_json_exits_cleanly() {
+fn antigravity_legacy_json_truncated_json_exits_cleanly() {
     // .broken extension bypasses JSON linters while keeping the file clearly
     // associated with the Gemini format it simulates.
-    let path = fixtures_dir().join("gemini").join("truncated.json.broken");
+    let path = fixtures_dir().join("antigravity_legacy_json").join("truncated.json.broken");
     let (count, ok) = parse_events(&path);
     assert!(ok, "engine must exit 0 on truncated (invalid) JSON");
     assert_eq!(count, 0, "Expected 0 events from truncated JSON");

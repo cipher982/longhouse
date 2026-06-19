@@ -126,7 +126,7 @@ Longhouse is not:
 
 ### Core
 
-- session ingest for Claude Code, Codex CLI, Antigravity CLI, and OpenCode (legacy Gemini imports stay searchable)
+- session ingest for Claude Code, Codex CLI, Antigravity CLI, and OpenCode
 - timeline, search, session detail, and recall
 - canonical `/api/agents/*` machine surface plus CLI parity
 - managed-local launch and remote control on user-owned machines

@@ -208,9 +208,7 @@ def compact_runtime_tool_label(tool_name: str | None) -> str | None:
         return "Codex"
     if lower == "claude":
         return "Claude"
-    if lower == "gemini":
-        return "Gemini"
-    if lower == "antigravity":
+    if lower == "gemini" or lower == "antigravity":
         return "Antigravity"
     if lower == "default":
         return "Z.ai"

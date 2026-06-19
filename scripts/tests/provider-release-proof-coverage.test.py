@@ -9,7 +9,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COVERAGE_PATH = REPO_ROOT / "docs" / "specs" / "provider-release-proof-coverage.json"
 
-EXPECTED_PROVIDERS = ("claude", "codex", "opencode", "antigravity", "gemini")
+EXPECTED_PROVIDERS = ("claude", "codex", "opencode", "antigravity", )
 EXPECTED_SURFACES = (
     "install/stage exact version",
     "binary identity",

@@ -52,7 +52,7 @@ export default function QuickStartPage() {
       <h2>3. Find one prior session</h2>
       <p>
         Use the timeline or search to find one real past session. If you have
-        used Claude Code, Codex, Antigravity, OpenCode, or legacy Gemini CLI on this machine, Longhouse will
+        used Claude Code, Codex, Antigravity, or OpenCode on this machine, Longhouse will
         import your sessions during setup.
       </p>
       <div className="docs-callout">

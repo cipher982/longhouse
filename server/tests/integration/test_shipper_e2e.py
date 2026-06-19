@@ -15,10 +15,10 @@ Strategy
 Fixtures are sanitised real-world session files (no PII):
 - ``1dd6c481-....jsonl``   — Claude Code JSONL format
 - ``9f0c3c8e-....jsonl``   — Claude non-text tool results
-- ``gemini_session.json``  — Gemini CLI JSON format
+- ``antigravity_legacy_session.json``  — legacy Antigravity JSON chat format
 - ``019a4bea-....jsonl``   — Codex CLI JSONL format
-- ``gemini_drift.json``    — Gemini with object-typed content (schema drift)
-- ``gemini_tool_results.json`` — Gemini tool call + tool result payloads
+- ``antigravity_legacy_drift.json``    — legacy Antigravity JSON with object-typed content (schema drift)
+- ``antigravity_legacy_tool_results.json`` — legacy Antigravity tool call + tool result payloads
 
 Marks / skip conditions
 -----------------------
@@ -59,17 +59,17 @@ ENGINE_BIN = REPO_ROOT / "engine" / "target" / _cargo_profile / "longhouse-engin
 # Fixture filenames.
 CLAUDE_FIXTURE = "1dd6c481-7d7b-498a-b492-c33c917889b9.jsonl"
 CLAUDE_NON_TEXT_TOOL_RESULTS_FIXTURE = "9f0c3c8e-0b6e-4c2d-9b93-5ab2ebf3e101.jsonl"
-GEMINI_FIXTURE = "gemini_session.json"
-GEMINI_DRIFT_FIXTURE = "gemini_drift.json"
-GEMINI_TOOL_RESULTS_FIXTURE = "gemini_tool_results.json"
+ANTIGRAVITY_LEGACY_FIXTURE = "antigravity_legacy_session.json"
+ANTIGRAVITY_LEGACY_DRIFT_FIXTURE = "antigravity_legacy_drift.json"
+ANTIGRAVITY_LEGACY_TOOL_RESULTS_FIXTURE = "antigravity_legacy_tool_results.json"
 CODEX_FIXTURE = "019a4bea-3f39-7fe1-b132-6c14579e806c.jsonl"
 
 # Expected session IDs — must match the fixture files exactly.
 CLAUDE_SESSION_ID = "1dd6c481-7d7b-498a-b492-c33c917889b9"
 CLAUDE_NON_TEXT_TOOL_RESULTS_SESSION_ID = "9f0c3c8e-0b6e-4c2d-9b93-5ab2ebf3e101"
-GEMINI_SESSION_ID = "5053c934-f66d-4fea-96af-f95181de5986"
-GEMINI_DRIFT_SESSION_ID = "d1f7b8a2-3e4c-4f56-a789-012345678901"
-GEMINI_TOOL_RESULTS_SESSION_ID = "f2b84f4d-9149-4ed8-8d65-9dc0b6b0fbe2"
+ANTIGRAVITY_LEGACY_SESSION_ID = "5053c934-f66d-4fea-96af-f95181de5986"
+ANTIGRAVITY_LEGACY_DRIFT_SESSION_ID = "d1f7b8a2-3e4c-4f56-a789-012345678901"
+ANTIGRAVITY_LEGACY_TOOL_RESULTS_SESSION_ID = "f2b84f4d-9149-4ed8-8d65-9dc0b6b0fbe2"
 CODEX_SESSION_ID = "019a4bea-3f39-7fe1-b132-6c14579e806c"
 OPENCODE_PROVIDER_SESSION_ID = "ses_longhouse_e2e"
 OPENCODE_SESSION_ID = str(uuid5(NAMESPACE_URL, f"opencode:{OPENCODE_PROVIDER_SESSION_ID}"))
@@ -1183,17 +1183,17 @@ class TestClaudeNonTextToolResults:
 
 class TestGeminiShipping:
     def test_session_appears_in_db(self, server, tmp_path):
-        _ship(GEMINI_FIXTURE, server, "gemini", tmp_path / "engine.db")
-        session = _get_session(server, GEMINI_SESSION_ID)
+        _ship(ANTIGRAVITY_LEGACY_FIXTURE, server, "antigravity", tmp_path / "engine.db")
+        session = _get_session(server, ANTIGRAVITY_LEGACY_SESSION_ID)
         assert session is not None, "Gemini session not found after shipping"
-        assert session["provider"] == "gemini"
+        assert session["provider"] == "antigravity"
 
     def test_events_ingested(self, server, tmp_path):
-        events = _get_events(server, GEMINI_SESSION_ID)
+        events = _get_events(server, ANTIGRAVITY_LEGACY_SESSION_ID)
         assert len(events) == 2, f"Expected exactly 2 events, got {len(events)}"
 
     def test_event_roles_and_content(self, server, tmp_path):
-        events = _get_events(server, GEMINI_SESSION_ID)
+        events = _get_events(server, ANTIGRAVITY_LEGACY_SESSION_ID)
         roles = [e["role"] for e in events]
         assert roles == ["user", "assistant"], f"Expected [user, assistant], got {roles}"
         # User message asks to reply with "gemini ok"
@@ -1208,21 +1208,21 @@ class TestGeminiShipping:
         )
 
     def test_timestamps_are_monotonic(self, server, tmp_path):
-        events = _get_events(server, GEMINI_SESSION_ID)
+        events = _get_events(server, ANTIGRAVITY_LEGACY_SESSION_ID)
         timestamps = [e.get("timestamp") for e in events if e.get("timestamp")]
         assert timestamps == sorted(timestamps)
 
     def test_session_metadata(self, server, tmp_path):
         # Phase 4: last_activity_at replaces ended_at as the "saw activity"
         # field; ended_at only gets set on a real terminal_signal.
-        session = _get_session(server, GEMINI_SESSION_ID)
+        session = _get_session(server, ANTIGRAVITY_LEGACY_SESSION_ID)
         assert session["started_at"] is not None
         assert session["last_activity_at"] is not None
 
     def test_reship_is_idempotent(self, server, tmp_path):
-        events_before = _get_events(server, GEMINI_SESSION_ID)
-        _ship(GEMINI_FIXTURE, server, "gemini", tmp_path / "engine2.db")
-        events_after = _get_events(server, GEMINI_SESSION_ID)
+        events_before = _get_events(server, ANTIGRAVITY_LEGACY_SESSION_ID)
+        _ship(ANTIGRAVITY_LEGACY_FIXTURE, server, "antigravity", tmp_path / "engine2.db")
+        events_after = _get_events(server, ANTIGRAVITY_LEGACY_SESSION_ID)
         assert len(events_after) == len(events_before), (
             f"Re-ship created duplicates: {len(events_before)} → {len(events_after)}"
         )
@@ -1243,14 +1243,14 @@ class TestGeminiSchemaDrift:
 
     def test_partial_session_shipped_despite_object_content(self, server, tmp_path):
         """String-content messages survive even when one uses object content."""
-        _ship(GEMINI_DRIFT_FIXTURE, server, "gemini", tmp_path / "engine.db")
-        session = _get_session(server, GEMINI_DRIFT_SESSION_ID)
+        _ship(ANTIGRAVITY_LEGACY_DRIFT_FIXTURE, server, "antigravity", tmp_path / "engine.db")
+        session = _get_session(server, ANTIGRAVITY_LEGACY_DRIFT_SESSION_ID)
         assert session is not None, (
             "Schema-drift session not found. The parser may have dropped the entire session."
         )
 
     def test_string_content_messages_preserved(self, server, tmp_path):
-        events = _get_events(server, GEMINI_DRIFT_SESSION_ID)
+        events = _get_events(server, ANTIGRAVITY_LEGACY_DRIFT_SESSION_ID)
         # Fixture has 4 messages: user(str), gemini(obj), user(str), gemini(str)
         # At minimum the 3 string-content messages must survive
         assert len(events) >= 3, (
@@ -1259,7 +1259,7 @@ class TestGeminiSchemaDrift:
         )
 
     def test_exact_content_of_string_messages(self, server, tmp_path):
-        events = _get_events(server, GEMINI_DRIFT_SESSION_ID)
+        events = _get_events(server, ANTIGRAVITY_LEGACY_DRIFT_SESSION_ID)
         user_contents = [
             e.get("content_text", "") for e in events if e["role"] == "user"
         ]
@@ -1271,9 +1271,9 @@ class TestGeminiSchemaDrift:
         )
 
     def test_reship_is_idempotent(self, server, tmp_path):
-        events_before = _get_events(server, GEMINI_DRIFT_SESSION_ID)
-        _ship(GEMINI_DRIFT_FIXTURE, server, "gemini", tmp_path / "engine2.db")
-        events_after = _get_events(server, GEMINI_DRIFT_SESSION_ID)
+        events_before = _get_events(server, ANTIGRAVITY_LEGACY_DRIFT_SESSION_ID)
+        _ship(ANTIGRAVITY_LEGACY_DRIFT_FIXTURE, server, "antigravity", tmp_path / "engine2.db")
+        events_after = _get_events(server, ANTIGRAVITY_LEGACY_DRIFT_SESSION_ID)
         assert len(events_after) == len(events_before)
 
 
@@ -1284,13 +1284,13 @@ class TestGeminiSchemaDrift:
 
 class TestGeminiToolResults:
     def test_session_appears_in_db(self, server, tmp_path):
-        _ship(GEMINI_TOOL_RESULTS_FIXTURE, server, "gemini", tmp_path / "engine.db")
-        session = _get_session(server, GEMINI_TOOL_RESULTS_SESSION_ID)
+        _ship(ANTIGRAVITY_LEGACY_TOOL_RESULTS_FIXTURE, server, "antigravity", tmp_path / "engine.db")
+        session = _get_session(server, ANTIGRAVITY_LEGACY_TOOL_RESULTS_SESSION_ID)
         assert session is not None, "Gemini tool-results session not found after shipping"
-        assert session["provider"] == "gemini"
+        assert session["provider"] == "antigravity"
 
     def test_tool_calls_and_results_are_ingested(self, server, tmp_path):
-        events = _get_events(server, GEMINI_TOOL_RESULTS_SESSION_ID)
+        events = _get_events(server, ANTIGRAVITY_LEGACY_TOOL_RESULTS_SESSION_ID)
         # user + assistant text + 2 assistant tool calls + 2 tool result events
         assert len(events) == 6, f"Expected exactly 6 events, got {len(events)}"
 
@@ -1307,7 +1307,7 @@ class TestGeminiToolResults:
         )
 
     def test_tool_call_id_pairing(self, server, tmp_path):
-        events = _get_events(server, GEMINI_TOOL_RESULTS_SESSION_ID)
+        events = _get_events(server, ANTIGRAVITY_LEGACY_TOOL_RESULTS_SESSION_ID)
         assistants = [
             e for e in events
             if e["role"] == "assistant" and e.get("tool_name")
@@ -1322,9 +1322,9 @@ class TestGeminiToolResults:
         assert assistant_ids == tool_ids, "Gemini tool call/result IDs must align"
 
     def test_reship_is_idempotent(self, server, tmp_path):
-        events_before = _get_events(server, GEMINI_TOOL_RESULTS_SESSION_ID)
-        _ship(GEMINI_TOOL_RESULTS_FIXTURE, server, "gemini", tmp_path / "engine2.db")
-        events_after = _get_events(server, GEMINI_TOOL_RESULTS_SESSION_ID)
+        events_before = _get_events(server, ANTIGRAVITY_LEGACY_TOOL_RESULTS_SESSION_ID)
+        _ship(ANTIGRAVITY_LEGACY_TOOL_RESULTS_FIXTURE, server, "antigravity", tmp_path / "engine2.db")
+        events_after = _get_events(server, ANTIGRAVITY_LEGACY_TOOL_RESULTS_SESSION_ID)
         assert len(events_after) == len(events_before), (
             f"Re-ship created duplicates: {len(events_before)} → {len(events_after)}"
         )
@@ -1506,7 +1506,7 @@ def test_full_ship_replays_pending_spool_even_without_new_files(server, tmp_path
     ("fixture", "provider", "session_id", "expect_event_raw_payload"),
     [
         (CLAUDE_FIXTURE, "claude", CLAUDE_SESSION_ID, True),
-        (GEMINI_FIXTURE, "gemini", GEMINI_SESSION_ID, False),
+        (ANTIGRAVITY_LEGACY_FIXTURE, "antigravity", ANTIGRAVITY_LEGACY_SESSION_ID, False),
         (CODEX_FIXTURE, "codex", CODEX_SESSION_ID, True),
     ],
 )
@@ -1555,7 +1555,7 @@ def test_archival_rows_are_stored_compressed_on_real_ingest(
     ("fixture", "provider", "session_id"),
     [
         (CLAUDE_FIXTURE, "claude", CLAUDE_SESSION_ID),
-        (GEMINI_FIXTURE, "gemini", GEMINI_SESSION_ID),
+        (ANTIGRAVITY_LEGACY_FIXTURE, "antigravity", ANTIGRAVITY_LEGACY_SESSION_ID),
         (CODEX_FIXTURE, "codex", CODEX_SESSION_ID),
     ],
 )

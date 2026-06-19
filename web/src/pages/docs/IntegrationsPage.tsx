@@ -129,13 +129,6 @@ export default function IntegrationsPage() {
         </tbody>
       </table>
 
-      <h2>Legacy Gemini CLI</h2>
-      <p>
-        Gemini CLI remains a legacy archive path. Longhouse keeps the parser
-        and import behavior so existing sessions stay searchable, but new Google
-        CLI work should move to Antigravity.
-      </p>
-
       <h2>How import works</h2>
       <p>
         Longhouse watches for new session files and imports them into the local

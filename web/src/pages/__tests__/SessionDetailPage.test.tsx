@@ -1537,7 +1537,7 @@ describe("SessionDetailPage", () => {
     expect(screen.getByTestId("session-chat")).toBeInTheDocument();
     const disabledReason =
       screen.getByTestId("session-chat").getAttribute("data-disabled-reason") ?? "";
-    expect(disabledReason).toMatch(/Gemini/);
+    expect(disabledReason).toMatch(/Antigravity/);
     expect(disabledReason.toLowerCase()).toMatch(/unmanaged|read-only|cannot/);
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-launch-command",

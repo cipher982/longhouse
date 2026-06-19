@@ -62,7 +62,7 @@
     "provider_counts_today": {
       "claude": 5,
       "codex": 3,
-      "gemini": 1
+      "antigravity": 1
     },
     "latest_activity_at": "2026-04-08T01:44:00Z",
     "recent_window_minutes": 15

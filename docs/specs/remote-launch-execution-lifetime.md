@@ -103,7 +103,7 @@ prompt-and-exit style execution paths:
 | --- | --- | --- |
 | Codex | `codex exec` / `codex e` | OpenAI documents `codex exec` as stable, non-interactive, suitable for scripted or CI-style runs, with stdout/JSONL output and resume support. Local `codex exec --help` confirms "Run Codex non-interactively." Source: https://developers.openai.com/codex/cli/reference |
 | Claude Code | `claude -p` / `--print` | Anthropic documents `claude -p "query"` as "Query via SDK, then exit." The same reference separately documents background agents, daemon stop/status, and remote-control, which supports keeping one-shot and live-control concepts separate. Source: https://code.claude.com/docs/en/cli-reference |
-| Gemini CLI | `gemini -p` / `--prompt` | Gemini CLI docs call this headless/non-interactive mode for scripts, automation, CI/CD, stdin, JSON output, and exit codes. Source: https://google-gemini.github.io/gemini-cli/docs/cli/headless.html |
+| Antigravity CLI | `agy` managed launch | Antigravity replaces the deprecated Gemini CLI provider surface. |
 | OpenCode | `opencode run` | OpenCode documents `opencode run [message..]` as non-interactive execution without launching the full TUI. It separately documents `opencode serve` for a headless HTTP server. Source: https://opencode.ai/docs/cli/ |
 | Antigravity CLI | `agy -p` / `--print` | Google docs snippets describe `-p` as a one-shot prompt flag. Local `agy --help` confirms `--print`: "Run a single prompt non-interactively and print the response." Longhouse must still not advertise Antigravity remote launch until a canary proves transcript, exit, and hook semantics. Source: https://antigravity.google/docs/cli-best-practices |
 
@@ -323,7 +323,7 @@ transcript and permission proof.
 ### Gemini
 
 Gemini remains legacy/import unless Longhouse intentionally re-enables launch.
-If it returns, `gemini -p` belongs behind the same `run_once` evidence gate.
+Antigravity does not expose a proven run-once lane yet.
 
 ### Antigravity
 

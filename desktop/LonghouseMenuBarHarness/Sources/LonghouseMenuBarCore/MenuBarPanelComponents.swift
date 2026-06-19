@@ -1067,8 +1067,8 @@ func providerColor(_ raw: String) -> Color {
         return Color(red: 0.39, green: 0.72, blue: 0.56)
     case "codex":
         return Color(red: 0.33, green: 0.57, blue: 0.88)
-    case "gemini":
-        return Color(red: 0.82, green: 0.64, blue: 0.26)
+    case "gemini", "antigravity":
+        return Color(red: 0.31, green: 0.53, blue: 0.93)
     default:
         return Color.secondary
     }

@@ -9,7 +9,7 @@
 //! - **Claude** (`.jsonl`): `{type: "user"|"assistant", message: {content: ...}}`
 //! - **Codex** (`.jsonl`): `{type: "response_item", payload: {type: "message"|"function_call"|..., role: ..., content: [...]}}`
 //! - **Antigravity** (`.jsonl`): `{step_index, source, type, created_at, content, tool_calls}`
-//! - **Legacy Gemini** (`.json`): `{sessionId, messages: [{type: "user"|"gemini", content, toolCalls: [...]}]}`
+//! - **Legacy Antigravity JSON** (`.json`): `{sessionId, messages: [{type: "user"|"gemini", content, toolCalls: [...]}]}`
 //!
 //! Gemini files are full JSON documents rewritten in-place (not JSONL appended),
 //! so they are always parsed from offset 0. The backend deduplicates events by hash.

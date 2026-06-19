@@ -47,7 +47,7 @@
     "provider_counts_today": {
       "claude": 8,
       "codex": 5,
-      "gemini": 1
+      "antigravity": 1
     },
     "provider_counts_recent": {
       "claude": 2,
@@ -57,7 +57,7 @@
       { "provider": "claude", "workspace_label": "zerg", "last_updated": "2026-04-08T01:51:58Z" },
       { "provider": "codex", "workspace_label": "crims", "last_updated": "2026-04-08T01:49:12Z" },
       { "provider": "claude", "workspace_label": "aiml-assistants-service", "last_updated": "2026-04-08T01:46:03Z" },
-      { "provider": "gemini", "workspace_label": "hdr", "last_updated": "2026-04-08T01:34:11Z" }
+      { "provider": "antigravity", "workspace_label": "hdr", "last_updated": "2026-04-08T01:34:11Z" }
     ],
     "session_recency_bands": [
       { "label": "0-1m", "session_count": 0 },

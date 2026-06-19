@@ -91,7 +91,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         Args:
             query: Text to search for in session content.
             project: Filter by project name (optional).
-            provider: Filter by provider, e.g. claude, codex, antigravity, gemini (optional).
+            provider: Filter by provider, e.g. claude, codex, antigravity, opencode (optional).
             days_back: Number of days to look back (default 14).
             limit: Maximum results to return (default 10).
             semantic: Use semantic (embedding) search instead of text search (default False).

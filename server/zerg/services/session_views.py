@@ -246,12 +246,13 @@ def _native_continue_target(db, session: AgentSession) -> SessionContinueTarget 
 
 def _provider_label(session: AgentSession | None) -> str | None:
     provider = str(getattr(session, "provider", "") or "").strip().lower()
+    if provider == "gemini":
+        provider = "antigravity"
     if not provider:
         return None
     labels = {
         "claude": "Claude",
         "codex": "Codex",
-        "gemini": "Gemini",
         "antigravity": "Antigravity",
     }
     return labels.get(provider, provider[:1].upper() + provider[1:])

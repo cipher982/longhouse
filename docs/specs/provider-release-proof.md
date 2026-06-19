@@ -182,7 +182,7 @@ operations explicit.
 | auth/status shape | no | none | none | no | no | no | no |
 | launch managed session | no | managed Gemini not launch-critical today | none | no | no | no | no |
 | session id/path binding | no | none | none | no | no | no | no |
-| transcript/log parse | yes | engine Gemini golden/adversarial parser tests plus `provider-release-proof --provider gemini` parser-fixture envelope | fixture | `make test-engine`, `validate-provider-cli-canaries` | parser-fixture proof | parser fixture yes; release-proof no | yes for parser drift |
+| transcript/log parse | yes | engine Antigravity legacy JSON golden/adversarial parser tests | fixture | `make test-engine`, `validate-provider-cli-canaries` | parser-fixture proof | parser fixture yes; release-proof no | yes for parser drift |
 | ingest into Longhouse | partial | shipper Gemini fixtures plus parser-fixture proof envelope | fixture | shipper tests, `validate-provider-cli-canaries` | parser-fixture proof | no | partial |
 | timeline/session projection | partial | generic session projection tests plus Gemini fixture session projection artifact | fixture/hermetic | `make test`, `validate-provider-cli-canaries` | parser-fixture proof | no | partial |
 | send input | no | no managed Gemini control path | none | no | no | no | no |

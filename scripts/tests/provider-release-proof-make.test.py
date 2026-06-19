@@ -122,39 +122,11 @@ def test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_ye
         assert status_payload["failure_code"] == "baseline_missing"
 
 
-def test_provider_release_proof_make_runs_gemini_parser_fixture_lane() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        proof = root / "gemini-proof.json"
-        evidence = root / "gemini-evidence"
-
-        proof_result = _run_make(
-            [
-                "provider-release-proof",
-                "PROVIDER=gemini",
-                "PROVIDER_VERSION=gemini-test-0",
-                f"ARTIFACT={proof}",
-                f"EVIDENCE_ROOT={evidence}",
-            ]
-        )
-
-        assert proof_result.returncode == 0, proof_result.stderr
-        proof_payload = _read_json(proof)
-        assert proof_payload["artifact_kind"] == "provider_release_proof"
-        assert proof_payload["provider"] == "gemini"
-        assert proof_payload["provider_version"] == "gemini-test-0"
-        assert proof_payload["verdict"] == "green"
-        assert proof_payload["failure_code"] is None
-        assert proof_payload["operation_evidence"]["transcript_log_parse"]["status"] == "pass"
-        assert proof_payload["operation_evidence"]["tool_tool_result_shape"]["status"] == "pass"
-
-
 def main() -> int:
     tests = [
         test_provider_release_proof_make_requires_provider,
         test_provider_release_proof_status_make_requires_provider_and_scenario,
         test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_yellow,
-        test_provider_release_proof_make_runs_gemini_parser_fixture_lane,
     ]
     for test in tests:
         test()

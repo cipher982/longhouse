@@ -142,7 +142,7 @@ def test_peers_command_lists_live_peer_sessions(monkeypatch):
                         "session_id": "33333333-3333-3333-3333-333333333333",
                         "has_live_presence": False,
                         "device_name": "idle-box",
-                        "provider": "gemini",
+                        "provider": "antigravity",
                         "presence_state": None,
                         "summary_title": "Inactive peer",
                         "git_branch": "main",

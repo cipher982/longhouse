@@ -24,8 +24,7 @@ logger = logging.getLogger(__name__)
 # Natural-language backend hints for spawn_commis dispatch normalization.
 _BACKEND_HINT_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("codex", (r"\bcodex\b", r"\bopenai\b", r"\bgpt[-\s]?5\b", r"\bgpt[-\s]?4o\b")),
-    ("antigravity", (r"\bantigravity\b", r"\bagy\b")),
-    ("gemini", (r"\bgemini\b",)),
+    ("antigravity", (r"\bantigravity\b", r"\bagy\b", r"\bgemini\b")),
     ("zai", (r"\bz\.?ai\b", r"\bglm(?:[-\s]?\d+(?:\.\d+)?)?\b")),
     ("bedrock", (r"\bbedrock\b",)),
     ("anthropic", (r"\banthropic\b",)),

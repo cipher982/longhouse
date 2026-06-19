@@ -536,7 +536,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.managedLaunchSuggestion?.command).toBe("longhouse claude");
   });
 
-  it("points legacy Gemini sessions at Antigravity for new Google CLI work", () => {
+  it("maps legacy gemini provider ids to Antigravity labels and launch guidance", () => {
     const capabilities = getSessionInteractionCapabilities({
       session: makeSession({
         provider: "gemini",
@@ -549,11 +549,11 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.managementLabel).toBe("Unmanaged");
     expect(capabilities.capabilityLabel).toBe("Read only");
     expect(capabilities.composerDisabledReason).toBe(
-      "This unmanaged Gemini session is read-only in Longhouse.",
+      "This unmanaged Antigravity session is read-only in Longhouse.",
     );
     expect(capabilities.managedLaunchSuggestion?.command).toBe("longhouse agy");
     expect(capabilities.managedLaunchSuggestion?.title).toBe(
-      "Start the next Google CLI session with Antigravity",
+      "Start the next Antigravity session through Longhouse",
     );
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
   });

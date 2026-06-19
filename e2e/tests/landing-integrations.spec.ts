@@ -18,9 +18,9 @@ const EXPECTED_PROVIDERS: ProviderExpectation[] = [
     status: 'Control-ready',
   },
   {
-    name: 'Gemini CLI',
-    description: 'Archive and search today',
-    status: 'Archive first',
+    name: 'Antigravity CLI',
+    description: 'Archive, launch, and hook-backed phase signals',
+    status: 'Observe-only today',
   },
 ];
 

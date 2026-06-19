@@ -206,7 +206,7 @@ function formatProviderName(provider: string | null | undefined): string {
   if (value.toLowerCase() === "codex") return "Codex";
   if (value.toLowerCase() === "claude") return "Claude";
   if (value.toLowerCase() === "antigravity") return "Antigravity";
-  if (value.toLowerCase() === "gemini") return "Gemini";
+
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 

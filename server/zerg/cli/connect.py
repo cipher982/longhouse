@@ -652,7 +652,7 @@ def recall(
     provider: str = typer.Option(
         None,
         "--provider",
-        help="Filter by provider (claude, codex, antigravity, gemini)",
+        help="Filter by provider (claude, codex, antigravity, opencode)",
     ),
     days_back: int = typer.Option(
         14,

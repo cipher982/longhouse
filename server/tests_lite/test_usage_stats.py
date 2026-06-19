@@ -56,7 +56,7 @@ def test_aggregates_by_provider(tmp_path):
     db = factory()
     _add_session(db, "claude", user_msgs=2, asst_msgs=2, tool_calls=5)
     _add_session(db, "claude", user_msgs=1, asst_msgs=1)
-    _add_session(db, "gemini", user_msgs=3, asst_msgs=3)
+    _add_session(db, "antigravity", user_msgs=3, asst_msgs=3)
 
     resp = _client(factory).get("/agents/usage-stats")
     assert resp.status_code == 200
@@ -66,20 +66,20 @@ def test_aggregates_by_provider(tmp_path):
     by_p = {r["provider"]: r for r in data["by_provider"]}
     assert by_p["claude"]["sessions"] == 2
     assert by_p["claude"]["messages"] == (2 + 2 + 5) + (1 + 1 + 0)
-    assert by_p["gemini"]["sessions"] == 1
+    assert by_p["antigravity"]["sessions"] == 1
 
 
 def test_multiple_providers_returned(tmp_path):
     factory = _make_db(tmp_path)
     db = factory()
     _add_session(db, "claude")
-    _add_session(db, "gemini")
+    _add_session(db, "antigravity")
     _add_session(db, "codex")
 
     resp = _client(factory).get("/agents/usage-stats")
     assert resp.status_code == 200
     providers = {r["provider"] for r in resp.json()["by_provider"]}
-    assert providers == {"claude", "gemini", "codex"}
+    assert providers == {"claude", "antigravity", "codex"}
 
 
 def test_days_param_filters_old_sessions(tmp_path):

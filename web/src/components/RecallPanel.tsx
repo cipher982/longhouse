@@ -20,7 +20,8 @@ interface RecallPanelProps {
 
 function ContextTurn({ turn }: { turn: RecallContextTurn }) {
   // Neutral assistant label: recall spans Claude, Codex, Antigravity, OpenCode,
-  // and legacy Gemini sessions, so don't hardcode a single provider name.
+  // Provider-specific launch hints live in sessionWorkspace/interaction.ts,
+  // so don't hardcode a single provider name.
   const roleLabel = turn.role === "user" ? "User" : turn.tool_name ? turn.tool_name : "Assistant";
   const roleClass = turn.role === "user" ? "recall-turn--user" : "recall-turn--assistant";
   const matchClass = turn.is_match ? "recall-turn--match" : "";

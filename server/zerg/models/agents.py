@@ -54,7 +54,7 @@ class AgentSession(AgentsBase):
     id = Column(GUID(), primary_key=True, default=uuid4)
 
     # Provider identification
-    provider = Column(String(50), nullable=False, index=True)  # claude, codex, antigravity, gemini, cursor
+    provider = Column(String(50), nullable=False, index=True)  # claude, codex, antigravity, opencode, cursor
 
     # Environment classification (required - no default, caller must specify)
     environment = Column(String(20), nullable=False, index=True)  # production, development, test, e2e

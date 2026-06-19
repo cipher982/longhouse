@@ -51,7 +51,7 @@ def test_backfill_creates_one_thread_per_session(tmp_path):
     with SessionLocal() as db:
         s1 = _make_session(db, provider_session_id="codex-1")
         s2 = _make_session(db, provider="claude", provider_session_id="claude-1")
-        s3 = _make_session(db, provider="gemini")  # no provider_session_id
+        s3 = _make_session(db, provider="antigravity")  # no provider_session_id
         db.commit()
 
         report = backfill_root_threads(db)
@@ -124,7 +124,7 @@ def test_backfill_handles_new_sessions_after_first_run(tmp_path):
 
         # Add more sessions after backfill.
         _make_session(db, provider="claude", provider_session_id="claude-1")
-        _make_session(db, provider="gemini", provider_session_id="gemini-1")
+        _make_session(db, provider="antigravity", provider_session_id="antigravity-1")
         db.commit()
 
         report = backfill_root_threads(db)
@@ -221,7 +221,7 @@ def test_backfill_order_independent_final_state(tmp_path):
     with Sa() as db:
         _make_session(db, provider_session_id="codex-1")
         _make_session(db, provider="claude", provider_session_id="claude-1")
-        _make_session(db, provider="gemini")
+        _make_session(db, provider="antigravity")
         db.commit()
         backfill_root_threads(db)
         db.commit()
@@ -238,7 +238,7 @@ def test_backfill_order_independent_final_state(tmp_path):
         db.commit()
         backfill_root_threads(db)
         db.commit()
-        _make_session(db, provider="gemini")
+        _make_session(db, provider="antigravity")
         db.commit()
         backfill_root_threads(db)
         db.commit()

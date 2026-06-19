@@ -443,8 +443,7 @@ def onboard(
     has_claude = _has_command("claude")
     has_codex = _has_command("codex")
     has_antigravity = _has_command("agy")
-    has_gemini = _has_command("gemini")
-    has_any_cli = has_claude or has_codex or has_antigravity or has_gemini
+    has_any_cli = has_claude or has_codex or has_antigravity
 
     if has_claude:
         typer.secho("  [OK] Claude Code found", fg=typer.colors.GREEN)
@@ -452,8 +451,6 @@ def onboard(
         typer.secho("  [OK] Codex CLI found", fg=typer.colors.GREEN)
     if has_antigravity:
         typer.secho("  [OK] Antigravity CLI found", fg=typer.colors.GREEN)
-    if has_gemini:
-        typer.secho("  [OK] Legacy Gemini CLI found", fg=typer.colors.GREEN)
 
     if not has_any_cli:
         typer.secho("  [--] No supported AI CLI found", fg=typer.colors.YELLOW)

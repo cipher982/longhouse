@@ -722,10 +722,10 @@ export function buildTimelineCardStressFixture(): {
 
   const blockedGemini = makeTimelineCard(
     {
-      id: "blocked-gemini",
-      thread_root_session_id: "thread-blocked-gemini",
-      thread_head_session_id: "thread-blocked-gemini",
-      provider: "gemini",
+      id: "blocked-antigravity",
+      thread_root_session_id: "thread-blocked-antigravity",
+      thread_head_session_id: "thread-blocked-antigravity",
+      provider: "antigravity",
       project: "photo-restore-lab",
       git_branch: "fix/approval-gate-and-pipeline-resume",
       started_at: "2026-04-15T14:55:00Z",
@@ -782,7 +782,7 @@ export function buildTimelineCardStressFixture(): {
         managed_transport: "codex_app_server",
         source_runner_id: null,
         source_runner_name: null,
-        attach_command: "longhouse gemini --attach blocked-gemini",
+        attach_command: "longhouse agy --attach blocked-antigravity",
       },
     },
     {
@@ -809,7 +809,7 @@ export function buildTimelineCardStressFixture(): {
     },
     filters: {
       projects: ["zerg", "demo-vpn", "project", "longhouse-mobile", "photo-restore-lab"],
-      providers: ["claude", "codex", "gemini"],
+      providers: ["claude", "codex", "antigravity"],
       machines: ["cinder", "studio", "This machine", "Cloud"],
     },
     runners: {

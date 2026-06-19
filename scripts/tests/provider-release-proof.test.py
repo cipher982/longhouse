@@ -47,94 +47,6 @@ def _write_fake_repo(root: Path) -> None:
     manifest_path = root / "server" / "zerg" / "config" / "managed_provider_contracts.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
-    fixture_root = root / "server" / "tests" / "integration" / "fixtures"
-    fixture_root.mkdir(parents=True, exist_ok=True)
-    (fixture_root / "gemini_session.json").write_text(
-        json.dumps(
-            {
-                "sessionId": "gemini-basic",
-                "messages": [
-                    {"type": "user", "content": "Reply with exactly: gemini ok"},
-                    {"type": "gemini", "content": "gemini ok"},
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-    (fixture_root / "gemini_drift.json").write_text(
-        json.dumps(
-            {
-                "sessionId": "gemini-drift",
-                "messages": [
-                    {"type": "user", "content": "valid string message"},
-                    {
-                        "type": "gemini",
-                        "content": {"parts": [{"text": "object content response"}]},
-                    },
-                    {"type": "user", "content": "follow-up after object content"},
-                    {"type": "gemini", "content": "normal string response"},
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-    (fixture_root / "gemini_tool_results.json").write_text(
-        json.dumps(
-            {
-                "sessionId": "gemini-tools",
-                "messages": [
-                    {"type": "user", "content": "Read README"},
-                    {
-                        "type": "gemini",
-                        "content": "Running tools now.",
-                        "toolCalls": [
-                            {
-                                "id": "tc-read",
-                                "name": "read_file",
-                                "result": [
-                                    {
-                                        "functionResponse": {
-                                            "id": "tc-read",
-                                            "response": {"output": "README content"},
-                                        }
-                                    }
-                                ],
-                            },
-                            {
-                                "id": "tc-write",
-                                "name": "write_file",
-                                "result": [
-                                    {
-                                        "functionResponse": {
-                                            "id": "tc-write",
-                                            "response": {
-                                                "error": "[Operation Cancelled]"
-                                            },
-                                        }
-                                    }
-                                ],
-                            },
-                        ],
-                    },
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
-    golden_root = root / "engine" / "tests" / "fixtures" / "golden" / "gemini"
-    golden_root.mkdir(parents=True, exist_ok=True)
-    (golden_root / "basic.expected.json").write_text(
-        json.dumps(
-            {
-                "event_count": 2,
-                "events": [
-                    {"role": "user", "raw_type": "gemini_user"},
-                    {"role": "assistant", "raw_type": "gemini_assistant"},
-                ],
-            }
-        ),
-        encoding="utf-8",
-    )
 
     _write_exe(
         root / "scripts" / "qa" / "provider-live-canary.py",
@@ -587,30 +499,6 @@ def test_claude_release_proof_preserves_detached_pty_failure_context() -> None:
         assert payload["normalized"]["claude"]["detached_pty_platform"] == "darwin"
 
 
-def test_gemini_release_proof_emits_parser_fixture_contract() -> None:
-    with tempfile.TemporaryDirectory() as temp_dir:
-        root = Path(temp_dir)
-        _write_fake_repo(root / "repo")
-
-        result, payload = _run_proof(root, "gemini")
-
-        assert result.returncode == 0
-        assert payload["provider"] == "gemini"
-        assert payload["provider_version"] == "gemini-parser-fixtures"
-        assert payload["verdict"] == "green"
-        assert payload["failure_code"] is None
-        assert payload["canaries"]["source_canary"]["status"] == "pass"
-        assert payload["normalized"]["canaries"]["golden_parser_snapshot"]["status"] == "pass"
-        assert payload["operation_evidence"]["transcript_log_parse"]["status"] == "pass"
-        assert payload["operation_evidence"]["ingest_into_longhouse"]["status"] == "pass"
-        assert payload["operation_evidence"]["tool_tool_result_shape"]["status"] == "pass"
-        assert payload["operation_evidence"]["timeline_session_projection"]["status"] == "pass"
-        session_projection = _read_json(Path(payload["artifacts"]["session_projection"]))
-        assert session_projection["status"] == "captured"
-        assert session_projection["projection"]["status"] == "fixture"
-        assert {"source_artifact", "stdout", "stderr"} <= set(payload["artifacts"])
-
-
 def main() -> int:
     tests = [
         test_opencode_release_proof_normalizes_source_canary,
@@ -622,7 +510,6 @@ def main() -> int:
         test_claude_release_proof_red_when_session_flag_missing,
         test_claude_release_proof_preserves_development_channel_failure_code,
         test_claude_release_proof_preserves_detached_pty_failure_context,
-        test_gemini_release_proof_emits_parser_fixture_contract,
     ]
     for test in tests:
         test()

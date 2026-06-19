@@ -41,7 +41,7 @@ pub fn detect_provider_for_file(
 
     match ext.as_deref() {
         Some("jsonl") => Ok("claude".to_string()),
-        Some("json") => Ok("gemini".to_string()),
+        Some("json") => Ok("antigravity".to_string()),
         _ => anyhow::bail!(
             "Unable to determine provider for {} (use --provider)",
             path.display()

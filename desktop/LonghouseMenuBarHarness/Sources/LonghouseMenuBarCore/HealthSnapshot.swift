@@ -975,7 +975,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             return []
         }
 
-        let preferredOrder = ["claude", "codex", "gemini"]
+        let preferredOrder = ["claude", "codex", "antigravity"]
         return providerCounts
             .filter { !$0.key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.value > 0 }
             .sorted { lhs, rhs in
@@ -1040,8 +1040,8 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             return "Claude"
         case "codex":
             return "Codex"
-        case "gemini":
-            return "Gemini"
+        case "gemini", "antigravity":
+            return "Antigravity"
         default:
             return raw.capitalized
         }
