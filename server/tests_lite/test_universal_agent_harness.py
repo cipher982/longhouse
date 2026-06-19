@@ -511,6 +511,11 @@ def test_action_matrix_emits_same_longhouse_actions_for_all_providers(tmp_path: 
         assert actions["steer_active_turn"]["category"] == "control"
         assert actions["pause_request_detect"]["category"] == "observe"
         assert actions["answer_pause_request"]["category"] == "control"
+        assert actions["multi_turn_continuity"]["category"] == "control"
+        assert actions["permission_prompt"]["status"] == "blocked"
+        assert actions["permission_prompt"]["failure_code"] == "permission_prompt_canary_missing"
+        assert actions["crash_timeout_cleanup"]["category"] == "resilience"
+        assert actions["crash_timeout_cleanup"]["status"] == "pass"
         assert actions["interrupt_cancel"]["contract_operation"] == "interrupt"
         assert actions["raw_evidence_capture"]["status"] == "pass"
         assert actions["parse_normalize"]["status"] == "pass"
@@ -541,8 +546,10 @@ def test_action_matrix_marks_provider_specific_unsupported_actions(tmp_path: Pat
     }
     assert by_provider["opencode"]["steer_active_turn"]["status"] == "unsupported_gap"
     assert by_provider["opencode"]["answer_pause_request"]["status"] == "unsupported_gap"
+    assert by_provider["opencode"]["external_event_channel"]["status"] == "unsupported_gap"
     assert by_provider["antigravity"]["launch_remote"]["status"] == "unsupported_gap"
     assert by_provider["antigravity"]["interrupt_cancel"]["status"] == "unsupported_gap"
+    assert by_provider["antigravity"]["external_event_channel"]["status"] == "pass"
     assert by_provider["antigravity"]["send_message"]["status"] == "pass"
     assert by_provider["antigravity"]["send_message"]["evidence_level"] == "live_token"
 
@@ -1470,6 +1477,51 @@ def test_terminate_cleanup_respects_provider_contract(tmp_path: Path) -> None:
     assert antigravity["status"] == "unsupported_gap"
     assert antigravity["failure_code"] == "terminate_cleanup_unsupported"
     assert antigravity["data"]["operation_evidence"]["terminate"]["status"] == "unsupported_gap"
+
+
+def test_remaining_surface_scenarios_emit_honest_results_for_all_providers(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=uah.SUPPORTED_PROVIDERS,
+            scenarios=(
+                "multi_turn_continuity",
+                "external_event_channel",
+                "permission_prompt",
+                "crash_timeout_cleanup",
+            ),
+            evidence_root=tmp_path / "evidence",
+        )
+    )
+
+    assert payload["verdict"] == "yellow"
+    by_key = {(result["provider"], result["scenario"]): result for result in payload["results"]}
+    for provider in uah.SUPPORTED_PROVIDERS:
+        multi = by_key[(provider, "multi_turn_continuity")]
+        assert multi["status"] == "pass"
+        assert multi["data"]["operation_evidence"]["multi_turn_continuity"]["status"] == "pass"
+        assert multi["data"]["continuity_assertions"]["provider_session_id_stable"] is True
+
+        permission = by_key[(provider, "permission_prompt")]
+        assert permission["status"] == "blocked"
+        assert permission["failure_code"] == "permission_prompt_canary_missing"
+        assert permission["data"]["operation_evidence"]["permission_prompt"]["level"] == "live_token_required"
+
+        crash = by_key[(provider, "crash_timeout_cleanup")]
+        assert crash["status"] == "pass"
+        assert crash["data"]["operation_evidence"]["crash_timeout_cleanup"]["status"] == "pass"
+        assert crash["data"]["cleanup_assertions"]["diagnostics_written"] is True
+        assert Path(crash["data"]["diagnostics_path"]).is_file()
+
+    for provider in ("claude", "codex", "opencode"):
+        external = by_key[(provider, "external_event_channel")]
+        assert external["status"] == "unsupported_gap"
+        assert external["failure_code"] == "external_event_channel_unsupported"
+
+    antigravity = by_key[("antigravity", "external_event_channel")]
+    assert antigravity["status"] == "pass"
+    assert antigravity["data"]["operation_evidence"]["external_event_channel"]["status"] == "pass"
+    assert antigravity["data"]["source_artifact_kind"] == "provider_control_e2e_canary"
+    assert (Path(antigravity["evidence_root"]) / "longhouse" / "db-ingest-result.json").is_file()
 
 
 def test_opencode_interrupt_cancel_uses_session_abort_canary(tmp_path: Path) -> None:

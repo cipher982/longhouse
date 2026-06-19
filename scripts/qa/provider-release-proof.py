@@ -77,6 +77,10 @@ UNIVERSAL_SCENARIOS = (
     "tail_output",
     "runtime_phase",
     "transcript_binding",
+    "multi_turn_continuity",
+    "external_event_channel",
+    "permission_prompt",
+    "crash_timeout_cleanup",
     "live_token_streaming",
     "old_new_release_diff",
 )
@@ -756,6 +760,7 @@ def _run_universal_harness(
             "pause_request_detect",
             "answer_pause_request",
             "runtime_phase",
+            "external_event_channel",
             "interrupt_cancel",
             "tool_call_result",
             "resume_reattach",

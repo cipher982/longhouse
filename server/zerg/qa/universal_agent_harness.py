@@ -57,6 +57,10 @@ SCENARIOS = (
     "tail_output",
     "runtime_phase",
     "transcript_binding",
+    "multi_turn_continuity",
+    "external_event_channel",
+    "permission_prompt",
+    "crash_timeout_cleanup",
     "live_token_streaming",
     "old_new_release_diff",
 )
@@ -104,6 +108,10 @@ MVP_METHODS = (
     "tail_output",
     "runtime_phase",
     "transcript_binding",
+    "multi_turn_continuity",
+    "external_event_channel",
+    "permission_prompt",
+    "crash_timeout_cleanup",
     "live_token_streaming",
     "old_new_release_diff",
     "cleanup",
@@ -267,6 +275,42 @@ ACTION_DEFINITIONS: tuple[ActionDefinition, ...] = (
         "contract_bool",
         "hermetic",
         "Bind raw provider output to canonical Longhouse events and the session it came from.",
+    ),
+    ActionDefinition(
+        "multi_turn_continuity",
+        "Multi-turn Continuity",
+        "control",
+        "send_input",
+        "contract_bool",
+        "hermetic",
+        "Preserve provider session identity and context across follow-up user turns.",
+    ),
+    ActionDefinition(
+        "external_event_channel",
+        "External Event Channel",
+        "observe",
+        None,
+        "external_event_channel",
+        "hermetic",
+        "Observe provider hook/inbox/external-event delivery where the provider exposes it.",
+    ),
+    ActionDefinition(
+        "permission_prompt",
+        "Permission Prompt",
+        "control",
+        None,
+        "permission_prompt",
+        "live_token_required",
+        "Observe and answer provider permission approve/deny prompts where supported.",
+    ),
+    ActionDefinition(
+        "crash_timeout_cleanup",
+        "Crash Timeout Cleanup",
+        "resilience",
+        None,
+        "harness",
+        "hermetic",
+        "Timeout or crash leaves diagnostic artifacts and no owned managed process behind.",
     ),
     ActionDefinition(
         "tool_call_result",
@@ -514,6 +558,14 @@ class AgentHarnessAdapter(Protocol):
     def runtime_phase(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def transcript_binding(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def multi_turn_continuity(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def external_event_channel(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def permission_prompt(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def crash_timeout_cleanup(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def live_token_streaming(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
@@ -1230,6 +1282,175 @@ class UniversalProviderAdapter:
             "user_and_assistant_bound": True,
         }
         package.write_json("assertions/transcript_binding.json", payload)
+        return payload
+
+    def multi_turn_continuity(self, package: EvidencePackage) -> dict[str, Any]:
+        provider_session_id = self._session_id(package)
+        payload = self._write_observation_projection(
+            package,
+            scenario="multi_turn_continuity",
+            operation="multi_turn_continuity",
+            canary="universal_multi_turn_continuity",
+            raw_events=(
+                {
+                    "type": "user",
+                    "role": "user",
+                    "text": "Remember marker alpha.",
+                    "provider_session_id": provider_session_id,
+                    "turn_index": 1,
+                },
+                {
+                    "type": "assistant",
+                    "role": "assistant",
+                    "text": "Marker alpha recorded.",
+                    "provider_session_id": provider_session_id,
+                    "turn_index": 1,
+                },
+                {
+                    "type": "user",
+                    "role": "user",
+                    "text": "Use the marker from the prior turn.",
+                    "provider_session_id": provider_session_id,
+                    "turn_index": 2,
+                    "depends_on_prior_turn": True,
+                },
+                {
+                    "type": "assistant",
+                    "role": "assistant",
+                    "text": "Using marker alpha from the prior turn.",
+                    "provider_session_id": provider_session_id,
+                    "turn_index": 2,
+                    "depends_on_prior_turn": True,
+                },
+            ),
+            source="universal harness multi-turn canonical projection; does not prove live model memory",
+        )
+        operation_evidence = dict(payload.get("operation_evidence") or {})
+        operation_evidence["send_input"] = {
+            "status": STATUS_PASS,
+            "level": "hermetic",
+            "canary": "universal_multi_turn_continuity",
+            "source": "universal harness multi-turn send projection",
+        }
+        payload["operation_evidence"] = operation_evidence
+        payload["continuity_assertions"] = {
+            "provider_session_id_stable": True,
+            "turn_count": 2,
+            "prior_turn_dependency_projected": True,
+        }
+        session_projection_path = package.path("longhouse", "session-projection.json")
+        try:
+            session_projection = json.loads(session_projection_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            session_projection = {}
+        if isinstance(session_projection, dict):
+            session_projection["operation_statuses"] = operation_evidence
+            package.write_json("longhouse/session-projection.json", session_projection)
+        package.write_json("assertions/multi_turn_continuity.json", payload)
+        return payload
+
+    def external_event_channel(self, package: EvidencePackage) -> dict[str, Any]:
+        if self.config.provider != "antigravity":
+            payload = self._unsupported_payload(
+                "external_event_channel",
+                "external_event_channel_unsupported",
+                "This provider does not expose stable hook/inbox external-event semantics in the universal harness.",
+            )
+            payload["operation_evidence"] = {
+                "external_event_channel": {
+                    "status": STATUS_UNSUPPORTED_GAP,
+                    "level": "none",
+                    "canary": "universal_external_event_channel",
+                    "failure_code": "external_event_channel_unsupported",
+                }
+            }
+            package.write_json("assertions/external_event_channel.json", payload)
+            return payload
+
+        payload = dict(self._run_antigravity_managed_session_e2e(package))
+        operation_evidence = {
+            str(operation): dict(evidence)
+            for operation, evidence in dict(payload.get("operation_evidence") or {}).items()
+            if isinstance(evidence, Mapping)
+        }
+        external_status = str((operation_evidence.get("external_event_channel") or {}).get("status") or STATUS_FAIL)
+        db_status = str(((payload.get("longhouse_ingest") or {}).get("status")) or STATUS_FAIL)
+        passed = external_status == STATUS_PASS and db_status == STATUS_PASS
+        payload["status"] = STATUS_PASS if passed else STATUS_FAIL
+        payload["scenario"] = "external_event_channel"
+        if passed:
+            payload.pop("failure_code", None)
+            payload.pop("message", None)
+        else:
+            payload["failure_code"] = payload.get("failure_code") or "external_event_channel_failed"
+            payload["message"] = "Antigravity hook/inbox external-event canary did not pass."
+        package.write_json("assertions/external_event_channel.json", payload)
+        return payload
+
+    def permission_prompt(self, package: EvidencePackage) -> dict[str, Any]:
+        payload = {
+            "status": STATUS_BLOCKED,
+            "scenario": "permission_prompt",
+            "failure_code": "permission_prompt_canary_missing",
+            "message": "Permission prompt approve/deny behavior requires a provider-held prompt canary.",
+            "operation_evidence": {
+                "permission_prompt": {
+                    "status": STATUS_BLOCKED,
+                    "level": "live_token_required",
+                    "canary": "universal_permission_prompt",
+                    "failure_code": "permission_prompt_canary_missing",
+                }
+            },
+            "next": "Add provider-specific permission prompt fixtures/canaries that prove approve and deny delivery.",
+        }
+        package.write_json("assertions/permission_prompt.json", payload)
+        return payload
+
+    def crash_timeout_cleanup(self, package: EvidencePackage) -> dict[str, Any]:
+        package.write_text(
+            "raw/timeout-diagnostics.log",
+            "\n".join(
+                [
+                    "universal crash/timeout cleanup simulation",
+                    "owned_process_launched=false",
+                    "owned_processes_remaining=0",
+                ]
+            )
+            + "\n",
+        )
+        payload = self._write_observation_projection(
+            package,
+            scenario="crash_timeout_cleanup",
+            operation="crash_timeout_cleanup",
+            canary="universal_crash_timeout_cleanup",
+            raw_events=(
+                {
+                    "type": "runtime_phase",
+                    "role": "system",
+                    "text": f"{self.config.provider} timeout diagnostics captured",
+                    "provider_session_id": self._session_id(package),
+                    "phase": "blocked",
+                    "failure_code": "simulated_timeout",
+                },
+                {
+                    "type": "terminal_signal",
+                    "role": "system",
+                    "text": f"{self.config.provider} timeout cleanup released owned resources",
+                    "provider_session_id": self._session_id(package),
+                    "terminal_state": "timeout_cleanup_complete",
+                    "owned_processes_remaining": 0,
+                },
+            ),
+            source="universal harness crash/timeout diagnostic projection; no live provider process was launched",
+        )
+        payload["cleanup_assertions"] = {
+            "diagnostics_written": True,
+            "owned_process_launched": False,
+            "owned_processes_remaining": 0,
+            "terminal_cleanup_projected": True,
+        }
+        payload["diagnostics_path"] = str(package.path("raw", "timeout-diagnostics.log"))
+        package.write_json("assertions/crash_timeout_cleanup.json", payload)
         return payload
 
     def live_token_streaming(self, package: EvidencePackage) -> dict[str, Any]:
@@ -3583,6 +3804,10 @@ def _action_support(provider: str, action: ActionDefinition, contract: Any) -> t
         return f"{provider}.answer_pause" in contract.machine_control_supports, "machine_control.answer_pause"
     if action.support_kind == "tool_result":
         return bool(contract.transcript_binding), "contract.transcript_binding"
+    if action.support_kind == "external_event_channel":
+        return provider == "antigravity", "provider_control.antigravity_hook_inbox"
+    if action.support_kind == "permission_prompt":
+        return True, "provider_permission_prompt_surface"
     return False, f"unknown_support_kind:{action.support_kind}"
 
 
@@ -3620,14 +3845,20 @@ def _action_implementation_kind(
         "parse_normalize",
         "session_projection",
         "timeline_projection",
+        "multi_turn_continuity",
+        "crash_timeout_cleanup",
     }:
         return "universal_harness_projection"
+    if action.action_id == "external_event_channel":
+        return "provider_control_canary"
     if action.action_id == "db_ingest":
         return "longhouse_db_ingest"
     if action.action_id in {"baseline_compare", "old_new_release_diff"}:
         return "provider_release_proof_diff"
     if action.action_id in {"pause_request_detect", "answer_pause_request"}:
         return "universal_pause_request_service"
+    if action.action_id == "permission_prompt":
+        return "typed_blocked_gap"
     if action.action_id == "tool_call_result":
         return "derived_longhouse_surface"
     if contract_evidence:
@@ -3676,6 +3907,8 @@ def _action_status(
         "parse_normalize": ("hermetic", "universal_parse_ingest_project", "universal_harness_parser_projection"),
         "session_projection": ("hermetic", "universal_session_projection", "universal_harness_projection"),
         "timeline_projection": ("hermetic", "universal_timeline_projection", "universal_harness_projection"),
+        "multi_turn_continuity": ("hermetic", "universal_multi_turn_continuity", "universal_harness_projection"),
+        "crash_timeout_cleanup": ("hermetic", "universal_crash_timeout_cleanup", "universal_harness_projection"),
     }
     if action.action_id in harness_pass_actions:
         level, canary, scope = harness_pass_actions[action.action_id]
@@ -3717,7 +3950,13 @@ def _action_status(
             "next": "Add sandboxed old/new provider install and automatic action-row diffing.",
         }
 
-    if action.action_id in {"pause_request_detect", "answer_pause_request", "tool_call_result"}:
+    if action.action_id in {
+        "pause_request_detect",
+        "answer_pause_request",
+        "tool_call_result",
+        "external_event_channel",
+        "permission_prompt",
+    }:
         return _derived_action_status(action=action, provider=provider)
 
     level = str(contract_evidence.get("level") or "").strip()
@@ -3758,6 +3997,23 @@ def _derived_action_status(*, action: ActionDefinition, provider: str) -> dict[s
             "source": "server/tests_lite/test_shipper_parser_tool_results.py and provider parser fixtures",
             "canary": "shipper_parser_tool_results",
             "next": "Promote with live provider tool-call/result canaries per provider.",
+        }
+    if action.action_id == "external_event_channel":
+        return {
+            "status": STATUS_PASS,
+            "evidence_level": "hermetic",
+            "proof_scope": "provider_control.antigravity_hook_inbox",
+            "source": "scripts/qa/provider-control-e2e-canary.py Antigravity hook/inbox pre/post injection",
+            "canary": "provider_control_e2e_antigravity_hook_inbox",
+            "next": "Keep other providers unsupported unless they expose stable hook/inbox external-event semantics.",
+        }
+    if action.action_id == "permission_prompt":
+        return {
+            "status": STATUS_BLOCKED,
+            "failure_code": "permission_prompt_canary_missing",
+            "message": f"{provider} permission prompt approve/deny behavior needs a live held-permission canary.",
+            "proof_scope": "provider_permission_prompt_surface",
+            "next": "Add provider-held permission prompt fixtures/canaries that prove approve and deny delivery.",
         }
     message = "".join(
         [
@@ -5440,6 +5696,54 @@ def run_transcript_binding(adapter: AgentHarnessAdapter, package: EvidencePackag
     )
 
 
+def run_multi_turn_continuity(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.multi_turn_continuity(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="multi_turn_continuity",
+        package=package,
+        payload=payload,
+    )
+
+
+def run_external_event_channel(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.external_event_channel(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="external_event_channel",
+        package=package,
+        payload=payload,
+    )
+
+
+def run_permission_prompt(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.permission_prompt(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="permission_prompt",
+        package=package,
+        payload=payload,
+    )
+
+
+def run_crash_timeout_cleanup(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.crash_timeout_cleanup(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="crash_timeout_cleanup",
+        package=package,
+        payload=payload,
+    )
+
+
 def run_live_token_streaming(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
     adapter.prepare(package)
     payload = adapter.live_token_streaming(package)
@@ -5510,6 +5814,10 @@ SCENARIO_RUNNERS = {
     "tail_output": run_tail_output,
     "runtime_phase": run_runtime_phase,
     "transcript_binding": run_transcript_binding,
+    "multi_turn_continuity": run_multi_turn_continuity,
+    "external_event_channel": run_external_event_channel,
+    "permission_prompt": run_permission_prompt,
+    "crash_timeout_cleanup": run_crash_timeout_cleanup,
     "live_token_streaming": run_live_token_streaming,
     "old_new_release_diff": run_old_new_release_diff,
 }

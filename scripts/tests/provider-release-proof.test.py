@@ -2417,6 +2417,56 @@ def test_antigravity_release_proof_can_attach_universal_hook_inbox_e2e() -> None
         assert "force_continue" in raw_events
 
 
+def test_antigravity_release_proof_can_attach_universal_external_event_channel_e2e() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        _write_fake_provider_bin(root, "agy 9.9.9")
+
+        result, payload = _run_proof(
+            root,
+            "antigravity",
+            extra_args=[
+                "--run-universal-harness",
+                "--universal-scenario",
+                "external_event_channel",
+            ],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["verdict"] == "green"
+        assert (
+            payload["normalized"]["canaries"]["universal_external_event_channel"][
+                "status"
+            ]
+            == "pass"
+        )
+        assert (
+            payload["operation_evidence"]["universal_external_event_channel"][
+                "status"
+            ]
+            == "pass"
+        )
+        assert payload["operation_evidence"]["universal_db_ingest"]["status"] == "pass"
+
+        universal_artifact = _read_json(
+            Path(payload["artifacts"]["universal_harness_artifact"])
+        )
+        result_row = universal_artifact["results"][0]
+        assert result_row["scenario"] == "external_event_channel"
+        assert result_row["status"] == "pass"
+        assert (
+            result_row["data"]["source_artifact_kind"]
+            == "provider_control_e2e_canary"
+        )
+        evidence_root = Path(result_row["evidence_root"])
+        raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(
+            encoding="utf-8"
+        )
+        assert "provider_control_e2e_canary" in raw_events
+        assert "force_continue" in raw_events
+
+
 def test_opencode_release_proof_blocks_on_source_canary_red() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -3429,6 +3479,7 @@ def main() -> int:
         test_opencode_release_proof_can_attach_universal_resume_reattach_e2e,
         test_claude_release_proof_can_attach_universal_provider_live_contract_e2e,
         test_antigravity_release_proof_can_attach_universal_hook_inbox_e2e,
+        test_antigravity_release_proof_can_attach_universal_external_event_channel_e2e,
         test_opencode_release_proof_blocks_on_source_canary_red,
         test_opencode_release_proof_blocks_green_artifact_from_failed_source_canary,
         test_opencode_release_proof_blocks_when_source_artifact_missing,
