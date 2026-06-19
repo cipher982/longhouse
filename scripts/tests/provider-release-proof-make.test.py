@@ -137,6 +137,7 @@ def test_provider_release_proof_make_passes_scenario_id_override() -> None:
                 "PROVIDER_VERSION=codex-test-0",
                 "SOURCE_REVIEW_STATUS=pass",
                 "SCENARIO_ID=codex-custom-proof-v1",
+                "PREFLIGHT_ONLY=1",
                 f"ARTIFACT={proof}",
                 f"EVIDENCE_ROOT={evidence}",
             ]
