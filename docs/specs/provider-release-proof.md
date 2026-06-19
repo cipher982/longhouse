@@ -1,6 +1,6 @@
 # Provider Release Proof
 
-**Status:** Phase 1 inventory + Longhouse proof/baseline/diff entrypoints; OpenCode, Codex, scoped Claude, and scoped Antigravity release-proof baselines accepted
+**Status:** Phase 1 inventory + Longhouse proof/baseline/diff entrypoints; five accepted release-proof scenarios promoted to Sauron (scoped Claude, Codex default, Codex live-send, OpenCode, scoped Antigravity)
 **Owner:** David
 **Last updated:** 2026-06-19
 
@@ -39,6 +39,8 @@ What exists:
   `engine/tests/golden_parser_contract.rs`
 - provider release/live/control canary scripts under `scripts/qa/`
 - Sauron release-watch provider-status publication
+- Sauron daily accepted-baseline inventory guard:
+  `agent-release-baseline-guard`
 
 What is missing:
 
@@ -47,15 +49,15 @@ What is missing:
 - scheduled old/new differentials from the accepted baseline store rather than
   only candidate or directly staged old/new artifacts
 
-## Audit Snapshot - 2026-06-18
+## Audit Snapshot - 2026-06-19
 
-This snapshot reflects the Longhouse audit through `8b5426a84`, Sauron jobs
-`6f1a212`, and the 2026-06-19 local OpenCode, scoped Claude, and scoped
-Antigravity baseline promotions after Gemini was removed as a release-watch
-provider and Antigravity became the canonical Google lane. Later Sauron
-surface-target commits are unrelated to provider release-proofing; the
-release-watch/proof scope remains Claude Code, Codex/OpenAI, OpenCode, and
-Antigravity.
+This snapshot reflects the Longhouse audit through `82deb20d3`, Sauron jobs
+`92f1a62`, and the 2026-06-19 accepted-baseline promotions after Gemini was
+removed as a release-watch provider and Antigravity became the canonical Google
+lane. The release-watch/proof scope is Claude Code, Codex/OpenAI, OpenCode, and
+Antigravity. Sauron's `agent-release-baseline-guard` now checks the promoted
+accepted baseline store daily; the live container guard returned 5/5 green
+against `/data/provider-release-proofs` on 2026-06-19.
 
 Machine-validated coverage map:
 
@@ -614,9 +616,9 @@ should not by itself count as contract drift.
 ## Next Work
 
 1. Add Claude managed-session binding proof beyond no-token launch shape.
-2. Configure durable Runtime Host credentials for scheduled Codex live-send
-   release-watch, or keep that lane explicitly preflight/yellow when credentials
-   are absent.
+2. Keep the scheduled Codex live-send release-watch and Sauron
+   `agent-release-baseline-guard` green, and add Codex interrupt/tool coverage
+   beyond the currently accepted send-input baseline.
 3. Accept a reviewed Antigravity real-agy send baseline, then decide whether to
    enable `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` in production Sauron.
 4. Add OpenCode tool/tool-result and live-token proof, which are currently the

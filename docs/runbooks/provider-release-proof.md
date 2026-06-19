@@ -284,6 +284,37 @@ the matrix claims as accepted exists, remains green, and still has its archived
 artifacts. Any non-green entry is a repair/reaccept task before claiming that
 scenario is protected.
 
+Sauron also runs a daily guard, `agent-release-baseline-guard`, against the same
+accepted-scenario inventory. The guard auto-clones Longhouse into
+`/data/agent-release-baseline-guard/longhouse` when `LONGHOUSE_REPO_PATH` is not
+mounted, reads `docs/specs/provider-release-proof-coverage.json`, and checks
+`/data/provider-release-proofs`. A configured non-green inventory returns
+`status=degraded`, so it appears in automation health and the daily health
+digest without retry noise.
+
+Manual guard check from the live container:
+
+```bash
+ssh clifford "docker exec sauron sh -lc 'cd /data/jobs && PYTHONPATH=/data/jobs:/app python - <<\"PY\"
+import asyncio, json
+from jobs.agent_releases.baseline_guard import run
+print(json.dumps(asyncio.run(run()), indent=2, sort_keys=True))
+PY'"
+```
+
+Expected healthy summary:
+
+```json
+{
+  "status": "healthy",
+  "verdict": "green",
+  "scenario_count": 5,
+  "green_count": 5,
+  "non_green_count": 0,
+  "artifact_path": "/data/provider-release-proofs/baseline-status-all.json"
+}
+```
+
 ## Sauron Email Interpretation
 
 Routine release digests should skip the inbox and live under a label/archive
@@ -302,6 +333,8 @@ lane. Inbox alerts are for structured provider-status evidence:
   baseline.
 - `release_differential`: Sauron staged old and new release assets and compared
   their normalized Longhouse proof artifacts directly.
+- `agent-release-baseline-guard`: daily Sauron job that checks the promoted
+  baseline store itself, independent of new upstream releases.
 
 The Sauron alert path currently treats `baseline_missing` and
 `insufficient_coverage` as non-actionable yellows for inbox purposes. Other
@@ -353,6 +386,9 @@ should not appear in the artifact tree.
   credentials for scheduled Codex live-send release-watch; a no-spend preflight
   in the `sauron` container on 2026-06-19 returned green for
   `codex-managed-live-send-release-proof-v1`.
+- Sauron baseline inventory guard: live in production as
+  `agent-release-baseline-guard`; on 2026-06-19 it returned 5/5 accepted
+  scenarios green against `/data/provider-release-proofs`.
 - Antigravity real-agy send: no accepted baseline yet for
   `antigravity-real-agy-send-release-proof-v1`. Sauron has an env-gated
   release-watch pass-through for this scenario, but production Sauron is not
@@ -396,6 +432,7 @@ PYTHONPATH=../runtime:. uv run \
   --with boto3 \
   --with markdown-it-py \
   python -m pytest \
+  tests/test_agent_release_baseline_guard.py \
   tests/test_agent_release_envelope.py \
   tests/test_agent_release_provider_status.py \
   -q
