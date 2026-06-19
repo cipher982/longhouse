@@ -193,6 +193,24 @@ if args == ["attach", "--help"]:
 
 if args and args[0] == "run":
     prompt = args[-1]
+    text_match = re.search(r"Reply with exactly ([A-Za-z0-9_]+) and nothing else", prompt)
+    if text_match:
+        marker = text_match.group(1)
+        session_id = "ses_fake_opencode_print"
+        print(json.dumps({
+            "type": "text",
+            "timestamp": 1781861714070,
+            "sessionID": session_id,
+            "part": {
+                "id": "prt_fake_print_text",
+                "messageID": "msg_fake_print_text",
+                "sessionID": session_id,
+                "type": "text",
+                "text": marker,
+            },
+        }))
+        raise SystemExit(0)
+
     match = re.search(r"printf '([^']+)'", prompt)
     marker = match.group(1) if match else "MISSING_MARKER"
     session_id = "ses_fake_opencode_tool"
@@ -1456,6 +1474,71 @@ def test_antigravity_release_proof_can_attach_universal_live_token_e2e() -> None
             encoding="utf-8"
         )
         assert "antigravity_real_agy_send" in raw_events
+        db_snapshot = _read_json(evidence_root / "longhouse" / "db-ingest-result.json")
+        assert db_snapshot["ingest_result"]["events_inserted"] == 2
+        assert db_snapshot["timeline"]["matched"] is True
+
+
+def test_opencode_release_proof_can_attach_universal_live_token_e2e() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        repo = root / "repo"
+        _write_fake_repo(repo)
+        _write_fake_opencode_server_bin(root)
+        control_path = repo / "scripts" / "qa" / "provider-control-e2e-canary.py"
+        control_path.write_text(
+            (REPO_ROOT / "scripts" / "qa" / "provider-control-e2e-canary.py").read_text(
+                encoding="utf-8"
+            ),
+            encoding="utf-8",
+        )
+        control_path.chmod(0o755)
+
+        result, payload = _run_proof(
+            root,
+            "opencode",
+            extra_args=[
+                "--run-universal-harness",
+                "--universal-scenario",
+                "live_token_streaming",
+            ],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["verdict"] == "green"
+        assert (
+            payload["normalized"]["canaries"]["universal_live_token_streaming"][
+                "status"
+            ]
+            == "pass"
+        )
+        assert payload["operation_evidence"]["universal_run_once"]["status"] == "pass"
+        assert (
+            payload["operation_evidence"]["universal_run_once"]["level"] == "live_token"
+        )
+        assert (
+            payload["operation_evidence"]["universal_live_token_behavior"]["status"]
+            == "pass"
+        )
+        assert payload["operation_evidence"]["universal_db_ingest"]["status"] == "pass"
+
+        universal_artifact = _read_json(
+            Path(payload["artifacts"]["universal_harness_artifact"])
+        )
+        result_row = universal_artifact["results"][0]
+        assert result_row["provider"] == "opencode"
+        assert result_row["scenario"] == "live_token_streaming"
+        assert result_row["status"] == "pass"
+        assert (
+            result_row["data"]["source_artifact_kind"] == "provider_control_e2e_canary"
+        )
+        assert result_row["data"]["synthetic"] is False
+
+        evidence_root = Path(result_row["evidence_root"])
+        raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(
+            encoding="utf-8"
+        )
+        assert "opencode_real_print" in raw_events
         db_snapshot = _read_json(evidence_root / "longhouse" / "db-ingest-result.json")
         assert db_snapshot["ingest_result"]["events_inserted"] == 2
         assert db_snapshot["timeline"]["matched"] is True
@@ -2856,6 +2939,7 @@ def main() -> int:
         test_codex_release_proof_can_attach_universal_live_token_credentials_gap,
         test_claude_release_proof_can_attach_universal_live_token_e2e,
         test_antigravity_release_proof_can_attach_universal_live_token_e2e,
+        test_opencode_release_proof_can_attach_universal_live_token_e2e,
         test_codex_release_proof_can_attach_universal_tool_call_result_e2e,
         test_opencode_release_proof_can_attach_universal_tool_call_result_e2e,
         test_opencode_release_proof_can_attach_real_universal_managed_session_e2e,

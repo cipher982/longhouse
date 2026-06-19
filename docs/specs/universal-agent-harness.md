@@ -193,11 +193,11 @@ and marker transcript rows, and DB-ingests the reattach evidence. Other provider
 currently return typed adapter gaps for this scenario.
 
 `live_token_streaming` is an executable universal scenario for Claude, Codex,
-and Antigravity. Claude calls the real-print one-shot canary. Codex calls the
-existing managed-live-send canary. Antigravity calls the real-agy hook-inbox
-injection canary. These paths project user and assistant marker rows and
-DB-ingest the live-token evidence when their live lane is configured. OpenCode
-currently returns a typed adapter gap for this scenario.
+OpenCode, and Antigravity. Claude calls the real-print one-shot canary. Codex
+calls the existing managed-live-send canary. OpenCode calls the real-print
+`opencode run --format json` marker canary. Antigravity calls the real-agy
+hook-inbox injection canary. These paths project user and assistant marker rows
+and DB-ingest the live-token evidence when their live lane is configured.
 
 ## Capabilities And Profiles
 
@@ -431,7 +431,7 @@ rewritten to call the shared scenario runner.
 | `server/zerg/qa/codex_provider_release_canary.py` | `probe_identity`, `run_prompt_once`, `launch_managed_session`, `resume_reattach`, `send_receive`, `interrupt_cancel`, `tool_call_result`, `live_token_streaming` | Partly migrated: Codex `managed_session_e2e`, `interrupt_cancel`, `tool_call_result`, and `live_token_streaming` now call this canary; remaining control/steer lanes still need promotion. |
 | `server/zerg/qa/provider_live_canary.py` OpenCode server/schema/session checks | `launch_managed_session`, `send_receive`, `resume_reattach`, `interrupt_cancel`, `parse_ingest_project` | Partly migrated: OpenCode `managed_session_e2e`, `interrupt_cancel`, and `resume_reattach` now call this canary; remaining live-token scenarios still need promotion. |
 | `server/zerg/qa/provider_live_canary.py` Antigravity plugin/global hook checks | `probe_identity`, `external_event_channel`, `send_receive` | Migration candidate; hook/inbox setup is Antigravity adapter internal. |
-| `scripts/qa/provider-control-e2e-canary.py` | `send_receive`, `interrupt_cancel`, `tool_call_result`, `external_event_channel`, `live_token_streaming` | Partly migrated: Claude `interrupt_cancel` and `live_token_streaming`, Antigravity `live_token_streaming`, plus OpenCode `tool_call_result`, now call this canary; keep provider-specific fakes as adapter test fixtures. |
+| `scripts/qa/provider-control-e2e-canary.py` | `send_receive`, `interrupt_cancel`, `tool_call_result`, `external_event_channel`, `live_token_streaming` | Partly migrated: Claude `interrupt_cancel` and `live_token_streaming`, OpenCode `tool_call_result` and `live_token_streaming`, plus Antigravity `live_token_streaming`, now call this canary; keep provider-specific fakes as adapter test fixtures. |
 | Engine parser golden/adversarial tests | `parse_ingest_project` fixture replay | Reusable as `fixture_replay` scenarios. |
 | Shipper/ingest/session projection tests | `parse_ingest_project`, `timeline_projection` | Reusable Longhouse assertions under the runner. |
 | Sauron release-envelope/provider-status jobs | Private invocation and reporting | Sauron-owned runner/reporting; should consume universal artifacts, not provider-specific semantics. |
@@ -493,8 +493,12 @@ shape:
    scenario. It calls real-agy hook-inbox injection, DB-ingests the queued user
    message plus marker response, and exposes `universal_live_token_streaming`
    evidence through release proof.
-16. Evidence packages are written for pass, fail, and unsupported results.
-17. Existing one-off canaries remain compatibility lanes until each behavior is
+16. OpenCode `live_token_streaming` is an executable universal live-token
+   scenario. It calls real-print `opencode run --format json`, DB-ingests the
+   prompt/result marker rows, and exposes `universal_live_token_streaming`
+   evidence through release proof.
+17. Evidence packages are written for pass, fail, and unsupported results.
+18. Existing one-off canaries remain compatibility lanes until each behavior is
    migrated and baselined.
 
 Next implementation target: migrate Claude managed live-token send/steer

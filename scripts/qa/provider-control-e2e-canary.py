@@ -94,14 +94,22 @@ def _hook_python(args: argparse.Namespace) -> str:
     return cmd[0] if len(cmd) == 1 else sys.executable
 
 
-def _runtime_env(args: argparse.Namespace, extra: dict[str, str] | None = None) -> dict[str, str]:
+def _runtime_env(
+    args: argparse.Namespace, extra: dict[str, str] | None = None
+) -> dict[str, str]:
     env = os.environ.copy()
     env.setdefault("DATABASE_URL", "sqlite://")
     env.setdefault("TESTING", "1")
     env.setdefault("AUTH_DISABLED", "1")
-    env.setdefault("FERNET_SECRET", base64.urlsafe_b64encode(os.urandom(32)).decode("ascii"))
-    env.setdefault("JWT_SECRET", base64.urlsafe_b64encode(os.urandom(32)).decode("ascii"))
-    env.setdefault("INTERNAL_API_SECRET", base64.urlsafe_b64encode(os.urandom(32)).decode("ascii"))
+    env.setdefault(
+        "FERNET_SECRET", base64.urlsafe_b64encode(os.urandom(32)).decode("ascii")
+    )
+    env.setdefault(
+        "JWT_SECRET", base64.urlsafe_b64encode(os.urandom(32)).decode("ascii")
+    )
+    env.setdefault(
+        "INTERNAL_API_SECRET", base64.urlsafe_b64encode(os.urandom(32)).decode("ascii")
+    )
     env.setdefault("PYTHONUNBUFFERED", "1")
     if extra:
         env.update(extra)
@@ -226,7 +234,10 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
         assert fake_claude.stdout is not None
         ready = fake_claude.stdout.readline().strip()
         if ready != "ready":
-            return _fail("claude_fake_process_not_ready", "fake Claude process did not become ready")
+            return _fail(
+                "claude_fake_process_not_ready",
+                "fake Claude process did not become ready",
+            )
 
         bridge = subprocess.Popen(
             [
@@ -262,17 +273,26 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
                     "params": {
                         "protocolVersion": "2025-11-25",
                         "capabilities": {},
-                        "clientInfo": {"name": "provider-control-e2e", "version": "0.1"},
+                        "clientInfo": {
+                            "name": "provider-control-e2e",
+                            "version": "0.1",
+                        },
                     },
                 }
             )
             + "\n"
         )
-        bridge.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
+        bridge.stdin.write(
+            json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n"
+        )
         bridge.stdin.flush()
         initialize = json.loads(stdout_lines.get(timeout=5.0))
         if initialize.get("id") != 1:
-            return _fail("claude_initialize_failed", "Claude channel bridge did not initialize", initialize=initialize)
+            return _fail(
+                "claude_initialize_failed",
+                "Claude channel bridge did not initialize",
+                initialize=initialize,
+            )
 
         send = _run_longhouse(
             args,
@@ -288,7 +308,11 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
             ],
         )
         if send.returncode != 0:
-            return _fail("claude_send_failed", "claude-channel send failed", evidence=_command_evidence(send))
+            return _fail(
+                "claude_send_failed",
+                "claude-channel send failed",
+                evidence=_command_evidence(send),
+            )
         send_notification = json.loads(stdout_lines.get(timeout=5.0))
         send_params = send_notification.get("params", {})
         send_meta = send_params.get("meta")
@@ -296,7 +320,10 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
             "injected_by": "longhouse",
             "longhouse_session_id": session_id,
         }
-        if send_params.get("content") != "hello from provider control canary" or send_meta != expected_send_meta:
+        if (
+            send_params.get("content") != "hello from provider control canary"
+            or send_meta != expected_send_meta
+        ):
             return _fail(
                 "claude_send_payload_mismatch",
                 "claude-channel send emitted the wrong channel notification",
@@ -319,7 +346,11 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
             ],
         )
         if steer.returncode != 0:
-            return _fail("claude_steer_failed", "claude-channel steer send failed", evidence=_command_evidence(steer))
+            return _fail(
+                "claude_steer_failed",
+                "claude-channel steer send failed",
+                evidence=_command_evidence(steer),
+            )
         steer_notification = json.loads(stdout_lines.get(timeout=5.0))
         steer_params = steer_notification.get("params", {})
         steer_meta = steer_params.get("meta")
@@ -328,7 +359,10 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
             "intent": "steer",
             "longhouse_session_id": session_id,
         }
-        if steer_params.get("content") != "steer from provider control canary" or steer_meta != expected_steer_meta:
+        if (
+            steer_params.get("content") != "steer from provider control canary"
+            or steer_meta != expected_steer_meta
+        ):
             return _fail(
                 "claude_steer_payload_mismatch",
                 "claude-channel steer emitted the wrong channel notification",
@@ -354,7 +388,10 @@ def run_claude_channel_canary(args: argparse.Namespace, root: Path) -> dict[str,
             )
         fake_claude.wait(timeout=5.0)
         if interrupt_marker.read_text(encoding="utf-8").strip() != "sigint":
-            return _fail("claude_interrupt_marker_missing", "fake Claude process did not receive SIGINT")
+            return _fail(
+                "claude_interrupt_marker_missing",
+                "fake Claude process did not receive SIGINT",
+            )
 
         return _status(
             "pass",
@@ -412,7 +449,9 @@ def _provider_real_run_env(*, extra_keys: tuple[str, ...] = ()) -> dict[str, str
     return env
 
 
-def _compact_claude_result_event(event: dict[str, Any] | None, *, marker: str) -> dict[str, Any] | None:
+def _compact_claude_result_event(
+    event: dict[str, Any] | None, *, marker: str
+) -> dict[str, Any] | None:
     if event is None:
         return None
     result_text = str(event.get("result") or "")
@@ -429,7 +468,9 @@ def _compact_claude_result_event(event: dict[str, Any] | None, *, marker: str) -
     }
 
 
-def _run_claude_auth_status(binary: str, *, env: dict[str, str], root: Path) -> dict[str, Any]:
+def _run_claude_auth_status(
+    binary: str, *, env: dict[str, str], root: Path
+) -> dict[str, Any]:
     stdout_path = root / "claude-auth-status-stdout.json"
     stderr_path = root / "claude-auth-status-stderr.log"
     command = [binary, "auth", "status", "--json"]
@@ -475,12 +516,16 @@ def _run_claude_auth_status(binary: str, *, env: dict[str, str], root: Path) -> 
         "stderr_sha256": _sha256_file(stderr_path),
         "json_parse_error": parse_error,
         "loggedIn": bool(parsed.get("loggedIn")) if parsed is not None else None,
-        "authMethod_present": bool(parsed.get("authMethod")) if parsed is not None else None,
+        "authMethod_present": bool(parsed.get("authMethod"))
+        if parsed is not None
+        else None,
         "apiProvider": parsed.get("apiProvider") if parsed is not None else None,
     }
 
 
-def _claude_real_print_failure(code: str, message: str, **fields: Any) -> dict[str, Any]:
+def _claude_real_print_failure(
+    code: str, message: str, **fields: Any
+) -> dict[str, Any]:
     fields.setdefault(
         "operation_evidence",
         {
@@ -501,7 +546,9 @@ def _claude_real_print_failure(code: str, message: str, **fields: Any) -> dict[s
     return _fail(code, message, **fields)
 
 
-def run_claude_real_print_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+def run_claude_real_print_canary(
+    args: argparse.Namespace, root: Path
+) -> dict[str, Any]:
     """Spend one real Claude Code print turn to prove auth + stream-json execution."""
 
     binary = _resolve_claude_binary()
@@ -785,7 +832,11 @@ def run_opencode_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
             timeout=20,
         )
         if launch.returncode != 0:
-            return _fail("opencode_launch_failed", "opencode-channel launch failed", evidence=_command_evidence(launch))
+            return _fail(
+                "opencode_launch_failed",
+                "opencode-channel launch failed",
+                evidence=_command_evidence(launch),
+            )
         launch_payload = json.loads(launch.stdout)
 
         send = _run_longhouse(
@@ -803,11 +854,22 @@ def run_opencode_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
             env=env,
         )
         if send.returncode != 0:
-            return _fail("opencode_send_failed", "opencode-channel send failed", evidence=_command_evidence(send))
+            return _fail(
+                "opencode_send_failed",
+                "opencode-channel send failed",
+                evidence=_command_evidence(send),
+            )
 
         interrupt = _run_longhouse(
             args,
-            ["opencode-channel", "interrupt", "--session-id", session_id, "--config-dir", str(config_dir)],
+            [
+                "opencode-channel",
+                "interrupt",
+                "--session-id",
+                session_id,
+                "--config-dir",
+                str(config_dir),
+            ],
             env=env,
         )
         if interrupt.returncode != 0:
@@ -834,7 +896,11 @@ def run_opencode_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
             env=env,
         )
         if attach.returncode != 0:
-            return _fail("opencode_attach_failed", "opencode-channel attach failed", evidence=_command_evidence(attach))
+            return _fail(
+                "opencode_attach_failed",
+                "opencode-channel attach failed",
+                evidence=_command_evidence(attach),
+            )
 
         events = _read_json_lines(events_path)
         observed = {row.get("event") for row in events}
@@ -858,7 +924,10 @@ def run_opencode_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
                 event=prompt_event,
             )
         attach_event = _first_event(events, "attach") or {}
-        if attach_event.get("username") != "opencode" or attach_event.get("password_present") is not True:
+        if (
+            attach_event.get("username") != "opencode"
+            or attach_event.get("password_present") is not True
+        ):
             return _fail(
                 "opencode_attach_env_mismatch",
                 "OpenCode attach did not receive server credentials in the process environment",
@@ -876,7 +945,14 @@ def run_opencode_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
     finally:
         _run_longhouse(
             args,
-            ["opencode-channel", "stop", "--session-id", session_id, "--config-dir", str(config_dir)],
+            [
+                "opencode-channel",
+                "stop",
+                "--session-id",
+                session_id,
+                "--config-dir",
+                str(config_dir),
+            ],
             env=env,
             timeout=10,
         )
@@ -904,10 +980,14 @@ def _opencode_real_tool_env() -> dict[str, str]:
 
 
 def _event_session_id(event: dict[str, Any]) -> str:
-    return str(event.get("sessionID") or _event_part(event).get("sessionID") or "").strip()
+    return str(
+        event.get("sessionID") or _event_part(event).get("sessionID") or ""
+    ).strip()
 
 
-def _compact_opencode_tool_event(event: dict[str, Any], *, marker: str) -> dict[str, Any]:
+def _compact_opencode_tool_event(
+    event: dict[str, Any], *, marker: str
+) -> dict[str, Any]:
     part = _event_part(event)
     state = part.get("state") if isinstance(part.get("state"), dict) else {}
     input_payload = state.get("input") if isinstance(state.get("input"), dict) else {}
@@ -922,15 +1002,20 @@ def _compact_opencode_tool_event(event: dict[str, Any], *, marker: str) -> dict[
         "callID_present": bool(part.get("callID")),
         "state_status": state.get("status"),
         "input_keys": sorted(input_payload),
-        "command_sha256": hashlib.sha256(str(input_payload.get("command") or "").encode("utf-8")).hexdigest(),
-        "command_exact_match": str(input_payload.get("command") or "") == f"printf '{marker}'",
+        "command_sha256": hashlib.sha256(
+            str(input_payload.get("command") or "").encode("utf-8")
+        ).hexdigest(),
+        "command_exact_match": str(input_payload.get("command") or "")
+        == f"printf '{marker}'",
         "output_sha256": hashlib.sha256(output.encode("utf-8")).hexdigest(),
         "output_exact_match": output.strip() == marker,
         "metadata_output_exact_match": metadata_output.strip() == marker,
     }
 
 
-def _opencode_text_done_event(events: list[dict[str, Any]], *, session_id: str) -> dict[str, Any] | None:
+def _opencode_text_done_event(
+    events: list[dict[str, Any]], *, session_id: str
+) -> dict[str, Any] | None:
     for event in events:
         part = _event_part(event)
         if event.get("type") != "text" or part.get("type") != "text":
@@ -947,12 +1032,176 @@ def _opencode_text_done_event(events: list[dict[str, Any]], *, session_id: str) 
     return None
 
 
-def run_opencode_real_tool_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+def _opencode_text_marker_event(
+    events: list[dict[str, Any]], *, marker: str
+) -> dict[str, Any] | None:
+    for event in events:
+        part = _event_part(event)
+        if event.get("type") != "text" or part.get("type") != "text":
+            continue
+        text = str(part.get("text") or "")
+        if text.strip() != marker:
+            continue
+        return {
+            "type": event.get("type"),
+            "sessionID": _event_session_id(event),
+            "part_type": part.get("type"),
+            "text_exact_match": True,
+            "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+        }
+    return None
+
+
+def run_opencode_real_print_canary(
+    args: argparse.Namespace, root: Path
+) -> dict[str, Any]:
+    """Prove real opencode can run a bounded prompt and emit exact marker text."""
+
+    binary = _resolve_opencode_binary()
+    if not binary:
+        return _fail(
+            "provider_binary_not_found", "opencode binary was not found on PATH"
+        )
+
+    version, version_evidence = _run_provider_version(binary)
+    if not version:
+        return _fail(
+            "provider_version_failed",
+            "opencode --version failed",
+            path=binary,
+            evidence=version_evidence,
+        )
+
+    workspace = root / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    stdout_path = root / "opencode-print-stdout.jsonl"
+    stderr_path = root / "opencode-print-stderr.log"
+    marker = f"LONGHOUSE_OPENCODE_PRINT_{uuid.uuid4().hex}"
+    prompt = f"Reply with exactly {marker} and nothing else."
+    command = [
+        binary,
+        "run",
+        "--format",
+        "json",
+        "--dangerously-skip-permissions",
+        "--title",
+        "Longhouse OpenCode print proof",
+        prompt,
+    ]
+    started = time.monotonic()
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(workspace),
+            env=_opencode_real_tool_env(),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=max(45, args.opencode_run_timeout_secs),
+        )
+        timed_out = False
+    except subprocess.TimeoutExpired as exc:
+        result = subprocess.CompletedProcess(
+            command,
+            returncode=124,
+            stdout=(exc.stdout or "") if isinstance(exc.stdout, str) else "",
+            stderr=(exc.stderr or "") if isinstance(exc.stderr, str) else "",
+        )
+        timed_out = True
+    elapsed = round(time.monotonic() - started, 3)
+    stdout = result.stdout or ""
+    stderr = result.stderr or ""
+    stdout_path.write_text(stdout, encoding="utf-8")
+    stderr_path.write_text(stderr, encoding="utf-8")
+
+    try:
+        events = _parse_json_lines(stdout)
+        parse_error = None
+    except (json.JSONDecodeError, ValueError) as exc:
+        events = []
+        parse_error = f"{type(exc).__name__}: {exc}"
+
+    text_events = [
+        event
+        for event in events
+        if event.get("type") == "text" and _event_part(event).get("type") == "text"
+    ]
+    marker_event = _opencode_text_marker_event(events, marker=marker)
+    session_ids = sorted(
+        {_event_session_id(event) for event in events if _event_session_id(event)}
+    )
+    evidence = {
+        "provider_version": version,
+        "binary": binary,
+        "binary_evidence": version_evidence,
+        "workspace": str(workspace),
+        "argv": command,
+        "returncode": result.returncode,
+        "elapsed_secs": elapsed,
+        "timed_out": timed_out,
+        "stdout_path": str(stdout_path),
+        "stderr_path": str(stderr_path),
+        "stdout_sha256": _sha256_file(stdout_path),
+        "stderr_sha256": _sha256_file(stderr_path),
+        "jsonl_parse_error": parse_error,
+        "event_count": len(events),
+        "text_event_count": len(text_events),
+        "session_ids": session_ids,
+        "marker": marker,
+        "marker_sha256": hashlib.sha256(marker.encode("utf-8")).hexdigest(),
+        "marker_in_prompt": marker in prompt,
+        "matching_text_event": marker_event,
+    }
+    if result.returncode != 0 or timed_out:
+        return _fail(
+            "opencode_real_print_run_failed",
+            "real opencode run did not complete successfully",
+            **evidence,
+        )
+    if parse_error:
+        return _fail(
+            "opencode_real_print_jsonl_invalid",
+            "real opencode run --format json did not emit valid JSONL events",
+            **evidence,
+        )
+    if marker_event is None:
+        return _fail(
+            "opencode_real_print_marker_missing",
+            "real opencode run did not emit the requested marker text",
+            **evidence,
+        )
+
+    return _status(
+        "pass",
+        canary="opencode_real_print",
+        operation_evidence={
+            "run_once": {
+                "status": "pass",
+                "level": "live_token",
+                "source": "real opencode run --format json emitted the exact requested marker text",
+                "canary": "opencode_real_print",
+            },
+            "live_token_behavior": {
+                "status": "pass",
+                "level": "live_token",
+                "source": "real opencode run --format json emitted the exact requested marker text",
+                "canary": "opencode_real_print",
+            },
+        },
+        **evidence,
+    )
+
+
+def run_opencode_real_tool_canary(
+    args: argparse.Namespace, root: Path
+) -> dict[str, Any]:
     """Prove real opencode emits a stable tool-call/tool-result event shape."""
 
     binary = _resolve_opencode_binary()
     if not binary:
-        return _fail("provider_binary_not_found", "opencode binary was not found on PATH")
+        return _fail(
+            "provider_binary_not_found", "opencode binary was not found on PATH"
+        )
 
     version, version_evidence = _run_provider_version(binary)
     if not version:
@@ -969,8 +1218,7 @@ def run_opencode_real_tool_canary(args: argparse.Namespace, root: Path) -> dict[
     stderr_path = root / "opencode-run-stderr.log"
     marker = f"LONGHOUSE_OPENCODE_TOOL_{uuid.uuid4().hex}"
     prompt = (
-        f"Use the shell tool to run: printf '{marker}'. "
-        "Then reply with exactly DONE."
+        f"Use the shell tool to run: printf '{marker}'. Then reply with exactly DONE."
     )
     command = [
         binary,
@@ -1025,9 +1273,13 @@ def run_opencode_real_tool_canary(args: argparse.Namespace, root: Path) -> dict[
     for event in tool_events:
         part = _event_part(event)
         state = part.get("state") if isinstance(part.get("state"), dict) else {}
-        input_payload = state.get("input") if isinstance(state.get("input"), dict) else {}
+        input_payload = (
+            state.get("input") if isinstance(state.get("input"), dict) else {}
+        )
         output = str(state.get("output") or "")
-        metadata = state.get("metadata") if isinstance(state.get("metadata"), dict) else {}
+        metadata = (
+            state.get("metadata") if isinstance(state.get("metadata"), dict) else {}
+        )
         metadata_output = str(metadata.get("output") or "")
         if (
             part.get("tool") == "bash"
@@ -1046,14 +1298,16 @@ def run_opencode_real_tool_canary(args: argparse.Namespace, root: Path) -> dict[
         if event.get("type") == "text" and _event_part(event).get("type") == "text"
     ]
     session_ids = sorted(
-        {
-            _event_session_id(event)
-            for event in events
-            if _event_session_id(event)
-        }
+        {_event_session_id(event) for event in events if _event_session_id(event)}
     )
-    matching_session_id = _event_session_id(matching_event) if matching_event is not None else ""
-    done_event = _opencode_text_done_event(events, session_id=matching_session_id) if matching_session_id else None
+    matching_session_id = (
+        _event_session_id(matching_event) if matching_event is not None else ""
+    )
+    done_event = (
+        _opencode_text_done_event(events, session_id=matching_session_id)
+        if matching_session_id
+        else None
+    )
     matching_tool_event = (
         _compact_opencode_tool_event(matching_event, marker=marker)
         if matching_event is not None
@@ -1128,7 +1382,9 @@ def run_opencode_real_tool_canary(args: argparse.Namespace, root: Path) -> dict[
     )
 
 
-def _install_antigravity_hook(args: argparse.Namespace, root: Path, config_dir: Path) -> Path:
+def _install_antigravity_hook(
+    args: argparse.Namespace, root: Path, config_dir: Path
+) -> Path:
     code = textwrap.dedent(
         f"""
         from pathlib import Path
@@ -1205,7 +1461,10 @@ def _run_provider_version(binary: str) -> tuple[str | None, dict[str, Any]]:
             timeout=8,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return None, {"argv": [binary, "--version"], "error": f"{type(exc).__name__}: {exc}"}
+        return None, {
+            "argv": [binary, "--version"],
+            "error": f"{type(exc).__name__}: {exc}",
+        }
     evidence = _command_evidence(result)
     if result.returncode != 0:
         return None, evidence
@@ -1219,7 +1478,11 @@ def _longhouse_home_from_provider_config(config_dir: Path) -> Path:
 
 
 def _antigravity_runtime_dir(config_dir: Path) -> Path:
-    return _longhouse_home_from_provider_config(config_dir) / "managed-local" / "antigravity"
+    return (
+        _longhouse_home_from_provider_config(config_dir)
+        / "managed-local"
+        / "antigravity"
+    )
 
 
 def _antigravity_inbox_dir(config_dir: Path, session_id: str) -> Path:
@@ -1243,7 +1506,9 @@ def _invoke_antigravity_hook(
         "LONGHOUSE_HOOK_PYTHON": _hook_python(args),
         "LONGHOUSE_ENGINE": "/bin/true",
         "LONGHOUSE_MANAGED_SESSION_ID": session_id,
-        "LONGHOUSE_ANTIGRAVITY_INBOX_DIR": str(_antigravity_inbox_dir(config_dir, session_id)),
+        "LONGHOUSE_ANTIGRAVITY_INBOX_DIR": str(
+            _antigravity_inbox_dir(config_dir, session_id)
+        ),
         "LONGHOUSE_ANTIGRAVITY_STATE_DIR": str(_antigravity_state_dir(config_dir)),
     }
     return subprocess.run(
@@ -1289,7 +1554,9 @@ def _enqueue_antigravity_direct(
     return json.loads(result.stdout)
 
 
-def _antigravity_pending_files(config_dir: Path, session_id: str) -> list[dict[str, Any]]:
+def _antigravity_pending_files(
+    config_dir: Path, session_id: str
+) -> list[dict[str, Any]]:
     inbox_dir = _antigravity_inbox_dir(config_dir, session_id)
     euid = os.geteuid() if hasattr(os, "geteuid") else None
     pending: list[dict[str, Any]] = []
@@ -1304,7 +1571,11 @@ def _antigravity_pending_files(config_dir: Path, session_id: str) -> list[dict[s
                     "uid": stat.st_uid,
                     "euid": euid,
                     "is_file": path.is_file(),
-                    "hook_safe": bool(path.is_file() and (euid is None or stat.st_uid == euid) and (mode & 0o077) == 0),
+                    "hook_safe": bool(
+                        path.is_file()
+                        and (euid is None or stat.st_uid == euid)
+                        and (mode & 0o077) == 0
+                    ),
                     "payload": json.loads(path.read_text(encoding="utf-8")),
                 }
             )
@@ -1314,7 +1585,9 @@ def _antigravity_pending_files(config_dir: Path, session_id: str) -> list[dict[s
     return pending
 
 
-def _wait_for_antigravity_pending_message(config_dir: Path, session_id: str, *, timeout_secs: float = 10.0) -> Path:
+def _wait_for_antigravity_pending_message(
+    config_dir: Path, session_id: str, *, timeout_secs: float = 10.0
+) -> Path:
     inbox_dir = _antigravity_inbox_dir(config_dir, session_id)
     deadline = time.monotonic() + timeout_secs
     while time.monotonic() < deadline:
@@ -1322,26 +1595,40 @@ def _wait_for_antigravity_pending_message(config_dir: Path, session_id: str, *, 
             if entry.get("payload") and entry.get("hook_safe"):
                 return Path(str(entry["path"]))
         time.sleep(0.05)
-    raise TimeoutError(f"Timed out waiting for Antigravity inbox message in {inbox_dir}")
+    raise TimeoutError(
+        f"Timed out waiting for Antigravity inbox message in {inbox_dir}"
+    )
 
 
-def _antigravity_claimed_files(config_dir: Path, session_id: str) -> list[dict[str, Any]]:
+def _antigravity_claimed_files(
+    config_dir: Path, session_id: str
+) -> list[dict[str, Any]]:
     claimed_dir = _antigravity_inbox_dir(config_dir, session_id) / "claimed"
     claims: list[dict[str, Any]] = []
     for path in sorted(claimed_dir.glob("*.json")) if claimed_dir.exists() else []:
         try:
-            claims.append({"path": str(path), "payload": json.loads(path.read_text(encoding="utf-8"))})
+            claims.append(
+                {
+                    "path": str(path),
+                    "payload": json.loads(path.read_text(encoding="utf-8")),
+                }
+            )
         except (OSError, json.JSONDecodeError) as exc:
             claims.append({"path": str(path), "error": f"{type(exc).__name__}: {exc}"})
     return claims
 
 
-def _antigravity_expected_claim_payload(event: str, text: str, payload: dict[str, Any]) -> bool:
+def _antigravity_expected_claim_payload(
+    event: str, text: str, payload: dict[str, Any]
+) -> bool:
     expected_steps = [{"userMessage": text}]
     if event == "PreInvocation":
         return payload.get("injectSteps") == expected_steps
     if event == "PostInvocation":
-        return payload.get("injectSteps") == expected_steps and payload.get("terminationBehavior") == "force_continue"
+        return (
+            payload.get("injectSteps") == expected_steps
+            and payload.get("terminationBehavior") == "force_continue"
+        )
     return False
 
 
@@ -1411,7 +1698,9 @@ def _run_antigravity_claim_cycle(
                 break
             time.sleep(0.1)
 
-        send_stdout, send_stderr = send_proc.communicate(timeout=max(5.0, float(wait_claimed_secs) + 5.0))
+        send_stdout, send_stderr = send_proc.communicate(
+            timeout=max(5.0, float(wait_claimed_secs) + 5.0)
+        )
         return {
             "ok": send_proc.returncode == 0 and matched_payload is not None,
             "returncode": send_proc.returncode,
@@ -1460,7 +1749,9 @@ def run_antigravity_canary(args: argparse.Namespace, root: Path) -> dict[str, An
                 cycle=pre_cycle,
             )
         pre_payload = pre_cycle["payload"]
-        if pre_payload.get("injectSteps") != [{"userMessage": "pre invocation canary input"}]:
+        if pre_payload.get("injectSteps") != [
+            {"userMessage": "pre invocation canary input"}
+        ]:
             return _fail(
                 "antigravity_pre_injection_missing",
                 "PreInvocation did not inject queued input",
@@ -1537,7 +1828,9 @@ def _claimed_antigravity_loop_messages(inbox_dir: Path) -> list[dict[str, Any]]:
     return claims
 
 
-def run_antigravity_real_agy_send_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+def run_antigravity_real_agy_send_canary(
+    args: argparse.Namespace, root: Path
+) -> dict[str, Any]:
     """Prove real agy honors Longhouse PreInvocation hook-inbox injection."""
 
     binary = _resolve_antigravity_binary()
@@ -1577,7 +1870,9 @@ def run_antigravity_real_agy_send_canary(args: argparse.Namespace, root: Path) -
         "text": queued_text,
         "intent": "send",
         "created_at": _now_iso(),
-        "expires_at": (datetime.now(UTC) + timedelta(minutes=5)).isoformat().replace("+00:00", "Z"),
+        "expires_at": (datetime.now(UTC) + timedelta(minutes=5))
+        .isoformat()
+        .replace("+00:00", "Z"),
     }
     pending_path = inbox_dir / "msg-real-loop-proof.json"
     _write_private_json(pending_path, message)
@@ -1673,7 +1968,11 @@ def run_antigravity_real_agy_send_canary(args: argparse.Namespace, root: Path) -
             **evidence,
         )
     if marker in baseline_prompt:
-        return _fail("antigravity_real_agy_canary_invalid", "baseline prompt leaked marker", **evidence)
+        return _fail(
+            "antigravity_real_agy_canary_invalid",
+            "baseline prompt leaked marker",
+            **evidence,
+        )
     if not preinvocation_claimed:
         return _fail(
             "antigravity_real_agy_claim_missing",
@@ -1718,7 +2017,11 @@ def classify(canaries: dict[str, dict[str, Any]]) -> tuple[str, str | None]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=_repo_root_from_script())
-    parser.add_argument("--provider", choices=["claude", "opencode", "antigravity", "all"], default="all")
+    parser.add_argument(
+        "--provider",
+        choices=["claude", "opencode", "antigravity", "all"],
+        default="all",
+    )
     parser.add_argument("--evidence-root", type=Path)
     parser.add_argument("--artifact", type=Path)
     parser.add_argument("--python-bin")
@@ -1740,10 +2043,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="For --provider opencode/all, spend a real opencode run turn to prove tool-call/tool-result JSON event shape.",
     )
     parser.add_argument(
+        "--opencode-run-real-print",
+        action="store_true",
+        help="For --provider opencode/all, spend a real opencode run turn to prove exact marker text output.",
+    )
+    parser.add_argument(
         "--opencode-run-timeout-secs",
         type=int,
         default=180,
-        help="Timeout for the real opencode tool run; the execution guard uses a minimum of 45 seconds.",
+        help="Timeout for real opencode run canaries; the execution guard uses a minimum of 45 seconds.",
     )
     parser.add_argument(
         "--antigravity-real-agy-send",
@@ -1760,11 +2068,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     args.repo_root = args.repo_root.resolve()
     timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-    evidence_root = args.evidence_root or args.repo_root / ".build/canaries/provider-control-e2e" / timestamp
+    evidence_root = (
+        args.evidence_root
+        or args.repo_root / ".build/canaries/provider-control-e2e" / timestamp
+    )
     artifact_path = args.artifact or evidence_root / "provider-control-e2e.json"
     evidence_root.mkdir(parents=True, exist_ok=True)
 
-    selected = ["claude", "opencode", "antigravity"] if args.provider == "all" else [args.provider]
+    selected = (
+        ["claude", "opencode", "antigravity"]
+        if args.provider == "all"
+        else [args.provider]
+    )
     canaries: dict[str, dict[str, Any]] = {}
     for provider in selected:
         provider_root = evidence_root / provider
@@ -1775,13 +2090,17 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 canaries[provider] = run_claude_channel_canary(args, provider_root)
         elif provider == "opencode":
-            if args.opencode_run_real_tool:
+            if args.opencode_run_real_print:
+                canaries[provider] = run_opencode_real_print_canary(args, provider_root)
+            elif args.opencode_run_real_tool:
                 canaries[provider] = run_opencode_real_tool_canary(args, provider_root)
             else:
                 canaries[provider] = run_opencode_canary(args, provider_root)
         elif provider == "antigravity":
             if args.antigravity_real_agy_send:
-                canaries[provider] = run_antigravity_real_agy_send_canary(args, provider_root)
+                canaries[provider] = run_antigravity_real_agy_send_canary(
+                    args, provider_root
+                )
             else:
                 canaries[provider] = run_antigravity_canary(args, provider_root)
 
@@ -1796,7 +2115,9 @@ def main(argv: list[str] | None = None) -> int:
         "evidence_root": str(evidence_root),
     }
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
-    artifact_path.write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    artifact_path.write_text(
+        json.dumps(artifact, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     if args.json:
         print(json.dumps(artifact, indent=2, sort_keys=True))
     return 0 if verdict == "green" else 1
