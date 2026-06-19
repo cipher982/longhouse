@@ -57,8 +57,8 @@ def test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_ye
         proof_result = _run_make(
             [
                 "provider-release-proof",
-                "PROVIDER=gemini",
-                "PROVIDER_VERSION=gemini-test-0",
+                "PROVIDER=codex",
+                "PROVIDER_VERSION=codex-test-0",
                 f"ARTIFACT={proof}",
                 f"EVIDENCE_ROOT={evidence}",
             ]
@@ -67,10 +67,10 @@ def test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_ye
         assert proof_result.returncode == 0, proof_result.stderr
         proof_payload = _read_json(proof)
         assert proof_payload["artifact_kind"] == "provider_release_proof"
-        assert proof_payload["provider"] == "gemini"
-        assert proof_payload["provider_version"] == "gemini-test-0"
+        assert proof_payload["provider"] == "codex"
+        assert proof_payload["provider_version"] == "codex-test-0"
         assert proof_payload["verdict"] == "yellow"
-        assert proof_payload["failure_code"] == "provider_release_proof_not_implemented"
+        assert proof_payload["failure_code"] == "insufficient_coverage"
         assert Path(proof_payload["artifacts"]["source_artifact"]).exists()
 
         accept_result = _run_make(
@@ -102,14 +102,14 @@ def test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_ye
         diff_payload = _read_json(diff)
         assert diff_payload["artifact_kind"] == "provider_release_proof_diff"
         assert diff_payload["verdict"] == "yellow"
-        assert diff_payload["failure_code"] == "provider_release_proof_not_implemented"
+        assert diff_payload["failure_code"] == "insufficient_coverage"
         assert diff_payload["diff"]["status"] == "not_compared"
 
         status_result = _run_make(
             [
                 "provider-release-proof-status",
-                "PROVIDER=gemini",
-                "SCENARIO_ID=gemini-release-proof-v1",
+                "PROVIDER=codex",
+                "SCENARIO_ID=codex-release-proof-v1",
                 f"BASELINE_ROOT={baseline_root}",
                 f"ARTIFACT={status}",
             ]
@@ -122,11 +122,39 @@ def test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_ye
         assert status_payload["failure_code"] == "baseline_missing"
 
 
+def test_provider_release_proof_make_runs_gemini_parser_fixture_lane() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        proof = root / "gemini-proof.json"
+        evidence = root / "gemini-evidence"
+
+        proof_result = _run_make(
+            [
+                "provider-release-proof",
+                "PROVIDER=gemini",
+                "PROVIDER_VERSION=gemini-test-0",
+                f"ARTIFACT={proof}",
+                f"EVIDENCE_ROOT={evidence}",
+            ]
+        )
+
+        assert proof_result.returncode == 0, proof_result.stderr
+        proof_payload = _read_json(proof)
+        assert proof_payload["artifact_kind"] == "provider_release_proof"
+        assert proof_payload["provider"] == "gemini"
+        assert proof_payload["provider_version"] == "gemini-test-0"
+        assert proof_payload["verdict"] == "green"
+        assert proof_payload["failure_code"] is None
+        assert proof_payload["operation_evidence"]["transcript_log_parse"]["status"] == "pass"
+        assert proof_payload["operation_evidence"]["tool_tool_result_shape"]["status"] == "pass"
+
+
 def main() -> int:
     tests = [
         test_provider_release_proof_make_requires_provider,
         test_provider_release_proof_status_make_requires_provider_and_scenario,
         test_provider_release_proof_make_rejects_yellow_acceptance_and_keeps_diff_yellow,
+        test_provider_release_proof_make_runs_gemini_parser_fixture_lane,
     ]
     for test in tests:
         test()

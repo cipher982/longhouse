@@ -182,17 +182,19 @@ operations explicit.
 | auth/status shape | no | none | none | no | no | no | no |
 | launch managed session | no | managed Gemini not launch-critical today | none | no | no | no | no |
 | session id/path binding | no | none | none | no | no | no | no |
-| transcript/log parse | yes | engine Gemini golden + adversarial parser tests | fixture | `make test-engine` | source review only | parser fixture yes; release-proof no | yes for parser drift |
-| ingest into Longhouse | partial | parser/shipper generic path only | fixture | `make test-engine`, shipper tests | no | no | partial |
-| timeline/session projection | partial | generic session projection tests | hermetic | `make test` | no | no | partial |
+| transcript/log parse | yes | engine Gemini golden/adversarial parser tests plus `provider-release-proof --provider gemini` parser-fixture envelope | fixture | `make test-engine`, `validate-provider-cli-canaries` | parser-fixture proof | parser fixture yes; release-proof no | yes for parser drift |
+| ingest into Longhouse | partial | shipper Gemini fixtures plus parser-fixture proof envelope | fixture | shipper tests, `validate-provider-cli-canaries` | parser-fixture proof | no | partial |
+| timeline/session projection | partial | generic session projection tests plus Gemini fixture session projection artifact | fixture/hermetic | `make test`, `validate-provider-cli-canaries` | parser-fixture proof | no | partial |
 | send input | no | no managed Gemini control path | none | no | no | no | no |
 | interrupt/abort/steer | no | no managed Gemini control path | none | no | no | no | no |
 | reattach/resume | no | no managed Gemini control path | none | no | no | no | no |
-| tool/tool-result shape | partial | Gemini parser adversarial fixtures | fixture | `make test-engine` | source review only | parser fixture yes; release-proof no | partial |
+| tool/tool-result shape | partial | Gemini parser/adversarial fixtures, shipper tool-result fixture, and parser-fixture proof envelope | fixture | `make test-engine`, shipper tests, `validate-provider-cli-canaries` | parser-fixture proof | parser fixture yes; release-proof no | yes for fixture drift |
 | live-token behavior | no | none | none | no | no | no | no |
 
-Gemini should remain parser-first until managed Gemini control becomes a product
-surface.
+Gemini now has a parser-fixture release-proof envelope and Sauron provider
+status for source-reviewed releases. This is intentionally not exact-version
+staging or managed-control proof; Gemini should remain parser-first until
+managed Gemini control becomes a product surface.
 
 ## Phase 2 Entry Point
 
@@ -268,7 +270,8 @@ Current implementation wraps existing source canaries:
 
 - Claude/OpenCode/Antigravity: `scripts/qa/provider-live-canary.py`
 - Codex: `scripts/qa/codex-provider-release-canary.py`
-- Gemini: explicit yellow `provider_release_proof_not_implemented`
+- Gemini: parser-fixture proof over committed Gemini session, schema-drift, and
+  tool-result fixtures
 
 Claude npm release-watch ticks now have exact-version package staging in Sauron:
 `@anthropic-ai/claude-code@<version>` is installed under the release artifact
