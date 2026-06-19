@@ -29,6 +29,7 @@ CODEX_AGENTS_TOKEN_ENV = "CODEX_AGENTS_TOKEN"
 CLAUDE_API_URL_ENV = "CLAUDE_API_URL"
 CLAUDE_AGENTS_TOKEN_ENV = "CLAUDE_AGENTS_TOKEN"
 CLAUDE_DEVICE_ID_ENV = "CLAUDE_DEVICE_ID"
+OPENCODE_BIN_ENV = "LONGHOUSE_OPENCODE_BIN"
 ANTIGRAVITY_BIN_ENV = "LONGHOUSE_ANTIGRAVITY_BIN"
 DEFAULT_OPERATION_POLL_INTERVAL_S = 2.0
 RETRYABLE_STATUS_CODES = {0, 408, 429, 500, 502, 503, 504}
@@ -286,6 +287,8 @@ def _scenario_profile(args: argparse.Namespace) -> str:
         return "managed-live-send"
     if args.provider == "claude" and args.claude_run_machine_live_proof:
         return "machine-live"
+    if args.provider == "opencode" and args.opencode_run_real_tool:
+        return "real-tool"
     if args.provider == "antigravity" and args.antigravity_run_real_agy_send:
         return "real-agy-send"
     return "default"
@@ -583,6 +586,29 @@ def _merge_antigravity_real_send_proof(source: dict[str, Any], control: dict[str
     if antigravity.get("status") == "fail":
         merged["verdict"] = "red"
         merged["failure_code"] = str(antigravity.get("failure_code") or "antigravity_real_agy_send_failed")
+        merged["recommendation"] = "block_upgrade_recommendation"
+    return merged
+
+
+def _merge_opencode_real_tool_proof(source: dict[str, Any], control: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(source)
+    canaries = dict(merged.get("canaries") or {})
+    operation_evidence = dict(merged.get("operation_evidence") or {})
+    opencode = (control.get("canaries") or {}).get("opencode")
+    if not isinstance(opencode, dict):
+        opencode = _fail_control_canary(
+            "opencode_real_tool_proof_missing",
+            "provider-control-e2e did not emit an OpenCode canary result.",
+        )
+    canaries["opencode_real_tool_result_shape"] = opencode
+    for operation, evidence in dict(opencode.get("operation_evidence") or {}).items():
+        if isinstance(operation, str) and isinstance(evidence, dict):
+            operation_evidence[operation] = evidence
+    merged["canaries"] = canaries
+    merged["operation_evidence"] = operation_evidence
+    if opencode.get("status") == "fail":
+        merged["verdict"] = "red"
+        merged["failure_code"] = str(opencode.get("failure_code") or "opencode_real_tool_proof_failed")
         merged["recommendation"] = "block_upgrade_recommendation"
     return merged
 
@@ -968,6 +994,108 @@ def _run_antigravity_real_send_proof(
     return artifact, raw_artifacts, result.returncode
 
 
+def _run_opencode_real_tool_proof(
+    args: argparse.Namespace,
+    raw_dir: Path,
+) -> tuple[dict[str, Any], dict[str, str], int | None]:
+    artifact_path = raw_dir / "opencode-control-e2e.json"
+    evidence_root = raw_dir / "opencode-control-evidence"
+    stdout_path = raw_dir / "opencode-control-stdout.log"
+    stderr_path = raw_dir / "opencode-control-stderr.log"
+    argv = [
+        sys.executable,
+        str(args.repo_root / "scripts" / "qa" / "provider-control-e2e-canary.py"),
+        "--repo-root",
+        str(args.repo_root),
+        "--provider",
+        "opencode",
+        "--artifact",
+        str(artifact_path),
+        "--evidence-root",
+        str(evidence_root),
+        "--opencode-run-real-tool",
+        "--opencode-run-timeout-secs",
+        str(args.opencode_run_timeout_secs),
+        "--json",
+    ]
+    raw_artifacts = {
+        "opencode_control_artifact": str(artifact_path),
+        "opencode_control_stdout": str(stdout_path),
+        "opencode_control_stderr": str(stderr_path),
+    }
+    if artifact_path.exists():
+        artifact_path.unlink()
+    run_env = os.environ.copy()
+    if args.provider_bin is not None:
+        run_env[OPENCODE_BIN_ENV] = str(args.provider_bin)
+    try:
+        result = subprocess.run(
+            argv,
+            cwd=str(args.repo_root),
+            env=run_env,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=args.timeout_secs,
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout_path.write_text(str(exc.stdout or ""), encoding="utf-8")
+        stderr_path.write_text(str(exc.stderr or ""), encoding="utf-8")
+        artifact = {
+            "schema_version": 1,
+            "provider": "opencode",
+            "verdict": "red",
+            "failure_code": "opencode_real_tool_proof_timeout",
+            "canaries": {
+                "opencode": _fail_control_canary(
+                    "opencode_real_tool_proof_timeout",
+                    f"provider-control-e2e timed out after {args.timeout_secs}s",
+                )
+            },
+            "evidence_root": str(evidence_root),
+        }
+        _write_json(artifact_path, artifact)
+        return artifact, raw_artifacts, None
+    stdout_path.write_text(result.stdout, encoding="utf-8")
+    stderr_path.write_text(result.stderr, encoding="utf-8")
+    if artifact_path.exists():
+        try:
+            artifact = _read_json(artifact_path)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
+            artifact = {
+                "schema_version": 1,
+                "provider": "opencode",
+                "verdict": "red",
+                "failure_code": "opencode_real_tool_proof_invalid_json",
+                "canaries": {
+                    "opencode": _fail_control_canary(
+                        "opencode_real_tool_proof_invalid_json",
+                        f"{type(exc).__name__}: {exc}",
+                        command=_command_evidence(result),
+                    )
+                },
+                "evidence_root": str(evidence_root),
+            }
+            _write_json(artifact_path, artifact)
+    else:
+        artifact = {
+            "schema_version": 1,
+            "provider": "opencode",
+            "verdict": "red",
+            "failure_code": "opencode_real_tool_proof_missing_artifact",
+            "canaries": {
+                "opencode": _fail_control_canary(
+                    "opencode_real_tool_proof_missing_artifact",
+                    "provider-control-e2e exited without writing an artifact.",
+                    command=_command_evidence(result),
+                )
+            },
+            "evidence_root": str(evidence_root),
+        }
+        _write_json(artifact_path, artifact)
+    return artifact, raw_artifacts, result.returncode
+
+
 def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
     args.repo_root = args.repo_root.expanduser().resolve()
     args.evidence_root = (args.evidence_root or Path.cwd() / "provider-release-proof-evidence").expanduser()
@@ -996,6 +1124,11 @@ def run_provider_release_proof(args: argparse.Namespace) -> dict[str, Any]:
         raw_artifacts.update(machine_artifacts)
         source_artifact = _merge_claude_machine_live_proof(source_artifact, machine_artifact)
         returncode = returncode or machine_returncode
+    if args.provider == "opencode" and args.opencode_run_real_tool:
+        control_artifact, control_artifacts, control_returncode = _run_opencode_real_tool_proof(args, raw_dir)
+        raw_artifacts.update(control_artifacts)
+        source_artifact = _merge_opencode_real_tool_proof(source_artifact, control_artifact)
+        returncode = returncode or control_returncode
     if args.provider == "antigravity" and args.antigravity_run_real_agy_send:
         control_artifact, control_artifacts, control_returncode = _run_antigravity_real_send_proof(args, raw_dir)
         raw_artifacts.update(control_artifacts)
@@ -1112,6 +1245,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--claude-api-url")
     parser.add_argument("--claude-agents-token")
     parser.add_argument("--claude-device-id")
+    parser.add_argument("--opencode-run-real-tool", action="store_true")
+    parser.add_argument("--opencode-run-timeout-secs", type=int, default=180)
     parser.add_argument("--antigravity-run-real-agy-send", action="store_true")
     parser.add_argument("--antigravity-print-timeout-secs", type=int, default=45)
     return parser

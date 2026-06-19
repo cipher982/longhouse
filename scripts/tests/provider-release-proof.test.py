@@ -334,23 +334,34 @@ args_path = os.environ.get("FAKE_CONTROL_ARGS_PATH")
 if args_path:
     Path(args_path).write_text(json.dumps(args), encoding="utf-8")
 
-status = "fail" if os.environ.get("FAKE_ANTIGRAVITY_CONTROL_FAIL") == "1" else "pass"
-failure_code = "fake_antigravity_send_failed" if status == "fail" else None
+provider = value("--provider")
+if provider == "opencode":
+    status = "fail" if os.environ.get("FAKE_OPENCODE_CONTROL_FAIL") == "1" else "pass"
+    failure_code = "fake_opencode_tool_failed" if status == "fail" else None
+    canary = "opencode_real_tool_result_shape"
+    operation = "transcript_binding"
+    level = "none" if status == "fail" else "live_token"
+else:
+    status = "fail" if os.environ.get("FAKE_ANTIGRAVITY_CONTROL_FAIL") == "1" else "pass"
+    failure_code = "fake_antigravity_send_failed" if status == "fail" else None
+    canary = "antigravity_real_agy_send"
+    operation = "send_input"
+    level = "none" if status == "fail" else "live_token"
 artifact = {
     "schema_version": 1,
-    "provider": value("--provider"),
+    "provider": provider,
     "verdict": "red" if status == "fail" else "green",
     "failure_code": failure_code,
     "canaries": {
-        "antigravity": {
+        provider: {
             "status": status,
             "failure_code": failure_code,
             "operation_evidence": {
-                "send_input": {
+                operation: {
                     "status": status,
-                    "level": "none" if status == "fail" else "live_token",
-                    "source": "fake real agy send canary",
-                    "canary": "antigravity_real_agy_send",
+                    "level": level,
+                    "source": "fake provider control live canary",
+                    "canary": canary,
                     "failure_code": failure_code,
                 }
             },
@@ -825,6 +836,60 @@ def test_antigravity_release_proof_blocks_failed_real_agy_send_evidence() -> Non
         )
 
 
+def test_opencode_release_proof_can_attach_real_tool_evidence() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        args_path = root / "control-args.json"
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "opencode",
+            env={"FAKE_CONTROL_ARGS_PATH": str(args_path)},
+            extra_args=[
+                "--opencode-run-real-tool",
+                "--opencode-run-timeout-secs",
+                "5",
+            ],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        control_args = json.loads(args_path.read_text(encoding="utf-8"))
+        assert "--opencode-run-real-tool" in control_args
+        assert payload["provider"] == "opencode"
+        assert payload["scenario_id"] == "opencode-real-tool-release-proof-v1"
+        assert payload["scenario_profile"] == "real-tool"
+        assert payload["verdict"] == "green"
+        assert payload["operation_evidence"]["transcript_binding"]["status"] == "pass"
+        assert payload["operation_evidence"]["transcript_binding"]["level"] == "live_token"
+        assert payload["normalized"]["operation_evidence"]["transcript_binding"]["level"] == "live_token"
+        assert payload["normalized"]["canaries"]["opencode_real_tool_result_shape"]["status"] == "pass"
+        assert Path(payload["artifacts"]["opencode_control_artifact"]).exists()
+
+
+def test_opencode_release_proof_blocks_failed_real_tool_evidence() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        (root / "fake-provider").write_text("#!/bin/sh\n", encoding="utf-8")
+
+        result, payload = _run_proof(
+            root,
+            "opencode",
+            env={"FAKE_OPENCODE_CONTROL_FAIL": "1"},
+            extra_args=["--opencode-run-real-tool"],
+        )
+
+        assert result.returncode == 1
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "fake_opencode_tool_failed"
+        assert payload["operation_evidence"]["transcript_binding"]["status"] == "fail"
+        assert payload["normalized"]["canaries"]["opencode_real_tool_result_shape"]["failure_code"] == (
+            "fake_opencode_tool_failed"
+        )
+
+
 def test_claude_machine_live_proof_uses_distinct_scenario_and_operation_evidence() -> None:
     with tempfile.TemporaryDirectory() as temp_dir, _fake_claude_machine_live_server() as (
         server,
@@ -1096,6 +1161,8 @@ def main() -> int:
         test_explicit_scenario_id_overrides_profile_default,
         test_antigravity_release_proof_can_attach_real_agy_send_evidence,
         test_antigravity_release_proof_blocks_failed_real_agy_send_evidence,
+        test_opencode_release_proof_can_attach_real_tool_evidence,
+        test_opencode_release_proof_blocks_failed_real_tool_evidence,
         test_claude_machine_live_proof_uses_distinct_scenario_and_operation_evidence,
         test_claude_machine_live_proof_preflight_reports_missing_credentials,
         test_claude_machine_live_proof_blocks_failed_operation,

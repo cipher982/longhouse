@@ -46,6 +46,29 @@ scripts/qa/provider-release-proof.py \
   --json
 ```
 
+OpenCode has an optional real-tool proof:
+
+```bash
+OPENCODE_RUN_REAL_TOOL=1 \
+make provider-release-proof \
+  PROVIDER=opencode \
+  PROVIDER_BIN=/path/to/opencode \
+  PROVIDER_VERSION="opencode 1.16.2" \
+  SOURCE_REVIEW_STATUS=pass \
+  ARTIFACT=/tmp/opencode-tool-proof.json \
+  EVIDENCE_ROOT=/tmp/opencode-tool-proof-evidence
+```
+
+This spends a real `opencode run --format json` turn through
+`provider-control-e2e-canary.py --opencode-run-real-tool` and attaches
+`operation_evidence.transcript_binding` at `level=live_token`. Proofs with this
+flag use scenario `opencode-real-tool-release-proof-v1`; the default
+`opencode-release-proof-v1` remains the no-token server/control baseline.
+Accept this as a baseline only after confirming the artifact shows a completed
+`bash` tool event with a non-empty `callID`, structured command input, and
+marker output. Production Sauron does not run this token-spending lane by
+default.
+
 For Codex, optional Make variables enable the deeper lanes:
 
 ```bash
@@ -246,6 +269,7 @@ for provider, scenario_id in [
     ('codex', 'codex-release-proof-v1'),
     ('codex', 'codex-managed-live-send-release-proof-v1'),
     ('opencode', 'opencode-release-proof-v1'),
+    ('opencode', 'opencode-real-tool-release-proof-v1'),
 ]:
     status = baseline_status(provider=provider, scenario_id=scenario_id)
     assert status['accepted'] is True, status
@@ -372,6 +396,11 @@ should not appear in the artifact tree.
 
 - OpenCode: accepted baseline `opencode-release-proof-v1`, provider version
   `opencode 1.16.2`.
+- OpenCode real-tool: accepted baseline `opencode-real-tool-release-proof-v1`,
+  provider version `opencode 1.16.2`. The accepted proof showed a real
+  `opencode run --format json` completed `bash` tool event with `callID`,
+  structured command input, marker output, and
+  `operation_evidence.transcript_binding.level=live_token`.
 - Claude Code: accepted scoped baseline `claude-release-proof-v1`, provider
   version `claude 2.1.161`.
 - Claude Code machine-live: no accepted baseline yet for
@@ -394,7 +423,7 @@ should not appear in the artifact tree.
   in the `sauron` container on 2026-06-19 returned green for
   `codex-managed-live-send-release-proof-v1`.
 - Sauron baseline inventory guard: live in production as
-  `agent-release-baseline-guard`; on 2026-06-19 it returned 6/6 accepted
+  `agent-release-baseline-guard`; on 2026-06-19 it returned 7/7 accepted
   scenarios green against `/data/provider-release-proofs`.
 - Antigravity real-agy send release-watch: Sauron has an env-gated pass-through
   for this scenario, but production Sauron is not configured with

@@ -28,6 +28,8 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+OPENCODE_BIN_ENV = "LONGHOUSE_OPENCODE_BIN"
+
 
 def _repo_root_from_script() -> Path:
     return Path(__file__).resolve().parents[2]
@@ -144,6 +146,18 @@ def _read_json_lines(path: Path) -> list[dict[str, Any]]:
         if not line.strip():
             continue
         rows.append(json.loads(line))
+    return rows
+
+
+def _parse_json_lines(text: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        payload = json.loads(line)
+        if not isinstance(payload, dict):
+            raise ValueError("JSONL row was not an object")
+        rows.append(payload)
     return rows
 
 
@@ -585,6 +599,190 @@ def run_opencode_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
             env=env,
             timeout=10,
         )
+
+
+def _resolve_opencode_binary() -> str | None:
+    env_candidate = str(os.environ.get(OPENCODE_BIN_ENV) or "").strip()
+    if env_candidate:
+        candidate = Path(env_candidate).expanduser()
+        if candidate.is_file():
+            return str(candidate)
+        resolved = shutil.which(env_candidate)
+        if resolved:
+            return resolved
+    return shutil.which("opencode")
+
+
+def _event_part(event: dict[str, Any]) -> dict[str, Any]:
+    part = event.get("part")
+    return part if isinstance(part, dict) else {}
+
+
+def run_opencode_real_tool_canary(args: argparse.Namespace, root: Path) -> dict[str, Any]:
+    """Prove real opencode emits a stable tool-call/tool-result event shape."""
+
+    binary = _resolve_opencode_binary()
+    if not binary:
+        return _fail("provider_binary_not_found", "opencode binary was not found on PATH")
+
+    version, version_evidence = _run_provider_version(binary)
+    if not version:
+        return _fail(
+            "provider_version_failed",
+            "opencode --version failed",
+            path=binary,
+            evidence=version_evidence,
+        )
+
+    workspace = root / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    stdout_path = root / "opencode-run-stdout.jsonl"
+    stderr_path = root / "opencode-run-stderr.log"
+    marker = f"LONGHOUSE_OPENCODE_TOOL_{uuid.uuid4().hex}"
+    prompt = (
+        f"Use the shell tool to run: printf '{marker}'. "
+        "Then reply with exactly DONE."
+    )
+    command = [
+        binary,
+        "run",
+        "--format",
+        "json",
+        "--dangerously-skip-permissions",
+        "--title",
+        "Longhouse OpenCode tool proof",
+        prompt,
+    ]
+    started = time.monotonic()
+    try:
+        result = subprocess.run(
+            command,
+            cwd=str(workspace),
+            env=_runtime_env(args),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=max(45, args.opencode_run_timeout_secs),
+        )
+        timed_out = False
+    except subprocess.TimeoutExpired as exc:
+        result = subprocess.CompletedProcess(
+            command,
+            returncode=124,
+            stdout=(exc.stdout or "") if isinstance(exc.stdout, str) else "",
+            stderr=(exc.stderr or "") if isinstance(exc.stderr, str) else "",
+        )
+        timed_out = True
+    elapsed = round(time.monotonic() - started, 3)
+    stdout = result.stdout or ""
+    stderr = result.stderr or ""
+    stdout_path.write_text(stdout, encoding="utf-8")
+    stderr_path.write_text(stderr, encoding="utf-8")
+
+    try:
+        events = _parse_json_lines(stdout)
+        parse_error = None
+    except (json.JSONDecodeError, ValueError) as exc:
+        events = []
+        parse_error = f"{type(exc).__name__}: {exc}"
+
+    tool_events = [
+        event
+        for event in events
+        if event.get("type") == "tool_use" and _event_part(event).get("type") == "tool"
+    ]
+    matching_event: dict[str, Any] | None = None
+    for event in tool_events:
+        part = _event_part(event)
+        state = part.get("state") if isinstance(part.get("state"), dict) else {}
+        input_payload = state.get("input") if isinstance(state.get("input"), dict) else {}
+        output = str(state.get("output") or "")
+        metadata = state.get("metadata") if isinstance(state.get("metadata"), dict) else {}
+        metadata_output = str(metadata.get("output") or "")
+        if (
+            part.get("tool") == "bash"
+            and part.get("callID")
+            and state.get("status") == "completed"
+            and marker in str(input_payload.get("command") or "")
+            and (marker in output or marker in metadata_output)
+        ):
+            matching_event = event
+            break
+
+    text_events = [
+        event
+        for event in events
+        if event.get("type") == "text" and _event_part(event).get("type") == "text"
+    ]
+    session_ids = sorted(
+        {
+            str(event.get("sessionID") or _event_part(event).get("sessionID") or "")
+            for event in events
+            if str(event.get("sessionID") or _event_part(event).get("sessionID") or "").strip()
+        }
+    )
+    evidence = {
+        "provider_version": version,
+        "binary": binary,
+        "binary_evidence": version_evidence,
+        "workspace": str(workspace),
+        "argv": command,
+        "returncode": result.returncode,
+        "elapsed_secs": elapsed,
+        "timed_out": timed_out,
+        "stdout_path": str(stdout_path),
+        "stderr_path": str(stderr_path),
+        "stdout_sha256": _sha256_file(stdout_path),
+        "stderr_sha256": _sha256_file(stderr_path),
+        "stdout_tail": stdout[-4000:],
+        "stderr_tail": stderr[-4000:],
+        "jsonl_parse_error": parse_error,
+        "event_count": len(events),
+        "tool_event_count": len(tool_events),
+        "text_event_count": len(text_events),
+        "session_ids": session_ids,
+        "marker": marker,
+        "marker_sha256": hashlib.sha256(marker.encode("utf-8")).hexdigest(),
+        "marker_in_prompt": marker in prompt,
+        "matching_tool_event": matching_event,
+    }
+    if result.returncode != 0 or timed_out:
+        return _fail(
+            "opencode_real_tool_run_failed",
+            "real opencode run did not complete successfully",
+            **evidence,
+        )
+    if parse_error:
+        return _fail(
+            "opencode_real_tool_jsonl_invalid",
+            "real opencode run --format json did not emit valid JSONL events",
+            **evidence,
+        )
+    if matching_event is None:
+        return _fail(
+            "opencode_real_tool_shape_missing",
+            "real opencode run did not emit the expected completed bash tool event with marker output",
+            **evidence,
+        )
+
+    part = _event_part(matching_event)
+    state = part.get("state") if isinstance(part.get("state"), dict) else {}
+    return _status(
+        "pass",
+        canary="opencode_real_tool_result_shape",
+        operation_evidence={
+            "transcript_binding": {
+                "status": "pass",
+                "level": "live_token",
+                "source": "real opencode run --format json emitted a completed bash tool event with structured input, callID, and marker output",
+                "canary": "opencode_real_tool_result_shape",
+            }
+        },
+        tool_name=part.get("tool"),
+        tool_call_id=part.get("callID"),
+        tool_state_status=state.get("status"),
+        **evidence,
+    )
 
 
 def _install_antigravity_hook(args: argparse.Namespace, root: Path, config_dir: Path) -> Path:
@@ -1183,6 +1381,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--python-bin")
     parser.add_argument("--longhouse-bin")
     parser.add_argument(
+        "--opencode-run-real-tool",
+        action="store_true",
+        help="For --provider opencode/all, spend a real opencode run turn to prove tool-call/tool-result JSON event shape.",
+    )
+    parser.add_argument("--opencode-run-timeout-secs", type=int, default=180)
+    parser.add_argument(
         "--antigravity-real-agy-send",
         action="store_true",
         help="For --provider antigravity/all, spend a real agy --print turn to prove hook-inbox send injection.",
@@ -1209,7 +1413,10 @@ def main(argv: list[str] | None = None) -> int:
         if provider == "claude":
             canaries[provider] = run_claude_channel_canary(args, provider_root)
         elif provider == "opencode":
-            canaries[provider] = run_opencode_canary(args, provider_root)
+            if args.opencode_run_real_tool:
+                canaries[provider] = run_opencode_real_tool_canary(args, provider_root)
+            else:
+                canaries[provider] = run_opencode_canary(args, provider_root)
         elif provider == "antigravity":
             if args.antigravity_real_agy_send:
                 canaries[provider] = run_antigravity_real_agy_send_canary(args, provider_root)

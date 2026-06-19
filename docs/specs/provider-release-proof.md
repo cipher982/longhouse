@@ -1,6 +1,6 @@
 # Provider Release Proof
 
-**Status:** Phase 1 inventory + Longhouse proof/baseline/diff entrypoints; six accepted release-proof scenarios promoted to Sauron (scoped Claude, Codex default, Codex live-send, OpenCode, scoped Antigravity, Antigravity live-send)
+**Status:** Phase 1 inventory + Longhouse proof/baseline/diff entrypoints; seven accepted release-proof scenarios promoted to Sauron (scoped Claude, Codex default, Codex live-send, OpenCode, OpenCode real-tool, scoped Antigravity, Antigravity live-send)
 **Owner:** David
 **Last updated:** 2026-06-19
 
@@ -56,7 +56,7 @@ Sauron jobs `4791001`, and the post-Gemini state where Antigravity is the
 canonical Google lane. The release-watch/proof scope is Claude Code,
 Codex/OpenAI, OpenCode, and Antigravity. Sauron's
 `agent-release-baseline-guard` now checks the promoted accepted baseline store
-daily; the live container guard returned 6/6 green against
+daily; the live container guard returned 7/7 green against
 `/data/provider-release-proofs` on 2026-06-19.
 
 Machine-validated coverage map:
@@ -67,12 +67,12 @@ Machine-validated coverage map:
 | Contract surfaces per provider | 13 |
 | Total provider/surface rows | 52 |
 | Covered `yes` | 11 |
-| Covered `partial` | 36 |
-| Covered `no` | 5 |
-| Rows running in Longhouse CI | 44 |
+| Covered `partial` | 38 |
+| Covered `no` | 3 |
+| Rows running in Longhouse CI | 46 |
 | Rows running in Sauron release-watch | 32 |
 | Rows with accepted parser-fixture baselines | 4 |
-| Rows with accepted release-proof baselines | 24 |
+| Rows with accepted release-proof baselines | 26 |
 
 Provider shape:
 
@@ -80,7 +80,7 @@ Provider shape:
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Claude Code | 2 | 11 | 0 | 12 | 7 | 3 |
 | Codex/OpenAI | 4 | 9 | 0 | 12 | 9 | 7 |
-| OpenCode | 4 | 7 | 2 | 11 | 11 | 9 |
+| OpenCode | 4 | 9 | 0 | 13 | 11 | 11 |
 | Antigravity | 1 | 9 | 3 | 9 | 5 | 5 |
 
 `Release baselines` counts rows whose current behavior is compared against an
@@ -90,7 +90,6 @@ accepted-baseline rows, and provider-specific gaps remain listed below.
 
 Known uncovered surfaces:
 
-- OpenCode: tool/tool-result shape and live-token behavior.
 - Antigravity: interrupt/abort/steer, reattach/resume, and tool/tool-result
   shape.
 
@@ -107,7 +106,8 @@ This is still not a complete release gate: Claude still lacks managed-session
 binding and live-token proof, Codex still lacks accepted-baseline-backed
 interrupt/tool proof beyond its accepted live-send lane, Antigravity still lacks
 interrupt/reattach/tool proof beyond its accepted live-send lane, and OpenCode
-still lacks tool/tool-result and live-token proof.
+still lacks scheduled managed live-token proof beyond its accepted manual
+real-tool lane.
 
 ## Coverage Legend
 
@@ -260,14 +260,14 @@ and the complete accepted store was promoted to Sauron production
 | auth/status shape | partial | server health/auth/doc checks | live_no_token | `validate-provider-cli-canaries` | yes | release-proof yes (`opencode-release-proof-v1`, 1.16.2) | yes |
 | launch managed session | yes | provider live canary server/session checks; channel CLI tests | live_no_token + hermetic | `validate-provider-cli-canaries`, `make test` | yes | release-proof yes (`opencode-release-proof-v1`, 1.16.2) | yes |
 | session id/path binding | partial | OpenCode bridge/channel state tests plus provider-live sidecar classification | hermetic/live_no_token | `make test`, `validate-provider-cli-canaries` | provider-live sidecar classification | release-proof yes (`opencode-release-proof-v1`, 1.16.2) | partial |
-| transcript/log parse | partial | live canary `session.messages` marker; no engine parser golden | live_no_token | `validate-provider-cli-canaries` | yes | release-proof yes (`opencode-release-proof-v1`, 1.16.2) | partial |
+| transcript/log parse | partial | live canary `session.messages` marker; OpenCode SQLite parser unit covers text/tool/file/patch parts | live_no_token plus parser fixture | `validate-provider-cli-canaries`, `make test-engine` | yes | release-proof yes (`opencode-release-proof-v1`, 1.16.2) | partial |
 | ingest into Longhouse | partial | provider-live session classification and route tests | hermetic/live_no_token | `make test`, `validate-provider-cli-canaries` | yes | no | partial |
 | timeline/session projection | partial | session capability/view tests plus provider-live session projection captured by `provider_release_proof` | hermetic/live_no_token | `make test`, `validate-provider-cli-canaries` | yes | release-proof yes (`opencode-release-proof-v1`, 1.16.2) | partial |
 | send input | yes | provider-live canary `prompt_async` noReply marker | live_no_token | `validate-provider-cli-canaries` | yes | release-proof yes (`opencode-release-proof-v1`, 1.16.2) | yes |
 | interrupt/abort/steer | partial | provider-live abort endpoint; steer unsupported | live_no_token | `validate-provider-cli-canaries` | yes for interrupt | release-proof yes for abort (`opencode-release-proof-v1`, 1.16.2); steer remains unsupported | yes for abort, no for steer |
 | reattach/resume | yes | provider-live process restart/session recovery + attach shape | live_no_token | `validate-provider-cli-canaries` | yes | release-proof yes (`opencode-release-proof-v1`, 1.16.2) | yes |
-| tool/tool-result shape | no | no OpenCode parser/tool result golden found | none | no | no | no | no |
-| live-token behavior | no | manifest marks prompt/abort proof as next release lane | none | no | no | no | no |
+| tool/tool-result shape | partial | OpenCode SQLite parser unit covers `opencode_tool_call`/`opencode_tool_result`; `provider-release-proof.py --opencode-run-real-tool` captures a real `opencode run --format json` completed bash tool event with callID, structured input, and marker output | manual live_token plus fake wrapper/parser fixture | fake-wrapper CI plus parser unit | not configured in production release-watch | release-proof yes (`opencode-real-tool-release-proof-v1`, 1.16.2) | yes for manual proof/diff; production gate remains off |
+| live-token behavior | partial | `provider-control-e2e-canary.py --opencode-run-real-tool`; `provider-release-proof.py --opencode-run-real-tool` attaches real OpenCode tool-use evidence to a release proof | manual live_token plus fake wrapper | fake-wrapper CI | not configured in production release-watch | release-proof yes (`opencode-real-tool-release-proof-v1`, 1.16.2) | yes for manual proof/diff; production gate remains off |
 
 OpenCode is the first accepted release-proof baseline. On 2026-06-19,
 `opencode 1.16.2` produced a green `opencode-release-proof-v1` artifact and a
@@ -276,8 +276,14 @@ local dogfood baseline is under
 `~/.local/share/longhouse/provider-release-proofs/opencode/opencode-release-proof-v1/`.
 The archived artifacts include source stdout/stderr, normalized contract,
 provider contract, operation evidence, and session projection. This proves the
-no-token server/API/control-shape lane; it does not prove OpenCode
-tool/tool-result transcript shape or live-token model-visible behavior.
+no-token server/API/control-shape lane. A separate accepted proof,
+`opencode-real-tool-release-proof-v1`, was reviewed on 2026-06-19 for
+`opencode 1.16.2`: real `opencode run --format json` emitted one completed
+`bash` tool event with a real `callID`, structured command input, marker output,
+one text response event, and `operation_evidence.transcript_binding.level=live_token`.
+Together, these baselines prove no-token server/control shape plus scoped
+real-token tool-result event shape. They do not prove scheduled managed
+live-token send/steer behavior in production release-watch.
 
 ### Antigravity
 
@@ -624,7 +630,8 @@ should not by itself count as contract drift.
 3. Decide whether to enable `AGENT_RELEASE_ANTIGRAVITY_REAL_AGY_SEND=1` in
    production Sauron; the accepted baseline exists, but the default release
    watch still avoids real `agy` token spend.
-4. Add OpenCode tool/tool-result and live-token proof, which are currently the
-   provider's two uncovered release-sensitive surfaces.
+4. Decide whether to enable scheduled OpenCode real-tool release-watch spend;
+   the accepted baseline exists, but the default release watch still avoids
+   real OpenCode token spend.
 5. Add model-visible live-token proof for the remaining partial Claude, Codex,
-   and Antigravity surfaces.
+   OpenCode, and Antigravity surfaces.
