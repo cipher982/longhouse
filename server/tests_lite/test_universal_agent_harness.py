@@ -923,6 +923,94 @@ def test_codex_live_token_streaming_reports_runtime_host_credentials_gap(tmp_pat
     assert result["data"]["operation_evidence"]["live_token_behavior"]["level"] == "live_token_required"
 
 
+def test_claude_live_token_streaming_uses_real_print_canary(tmp_path: Path, monkeypatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_control_canary(
+        *,
+        provider: str,
+        artifact_path: Path,
+        evidence_root: Path,
+        extra_args: list[str] | None = None,
+        extra_env: dict[str, str] | None = None,
+    ) -> dict[str, object]:
+        calls.append(
+            {
+                "provider": provider,
+                "artifact_path": artifact_path,
+                "evidence_root": evidence_root,
+                "extra_args": extra_args,
+                "extra_env": extra_env,
+            }
+        )
+        return {
+            "schema_version": 1,
+            "provider": "claude",
+            "verdict": "green",
+            "failure_code": None,
+            "canaries": {
+                "claude": {
+                    "status": "pass",
+                    "provider_version": "2.1.181-fake (Claude Code)",
+                    "marker": "LONGHOUSE_CLAUDE_PRINT_fake",
+                    "prompt_sha256": "fake-prompt-sha",
+                    "session_ids": ["fake-claude-print-session"],
+                    "result_event": {
+                        "result_exact_match": True,
+                        "session_id_present": True,
+                    },
+                    "operation_evidence": {
+                        "run_once": {
+                            "status": "pass",
+                            "level": "live_token",
+                            "canary": "claude_real_print",
+                        },
+                        "live_token_behavior": {
+                            "status": "pass",
+                            "level": "live_token",
+                            "canary": "claude_real_print",
+                        },
+                    },
+                }
+            },
+        }
+
+    monkeypatch.setattr(uah, "run_provider_control_e2e_canary", fake_control_canary)
+    fake_claude = _fake_bins(tmp_path)["claude"]
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("claude",),
+            scenarios=("live_token_streaming",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"claude": fake_claude},
+        )
+    )
+
+    assert calls
+    assert calls[0]["provider"] == "claude"
+    assert calls[0]["extra_args"] == ["--claude-run-real-print"]
+    assert calls[0]["extra_env"] == {"LONGHOUSE_CLAUDE_BIN": str(fake_claude)}
+    result = payload["results"][0]
+    assert payload["verdict"] == "green"
+    assert result["status"] == "pass"
+    assert result["data"]["scenario"] == "live_token_streaming"
+    assert result["data"]["source_artifact_kind"] == "provider_control_e2e_canary"
+    assert result["data"]["operation_evidence"]["run_once"]["level"] == "live_token"
+    assert result["data"]["operation_evidence"]["live_token_behavior"]["status"] == "pass"
+    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
+
+    evidence_root = Path(result["evidence_root"])
+    raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(encoding="utf-8")
+    assert "claude_real_print" in raw_events
+    assert "LONGHOUSE_CLAUDE_PRINT_fake" in raw_events
+    session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
+    assert session["provider_session_id"] == "fake-claude-print-session"
+    assert session["operation_statuses"]["live_token_behavior"]["status"] == "pass"
+    db_snapshot = json.loads((evidence_root / "longhouse" / "db-ingest-result.json").read_text(encoding="utf-8"))
+    assert db_snapshot["ingest_result"]["events_inserted"] == 2
+    assert db_snapshot["timeline"]["matched"] is True
+
+
 def test_antigravity_live_token_streaming_uses_real_agy_send_canary(tmp_path: Path, monkeypatch) -> None:
     calls: list[dict[str, object]] = []
 
@@ -1210,7 +1298,7 @@ def test_tool_call_result_is_typed_gap_for_unmigrated_providers(tmp_path: Path) 
 def test_live_token_streaming_is_typed_gap_for_unmigrated_providers(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(
-            providers=("claude", "opencode"),
+            providers=("opencode",),
             scenarios=("live_token_streaming",),
             evidence_root=tmp_path / "evidence",
             provider_bins=_fake_bins(tmp_path),
@@ -1218,7 +1306,7 @@ def test_live_token_streaming_is_typed_gap_for_unmigrated_providers(tmp_path: Pa
     )
 
     assert payload["verdict"] == "yellow"
-    assert {result["provider"] for result in payload["results"]} == {"claude", "opencode"}
+    assert {result["provider"] for result in payload["results"]} == {"opencode"}
     assert {result["status"] for result in payload["results"]} == {"unsupported_gap"}
     assert {result["failure_code"] for result in payload["results"]} == {"live_token_streaming_adapter_missing"}
 

@@ -959,6 +959,8 @@ class UniversalProviderAdapter:
         return payload
 
     def live_token_streaming(self, package: EvidencePackage) -> dict[str, Any]:
+        if self.config.provider == "claude":
+            return self._run_claude_live_token_streaming(package)
         if self.config.provider == "codex":
             return self._run_codex_live_token_streaming(package)
         if self.config.provider == "antigravity":
@@ -1603,6 +1605,96 @@ class UniversalProviderAdapter:
             payload["failure_code"] = db_ingest.get("failure_code") or "tool_call_result_db_ingest_failed"
             payload["message"] = "OpenCode real-tool call/result evidence did not pass Longhouse DB ingest assertions."
         package.write_json("assertions/tool_call_result.json", payload)
+        return payload
+
+    def _run_claude_live_token_streaming(self, package: EvidencePackage) -> dict[str, Any]:
+        binary, source = self._resolve_binary()
+        if binary is None:
+            payload = {
+                "status": STATUS_FAIL,
+                "failure_code": "provider_binary_not_found",
+                "message": "claude binary was not found for live_token_streaming",
+                "binary_source": source,
+            }
+            package.write_json("assertions/live_token_streaming.json", payload)
+            return payload
+
+        control_evidence_root = package.path("raw", "provider-control-e2e-evidence")
+        control_artifact_path = package.path("raw", "provider-control-e2e.json")
+        control_artifact = run_provider_control_e2e_canary(
+            provider="claude",
+            artifact_path=control_artifact_path,
+            evidence_root=control_evidence_root,
+            extra_args=["--claude-run-real-print"],
+            extra_env={"LONGHOUSE_CLAUDE_BIN": str(binary)},
+        )
+        if not control_artifact_path.is_file():
+            package.write_json("raw/provider-control-e2e.json", control_artifact)
+        package.write_json("raw/provider-control-e2e-inline.json", control_artifact)
+
+        claude = _claude_control_canary(control_artifact)
+        operation_evidence = claude_real_print_operation_evidence(claude)
+        raw_events = claude_real_print_raw_events(claude)
+        provider_session_id = _first_claude_control_session_id(claude) or self._session_id(package)
+        projection = self._write_session_projection(
+            package,
+            raw_events=raw_events,
+            operations=operation_evidence,
+            provider_session_id=provider_session_id,
+        )
+        db_ingest = ingest_canonical_events_into_longhouse_db(
+            package=package,
+            provider=self.config.provider,
+            rows=raw_events,
+            provider_session_id=provider_session_id,
+        )
+        operation_evidence.update(
+            {
+                str(operation): dict(evidence)
+                for operation, evidence in dict(db_ingest.get("operation_evidence") or {}).items()
+                if isinstance(evidence, Mapping)
+            }
+        )
+        session_projection_path = package.path("longhouse", "session-projection.json")
+        try:
+            session_projection = json.loads(session_projection_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            session_projection = {}
+        if isinstance(session_projection, dict):
+            session_projection["operation_statuses"] = operation_evidence
+            package.write_json("longhouse/session-projection.json", session_projection)
+
+        verdict = str(control_artifact.get("verdict") or "red")
+        live_status = str((operation_evidence.get("live_token_behavior") or {}).get("status") or STATUS_FAIL)
+        db_status = str(db_ingest.get("status") or STATUS_FAIL)
+        passed = verdict == "green" and live_status == STATUS_PASS and db_status == STATUS_PASS
+        payload = {
+            **projection,
+            "status": STATUS_PASS if passed else STATUS_FAIL,
+            "scenario": "live_token_streaming",
+            "provider_version": claude.get("provider_version"),
+            "provider_control_artifact_path": str(control_artifact_path),
+            "provider_control_evidence_root": str(control_evidence_root),
+            "provider_control_verdict": verdict,
+            "source_artifact_kind": "provider_control_e2e_canary",
+            "synthetic": False,
+            "operation_evidence": operation_evidence,
+            "longhouse_ingest": {
+                "status": db_status,
+                "failure_code": db_ingest.get("failure_code"),
+                "db_snapshot_path": db_ingest.get("db_snapshot_path"),
+                "session_projection_path": db_ingest.get("session_projection_path"),
+                "timeline_projection_path": db_ingest.get("timeline_projection_path"),
+            },
+        }
+        if verdict != "green" or live_status != STATUS_PASS:
+            failure_code = control_artifact.get("failure_code") or claude.get("failure_code")
+            payload["failure_code"] = failure_code or "claude_live_token_streaming_failed"
+            payload["message"] = "Claude real-print live-token canary did not pass."
+        elif db_status != STATUS_PASS:
+            payload["failure_code"] = db_ingest.get("failure_code") or "live_token_streaming_db_ingest_failed"
+            payload["message"] = "Claude live-token evidence did not pass Longhouse DB ingest assertions."
+        package.write_json("assertions/live_token_streaming.json", payload)
         return payload
 
     def _run_codex_live_token_streaming(self, package: EvidencePackage) -> dict[str, Any]:
@@ -3133,9 +3225,27 @@ def _opencode_control_canary(artifact: Mapping[str, Any]) -> dict[str, Any]:
     return canary
 
 
+def _claude_control_canary(artifact: Mapping[str, Any]) -> dict[str, Any]:
+    canary = dict(dict(artifact.get("canaries") or {}).get("claude") or {})
+    return canary
+
+
 def _antigravity_control_canary(artifact: Mapping[str, Any]) -> dict[str, Any]:
     canary = dict(dict(artifact.get("canaries") or {}).get("antigravity") or {})
     return canary
+
+
+def _first_claude_control_session_id(canary: Mapping[str, Any]) -> str | None:
+    session_ids = canary.get("session_ids")
+    if isinstance(session_ids, list):
+        for session_id in session_ids:
+            cleaned = _clean_optional_str(session_id)
+            if cleaned:
+                return cleaned
+    result_event = canary.get("result_event")
+    if isinstance(result_event, Mapping):
+        return _clean_optional_str(result_event.get("session_id"))
+    return None
 
 
 def _first_opencode_control_session_id(artifact: Mapping[str, Any]) -> str | None:
@@ -3214,6 +3324,42 @@ def opencode_tool_call_result_raw_events(artifact: Mapping[str, Any]) -> list[di
     return rows
 
 
+def claude_real_print_raw_events(canary: Mapping[str, Any]) -> list[dict[str, Any]]:
+    provider_session_id = _first_claude_control_session_id(canary) or "claude-real-print"
+    marker = str(canary.get("marker") or "marker-unavailable")
+    prompt = f"Reply with exactly {marker} and nothing else."
+    result_event = canary.get("result_event")
+    result_event = result_event if isinstance(result_event, Mapping) else {}
+    exact_match = bool(result_event.get("result_exact_match"))
+    rows: list[dict[str, Any]] = []
+    if canary:
+        rows.append(
+            {
+                "type": "user",
+                "role": "user",
+                "text": prompt,
+                "provider_session_id": provider_session_id,
+                "source_canary": "claude_real_print",
+                "marker": marker,
+                "prompt_sha256": canary.get("prompt_sha256"),
+                "evidence_origin": "provider_control_e2e_canary",
+            }
+        )
+        rows.append(
+            {
+                "type": "assistant",
+                "role": "assistant",
+                "text": marker if exact_match else "",
+                "provider_session_id": provider_session_id,
+                "source_canary": "claude_real_print",
+                "result_exact_match": exact_match,
+                "session_id_present": result_event.get("session_id_present"),
+                "evidence_origin": "provider_control_e2e_canary",
+            }
+        )
+    return rows
+
+
 def antigravity_real_send_raw_events(canary: Mapping[str, Any]) -> list[dict[str, Any]]:
     session_id = str(canary.get("session_id") or "antigravity-real-agy-send")
     marker = str(canary.get("marker") or "marker-unavailable")
@@ -3249,6 +3395,32 @@ def antigravity_real_send_raw_events(canary: Mapping[str, Any]) -> list[dict[str
             }
         )
     return rows
+
+
+def claude_real_print_operation_evidence(canary: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    operation_evidence = {
+        str(operation): dict(evidence)
+        for operation, evidence in dict(canary.get("operation_evidence") or {}).items()
+        if isinstance(evidence, Mapping)
+    }
+    status = STATUS_PASS if canary.get("status") == "pass" else STATUS_FAIL
+    if status == STATUS_PASS:
+        failure_code = None
+    else:
+        failure_code = str(canary.get("failure_code") or "claude_real_print_failed")
+    operation_evidence["run_once"] = {
+        "status": status,
+        "level": "live_token" if status == STATUS_PASS else "none",
+        "canary": "claude_real_print",
+        "failure_code": failure_code,
+    }
+    operation_evidence["live_token_behavior"] = {
+        "status": status,
+        "level": "live_token" if status == STATUS_PASS else "none",
+        "canary": "claude_real_print",
+        "failure_code": failure_code,
+    }
+    return operation_evidence
 
 
 def codex_live_token_streaming_operation_evidence(artifact: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
