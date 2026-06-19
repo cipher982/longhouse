@@ -65,10 +65,10 @@ Machine-validated coverage map:
 | Contract surfaces per provider | 13 |
 | Total provider/surface rows | 52 |
 | Covered `yes` | 11 |
-| Covered `partial` | 35 |
-| Covered `no` | 6 |
-| Rows running in Longhouse CI | 42 |
-| Rows running in Sauron release-watch | 29 |
+| Covered `partial` | 36 |
+| Covered `no` | 5 |
+| Rows running in Longhouse CI | 43 |
+| Rows running in Sauron release-watch | 30 |
 | Rows with accepted parser-fixture baselines | 4 |
 | Rows with accepted release-proof baselines | 20 |
 
@@ -77,7 +77,7 @@ Provider shape:
 | Provider | Yes | Partial | No | CI rows | Sauron rows | Release baselines |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | Claude Code | 2 | 11 | 0 | 11 | 5 | 3 |
-| Codex/OpenAI | 4 | 8 | 1 | 11 | 8 | 5 |
+| Codex/OpenAI | 4 | 9 | 0 | 12 | 9 | 5 |
 | OpenCode | 4 | 7 | 2 | 11 | 11 | 9 |
 | Antigravity | 1 | 9 | 3 | 9 | 5 | 3 |
 
@@ -88,7 +88,6 @@ accepted-baseline rows, and provider-specific gaps remain listed below.
 
 Known uncovered surfaces:
 
-- Codex/OpenAI: live-token behavior.
 - OpenCode: tool/tool-result shape and live-token behavior.
 - Antigravity: interrupt/abort/steer, reattach/resume, and tool/tool-result
   shape.
@@ -103,7 +102,7 @@ Codex has an accepted no-token managed proof baseline for binary identity,
 static/app-server protocol shape, managed TUI attach, detached-ui launch, raw
 remote protocol fingerprints, and launch/remote/reattach operation evidence.
 This is still not a complete release gate: Claude still lacks managed-session
-binding and live-token proof, Codex still lacks Longhouse-level
+binding and live-token proof, Codex still lacks accepted-baseline-backed
 send/interrupt/tool/live-token proof, Antigravity still lacks model-visible
 send/reattach/tool proof, and OpenCode still lacks tool/tool-result and
 live-token proof.
@@ -179,11 +178,11 @@ binding, transcript, send/steer, resume, and live-token proof are still missing.
 | transcript/log parse | yes | engine Codex golden + adversarial parser tests | fixture | `make test-engine` | source review only | parser fixture yes; release-proof no | yes for parser drift |
 | ingest into Longhouse | partial | hook/outbox tests, shipper E2E | fixture/hermetic | `make test`, `make test-shipper-e2e` | no dedicated release proof | no | partial |
 | timeline/session projection | partial | session capabilities/messages/views | hermetic | `make test` | no | no | partial |
-| send input | partial | engine bridge IPC turn/start tests | hermetic | `make test`, engine tests | Sauron canary when configured | no | partial |
+| send input | partial | engine bridge IPC turn/start tests; `codex-provider-release-canary.py --run-managed-live-send` starts a managed detached bridge, sends a unique marker, waits for completion, and checks transcript/state evidence | hermetic/live_token when explicitly run; fake wrapper in CI | `make test`, engine tests, wrapper fake-engine test | Sauron canary when configured | no | partial |
 | interrupt/abort/steer | partial | engine bridge interrupt/steer tests | hermetic | `make test`, engine tests | Sauron canary when configured | no | partial |
 | reattach/resume | partial | managed TUI attach canary; resume path tests | hermetic/live_no_token | `validate-provider-cli-canaries` | yes | release-proof yes (`codex-release-proof-v1`, codex-cli 0.139.0) | partial |
 | tool/tool-result shape | partial | Codex parser fixtures and tool-call tests | fixture/hermetic | `make test`, `make test-engine` | source review only | parser fixture yes; release-proof no | partial |
-| live-token behavior | no | next notes in manifest call this out | none | no | no | no | no |
+| live-token behavior | partial | `codex-provider-release-canary.py --run-managed-live-send`; `provider-release-proof.py --codex-run-managed-live-send` can attach the evidence to a release proof | managed Runtime Host live_token when explicitly run; fake wrapper in CI | wrapper fake-engine test | Sauron canary when configured | no | no |
 
 Codex is the strongest existing provider lane. Sauron now produces a
 Longhouse-owned proof artifact and proof-baseline diff for source-reviewed
@@ -209,6 +208,13 @@ that failure path. A rerun passed raw-fresh-remote and captured stable
 lanes now emit `status=not_run` with
 `failure_code=managed_bridge_credentials_missing` instead of a red bridge
 exception.
+
+The managed live-send lane is now available as an explicit opt-in proof. It
+spends a real managed Codex turn only when Runtime Host credentials are
+provided, records `operation_evidence.send_input` at `level=live_token`, and
+fails red if the turn does not complete or the provider transcript/state does
+not contain the unique canary marker. No accepted baseline includes this lane
+yet.
 
 Accepted baseline evidence, 2026-06-19: Codex `codex-cli 0.139.0` was run with
 fake app-server, raw-fresh-remote, managed TUI attach, and detached-ui lanes
@@ -305,8 +311,8 @@ Optional variables:
   review evidence through without fabricating it.
 - `TIMEOUT_SECS` bounds the wrapped source canary.
 - `CODEX_RUN_FAKE_APP_SERVER`, `CODEX_RUN_RAW_FRESH_REMOTE`,
-  `CODEX_RUN_MANAGED_TUI_ATTACH`, and `CODEX_RUN_DETACHED_UI` enable opt-in
-  Codex canary lanes.
+  `CODEX_RUN_MANAGED_TUI_ATTACH`, `CODEX_RUN_DETACHED_UI`, and
+  `CODEX_RUN_MANAGED_LIVE_SEND` enable opt-in Codex canary lanes.
 
 The equivalent direct script entrypoint is:
 
@@ -555,8 +561,8 @@ should not by itself count as contract drift.
 ## Next Work
 
 1. Add Claude managed-session binding proof beyond no-token launch shape.
-2. Promote Codex beyond `insufficient_coverage` by running and hardening the
-   managed TUI attach and detached UI lanes with Runtime Host credentials.
+2. Accept a reviewed real Codex baseline that includes managed live-send
+   evidence.
 3. Decide whether Antigravity real-agy send belongs in scheduled CI or remains
    an opt-in live-token proof.
 4. Accept a real Codex baseline once its proof lane is green enough to trust.

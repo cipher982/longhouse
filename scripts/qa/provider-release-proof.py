@@ -315,6 +315,8 @@ def _run_source_canary(args: argparse.Namespace, raw_dir: Path) -> tuple[dict[st
             argv.append("--run-managed-tui-attach")
         if args.codex_run_detached_ui:
             argv.append("--run-detached-ui")
+        if args.codex_run_managed_live_send:
+            argv.append("--run-managed-live-send")
     else:
         raise ValueError(f"unsupported provider: {args.provider}")
 
@@ -679,6 +681,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--codex-run-raw-fresh-remote", action="store_true")
     parser.add_argument("--codex-run-managed-tui-attach", action="store_true")
     parser.add_argument("--codex-run-detached-ui", action="store_true")
+    parser.add_argument("--codex-run-managed-live-send", action="store_true")
     parser.add_argument("--codex-api-url")
     parser.add_argument("--codex-agents-token")
     parser.add_argument("--antigravity-run-real-agy-send", action="store_true")

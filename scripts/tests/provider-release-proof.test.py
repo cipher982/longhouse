@@ -477,6 +477,7 @@ def test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest
                 "--codex-run-raw-fresh-remote",
                 "--codex-run-managed-tui-attach",
                 "--codex-run-detached-ui",
+                "--codex-run-managed-live-send",
                 "--codex-api-url",
                 "http://longhouse.test",
                 "--codex-agents-token",
@@ -492,6 +493,7 @@ def test_codex_release_proof_maps_provider_binary_and_keeps_source_review_honest
         assert "--run-raw-fresh-remote" in codex_args
         assert "--run-managed-tui-attach" in codex_args
         assert "--run-detached-ui" in codex_args
+        assert "--run-managed-live-send" in codex_args
         assert codex_args[codex_args.index("--api-url") + 1] == "http://longhouse.test"
         assert "--agents-token" not in codex_args
         assert codex_env["CODEX_AGENTS_TOKEN"] == "secret-token"

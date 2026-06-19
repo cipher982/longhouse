@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
 import uuid
 from datetime import UTC
 from datetime import datetime
@@ -303,6 +304,7 @@ def _canary_operation_entry(
     canary_name: str,
     canary: dict[str, Any],
     pass_statuses: set[str] | None = None,
+    level: str | None = None,
     source: str | None = None,
     message: str | None = None,
 ) -> dict[str, Any] | None:
@@ -336,6 +338,7 @@ def _canary_operation_entry(
             operation,
             status=status,
             canary=canary_name,
+            level=level,
             source=source,
             message=message or canary.get("message"),
         )
@@ -401,6 +404,17 @@ def build_operation_evidence(
     )
     if tail_output:
         evidence["tail_output"] = tail_output
+
+    managed_live_send = _canary_operation_entry(
+        contract,
+        "send_input",
+        canary_name="managed_live_send",
+        canary=canaries.get("managed_live_send") or {},
+        level="live_token",
+        source="scripts/qa/codex-provider-release-canary.py managed_live_send",
+    )
+    if managed_live_send:
+        evidence["send_input"] = managed_live_send
 
     return evidence
 
@@ -866,6 +880,130 @@ def run_detached_ui(args: argparse.Namespace, evidence_root: Path, codex_bin: st
             (root / "stop.json").write_text(json.dumps(stop, indent=2), encoding="utf-8")
 
 
+def _terminal_turn_state(state: dict[str, Any]) -> bool:
+    return state.get("last_turn_status") in {"completed", "failed", "interrupted", "cancelled"} and not state.get("active_turn_id")
+
+
+def run_managed_live_send(args: argparse.Namespace, evidence_root: Path, codex_bin: str) -> dict[str, Any]:
+    root = evidence_root / "managed-live-send"
+    root.mkdir(parents=True, exist_ok=True)
+    credentials_gap = _managed_bridge_credentials_gap(args)
+    if credentials_gap is not None:
+        return credentials_gap
+    isolation_root: Path | None = None
+    session_id: str | None = None
+    try:
+        summary, start_result, isolation_root = _start_bridge(
+            args,
+            evidence_root=root,
+            codex_bin=codex_bin,
+            launch_mode="detached_ui",
+        )
+        session_id = str(summary.get("session_id") or "")
+        state_file = Path(str(summary.get("state_file") or ""))
+        thread_id = str(summary.get("thread_id") or "")
+        if not session_id or not thread_id or not state_file.exists():
+            return _fail(
+                "managed_live_send_incomplete_start",
+                "managed live-send bridge start did not return session_id, thread_id, and state_file",
+                evidence_root=str(root),
+                summary=summary,
+                start=_command_evidence(start_result, secrets=[args.agents_token]),
+            )
+        marker = f"LONGHOUSE_CODEX_RELEASE_CANARY_{uuid.uuid4().hex}"
+        prompt = f"Reply exactly {marker} and nothing else."
+        send_result = _run(
+            [
+                _resolve_executable(args.engine, "longhouse-engine") or "longhouse-engine",
+                "codex-bridge",
+                "send",
+                "--session-id",
+                session_id,
+                "--text",
+                prompt,
+                "--state-root",
+                str(_bridge_state_root(isolation_root)),
+                "--json",
+            ],
+            cwd=args.repo_root,
+            timeout=args.live_send_timeout_secs + 20,
+        )
+        (root / "send.stdout").write_text(send_result.stdout, encoding="utf-8")
+        (root / "send.stderr").write_text(send_result.stderr, encoding="utf-8")
+        if send_result.returncode != 0:
+            return _fail(
+                "managed_live_send_failed",
+                "codex-bridge send failed during managed live-send canary",
+                evidence_root=str(root),
+                evidence=_command_evidence(send_result),
+            )
+
+        deadline = time.monotonic() + args.live_send_timeout_secs
+        state = _read_json(state_file)
+        while not _terminal_turn_state(state) and time.monotonic() < deadline:
+            time.sleep(1)
+            state = _read_json(state_file)
+        if not _terminal_turn_state(state):
+            return _fail(
+                "managed_live_send_timeout",
+                f"managed live-send turn did not reach a terminal state within {args.live_send_timeout_secs}s",
+                evidence_root=str(root),
+                state=state,
+            )
+        if state.get("last_turn_status") != "completed":
+            return _fail(
+                "managed_live_send_turn_not_completed",
+                "managed live-send turn reached a non-completed terminal state",
+                evidence_root=str(root),
+                state=state,
+            )
+        thread_path_value = str(state.get("thread_path") or "").strip()
+        if not thread_path_value:
+            return _fail(
+                "managed_live_send_transcript_missing",
+                "managed live-send turn completed but bridge state did not include a thread transcript path",
+                evidence_root=str(root),
+                state=state,
+            )
+        thread_path = Path(thread_path_value)
+        if not thread_path.exists():
+            return _fail(
+                "managed_live_send_transcript_missing",
+                "managed live-send turn completed but thread transcript path was missing",
+                evidence_root=str(root),
+                state=state,
+                expected_thread_path=str(thread_path),
+            )
+        transcript_text = thread_path.read_text(encoding="utf-8", errors="replace")
+        if marker not in transcript_text:
+            return _fail(
+                "managed_live_send_marker_missing",
+                "managed live-send transcript did not contain the unique canary marker",
+                evidence_root=str(root),
+                state=state,
+                thread_path=str(thread_path),
+            )
+        try:
+            send_summary = _load_json_stdout(send_result)
+        except ValueError:
+            send_summary = {}
+        return _status(
+            "pass",
+            evidence_root=str(root),
+            state_file=str(state_file),
+            thread_id=thread_id,
+            thread_path=str(thread_path),
+            marker=marker,
+            send_summary=send_summary,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _fail("managed_live_send_exception", str(exc), evidence_root=str(root))
+    finally:
+        if session_id and isolation_root:
+            stop = _stop_bridge(args, session_id, isolation_root)
+            (root / "stop.json").write_text(json.dumps(stop, indent=2), encoding="utf-8")
+
+
 def classify_artifact(
     canaries: dict[str, dict[str, Any]],
     source_review: dict[str, Any],
@@ -913,6 +1051,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-raw-fresh-remote", action="store_true")
     parser.add_argument("--run-managed-tui-attach", action="store_true")
     parser.add_argument("--run-detached-ui", action="store_true")
+    parser.add_argument("--run-managed-live-send", action="store_true")
     parser.add_argument("--run-all-live", action="store_true")
     parser.add_argument(
         "--source-review-status",
@@ -928,6 +1067,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--canary-timeout-secs", type=int, default=90)
     parser.add_argument("--fake-app-server-timeout-secs", type=int, default=120)
     parser.add_argument("--bridge-start-timeout-secs", type=int, default=30)
+    parser.add_argument("--live-send-timeout-secs", type=int, default=60)
     parser.add_argument("--remote-tui-grace-ms", type=int, default=3000)
     parser.add_argument("--tui-record-secs", type=int, default=8)
     return parser
@@ -962,6 +1102,7 @@ def run_codex_provider_release_canary(args: argparse.Namespace | Mapping[str, An
         args.run_raw_fresh_remote = True
         args.run_managed_tui_attach = True
         args.run_detached_ui = True
+        args.run_managed_live_send = True
 
     canaries: dict[str, dict[str, Any]] = {}
     canaries["binary_identity"] = (
@@ -995,6 +1136,11 @@ def run_codex_provider_release_canary(args: argparse.Namespace | Mapping[str, An
         run_detached_ui(args, evidence_root, codex_bin)
         if args.run_detached_ui
         else _status("not_run", reason="pass --run-detached-ui to exercise this canary")
+    )
+    canaries["managed_live_send"] = (
+        run_managed_live_send(args, evidence_root, codex_bin)
+        if args.run_managed_live_send
+        else _status("not_run", reason="pass --run-managed-live-send to exercise this canary")
     )
 
     source_review = {

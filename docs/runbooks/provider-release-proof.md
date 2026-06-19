@@ -53,6 +53,7 @@ CODEX_RUN_FAKE_APP_SERVER=1 \
 CODEX_RUN_RAW_FRESH_REMOTE=1 \
 CODEX_RUN_MANAGED_TUI_ATTACH=1 \
 CODEX_RUN_DETACHED_UI=1 \
+CODEX_RUN_MANAGED_LIVE_SEND=1 \
 make provider-release-proof \
   PROVIDER=codex \
   PROVIDER_BIN=/path/to/codex \
@@ -67,9 +68,12 @@ Today the managed Codex bridge lanes need Runtime Host credentials. Without
 `CODEX_API_URL` and `CODEX_AGENTS_TOKEN`, those lanes must report
 `status=not_run` and
 `failure_code=managed_bridge_credentials_missing`; that is a coverage gap, not
-an upstream break. Do not accept a Codex baseline while the managed attach or
-detached UI lanes are still missing if the baseline is intended to protect those
-surfaces.
+an upstream break. `CODEX_RUN_MANAGED_LIVE_SEND=1` spends a real managed Codex
+turn and records `operation_evidence.send_input` at `level=live_token` only
+after the turn completes and transcript/state evidence contains the unique
+canary marker. Do not accept a Codex baseline while the managed attach,
+detached UI, or live-send lanes are still missing if the baseline is intended to
+protect those surfaces.
 
 Sauron release-watch reuses `AGENT_RELEASE_LONGHOUSE_API_URL` and
 `AGENT_RELEASE_LONGHOUSE_AGENTS_TOKEN` for the same Codex managed bridge proof

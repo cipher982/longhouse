@@ -55,6 +55,7 @@ ALLOWED_PROOF_BOUNDARY = {
     "live_no_token",
     "live_no_token_or_fake",
     "hermetic_or_live_no_token",
+    "hermetic_or_live_token",
     "hermetic_or_launch_flag_shape",
     "fixture_or_hermetic",
     "path_or_override",
@@ -63,6 +64,7 @@ ALLOWED_PROOF_BOUNDARY = {
     "hermetic_plus_manual_live_token",
     "manual_live_token",
     "manual_live_token_or_fake",
+    "managed_runtime_live_token_or_fake",
 }
 
 

@@ -352,10 +352,12 @@
             "covered": "partial",
             "test_evidence": [
                 "engine/src/codex_bridge.rs",
-                "engine/src/codex_app_server_canary.rs"
+                "engine/src/codex_app_server_canary.rs",
+                "scripts/tests/codex-provider-release-canary.test.py",
+                "scripts/tests/provider-release-proof.test.py"
             ],
-            "proof_boundary": "hermetic",
-            "fake_or_real": "fake",
+            "proof_boundary": "hermetic_or_live_token",
+            "fake_or_real": "mixed",
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
             "accepted_baseline": "none",
@@ -411,12 +413,16 @@
         {
             "provider": "codex",
             "surface": "live-token behavior",
-            "covered": "no",
-            "test_evidence": [],
-            "proof_boundary": "none",
-            "fake_or_real": "none",
-            "runs_in_ci": false,
-            "runs_in_sauron_release_watch": false,
+            "covered": "partial",
+            "test_evidence": [
+                "scripts/tests/codex-provider-release-canary.test.py",
+                "scripts/tests/provider-release-proof.test.py",
+                "Sauron:jobs/agents/release_triage/provider_status.py"
+            ],
+            "proof_boundary": "managed_runtime_live_token_or_fake",
+            "fake_or_real": "mixed",
+            "runs_in_ci": true,
+            "runs_in_sauron_release_watch": true,
             "accepted_baseline": "none",
             "failure_actionable": false
         },
