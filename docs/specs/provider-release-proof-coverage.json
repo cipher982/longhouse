@@ -425,9 +425,11 @@
             "fake_or_real": "mixed",
             "runs_in_ci": true,
             "runs_in_sauron_release_watch": true,
-            "accepted_baseline": "none",
+            "accepted_baseline": "release_proof",
             "failure_actionable": true,
-            "baseline_scenarios": []
+            "baseline_scenarios": [
+                "codex-managed-live-interrupt-release-proof-v1"
+            ]
         },
         {
             "provider": "codex",
@@ -964,6 +966,14 @@
             "scenario_id": "codex-managed-live-send-release-proof-v1",
             "provider_version": "codex-cli 0.139.0",
             "baseline_scope": "managed_runtime_live_send_marker",
+            "baseline_boundary": "managed_runtime_live_token_or_fake",
+            "promoted_to_sauron": true
+        },
+        {
+            "provider": "codex",
+            "scenario_id": "codex-managed-live-interrupt-release-proof-v1",
+            "provider_version": "codex-cli 0.139.0",
+            "baseline_scope": "managed_runtime_live_interrupt_marker",
             "baseline_boundary": "managed_runtime_live_token_or_fake",
             "promoted_to_sauron": true
         },
