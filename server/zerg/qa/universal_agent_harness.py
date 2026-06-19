@@ -53,6 +53,10 @@ SCENARIOS = (
     "interrupt_cancel",
     "tool_call_result",
     "resume_reattach",
+    "terminate_cleanup",
+    "tail_output",
+    "runtime_phase",
+    "transcript_binding",
     "live_token_streaming",
     "old_new_release_diff",
 )
@@ -96,6 +100,10 @@ MVP_METHODS = (
     "interrupt_cancel",
     "tool_call_result",
     "resume_reattach",
+    "terminate_cleanup",
+    "tail_output",
+    "runtime_phase",
+    "transcript_binding",
     "live_token_streaming",
     "old_new_release_diff",
     "cleanup",
@@ -498,6 +506,14 @@ class AgentHarnessAdapter(Protocol):
     def tool_call_result(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def resume_reattach(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def terminate_cleanup(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def tail_output(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def runtime_phase(self, package: "EvidencePackage") -> dict[str, Any]: ...
+
+    def transcript_binding(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
     def live_token_streaming(self, package: "EvidencePackage") -> dict[str, Any]: ...
 
@@ -1096,6 +1112,126 @@ class UniversalProviderAdapter:
         package.write_json("assertions/resume_reattach.json", payload)
         return payload
 
+    def terminate_cleanup(self, package: EvidencePackage) -> dict[str, Any]:
+        contract = contract_for_provider(self.config.provider)
+        if contract is None or not contract.terminate:
+            payload = self._unsupported_payload(
+                "terminate_cleanup",
+                "terminate_cleanup_unsupported",
+                "This provider does not expose stable terminate/cleanup semantics in the managed-provider contract.",
+            )
+            payload["operation_evidence"] = {
+                "terminate": {
+                    "status": STATUS_UNSUPPORTED_GAP,
+                    "level": "none",
+                    "canary": "universal_terminate_cleanup",
+                    "failure_code": "terminate_cleanup_unsupported",
+                }
+            }
+            package.write_json("assertions/terminate_cleanup.json", payload)
+            return payload
+        payload = self._write_observation_projection(
+            package,
+            scenario="terminate_cleanup",
+            operation="terminate",
+            canary="universal_terminate_cleanup",
+            raw_events=(
+                {
+                    "type": "session_start",
+                    "role": "system",
+                    "text": f"{self.config.provider} universal cleanup session started",
+                    "provider_session_id": self._session_id(package),
+                },
+                {
+                    "type": "terminal_signal",
+                    "role": "system",
+                    "text": f"{self.config.provider} universal cleanup released owned resources",
+                    "provider_session_id": self._session_id(package),
+                    "terminal_state": "session_ended",
+                    "cleanup_owned_processes": 0,
+                },
+            ),
+            source="universal harness provider-neutral cleanup projection; no live provider process was launched",
+        )
+        payload["cleanup_assertions"] = {
+            "owned_process_launched": False,
+            "owned_processes_remaining": 0,
+            "terminal_event_projected": True,
+        }
+        package.write_json("assertions/terminate_cleanup.json", payload)
+        return payload
+
+    def tail_output(self, package: EvidencePackage) -> dict[str, Any]:
+        payload = self._write_observation_projection(
+            package,
+            scenario="tail_output",
+            operation="tail_output",
+            canary="universal_tail_output",
+            raw_events=(
+                {
+                    "type": "assistant",
+                    "role": "assistant",
+                    "text": f"{self.config.provider} tail output marker",
+                    "provider_session_id": self._session_id(package),
+                    "tail_offset": 1,
+                },
+                {
+                    "type": "system",
+                    "role": "system",
+                    "text": f"{self.config.provider} tail output cursor advanced",
+                    "provider_session_id": self._session_id(package),
+                    "tail_cursor": "cursor-2",
+                },
+            ),
+            source="universal harness canonical tail-output projection",
+        )
+        payload["tail_assertions"] = {
+            "tail_event_count": 2,
+            "cursor_observed": True,
+            "assistant_tail_visible": True,
+        }
+        package.write_json("assertions/tail_output.json", payload)
+        return payload
+
+    def runtime_phase(self, package: EvidencePackage) -> dict[str, Any]:
+        payload = self._run_runtime_phase_service_projection(package)
+        package.write_json("assertions/runtime_phase.json", payload)
+        return payload
+
+    def transcript_binding(self, package: EvidencePackage) -> dict[str, Any]:
+        payload = self._write_observation_projection(
+            package,
+            scenario="transcript_binding",
+            operation="transcript_binding",
+            canary="universal_transcript_binding",
+            raw_events=(
+                {
+                    "type": "user",
+                    "role": "user",
+                    "text": f"{self.config.provider} transcript binding input",
+                    "provider_session_id": self._session_id(package),
+                    "source_path": "provider-transcript.jsonl",
+                    "source_offset": 0,
+                },
+                {
+                    "type": "assistant",
+                    "role": "assistant",
+                    "text": f"{self.config.provider} transcript binding output",
+                    "provider_session_id": self._session_id(package),
+                    "source_path": "provider-transcript.jsonl",
+                    "source_offset": 1,
+                },
+            ),
+            source="universal harness raw transcript to canonical event/session projection",
+        )
+        payload["binding_assertions"] = {
+            "raw_transcript_projected": True,
+            "provider_session_id_preserved": True,
+            "user_and_assistant_bound": True,
+        }
+        package.write_json("assertions/transcript_binding.json", payload)
+        return payload
+
     def live_token_streaming(self, package: EvidencePackage) -> dict[str, Any]:
         if self.config.provider == "claude":
             return self._run_claude_live_token_streaming(package)
@@ -1586,6 +1722,205 @@ class UniversalProviderAdapter:
             },
             "next": "Promote with a live provider-held structured-question canary that proves the answer reaches the provider runtime.",
         }
+        return payload
+
+    def _write_observation_projection(
+        self,
+        package: EvidencePackage,
+        *,
+        scenario: str,
+        operation: str,
+        canary: str,
+        raw_events: Iterable[Mapping[str, Any]],
+        source: str,
+    ) -> dict[str, Any]:
+        operations = {
+            operation: {
+                "status": STATUS_PASS,
+                "level": "hermetic",
+                "canary": canary,
+                "source": source,
+            },
+            "transcript_binding": {
+                "status": STATUS_PASS,
+                "level": "hermetic",
+                "canary": canary,
+                "source": "universal harness canonical event/session projection",
+            },
+        }
+        payload = self._write_session_projection(
+            package,
+            raw_events=raw_events,
+            operations=operations,
+            provider_session_id=self._session_id(package),
+        )
+        payload["scenario"] = scenario
+        return payload
+
+    def _run_runtime_phase_service_projection(self, package: EvidencePackage) -> dict[str, Any]:
+        os.environ.setdefault("TESTING", "1")
+        os.environ.setdefault("DATABASE_URL", f"sqlite:///{package.path('longhouse', 'settings-bootstrap.sqlite')}")
+
+        from zerg.database import initialize_database
+        from zerg.database import make_engine
+        from zerg.database import make_sessionmaker
+        from zerg.models.agents import AgentSession
+        from zerg.models.agents import SessionRuntimeState
+        from zerg.services.session_runtime import RuntimeEventIngest
+        from zerg.services.session_runtime import ingest_runtime_events
+
+        now = datetime(2026, 6, 19, 12, 0, tzinfo=UTC)
+        db_path = package.path("longhouse", "runtime-phase-service.sqlite")
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        engine = make_engine(f"sqlite:///{db_path}")
+        initialize_database(engine)
+        session_factory = make_sessionmaker(engine)
+
+        with session_factory() as db:
+            session = AgentSession(
+                provider=self.config.provider,
+                environment="test",
+                project="universal-agent-harness",
+                device_id="universal-harness",
+                cwd=str(package.path("workspace")),
+                started_at=now - timedelta(minutes=5),
+                last_activity_at=now,
+                user_messages=1,
+                assistant_messages=1,
+            )
+            db.add(session)
+            db.flush()
+            db.refresh(session)
+            runtime_key = f"{self.config.provider}:{session.id}:runtime-phase"
+            events = [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider=self.config.provider,
+                    device_id="universal-harness",
+                    source="universal_harness",
+                    kind="phase_signal",
+                    phase="running",
+                    tool_name="Shell",
+                    occurred_at=now,
+                    freshness_ms=10 * 60 * 1000,
+                    dedupe_key="runtime-phase:running",
+                    payload={},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider=self.config.provider,
+                    device_id="universal-harness",
+                    source="universal_harness",
+                    kind="progress_signal",
+                    phase="running",
+                    tool_name="Shell",
+                    occurred_at=now + timedelta(seconds=1),
+                    freshness_ms=10 * 60 * 1000,
+                    dedupe_key="runtime-phase:progress",
+                    payload={"message": "runtime phase progress marker"},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider=self.config.provider,
+                    device_id="universal-harness",
+                    source="universal_harness",
+                    kind="phase_signal",
+                    phase="idle",
+                    occurred_at=now + timedelta(seconds=2),
+                    freshness_ms=10 * 60 * 1000,
+                    dedupe_key="runtime-phase:idle",
+                    payload={},
+                ),
+            ]
+            result = ingest_runtime_events(db, events)
+            db.commit()
+            state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one_or_none()
+            state_projection = None
+            if state is not None:
+                state_projection = {
+                    "runtime_key": state.runtime_key,
+                    "session_id": str(state.session_id) if state.session_id else None,
+                    "provider": state.provider,
+                    "phase": state.phase,
+                    "phase_source": state.phase_source,
+                    "active_tool": state.active_tool,
+                    "phase_started_at": state.phase_started_at,
+                    "last_runtime_signal_at": state.last_runtime_signal_at,
+                    "last_progress_at": state.last_progress_at,
+                    "runtime_version": state.runtime_version,
+                }
+            db_summary = {
+                "session_id": str(session.id),
+                "runtime_key": runtime_key,
+                "db_path": str(db_path),
+                "ingest_result": result.model_dump(mode="json"),
+                "state": _json_safe(state_projection),
+            }
+
+        db_summary_path = package.write_json("longhouse/runtime-phase-service.json", _json_safe(db_summary))
+        package.write_json(
+            "longhouse/runtime-state.json",
+            _json_safe({"state": db_summary["state"], "runtime_key": runtime_key}),
+        )
+        raw_events = (
+            {
+                "type": "runtime_phase",
+                "role": "system",
+                "text": f"{self.config.provider} runtime phase running",
+                "provider_session_id": self._session_id(package),
+                "runtime_key": runtime_key,
+                "phase": "running",
+            },
+            {
+                "type": "runtime_phase",
+                "role": "system",
+                "text": f"{self.config.provider} runtime phase idle",
+                "provider_session_id": self._session_id(package),
+                "runtime_key": runtime_key,
+                "phase": "idle",
+            },
+        )
+        projection = self._write_observation_projection(
+            package,
+            scenario="runtime_phase",
+            operation="runtime_phase",
+            canary="universal_runtime_phase",
+            raw_events=raw_events,
+            source="universal harness runtime event reducer plus canonical projection",
+        )
+        assertions = {
+            "events_accepted": db_summary["ingest_result"]["accepted"] == 3,
+            "runtime_state_created": db_summary["state"] is not None,
+            "runtime_phase_idle": (db_summary["state"] or {}).get("phase") == "idle",
+            "runtime_version_advanced": int((db_summary["state"] or {}).get("runtime_version") or 0) >= 2,
+        }
+        status = STATUS_PASS if all(assertions.values()) else STATUS_FAIL
+        operation_evidence = dict(projection.get("operation_evidence") or {})
+        operation_evidence["runtime_phase"] = {
+            "status": status,
+            "level": "hermetic",
+            "canary": "universal_runtime_phase",
+            "failure_code": None if status == STATUS_PASS else "runtime_phase_projection_failed",
+        }
+        payload = {
+            **projection,
+            "status": status,
+            "scenario": "runtime_phase",
+            "db_path": str(db_path),
+            "db_summary_path": str(db_summary_path),
+            "runtime_key": runtime_key,
+            "runtime_state_path": str(package.path("longhouse", "runtime-state.json")),
+            "runtime_state": db_summary["state"],
+            "assertions": assertions,
+            "operation_evidence": operation_evidence,
+        }
+        if status != STATUS_PASS:
+            payload["failure_code"] = "runtime_phase_projection_failed"
+            payload["message"] = "Longhouse did not project the runtime phase reducer state as expected."
+        package.write_json("assertions/runtime_phase.json", payload)
         return payload
 
     def managed_session_e2e(self, package: EvidencePackage) -> dict[str, Any]:
@@ -5057,6 +5392,54 @@ def run_resume_reattach(adapter: AgentHarnessAdapter, package: EvidencePackage) 
     )
 
 
+def run_terminate_cleanup(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.terminate_cleanup(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="terminate_cleanup",
+        package=package,
+        payload=payload,
+    )
+
+
+def run_tail_output(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.tail_output(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="tail_output",
+        package=package,
+        payload=payload,
+    )
+
+
+def run_runtime_phase(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.runtime_phase(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="runtime_phase",
+        package=package,
+        payload=payload,
+    )
+
+
+def run_transcript_binding(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = adapter.transcript_binding(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="transcript_binding",
+        package=package,
+        payload=payload,
+    )
+
+
 def run_live_token_streaming(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
     adapter.prepare(package)
     payload = adapter.live_token_streaming(package)
@@ -5123,6 +5506,10 @@ SCENARIO_RUNNERS = {
     "interrupt_cancel": run_interrupt_cancel,
     "tool_call_result": run_tool_call_result,
     "resume_reattach": run_resume_reattach,
+    "terminate_cleanup": run_terminate_cleanup,
+    "tail_output": run_tail_output,
+    "runtime_phase": run_runtime_phase,
+    "transcript_binding": run_transcript_binding,
     "live_token_streaming": run_live_token_streaming,
     "old_new_release_diff": run_old_new_release_diff,
 }

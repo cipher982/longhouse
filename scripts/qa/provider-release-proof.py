@@ -50,6 +50,9 @@ DEFAULT_UNIVERSAL_SCENARIOS = (
     "launch_managed_session",
     "send_receive",
     "pause_request_detect",
+    "tail_output",
+    "runtime_phase",
+    "transcript_binding",
 )
 UNIVERSAL_SCENARIOS = (
     "probe_identity",
@@ -70,6 +73,10 @@ UNIVERSAL_SCENARIOS = (
     "interrupt_cancel",
     "tool_call_result",
     "resume_reattach",
+    "terminate_cleanup",
+    "tail_output",
+    "runtime_phase",
+    "transcript_binding",
     "live_token_streaming",
     "old_new_release_diff",
 )
@@ -748,6 +755,7 @@ def _run_universal_harness(
             "steer_active_turn",
             "pause_request_detect",
             "answer_pause_request",
+            "runtime_phase",
             "interrupt_cancel",
             "tool_call_result",
             "resume_reattach",

@@ -280,6 +280,9 @@ Universal scenarios:
 | `launch_managed_session` | P0 | Managed session starts, exposes a session handle, and has raw evidence. |
 | `send_receive` | P0 | Input reaches the correct active session and a response is observed. |
 | `managed_session_e2e` | P0 | Real provider-safe managed/session mechanics run, raw provider/control evidence is captured, and canonical session/timeline projection is produced. |
+| `tail_output` | P0 | Fresh provider output/tail events project to canonical session and timeline artifacts. |
+| `runtime_phase` | P0 | Runtime phase events reduce into Longhouse runtime state and project to canonical artifacts. |
+| `transcript_binding` | P0 | Raw provider transcript events bind to a stable provider session id and canonical Longhouse events. |
 | `collect_raw_evidence` | P0 | stdout/stderr/provider logs/transcripts are persisted on success and failure. |
 | `parse_ingest_project` | P0 | Raw evidence becomes canonical events, ingests into Longhouse, and projects a session/timeline. |
 | `db_ingest_project` | P0 | Canonical events ingest through `AgentsStore` into an isolated SQLite DB, then session events/counts/export/timeline reads prove durable Longhouse projection. |
@@ -291,6 +294,7 @@ Universal scenarios:
 | `answer_pause_request` | P1 | Longhouse answer/resolve service works, or provider-held live answer delivery reports an explicit blocked/unsupported gap. |
 | `interrupt_cancel` | P1 | A long active turn can be interrupted without corrupting session evidence. |
 | `resume_reattach` | P1 | A prior session can be resumed or explicitly reports an unsupported gap. |
+| `terminate_cleanup` | P1 | Termination/cleanup projects owned-resource cleanup or reports an explicit unsupported gap. |
 | `multi_turn_continuity` | P1 | Follow-up input depends on prior turn state and stays in the same session. |
 | `live_token_streaming` | P1 | Model-visible behavior works; streaming is verified only when declared. |
 | `permission_prompt` | P2 | Permission approve/deny paths are observable where supported. |

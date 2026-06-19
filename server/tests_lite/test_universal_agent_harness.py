@@ -1415,6 +1415,63 @@ def test_answer_pause_request_reports_explicit_provider_gaps(tmp_path: Path) -> 
         assert result["data"]["operation_evidence"]["answer_pause_request"]["status"] == "unsupported_gap"
 
 
+def test_observation_surface_scenarios_emit_comparable_artifacts_for_all_providers(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=uah.SUPPORTED_PROVIDERS,
+            scenarios=("tail_output", "runtime_phase", "transcript_binding"),
+            evidence_root=tmp_path / "evidence",
+        )
+    )
+
+    assert payload["verdict"] == "green"
+    assert len(payload["results"]) == len(uah.SUPPORTED_PROVIDERS) * 3
+    for result in payload["results"]:
+        assert result["status"] == "pass"
+        assert result["scenario"] in {"tail_output", "runtime_phase", "transcript_binding"}
+        evidence_root = Path(result["evidence_root"])
+        data = result["data"]
+        assert Path(data["session_projection_path"]).is_file()
+        assert Path(data["timeline_projection_path"]).is_file()
+        assert Path(data["canonical_events_path"]).is_file()
+        session = json.loads((evidence_root / "longhouse" / "session-projection.json").read_text(encoding="utf-8"))
+        assert session["provider"] == result["provider"]
+        assert session["provider_session_id"].startswith(f"universal-{result['provider']}-{result['scenario']}")
+        if result["scenario"] == "tail_output":
+            assert data["operation_evidence"]["tail_output"]["status"] == "pass"
+            assert data["tail_assertions"]["assistant_tail_visible"] is True
+        elif result["scenario"] == "runtime_phase":
+            assert data["operation_evidence"]["runtime_phase"]["status"] == "pass"
+            assert data["assertions"]["runtime_phase_idle"] is True
+            assert data["runtime_state"]["phase"] == "idle"
+            assert (evidence_root / "longhouse" / "runtime-phase-service.json").is_file()
+        else:
+            assert data["operation_evidence"]["transcript_binding"]["status"] == "pass"
+            assert data["binding_assertions"]["user_and_assistant_bound"] is True
+
+
+def test_terminate_cleanup_respects_provider_contract(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=uah.SUPPORTED_PROVIDERS,
+            scenarios=("terminate_cleanup",),
+            evidence_root=tmp_path / "evidence",
+        )
+    )
+
+    assert payload["verdict"] == "yellow"
+    by_provider = {result["provider"]: result for result in payload["results"]}
+    for provider in ("claude", "codex", "opencode"):
+        result = by_provider[provider]
+        assert result["status"] == "pass"
+        assert result["data"]["operation_evidence"]["terminate"]["status"] == "pass"
+        assert result["data"]["cleanup_assertions"]["owned_processes_remaining"] == 0
+    antigravity = by_provider["antigravity"]
+    assert antigravity["status"] == "unsupported_gap"
+    assert antigravity["failure_code"] == "terminate_cleanup_unsupported"
+    assert antigravity["data"]["operation_evidence"]["terminate"]["status"] == "unsupported_gap"
+
+
 def test_opencode_interrupt_cancel_uses_session_abort_canary(tmp_path: Path) -> None:
     fake_opencode = _fake_opencode_server(tmp_path / "bin" / "opencode")
     payload = uah.run_harness(
