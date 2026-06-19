@@ -6255,6 +6255,91 @@ def verdict_for_results(results: Iterable[ScenarioResult]) -> str:
     return "green"
 
 
+def provider_support_matrix(
+    *,
+    providers: Iterable[str],
+    scenarios: Iterable[str],
+    results: Iterable[ScenarioResult],
+) -> dict[str, Any] | None:
+    action_rows_by_provider: dict[str, dict[str, dict[str, Any]]] = {}
+    for result in results:
+        if result.scenario != "action_matrix":
+            continue
+        rows = result.data.get("actions") if isinstance(result.data, Mapping) else None
+        if not isinstance(rows, list):
+            continue
+        provider_rows: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            action_id = str(row.get("action_id") or "")
+            if action_id:
+                provider_rows[action_id] = dict(row)
+        if provider_rows:
+            action_rows_by_provider[result.provider] = provider_rows
+
+    if not action_rows_by_provider:
+        return None
+
+    provider_list = list(providers)
+    matrix_rows: list[dict[str, Any]] = []
+    missing_provider_actions: list[dict[str, str]] = []
+    provider_statuses: dict[str, list[str]] = {provider: [] for provider in provider_list}
+    for action in ACTION_DEFINITIONS:
+        cells: dict[str, dict[str, Any]] = {}
+        for provider in provider_list:
+            row = action_rows_by_provider.get(provider, {}).get(action.action_id)
+            if row is None:
+                cells[provider] = {
+                    "status": "missing",
+                    "failure_code": "action_matrix_row_missing",
+                }
+                missing_provider_actions.append({"provider": provider, "action_id": action.action_id})
+                continue
+            status = str(row.get("status") or STATUS_FAIL)
+            provider_statuses.setdefault(provider, []).append(status)
+            cells[provider] = {
+                key: row.get(key)
+                for key in (
+                    "status",
+                    "support",
+                    "support_reason",
+                    "implementation_kind",
+                    "required_evidence",
+                    "evidence_level",
+                    "proof_scope",
+                    "canary",
+                    "failure_code",
+                    "next",
+                )
+                if row.get(key) is not None
+            }
+        matrix_rows.append(
+            {
+                "action_id": action.action_id,
+                "title": action.title,
+                "category": action.category,
+                "contract_operation": action.contract_operation,
+                "required_evidence": action.required_evidence,
+                "providers": cells,
+                "status_counts": _status_counts(cell["status"] for cell in cells.values() if cell.get("status") in STATUSES),
+            }
+        )
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "artifact_kind": "universal_agent_harness_provider_support_matrix",
+        "generated_at": utc_now(),
+        "providers": provider_list,
+        "scenarios": list(scenarios),
+        "action_count": len(matrix_rows),
+        "captured_provider_count": len(action_rows_by_provider),
+        "missing_provider_actions": missing_provider_actions,
+        "provider_status_counts": {provider: _status_counts(statuses) for provider, statuses in provider_statuses.items() if statuses},
+        "actions": matrix_rows,
+    }
+
+
 def run_harness(options: HarnessOptions) -> dict[str, Any]:
     registry = adapter_registry(options.provider_bins)
     results: list[ScenarioResult] = []
@@ -6291,6 +6376,7 @@ def run_harness(options: HarnessOptions) -> dict[str, Any]:
                 )
             )
 
+    support_matrix = provider_support_matrix(providers=options.providers, scenarios=options.scenarios, results=results)
     payload = {
         "schema_version": SCHEMA_VERSION,
         "artifact_kind": ARTIFACT_KIND,
@@ -6301,6 +6387,11 @@ def run_harness(options: HarnessOptions) -> dict[str, Any]:
         "verdict": verdict_for_results(results),
         "results": [result.to_json() for result in results],
     }
+    if support_matrix is not None:
+        matrix_path = options.evidence_root / "provider-support-matrix.json"
+        write_json(matrix_path, support_matrix)
+        payload["provider_support_matrix"] = support_matrix
+        payload["provider_support_matrix_path"] = str(matrix_path)
     write_json(options.evidence_root / "universal-agent-harness.json", payload)
     return payload
 

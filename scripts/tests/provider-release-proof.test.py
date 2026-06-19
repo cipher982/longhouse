@@ -1251,6 +1251,7 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
             ).is_dir()
             assert Path(payload["artifacts"]["action_matrix"]).exists()
             assert Path(payload["artifacts"]["control_surface"]).exists()
+            assert Path(payload["artifacts"]["provider_support_matrix"]).exists()
             universal = payload["normalized"]["universal_harness"]
             assert universal["result_count"] == 17
             assert "adapter_conformance" in universal["scenarios"]
@@ -1408,6 +1409,27 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
                 + control_counts.get("unsupported_gap", 0)
                 >= 1
             )
+            provider_support = payload["provider_support_matrix"]
+            assert (
+                provider_support["artifact_kind"]
+                == "provider_release_proof_provider_support_matrix"
+            )
+            assert provider_support["provider"] == provider
+            assert provider_support["action_count"] == action_matrix["action_count"]
+            assert provider_support["support_matrix_path"]
+            assert (
+                payload["normalized"]["provider_support_matrix"]["action_count"]
+                == action_matrix["action_count"]
+            )
+            support_actions = {
+                row["action_id"]: row for row in provider_support["actions"]
+            }
+            assert set(support_actions) == set(action_statuses)
+            assert (
+                support_actions["send_message"]["status"]
+                == action_statuses["send_message"]["status"]
+            )
+            assert support_actions["permission_prompt"]["status"] == "blocked"
 
 
 def test_release_proof_can_attach_universal_old_new_release_diff() -> None:

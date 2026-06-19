@@ -102,6 +102,14 @@ action ids for every provider, even when a provider cannot support an action.
 This is the bridge between "agent harnesses are fungible" and "provider
 mechanics are not."
 
+When an all-provider run includes `action_matrix`, the harness also writes
+`provider-support-matrix.json`. That artifact transposes the per-provider
+action rows into one provider-by-action grid, preserving each provider's
+status, support reason, evidence level, proof scope, canary, failure code, and
+next promotion gate. Release-proof attaches the current provider's slice as
+`provider_support_matrix` so Sauron and baseline tooling can report the shared
+surface without re-parsing every provider subrun.
+
 Current action ids:
 
 ```text

@@ -2502,6 +2502,21 @@ def test_script_entrypoint_runs_all_provider_action_e2e(tmp_path: Path) -> None:
     assert payload["verdict"] == "yellow"
     assert len(payload["results"]) == len(uah.SUPPORTED_PROVIDERS) * 2
     assert (artifact_root / "universal-agent-harness.json").is_file()
+    assert (artifact_root / "provider-support-matrix.json").is_file()
+
+    support_matrix = payload["provider_support_matrix"]
+    assert support_matrix["artifact_kind"] == "universal_agent_harness_provider_support_matrix"
+    assert support_matrix["providers"] == list(uah.SUPPORTED_PROVIDERS)
+    assert support_matrix["action_count"] == len(uah.ACTIONS)
+    assert support_matrix["missing_provider_actions"] == []
+    support_rows = {row["action_id"]: row for row in support_matrix["actions"]}
+    assert set(support_rows) == set(uah.ACTIONS)
+    assert support_rows["send_message"]["providers"]["codex"]["status"] == "pass"
+    assert support_rows["send_message"]["providers"]["claude"]["status"] == "pass"
+    assert support_rows["steer_active_turn"]["providers"]["opencode"]["status"] == "unsupported_gap"
+    assert support_rows["permission_prompt"]["providers"]["antigravity"]["status"] == "blocked"
+    assert support_matrix["provider_status_counts"]["claude"]["blocked"] >= 1
+    assert support_matrix["provider_status_counts"]["opencode"]["unsupported_gap"] >= 1
 
     by_provider_scenario = {(item["provider"], item["scenario"]): item for item in payload["results"]}
     for provider in uah.SUPPORTED_PROVIDERS:
