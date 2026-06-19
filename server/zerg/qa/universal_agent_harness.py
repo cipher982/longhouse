@@ -961,6 +961,8 @@ class UniversalProviderAdapter:
     def live_token_streaming(self, package: EvidencePackage) -> dict[str, Any]:
         if self.config.provider == "codex":
             return self._run_codex_live_token_streaming(package)
+        if self.config.provider == "antigravity":
+            return self._run_antigravity_live_token_streaming(package)
         payload = self._unsupported_payload(
             "live_token_streaming",
             "live_token_streaming_adapter_missing",
@@ -1139,7 +1141,8 @@ class UniversalProviderAdapter:
             if isinstance(evidence, Mapping)
         }
         raw_events = opencode_provider_live_raw_events(live_artifact)
-        provider_session_id = str((live_artifact.get("session_projection") or {}).get("provider_session_id") or self._session_id(package))
+        live_session_projection = live_artifact.get("session_projection") or {}
+        provider_session_id = str(live_session_projection.get("provider_session_id") or self._session_id(package))
         projection = self._write_session_projection(
             package,
             raw_events=raw_events,
@@ -1387,9 +1390,10 @@ class UniversalProviderAdapter:
         verdict = str(canary_artifact.get("verdict") or "red")
         interrupt_status = str((operation_evidence.get("interrupt") or {}).get("status") or STATUS_FAIL)
         db_status = str(db_ingest.get("status") or STATUS_FAIL)
+        passed = verdict == "green" and interrupt_status == STATUS_PASS and db_status == STATUS_PASS
         payload = {
             **projection,
-            "status": STATUS_PASS if verdict == "green" and interrupt_status == STATUS_PASS and db_status == STATUS_PASS else STATUS_FAIL,
+            "status": STATUS_PASS if passed else STATUS_FAIL,
             "scenario": "interrupt_cancel",
             "provider_version": canary_artifact.get("codex_version") or canary_artifact.get("provider_version"),
             "codex_canary_artifact_path": str(canary_artifact_path),
@@ -1480,9 +1484,10 @@ class UniversalProviderAdapter:
         verdict = str(canary_artifact.get("verdict") or "red")
         tool_status = str((operation_evidence.get("tool_call_result") or {}).get("status") or STATUS_FAIL)
         db_status = str(db_ingest.get("status") or STATUS_FAIL)
+        passed = verdict == "green" and tool_status == STATUS_PASS and db_status == STATUS_PASS
         payload = {
             **projection,
-            "status": STATUS_PASS if verdict == "green" and tool_status == STATUS_PASS and db_status == STATUS_PASS else STATUS_FAIL,
+            "status": STATUS_PASS if passed else STATUS_FAIL,
             "scenario": "tool_call_result",
             "provider_version": canary_artifact.get("codex_version") or canary_artifact.get("provider_version"),
             "codex_canary_artifact_path": str(canary_artifact_path),
@@ -1567,9 +1572,10 @@ class UniversalProviderAdapter:
         verdict = str(control_artifact.get("verdict") or "red")
         tool_status = str((operation_evidence.get("tool_call_result") or {}).get("status") or STATUS_FAIL)
         db_status = str(db_ingest.get("status") or STATUS_FAIL)
+        passed = verdict == "green" and tool_status == STATUS_PASS and db_status == STATUS_PASS
         payload = {
             **projection,
-            "status": STATUS_PASS if verdict == "green" and tool_status == STATUS_PASS and db_status == STATUS_PASS else STATUS_FAIL,
+            "status": STATUS_PASS if passed else STATUS_FAIL,
             "scenario": "tool_call_result",
             "provider_version": _opencode_control_canary(control_artifact).get("provider_version"),
             "provider_control_artifact_path": str(control_artifact_path),
@@ -1694,11 +1700,17 @@ class UniversalProviderAdapter:
         live_status = str((operation_evidence.get("live_token_behavior") or {}).get("status") or STATUS_FAIL)
         send_status = str((operation_evidence.get("send_input") or {}).get("status") or STATUS_FAIL)
         db_status = str(db_ingest.get("status") or STATUS_FAIL)
+        passed = all(
+            (
+                verdict == "green",
+                live_status == STATUS_PASS,
+                send_status == STATUS_PASS,
+                db_status == STATUS_PASS,
+            )
+        )
         payload = {
             **projection,
-            "status": STATUS_PASS
-            if verdict == "green" and live_status == STATUS_PASS and send_status == STATUS_PASS and db_status == STATUS_PASS
-            else STATUS_FAIL,
+            "status": STATUS_PASS if passed else STATUS_FAIL,
             "scenario": "live_token_streaming",
             "provider_version": canary_artifact.get("codex_version") or canary_artifact.get("provider_version"),
             "codex_canary_artifact_path": str(canary_artifact_path),
@@ -1721,6 +1733,104 @@ class UniversalProviderAdapter:
         elif db_status != STATUS_PASS:
             payload["failure_code"] = db_ingest.get("failure_code") or "live_token_streaming_db_ingest_failed"
             payload["message"] = "Codex live-token evidence did not pass Longhouse DB ingest assertions."
+        package.write_json("assertions/live_token_streaming.json", payload)
+        return payload
+
+    def _run_antigravity_live_token_streaming(self, package: EvidencePackage) -> dict[str, Any]:
+        binary, source = self._resolve_binary()
+        if binary is None:
+            payload = {
+                "status": STATUS_FAIL,
+                "failure_code": "provider_binary_not_found",
+                "message": "agy binary was not found for live_token_streaming",
+                "binary_source": source,
+            }
+            package.write_json("assertions/live_token_streaming.json", payload)
+            return payload
+
+        control_evidence_root = package.path("raw", "provider-control-e2e-evidence")
+        control_artifact_path = package.path("raw", "provider-control-e2e.json")
+        control_artifact = run_provider_control_e2e_canary(
+            provider="antigravity",
+            artifact_path=control_artifact_path,
+            evidence_root=control_evidence_root,
+            extra_args=["--antigravity-real-agy-send"],
+            extra_env={"LONGHOUSE_ANTIGRAVITY_BIN": str(binary)},
+        )
+        if not control_artifact_path.is_file():
+            package.write_json("raw/provider-control-e2e.json", control_artifact)
+        package.write_json("raw/provider-control-e2e-inline.json", control_artifact)
+
+        antigravity = _antigravity_control_canary(control_artifact)
+        operation_evidence = antigravity_real_send_operation_evidence(antigravity)
+        raw_events = antigravity_real_send_raw_events(antigravity)
+        provider_session_id = str(antigravity.get("session_id") or self._session_id(package))
+        projection = self._write_session_projection(
+            package,
+            raw_events=raw_events,
+            operations=operation_evidence,
+            provider_session_id=provider_session_id,
+        )
+        db_ingest = ingest_canonical_events_into_longhouse_db(
+            package=package,
+            provider=self.config.provider,
+            rows=raw_events,
+            provider_session_id=provider_session_id,
+        )
+        operation_evidence.update(
+            {
+                str(operation): dict(evidence)
+                for operation, evidence in dict(db_ingest.get("operation_evidence") or {}).items()
+                if isinstance(evidence, Mapping)
+            }
+        )
+        session_projection_path = package.path("longhouse", "session-projection.json")
+        try:
+            session_projection = json.loads(session_projection_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            session_projection = {}
+        if isinstance(session_projection, dict):
+            session_projection["operation_statuses"] = operation_evidence
+            package.write_json("longhouse/session-projection.json", session_projection)
+
+        verdict = str(control_artifact.get("verdict") or "red")
+        send_status = str((operation_evidence.get("send_input") or {}).get("status") or STATUS_FAIL)
+        live_status = str((operation_evidence.get("live_token_behavior") or {}).get("status") or STATUS_FAIL)
+        db_status = str(db_ingest.get("status") or STATUS_FAIL)
+        passed = all(
+            (
+                verdict == "green",
+                send_status == STATUS_PASS,
+                live_status == STATUS_PASS,
+                db_status == STATUS_PASS,
+            )
+        )
+        payload = {
+            **projection,
+            "status": STATUS_PASS if passed else STATUS_FAIL,
+            "scenario": "live_token_streaming",
+            "provider_version": antigravity.get("provider_version"),
+            "provider_control_artifact_path": str(control_artifact_path),
+            "provider_control_evidence_root": str(control_evidence_root),
+            "provider_control_verdict": verdict,
+            "source_artifact_kind": "provider_control_e2e_canary",
+            "synthetic": False,
+            "operation_evidence": operation_evidence,
+            "longhouse_ingest": {
+                "status": db_status,
+                "failure_code": db_ingest.get("failure_code"),
+                "db_snapshot_path": db_ingest.get("db_snapshot_path"),
+                "session_projection_path": db_ingest.get("session_projection_path"),
+                "timeline_projection_path": db_ingest.get("timeline_projection_path"),
+            },
+        }
+        if verdict != "green" or send_status != STATUS_PASS or live_status != STATUS_PASS:
+            failure_code = control_artifact.get("failure_code") or antigravity.get("failure_code")
+            payload["failure_code"] = failure_code or "antigravity_live_token_streaming_failed"
+            payload["message"] = "Antigravity real-agy send canary did not pass."
+        elif db_status != STATUS_PASS:
+            payload["failure_code"] = db_ingest.get("failure_code") or "live_token_streaming_db_ingest_failed"
+            payload["message"] = "Antigravity live-token evidence did not pass Longhouse DB ingest assertions."
         package.write_json("assertions/live_token_streaming.json", payload)
         return payload
 
@@ -1872,9 +1982,10 @@ class UniversalProviderAdapter:
         verdict = str(control_artifact.get("verdict") or "red")
         canary_status = str(antigravity.get("status") or "fail")
         db_status = str(db_ingest.get("status") or STATUS_FAIL)
+        passed = verdict == "green" and canary_status == "pass" and db_status == STATUS_PASS
         payload = {
             **projection,
-            "status": STATUS_PASS if verdict == "green" and canary_status == "pass" and db_status == STATUS_PASS else STATUS_FAIL,
+            "status": STATUS_PASS if passed else STATUS_FAIL,
             "scenario": "managed_session_e2e",
             "provider_control_artifact_path": str(control_artifact_path),
             "provider_control_evidence_root": str(control_evidence_root),
@@ -3022,6 +3133,11 @@ def _opencode_control_canary(artifact: Mapping[str, Any]) -> dict[str, Any]:
     return canary
 
 
+def _antigravity_control_canary(artifact: Mapping[str, Any]) -> dict[str, Any]:
+    canary = dict(dict(artifact.get("canaries") or {}).get("antigravity") or {})
+    return canary
+
+
 def _first_opencode_control_session_id(artifact: Mapping[str, Any]) -> str | None:
     canary = _opencode_control_canary(artifact)
     session_ids = canary.get("session_ids")
@@ -3098,6 +3214,43 @@ def opencode_tool_call_result_raw_events(artifact: Mapping[str, Any]) -> list[di
     return rows
 
 
+def antigravity_real_send_raw_events(canary: Mapping[str, Any]) -> list[dict[str, Any]]:
+    session_id = str(canary.get("session_id") or "antigravity-real-agy-send")
+    marker = str(canary.get("marker") or "marker-unavailable")
+    queued_text = str(canary.get("queued_text") or f"Reply exactly {marker}")
+    matching_claim = canary.get("matching_claim")
+    matching_claim = matching_claim if isinstance(matching_claim, Mapping) else {}
+    rows: list[dict[str, Any]] = []
+    if canary:
+        rows.append(
+            {
+                "type": "user",
+                "role": "user",
+                "text": queued_text,
+                "provider_session_id": session_id,
+                "source_canary": "antigravity_real_agy_send",
+                "hook_event": matching_claim.get("hook_event"),
+                "claim_id": matching_claim.get("id"),
+                "conversation_id": matching_claim.get("conversation_id"),
+                "marker": marker,
+                "evidence_origin": "provider_control_e2e_canary",
+            }
+        )
+        rows.append(
+            {
+                "type": "assistant",
+                "role": "assistant",
+                "text": marker if canary.get("marker_in_stdout") else "",
+                "provider_session_id": session_id,
+                "source_canary": "antigravity_real_agy_send",
+                "marker_in_stdout": canary.get("marker_in_stdout"),
+                "baseline_in_stdout": canary.get("baseline_in_stdout"),
+                "evidence_origin": "provider_control_e2e_canary",
+            }
+        )
+    return rows
+
+
 def codex_live_token_streaming_operation_evidence(artifact: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     operation_evidence = {
         str(operation): dict(evidence)
@@ -3106,7 +3259,10 @@ def codex_live_token_streaming_operation_evidence(artifact: Mapping[str, Any]) -
     }
     live_send = dict(dict(artifact.get("canaries") or {}).get("managed_live_send") or {})
     status = STATUS_PASS if live_send.get("status") == "pass" else STATUS_FAIL
-    failure_code = None if status == STATUS_PASS else str(live_send.get("failure_code") or "codex_live_token_streaming_failed")
+    if status == STATUS_PASS:
+        failure_code = None
+    else:
+        failure_code = str(live_send.get("failure_code") or "codex_live_token_streaming_failed")
     operation_evidence["send_input"] = {
         "status": status,
         "level": "live_token" if status == STATUS_PASS else "none",
@@ -3122,6 +3278,32 @@ def codex_live_token_streaming_operation_evidence(artifact: Mapping[str, Any]) -
     return operation_evidence
 
 
+def antigravity_real_send_operation_evidence(canary: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    operation_evidence = {
+        str(operation): dict(evidence)
+        for operation, evidence in dict(canary.get("operation_evidence") or {}).items()
+        if isinstance(evidence, Mapping)
+    }
+    status = STATUS_PASS if canary.get("status") == "pass" else STATUS_FAIL
+    if status == STATUS_PASS:
+        failure_code = None
+    else:
+        failure_code = str(canary.get("failure_code") or "antigravity_real_agy_send_failed")
+    operation_evidence["send_input"] = {
+        "status": status,
+        "level": "live_token" if status == STATUS_PASS else "none",
+        "canary": "antigravity_real_agy_send",
+        "failure_code": failure_code,
+    }
+    operation_evidence["live_token_behavior"] = {
+        "status": status,
+        "level": "live_token" if status == STATUS_PASS else "none",
+        "canary": "antigravity_real_agy_send",
+        "failure_code": failure_code,
+    }
+    return operation_evidence
+
+
 def opencode_tool_call_result_operation_evidence(artifact: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     tool = _opencode_control_canary(artifact)
     operation_evidence = {
@@ -3130,7 +3312,10 @@ def opencode_tool_call_result_operation_evidence(artifact: Mapping[str, Any]) ->
         if isinstance(evidence, Mapping)
     }
     status = STATUS_PASS if tool.get("status") == "pass" else STATUS_FAIL
-    failure_code = None if status == STATUS_PASS else str(tool.get("failure_code") or "opencode_tool_call_result_failed")
+    if status == STATUS_PASS:
+        failure_code = None
+    else:
+        failure_code = str(tool.get("failure_code") or "opencode_tool_call_result_failed")
     operation_evidence["tool_call_result"] = {
         "status": status,
         "level": "live_token" if status == STATUS_PASS else "none",

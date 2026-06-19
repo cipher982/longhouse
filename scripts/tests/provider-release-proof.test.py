@@ -115,6 +115,56 @@ raise SystemExit(2)
     )
 
 
+def _write_fake_antigravity_real_send_bin(root: Path) -> None:
+    _write_exe(
+        root / "fake-provider",
+        r"""#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import re
+import sys
+
+args = sys.argv[1:]
+if args == ["--version"]:
+    print("agy 9.9.9")
+    raise SystemExit(0)
+
+if args[:2] == ["plugin", "install"]:
+    print("installed")
+    raise SystemExit(0)
+
+if "--print" not in args:
+    print("unexpected fake agy args: " + json.dumps(args), file=sys.stderr)
+    raise SystemExit(2)
+
+inbox = pathlib.Path(os.environ["LONGHOUSE_ANTIGRAVITY_INBOX_DIR"])
+pending = sorted(inbox.glob("msg-*.json"))
+if not pending:
+    print("NO_PENDING_INPUT")
+    raise SystemExit(0)
+
+path = pending[0]
+payload = json.loads(path.read_text())
+claim_dir = inbox / "claimed"
+claim_dir.mkdir(parents=True, exist_ok=True)
+payload.update({
+    "claimed_at": "2026-01-01T00:00:00Z",
+    "claimed_by": "fake-agy",
+    "hook_event": "PreInvocation",
+    "conversation_id": "fake-conversation",
+    "step_index": "",
+})
+(claim_dir / ("claimed-" + path.name)).write_text(json.dumps(payload))
+path.unlink()
+
+match = re.search(r"reply exactly ([A-Za-z0-9_]+)", payload.get("text", ""))
+print(match.group(1) if match else "MISSING_MARKER")
+raise SystemExit(0)
+""",
+    )
+
+
 def _write_fake_opencode_server_bin(root: Path) -> None:
     _write_exe(
         root / "fake-provider",
@@ -1221,6 +1271,63 @@ def test_codex_release_proof_can_attach_universal_live_token_credentials_gap() -
         assert result_row["status"] == "unsupported_gap"
         assert result_row["failure_code"] == "codex_managed_bridge_credentials_missing"
         assert result_row["data"]["missing"] == ["--agents-token", "--api-url"]
+
+
+def test_antigravity_release_proof_can_attach_universal_live_token_e2e() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        _write_fake_repo(root / "repo")
+        _write_fake_antigravity_real_send_bin(root)
+
+        result, payload = _run_proof(
+            root,
+            "antigravity",
+            extra_args=[
+                "--run-universal-harness",
+                "--universal-scenario",
+                "live_token_streaming",
+            ],
+        )
+
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert payload["verdict"] == "green"
+        assert (
+            payload["normalized"]["canaries"]["universal_live_token_streaming"][
+                "status"
+            ]
+            == "pass"
+        )
+        assert payload["operation_evidence"]["universal_send_input"]["status"] == "pass"
+        assert (
+            payload["operation_evidence"]["universal_send_input"]["level"]
+            == "live_token"
+        )
+        assert (
+            payload["operation_evidence"]["universal_live_token_behavior"]["status"]
+            == "pass"
+        )
+        assert payload["operation_evidence"]["universal_db_ingest"]["status"] == "pass"
+
+        universal_artifact = _read_json(
+            Path(payload["artifacts"]["universal_harness_artifact"])
+        )
+        result_row = universal_artifact["results"][0]
+        assert result_row["provider"] == "antigravity"
+        assert result_row["scenario"] == "live_token_streaming"
+        assert result_row["status"] == "pass"
+        assert (
+            result_row["data"]["source_artifact_kind"] == "provider_control_e2e_canary"
+        )
+        assert result_row["data"]["synthetic"] is False
+
+        evidence_root = Path(result_row["evidence_root"])
+        raw_events = (evidence_root / "events" / "provider-raw-events.jsonl").read_text(
+            encoding="utf-8"
+        )
+        assert "antigravity_real_agy_send" in raw_events
+        db_snapshot = _read_json(evidence_root / "longhouse" / "db-ingest-result.json")
+        assert db_snapshot["ingest_result"]["events_inserted"] == 2
+        assert db_snapshot["timeline"]["matched"] is True
 
 
 def test_codex_release_proof_can_attach_universal_tool_call_result_e2e() -> None:
@@ -2567,6 +2674,7 @@ def main() -> int:
         test_release_proof_can_attach_universal_db_ingest_project,
         test_codex_release_proof_can_attach_universal_interrupt_credentials_gap,
         test_codex_release_proof_can_attach_universal_live_token_credentials_gap,
+        test_antigravity_release_proof_can_attach_universal_live_token_e2e,
         test_codex_release_proof_can_attach_universal_tool_call_result_e2e,
         test_opencode_release_proof_can_attach_universal_tool_call_result_e2e,
         test_opencode_release_proof_can_attach_real_universal_managed_session_e2e,

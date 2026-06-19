@@ -188,10 +188,11 @@ provider-live process-restart reattach canary, projects the recovered session
 and marker transcript rows, and DB-ingests the reattach evidence. Other providers
 currently return typed adapter gaps for this scenario.
 
-`live_token_streaming` is an executable universal scenario for Codex. It calls
-the existing managed-live-send canary, projects the user prompt and assistant
-marker rows, and DB-ingests the live-token evidence when Runtime Host
-credentials are present. Other providers currently return typed adapter gaps for
+`live_token_streaming` is an executable universal scenario for Codex and
+Antigravity. Codex calls the existing managed-live-send canary. Antigravity
+calls the real-agy hook-inbox injection canary. Both paths project user and
+assistant marker rows and DB-ingest the live-token evidence when their live
+lane is configured. Claude and OpenCode currently return typed adapter gaps for
 this scenario.
 
 ## Capabilities And Profiles
@@ -423,10 +424,10 @@ rewritten to call the shared scenario runner.
 | `scripts/qa/provider-release-proof.py` | Proof wrapper, normalization, baseline artifact generation | Reusable shell; should eventually call universal runner instead of provider-specific canary scripts. |
 | `server/zerg/qa/provider_live_canary.py` Claude binary/channel/PTY checks | `probe_identity`, `launch_managed_session`, `collect_raw_evidence` | Migrated into Claude `managed_session_e2e`; live-token send/steer still need promotion. |
 | `server/zerg/qa/managed_claude_live.py` | `send_receive`, `live_token_streaming`, `interrupt_cancel`, `multi_turn_continuity` | Migration candidate; PTY loop and channel readiness are Claude adapter internals. |
-| `server/zerg/qa/codex_provider_release_canary.py` | `probe_identity`, `run_prompt_once`, `launch_managed_session`, `resume_reattach`, `send_receive`, `interrupt_cancel`, `tool_call_result` | Partly migrated: Codex `managed_session_e2e`, `interrupt_cancel`, `tool_call_result`, and `live_token_streaming` now call this canary; remaining control/steer lanes still need promotion. |
+| `server/zerg/qa/codex_provider_release_canary.py` | `probe_identity`, `run_prompt_once`, `launch_managed_session`, `resume_reattach`, `send_receive`, `interrupt_cancel`, `tool_call_result`, `live_token_streaming` | Partly migrated: Codex `managed_session_e2e`, `interrupt_cancel`, `tool_call_result`, and `live_token_streaming` now call this canary; remaining control/steer lanes still need promotion. |
 | `server/zerg/qa/provider_live_canary.py` OpenCode server/schema/session checks | `launch_managed_session`, `send_receive`, `resume_reattach`, `interrupt_cancel`, `parse_ingest_project` | Partly migrated: OpenCode `managed_session_e2e` and `resume_reattach` now call this canary; remaining control/live-token scenarios still need promotion. |
 | `server/zerg/qa/provider_live_canary.py` Antigravity plugin/global hook checks | `probe_identity`, `external_event_channel`, `send_receive` | Migration candidate; hook/inbox setup is Antigravity adapter internal. |
-| `scripts/qa/provider-control-e2e-canary.py` | `send_receive`, `interrupt_cancel`, `tool_call_result`, `external_event_channel` | Partly migrated: OpenCode `tool_call_result` now calls this canary; keep provider-specific fakes as adapter test fixtures. |
+| `scripts/qa/provider-control-e2e-canary.py` | `send_receive`, `interrupt_cancel`, `tool_call_result`, `external_event_channel`, `live_token_streaming` | Partly migrated: OpenCode `tool_call_result` and Antigravity `live_token_streaming` now call this canary; keep provider-specific fakes as adapter test fixtures. |
 | Engine parser golden/adversarial tests | `parse_ingest_project` fixture replay | Reusable as `fixture_replay` scenarios. |
 | Shipper/ingest/session projection tests | `parse_ingest_project`, `timeline_projection` | Reusable Longhouse assertions under the runner. |
 | Sauron release-envelope/provider-status jobs | Private invocation and reporting | Sauron-owned runner/reporting; should consume universal artifacts, not provider-specific semantics. |
@@ -477,10 +478,14 @@ shape:
    scenario. It calls managed live-send, DB-ingests user/assistant marker rows
    when Runtime Host credentials are present, and exposes live-token credential
    gaps as yellow release-proof evidence.
-14. Evidence packages are written for pass, fail, and unsupported results.
-15. Existing one-off canaries remain compatibility lanes until each behavior is
+14. Antigravity `live_token_streaming` is an executable universal live-token
+   scenario. It calls real-agy hook-inbox injection, DB-ingests the queued user
+   message plus marker response, and exposes `universal_live_token_streaming`
+   evidence through release proof.
+15. Evidence packages are written for pass, fail, and unsupported results.
+16. Existing one-off canaries remain compatibility lanes until each behavior is
    migrated and baselined.
 
-Next implementation target: migrate Codex live send/control mechanics, Claude
-live-token send/steer mechanics, and Antigravity real-agy send/control mechanics
+Next implementation target: migrate Claude live-token send/steer mechanics and
+the remaining Codex, OpenCode, and Antigravity control gaps
 behind the same runner.
