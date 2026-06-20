@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from datetime import UTC
 from datetime import datetime
@@ -306,7 +307,9 @@ def utc_now() -> str:
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def default_evidence_root() -> Path:
@@ -407,7 +410,9 @@ def write_synthetic_release_proof(
     stderr = artifact_dir / "stderr.log"
     normalized_contract = artifact_dir / "normalized" / "contract.json"
     provider_contract = artifact_dir / "normalized" / "provider-contract.json"
-    operation_evidence_artifact = artifact_dir / "normalized" / "operation-evidence.json"
+    operation_evidence_artifact = (
+        artifact_dir / "normalized" / "operation-evidence.json"
+    )
     session_projection = artifact_dir / "normalized" / "session-projection.json"
     action_matrix = artifact_dir / "normalized" / "action-matrix.json"
     control_surface = artifact_dir / "normalized" / "control-surface.json"
@@ -503,7 +508,11 @@ def write_synthetic_release_proof(
             "provider": provider,
             "action_count": len(action_rows),
             "action_ids": [row["action_id"] for row in action_rows],
-            "status_counts": ({"pass": len(action_rows)} if status == "pass" else {status: 1, "pass": 1}),
+            "status_counts": (
+                {"pass": len(action_rows)}
+                if status == "pass"
+                else {status: 1, "pass": 1}
+            ),
             "actions": action_rows,
         },
     }
@@ -579,15 +588,77 @@ def write_synthetic_old_new_release_proofs(
     return old_paths, new_paths
 
 
+def write_maturity_rollup(
+    *, artifact_path: Path, evidence_root: Path
+) -> dict[str, Any]:
+    maturity_path = evidence_root / "provider-release-proof-maturity.json"
+    maturity_script = (
+        Path(__file__).resolve().with_name("provider-release-proof-maturity.py")
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(maturity_script),
+            "--universal-artifact",
+            str(artifact_path),
+            "--artifact",
+            str(maturity_path),
+        ],
+        cwd=Path(__file__).resolve().parents[2],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return {
+            "status": "fail",
+            "maturity_rollup_path": str(maturity_path),
+            "failure_code": "maturity_rollup_failed",
+            "returncode": result.returncode,
+            "stderr": result.stderr,
+        }
+    payload = json.loads(maturity_path.read_text(encoding="utf-8"))
+    universal_harness = (
+        payload.get("universal_harness")
+        if isinstance(payload.get("universal_harness"), dict)
+        else {}
+    )
+    return {
+        "status": "pass",
+        "maturity_rollup_path": str(maturity_path),
+        "universal_harness": {
+            key: universal_harness.get(key)
+            for key in (
+                "status",
+                "run_modes",
+                "execution_coverage_pass_percent",
+                "required_evidence_rollup",
+            )
+            if universal_harness.get(key) is not None
+        },
+    }
+
+
 def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
-    evidence_root = (args.evidence_root or default_evidence_root()).expanduser().resolve()
+    evidence_root = (
+        (args.evidence_root or default_evidence_root()).expanduser().resolve()
+    )
     artifact_path = (
-        (args.artifact or (evidence_root / "provider-release-proof-universal-smoke.json")).expanduser().resolve()
+        (
+            args.artifact
+            or (evidence_root / "provider-release-proof-universal-smoke.json")
+        )
+        .expanduser()
+        .resolve()
     )
     scenarios = _selected_scenarios(args)
-    provider_bins = None if args.use_real_provider_bins else write_fake_provider_bins(evidence_root)
+    provider_bins = (
+        None if args.use_real_provider_bins else write_fake_provider_bins(evidence_root)
+    )
     fixture_path = write_parse_fixture(evidence_root)
-    old_proof_paths, new_proof_paths = write_synthetic_old_new_release_proofs(evidence_root)
+    old_proof_paths, new_proof_paths = write_synthetic_old_new_release_proofs(
+        evidence_root
+    )
     harness = run_harness(
         HarnessOptions(
             providers=SUPPORTED_PROVIDERS,
@@ -609,18 +680,37 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         "providers": list(SUPPORTED_PROVIDERS),
         "scenarios": list(scenarios),
         "provider_bin_mode": "path_or_env" if args.use_real_provider_bins else "fake",
-        "token_spending_scenarios": [LIVE_TOKEN_SCENARIO] if LIVE_TOKEN_SCENARIO in scenarios else [],
+        "token_spending_scenarios": [LIVE_TOKEN_SCENARIO]
+        if LIVE_TOKEN_SCENARIO in scenarios
+        else [],
         "result_count": len(harness.get("results") or []),
         "evidence_root": str(evidence_root),
-        "synthetic_old_proof_paths": {provider: str(path) for provider, path in old_proof_paths.items()},
-        "synthetic_new_proof_paths": {provider: str(path) for provider, path in new_proof_paths.items()},
-        "universal_harness_artifact": str(evidence_root / "universal-agent-harness" / "universal-agent-harness.json"),
+        "synthetic_old_proof_paths": {
+            provider: str(path) for provider, path in old_proof_paths.items()
+        },
+        "synthetic_new_proof_paths": {
+            provider: str(path) for provider, path in new_proof_paths.items()
+        },
+        "universal_harness_artifact": str(
+            evidence_root / "universal-agent-harness" / "universal-agent-harness.json"
+        ),
         "provider_support_matrix_path": harness.get("provider_support_matrix_path"),
         "provider_support_matrix": harness.get("provider_support_matrix"),
-        "provider_execution_coverage_matrix_path": harness.get("provider_execution_coverage_matrix_path"),
-        "provider_execution_coverage_matrix": harness.get("provider_execution_coverage_matrix"),
+        "provider_execution_coverage_matrix_path": harness.get(
+            "provider_execution_coverage_matrix_path"
+        ),
+        "provider_execution_coverage_matrix": harness.get(
+            "provider_execution_coverage_matrix"
+        ),
     }
     artifact["artifact_path"] = str(artifact_path)
+    write_json(artifact_path, artifact)
+    maturity_rollup = write_maturity_rollup(
+        artifact_path=artifact_path,
+        evidence_root=evidence_root,
+    )
+    artifact["maturity_rollup"] = maturity_rollup
+    artifact["maturity_rollup_path"] = maturity_rollup.get("maturity_rollup_path")
     write_json(artifact_path, artifact)
     return artifact
 
@@ -659,7 +749,9 @@ def build_parser() -> argparse.ArgumentParser:
             "Append live_token_streaming to the scenario list. Requires --use-real-provider-bins and may spend tokens."
         ),
     )
-    parser.add_argument("--json", action="store_true", help="Print the smoke artifact as JSON.")
+    parser.add_argument(
+        "--json", action="store_true", help="Print the smoke artifact as JSON."
+    )
     return parser
 
 
@@ -670,7 +762,9 @@ def main(argv: list[str] | None = None) -> int:
     if (
         args.include_live_token_streaming or LIVE_TOKEN_SCENARIO in requested_scenarios
     ) and not args.use_real_provider_bins:
-        parser.error("live_token_streaming requires --use-real-provider-bins because it may spend provider tokens")
+        parser.error(
+            "live_token_streaming requires --use-real-provider-bins because it may spend provider tokens"
+        )
     artifact = run_smoke(args)
     if args.json:
         print(json.dumps(artifact, indent=2, sort_keys=True))

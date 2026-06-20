@@ -91,7 +91,10 @@ coverage suite before merge. Set `JSON=1` on the Make target only when you want
 the full inline artifact in stdout; the artifact path remains the durable
 evidence source. The primary CI workflow uploads
 `.build/canaries/provider-release-proof-universal-smoke/**` as a short-retention
-artifact after provider validation, including failed runs.
+artifact after provider validation, including failed runs. The universal smoke
+artifact also writes `provider-release-proof-maturity.json` in the same evidence
+root so the uploaded CI artifact includes both raw matrix evidence and the
+required-evidence completion rollup.
 
 Run the DB-backed universal ingest lane explicitly:
 

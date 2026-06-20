@@ -3314,3 +3314,8 @@ def test_universal_smoke_can_select_real_provider_live_token_mode(tmp_path: Path
     assert artifact["provider_bin_mode"] == "path_or_env"
     assert artifact["token_spending_scenarios"] == ["live_token_streaming"]
     assert artifact["artifact_path"] == str((tmp_path / "smoke.json").resolve())
+    assert Path(artifact["maturity_rollup_path"]).is_file()
+    assert artifact["maturity_rollup"]["status"] == "pass"
+    assert artifact["maturity_rollup"]["universal_harness"]["run_modes"]["token_spending_scenarios"] == [
+        "live_token_streaming"
+    ]

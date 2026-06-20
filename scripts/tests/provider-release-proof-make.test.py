@@ -217,6 +217,14 @@ def test_provider_release_proof_universal_smoke_make_emits_all_provider_artifact
         assert Path(payload["universal_harness_artifact"]).is_file()
         assert Path(payload["provider_support_matrix_path"]).is_file()
         assert Path(payload["provider_execution_coverage_matrix_path"]).is_file()
+        assert Path(payload["maturity_rollup_path"]).is_file()
+        assert payload["maturity_rollup"]["status"] == "pass"
+        assert (
+            payload["maturity_rollup"]["universal_harness"][
+                "execution_coverage_pass_percent"
+            ]
+            > 0.0
+        )
         support_matrix = payload["provider_support_matrix"]
         assert support_matrix["action_count"] > 20
         assert support_matrix["missing_provider_actions"] == []
@@ -266,9 +274,8 @@ def test_provider_release_proof_universal_smoke_default_runs_managed_session_e2e
         for provider, row in old_new_results.items():
             assert row["status"] == "pass"
             assert row["data"]["provider_release_proof_old_new_verdict"] == "green"
-            assert (
-                row["data"]["old_proof_uri"]
-                == str(Path(payload["synthetic_old_proof_paths"][provider]).resolve())
+            assert row["data"]["old_proof_uri"] == str(
+                Path(payload["synthetic_old_proof_paths"][provider]).resolve()
             )
 
         managed_results = {
