@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from provider_release_proof_rollups import coverage_actionability
 from provider_release_proof_rollups import finalize_execution_bucket
 from provider_release_proof_rollups import increment
 from provider_release_proof_rollups import new_execution_bucket
@@ -274,6 +275,7 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
                 "by_requirement": {},
                 "by_provider": {},
             },
+            "execution_coverage_actionability": coverage_actionability({}),
             "execution_coverage_gap_kind_counts": {},
             "action_matrix_pass_percent": None,
         }
@@ -436,6 +438,9 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
             )
             provider_entry["execution_coverage"] = {
                 "action_count": action_count,
+                "actionability": coverage_actionability(
+                    dict(totals["coverage_gap_kind_counts"])
+                ),
                 "coverage_status_counts": dict(totals["coverage_status_counts"]),
                 "coverage_kind_counts": dict(totals["coverage_kind_counts"]),
                 "coverage_gap_kind_counts": dict(totals["coverage_gap_kind_counts"]),
@@ -488,6 +493,9 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
         "providers": providers,
         "scenario_status_counts": scenario_status_counts,
         "required_evidence_rollup": required_evidence_rollup,
+        "execution_coverage_actionability": coverage_actionability(
+            execution_gap_kind_counts
+        ),
         "execution_coverage_gap_kind_counts": execution_gap_kind_counts,
         "action_matrix_pass_percent": pct(action_pass, action_total)
         if action_total

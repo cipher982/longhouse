@@ -632,6 +632,7 @@ def write_maturity_rollup(
                 "status",
                 "run_modes",
                 "execution_coverage_pass_percent",
+                "execution_coverage_actionability",
                 "execution_coverage_gap_kind_counts",
                 "required_evidence_rollup",
             )

@@ -1739,6 +1739,11 @@ def test_release_proof_can_attach_universal_full_action_suite() -> None:
         assert provider_execution["execution_coverage_matrix_path"]
         assert provider_execution["coverage_kind_counts"]["executable_scenario"] > 0
         assert provider_execution["coverage_kind_counts"].get("matrix_contract", 0) == 0
+        assert (
+            provider_execution["coverage_actionability"]["status"]
+            == "needs_stronger_evidence"
+        )
+        assert provider_execution["coverage_actionability"]["proof_gap_cells"] > 0
         required_evidence_rollup = provider_execution["required_evidence_rollup"]
         assert required_evidence_rollup["binary_version"]["pass_percent"] == 100.0
         assert required_evidence_rollup["hermetic"]["cell_count"] > 0
@@ -1752,6 +1757,12 @@ def test_release_proof_can_attach_universal_full_action_suite() -> None:
         assert (
             payload["normalized"]["provider_execution_coverage_matrix"]["action_count"]
             == provider_execution["action_count"]
+        )
+        assert (
+            payload["normalized"]["provider_execution_coverage_matrix"][
+                "coverage_actionability"
+            ]["status"]
+            == "needs_stronger_evidence"
         )
         assert (
             payload["normalized"]["provider_execution_coverage_matrix"][

@@ -527,6 +527,9 @@ separate ways:
   non-green execution cells, for example `provider_contract_unsupported`,
   `missing_live_canary`, `no_token_safety_gate`, `missing_credentials`, and
   `missing_coverage`. Use these fields before interpreting a raw pass percent.
+- `execution_coverage_actionability` summarizes those gap kinds for release
+  reporting. Expected provider limitations stay distinct from proof gaps that
+  need stronger evidence and from regressions or unknown failures.
 
 Smoke artifacts also report `run_modes`, including whether provider binaries
 were generated fakes or resolved from PATH/env and whether token-spending

@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from provider_release_proof_rollups import coverage_actionability
 from provider_release_proof_rollups import finalize_execution_bucket
 from provider_release_proof_rollups import new_execution_bucket
 from provider_release_proof_rollups import record_execution_cell
@@ -346,6 +347,7 @@ def _normalize_source_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
                 "coverage_status_counts",
                 "coverage_kind_counts",
                 "coverage_gap_kind_counts",
+                "coverage_actionability",
                 "required_evidence_rollup",
                 "execution_coverage_matrix_path",
             )
@@ -1225,6 +1227,9 @@ def _universal_provider_execution_coverage_summary(
         "coverage_status_counts": _status_counts_from_strings(coverage_statuses),
         "coverage_kind_counts": _status_counts_from_strings(coverage_kinds),
         "coverage_gap_kind_counts": _status_counts_from_strings(coverage_gap_kinds),
+        "coverage_actionability": coverage_actionability(
+            _status_counts_from_strings(coverage_gap_kinds)
+        ),
         "required_evidence_rollup": {
             key: finalize_execution_bucket(bucket)
             for key, bucket in sorted(required_evidence_buckets.items())

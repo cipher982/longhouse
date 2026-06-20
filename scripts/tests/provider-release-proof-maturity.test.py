@@ -279,6 +279,21 @@ def test_maturity_rollup_summarizes_universal_action_matrix() -> None:
             "passed": 2,
             "provider_contract_unsupported": 1,
         }
+        assert payload["universal_harness"]["execution_coverage_actionability"] == {
+            "attention_required_cells": 1,
+            "cell_count": 4,
+            "expected_provider_limit_cells": 1,
+            "gap_kind_counts": {
+                "missing_live_canary": 1,
+                "passed": 2,
+                "provider_contract_unsupported": 1,
+            },
+            "pass_percent": 50.0,
+            "passed": 2,
+            "proof_gap_cells": 1,
+            "regression_or_unknown_cells": 0,
+            "status": "needs_stronger_evidence",
+        }
         assert payload["universal_harness"]["run_modes"] == {
             "fake_provider_bin_artifact_count": 1,
             "live_token_streaming_artifact_count": 0,
@@ -324,6 +339,17 @@ def test_maturity_rollup_summarizes_universal_action_matrix() -> None:
             "execution_coverage"
         ] == {
             "action_count": 2,
+            "actionability": {
+                "attention_required_cells": 0,
+                "cell_count": 2,
+                "expected_provider_limit_cells": 0,
+                "gap_kind_counts": {"passed": 2},
+                "pass_percent": 100.0,
+                "passed": 2,
+                "proof_gap_cells": 0,
+                "regression_or_unknown_cells": 0,
+                "status": "covered",
+            },
             "coverage_gap_kind_counts": {"passed": 2},
             "coverage_kind_counts": {
                 "executable_scenario": 1,

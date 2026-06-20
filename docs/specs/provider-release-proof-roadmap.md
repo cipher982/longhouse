@@ -434,6 +434,7 @@ evidence path is recorded and the relevant doc, test, or proof command exists.
 | H76 | Summarize action and execution coverage drift in release-proof diffs | Done | +1 | `provider-release-proof-baseline.py` emits `action_drift` and `execution_coverage_drift` for accepted-baseline and explicit old/new comparisons, including rollup-only coverage drift and optional missing execution-coverage artifacts |
 | H77 | Add staged old/new binary manifest | Done | +1 | `provider-release-proof-old-new.py` writes `provider_release_proof_staging_manifest` with resolved paths, requested/observed versions, optional source URIs, executable bit, file sizes, SHA-256s, proof verdicts, and proof artifact paths for both staged binaries |
 | H78 | Classify execution coverage gap kinds | Done | +0 | `provider_execution_coverage_matrix`, release-proof provider slices, and maturity rollups now distinguish `provider_contract_unsupported`, `missing_live_canary`, `no_token_safety_gate`, `missing_credentials`, and `missing_coverage`, so a raw pass percent no longer makes expected provider limits look like remediable CI failures |
+| H79 | Summarize execution coverage actionability | Done | +0 | Maturity, smoke, and provider-release-proof slices now emit `execution_coverage_actionability`/`coverage_actionability` with `covered`, `covered_with_expected_limits`, `needs_stronger_evidence`, or `regression_or_unknown`, giving Sauron a generic release-reporting signal without private provider heuristics |
 
 ## Score Update Rules
 

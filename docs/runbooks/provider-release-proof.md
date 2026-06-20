@@ -158,6 +158,9 @@ Execution cells also include `coverage_gap_kind` and rollups such as
 `provider_contract_unsupported`, `missing_live_canary`, `no_token_safety_gate`,
 `missing_credentials`, or `missing_coverage` so alerting can separate expected
 provider limitations from remediable proof gaps.
+`execution_coverage_actionability.status` turns those counts into a conservative
+release-readiness summary: `covered`, `covered_with_expected_limits`,
+`needs_stronger_evidence`, or `regression_or_unknown`.
 
 OpenCode has the first real provider-safe universal e2e lane:
 
