@@ -21,6 +21,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from provider_release_proof_rollups import finalize_execution_bucket
+from provider_release_proof_rollups import new_execution_bucket
+from provider_release_proof_rollups import record_execution_cell
+
 SCHEMA_VERSION = 1
 SUPPORTED_PROVIDERS = ("claude", "codex", "opencode", "antigravity")
 LIVE_CANARY_PROVIDERS = frozenset({"claude", "opencode", "antigravity"})
@@ -341,6 +345,7 @@ def _normalize_source_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
                 "action_count",
                 "coverage_status_counts",
                 "coverage_kind_counts",
+                "required_evidence_rollup",
                 "execution_coverage_matrix_path",
             )
             if provider_execution_coverage_matrix.get(key) is not None
@@ -1161,6 +1166,7 @@ def _universal_provider_execution_coverage_summary(
     provider_actions: list[dict[str, Any]] = []
     coverage_statuses: list[str] = []
     coverage_kinds: list[str] = []
+    required_evidence_buckets: dict[str, dict[str, Any]] = {}
     for row in actions:
         if not isinstance(row, dict):
             continue
@@ -1179,11 +1185,28 @@ def _universal_provider_execution_coverage_summary(
         coverage_kind = str(provider_cell.get("coverage_kind") or "")
         if coverage_kind:
             coverage_kinds.append(coverage_kind)
+        # Today required_evidence is row-level; keep cell-level first so future
+        # provider-specific overrides do not need a schema migration.
+        required_evidence = str(
+            provider_cell.get("required_evidence")
+            or row.get("required_evidence")
+            or "unknown"
+        )
+        bucket = required_evidence_buckets.setdefault(
+            required_evidence,
+            new_execution_bucket(),
+        )
+        record_execution_cell(
+            bucket,
+            coverage_status=coverage_status or "unknown",
+            coverage_kind=coverage_kind or "unknown",
+        )
         provider_actions.append(
             {
                 "action_id": row.get("action_id"),
                 "category": row.get("category"),
                 "contract_operation": row.get("contract_operation"),
+                "required_evidence": required_evidence,
                 **provider_cell,
             }
         )
@@ -1195,6 +1218,10 @@ def _universal_provider_execution_coverage_summary(
         "action_count": len(provider_actions),
         "coverage_status_counts": _status_counts_from_strings(coverage_statuses),
         "coverage_kind_counts": _status_counts_from_strings(coverage_kinds),
+        "required_evidence_rollup": {
+            key: finalize_execution_bucket(bucket)
+            for key, bucket in sorted(required_evidence_buckets.items())
+        },
         "execution_coverage_matrix_path": universal.get(
             "provider_execution_coverage_matrix_path"
         ),

@@ -15,6 +15,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from provider_release_proof_rollups import finalize_execution_bucket
+from provider_release_proof_rollups import increment
+from provider_release_proof_rollups import new_execution_bucket
+from provider_release_proof_rollups import pct
+from provider_release_proof_rollups import record_execution_cell
+
 SCHEMA_VERSION = 1
 DEFAULT_COVERAGE_PATH = (
     Path(__file__).resolve().parents[2]
@@ -24,7 +30,6 @@ DEFAULT_COVERAGE_PATH = (
 )
 DEFAULT_OUTPUT_PATH = Path(".build/provider-release-proof-maturity.json")
 COVERAGE_WEIGHTS = {"yes": 1.0, "partial": 0.5, "no": 0.0}
-PASS_STATUS = "pass"
 
 
 def _now_iso() -> str:
@@ -43,57 +48,6 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-
-
-def _pct(numerator: float, denominator: float) -> float:
-    if denominator <= 0:
-        return 0.0
-    return round((numerator / denominator) * 100.0, 1)
-
-
-def _increment(mapping: dict[str, int], key: str) -> None:
-    mapping[key] = mapping.get(key, 0) + 1
-
-
-def _new_execution_bucket() -> dict[str, Any]:
-    return {
-        "cell_count": 0,
-        "pass": 0,
-        "coverage_status_counts": {},
-        "coverage_kind_counts": {},
-    }
-
-
-def _record_execution_cell(
-    bucket: dict[str, Any],
-    *,
-    coverage_status: str,
-    coverage_kind: str,
-) -> None:
-    bucket["cell_count"] += 1
-    if coverage_status == PASS_STATUS:
-        bucket["pass"] += 1
-    _increment(bucket["coverage_status_counts"], coverage_status)
-    _increment(bucket["coverage_kind_counts"], coverage_kind)
-
-
-def _finalize_execution_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
-    cell_count = int(bucket["cell_count"] or 0)
-    executable_count = int(
-        bucket["coverage_kind_counts"].get("executable_scenario") or 0
-    )
-    matrix_contract_count = int(
-        bucket["coverage_kind_counts"].get("matrix_contract") or 0
-    )
-    return {
-        "cell_count": cell_count,
-        "coverage_kind_counts": dict(bucket["coverage_kind_counts"]),
-        "coverage_status_counts": dict(bucket["coverage_status_counts"]),
-        "executable_scenario_percent": _pct(executable_count, cell_count),
-        "matrix_contract_percent": _pct(matrix_contract_count, cell_count),
-        "pass": int(bucket["pass"] or 0),
-        "pass_percent": _pct(float(bucket["pass"]), float(cell_count)),
-    }
 
 
 def _artifact_run_mode(artifact: dict[str, Any]) -> dict[str, Any]:
@@ -175,11 +129,11 @@ def _coverage_score(rows: list[dict[str, Any]]) -> dict[str, Any]:
         **counts,
         "total": total,
         "weighted_points": weighted,
-        "weighted_percent": _pct(weighted, total),
-        "ci_percent": _pct(counts["ci"], total),
-        "sauron_percent": _pct(counts["sauron"], total),
-        "release_baseline_percent": _pct(counts["release_baseline_rows"], total),
-        "actionable_percent": _pct(counts["actionable_rows"], total),
+        "weighted_percent": pct(weighted, total),
+        "ci_percent": pct(counts["ci"], total),
+        "sauron_percent": pct(counts["sauron"], total),
+        "release_baseline_percent": pct(counts["release_baseline_rows"], total),
+        "actionable_percent": pct(counts["actionable_rows"], total),
     }
 
 
@@ -258,7 +212,7 @@ def _baseline_statuses(
         "baseline_root": str(baseline_root),
         "scenario_count": len(accepted_scenarios),
         **counts,
-        "green_percent": _pct(counts["green"], len(accepted_scenarios)),
+        "green_percent": pct(counts["green"], len(accepted_scenarios)),
         "scenarios": statuses,
     }, status_by_key
 
@@ -297,7 +251,7 @@ def _release_baseline_row_status(
         "row_count": len(release_rows),
         "green": green,
         "missing_or_not_green": missing_or_not_green,
-        "green_percent": _pct(green, len(release_rows)),
+        "green_percent": pct(green, len(release_rows)),
     }
 
 
@@ -349,7 +303,7 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
         errors.extend(load_errors)
         loaded_artifacts.append(str(path))
         run_mode = _artifact_run_mode(artifact)
-        _increment(provider_bin_mode_counts, run_mode["provider_bin_mode"])
+        increment(provider_bin_mode_counts, run_mode["provider_bin_mode"])
         if run_mode["token_spending_scenarios"]:
             token_spending_artifact_count += 1
             token_spending_scenarios.update(run_mode["token_spending_scenarios"])
@@ -388,7 +342,7 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
             provider_entry["action_matrix"] = {
                 "action_count": action_count,
                 "status_counts": dict(status_counts),
-                "pass_percent": _pct(pass_count, action_count),
+                "pass_percent": pct(pass_count, action_count),
             }
         execution_matrix = artifact.get("provider_execution_coverage_matrix")
         if not isinstance(execution_matrix, dict):
@@ -436,9 +390,9 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
                     matrix_contract_total += 1
                 required_bucket = required_evidence_buckets.setdefault(
                     required_evidence,
-                    _new_execution_bucket(),
+                    new_execution_bucket(),
                 )
-                _record_execution_cell(
+                record_execution_cell(
                     required_bucket,
                     coverage_status=coverage_status,
                     coverage_kind=coverage_kind,
@@ -447,9 +401,9 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
                     provider_required_evidence_buckets.setdefault(
                         provider_key,
                         {},
-                    ).setdefault(required_evidence, _new_execution_bucket())
+                    ).setdefault(required_evidence, new_execution_bucket())
                 )
-                _record_execution_cell(
+                record_execution_cell(
                     provider_required_bucket,
                     coverage_status=coverage_status,
                     coverage_kind=coverage_kind,
@@ -474,12 +428,12 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
                 "action_count": action_count,
                 "coverage_status_counts": dict(totals["coverage_status_counts"]),
                 "coverage_kind_counts": dict(totals["coverage_kind_counts"]),
-                "pass_percent": _pct(float(totals["pass"]), float(action_count)),
-                "executable_scenario_percent": _pct(
+                "pass_percent": pct(float(totals["pass"]), float(action_count)),
+                "executable_scenario_percent": pct(
                     float(executable_count),
                     float(action_count),
                 ),
-                "matrix_contract_percent": _pct(
+                "matrix_contract_percent": pct(
                     float(matrix_contract_count),
                     float(action_count),
                 ),
@@ -487,12 +441,12 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
 
     required_evidence_rollup = {
         "by_requirement": {
-            key: _finalize_execution_bucket(bucket)
+            key: finalize_execution_bucket(bucket)
             for key, bucket in sorted(required_evidence_buckets.items())
         },
         "by_provider": {
             provider: {
-                key: _finalize_execution_bucket(bucket)
+                key: finalize_execution_bucket(bucket)
                 for key, bucket in sorted(provider_buckets.items())
             }
             for provider, provider_buckets in sorted(
@@ -523,19 +477,19 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
         "providers": providers,
         "scenario_status_counts": scenario_status_counts,
         "required_evidence_rollup": required_evidence_rollup,
-        "action_matrix_pass_percent": _pct(action_pass, action_total)
+        "action_matrix_pass_percent": pct(action_pass, action_total)
         if action_total
         else None,
-        "execution_coverage_pass_percent": _pct(execution_pass, execution_total)
+        "execution_coverage_pass_percent": pct(execution_pass, execution_total)
         if execution_total
         else None,
-        "executable_scenario_percent": _pct(
+        "executable_scenario_percent": pct(
             executable_scenario_total,
             execution_total,
         )
         if execution_total
         else None,
-        "matrix_contract_percent": _pct(matrix_contract_total, execution_total)
+        "matrix_contract_percent": pct(matrix_contract_total, execution_total)
         if execution_total
         else None,
     }

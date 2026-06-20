@@ -130,8 +130,30 @@ if args == ["--version"]:
     print("agy 9.9.9")
     raise SystemExit(0)
 
+if args == ["--help"]:
+    print("--print --prompt-interactive --conversation plugin")
+    raise SystemExit(0)
+
+if args == ["plugin", "--help"]:
+    print("install <target>")
+    print("list")
+    print("validate")
+    raise SystemExit(0)
+
+if len(args) == 3 and args[:2] == ["plugin", "validate"]:
+    plugin_root = pathlib.Path(args[2])
+    if not (plugin_root / "plugin.json").is_file():
+        print("plugin.json missing", file=sys.stderr)
+        raise SystemExit(1)
+    print("valid longhouse-runtime")
+    raise SystemExit(0)
+
 if args[:2] == ["plugin", "install"]:
     print("installed")
+    raise SystemExit(0)
+
+if args == ["plugin", "list"]:
+    print("longhouse-runtime")
     raise SystemExit(0)
 
 if "--print" not in args:
@@ -1221,7 +1243,12 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             _write_fake_repo(root / "repo")
-            _write_fake_provider_bin(root, f"{provider} 9.9.9")
+            if provider == "claude":
+                _write_fake_claude_provider_live_bin(root)
+            elif provider == "antigravity":
+                _write_fake_antigravity_real_send_bin(root)
+            else:
+                _write_fake_provider_bin(root, f"{provider} 9.9.9")
             fixture = root / "fixture.jsonl"
             fixture.write_text(
                 "\n".join(
@@ -1430,7 +1457,16 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
                 support_actions["send_message"]["status"]
                 == action_statuses["send_message"]["status"]
             )
-            assert support_actions["permission_prompt"]["status"] == "blocked"
+            expected_permission_prompt_status = {
+                "antigravity": "unsupported_gap",
+                "claude": "blocked",
+                "codex": "blocked",
+                "opencode": "pass",
+            }[provider]
+            assert (
+                support_actions["permission_prompt"]["status"]
+                == expected_permission_prompt_status
+            )
 
 
 def test_release_proof_can_attach_universal_old_new_release_diff() -> None:
@@ -1587,7 +1623,7 @@ def test_release_proof_can_attach_universal_full_action_suite() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         _write_fake_repo(root / "repo")
-        _write_fake_provider_bin(root, "2.9.9-fake (Claude Code)")
+        _write_fake_claude_provider_live_bin(root)
 
         result, payload = _run_proof(
             root,
@@ -1620,13 +1656,30 @@ def test_release_proof_can_attach_universal_full_action_suite() -> None:
         assert provider_execution["execution_coverage_matrix_path"]
         assert provider_execution["coverage_kind_counts"]["executable_scenario"] > 0
         assert provider_execution["coverage_kind_counts"].get("matrix_contract", 0) == 0
+        required_evidence_rollup = provider_execution["required_evidence_rollup"]
+        assert required_evidence_rollup["binary_version"]["pass_percent"] == 100.0
+        assert required_evidence_rollup["hermetic"]["cell_count"] > 0
+        assert required_evidence_rollup["hermetic"]["pass_percent"] > 0.0
+        assert (
+            required_evidence_rollup["live_token_required"]["coverage_status_counts"][
+                "blocked"
+            ]
+            >= 1
+        )
         assert (
             payload["normalized"]["provider_execution_coverage_matrix"]["action_count"]
             == provider_execution["action_count"]
         )
+        assert (
+            payload["normalized"]["provider_execution_coverage_matrix"][
+                "required_evidence_rollup"
+            ]["hermetic"]["cell_count"]
+            == required_evidence_rollup["hermetic"]["cell_count"]
+        )
         execution_actions = {
             row["action_id"]: row for row in provider_execution["actions"]
         }
+        assert all(row["required_evidence"] for row in execution_actions.values())
         assert execution_actions["send_message"]["coverage_kind"] == (
             "executable_scenario"
         )
@@ -1682,14 +1735,18 @@ def test_codex_release_proof_can_attach_universal_interrupt_credentials_gap() ->
         assert payload["verdict"] == "yellow"
         assert (
             payload["normalized"]["canaries"]["universal_interrupt_cancel"]["status"]
-            == "warn"
+            == "pass"
+        )
+        assert payload["operation_evidence"]["universal_interrupt"]["status"] == "pass"
+        assert (
+            payload["operation_evidence"]["universal_interrupt"]["level"] == "hermetic"
         )
         assert (
-            payload["operation_evidence"]["universal_interrupt"]["status"]
-            == "unsupported_gap"
+            payload["operation_evidence"]["universal_live_interrupt_canary"]["status"]
+            == "blocked"
         )
         assert (
-            payload["operation_evidence"]["universal_interrupt"]["level"]
+            payload["operation_evidence"]["universal_live_interrupt_canary"]["level"]
             == "live_token_required"
         )
 
@@ -1698,9 +1755,18 @@ def test_codex_release_proof_can_attach_universal_interrupt_credentials_gap() ->
         )
         result_row = universal_artifact["results"][0]
         assert result_row["scenario"] == "interrupt_cancel"
-        assert result_row["status"] == "unsupported_gap"
-        assert result_row["failure_code"] == "codex_managed_bridge_credentials_missing"
-        assert result_row["data"]["missing"] == ["--agents-token", "--api-url"]
+        assert result_row["status"] == "pass"
+        assert result_row["data"]["operation_evidence"]["interrupt"]["status"] == "pass"
+        assert (
+            result_row["data"]["operation_evidence"]["live_interrupt_canary"][
+                "failure_code"
+            ]
+            == "codex_managed_bridge_credentials_missing"
+        )
+        assert result_row["data"]["missing_live_credentials"] == [
+            "--agents-token",
+            "--api-url",
+        ]
 
 
 def test_claude_release_proof_can_attach_universal_interrupt_cancel_e2e() -> None:
@@ -1851,14 +1917,22 @@ def test_codex_release_proof_can_attach_universal_answer_pause_request_service_g
             payload["normalized"]["canaries"]["universal_answer_pause_request"][
                 "status"
             ]
-            == "warn"
+            == "pass"
         )
         assert (
             payload["operation_evidence"]["universal_answer_pause_request"]["status"]
-            == "blocked"
+            == "pass"
         )
         assert (
             payload["operation_evidence"]["universal_answer_pause_request"]["level"]
+            == "hermetic"
+        )
+        assert (
+            payload["operation_evidence"]["universal_live_answer_delivery"]["status"]
+            == "blocked"
+        )
+        assert (
+            payload["operation_evidence"]["universal_live_answer_delivery"]["level"]
             == "live_token_required"
         )
         assert (
@@ -1873,8 +1947,13 @@ def test_codex_release_proof_can_attach_universal_answer_pause_request_service_g
         result_row = universal_artifact["results"][0]
         assert result_row["provider"] == "codex"
         assert result_row["scenario"] == "answer_pause_request"
-        assert result_row["status"] == "blocked"
-        assert result_row["failure_code"] == "answer_pause_provider_delivery_unproven"
+        assert result_row["status"] == "pass"
+        assert (
+            result_row["data"]["operation_evidence"]["live_answer_delivery"][
+                "failure_code"
+            ]
+            == "answer_pause_provider_delivery_unproven"
+        )
         assert result_row["data"]["longhouse_response_service"]["status"] == "pass"
         evidence_root = Path(result_row["evidence_root"])
         resolved = _read_json(
