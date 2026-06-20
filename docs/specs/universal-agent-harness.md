@@ -572,7 +572,10 @@ shape:
    `old_new_release_diff` both as a top-level scenario and inside the
    `full_action_suite` execution matrix. Implemented scenarios must pass;
    unsafe provider mechanics must report operation-level `unsupported_gap`
-   evidence.
+   evidence. The same smoke entrypoint has an explicit real-provider mode:
+   `--use-real-provider-bins --include-live-token-streaming` appends the
+   token-spending live lane and resolves provider binaries from PATH/env instead
+   of generated fakes.
 10. OpenCode has the first real no-token `managed_session_e2e` lane. It calls the
    existing provider-live canary to prove server startup, schema, session
    create/get, `prompt_async noReply`, transcript marker recovery, process

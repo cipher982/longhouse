@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import inspect
 import json
 import subprocess
@@ -11,6 +12,15 @@ import pytest
 from zerg.qa import universal_agent_harness as uah
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _load_universal_smoke_module():
+    module_path = REPO_ROOT / "scripts" / "qa" / "provider-release-proof-universal-smoke.py"
+    spec = importlib.util.spec_from_file_location("provider_release_proof_universal_smoke", module_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _write_exe(path: Path, version: str) -> Path:
@@ -3242,3 +3252,65 @@ def test_script_entrypoint_runs_all_provider_fake_no_token_release_surface(tmp_p
         crash = by_key[(provider, "crash_timeout_cleanup")]
         assert crash["data"]["cleanup_assertions"]["owned_processes_remaining"] == 0
         assert Path(crash["data"]["diagnostics_path"]).is_file()
+
+
+def test_universal_smoke_rejects_live_token_without_real_provider_bins(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "qa" / "provider-release-proof-universal-smoke.py"),
+            "--evidence-root",
+            str(tmp_path / "evidence"),
+            "--include-live-token-streaming",
+        ],
+        cwd=str(REPO_ROOT),
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 2
+    assert "live_token_streaming requires --use-real-provider-bins" in result.stderr
+
+
+def test_universal_smoke_can_select_real_provider_live_token_mode(tmp_path: Path, monkeypatch) -> None:
+    smoke = _load_universal_smoke_module()
+    calls: list[object] = []
+
+    def fake_run_harness(options):
+        calls.append(options)
+        artifact_path = options.evidence_root / "universal-agent-harness.json"
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.write_text("{}", encoding="utf-8")
+        return {
+            "verdict": "yellow",
+            "results": [],
+            "provider_support_matrix_path": str(options.evidence_root / "provider-support-matrix.json"),
+            "provider_support_matrix": {"artifact_kind": "fake_support"},
+            "provider_execution_coverage_matrix_path": str(
+                options.evidence_root / "provider-execution-coverage-matrix.json"
+            ),
+            "provider_execution_coverage_matrix": {"artifact_kind": "fake_execution"},
+        }
+
+    monkeypatch.setattr(smoke, "run_harness", fake_run_harness)
+    args = smoke.build_parser().parse_args(
+        [
+            "--evidence-root",
+            str(tmp_path / "evidence"),
+            "--artifact",
+            str(tmp_path / "smoke.json"),
+            "--use-real-provider-bins",
+            "--include-live-token-streaming",
+        ]
+    )
+    artifact = smoke.run_smoke(args)
+
+    assert calls
+    options = calls[0]
+    assert options.provider_bins is None
+    assert "live_token_streaming" in options.scenarios
+    assert artifact["provider_bin_mode"] == "path_or_env"
+    assert artifact["token_spending_scenarios"] == ["live_token_streaming"]
+    assert artifact["artifact_path"] == str((tmp_path / "smoke.json").resolve())

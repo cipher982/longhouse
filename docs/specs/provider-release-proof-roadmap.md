@@ -426,6 +426,7 @@ evidence path is recorded and the relevant doc, test, or proof command exists.
 | H72 | Promote Antigravity launch behind the universal adapter | Done | +0 | `launch_managed_session` now routes Antigravity through the provider-live no-token binary/help/plugin/global-hook canary, requires `launch_local` evidence, DB-ingests the rows, and keeps real `agy` loop send/interrupt/reattach gaps separate |
 | H73 | Replace Antigravity adapter-missing control gaps with contract gaps | Done | +0 | `interrupt_cancel` and `resume_reattach` now report typed Antigravity `unsupported_gap` results from the managed-provider contract instead of looking like missing universal adapter plumbing |
 | H74 | Promote Claude external event channel proof | Done | +0 | `external_event_channel` now routes Claude through the provider-live no-token development-channel contract, requires passing channel evidence, DB-ingests the rows, and leaves Codex/OpenCode unsupported until they expose comparable external-event semantics |
+| H75 | Add explicit real-provider live-token smoke mode | Done | +0 | `provider-release-proof-universal-smoke.py` keeps CI fake/no-token by default, rejects accidental `live_token_streaming` with fake bins, and adds `--use-real-provider-bins --include-live-token-streaming` plus `make provider-release-proof-universal-live-smoke` for intentional token-spending release checks |
 
 ## Score Update Rules
 

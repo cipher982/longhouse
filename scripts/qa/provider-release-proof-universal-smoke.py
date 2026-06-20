@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Run the all-provider universal release-proof smoke with fake no-token binaries."""
+"""Run the all-provider universal release-proof smoke.
+
+The default mode is fake/no-token and safe for CI. The opt-in live-token mode
+uses real provider binaries from PATH/env and may spend provider tokens.
+"""
 
 # ruff: noqa: E402
 
@@ -44,6 +48,7 @@ DEFAULT_SCENARIOS = (
     "crash_timeout_cleanup",
     "managed_session_e2e",
 )
+LIVE_TOKEN_SCENARIO = "live_token_streaming"
 FAKE_VERSION_BY_PROVIDER = {
     "claude": "2.9.9-fake (Claude Code)",
     "codex": "codex-cli 9.9.9",
@@ -579,8 +584,8 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
     artifact_path = (
         (args.artifact or (evidence_root / "provider-release-proof-universal-smoke.json")).expanduser().resolve()
     )
-    scenarios = tuple(args.scenario or DEFAULT_SCENARIOS)
-    provider_bins = write_fake_provider_bins(evidence_root)
+    scenarios = _selected_scenarios(args)
+    provider_bins = None if args.use_real_provider_bins else write_fake_provider_bins(evidence_root)
     fixture_path = write_parse_fixture(evidence_root)
     old_proof_paths, new_proof_paths = write_synthetic_old_new_release_proofs(evidence_root)
     harness = run_harness(
@@ -590,7 +595,7 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             evidence_root=evidence_root / "universal-agent-harness",
             provider_bins=provider_bins,
             fixture_path=fixture_path,
-            prompt="Longhouse release-proof universal fake/no-token smoke.",
+            prompt=_smoke_prompt(args),
             old_proof_paths=old_proof_paths,
             new_proof_paths=new_proof_paths,
             baseline_root=evidence_root / "baselines",
@@ -603,6 +608,8 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         "verdict": harness.get("verdict"),
         "providers": list(SUPPORTED_PROVIDERS),
         "scenarios": list(scenarios),
+        "provider_bin_mode": "path_or_env" if args.use_real_provider_bins else "fake",
+        "token_spending_scenarios": [LIVE_TOKEN_SCENARIO] if LIVE_TOKEN_SCENARIO in scenarios else [],
         "result_count": len(harness.get("results") or []),
         "evidence_root": str(evidence_root),
         "synthetic_old_proof_paths": {provider: str(path) for provider, path in old_proof_paths.items()},
@@ -618,6 +625,19 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
     return artifact
 
 
+def _selected_scenarios(args: argparse.Namespace) -> tuple[str, ...]:
+    scenarios = list(args.scenario or DEFAULT_SCENARIOS)
+    if args.include_live_token_streaming and LIVE_TOKEN_SCENARIO not in scenarios:
+        scenarios.append(LIVE_TOKEN_SCENARIO)
+    return tuple(scenarios)
+
+
+def _smoke_prompt(args: argparse.Namespace) -> str:
+    if args.use_real_provider_bins:
+        return "Longhouse release-proof universal real-provider smoke."
+    return "Longhouse release-proof universal fake/no-token smoke."
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--artifact", type=Path)
@@ -627,12 +647,30 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         help="Universal scenario to run. Repeatable; defaults to fake/no-token smoke surface.",
     )
+    parser.add_argument(
+        "--use-real-provider-bins",
+        action="store_true",
+        help="Resolve provider binaries from PATH/env instead of generating fake no-token binaries.",
+    )
+    parser.add_argument(
+        "--include-live-token-streaming",
+        action="store_true",
+        help=(
+            "Append live_token_streaming to the scenario list. Requires --use-real-provider-bins and may spend tokens."
+        ),
+    )
     parser.add_argument("--json", action="store_true", help="Print the smoke artifact as JSON.")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    requested_scenarios = set(args.scenario or ())
+    if (
+        args.include_live_token_streaming or LIVE_TOKEN_SCENARIO in requested_scenarios
+    ) and not args.use_real_provider_bins:
+        parser.error("live_token_streaming requires --use-real-provider-bins because it may spend provider tokens")
     artifact = run_smoke(args)
     if args.json:
         print(json.dumps(artifact, indent=2, sort_keys=True))
