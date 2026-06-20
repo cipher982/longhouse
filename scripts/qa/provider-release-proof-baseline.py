@@ -19,7 +19,12 @@ from typing import Any
 
 SCHEMA_VERSION = 1
 DEFAULT_BASELINE_ROOT = Path(".provider-release-proofs")
-DEFAULT_COVERAGE_PATH = Path(__file__).resolve().parents[2] / "docs" / "specs" / "provider-release-proof-coverage.json"
+DEFAULT_COVERAGE_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "docs"
+    / "specs"
+    / "provider-release-proof-coverage.json"
+)
 COMPARABLE_ARTIFACT_KEYS = (
     "normalized_contract",
     "provider_contract",
@@ -45,7 +50,9 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def _safe_segment(value: Any) -> str:
@@ -70,7 +77,11 @@ def _scenario_root(root: Path, proof: dict[str, Any]) -> Path:
 
 
 def _version_root(root: Path, proof: dict[str, Any]) -> Path:
-    return _scenario_root(root, proof) / "versions" / _safe_segment(_provider_version(proof))
+    return (
+        _scenario_root(root, proof)
+        / "versions"
+        / _safe_segment(_provider_version(proof))
+    )
 
 
 def _accepted_path(root: Path, proof: dict[str, Any]) -> Path:
@@ -201,12 +212,20 @@ def _artifact_paths(proof: dict[str, Any]) -> dict[str, str]:
     artifacts = proof.get("artifacts")
     if isinstance(artifacts, dict):
         paths.update(
-            {key: value for key, value in artifacts.items() if isinstance(key, str) and isinstance(value, str)}
+            {
+                key: value
+                for key, value in artifacts.items()
+                if isinstance(key, str) and isinstance(value, str)
+            }
         )
     archived_artifacts = proof.get("archived_artifacts")
     if isinstance(archived_artifacts, dict):
         paths.update(
-            {key: value for key, value in archived_artifacts.items() if isinstance(key, str) and isinstance(value, str)}
+            {
+                key: value
+                for key, value in archived_artifacts.items()
+                if isinstance(key, str) and isinstance(value, str)
+            }
         )
     return paths
 
@@ -246,13 +265,17 @@ def _artifact_json(
 def _stable_operation(info: Any) -> dict[str, Any]:
     if not isinstance(info, dict):
         return {}
-    return {key: info.get(key) for key in STABLE_OPERATION_KEYS if info.get(key) is not None}
+    return {
+        key: info.get(key) for key in STABLE_OPERATION_KEYS if info.get(key) is not None
+    }
 
 
 def _stable_check(info: Any) -> dict[str, Any]:
     if not isinstance(info, dict):
         return {}
-    return {key: info.get(key) for key in STABLE_CHECK_KEYS if info.get(key) is not None}
+    return {
+        key: info.get(key) for key in STABLE_CHECK_KEYS if info.get(key) is not None
+    }
 
 
 def _stable_operation_map(payload: Any) -> dict[str, dict[str, Any]]:
@@ -308,7 +331,9 @@ def _artifact_shape_errors(key: str, payload: dict[str, Any]) -> list[dict[str, 
 
 def _stable_session_projection(payload: dict[str, Any]) -> dict[str, Any]:
     comparable: dict[str, Any] = {
-        key: payload.get(key) for key in ("artifact_kind", "provider", "status") if payload.get(key) is not None
+        key: payload.get(key)
+        for key in ("artifact_kind", "provider", "status")
+        if payload.get(key) is not None
     }
     projection = payload.get("projection")
     if isinstance(projection, dict):
@@ -347,13 +372,21 @@ def _stable_action_row(row: Any) -> dict[str, Any]:
 
 def _stable_action_artifact(payload: dict[str, Any], field: str) -> dict[str, Any]:
     comparable: dict[str, Any] = {
-        key: payload.get(key) for key in ("artifact_kind", "provider", "status") if payload.get(key) is not None
+        key: payload.get(key)
+        for key in ("artifact_kind", "provider", "status")
+        if payload.get(key) is not None
     }
     summary = payload.get(field)
     if isinstance(summary, dict):
         comparable[field] = {
             key: summary.get(key)
-            for key in ("artifact_kind", "provider", "action_count", "action_ids", "status_counts")
+            for key in (
+                "artifact_kind",
+                "provider",
+                "action_count",
+                "action_ids",
+                "status_counts",
+            )
             if summary.get(key) is not None
         }
         actions = summary.get("actions")
@@ -381,7 +414,9 @@ def _stable_artifact(key: str, payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "artifact_kind": payload.get("artifact_kind"),
             "provider": payload.get("provider"),
-            "operation_evidence": _stable_operation_map(payload.get("operation_evidence")),
+            "operation_evidence": _stable_operation_map(
+                payload.get("operation_evidence")
+            ),
         }
     if key == "session_projection":
         return _stable_session_projection(payload)
@@ -433,6 +468,158 @@ def _diff_comparable(base: Any, candidate: Any) -> dict[str, Any]:
     }
 
 
+ACTION_DRIFT_ARTIFACTS = ("action_matrix", "control_surface")
+ACTION_DRIFT_FIELDS = (
+    "category",
+    "status",
+    "failure_code",
+    "support",
+    "support_reason",
+    "required_evidence",
+    "evidence_level",
+    "proof_scope",
+    "contract_operation",
+    "canary",
+)
+
+
+def _actions_by_id(
+    comparable: dict[str, Any], artifact: str
+) -> dict[str, dict[str, Any]]:
+    artifact_payload = comparable.get("artifacts")
+    if not isinstance(artifact_payload, dict):
+        return {}
+    wrapper = artifact_payload.get(artifact)
+    if not isinstance(wrapper, dict):
+        return {}
+    summary = wrapper.get(artifact)
+    if not isinstance(summary, dict):
+        return {}
+    actions = summary.get("actions")
+    if not isinstance(actions, list):
+        return {}
+    return {
+        str(row["action_id"]): row
+        for row in actions
+        if isinstance(row, dict) and isinstance(row.get("action_id"), str)
+    }
+
+
+def _changed_action_summary(
+    *,
+    artifact: str,
+    action_id: str,
+    previous: dict[str, Any] | None,
+    current: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    previous = previous or {}
+    current = current or {}
+    changed_fields = [
+        field
+        for field in ACTION_DRIFT_FIELDS
+        if previous.get(field) != current.get(field)
+    ]
+    if not changed_fields:
+        return None
+    category = (
+        current.get("category")
+        if current.get("category") is not None
+        else previous.get("category")
+    )
+    required_evidence = (
+        current.get("required_evidence")
+        if current.get("required_evidence") is not None
+        else previous.get("required_evidence")
+    )
+    return {
+        "artifact": artifact,
+        "action_id": action_id,
+        "category": category,
+        "required_evidence": required_evidence,
+        "changed_fields": changed_fields,
+        "previous": {
+            field: previous.get(field)
+            for field in ACTION_DRIFT_FIELDS
+            if previous.get(field) is not None
+        },
+        "current": {
+            field: current.get(field)
+            for field in ACTION_DRIFT_FIELDS
+            if current.get(field) is not None
+        },
+    }
+
+
+def _count_by(rows: list[dict[str, Any]], field: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        key = str(row.get(field) or "unknown")
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _empty_action_drift(status: str) -> dict[str, Any]:
+    return {
+        "status": status,
+        "changed_action_count": 0,
+        "counts_by_artifact": {},
+        "counts_by_required_evidence": {},
+        "counts_by_category": {},
+        "actions": [],
+    }
+
+
+def _action_artifact_errors(errors: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            key: error.get(key)
+            for key in ("side", "artifact", "failure_code", "path", "message")
+            if error.get(key) is not None
+        }
+        for error in errors
+        if error.get("artifact") in ACTION_DRIFT_ARTIFACTS
+    ]
+
+
+def _action_drift_summary(
+    base_comparable: dict[str, Any],
+    candidate_comparable: dict[str, Any],
+    *,
+    artifact_errors: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    changed: list[dict[str, Any]] = []
+    unavailable_artifacts = _action_artifact_errors(artifact_errors or [])
+    for artifact in ACTION_DRIFT_ARTIFACTS:
+        previous_actions = _actions_by_id(base_comparable, artifact)
+        current_actions = _actions_by_id(candidate_comparable, artifact)
+        for action_id in sorted(set(previous_actions) | set(current_actions)):
+            row = _changed_action_summary(
+                artifact=artifact,
+                action_id=action_id,
+                previous=previous_actions.get(action_id),
+                current=current_actions.get(action_id),
+            )
+            if row is not None:
+                changed.append(row)
+    if changed:
+        status = "different"
+    elif unavailable_artifacts:
+        status = "unavailable"
+    else:
+        status = "match"
+    summary = {
+        "status": status,
+        "changed_action_count": len(changed),
+        "counts_by_artifact": _count_by(changed, "artifact"),
+        "counts_by_required_evidence": _count_by(changed, "required_evidence"),
+        "counts_by_category": _count_by(changed, "category"),
+        "actions": changed,
+    }
+    if unavailable_artifacts:
+        summary["unavailable_artifacts"] = unavailable_artifacts
+    return summary
+
+
 def diff_proofs(
     candidate_path: Path,
     *,
@@ -454,7 +641,9 @@ def diff_proofs(
     if base is None:
         if candidate_verdict == "red":
             verdict = "red"
-            failure_code = str(candidate.get("failure_code") or "candidate_release_proof_failed")
+            failure_code = str(
+                candidate.get("failure_code") or "candidate_release_proof_failed"
+            )
             recommendation = "block_upgrade_recommendation"
         elif candidate_verdict == "green":
             verdict = "yellow"
@@ -462,9 +651,15 @@ def diff_proofs(
             recommendation = "investigate_before_upgrade"
         else:
             verdict = "yellow"
-            failure_code = str(candidate.get("failure_code") or "candidate_release_proof_not_green")
+            failure_code = str(
+                candidate.get("failure_code") or "candidate_release_proof_not_green"
+            )
             recommendation = "investigate_before_upgrade"
-        diff = {"status": "not_compared", "changes": []}
+        diff = {
+            "status": "not_compared",
+            "changes": [],
+            "action_drift": _empty_action_drift("not_compared"),
+        }
     else:
         base_comparable, base_errors = _comparable_proof(
             base,
@@ -478,9 +673,16 @@ def diff_proofs(
         )
         comparable_errors = [*base_errors, *candidate_errors]
         diff = _diff_comparable(base_comparable, candidate_comparable)
+        diff["action_drift"] = _action_drift_summary(
+            base_comparable,
+            candidate_comparable,
+            artifact_errors=comparable_errors,
+        )
         if candidate_verdict == "red":
             verdict = "red"
-            failure_code = str(candidate.get("failure_code") or "candidate_release_proof_failed")
+            failure_code = str(
+                candidate.get("failure_code") or "candidate_release_proof_failed"
+            )
             recommendation = "block_upgrade_recommendation"
         elif comparable_errors:
             verdict = "red"
@@ -492,7 +694,9 @@ def diff_proofs(
             recommendation = "block_upgrade_recommendation"
         elif candidate_verdict != "green":
             verdict = "yellow"
-            failure_code = str(candidate.get("failure_code") or "candidate_release_proof_not_green")
+            failure_code = str(
+                candidate.get("failure_code") or "candidate_release_proof_not_green"
+            )
             recommendation = "investigate_before_upgrade"
         else:
             verdict = "green"
@@ -631,17 +835,25 @@ def _accepted_scenarios_from_coverage(coverage_path: Path) -> list[dict[str, Any
     payload = _read_json(coverage_path)
     scenarios = payload.get("accepted_release_proof_scenarios")
     if not isinstance(scenarios, list):
-        raise ValueError(f"{coverage_path} does not define accepted_release_proof_scenarios")
+        raise ValueError(
+            f"{coverage_path} does not define accepted_release_proof_scenarios"
+        )
     accepted: list[dict[str, Any]] = []
     for index, scenario in enumerate(scenarios):
         if not isinstance(scenario, dict):
-            raise ValueError(f"{coverage_path} accepted_release_proof_scenarios[{index}] is not an object")
+            raise ValueError(
+                f"{coverage_path} accepted_release_proof_scenarios[{index}] is not an object"
+            )
         provider = scenario.get("provider")
         scenario_id = scenario.get("scenario_id")
         if not isinstance(provider, str) or not provider:
-            raise ValueError(f"{coverage_path} accepted_release_proof_scenarios[{index}] is missing provider")
+            raise ValueError(
+                f"{coverage_path} accepted_release_proof_scenarios[{index}] is missing provider"
+            )
         if not isinstance(scenario_id, str) or not scenario_id:
-            raise ValueError(f"{coverage_path} accepted_release_proof_scenarios[{index}] is missing scenario_id")
+            raise ValueError(
+                f"{coverage_path} accepted_release_proof_scenarios[{index}] is missing scenario_id"
+            )
         accepted.append(scenario)
     return accepted
 
@@ -688,7 +900,9 @@ def baseline_status_all(
         "baseline_root": str(baseline_root.expanduser()),
         "coverage_path": str(coverage_path),
         "scenario_count": len(statuses),
-        "green_count": sum(1 for status in statuses if status.get("verdict") == "green"),
+        "green_count": sum(
+            1 for status in statuses if status.get("verdict") == "green"
+        ),
         "non_green_count": len(non_green),
         "verdict": verdict,
         "failure_code": failure_code,
@@ -697,13 +911,17 @@ def baseline_status_all(
     }
 
 
-def _print_or_write(payload: dict[str, Any], *, artifact: Path | None, as_json: bool) -> None:
+def _print_or_write(
+    payload: dict[str, Any], *, artifact: Path | None, as_json: bool
+) -> None:
     if artifact is not None:
         _write_json(artifact.expanduser(), payload)
     if as_json:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return
-    print(f"{payload['artifact_kind']}: {payload.get('provider')} {payload.get('verdict', 'accepted')}")
+    print(
+        f"{payload['artifact_kind']}: {payload.get('provider')} {payload.get('verdict', 'accepted')}"
+    )
     if payload.get("failure_code"):
         print(f"failure_code: {payload['failure_code']}")
     if artifact is not None:
@@ -714,13 +932,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    accept = subparsers.add_parser("accept", help="Accept a proof artifact as the current baseline")
+    accept = subparsers.add_parser(
+        "accept", help="Accept a proof artifact as the current baseline"
+    )
     accept.add_argument("--proof", type=Path, required=True)
     accept.add_argument("--baseline-root", type=Path, default=DEFAULT_BASELINE_ROOT)
     accept.add_argument("--artifact", type=Path)
     accept.add_argument("--json", action="store_true")
 
-    diff = subparsers.add_parser("diff", help="Diff a candidate proof against accepted or explicit base proof")
+    diff = subparsers.add_parser(
+        "diff", help="Diff a candidate proof against accepted or explicit base proof"
+    )
     diff.add_argument("--candidate", type=Path, required=True)
     diff.add_argument("--base", type=Path)
     diff.add_argument("--baseline-root", type=Path, default=DEFAULT_BASELINE_ROOT)
@@ -762,7 +984,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "accept":
-        payload = accept_proof(args.proof, baseline_root=args.baseline_root.expanduser())
+        payload = accept_proof(
+            args.proof, baseline_root=args.baseline_root.expanduser()
+        )
         _print_or_write(payload, artifact=args.artifact, as_json=args.json)
         return 1 if payload.get("verdict") == "red" else 0
     if args.command == "diff":

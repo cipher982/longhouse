@@ -47,7 +47,9 @@ def _write_proof(
     stderr = artifact_dir / "stderr.log"
     normalized_contract = artifact_dir / "normalized" / "contract.json"
     provider_contract = artifact_dir / "normalized" / "provider_contract.json"
-    operation_evidence_artifact = artifact_dir / "normalized" / "operation_evidence.json"
+    operation_evidence_artifact = (
+        artifact_dir / "normalized" / "operation_evidence.json"
+    )
     session_projection = artifact_dir / "normalized" / "session_projection.json"
     action_matrix = artifact_dir / "normalized" / "action_matrix.json"
     control_surface = artifact_dir / "normalized" / "control_surface.json"
@@ -178,9 +180,15 @@ def _write_proof(
     stderr.write_text("", encoding="utf-8")
     normalized_contract.parent.mkdir(parents=True, exist_ok=True)
     normalized_contract.write_text(json.dumps(normalized), encoding="utf-8")
-    provider_contract.write_text(json.dumps(provider_contract_payload), encoding="utf-8")
-    operation_evidence_artifact.write_text(json.dumps(operation_evidence_payload), encoding="utf-8")
-    session_projection.write_text(json.dumps(session_projection_payload), encoding="utf-8")
+    provider_contract.write_text(
+        json.dumps(provider_contract_payload), encoding="utf-8"
+    )
+    operation_evidence_artifact.write_text(
+        json.dumps(operation_evidence_payload), encoding="utf-8"
+    )
+    session_projection.write_text(
+        json.dumps(session_projection_payload), encoding="utf-8"
+    )
     action_matrix.write_text(json.dumps(action_matrix_payload), encoding="utf-8")
     control_surface.write_text(json.dumps(control_surface_payload), encoding="utf-8")
     proof = {
@@ -211,7 +219,9 @@ def _write_proof(
 
 
 def _run(args: list[str]) -> tuple[subprocess.CompletedProcess[str], dict]:
-    artifact = Path(args[args.index("--artifact") + 1]) if "--artifact" in args else None
+    artifact = (
+        Path(args[args.index("--artifact") + 1]) if "--artifact" in args else None
+    )
     result = subprocess.run(
         [sys.executable, str(BASELINE), *args, "--json"],
         cwd=REPO_ROOT,
@@ -307,7 +317,9 @@ def test_diff_against_accepted_baseline_matches() -> None:
         baseline_root = root / "baselines"
         accepted = _write_proof(root, "accepted")
         candidate = _write_proof(root, "candidate", version="1.2.4")
-        _run(["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)])
+        _run(
+            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
+        )
 
         result, payload = _run(
             [
@@ -331,7 +343,9 @@ def test_diff_against_accepted_baseline_detects_drift() -> None:
         baseline_root = root / "baselines"
         accepted = _write_proof(root, "accepted")
         candidate = _write_proof(root, "candidate", status="fail", version="1.2.4")
-        _run(["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)])
+        _run(
+            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
+        )
 
         result, payload = _run(
             [
@@ -358,16 +372,20 @@ def test_diff_detects_stable_session_projection_drift() -> None:
         candidate_payload = json.loads(candidate.read_text(encoding="utf-8"))
         projection_path = Path(candidate_payload["artifacts"]["session_projection"])
         projection = json.loads(projection_path.read_text(encoding="utf-8"))
-        projection["projection"]["checks"]["prompt_async_no_reply_delivery"]["status"] = "fail"
-        projection["projection"]["checks"]["prompt_async_no_reply_delivery"]["failure_code"] = (
-            "opencode_prompt_async_delivery_not_observed"
-        )
+        projection["projection"]["checks"]["prompt_async_no_reply_delivery"][
+            "status"
+        ] = "fail"
+        projection["projection"]["checks"]["prompt_async_no_reply_delivery"][
+            "failure_code"
+        ] = "opencode_prompt_async_delivery_not_observed"
         projection["projection"]["operation_statuses"]["send_input"]["status"] = "fail"
         projection["projection"]["operation_statuses"]["send_input"]["failure_code"] = (
             "opencode_prompt_async_delivery_not_observed"
         )
         projection_path.write_text(json.dumps(projection), encoding="utf-8")
-        _run(["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)])
+        _run(
+            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
+        )
 
         result, payload = _run(
             [
@@ -386,15 +404,15 @@ def test_diff_detects_stable_session_projection_drift() -> None:
         previous = payload["diff"]["changes"][0]["previous"]
         current = payload["diff"]["changes"][0]["current"]
         assert (
-            previous["artifacts"]["session_projection"]["projection"]["checks"]["prompt_async_no_reply_delivery"][
-                "status"
-            ]
+            previous["artifacts"]["session_projection"]["projection"]["checks"][
+                "prompt_async_no_reply_delivery"
+            ]["status"]
             == "pass"
         )
         assert (
-            current["artifacts"]["session_projection"]["projection"]["checks"]["prompt_async_no_reply_delivery"][
-                "failure_code"
-            ]
+            current["artifacts"]["session_projection"]["projection"]["checks"][
+                "prompt_async_no_reply_delivery"
+            ]["failure_code"]
             == "opencode_prompt_async_delivery_not_observed"
         )
 
@@ -409,10 +427,14 @@ def test_diff_detects_stable_action_matrix_drift() -> None:
         action_matrix_path = Path(candidate_payload["artifacts"]["action_matrix"])
         action_matrix = json.loads(action_matrix_path.read_text(encoding="utf-8"))
         action_matrix["action_matrix"]["actions"][0]["status"] = "fail"
-        action_matrix["action_matrix"]["actions"][0]["failure_code"] = "send_message_contract_regressed"
+        action_matrix["action_matrix"]["actions"][0]["failure_code"] = (
+            "send_message_contract_regressed"
+        )
         action_matrix["action_matrix"]["status_counts"] = {"blocked": 1, "fail": 1}
         action_matrix_path.write_text(json.dumps(action_matrix), encoding="utf-8")
-        _run(["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)])
+        _run(
+            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
+        )
 
         result, payload = _run(
             [
@@ -428,12 +450,110 @@ def test_diff_detects_stable_action_matrix_drift() -> None:
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "provider_release_proof_drift"
         assert payload["diff"]["status"] == "different"
+        action_drift = payload["diff"]["action_drift"]
+        assert action_drift["status"] == "different"
+        assert action_drift["changed_action_count"] == 1
+        assert action_drift["counts_by_artifact"] == {"action_matrix": 1}
+        assert action_drift["counts_by_required_evidence"] == {"hermetic": 1}
+        action_row = next(
+            row for row in action_drift["actions"] if row["artifact"] == "action_matrix"
+        )
+        assert action_row["action_id"] == "send_message"
+        assert action_row["category"] == "control"
+        assert action_row["required_evidence"] == "hermetic"
+        assert action_row["changed_fields"] == ["status", "failure_code"]
+        assert action_row["previous"]["status"] == "pass"
+        assert action_row["current"]["status"] == "fail"
+        assert (
+            action_row["current"]["failure_code"] == "send_message_contract_regressed"
+        )
         previous = payload["diff"]["changes"][0]["previous"]
         current = payload["diff"]["changes"][0]["current"]
-        assert previous["artifacts"]["action_matrix"]["action_matrix"]["actions"][0]["status"] == "pass"
-        assert current["artifacts"]["action_matrix"]["action_matrix"]["actions"][0]["failure_code"] == (
-            "send_message_contract_regressed"
+        assert (
+            previous["artifacts"]["action_matrix"]["action_matrix"]["actions"][0][
+                "status"
+            ]
+            == "pass"
         )
+        assert current["artifacts"]["action_matrix"]["action_matrix"]["actions"][0][
+            "failure_code"
+        ] == ("send_message_contract_regressed")
+
+
+def test_diff_summarizes_action_category_drift() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        baseline_root = root / "baselines"
+        accepted = _write_proof(root, "accepted")
+        candidate = _write_proof(root, "candidate", version="1.2.4")
+        candidate_payload = json.loads(candidate.read_text(encoding="utf-8"))
+        action_matrix_path = Path(candidate_payload["artifacts"]["action_matrix"])
+        action_matrix = json.loads(action_matrix_path.read_text(encoding="utf-8"))
+        action_matrix["action_matrix"]["actions"][0]["category"] = "observation"
+        action_matrix_path.write_text(json.dumps(action_matrix), encoding="utf-8")
+        _run(
+            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
+        )
+
+        result, payload = _run(
+            [
+                "diff",
+                "--candidate",
+                str(candidate),
+                "--baseline-root",
+                str(baseline_root),
+            ]
+        )
+
+        assert result.returncode == 1
+        action_drift = payload["diff"]["action_drift"]
+        assert action_drift["status"] == "different"
+        assert action_drift["changed_action_count"] == 1
+        assert action_drift["counts_by_category"] == {"observation": 1}
+        assert action_drift["actions"][0]["changed_fields"] == ["category"]
+        assert action_drift["actions"][0]["previous"]["category"] == "control"
+        assert action_drift["actions"][0]["current"]["category"] == "observation"
+
+
+def test_diff_summarizes_control_surface_action_drift() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        baseline_root = root / "baselines"
+        accepted = _write_proof(root, "accepted")
+        candidate = _write_proof(root, "candidate", version="1.2.4")
+        candidate_payload = json.loads(candidate.read_text(encoding="utf-8"))
+        control_surface_path = Path(candidate_payload["artifacts"]["control_surface"])
+        control_surface = json.loads(control_surface_path.read_text(encoding="utf-8"))
+        control_surface["control_surface"]["actions"][0]["status"] = "fail"
+        control_surface["control_surface"]["actions"][0]["failure_code"] = (
+            "control_surface_send_regressed"
+        )
+        control_surface["control_surface"]["status_counts"] = {"fail": 1}
+        control_surface_path.write_text(json.dumps(control_surface), encoding="utf-8")
+        _run(
+            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
+        )
+
+        result, payload = _run(
+            [
+                "diff",
+                "--candidate",
+                str(candidate),
+                "--baseline-root",
+                str(baseline_root),
+            ]
+        )
+
+        assert result.returncode == 1
+        action_drift = payload["diff"]["action_drift"]
+        assert action_drift["status"] == "different"
+        assert action_drift["changed_action_count"] == 1
+        assert action_drift["counts_by_artifact"] == {"control_surface": 1}
+        assert action_drift["actions"][0]["artifact"] == "control_surface"
+        assert action_drift["actions"][0]["changed_fields"] == [
+            "status",
+            "failure_code",
+        ]
 
 
 def test_diff_blocks_when_comparable_artifacts_are_missing() -> None:
@@ -442,7 +562,9 @@ def test_diff_blocks_when_comparable_artifacts_are_missing() -> None:
         baseline_root = root / "baselines"
         accepted = _write_proof(root, "accepted")
         candidate = _write_proof(root, "candidate", version="1.2.4")
-        _, acceptance = _run(["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)])
+        _, acceptance = _run(
+            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
+        )
         Path(acceptance["archived_artifacts"]["session_projection"]).unlink()
         candidate_payload = json.loads(candidate.read_text(encoding="utf-8"))
         Path(candidate_payload["artifacts"]["session_projection"]).unlink()
@@ -459,7 +581,10 @@ def test_diff_blocks_when_comparable_artifacts_are_missing() -> None:
 
         assert result.returncode == 1
         assert payload["verdict"] == "red"
-        assert payload["failure_code"] == "provider_release_proof_comparable_artifacts_unavailable"
+        assert (
+            payload["failure_code"]
+            == "provider_release_proof_comparable_artifacts_unavailable"
+        )
         assert payload["diff"]["artifact_errors"] == [
             {
                 "artifact": "session_projection",
@@ -478,6 +603,46 @@ def test_diff_blocks_when_comparable_artifacts_are_missing() -> None:
         ]
 
 
+def test_diff_marks_action_drift_unavailable_when_action_artifact_is_missing() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        baseline_root = root / "baselines"
+        accepted = _write_proof(root, "accepted")
+        candidate = _write_proof(root, "candidate", version="1.2.4")
+        _, acceptance = _run(
+            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
+        )
+        Path(acceptance["archived_artifacts"]["action_matrix"]).unlink()
+        candidate_payload = json.loads(candidate.read_text(encoding="utf-8"))
+        Path(candidate_payload["artifacts"]["action_matrix"]).unlink()
+
+        result, payload = _run(
+            [
+                "diff",
+                "--candidate",
+                str(candidate),
+                "--baseline-root",
+                str(baseline_root),
+            ]
+        )
+
+        assert result.returncode == 1
+        assert (
+            payload["failure_code"]
+            == "provider_release_proof_comparable_artifacts_unavailable"
+        )
+        action_drift = payload["diff"]["action_drift"]
+        assert action_drift["status"] == "unavailable"
+        assert action_drift["changed_action_count"] == 0
+        assert [
+            (error["side"], error["artifact"], error["failure_code"])
+            for error in action_drift["unavailable_artifacts"]
+        ] == [
+            ("baseline", "action_matrix", "comparable_artifact_missing"),
+            ("candidate", "action_matrix", "comparable_artifact_missing"),
+        ]
+
+
 def test_diff_blocks_when_operation_evidence_artifact_is_malformed() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -485,11 +650,19 @@ def test_diff_blocks_when_operation_evidence_artifact_is_malformed() -> None:
         accepted = _write_proof(root, "accepted")
         candidate = _write_proof(root, "candidate", version="1.2.4")
         candidate_payload = json.loads(candidate.read_text(encoding="utf-8"))
-        operation_evidence_path = Path(candidate_payload["artifacts"]["operation_evidence"])
-        operation_evidence = json.loads(operation_evidence_path.read_text(encoding="utf-8"))
+        operation_evidence_path = Path(
+            candidate_payload["artifacts"]["operation_evidence"]
+        )
+        operation_evidence = json.loads(
+            operation_evidence_path.read_text(encoding="utf-8")
+        )
         operation_evidence["operation_evidence"] = []
-        operation_evidence_path.write_text(json.dumps(operation_evidence), encoding="utf-8")
-        _run(["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)])
+        operation_evidence_path.write_text(
+            json.dumps(operation_evidence), encoding="utf-8"
+        )
+        _run(
+            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
+        )
 
         result, payload = _run(
             [
@@ -503,7 +676,10 @@ def test_diff_blocks_when_operation_evidence_artifact_is_malformed() -> None:
 
         assert result.returncode == 1
         assert payload["verdict"] == "red"
-        assert payload["failure_code"] == "provider_release_proof_comparable_artifacts_unavailable"
+        assert (
+            payload["failure_code"]
+            == "provider_release_proof_comparable_artifacts_unavailable"
+        )
         assert {
             "artifact": "operation_evidence",
             "failure_code": "comparable_artifact_field_malformed",
@@ -532,6 +708,7 @@ def test_diff_reports_missing_baseline_as_yellow() -> None:
         assert payload["verdict"] == "yellow"
         assert payload["failure_code"] == "baseline_missing"
         assert payload["diff"]["status"] == "not_compared"
+        assert payload["diff"]["action_drift"]["status"] == "not_compared"
 
 
 def test_diff_reports_yellow_candidate_without_baseline_as_yellow() -> None:
@@ -586,7 +763,9 @@ def test_diff_does_not_promote_matching_yellow_candidate_to_green() -> None:
         candidate_payload["verdict"] = "yellow"
         candidate_payload["failure_code"] = "fake_warning"
         candidate.write_text(json.dumps(candidate_payload), encoding="utf-8")
-        _run(["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)])
+        _run(
+            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
+        )
 
         result, payload = _run(
             [
@@ -618,7 +797,9 @@ def test_diff_blocks_drift_even_when_candidate_is_yellow() -> None:
         normalized["operation_evidence"]["send_input"]["status"] = "fail"
         normalized["operation_evidence"]["send_input"]["failure_code"] = "fake_drift"
         normalized_path.write_text(json.dumps(normalized), encoding="utf-8")
-        _run(["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)])
+        _run(
+            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
+        )
 
         result, payload = _run(
             [
@@ -687,7 +868,9 @@ def test_old_new_command_blocks_on_action_row_drift() -> None:
         action_matrix_path = Path(new_payload["artifacts"]["action_matrix"])
         action_matrix = json.loads(action_matrix_path.read_text(encoding="utf-8"))
         action_matrix["action_matrix"]["actions"][0]["status"] = "fail"
-        action_matrix["action_matrix"]["actions"][0]["failure_code"] = "send_message_contract_regressed"
+        action_matrix["action_matrix"]["actions"][0]["failure_code"] = (
+            "send_message_contract_regressed"
+        )
         action_matrix_path.write_text(json.dumps(action_matrix), encoding="utf-8")
 
         result, payload = _run(
@@ -705,6 +888,10 @@ def test_old_new_command_blocks_on_action_row_drift() -> None:
         assert payload["verdict"] == "red"
         assert payload["failure_code"] == "provider_release_proof_drift"
         assert payload["diff"]["status"] == "different"
+        assert payload["diff"]["action_drift"]["changed_action_count"] == 1
+        assert payload["diff"]["action_drift"]["counts_by_required_evidence"] == {
+            "hermetic": 1
+        }
 
 
 def test_status_reports_missing_baseline_as_yellow() -> None:
@@ -735,7 +922,9 @@ def test_status_reports_accepted_baseline_and_archived_artifacts() -> None:
         root = Path(temp_dir)
         baseline_root = root / "baselines"
         accepted = _write_proof(root, "accepted")
-        _run(["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)])
+        _run(
+            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
+        )
 
         result, payload = _run(
             [
@@ -754,7 +943,9 @@ def test_status_reports_accepted_baseline_and_archived_artifacts() -> None:
         assert payload["verdict"] == "green"
         assert payload["failure_code"] is None
         assert payload["provider_version"] == "opencode 1.2.3"
-        assert {"source_artifact", "stdout", "stderr"} <= set(payload["archived_artifacts"])
+        assert {"source_artifact", "stdout", "stderr"} <= set(
+            payload["archived_artifacts"]
+        )
         assert payload["missing_archived_artifacts"] == []
 
 
@@ -765,7 +956,9 @@ def test_relocated_baseline_store_resolves_archived_artifacts() -> None:
         relocated_root = root / "relocated-baselines"
         accepted = _write_proof(root, "accepted")
         candidate = _write_proof(root, "candidate", version="1.2.4")
-        _run(["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)])
+        _run(
+            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
+        )
 
         shutil.copytree(baseline_root, relocated_root)
         shutil.rmtree(baseline_root)
@@ -810,7 +1003,9 @@ def test_status_warns_when_archived_artifact_is_missing() -> None:
         root = Path(temp_dir)
         baseline_root = root / "baselines"
         accepted = _write_proof(root, "accepted")
-        _, acceptance = _run(["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)])
+        _, acceptance = _run(
+            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
+        )
         Path(acceptance["archived_artifacts"]["stdout"]).unlink()
 
         result, payload = _run(
@@ -837,7 +1032,9 @@ def test_status_blocks_when_accepted_baseline_is_not_green() -> None:
         root = Path(temp_dir)
         baseline_root = root / "baselines"
         accepted = _write_proof(root, "accepted")
-        _, acceptance = _run(["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)])
+        _, acceptance = _run(
+            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
+        )
         accepted_path = Path(acceptance["accepted_path"])
         accepted_payload = json.loads(accepted_path.read_text(encoding="utf-8"))
         accepted_payload["verdict"] = "yellow"
@@ -862,7 +1059,9 @@ def test_status_blocks_when_accepted_baseline_is_not_green() -> None:
         assert payload["failure_code"] == "accepted_baseline_not_green"
 
 
-def test_status_all_reports_inventory_green_when_every_accepted_scenario_is_green() -> None:
+def test_status_all_reports_inventory_green_when_every_accepted_scenario_is_green() -> (
+    None
+):
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         baseline_root = root / "baselines"
@@ -873,7 +1072,9 @@ def test_status_all_reports_inventory_green_when_every_accepted_scenario_is_gree
             provider="codex",
             scenario_id="codex-managed-live-send-release-proof-v1",
         )
-        _run(["accept", "--proof", str(opencode), "--baseline-root", str(baseline_root)])
+        _run(
+            ["accept", "--proof", str(opencode), "--baseline-root", str(baseline_root)]
+        )
         _run(["accept", "--proof", str(codex), "--baseline-root", str(baseline_root)])
         coverage = _write_coverage_inventory(
             root,
@@ -967,7 +1168,10 @@ def main() -> int:
         test_diff_against_accepted_baseline_detects_drift,
         test_diff_detects_stable_session_projection_drift,
         test_diff_detects_stable_action_matrix_drift,
+        test_diff_summarizes_action_category_drift,
+        test_diff_summarizes_control_surface_action_drift,
         test_diff_blocks_when_comparable_artifacts_are_missing,
+        test_diff_marks_action_drift_unavailable_when_action_artifact_is_missing,
         test_diff_blocks_when_operation_evidence_artifact_is_malformed,
         test_diff_reports_missing_baseline_as_yellow,
         test_diff_reports_yellow_candidate_without_baseline_as_yellow,
