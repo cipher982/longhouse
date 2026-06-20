@@ -32,7 +32,9 @@ COMPARABLE_ARTIFACT_KEYS = (
     "session_projection",
     "action_matrix",
     "control_surface",
+    "provider_execution_coverage_matrix",
 )
+OPTIONAL_COMPARABLE_ARTIFACT_KEYS = ("provider_execution_coverage_matrix",)
 STABLE_OPERATION_KEYS = ("status", "level", "canary", "failure_code")
 STABLE_CHECK_KEYS = ("status", "failure_code")
 
@@ -304,9 +306,16 @@ def _artifact_shape_errors(key: str, payload: dict[str, Any]) -> list[dict[str, 
         "operation_evidence": "operation_evidence",
         "action_matrix": "action_matrix",
         "control_surface": "control_surface",
+        "provider_execution_coverage_matrix": "provider_execution_coverage_matrix",
     }
     required_field = checks.get(key)
     if required_field is None:
+        return []
+    if (
+        key == "provider_execution_coverage_matrix"
+        and payload.get("status") != "captured"
+        and not isinstance(payload.get(required_field), dict)
+    ):
         return []
     if required_field not in payload:
         return [
@@ -399,6 +408,61 @@ def _stable_action_artifact(payload: dict[str, Any], field: str) -> dict[str, An
     return comparable
 
 
+def _stable_execution_coverage_row(row: Any) -> dict[str, Any]:
+    if not isinstance(row, dict):
+        return {}
+    stable_keys = (
+        "action_id",
+        "category",
+        "contract_operation",
+        "required_evidence",
+        "coverage_kind",
+        "coverage_status",
+        "failure_code",
+        "matrix_status",
+        "matrix_failure_code",
+        "matrix_support",
+        "matrix_support_reason",
+        "scenario_ids",
+        "scenario_statuses",
+        "scenario_failure_codes",
+        "coverage_policy",
+    )
+    return {key: row.get(key) for key in stable_keys if row.get(key) is not None}
+
+
+def _stable_provider_execution_coverage_artifact(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    comparable: dict[str, Any] = {
+        key: payload.get(key)
+        for key in ("artifact_kind", "provider", "status")
+        if payload.get(key) is not None
+    }
+    summary = payload.get("provider_execution_coverage_matrix")
+    if isinstance(summary, dict):
+        comparable["provider_execution_coverage_matrix"] = {
+            key: summary.get(key)
+            for key in (
+                "artifact_kind",
+                "provider",
+                "action_count",
+                "coverage_status_counts",
+                "coverage_kind_counts",
+                "required_evidence_rollup",
+            )
+            if summary.get(key) is not None
+        }
+        actions = summary.get("actions")
+        if isinstance(actions, list):
+            comparable["provider_execution_coverage_matrix"]["actions"] = [
+                _stable_execution_coverage_row(row)
+                for row in actions
+                if isinstance(row, dict) and isinstance(row.get("action_id"), str)
+            ]
+    return comparable
+
+
 def _stable_artifact(key: str, payload: dict[str, Any]) -> dict[str, Any]:
     if key == "normalized_contract":
         comparable = json.loads(json.dumps(payload))
@@ -424,6 +488,8 @@ def _stable_artifact(key: str, payload: dict[str, Any]) -> dict[str, Any]:
         return _stable_action_artifact(payload, "action_matrix")
     if key == "control_surface":
         return _stable_action_artifact(payload, "control_surface")
+    if key == "provider_execution_coverage_matrix":
+        return _stable_provider_execution_coverage_artifact(payload)
     comparable = json.loads(json.dumps(payload))
     comparable.pop("provider_version", None)
     return comparable
@@ -441,8 +507,16 @@ def _comparable_proof(
         payload, error = _artifact_json(proof, key, proof_path=proof_path)
         if error is not None:
             error["side"] = side
-            errors.append(error)
             comparable["artifacts"][key] = {"load_status": "unavailable"}
+            if not (
+                key in OPTIONAL_COMPARABLE_ARTIFACT_KEYS
+                and error.get("failure_code")
+                in {
+                    "comparable_artifact_reference_missing",
+                    "comparable_artifact_missing",
+                }
+            ):
+                errors.append(error)
             continue
         if payload is not None:
             shape_errors = _artifact_shape_errors(key, payload)
@@ -483,9 +557,7 @@ ACTION_DRIFT_FIELDS = (
 )
 
 
-def _actions_by_id(
-    comparable: dict[str, Any], artifact: str
-) -> dict[str, dict[str, Any]]:
+def _rows_by_id(comparable: dict[str, Any], artifact: str) -> dict[str, dict[str, Any]]:
     artifact_payload = comparable.get("artifacts")
     if not isinstance(artifact_payload, dict):
         return {}
@@ -590,8 +662,8 @@ def _action_drift_summary(
     changed: list[dict[str, Any]] = []
     unavailable_artifacts = _action_artifact_errors(artifact_errors or [])
     for artifact in ACTION_DRIFT_ARTIFACTS:
-        previous_actions = _actions_by_id(base_comparable, artifact)
-        current_actions = _actions_by_id(candidate_comparable, artifact)
+        previous_actions = _rows_by_id(base_comparable, artifact)
+        current_actions = _rows_by_id(candidate_comparable, artifact)
         for action_id in sorted(set(previous_actions) | set(current_actions)):
             row = _changed_action_summary(
                 artifact=artifact,
@@ -615,6 +687,235 @@ def _action_drift_summary(
         "counts_by_category": _count_by(changed, "category"),
         "actions": changed,
     }
+    if unavailable_artifacts:
+        summary["unavailable_artifacts"] = unavailable_artifacts
+    return summary
+
+
+EXECUTION_COVERAGE_DRIFT_ARTIFACTS = ("provider_execution_coverage_matrix",)
+EXECUTION_COVERAGE_DRIFT_FIELDS = (
+    "category",
+    "contract_operation",
+    "required_evidence",
+    "coverage_kind",
+    "coverage_status",
+    "failure_code",
+    "matrix_status",
+    "matrix_failure_code",
+    "matrix_support",
+    "matrix_support_reason",
+    "scenario_ids",
+    "scenario_statuses",
+    "scenario_failure_codes",
+    "coverage_policy",
+)
+
+
+def _empty_execution_coverage_drift(status: str) -> dict[str, Any]:
+    return {
+        "status": status,
+        "changed_action_count": 0,
+        "counts_by_required_evidence": {},
+        "counts_by_category": {},
+        "counts_by_coverage_status": {},
+        "counts_by_coverage_kind": {},
+        "actions": [],
+    }
+
+
+def _execution_coverage_artifact_errors(
+    errors: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            key: error.get(key)
+            for key in ("side", "artifact", "failure_code", "path", "message")
+            if error.get(key) is not None
+        }
+        for error in errors
+        if error.get("artifact") in EXECUTION_COVERAGE_DRIFT_ARTIFACTS
+    ]
+
+
+def _artifact_summary(comparable: dict[str, Any], artifact: str) -> dict[str, Any]:
+    artifact_payload = comparable.get("artifacts")
+    if not isinstance(artifact_payload, dict):
+        return {}
+    wrapper = artifact_payload.get(artifact)
+    if not isinstance(wrapper, dict):
+        return {}
+    summary = wrapper.get(artifact)
+    if not isinstance(summary, dict):
+        return {}
+    return summary
+
+
+def _unavailable_comparable_artifacts(
+    comparable: dict[str, Any],
+    *,
+    side: str,
+    artifacts: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    artifact_payload = comparable.get("artifacts")
+    if not isinstance(artifact_payload, dict):
+        return []
+    unavailable: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        wrapper = artifact_payload.get(artifact)
+        if isinstance(wrapper, dict) and wrapper.get("load_status") == "unavailable":
+            unavailable.append(
+                {
+                    "side": side,
+                    "artifact": artifact,
+                    "failure_code": "comparable_artifact_unavailable",
+                }
+            )
+    return unavailable
+
+
+def _changed_execution_coverage_summary(
+    *,
+    action_id: str,
+    previous: dict[str, Any] | None,
+    current: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    previous = previous or {}
+    current = current or {}
+    changed_fields = [
+        field
+        for field in EXECUTION_COVERAGE_DRIFT_FIELDS
+        if previous.get(field) != current.get(field)
+    ]
+    if not changed_fields:
+        return None
+    category = (
+        current.get("category")
+        if current.get("category") is not None
+        else previous.get("category")
+    )
+    required_evidence = (
+        current.get("required_evidence")
+        if current.get("required_evidence") is not None
+        else previous.get("required_evidence")
+    )
+    coverage_status = (
+        current.get("coverage_status")
+        if current.get("coverage_status") is not None
+        else previous.get("coverage_status")
+    )
+    coverage_kind = (
+        current.get("coverage_kind")
+        if current.get("coverage_kind") is not None
+        else previous.get("coverage_kind")
+    )
+    return {
+        "action_id": action_id,
+        "category": category,
+        "required_evidence": required_evidence,
+        "coverage_status": coverage_status,
+        "coverage_kind": coverage_kind,
+        "changed_fields": changed_fields,
+        "previous": {
+            field: previous.get(field)
+            for field in EXECUTION_COVERAGE_DRIFT_FIELDS
+            if previous.get(field) is not None
+        },
+        "current": {
+            field: current.get(field)
+            for field in EXECUTION_COVERAGE_DRIFT_FIELDS
+            if current.get(field) is not None
+        },
+    }
+
+
+def _execution_coverage_drift_summary(
+    base_comparable: dict[str, Any],
+    candidate_comparable: dict[str, Any],
+    *,
+    artifact_errors: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    changed: list[dict[str, Any]] = []
+    unavailable_artifacts = [
+        *_execution_coverage_artifact_errors(artifact_errors or []),
+        *_unavailable_comparable_artifacts(
+            base_comparable,
+            side="baseline",
+            artifacts=EXECUTION_COVERAGE_DRIFT_ARTIFACTS,
+        ),
+        *_unavailable_comparable_artifacts(
+            candidate_comparable,
+            side="candidate",
+            artifacts=EXECUTION_COVERAGE_DRIFT_ARTIFACTS,
+        ),
+    ]
+    rollup_fields = (
+        "action_count",
+        "coverage_status_counts",
+        "coverage_kind_counts",
+        "required_evidence_rollup",
+    )
+    previous_rollup = _artifact_summary(
+        base_comparable,
+        "provider_execution_coverage_matrix",
+    )
+    current_rollup = _artifact_summary(
+        candidate_comparable,
+        "provider_execution_coverage_matrix",
+    )
+    rollup_changed_fields = [
+        field
+        for field in rollup_fields
+        if previous_rollup.get(field) != current_rollup.get(field)
+    ]
+    rollup_drift = None
+    if rollup_changed_fields:
+        rollup_drift = {
+            "changed_fields": rollup_changed_fields,
+            "previous": {
+                field: previous_rollup.get(field)
+                for field in rollup_fields
+                if previous_rollup.get(field) is not None
+            },
+            "current": {
+                field: current_rollup.get(field)
+                for field in rollup_fields
+                if current_rollup.get(field) is not None
+            },
+        }
+    if not unavailable_artifacts:
+        previous_rows = _rows_by_id(
+            base_comparable,
+            "provider_execution_coverage_matrix",
+        )
+        current_rows = _rows_by_id(
+            candidate_comparable,
+            "provider_execution_coverage_matrix",
+        )
+        for action_id in sorted(set(previous_rows) | set(current_rows)):
+            row = _changed_execution_coverage_summary(
+                action_id=action_id,
+                previous=previous_rows.get(action_id),
+                current=current_rows.get(action_id),
+            )
+            if row is not None:
+                changed.append(row)
+    if changed or rollup_drift is not None:
+        status = "different"
+    elif unavailable_artifacts:
+        status = "unavailable"
+    else:
+        status = "match"
+    summary = {
+        "status": status,
+        "changed_action_count": len(changed),
+        "counts_by_required_evidence": _count_by(changed, "required_evidence"),
+        "counts_by_category": _count_by(changed, "category"),
+        "counts_by_coverage_status": _count_by(changed, "coverage_status"),
+        "counts_by_coverage_kind": _count_by(changed, "coverage_kind"),
+        "actions": changed,
+    }
+    if rollup_drift is not None:
+        summary["rollup_drift"] = rollup_drift
     if unavailable_artifacts:
         summary["unavailable_artifacts"] = unavailable_artifacts
     return summary
@@ -659,6 +960,7 @@ def diff_proofs(
             "status": "not_compared",
             "changes": [],
             "action_drift": _empty_action_drift("not_compared"),
+            "execution_coverage_drift": _empty_execution_coverage_drift("not_compared"),
         }
     else:
         base_comparable, base_errors = _comparable_proof(
@@ -674,6 +976,11 @@ def diff_proofs(
         comparable_errors = [*base_errors, *candidate_errors]
         diff = _diff_comparable(base_comparable, candidate_comparable)
         diff["action_drift"] = _action_drift_summary(
+            base_comparable,
+            candidate_comparable,
+            artifact_errors=comparable_errors,
+        )
+        diff["execution_coverage_drift"] = _execution_coverage_drift_summary(
             base_comparable,
             candidate_comparable,
             artifact_errors=comparable_errors,

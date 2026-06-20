@@ -88,6 +88,7 @@ def _write_release_proof(
     session_projection = artifact_dir / "normalized" / "session_projection.json"
     action_matrix = artifact_dir / "normalized" / "action_matrix.json"
     control_surface = artifact_dir / "normalized" / "control_surface.json"
+    provider_execution_coverage_matrix = artifact_dir / "normalized" / "provider_execution_coverage_matrix.json"
     action_rows = [
         {
             "action_id": "send_message",
@@ -210,6 +211,70 @@ def _write_release_proof(
             "actions": [action_rows[0]],
         },
     }
+    execution_coverage_rows = [
+        {
+            "action_id": "send_message",
+            "category": "control",
+            "contract_operation": "send_input",
+            "required_evidence": "hermetic",
+            "coverage_kind": "executable_scenario",
+            "coverage_status": status,
+            "failure_code": _proof_failure_for_status(status),
+            "matrix_status": status,
+            "matrix_support": True,
+            "matrix_support_reason": "contract.send_input",
+            "scenario_ids": ["managed_session_e2e"],
+            "scenario_statuses": {"managed_session_e2e": status},
+            "coverage_policy": "scenario_or_matrix",
+        },
+        {
+            "action_id": "old_new_release_diff",
+            "category": "release_diff",
+            "required_evidence": "live_no_token",
+            "coverage_kind": "matrix_contract",
+            "coverage_status": "blocked",
+            "failure_code": "old_new_release_runner_missing",
+            "matrix_status": "blocked",
+            "matrix_failure_code": "old_new_release_runner_missing",
+            "matrix_support": True,
+            "matrix_support_reason": "provider_release_proof",
+            "coverage_policy": "matrix_only",
+        },
+    ]
+    provider_execution_coverage_matrix_payload = {
+        "artifact_kind": "provider_release_proof_provider_execution_coverage_matrix",
+        "provider": provider,
+        "provider_version": f"{provider} {version}",
+        "status": "captured",
+        "provider_execution_coverage_matrix": {
+            "artifact_kind": "provider_release_proof_provider_execution_coverage_matrix",
+            "provider": provider,
+            "action_count": len(execution_coverage_rows),
+            "coverage_status_counts": {"blocked": 1, status: 1},
+            "coverage_kind_counts": {
+                "executable_scenario": 1,
+                "matrix_contract": 1,
+            },
+            "required_evidence_rollup": {
+                "hermetic": {
+                    "cell_count": 1,
+                    "pass_count": 1 if status == "pass" else 0,
+                    "pass_percent": 100.0 if status == "pass" else 0.0,
+                    "coverage_status_counts": {status: 1},
+                    "coverage_kind_counts": {"executable_scenario": 1},
+                },
+                "live_no_token": {
+                    "cell_count": 1,
+                    "pass_count": 0,
+                    "pass_percent": 0.0,
+                    "coverage_status_counts": {"blocked": 1},
+                    "coverage_kind_counts": {"matrix_contract": 1},
+                },
+            },
+            "execution_coverage_matrix_path": f"/tmp/{name}/volatile-execution-coverage.json",
+            "actions": execution_coverage_rows,
+        },
+    }
     source_artifact.write_text(json.dumps({"raw": True}), encoding="utf-8")
     stdout.write_text("stdout\n", encoding="utf-8")
     stderr.write_text("", encoding="utf-8")
@@ -220,6 +285,9 @@ def _write_release_proof(
     session_projection.write_text(json.dumps(session_projection_payload), encoding="utf-8")
     action_matrix.write_text(json.dumps(action_matrix_payload), encoding="utf-8")
     control_surface.write_text(json.dumps(control_surface_payload), encoding="utf-8")
+    provider_execution_coverage_matrix.write_text(
+        json.dumps(provider_execution_coverage_matrix_payload), encoding="utf-8"
+    )
     proof = {
         "schema_version": 1,
         "artifact_kind": "provider_release_proof",
@@ -240,6 +308,7 @@ def _write_release_proof(
             "session_projection": str(session_projection),
             "action_matrix": str(action_matrix),
             "control_surface": str(control_surface),
+            "provider_execution_coverage_matrix": str(provider_execution_coverage_matrix),
         },
     }
     proof_path = proof_dir / "proof.json"

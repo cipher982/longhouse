@@ -53,6 +53,9 @@ def _write_proof(
     session_projection = artifact_dir / "normalized" / "session_projection.json"
     action_matrix = artifact_dir / "normalized" / "action_matrix.json"
     control_surface = artifact_dir / "normalized" / "control_surface.json"
+    provider_execution_coverage_matrix = (
+        artifact_dir / "normalized" / "provider_execution_coverage_matrix.json"
+    )
     action_rows = [
         {
             "action_id": "send_message",
@@ -175,6 +178,70 @@ def _write_proof(
             "actions": [action_rows[0]],
         },
     }
+    execution_coverage_rows = [
+        {
+            "action_id": "send_message",
+            "category": "control",
+            "contract_operation": "send_input",
+            "required_evidence": "hermetic",
+            "coverage_kind": "executable_scenario",
+            "coverage_status": status,
+            "failure_code": _failure_for_status(status),
+            "matrix_status": status,
+            "matrix_support": True,
+            "matrix_support_reason": "contract.send_input",
+            "scenario_ids": ["managed_session_e2e"],
+            "scenario_statuses": {"managed_session_e2e": status},
+            "coverage_policy": "scenario_or_matrix",
+        },
+        {
+            "action_id": "old_new_release_diff",
+            "category": "release_diff",
+            "required_evidence": "live_no_token",
+            "coverage_kind": "matrix_contract",
+            "coverage_status": "blocked",
+            "failure_code": "old_new_release_runner_missing",
+            "matrix_status": "blocked",
+            "matrix_failure_code": "old_new_release_runner_missing",
+            "matrix_support": True,
+            "matrix_support_reason": "provider_release_proof",
+            "coverage_policy": "matrix_only",
+        },
+    ]
+    provider_execution_coverage_matrix_payload = {
+        "artifact_kind": "provider_release_proof_provider_execution_coverage_matrix",
+        "provider": provider,
+        "provider_version": f"{provider} {version}",
+        "status": "captured",
+        "provider_execution_coverage_matrix": {
+            "artifact_kind": "provider_release_proof_provider_execution_coverage_matrix",
+            "provider": provider,
+            "action_count": len(execution_coverage_rows),
+            "coverage_status_counts": {"blocked": 1, status: 1},
+            "coverage_kind_counts": {
+                "executable_scenario": 1,
+                "matrix_contract": 1,
+            },
+            "required_evidence_rollup": {
+                "hermetic": {
+                    "cell_count": 1,
+                    "pass_count": 1 if status == "pass" else 0,
+                    "pass_percent": 100.0 if status == "pass" else 0.0,
+                    "coverage_status_counts": {status: 1},
+                    "coverage_kind_counts": {"executable_scenario": 1},
+                },
+                "live_no_token": {
+                    "cell_count": 1,
+                    "pass_count": 0,
+                    "pass_percent": 0.0,
+                    "coverage_status_counts": {"blocked": 1},
+                    "coverage_kind_counts": {"matrix_contract": 1},
+                },
+            },
+            "execution_coverage_matrix_path": f"/tmp/{name}/volatile-execution-coverage.json",
+            "actions": execution_coverage_rows,
+        },
+    }
     source_artifact.write_text(json.dumps({"raw": True}), encoding="utf-8")
     stdout.write_text("stdout\n", encoding="utf-8")
     stderr.write_text("", encoding="utf-8")
@@ -191,6 +258,9 @@ def _write_proof(
     )
     action_matrix.write_text(json.dumps(action_matrix_payload), encoding="utf-8")
     control_surface.write_text(json.dumps(control_surface_payload), encoding="utf-8")
+    provider_execution_coverage_matrix.write_text(
+        json.dumps(provider_execution_coverage_matrix_payload), encoding="utf-8"
+    )
     proof = {
         "schema_version": 1,
         "artifact_kind": "provider_release_proof",
@@ -211,6 +281,9 @@ def _write_proof(
             "session_projection": str(session_projection),
             "action_matrix": str(action_matrix),
             "control_surface": str(control_surface),
+            "provider_execution_coverage_matrix": str(
+                provider_execution_coverage_matrix
+            ),
         },
     }
     proof_path = proof_dir / "proof.json"
@@ -556,6 +629,120 @@ def test_diff_summarizes_control_surface_action_drift() -> None:
         ]
 
 
+def test_diff_summarizes_provider_execution_coverage_drift() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        baseline_root = root / "baselines"
+        accepted = _write_proof(root, "accepted")
+        candidate = _write_proof(root, "candidate", version="1.2.4")
+        candidate_payload = json.loads(candidate.read_text(encoding="utf-8"))
+        execution_path = Path(
+            candidate_payload["artifacts"]["provider_execution_coverage_matrix"]
+        )
+        execution = json.loads(execution_path.read_text(encoding="utf-8"))
+        execution["provider_execution_coverage_matrix"]["actions"][0][
+            "coverage_status"
+        ] = "fail"
+        execution["provider_execution_coverage_matrix"]["actions"][0][
+            "failure_code"
+        ] = "send_message_execution_regressed"
+        execution["provider_execution_coverage_matrix"]["actions"][0][
+            "scenario_statuses"
+        ] = {"managed_session_e2e": "fail"}
+        execution["provider_execution_coverage_matrix"]["actions"][0][
+            "scenario_failure_codes"
+        ] = {"managed_session_e2e": "send_message_execution_regressed"}
+        execution["provider_execution_coverage_matrix"]["coverage_status_counts"] = {
+            "blocked": 1,
+            "fail": 1,
+        }
+        execution_path.write_text(json.dumps(execution), encoding="utf-8")
+        _run(
+            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
+        )
+
+        result, payload = _run(
+            [
+                "diff",
+                "--candidate",
+                str(candidate),
+                "--baseline-root",
+                str(baseline_root),
+            ]
+        )
+
+        assert result.returncode == 1
+        assert payload["failure_code"] == "provider_release_proof_drift"
+        coverage_drift = payload["diff"]["execution_coverage_drift"]
+        assert coverage_drift["status"] == "different"
+        assert coverage_drift["changed_action_count"] == 1
+        assert coverage_drift["counts_by_required_evidence"] == {"hermetic": 1}
+        assert coverage_drift["counts_by_coverage_status"] == {"fail": 1}
+        assert coverage_drift["counts_by_coverage_kind"] == {"executable_scenario": 1}
+        coverage_row = coverage_drift["actions"][0]
+        assert coverage_row["action_id"] == "send_message"
+        assert coverage_row["changed_fields"] == [
+            "coverage_status",
+            "failure_code",
+            "scenario_statuses",
+            "scenario_failure_codes",
+        ]
+        assert coverage_row["previous"]["coverage_status"] == "pass"
+        assert coverage_row["current"]["coverage_status"] == "fail"
+        assert (
+            coverage_row["current"]["failure_code"]
+            == "send_message_execution_regressed"
+        )
+
+
+def test_diff_summarizes_provider_execution_rollup_drift() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        baseline_root = root / "baselines"
+        accepted = _write_proof(root, "accepted")
+        candidate = _write_proof(root, "candidate", version="1.2.4")
+        candidate_payload = json.loads(candidate.read_text(encoding="utf-8"))
+        execution_path = Path(
+            candidate_payload["artifacts"]["provider_execution_coverage_matrix"]
+        )
+        execution = json.loads(execution_path.read_text(encoding="utf-8"))
+        execution["provider_execution_coverage_matrix"]["coverage_status_counts"] = {
+            "blocked": 1,
+            "pass": 99,
+        }
+        execution_path.write_text(json.dumps(execution), encoding="utf-8")
+        _run(
+            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
+        )
+
+        result, payload = _run(
+            [
+                "diff",
+                "--candidate",
+                str(candidate),
+                "--baseline-root",
+                str(baseline_root),
+            ]
+        )
+
+        assert result.returncode == 1
+        assert payload["failure_code"] == "provider_release_proof_drift"
+        coverage_drift = payload["diff"]["execution_coverage_drift"]
+        assert coverage_drift["status"] == "different"
+        assert coverage_drift["changed_action_count"] == 0
+        assert coverage_drift["rollup_drift"]["changed_fields"] == [
+            "coverage_status_counts"
+        ]
+        assert coverage_drift["rollup_drift"]["previous"]["coverage_status_counts"] == {
+            "blocked": 1,
+            "pass": 1,
+        }
+        assert coverage_drift["rollup_drift"]["current"]["coverage_status_counts"] == {
+            "blocked": 1,
+            "pass": 99,
+        }
+
+
 def test_diff_blocks_when_comparable_artifacts_are_missing() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -643,6 +830,99 @@ def test_diff_marks_action_drift_unavailable_when_action_artifact_is_missing() -
         ]
 
 
+def test_diff_marks_execution_coverage_drift_unavailable_when_artifact_is_missing() -> (
+    None
+):
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        baseline_root = root / "baselines"
+        accepted = _write_proof(root, "accepted")
+        candidate = _write_proof(root, "candidate", version="1.2.4")
+        _, acceptance = _run(
+            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
+        )
+        Path(
+            acceptance["archived_artifacts"]["provider_execution_coverage_matrix"]
+        ).unlink()
+        candidate_payload = json.loads(candidate.read_text(encoding="utf-8"))
+        Path(
+            candidate_payload["artifacts"]["provider_execution_coverage_matrix"]
+        ).unlink()
+
+        result, payload = _run(
+            [
+                "diff",
+                "--candidate",
+                str(candidate),
+                "--baseline-root",
+                str(baseline_root),
+            ]
+        )
+
+        assert result.returncode == 0
+        assert payload["verdict"] == "green"
+        assert payload["failure_code"] is None
+        coverage_drift = payload["diff"]["execution_coverage_drift"]
+        assert coverage_drift["status"] == "unavailable"
+        assert coverage_drift["changed_action_count"] == 0
+        assert [
+            (error["side"], error["artifact"], error["failure_code"])
+            for error in coverage_drift["unavailable_artifacts"]
+        ] == [
+            (
+                "baseline",
+                "provider_execution_coverage_matrix",
+                "comparable_artifact_unavailable",
+            ),
+            (
+                "candidate",
+                "provider_execution_coverage_matrix",
+                "comparable_artifact_unavailable",
+            ),
+        ]
+
+
+def test_diff_blocks_when_execution_coverage_missing_on_one_side() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        baseline_root = root / "baselines"
+        accepted = _write_proof(root, "accepted")
+        candidate = _write_proof(root, "candidate", version="1.2.4")
+        _run(
+            ["accept", "--proof", str(accepted), "--baseline-root", str(baseline_root)]
+        )
+        candidate_payload = json.loads(candidate.read_text(encoding="utf-8"))
+        Path(
+            candidate_payload["artifacts"]["provider_execution_coverage_matrix"]
+        ).unlink()
+
+        result, payload = _run(
+            [
+                "diff",
+                "--candidate",
+                str(candidate),
+                "--baseline-root",
+                str(baseline_root),
+            ]
+        )
+
+        assert result.returncode == 1
+        assert payload["failure_code"] == "provider_release_proof_drift"
+        coverage_drift = payload["diff"]["execution_coverage_drift"]
+        assert coverage_drift["status"] == "different"
+        assert coverage_drift["changed_action_count"] == 0
+        assert [
+            (error["side"], error["artifact"], error["failure_code"])
+            for error in coverage_drift["unavailable_artifacts"]
+        ] == [
+            (
+                "candidate",
+                "provider_execution_coverage_matrix",
+                "comparable_artifact_unavailable",
+            )
+        ]
+
+
 def test_diff_blocks_when_operation_evidence_artifact_is_malformed() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
@@ -709,6 +989,7 @@ def test_diff_reports_missing_baseline_as_yellow() -> None:
         assert payload["failure_code"] == "baseline_missing"
         assert payload["diff"]["status"] == "not_compared"
         assert payload["diff"]["action_drift"]["status"] == "not_compared"
+        assert payload["diff"]["execution_coverage_drift"]["status"] == "not_compared"
 
 
 def test_diff_reports_yellow_candidate_without_baseline_as_yellow() -> None:
@@ -892,6 +1173,45 @@ def test_old_new_command_blocks_on_action_row_drift() -> None:
         assert payload["diff"]["action_drift"]["counts_by_required_evidence"] == {
             "hermetic": 1
         }
+
+
+def test_old_new_command_blocks_on_execution_coverage_drift() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        old = _write_proof(root, "old")
+        new = _write_proof(root, "new", version="1.2.4")
+        new_payload = json.loads(new.read_text(encoding="utf-8"))
+        execution_path = Path(
+            new_payload["artifacts"]["provider_execution_coverage_matrix"]
+        )
+        execution = json.loads(execution_path.read_text(encoding="utf-8"))
+        execution["provider_execution_coverage_matrix"]["actions"][0][
+            "coverage_status"
+        ] = "fail"
+        execution["provider_execution_coverage_matrix"]["actions"][0][
+            "failure_code"
+        ] = "send_message_execution_regressed"
+        execution_path.write_text(json.dumps(execution), encoding="utf-8")
+
+        result, payload = _run(
+            [
+                "old-new",
+                "--old",
+                str(old),
+                "--new",
+                str(new),
+            ]
+        )
+
+        assert result.returncode == 1
+        assert payload["artifact_kind"] == "provider_release_proof_old_new_diff"
+        assert payload["verdict"] == "red"
+        assert payload["failure_code"] == "provider_release_proof_drift"
+        assert payload["diff"]["status"] == "different"
+        assert payload["diff"]["execution_coverage_drift"]["changed_action_count"] == 1
+        assert payload["diff"]["execution_coverage_drift"][
+            "counts_by_coverage_status"
+        ] == {"fail": 1}
 
 
 def test_status_reports_missing_baseline_as_yellow() -> None:
@@ -1170,8 +1490,12 @@ def main() -> int:
         test_diff_detects_stable_action_matrix_drift,
         test_diff_summarizes_action_category_drift,
         test_diff_summarizes_control_surface_action_drift,
+        test_diff_summarizes_provider_execution_coverage_drift,
+        test_diff_summarizes_provider_execution_rollup_drift,
         test_diff_blocks_when_comparable_artifacts_are_missing,
         test_diff_marks_action_drift_unavailable_when_action_artifact_is_missing,
+        test_diff_marks_execution_coverage_drift_unavailable_when_artifact_is_missing,
+        test_diff_blocks_when_execution_coverage_missing_on_one_side,
         test_diff_blocks_when_operation_evidence_artifact_is_malformed,
         test_diff_reports_missing_baseline_as_yellow,
         test_diff_reports_yellow_candidate_without_baseline_as_yellow,
@@ -1181,6 +1505,7 @@ def main() -> int:
         test_diff_can_compare_explicit_old_and_new_proofs,
         test_old_new_command_compares_explicit_proof_artifacts,
         test_old_new_command_blocks_on_action_row_drift,
+        test_old_new_command_blocks_on_execution_coverage_drift,
         test_status_reports_missing_baseline_as_yellow,
         test_status_reports_accepted_baseline_and_archived_artifacts,
         test_relocated_baseline_store_resolves_archived_artifacts,
