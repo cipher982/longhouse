@@ -1513,7 +1513,31 @@ def test_resume_reattach_uses_claude_command_shape_and_keeps_unmigrated_gap(tmp_
     assert Path(claude["data"]["raw_resume_command_path"]).is_file()
     antigravity = by_provider["antigravity"]
     assert antigravity["status"] == "unsupported_gap"
-    assert antigravity["failure_code"] == "resume_reattach_adapter_missing"
+    assert antigravity["failure_code"] == "resume_reattach_unsupported"
+    assert antigravity["data"]["operation_evidence"]["reattach"]["failure_code"] == "resume_reattach_unsupported"
+
+
+def test_antigravity_interrupt_and_resume_are_explicit_contract_gaps(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("antigravity",),
+            scenarios=("interrupt_cancel", "resume_reattach"),
+            evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
+        )
+    )
+
+    assert payload["verdict"] == "yellow"
+    by_scenario = {result["scenario"]: result for result in payload["results"]}
+    interrupt = by_scenario["interrupt_cancel"]
+    assert interrupt["status"] == "unsupported_gap"
+    assert interrupt["failure_code"] == "interrupt_cancel_unsupported"
+    assert interrupt["data"]["operation_evidence"]["interrupt"]["failure_code"] == "interrupt_cancel_unsupported"
+
+    resume = by_scenario["resume_reattach"]
+    assert resume["status"] == "unsupported_gap"
+    assert resume["failure_code"] == "resume_reattach_unsupported"
+    assert resume["data"]["operation_evidence"]["reattach"]["failure_code"] == "resume_reattach_unsupported"
 
 
 def test_claude_managed_session_e2e_uses_provider_live_contract_canary(tmp_path: Path) -> None:

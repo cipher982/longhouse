@@ -423,6 +423,7 @@ evidence path is recorded and the relevant doc, test, or proof command exists.
 | H70 | Add managed answer-pause dispatch proof | Done | +0 | `answer_pause_request` now proves Longhouse pause resolution plus Claude/Codex managed-local `session.answer_pause` dispatch, while preserving live provider-held answer delivery as a blocked stronger gate |
 | H71 | Mark Antigravity permission prompts unsupported | Done | +0 | `permission_prompt` now reports Antigravity as a typed unsupported gap instead of a missing live canary, matching its contract surface |
 | H72 | Promote Antigravity launch behind the universal adapter | Done | +0 | `launch_managed_session` now routes Antigravity through the provider-live no-token binary/help/plugin/global-hook canary, requires `launch_local` evidence, DB-ingests the rows, and keeps real `agy` loop send/interrupt/reattach gaps separate |
+| H73 | Replace Antigravity adapter-missing control gaps with contract gaps | Done | +0 | `interrupt_cancel` and `resume_reattach` now report typed Antigravity `unsupported_gap` results from the managed-provider contract instead of looking like missing universal adapter plumbing |
 
 ## Score Update Rules
 

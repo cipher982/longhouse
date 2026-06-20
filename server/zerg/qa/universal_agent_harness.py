@@ -1299,6 +1299,23 @@ class UniversalProviderAdapter:
             return self._run_codex_interrupt_cancel(package)
         if self.config.provider == "opencode":
             return self._run_opencode_interrupt_cancel(package)
+        contract = contract_for_provider(self.config.provider)
+        if contract is None or not contract.interrupt:
+            payload = self._unsupported_payload(
+                "interrupt_cancel",
+                "interrupt_cancel_unsupported",
+                "This provider does not expose stable interrupt/cancel semantics in the managed-provider contract.",
+            )
+            payload["operation_evidence"] = {
+                "interrupt": {
+                    "status": STATUS_UNSUPPORTED_GAP,
+                    "level": "none",
+                    "canary": "universal_interrupt_cancel",
+                    "failure_code": "interrupt_cancel_unsupported",
+                }
+            }
+            package.write_json("assertions/interrupt_cancel.json", payload)
+            return payload
         payload = self._unsupported_payload(
             "interrupt_cancel",
             "interrupt_cancel_adapter_missing",
@@ -1343,6 +1360,23 @@ class UniversalProviderAdapter:
             return self._run_opencode_resume_reattach(package)
         if self.config.provider == "codex":
             return self._run_codex_resume_reattach(package)
+        contract = contract_for_provider(self.config.provider)
+        if contract is None or not (contract.reattach or contract.can_resume):
+            payload = self._unsupported_payload(
+                "resume_reattach",
+                "resume_reattach_unsupported",
+                "This provider does not expose stable resume/reattach semantics in the managed-provider contract.",
+            )
+            payload["operation_evidence"] = {
+                "reattach": {
+                    "status": STATUS_UNSUPPORTED_GAP,
+                    "level": "none",
+                    "canary": "universal_resume_reattach",
+                    "failure_code": "resume_reattach_unsupported",
+                }
+            }
+            package.write_json("assertions/resume_reattach.json", payload)
+            return payload
         payload = self._unsupported_payload(
             "resume_reattach",
             "resume_reattach_adapter_missing",
