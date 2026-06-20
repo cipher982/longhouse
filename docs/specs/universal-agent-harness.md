@@ -514,6 +514,22 @@ Roadmap completion should separately report:
 - Sauron invocation/reporting integration
 - flake governance
 
+`provider-release-proof-maturity.py` reports universal harness progress in two
+separate ways:
+
+- `action_matrix_pass_percent` is the contract/support view from
+  `action_matrix`.
+- `execution_coverage_pass_percent` and `required_evidence_rollup` are the
+  action/provider execution view from `full_action_suite`. They group cells by
+  required evidence such as `hermetic`, `live_no_token`, `live_token`,
+  `live_token_required`, and `artifact_diff`.
+
+Smoke artifacts also report `run_modes`, including whether provider binaries
+were generated fakes or resolved from PATH/env and whether token-spending
+scenarios were requested. Use those fields to separate portable CI progress
+from opt-in real-provider/live-token progress instead of collapsing both into
+one maturity number.
+
 ## Current One-Off Crosswalk
 
 This crosswalk records how today's provider-specific work should migrate into

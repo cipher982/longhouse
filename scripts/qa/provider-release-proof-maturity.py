@@ -24,6 +24,7 @@ DEFAULT_COVERAGE_PATH = (
 )
 DEFAULT_OUTPUT_PATH = Path(".build/provider-release-proof-maturity.json")
 COVERAGE_WEIGHTS = {"yes": 1.0, "partial": 0.5, "no": 0.0}
+PASS_STATUS = "pass"
 
 
 def _now_iso() -> str:
@@ -48,6 +49,101 @@ def _pct(numerator: float, denominator: float) -> float:
     if denominator <= 0:
         return 0.0
     return round((numerator / denominator) * 100.0, 1)
+
+
+def _increment(mapping: dict[str, int], key: str) -> None:
+    mapping[key] = mapping.get(key, 0) + 1
+
+
+def _new_execution_bucket() -> dict[str, Any]:
+    return {
+        "cell_count": 0,
+        "pass": 0,
+        "coverage_status_counts": {},
+        "coverage_kind_counts": {},
+    }
+
+
+def _record_execution_cell(
+    bucket: dict[str, Any],
+    *,
+    coverage_status: str,
+    coverage_kind: str,
+) -> None:
+    bucket["cell_count"] += 1
+    if coverage_status == PASS_STATUS:
+        bucket["pass"] += 1
+    _increment(bucket["coverage_status_counts"], coverage_status)
+    _increment(bucket["coverage_kind_counts"], coverage_kind)
+
+
+def _finalize_execution_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
+    cell_count = int(bucket["cell_count"] or 0)
+    executable_count = int(
+        bucket["coverage_kind_counts"].get("executable_scenario") or 0
+    )
+    matrix_contract_count = int(
+        bucket["coverage_kind_counts"].get("matrix_contract") or 0
+    )
+    return {
+        "cell_count": cell_count,
+        "coverage_kind_counts": dict(bucket["coverage_kind_counts"]),
+        "coverage_status_counts": dict(bucket["coverage_status_counts"]),
+        "executable_scenario_percent": _pct(executable_count, cell_count),
+        "matrix_contract_percent": _pct(matrix_contract_count, cell_count),
+        "pass": int(bucket["pass"] or 0),
+        "pass_percent": _pct(float(bucket["pass"]), float(cell_count)),
+    }
+
+
+def _artifact_run_mode(artifact: dict[str, Any]) -> dict[str, Any]:
+    provider_bin_mode = str(artifact.get("provider_bin_mode") or "unknown")
+    scenarios = [str(item) for item in artifact.get("scenarios") or []]
+    token_spending_scenarios = [
+        str(item) for item in artifact.get("token_spending_scenarios") or []
+    ]
+    live_token_requested = (
+        "live_token_streaming" in scenarios
+        or "live_token_streaming" in token_spending_scenarios
+    )
+    return {
+        "provider_bin_mode": provider_bin_mode,
+        "scenarios": scenarios,
+        "token_spending_scenarios": token_spending_scenarios,
+        "live_token_streaming_requested": live_token_requested,
+    }
+
+
+def _load_universal_artifact(path: Path) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    artifact = _read_json(path)
+    errors: list[dict[str, str]] = []
+    if artifact.get("artifact_kind") != "provider_release_proof_universal_smoke":
+        return artifact, errors
+
+    child_path_raw = artifact.get("universal_harness_artifact")
+    if not child_path_raw:
+        return artifact, errors
+
+    child_path = Path(str(child_path_raw))
+    try:
+        child = _read_json(child_path)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        errors.append(
+            {
+                "path": str(child_path),
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        )
+        return artifact, errors
+
+    merged = dict(child)
+    for key in ("provider_bin_mode", "token_spending_scenarios"):
+        if artifact.get(key) is not None:
+            merged[key] = artifact[key]
+    if artifact.get("scenarios") is not None:
+        merged["scenarios"] = artifact["scenarios"]
+    merged["wrapper_artifact_path"] = str(path)
+    return merged, errors
 
 
 def _coverage_counts(rows: list[dict[str, Any]]) -> dict[str, int]:
@@ -212,6 +308,18 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
             "artifact_count": 0,
             "providers": {},
             "scenario_status_counts": {},
+            "run_modes": {
+                "provider_bin_mode_counts": {},
+                "token_spending_scenarios": [],
+                "token_spending_artifact_count": 0,
+                "live_token_streaming_artifact_count": 0,
+                "real_provider_bin_artifact_count": 0,
+                "fake_provider_bin_artifact_count": 0,
+            },
+            "required_evidence_rollup": {
+                "by_requirement": {},
+                "by_provider": {},
+            },
             "action_matrix_pass_percent": None,
         }
 
@@ -225,14 +333,28 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
     matrix_contract_total = 0
     loaded_artifacts: list[str] = []
     errors: list[dict[str, str]] = []
+    provider_bin_mode_counts: dict[str, int] = {}
+    token_spending_scenarios: set[str] = set()
+    token_spending_artifact_count = 0
+    live_token_streaming_artifact_count = 0
+    required_evidence_buckets: dict[str, dict[str, Any]] = {}
+    provider_required_evidence_buckets: dict[str, dict[str, dict[str, Any]]] = {}
 
     for path in universal_artifacts:
         try:
-            artifact = _read_json(path)
+            artifact, load_errors = _load_universal_artifact(path)
         except (OSError, json.JSONDecodeError, ValueError) as exc:
             errors.append({"path": str(path), "error": f"{type(exc).__name__}: {exc}"})
             continue
+        errors.extend(load_errors)
         loaded_artifacts.append(str(path))
+        run_mode = _artifact_run_mode(artifact)
+        _increment(provider_bin_mode_counts, run_mode["provider_bin_mode"])
+        if run_mode["token_spending_scenarios"]:
+            token_spending_artifact_count += 1
+            token_spending_scenarios.update(run_mode["token_spending_scenarios"])
+        if run_mode["live_token_streaming_requested"]:
+            live_token_streaming_artifact_count += 1
         for result in artifact.get("results") or []:
             if not isinstance(result, dict):
                 continue
@@ -286,6 +408,7 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
                     continue
                 coverage_status = str(cell.get("coverage_status") or "missing")
                 coverage_kind = str(cell.get("coverage_kind") or "unknown")
+                required_evidence = str(row.get("required_evidence") or "unknown")
                 provider_key = str(provider)
                 totals = provider_execution_totals.setdefault(
                     provider_key,
@@ -311,6 +434,26 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
                     executable_scenario_total += 1
                 elif coverage_kind == "matrix_contract":
                     matrix_contract_total += 1
+                required_bucket = required_evidence_buckets.setdefault(
+                    required_evidence,
+                    _new_execution_bucket(),
+                )
+                _record_execution_cell(
+                    required_bucket,
+                    coverage_status=coverage_status,
+                    coverage_kind=coverage_kind,
+                )
+                provider_required_bucket = (
+                    provider_required_evidence_buckets.setdefault(
+                        provider_key,
+                        {},
+                    ).setdefault(required_evidence, _new_execution_bucket())
+                )
+                _record_execution_cell(
+                    provider_required_bucket,
+                    coverage_status=coverage_status,
+                    coverage_kind=coverage_kind,
+                )
         for provider, totals in provider_execution_totals.items():
             provider_entry = providers.setdefault(
                 provider,
@@ -342,13 +485,44 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
                 ),
             }
 
+    required_evidence_rollup = {
+        "by_requirement": {
+            key: _finalize_execution_bucket(bucket)
+            for key, bucket in sorted(required_evidence_buckets.items())
+        },
+        "by_provider": {
+            provider: {
+                key: _finalize_execution_bucket(bucket)
+                for key, bucket in sorted(provider_buckets.items())
+            }
+            for provider, provider_buckets in sorted(
+                provider_required_evidence_buckets.items()
+            )
+        },
+    }
+
     return {
         "status": "checked" if not errors else "partial",
         "artifact_count": len(universal_artifacts),
         "loaded_artifacts": loaded_artifacts,
         "errors": errors,
+        "run_modes": {
+            "provider_bin_mode_counts": provider_bin_mode_counts,
+            "token_spending_scenarios": sorted(token_spending_scenarios),
+            "token_spending_artifact_count": token_spending_artifact_count,
+            "live_token_streaming_artifact_count": live_token_streaming_artifact_count,
+            "real_provider_bin_artifact_count": provider_bin_mode_counts.get(
+                "path_or_env",
+                0,
+            ),
+            "fake_provider_bin_artifact_count": provider_bin_mode_counts.get(
+                "fake",
+                0,
+            ),
+        },
         "providers": providers,
         "scenario_status_counts": scenario_status_counts,
+        "required_evidence_rollup": required_evidence_rollup,
         "action_matrix_pass_percent": _pct(action_pass, action_total)
         if action_total
         else None,

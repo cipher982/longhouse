@@ -189,6 +189,9 @@ def test_maturity_rollup_summarizes_universal_action_matrix() -> None:
             json.dumps(
                 {
                     "artifact_kind": "universal_agent_harness_run",
+                    "provider_bin_mode": "fake",
+                    "scenarios": ["full_action_suite"],
+                    "token_spending_scenarios": [],
                     "verdict": "yellow",
                     "results": [
                         {
@@ -216,6 +219,7 @@ def test_maturity_rollup_summarizes_universal_action_matrix() -> None:
                         "actions": [
                             {
                                 "action_id": "send_message",
+                                "required_evidence": "hermetic",
                                 "providers": {
                                     "opencode": {
                                         "coverage_kind": "executable_scenario",
@@ -229,6 +233,7 @@ def test_maturity_rollup_summarizes_universal_action_matrix() -> None:
                             },
                             {
                                 "action_id": "tool_call_result",
+                                "required_evidence": "live_token_required",
                                 "providers": {
                                     "opencode": {
                                         "coverage_kind": "matrix_contract",
@@ -265,6 +270,42 @@ def test_maturity_rollup_summarizes_universal_action_matrix() -> None:
         assert payload["universal_harness"]["execution_coverage_pass_percent"] == 50.0
         assert payload["universal_harness"]["executable_scenario_percent"] == 50.0
         assert payload["universal_harness"]["matrix_contract_percent"] == 50.0
+        assert payload["universal_harness"]["run_modes"] == {
+            "fake_provider_bin_artifact_count": 1,
+            "live_token_streaming_artifact_count": 0,
+            "provider_bin_mode_counts": {"fake": 1},
+            "real_provider_bin_artifact_count": 0,
+            "token_spending_artifact_count": 0,
+            "token_spending_scenarios": [],
+        }
+        assert payload["universal_harness"]["required_evidence_rollup"][
+            "by_requirement"
+        ] == {
+            "hermetic": {
+                "cell_count": 2,
+                "coverage_kind_counts": {"executable_scenario": 2},
+                "coverage_status_counts": {"blocked": 1, "pass": 1},
+                "executable_scenario_percent": 100.0,
+                "matrix_contract_percent": 0.0,
+                "pass": 1,
+                "pass_percent": 50.0,
+            },
+            "live_token_required": {
+                "cell_count": 2,
+                "coverage_kind_counts": {"matrix_contract": 2},
+                "coverage_status_counts": {"pass": 1, "unsupported_gap": 1},
+                "executable_scenario_percent": 0.0,
+                "matrix_contract_percent": 100.0,
+                "pass": 1,
+                "pass_percent": 50.0,
+            },
+        }
+        assert (
+            payload["universal_harness"]["required_evidence_rollup"]["by_provider"][
+                "opencode"
+            ]["hermetic"]["pass_percent"]
+            == 100.0
+        )
         assert payload["universal_harness"]["providers"]["opencode"][
             "execution_coverage"
         ] == {
@@ -290,11 +331,80 @@ def test_maturity_rollup_summarizes_universal_action_matrix() -> None:
         ]
 
 
+def test_maturity_rollup_accepts_universal_smoke_wrapper_artifact() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        coverage = root / "coverage.json"
+        wrapper = root / "smoke.json"
+        child = root / "universal-agent-harness.json"
+        _write_coverage(coverage)
+        child.write_text(
+            json.dumps(
+                {
+                    "artifact_kind": "universal_agent_harness_run",
+                    "verdict": "yellow",
+                    "results": [],
+                    "provider_execution_coverage_matrix": {
+                        "artifact_kind": "universal_agent_harness_provider_execution_coverage_matrix",
+                        "providers": ["opencode"],
+                        "actions": [
+                            {
+                                "action_id": "live_token_streaming",
+                                "required_evidence": "live_token",
+                                "providers": {
+                                    "opencode": {
+                                        "coverage_kind": "executable_scenario",
+                                        "coverage_status": "pass",
+                                    },
+                                },
+                            }
+                        ],
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        wrapper.write_text(
+            json.dumps(
+                {
+                    "artifact_kind": "provider_release_proof_universal_smoke",
+                    "provider_bin_mode": "path_or_env",
+                    "scenarios": ["full_action_suite", "live_token_streaming"],
+                    "token_spending_scenarios": ["live_token_streaming"],
+                    "universal_harness_artifact": str(child),
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result, payload = _run_maturity(
+            root, coverage=coverage, universal_artifact=wrapper
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert payload["universal_harness"]["status"] == "checked"
+        assert payload["universal_harness"]["run_modes"] == {
+            "fake_provider_bin_artifact_count": 0,
+            "live_token_streaming_artifact_count": 1,
+            "provider_bin_mode_counts": {"path_or_env": 1},
+            "real_provider_bin_artifact_count": 1,
+            "token_spending_artifact_count": 1,
+            "token_spending_scenarios": ["live_token_streaming"],
+        }
+        assert (
+            payload["universal_harness"]["required_evidence_rollup"]["by_requirement"][
+                "live_token"
+            ]["pass_percent"]
+            == 100.0
+        )
+
+
 def main() -> int:
     tests = [
         test_maturity_rollup_scores_static_coverage_without_baselines,
         test_maturity_rollup_checks_accepted_baseline_store,
         test_maturity_rollup_summarizes_universal_action_matrix,
+        test_maturity_rollup_accepts_universal_smoke_wrapper_artifact,
     ]
     for test in tests:
         test()
