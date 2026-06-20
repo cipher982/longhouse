@@ -633,10 +633,10 @@ def test_action_matrix_marks_provider_specific_unsupported_actions(tmp_path: Pat
     bins = _fake_bins(tmp_path)
     payload = uah.run_harness(
         uah.HarnessOptions(
-            providers=("opencode", "antigravity"),
+            providers=("claude", "opencode", "antigravity"),
             scenarios=("action_matrix",),
             evidence_root=tmp_path / "evidence",
-            provider_bins={"opencode": bins["opencode"], "antigravity": bins["antigravity"]},
+            provider_bins={"claude": bins["claude"], "opencode": bins["opencode"], "antigravity": bins["antigravity"]},
         )
     )
 
@@ -644,6 +644,8 @@ def test_action_matrix_marks_provider_specific_unsupported_actions(tmp_path: Pat
         result["provider"]: {row["action_id"]: row for row in result["data"]["actions"]}
         for result in payload["results"]
     }
+    assert by_provider["claude"]["external_event_channel"]["status"] == "pass"
+    assert by_provider["claude"]["external_event_channel"]["canary"] == "claude_development_channels_contract"
     assert by_provider["opencode"]["steer_active_turn"]["status"] == "unsupported_gap"
     assert by_provider["opencode"]["answer_pause_request"]["status"] == "unsupported_gap"
     assert by_provider["opencode"]["external_event_channel"]["status"] == "unsupported_gap"
@@ -2119,6 +2121,7 @@ def test_remaining_surface_scenarios_emit_honest_results_for_all_providers(tmp_p
                 "crash_timeout_cleanup",
             ),
             evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
         )
     )
 
@@ -2158,7 +2161,16 @@ def test_remaining_surface_scenarios_emit_honest_results_for_all_providers(tmp_p
         assert crash["data"]["cleanup_assertions"]["diagnostics_written"] is True
         assert Path(crash["data"]["diagnostics_path"]).is_file()
 
-    for provider in ("claude", "codex", "opencode"):
+    claude_external = by_key[("claude", "external_event_channel")]
+    assert claude_external["status"] == "pass"
+    assert claude_external["data"]["operation_evidence"]["external_event_channel"]["status"] == "pass"
+    assert claude_external["data"]["operation_evidence"]["external_event_channel"]["canary"] == (
+        "claude_development_channels_contract"
+    )
+    assert claude_external["data"]["source_artifact_kind"] == "provider_live_canary"
+    assert (Path(claude_external["evidence_root"]) / "longhouse" / "db-ingest-result.json").is_file()
+
+    for provider in ("codex", "opencode"):
         external = by_key[(provider, "external_event_channel")]
         assert external["status"] == "unsupported_gap"
         assert external["failure_code"] == "external_event_channel_unsupported"

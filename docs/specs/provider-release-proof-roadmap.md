@@ -243,10 +243,11 @@ Implemented:
   artifacts and are included in default release-proof universal runs;
   crash/timeout also writes diagnostics proving no owned process is left
   behind.
-- `external_event_channel` is an executable universal scenario. Antigravity
-  routes it to the existing provider-control hook/inbox canary and DB-ingests
-  the resulting external-event evidence; other providers report typed
-  `unsupported_gap` results.
+- `external_event_channel` is an executable universal scenario. Claude routes
+  it to the provider-live development-channel contract and DB-ingests the
+  resulting channel evidence. Antigravity routes it to the existing
+  provider-control hook/inbox canary and DB-ingests the resulting external-event
+  evidence; Codex and OpenCode report typed `unsupported_gap` results.
 - `permission_prompt` is an executable universal scenario. OpenCode proves the
   bridge reply transport hermetically. Claude and Codex report typed `blocked`
   live held-prompt canary gaps. Antigravity reports a typed `unsupported_gap`
@@ -424,6 +425,7 @@ evidence path is recorded and the relevant doc, test, or proof command exists.
 | H71 | Mark Antigravity permission prompts unsupported | Done | +0 | `permission_prompt` now reports Antigravity as a typed unsupported gap instead of a missing live canary, matching its contract surface |
 | H72 | Promote Antigravity launch behind the universal adapter | Done | +0 | `launch_managed_session` now routes Antigravity through the provider-live no-token binary/help/plugin/global-hook canary, requires `launch_local` evidence, DB-ingests the rows, and keeps real `agy` loop send/interrupt/reattach gaps separate |
 | H73 | Replace Antigravity adapter-missing control gaps with contract gaps | Done | +0 | `interrupt_cancel` and `resume_reattach` now report typed Antigravity `unsupported_gap` results from the managed-provider contract instead of looking like missing universal adapter plumbing |
+| H74 | Promote Claude external event channel proof | Done | +0 | `external_event_channel` now routes Claude through the provider-live no-token development-channel contract, requires passing channel evidence, DB-ingests the rows, and leaves Codex/OpenCode unsupported until they expose comparable external-event semantics |
 
 ## Score Update Rules
 

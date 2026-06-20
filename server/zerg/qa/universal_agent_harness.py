@@ -1579,11 +1579,18 @@ class UniversalProviderAdapter:
         return payload
 
     def external_event_channel(self, package: EvidencePackage) -> dict[str, Any]:
+        if self.config.provider == "claude":
+            return self._run_claude_provider_live_projection(
+                package,
+                scenario="external_event_channel",
+                assertion_name="external_event_channel",
+                require_operation="external_event_channel",
+            )
         if self.config.provider != "antigravity":
             payload = self._unsupported_payload(
                 "external_event_channel",
                 "external_event_channel_unsupported",
-                "This provider does not expose stable hook/inbox external-event semantics in the universal harness.",
+                "This provider does not expose stable external-event channel semantics in the universal harness.",
             )
             payload["operation_evidence"] = {
                 "external_event_channel": {
@@ -5248,7 +5255,11 @@ def _action_support(provider: str, action: ActionDefinition, contract: Any) -> t
     if action.support_kind == "tool_result":
         return bool(contract.transcript_binding), "contract.transcript_binding"
     if action.support_kind == "external_event_channel":
-        return provider == "antigravity", "provider_control.antigravity_hook_inbox"
+        if provider == "claude":
+            return True, "provider_live.claude_development_channel"
+        if provider == "antigravity":
+            return True, "provider_control.antigravity_hook_inbox"
+        return False, "external_event_channel_unsupported"
     if action.support_kind == "permission_prompt":
         return provider in {"claude", "codex", "opencode"}, "provider_permission_prompt_surface"
     return False, f"unknown_support_kind:{action.support_kind}"
@@ -5477,13 +5488,22 @@ def _derived_action_status(*, action: ActionDefinition, provider: str) -> dict[s
             "next": "Keep unsupported until the provider exposes answer-pause semantics.",
         }
     if action.action_id == "external_event_channel":
+        if provider == "claude":
+            return {
+                "status": STATUS_PASS,
+                "evidence_level": "live_no_token",
+                "proof_scope": "provider_live.claude_development_channel",
+                "source": "longhouse provider-live canary --provider claude development channel contract",
+                "canary": "claude_development_channels_contract",
+                "next": "Promote with live channel send/receive behavior proof when available.",
+            }
         return {
             "status": STATUS_PASS,
             "evidence_level": "hermetic",
             "proof_scope": "provider_control.antigravity_hook_inbox",
             "source": "scripts/qa/provider-control-e2e-canary.py Antigravity hook/inbox pre/post injection",
             "canary": "provider_control_e2e_antigravity_hook_inbox",
-            "next": "Keep other providers unsupported unless they expose stable hook/inbox external-event semantics.",
+            "next": "Keep other providers unsupported unless they expose stable external-event semantics.",
         }
     if action.action_id == "permission_prompt":
         if provider == "opencode":

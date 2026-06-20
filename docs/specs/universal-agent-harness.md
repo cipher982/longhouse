@@ -377,7 +377,7 @@ Universal scenarios:
 | `multi_turn_continuity` | P1 | Follow-up input depends on prior turn state and stays in the same session. |
 | `live_token_streaming` | P1 | Model-visible behavior works; streaming is verified only when declared. |
 | `permission_prompt` | P2 | Permission approve/deny paths are observable where supported; OpenCode currently proves the bridge reply transport hermetically, while live held-provider prompts remain a stronger gate. |
-| `external_event_channel` | P2 | Hook/inbox/external input reaches the session where supported. |
+| `external_event_channel` | P2 | Provider channel, hook/inbox, or external input reaches the session where supported. |
 | `crash_timeout_cleanup` | P2 | Timeouts/crashes leave diagnosable artifacts and no orphaned managed process. |
 
 ## Scenario Statuses
