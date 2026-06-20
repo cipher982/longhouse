@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import subprocess
 import sys
 import tempfile
@@ -104,7 +105,11 @@ raise SystemExit(0 if verdict == "green" else 1)
 
 def _run(args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(REPO_ROOT / "scripts" / "qa" / "provider-release-proof-old-new.py"), *args],
+        [
+            sys.executable,
+            str(REPO_ROOT / "scripts" / "qa" / "provider-release-proof-old-new.py"),
+            *args,
+        ],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
@@ -117,13 +122,21 @@ def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def test_staged_old_new_runner_produces_old_new_proofs_and_diff() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         fake_repo = root / "repo"
         _write_fake_repo(fake_repo)
-        old_bin = _write_fake_provider_bin(root / "bin" / "opencode-old", "opencode 1.2.3")
-        new_bin = _write_fake_provider_bin(root / "bin" / "opencode-new", "opencode 1.2.4")
+        old_bin = _write_fake_provider_bin(
+            root / "bin" / "opencode-old", "opencode 1.2.3"
+        )
+        new_bin = _write_fake_provider_bin(
+            root / "bin" / "opencode-new", "opencode 1.2.4"
+        )
         artifact = root / "staged-old-new.json"
         evidence_root = root / "evidence"
 
@@ -141,6 +154,10 @@ def test_staged_old_new_runner_produces_old_new_proofs_and_diff() -> None:
                 "opencode 1.2.3",
                 "--new-provider-version",
                 "opencode 1.2.4",
+                "--old-provider-source-uri",
+                "file:///fixtures/opencode/1.2.3",
+                "--new-provider-source-uri",
+                "file:///fixtures/opencode/1.2.4",
                 "--source-review-status",
                 "pass",
                 "--source-review-note",
@@ -167,7 +184,45 @@ def test_staged_old_new_runner_produces_old_new_proofs_and_diff() -> None:
         assert _read_json(artifact)["verdict"] == "green"
         assert payload["proofs"]["old"]["provider_version"] == "opencode 1.2.3"
         assert payload["proofs"]["new"]["provider_version"] == "opencode 1.2.4"
-        assert payload["diff"]["summary"]["staging"]["status"] == "explicit_proof_artifacts"
+        assert (
+            payload["diff"]["summary"]["staging"]["status"]
+            == "explicit_proof_artifacts"
+        )
+        manifest_path = Path(payload["staging_manifest_path"])
+        assert manifest_path.is_file()
+        assert payload["staging"]["staging_manifest_path"] == str(manifest_path)
+        manifest = _read_json(manifest_path)
+        assert manifest["artifact_kind"] == "provider_release_proof_staging_manifest"
+        assert manifest["artifact_path"] == str(manifest_path)
+        assert manifest["provider"] == "opencode"
+        assert manifest["source_review"] == {
+            "status": "pass",
+            "note": "fixture source review passed",
+        }
+        assert manifest["sides"]["old"]["resolved_provider_bin"] == str(
+            old_bin.resolve()
+        )
+        assert manifest["sides"]["new"]["resolved_provider_bin"] == str(
+            new_bin.resolve()
+        )
+        assert (
+            manifest["sides"]["old"]["provider_source_uri"]
+            == "file:///fixtures/opencode/1.2.3"
+        )
+        assert (
+            manifest["sides"]["new"]["provider_source_uri"]
+            == "file:///fixtures/opencode/1.2.4"
+        )
+        assert manifest["sides"]["old"]["sha256"] == _sha256(old_bin)
+        assert manifest["sides"]["new"]["sha256"] == _sha256(new_bin)
+        assert (
+            manifest["sides"]["old"]["requested_provider_version"] == "opencode 1.2.3"
+        )
+        assert (
+            manifest["sides"]["new"]["requested_provider_version"] == "opencode 1.2.4"
+        )
+        assert manifest["sides"]["old"]["observed_provider_version"] == "opencode 1.2.3"
+        assert manifest["sides"]["new"]["observed_provider_version"] == "opencode 1.2.4"
 
 
 def test_staged_old_new_runner_reports_red_when_a_side_cannot_write_artifact() -> None:
@@ -175,7 +230,9 @@ def test_staged_old_new_runner_reports_red_when_a_side_cannot_write_artifact() -
         root = Path(temp_dir)
         fake_repo = root / "repo"
         _write_fake_repo(fake_repo)
-        old_bin = _write_fake_provider_bin(root / "bin" / "opencode-old", "opencode 1.2.3")
+        old_bin = _write_fake_provider_bin(
+            root / "bin" / "opencode-old", "opencode 1.2.3"
+        )
         missing_new_bin = root / "bin" / "missing-opencode"
 
         result = _run(
@@ -201,6 +258,11 @@ def test_staged_old_new_runner_reports_red_when_a_side_cannot_write_artifact() -
         assert result.returncode == 1
         payload = json.loads(result.stdout)
         assert payload["verdict"] == "red"
+        manifest = _read_json(Path(payload["staging_manifest_path"]))
+        assert manifest["sides"]["old"]["exists"] is True
+        assert manifest["sides"]["old"]["sha256"] == _sha256(old_bin)
+        assert manifest["sides"]["new"]["exists"] is False
+        assert manifest["sides"]["new"]["sha256"] is None
         assert payload["proofs"]["new"]["failure_code"] in {
             "provider_release_proof_missing_artifact",
             "provider_release_proof_timeout",

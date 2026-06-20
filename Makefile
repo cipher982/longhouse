@@ -428,6 +428,8 @@ provider-release-proof-staged-old-new: ## Run old/new staged provider binaries t
 		--json; \
 	if [ -n "$(OLD_PROVIDER_VERSION)" ]; then set -- "$$@" --old-provider-version "$(OLD_PROVIDER_VERSION)"; fi; \
 	if [ -n "$(NEW_PROVIDER_VERSION)" ]; then set -- "$$@" --new-provider-version "$(NEW_PROVIDER_VERSION)"; fi; \
+	if [ -n "$(OLD_PROVIDER_SOURCE_URI)" ]; then set -- "$$@" --old-provider-source-uri "$(OLD_PROVIDER_SOURCE_URI)"; fi; \
+	if [ -n "$(NEW_PROVIDER_SOURCE_URI)" ]; then set -- "$$@" --new-provider-source-uri "$(NEW_PROVIDER_SOURCE_URI)"; fi; \
 	if [ -n "$(ARTIFACT)" ]; then set -- "$$@" --artifact "$(ARTIFACT)"; fi; \
 	if [ -n "$(EVIDENCE_ROOT)" ]; then set -- "$$@" --evidence-root "$(EVIDENCE_ROOT)"; fi; \
 	if [ -n "$(TIMEOUT_SECS)" ]; then set -- "$$@" --timeout-secs "$(TIMEOUT_SECS)"; fi; \

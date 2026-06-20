@@ -424,6 +424,28 @@ This emits `artifact_kind=provider_release_proof_old_new_diff` with
 `staging.status=explicit_proof_artifacts`. It compares supplied proof artifacts;
 it does not install or stage old/new provider binaries by itself.
 
+Run proof and diff from already staged old/new provider binaries:
+
+```bash
+make provider-release-proof-staged-old-new \
+  PROVIDER=opencode \
+  OLD_PROVIDER_BIN=/tmp/staged/opencode-old \
+  NEW_PROVIDER_BIN=/tmp/staged/opencode-new \
+  OLD_PROVIDER_VERSION="opencode 1.2.3" \
+  NEW_PROVIDER_VERSION="opencode 1.2.4" \
+  OLD_PROVIDER_SOURCE_URI="sauron://release/opencode/1.2.3" \
+  NEW_PROVIDER_SOURCE_URI="sauron://release/opencode/1.2.4" \
+  ARTIFACT=/tmp/staged-old-new-proof.json
+```
+
+This emits `artifact_kind=provider_release_proof_staged_old_new` and writes a
+`provider_release_proof_staging_manifest` beside the proof artifacts. The
+manifest records each side's requested and observed provider version, source
+URI, resolved binary path, file size, executable bit, SHA-256, proof verdict,
+and proof artifact path. Longhouse still does not install provider binaries;
+private/Sauron staging is responsible for placing the binaries and can use the
+source URI fields to point back to its release envelope or artifact store.
+
 When `diff.status=different`, inspect the structured summaries before opening
 the full raw comparable diff:
 

@@ -10,6 +10,7 @@ provider-release-proof-baseline.py old-new.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import subprocess
 import sys
@@ -38,7 +39,9 @@ def _default_evidence_root(repo_root: Path) -> Path:
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -51,9 +54,99 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 
 def _command_evidence(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
     return {
-        "args": list(result.args) if isinstance(result.args, list) else [str(result.args)],
+        "args": list(result.args)
+        if isinstance(result.args, list)
+        else [str(result.args)],
         "returncode": result.returncode,
     }
+
+
+def _sha256_file(path: Path) -> str | None:
+    try:
+        with path.open("rb") as handle:
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+            return digest.hexdigest()
+    except OSError:
+        return None
+
+
+def _staged_binary_entry(
+    *,
+    side: str,
+    provider_bin: Path,
+    requested_provider_version: str | None,
+    source_uri: str | None,
+    proof: dict[str, Any],
+) -> dict[str, Any]:
+    expanded = provider_bin.expanduser()
+    resolved = expanded.resolve(strict=False)
+    try:
+        stat = resolved.stat()
+    except OSError:
+        stat = None
+    return {
+        "side": side,
+        "provider_bin": str(expanded),
+        "resolved_provider_bin": str(resolved),
+        "provider_source_uri": source_uri,
+        "exists": stat is not None,
+        "is_file": stat is not None and resolved.is_file(),
+        "is_executable": stat is not None
+        and resolved.is_file()
+        and bool(stat.st_mode & 0o111),
+        "size_bytes": stat.st_size if stat is not None else None,
+        "sha256": _sha256_file(resolved)
+        if stat is not None and resolved.is_file()
+        else None,
+        "requested_provider_version": requested_provider_version,
+        "observed_provider_version": proof.get("provider_version"),
+        "proof_verdict": proof.get("verdict"),
+        "proof_failure_code": proof.get("failure_code"),
+        "proof_artifact_path": proof.get("artifact_path"),
+        "scenario_id": proof.get("scenario_id"),
+    }
+
+
+def _write_staging_manifest(
+    args: argparse.Namespace,
+    *,
+    evidence_root: Path,
+    old: dict[str, Any],
+    new: dict[str, Any],
+) -> dict[str, Any]:
+    manifest_path = evidence_root / "staging-manifest.json"
+    manifest = {
+        "schema_version": SCHEMA_VERSION,
+        "artifact_kind": "provider_release_proof_staging_manifest",
+        "generated_at": _now_iso(),
+        "provider": args.provider,
+        "artifact_path": str(manifest_path),
+        "installer": "external",
+        "source_review": {
+            "status": args.source_review_status,
+            "note": args.source_review_note,
+        },
+        "sides": {
+            "old": _staged_binary_entry(
+                side="old",
+                provider_bin=args.old_provider_bin,
+                requested_provider_version=args.old_provider_version,
+                source_uri=args.old_provider_source_uri,
+                proof=old,
+            ),
+            "new": _staged_binary_entry(
+                side="new",
+                provider_bin=args.new_provider_bin,
+                requested_provider_version=args.new_provider_version,
+                source_uri=args.new_provider_source_uri,
+                proof=new,
+            ),
+        },
+    }
+    _write_json(manifest_path, manifest)
+    return manifest
 
 
 def _verdict_rank(verdict: str | None) -> int:
@@ -196,7 +289,9 @@ def _run_release_proof(
     }
 
 
-def _run_old_new_diff(args: argparse.Namespace, old_artifact: Path, new_artifact: Path, root: Path) -> dict[str, Any]:
+def _run_old_new_diff(
+    args: argparse.Namespace, old_artifact: Path, new_artifact: Path, root: Path
+) -> dict[str, Any]:
     root.mkdir(parents=True, exist_ok=True)
     artifact = root / "old-new-diff.json"
     stdout_path = root / "old-new-diff-stdout.log"
@@ -250,7 +345,9 @@ def _run_old_new_diff(args: argparse.Namespace, old_artifact: Path, new_artifact
 
 
 def run_staged_old_new(args: argparse.Namespace) -> dict[str, Any]:
-    evidence_root = (args.evidence_root or _default_evidence_root(args.repo_root)).expanduser()
+    evidence_root = (
+        args.evidence_root or _default_evidence_root(args.repo_root)
+    ).expanduser()
     old = _run_release_proof(
         args,
         side="old",
@@ -265,8 +362,14 @@ def run_staged_old_new(args: argparse.Namespace) -> dict[str, Any]:
         provider_version=args.new_provider_version,
         root=evidence_root / "new",
     )
+    staging_manifest = _write_staging_manifest(
+        args, evidence_root=evidence_root, old=old, new=new
+    )
     diff: dict[str, Any]
-    if _verdict_rank(str(old.get("verdict"))) >= 2 or _verdict_rank(str(new.get("verdict"))) >= 2:
+    if (
+        _verdict_rank(str(old.get("verdict"))) >= 2
+        or _verdict_rank(str(new.get("verdict"))) >= 2
+    ):
         diff = {
             "status": "blocked",
             "verdict": "red",
@@ -295,14 +398,21 @@ def run_staged_old_new(args: argparse.Namespace) -> dict[str, Any]:
         "evidence_root": str(evidence_root),
         "proofs": {"old": old, "new": new},
         "diff": diff,
+        "staging_manifest_path": staging_manifest["artifact_path"],
+        "staging_manifest": staging_manifest,
         "staging": {
             "status": "staged_provider_binaries",
             "old_provider_bin": str(args.old_provider_bin.expanduser()),
             "new_provider_bin": str(args.new_provider_bin.expanduser()),
+            "old_provider_source_uri": args.old_provider_source_uri,
+            "new_provider_source_uri": args.new_provider_source_uri,
+            "staging_manifest_path": staging_manifest["artifact_path"],
             "installer": "external",
         },
     }
-    artifact = (args.artifact or (evidence_root / "provider-release-proof-staged-old-new.json")).expanduser()
+    artifact = (
+        args.artifact or (evidence_root / "provider-release-proof-staged-old-new.json")
+    ).expanduser()
     payload["artifact_path"] = str(artifact)
     _write_json(artifact, payload)
     return payload
@@ -316,9 +426,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--new-provider-bin", type=Path, required=True)
     parser.add_argument("--old-provider-version")
     parser.add_argument("--new-provider-version")
+    parser.add_argument("--old-provider-source-uri")
+    parser.add_argument("--new-provider-source-uri")
     parser.add_argument("--artifact", type=Path)
     parser.add_argument("--evidence-root", type=Path)
-    parser.add_argument("--baseline-root", type=Path, default=Path(".build/provider-release-baselines"))
+    parser.add_argument(
+        "--baseline-root", type=Path, default=Path(".build/provider-release-baselines")
+    )
     parser.add_argument("--timeout-secs", type=int, default=180)
     parser.add_argument("--skip-universal-harness", action="store_true")
     parser.add_argument(
