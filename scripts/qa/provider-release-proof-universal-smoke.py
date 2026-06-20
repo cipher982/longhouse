@@ -244,15 +244,64 @@ raise SystemExit(2)
 """
 
 
+def _fake_antigravity_provider_live_script() -> str:
+    return r"""#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+if args == ["--version"]:
+    print("agy 9.9.9-fake")
+    raise SystemExit(0)
+
+if args == ["--help"]:
+    print("--print --prompt-interactive --conversation plugin")
+    raise SystemExit(0)
+
+if args == ["plugin", "--help"]:
+    print("install <target>")
+    print("list")
+    print("validate")
+    raise SystemExit(0)
+
+if len(args) == 3 and args[:2] == ["plugin", "validate"]:
+    plugin_root = Path(args[2])
+    plugin_json = plugin_root / "plugin.json"
+    if not plugin_json.is_file():
+        print("plugin.json missing", file=sys.stderr)
+        raise SystemExit(1)
+    payload = json.loads(plugin_json.read_text())
+    if payload.get("name") != "longhouse-runtime":
+        print("unexpected plugin name", file=sys.stderr)
+        raise SystemExit(1)
+    print("valid longhouse-runtime")
+    raise SystemExit(0)
+
+if len(args) == 3 and args[:2] == ["plugin", "install"]:
+    plugin_root = Path(args[2])
+    if not (plugin_root / "plugin.json").is_file():
+        print("plugin.json missing", file=sys.stderr)
+        raise SystemExit(1)
+    print("installed longhouse-runtime")
+    raise SystemExit(0)
+
+if args == ["plugin", "list"]:
+    print("longhouse-runtime")
+    raise SystemExit(0)
+
+print("unexpected fake agy args: " + json.dumps(args), file=sys.stderr)
+raise SystemExit(2)
+"""
+
+
 def utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def default_evidence_root() -> Path:
@@ -273,6 +322,11 @@ def write_fake_provider_bins(root: Path) -> dict[str, Path]:
             continue
         if provider == "claude":
             path.write_text(_fake_claude_provider_live_script(), encoding="utf-8")
+            path.chmod(0o755)
+            result[provider] = path
+            continue
+        if provider == "antigravity":
+            path.write_text(_fake_antigravity_provider_live_script(), encoding="utf-8")
             path.chmod(0o755)
             result[provider] = path
             continue
@@ -444,11 +498,7 @@ def write_synthetic_release_proof(
             "provider": provider,
             "action_count": len(action_rows),
             "action_ids": [row["action_id"] for row in action_rows],
-            "status_counts": (
-                {"pass": len(action_rows)}
-                if status == "pass"
-                else {status: 1, "pass": 1}
-            ),
+            "status_counts": ({"pass": len(action_rows)} if status == "pass" else {status: 1, "pass": 1}),
             "actions": action_rows,
         },
     }
@@ -527,8 +577,8 @@ def write_synthetic_old_new_release_proofs(
 def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
     evidence_root = (args.evidence_root or default_evidence_root()).expanduser().resolve()
     artifact_path = (
-        args.artifact or (evidence_root / "provider-release-proof-universal-smoke.json")
-    ).expanduser().resolve()
+        (args.artifact or (evidence_root / "provider-release-proof-universal-smoke.json")).expanduser().resolve()
+    )
     scenarios = tuple(args.scenario or DEFAULT_SCENARIOS)
     provider_bins = write_fake_provider_bins(evidence_root)
     fixture_path = write_parse_fixture(evidence_root)
@@ -555,23 +605,13 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         "scenarios": list(scenarios),
         "result_count": len(harness.get("results") or []),
         "evidence_root": str(evidence_root),
-        "synthetic_old_proof_paths": {
-            provider: str(path) for provider, path in old_proof_paths.items()
-        },
-        "synthetic_new_proof_paths": {
-            provider: str(path) for provider, path in new_proof_paths.items()
-        },
-        "universal_harness_artifact": str(
-            evidence_root / "universal-agent-harness" / "universal-agent-harness.json"
-        ),
+        "synthetic_old_proof_paths": {provider: str(path) for provider, path in old_proof_paths.items()},
+        "synthetic_new_proof_paths": {provider: str(path) for provider, path in new_proof_paths.items()},
+        "universal_harness_artifact": str(evidence_root / "universal-agent-harness" / "universal-agent-harness.json"),
         "provider_support_matrix_path": harness.get("provider_support_matrix_path"),
         "provider_support_matrix": harness.get("provider_support_matrix"),
-        "provider_execution_coverage_matrix_path": harness.get(
-            "provider_execution_coverage_matrix_path"
-        ),
-        "provider_execution_coverage_matrix": harness.get(
-            "provider_execution_coverage_matrix"
-        ),
+        "provider_execution_coverage_matrix_path": harness.get("provider_execution_coverage_matrix_path"),
+        "provider_execution_coverage_matrix": harness.get("provider_execution_coverage_matrix"),
     }
     artifact["artifact_path"] = str(artifact_path)
     write_json(artifact_path, artifact)
@@ -587,9 +627,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         help="Universal scenario to run. Repeatable; defaults to fake/no-token smoke surface.",
     )
-    parser.add_argument(
-        "--json", action="store_true", help="Print the smoke artifact as JSON."
-    )
+    parser.add_argument("--json", action="store_true", help="Print the smoke artifact as JSON.")
     return parser
 
 

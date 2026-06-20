@@ -37,7 +37,7 @@ def _fake_bins(tmp_path: Path) -> dict[str, Path]:
         "claude": _fake_claude_provider_live(tmp_path / "bin" / "claude"),
         "codex": _write_exe(tmp_path / "bin" / "codex", "codex-cli 9.9.9"),
         "opencode": _write_exe(tmp_path / "bin" / "opencode", "opencode 9.9.9"),
-        "antigravity": _write_exe(tmp_path / "bin" / "agy", "agy 9.9.9"),
+        "antigravity": _fake_antigravity_provider_live(tmp_path / "bin" / "agy"),
     }
 
 
@@ -276,6 +276,63 @@ if args == ["--dangerously-load-development-channels", "server:longhouse-channel
     raise SystemExit(0)
 
 print("unexpected fake claude args: " + json.dumps(args), file=sys.stderr)
+raise SystemExit(2)
+""",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
+def _fake_antigravity_provider_live(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        r"""#!/usr/bin/env python3
+import json
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+if args == ["--version"]:
+    print("agy 9.9.9-fake")
+    raise SystemExit(0)
+
+if args == ["--help"]:
+    print("--print --prompt-interactive --conversation plugin")
+    raise SystemExit(0)
+
+if args == ["plugin", "--help"]:
+    print("install <target>")
+    print("list")
+    print("validate")
+    raise SystemExit(0)
+
+if len(args) == 3 and args[:2] == ["plugin", "validate"]:
+    plugin_root = Path(args[2])
+    plugin_json = plugin_root / "plugin.json"
+    if not plugin_json.is_file():
+        print("plugin.json missing", file=sys.stderr)
+        raise SystemExit(1)
+    payload = json.loads(plugin_json.read_text())
+    if payload.get("name") != "longhouse-runtime":
+        print("unexpected plugin name", file=sys.stderr)
+        raise SystemExit(1)
+    print("valid longhouse-runtime")
+    raise SystemExit(0)
+
+if len(args) == 3 and args[:2] == ["plugin", "install"]:
+    plugin_root = Path(args[2])
+    if not (plugin_root / "plugin.json").is_file():
+        print("plugin.json missing", file=sys.stderr)
+        raise SystemExit(1)
+    print("installed longhouse-runtime")
+    raise SystemExit(0)
+
+if args == ["plugin", "list"]:
+    print("longhouse-runtime")
+    raise SystemExit(0)
+
+print("unexpected fake agy args: " + json.dumps(args), file=sys.stderr)
 raise SystemExit(2)
 """,
         encoding="utf-8",
@@ -1193,13 +1250,18 @@ def test_managed_session_scenarios_keep_remaining_typed_gaps(tmp_path: Path) -> 
     expected = {
         ("claude", "launch_managed_session"): ("pass", None),
         ("claude", "send_receive"): ("unsupported_gap", "send_receive_not_safe_no_token"),
-        ("antigravity", "launch_managed_session"): ("unsupported_gap", "managed_session_not_safe_no_token"),
+        ("antigravity", "launch_managed_session"): ("pass", None),
         ("antigravity", "send_receive"): ("unsupported_gap", "send_receive_not_safe_no_token"),
     }
     for key, (status, failure_code) in expected.items():
         assert by_key[key]["status"] == status
         if failure_code is not None:
             assert by_key[key]["failure_code"] == failure_code
+
+    antigravity_launch = by_key[("antigravity", "launch_managed_session")]
+    assert antigravity_launch["data"]["source_artifact_kind"] == "provider_live_canary"
+    assert antigravity_launch["data"]["operation_evidence"]["launch_local"]["status"] == "pass"
+    assert antigravity_launch["data"]["operation_evidence"]["launch_local"]["level"] == "live_no_token"
 
 
 def test_opencode_managed_session_e2e_uses_real_provider_live_canary(tmp_path: Path) -> None:
@@ -3101,7 +3163,6 @@ def test_script_entrypoint_runs_all_provider_fake_no_token_release_surface(tmp_p
         ("claude", "send_receive"): "send_receive_not_safe_no_token",
         ("opencode", "run_prompt_once"): "run_prompt_once_not_safe_no_token",
         ("antigravity", "run_prompt_once"): "run_prompt_once_not_safe_no_token",
-        ("antigravity", "launch_managed_session"): "managed_session_not_safe_no_token",
         ("antigravity", "send_receive"): "send_receive_not_safe_no_token",
     }
     for provider in uah.SUPPORTED_PROVIDERS:

@@ -1127,6 +1127,8 @@ class UniversalProviderAdapter:
     def launch_managed_session(self, package: EvidencePackage) -> dict[str, Any]:
         if self.config.provider == "claude":
             return self._run_claude_launch_managed_session(package)
+        if self.config.provider == "antigravity":
+            return self._run_antigravity_launch_managed_session(package)
         if "launch_managed_session" not in self.config.safe_managed_session_scenarios:
             payload = self._unsupported_payload(
                 "launch_managed_session",
@@ -4777,6 +4779,105 @@ class UniversalProviderAdapter:
             require_operation="reattach",
         )
 
+    def _run_antigravity_launch_managed_session(self, package: EvidencePackage) -> dict[str, Any]:
+        binary, source = self._resolve_binary()
+        if binary is None:
+            payload = {
+                "status": STATUS_FAIL,
+                "failure_code": "provider_binary_not_found",
+                "message": "agy binary was not found for launch_managed_session",
+                "binary_source": source,
+            }
+            package.write_json("assertions/launch_managed_session.json", payload)
+            return payload
+
+        from zerg.qa.provider_live_canary import run_provider_live_canary
+
+        live_evidence_root = package.path("raw", "provider-live-evidence")
+        live_artifact_path = package.path("raw", "provider-live-canary.json")
+        live_artifact = run_provider_live_canary(
+            {
+                "provider": "antigravity",
+                "provider_bin": str(binary),
+                "artifact": live_artifact_path,
+                "evidence_root": live_evidence_root,
+                "wait_ready_secs": 15.0,
+                "json": False,
+            }
+        )
+        package.write_json("raw/provider-live-canary-inline.json", live_artifact)
+        operation_evidence = {
+            str(operation): dict(evidence)
+            for operation, evidence in dict(live_artifact.get("operation_evidence") or {}).items()
+            if isinstance(evidence, Mapping)
+        }
+        session_projection_data = dict(live_artifact.get("session_projection") or {})
+        provider_session_id = str(session_projection_data.get("provider_session_id") or self._session_id(package))
+        raw_events = antigravity_provider_live_raw_events(live_artifact, provider_session_id=provider_session_id)
+        projection = self._write_session_projection(
+            package,
+            raw_events=raw_events,
+            operations=operation_evidence,
+            provider_session_id=provider_session_id,
+        )
+        db_ingest = ingest_canonical_events_into_longhouse_db(
+            package=package,
+            provider=self.config.provider,
+            rows=raw_events,
+            provider_session_id=provider_session_id,
+        )
+        operation_evidence.update(
+            {
+                str(operation): dict(evidence)
+                for operation, evidence in dict(db_ingest.get("operation_evidence") or {}).items()
+                if isinstance(evidence, Mapping)
+            }
+        )
+        session_projection_path = package.path("longhouse", "session-projection.json")
+        try:
+            session_projection = json.loads(session_projection_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            session_projection = {}
+        if isinstance(session_projection, dict):
+            session_projection["operation_statuses"] = operation_evidence
+            package.write_json("longhouse/session-projection.json", session_projection)
+
+        live_verdict = str(live_artifact.get("verdict") or "red")
+        db_verdict = str(db_ingest.get("status") or STATUS_FAIL)
+        status = STATUS_PASS if live_verdict == "green" and db_verdict == STATUS_PASS else STATUS_FAIL
+        payload = {
+            **projection,
+            "status": status,
+            "scenario": "launch_managed_session",
+            "provider_version": live_artifact.get("provider_version"),
+            "provider_live_artifact_path": str(live_artifact_path),
+            "provider_live_evidence_root": str(live_evidence_root),
+            "provider_live_verdict": live_verdict,
+            "source_artifact_kind": live_artifact.get("artifact_kind"),
+            "synthetic": False,
+            "operation_evidence": operation_evidence,
+            "longhouse_ingest": {
+                "status": db_verdict,
+                "failure_code": db_ingest.get("failure_code"),
+                "db_snapshot_path": db_ingest.get("db_snapshot_path"),
+                "session_projection_path": db_ingest.get("session_projection_path"),
+                "timeline_projection_path": db_ingest.get("timeline_projection_path"),
+            },
+        }
+        launch_status = str((operation_evidence.get("launch_local") or {}).get("status") or STATUS_FAIL)
+        if live_verdict != "green":
+            payload["failure_code"] = live_artifact.get("failure_code") or "provider_live_canary_failed"
+            payload["message"] = "Antigravity provider-live no-token canary did not pass."
+        elif db_verdict != STATUS_PASS:
+            payload["failure_code"] = db_ingest.get("failure_code") or "launch_managed_session_db_ingest_failed"
+            payload["message"] = "Antigravity provider-live evidence did not pass Longhouse DB ingest assertions."
+        elif launch_status != STATUS_PASS:
+            payload["status"] = STATUS_FAIL
+            payload["failure_code"] = "antigravity_launch_local_evidence_missing"
+            payload["message"] = "Antigravity provider-live canary did not produce passing launch_local evidence."
+        package.write_json("assertions/launch_managed_session.json", payload)
+        return payload
+
     def _run_antigravity_managed_session_e2e(self, package: EvidencePackage) -> dict[str, Any]:
         control_evidence_root = package.path("raw", "provider-control-e2e-evidence")
         control_artifact_path = package.path("raw", "provider-control-e2e.json")
@@ -6063,6 +6164,95 @@ def claude_provider_live_operation_evidence(artifact: Mapping[str, Any]) -> dict
             },
         )
     return operation_evidence
+
+
+def antigravity_provider_live_raw_events(
+    artifact: Mapping[str, Any],
+    *,
+    provider_session_id: str,
+) -> list[dict[str, Any]]:
+    canaries = dict(artifact.get("canaries") or {})
+    binary_identity = dict(canaries.get("binary_identity") or {})
+    command_shape = dict(canaries.get("command_shape") or {})
+    plugin_contract = dict(canaries.get("plugin_contract") or {})
+    global_hooks = dict(canaries.get("global_hooks_contract") or {})
+    hook_inbox = dict(canaries.get("hook_inbox_claim_contract") or {})
+    provider_version = artifact.get("provider_version") or binary_identity.get("version")
+    rows: list[dict[str, Any]] = []
+    if binary_identity:
+        rows.append(
+            {
+                "type": "session_start",
+                "role": "system",
+                "text": f"Antigravity binary identity captured: {provider_version}",
+                "provider_session_id": provider_session_id,
+                "source_canary": "binary_identity",
+                "status": binary_identity.get("status"),
+                "provider_version": provider_version,
+                "evidence_origin": "provider_live_canary",
+            }
+        )
+    if command_shape:
+        rows.append(
+            {
+                "type": "launch_contract",
+                "role": "system",
+                "text": "Antigravity CLI/plugin command contract checked.",
+                "provider_session_id": provider_session_id,
+                "source_canary": "command_shape",
+                "status": command_shape.get("status"),
+                "missing_by_probe": command_shape.get("missing_by_probe"),
+                "failure_code": command_shape.get("failure_code"),
+                "evidence_origin": "provider_live_canary",
+            }
+        )
+    if plugin_contract:
+        rows.append(
+            {
+                "type": "launch_contract",
+                "role": "system",
+                "text": "Antigravity Longhouse runtime plugin validate/install/list contract checked.",
+                "provider_session_id": provider_session_id,
+                "source_canary": "plugin_contract",
+                "status": plugin_contract.get("status"),
+                "plugin_root": plugin_contract.get("plugin_root"),
+                "isolated_home": plugin_contract.get("isolated_home"),
+                "failure_code": plugin_contract.get("failure_code"),
+                "evidence_origin": "provider_live_canary",
+            }
+        )
+    if global_hooks:
+        rows.append(
+            {
+                "type": "external_event_channel",
+                "role": "system",
+                "text": "Antigravity global hooks config contract checked.",
+                "provider_session_id": provider_session_id,
+                "source_canary": "global_hooks_contract",
+                "status": global_hooks.get("status"),
+                "events": global_hooks.get("events"),
+                "global_hooks_path": global_hooks.get("global_hooks_path"),
+                "failure_code": global_hooks.get("failure_code"),
+                "evidence_origin": "provider_live_canary",
+            }
+        )
+    if hook_inbox:
+        rows.append(
+            {
+                "type": "external_event_channel",
+                "role": "system",
+                "text": "Antigravity hook-inbox claim contract checked.",
+                "provider_session_id": provider_session_id,
+                "source_canary": "hook_inbox_claim_contract",
+                "status": hook_inbox.get("status"),
+                "pre_claim_event": hook_inbox.get("pre_claim_event"),
+                "post_claim_event": hook_inbox.get("post_claim_event"),
+                "stop_decision": hook_inbox.get("stop_decision"),
+                "failure_code": hook_inbox.get("failure_code"),
+                "evidence_origin": "provider_live_canary",
+            }
+        )
+    return rows
 
 
 def codex_provider_release_raw_events(artifact: Mapping[str, Any]) -> list[dict[str, Any]]:

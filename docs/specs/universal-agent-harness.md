@@ -192,15 +192,18 @@ and falls back to a hermetic managed-local attach-command proof otherwise.
 Claude `resume_reattach` proves the channel command shape hermetically through
 `build_claude_channel_exec_command`, including `--resume`, session env,
 development-channel loading, and workspace selection; live process restart plus
-same-session send remains a stronger gate. Antigravity calls the
-provider-control hook/inbox canary, projects external-event channel rows, and
-DB-ingests them. The default all-provider fake/no-token release smoke includes
-this scenario, so routine CI/Sauron smoke artifacts must show Claude, OpenCode,
-and Antigravity passing their provider-specific managed-session lanes while
-Codex reports the typed Runtime Host credentials gap for `managed_session_e2e`
-when credentials are not configured. That proves hook/inbox input delivery and
-Stop/force-continue behavior for Antigravity; it does not prove interrupt,
-reattach, or tool-result semantics.
+same-session send remains a stronger gate. Antigravity `launch_managed_session`
+calls the provider-live no-token binary/help/plugin/global-hook contract,
+requires passing `launch_local` evidence, projects those rows, and DB-ingests
+them. Antigravity `managed_session_e2e` calls the provider-control hook/inbox
+canary, projects external-event channel rows, and DB-ingests them. The default
+all-provider fake/no-token release smoke includes this scenario, so routine
+CI/Sauron smoke artifacts must show Claude, OpenCode, and Antigravity passing
+their provider-specific managed-session lanes while Codex reports the typed
+Runtime Host credentials gap for `managed_session_e2e` when credentials are not
+configured. That proves hook/inbox input delivery and Stop/force-continue
+behavior for Antigravity; it does not prove interrupt, reattach, or tool-result
+semantics.
 
 `interrupt_cancel` is a dedicated universal control scenario. Claude routes it
 to the provider-control channel canary, proves normal send metadata, steer
@@ -527,7 +530,7 @@ rewritten to call the shared scenario runner.
 | `server/zerg/qa/managed_claude_live.py` | `send_receive`, `live_token_streaming`, `interrupt_cancel`, `multi_turn_continuity` | Migration candidate; PTY loop and channel readiness are Claude adapter internals. |
 | `server/zerg/qa/codex_provider_release_canary.py` | `probe_identity`, `run_prompt_once`, `launch_managed_session`, `resume_reattach`, `send_receive`, `interrupt_cancel`, `tool_call_result`, `live_token_streaming` | Partly migrated: Codex `managed_session_e2e`, `interrupt_cancel`, `tool_call_result`, and `live_token_streaming` now call this canary; live active-turn steer behavior still needs promotion. |
 | `server/zerg/qa/provider_live_canary.py` OpenCode server/schema/session checks | `launch_managed_session`, `send_receive`, `resume_reattach`, `interrupt_cancel`, `parse_ingest_project` | Partly migrated: OpenCode `managed_session_e2e`, `interrupt_cancel`, and `resume_reattach` now call this canary; remaining live-token scenarios still need promotion. |
-| `server/zerg/qa/provider_live_canary.py` Antigravity plugin/global hook checks | `probe_identity`, `external_event_channel`, `send_receive` | Migration candidate; hook/inbox setup is Antigravity adapter internal. |
+| `server/zerg/qa/provider_live_canary.py` Antigravity plugin/global hook checks | `probe_identity`, `launch_managed_session`, `external_event_channel` | Migrated into Antigravity `launch_managed_session`; real `agy` loop send remains owned by provider-control/live-token lanes. |
 | `scripts/qa/provider-control-e2e-canary.py` | `send_receive`, `interrupt_cancel`, `tool_call_result`, `external_event_channel`, `live_token_streaming` | Partly migrated: Claude `interrupt_cancel` and `live_token_streaming`, OpenCode `tool_call_result` and `live_token_streaming`, plus Antigravity `live_token_streaming`, now call this canary; keep provider-specific fakes as adapter test fixtures. |
 | Engine parser golden/adversarial tests | `parse_ingest_project` fixture replay | Reusable as `fixture_replay` scenarios. |
 | Shipper/ingest/session projection tests | `parse_ingest_project`, `timeline_projection` | Reusable Longhouse assertions under the runner. |
@@ -582,6 +585,10 @@ shape:
 10. Claude `launch_managed_session` now calls the provider-live no-token
    command/channel/PTY contract, requires passing `launch_local` evidence, and
    DB-ingests those rows. Claude send/receive remains an explicit no-token gap.
+10. Antigravity `launch_managed_session` now calls the provider-live no-token
+   binary/help/plugin/global-hook contract, requires passing `launch_local`
+   evidence, and DB-ingests those rows. Real `agy` loop send remains an explicit
+   provider-control/live-token gate.
 10. `send_message` action coverage can be proven by any mapped executable
    scenario that carries passing `send_input` operation evidence. This lets
    Claude's channel-control `interrupt_cancel` canary and Antigravity's
