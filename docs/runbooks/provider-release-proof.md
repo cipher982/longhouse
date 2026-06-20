@@ -424,6 +424,18 @@ This emits `artifact_kind=provider_release_proof_old_new_diff` with
 `staging.status=explicit_proof_artifacts`. It compares supplied proof artifacts;
 it does not install or stage old/new provider binaries by itself.
 
+When `diff.status=different`, inspect the structured summaries before opening
+the full raw comparable diff:
+
+- `diff.action_drift` lists changed universal `action_matrix` and
+  `control_surface` rows, grouped by abstract action, category, and required
+  evidence.
+- `diff.execution_coverage_drift` lists changed provider execution-coverage
+  rows and rollup-only coverage drift. If both compared proofs predate
+  execution-coverage artifacts, it reports `status=unavailable` without
+  blocking an otherwise matching baseline; if only one side is unavailable, the
+  release diff remains red.
+
 `diff.status=match` with `verdict=green` means no normalized contract drift was
 found. `diff.status=different` with `verdict=red` is a release-risk signal.
 `diff.status=not_compared` is usually a yellow setup gap such as

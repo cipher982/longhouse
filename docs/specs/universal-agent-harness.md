@@ -654,6 +654,11 @@ shape:
     current action/control artifacts, calls `provider-release-proof-baseline.py
     diff`, and records the baseline/candidate proof plus diff artifact for all
     providers.
+15. Provider release-proof diffs emit structured `action_drift` and
+    `execution_coverage_drift` summaries. These show changed abstract actions,
+    required-evidence buckets, execution coverage status/kind changes,
+    rollup-only coverage drift, and optional unavailable execution-coverage
+    artifacts before an agent has to inspect the full raw comparable diff.
 15. Codex `live_token_streaming` is an executable universal live-token
    scenario. It calls managed live-send, DB-ingests user/assistant marker rows
    when Runtime Host credentials are present, and exposes live-token credential
