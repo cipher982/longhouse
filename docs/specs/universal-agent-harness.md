@@ -376,7 +376,7 @@ Universal scenarios:
 | `terminate_cleanup` | P1 | Termination/cleanup projects owned-resource cleanup or reports an explicit unsupported gap. |
 | `multi_turn_continuity` | P1 | Follow-up input depends on prior turn state and stays in the same session. |
 | `live_token_streaming` | P1 | Model-visible behavior works; streaming is verified only when declared. |
-| `permission_prompt` | P2 | Permission approve/deny paths are observable where supported; OpenCode currently proves the bridge reply transport hermetically, while live held-provider prompts remain a stronger gate. |
+| `permission_prompt` | P2 | Permission approve/deny paths are observable where supported; OpenCode proves bridge reply transport hermetically and Codex proves fake app-server approval handling hermetically, while live held-provider prompts remain a stronger gate. |
 | `external_event_channel` | P2 | Provider channel, hook/inbox, or external input reaches the session where supported. |
 | `crash_timeout_cleanup` | P2 | Timeouts/crashes leave diagnosable artifacts and no orphaned managed process. |
 
@@ -551,7 +551,7 @@ rewritten to call the shared scenario runner.
 | `scripts/qa/provider-release-proof.py` | Proof wrapper, normalization, baseline artifact generation | Reusable shell; should eventually call universal runner instead of provider-specific canary scripts. |
 | `server/zerg/qa/provider_live_canary.py` Claude binary/channel/PTY checks | `probe_identity`, `launch_managed_session`, `collect_raw_evidence` | Migrated into Claude `managed_session_e2e`; live-token send/steer still need promotion. |
 | `server/zerg/qa/managed_claude_live.py` | `send_receive`, `live_token_streaming`, `interrupt_cancel`, `multi_turn_continuity` | Migration candidate; PTY loop and channel readiness are Claude adapter internals. |
-| `server/zerg/qa/codex_provider_release_canary.py` | `probe_identity`, `run_prompt_once`, `launch_managed_session`, `resume_reattach`, `send_receive`, `interrupt_cancel`, `tool_call_result`, `live_token_streaming` | Partly migrated: Codex `managed_session_e2e`, `interrupt_cancel`, `tool_call_result`, and `live_token_streaming` now call this canary; live active-turn steer behavior still needs promotion. |
+| `server/zerg/qa/codex_provider_release_canary.py` | `probe_identity`, `run_prompt_once`, `launch_managed_session`, `resume_reattach`, `send_receive`, `interrupt_cancel`, `tool_call_result`, `permission_prompt`, `live_token_streaming` | Partly migrated: Codex `managed_session_e2e`, `interrupt_cancel`, `tool_call_result`, `permission_prompt`, and `live_token_streaming` now call this canary; live active-turn steer and live held-permission behavior still need promotion. |
 | `server/zerg/qa/provider_live_canary.py` OpenCode server/schema/session checks | `launch_managed_session`, `send_receive`, `resume_reattach`, `interrupt_cancel`, `parse_ingest_project` | Partly migrated: OpenCode `managed_session_e2e`, `interrupt_cancel`, and `resume_reattach` now call this canary; remaining live-token scenarios still need promotion. |
 | `server/zerg/qa/provider_live_canary.py` Antigravity plugin/global hook checks | `probe_identity`, `launch_managed_session`, `external_event_channel` | Migrated into Antigravity `launch_managed_session`; real `agy` loop send remains owned by provider-control/live-token lanes. |
 | `scripts/qa/provider-control-e2e-canary.py` | `send_receive`, `interrupt_cancel`, `tool_call_result`, `external_event_channel`, `live_token_streaming` | Partly migrated: Claude `interrupt_cancel` and `live_token_streaming`, OpenCode `tool_call_result` and `live_token_streaming`, plus Antigravity `live_token_streaming`, now call this canary; keep provider-specific fakes as adapter test fixtures. |
@@ -678,13 +678,14 @@ shape:
    scenario. It calls real-print `opencode run --format json`, DB-ingests the
    prompt/result marker rows, and exposes `universal_live_token_streaming`
    evidence through release proof.
-18. OpenCode `permission_prompt` is an executable universal bridge-transport
-   scenario. It writes an OpenCode bridge state file, sends
-`permission-reply` through the real Longhouse bridge command to a held fake
-upstream permission request, and records the forwarded decision/auth/path
-evidence. Claude and Codex still report explicit live provider-held permission
-prompt gaps. Antigravity reports `unsupported_gap` until it exposes stable
-provider permission-prompt semantics.
+18. `permission_prompt` is an executable universal scenario for OpenCode and
+   Codex. OpenCode writes a bridge state file, sends `permission-reply` through
+   the real Longhouse bridge command to a held fake upstream permission request,
+   and records the forwarded decision/auth/path evidence. Codex calls the fake
+   app-server approval canary and records hermetic approval-request evidence.
+   Claude still reports an explicit live provider-held permission prompt gap.
+   Antigravity reports `unsupported_gap` until it exposes stable provider
+   permission-prompt semantics.
 19. `full_action_suite` runs `managed_session_e2e` and lets any-mapped abstract
    actions count it only when the result carries the operation evidence required
    by that action. Antigravity hook/inbox e2e now covers abstract

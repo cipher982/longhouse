@@ -366,6 +366,11 @@ def build_operation_evidence(
             failure_code=binary_identity.get("failure_code"),
         )
 
+    fake_app_server = canaries.get("fake_app_server") or {}
+    for operation, item in dict(fake_app_server.get("operation_evidence") or {}).items():
+        if isinstance(operation, str) and isinstance(item, dict):
+            evidence[operation] = item
+
     managed_tui_attach = canaries.get("managed_tui_attach") or {}
     launch_local = _canary_operation_entry(
         contract,
@@ -513,26 +518,63 @@ def run_fake_app_server_unit(args: argparse.Namespace) -> dict[str, Any]:
     cargo_bin = _resolve_executable(args.cargo_bin, "cargo")
     if not cargo_bin:
         return _fail("cargo_not_found", "cargo binary was not found")
-    result = _run(
+    identity_result = _run(
         [
-            cargo_bin,
-            "test",
-            "--manifest-path",
-            str(args.repo_root / "engine/Cargo.toml"),
-            "--bin",
-            "longhouse-engine",
-            "canary_runs_against_fake_codex_app_server",
+            "python3",
+            str(args.repo_root / "scripts/build/generate_build_identity.py"),
+            "--skip-python-package",
         ],
         cwd=args.repo_root,
-        timeout=args.fake_app_server_timeout_secs,
+        timeout=30,
     )
-    if result.returncode != 0:
+    if identity_result.returncode != 0:
         return _fail(
-            "fake_app_server_unit_failed",
-            "fake app-server unit contract test failed",
-            evidence=_command_evidence(result),
+            "build_identity_generation_failed",
+            "failed to refresh build identity before fake app-server unit contract tests",
+            evidence=_command_evidence(identity_result),
         )
-    return _status("pass", evidence=result.stdout[-1200:])
+    tests = (
+        "canary_runs_against_fake_codex_app_server",
+        "canary_auto_approves_server_requests",
+    )
+    results = []
+    for test_name in tests:
+        result = _run(
+            [
+                cargo_bin,
+                "test",
+                "--manifest-path",
+                str(args.repo_root / "engine/Cargo.toml"),
+                "--bin",
+                "longhouse-engine",
+                test_name,
+            ],
+            cwd=args.repo_root,
+            timeout=args.fake_app_server_timeout_secs,
+        )
+        results.append({"test": test_name, "evidence": _command_evidence(result)})
+        if result.returncode != 0:
+            return _fail(
+                "fake_app_server_unit_failed",
+                f"fake app-server unit contract test failed: {test_name}",
+                unit_tests=results,
+            )
+    stdout_tail = "\n".join(str(item["evidence"]["stdout"]) for item in results)[-1200:]
+    operation_evidence = {
+        "permission_prompt": {
+            "status": "pass",
+            "level": "hermetic",
+            "source": "engine/src/codex_app_server_canary.rs fake app-server approval request test",
+            "canary": "codex_fake_app_server_permission_approval",
+            "next": "Promote with a live held-permission Codex provider canary.",
+        }
+    }
+    return _status(
+        "pass",
+        evidence=stdout_tail,
+        unit_tests=results,
+        operation_evidence=operation_evidence,
+    )
 
 
 def run_raw_fresh_remote(args: argparse.Namespace, evidence_root: Path, codex_bin: str) -> dict[str, Any]:
@@ -897,7 +939,13 @@ def run_detached_ui(args: argparse.Namespace, evidence_root: Path, codex_bin: st
 
 
 def _terminal_turn_state(state: dict[str, Any]) -> bool:
-    return state.get("last_turn_status") in {"completed", "failed", "interrupted", "cancelled"} and not state.get("active_turn_id")
+    terminal_status = state.get("last_turn_status") in {
+        "completed",
+        "failed",
+        "interrupted",
+        "cancelled",
+    }
+    return terminal_status and not state.get("active_turn_id")
 
 
 def _assistant_text_from_rollout_event(value: dict[str, Any]) -> str | None:
@@ -1147,7 +1195,7 @@ def run_managed_live_interrupt(args: argparse.Namespace, evidence_root: Path, co
         if not _terminal_turn_state(state):
             return _fail(
                 "managed_live_interrupt_timeout",
-                ("managed live-interrupt turn did not reach a terminal state " f"within {args.live_interrupt_timeout_secs}s"),
+                (f"managed live-interrupt turn did not reach a terminal state within {args.live_interrupt_timeout_secs}s"),
                 evidence_root=str(root),
                 state=state,
             )

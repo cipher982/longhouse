@@ -1543,7 +1543,7 @@ def test_release_proof_can_attach_universal_harness_for_all_providers() -> None:
             expected_permission_prompt_status = {
                 "antigravity": "unsupported_gap",
                 "claude": "blocked",
-                "codex": "blocked",
+                "codex": "pass",
                 "opencode": "pass",
             }[provider]
             assert (

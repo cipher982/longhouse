@@ -1638,6 +1638,8 @@ class UniversalProviderAdapter:
     def permission_prompt(self, package: EvidencePackage) -> dict[str, Any]:
         if self.config.provider == "opencode":
             return self._run_opencode_permission_prompt(package)
+        if self.config.provider == "codex":
+            return self._run_codex_permission_prompt(package)
         if self.config.provider == "antigravity":
             payload = self._unsupported_payload(
                 "permission_prompt",
@@ -1669,6 +1671,71 @@ class UniversalProviderAdapter:
             },
             "next": "Add provider-specific permission prompt fixtures/canaries that prove approve and deny delivery.",
         }
+        package.write_json("assertions/permission_prompt.json", payload)
+        return payload
+
+    def _run_codex_permission_prompt(self, package: EvidencePackage) -> dict[str, Any]:
+        binary, source = self._resolve_binary()
+        if binary is None:
+            payload = {
+                "status": STATUS_FAIL,
+                "failure_code": "provider_binary_not_found",
+                "message": "codex binary was not found for permission_prompt",
+                "binary_source": source,
+            }
+            package.write_json("assertions/permission_prompt.json", payload)
+            return payload
+
+        from zerg.qa.codex_provider_release_canary import run_codex_provider_release_canary
+
+        canary_evidence_root = package.path("raw", "codex-permission-canary-evidence")
+        canary_artifact_path = package.path("raw", "codex-provider-release-canary.json")
+        canary_artifact = run_codex_provider_release_canary(
+            {
+                "codex_bin": str(binary),
+                "artifact": canary_artifact_path,
+                "evidence_root": canary_evidence_root,
+                "repo_root": default_repo_root(),
+                "source_review_status": "pass",
+                "skip_static_contract": True,
+                "run_fake_app_server": True,
+            }
+        )
+        if not canary_artifact_path.is_file():
+            package.write_json("raw/codex-provider-release-canary.json", canary_artifact)
+        package.write_json("raw/codex-provider-release-canary-inline.json", canary_artifact)
+        operation_evidence = {
+            str(operation): dict(evidence)
+            for operation, evidence in dict(canary_artifact.get("operation_evidence") or {}).items()
+            if isinstance(evidence, Mapping)
+        }
+        permission = dict(operation_evidence.get("permission_prompt") or {})
+        verdict = str(canary_artifact.get("verdict") or "red")
+        passed = verdict == "green" and permission.get("status") == STATUS_PASS
+        payload = {
+            "status": STATUS_PASS if passed else STATUS_FAIL,
+            "scenario": "permission_prompt",
+            "provider_version": canary_artifact.get("provider_version"),
+            "codex_canary_artifact_path": str(canary_artifact_path),
+            "codex_canary_evidence_root": str(canary_evidence_root),
+            "codex_canary_verdict": verdict,
+            "source_artifact_kind": canary_artifact.get("artifact_kind"),
+            "synthetic": False,
+            "operation_evidence": {
+                "permission_prompt": permission
+                or {
+                    "status": STATUS_FAIL,
+                    "level": "none",
+                    "canary": "codex_fake_app_server_permission_approval",
+                    "failure_code": "codex_permission_prompt_evidence_missing",
+                }
+            },
+            "proof_scope": "codex_fake_app_server_permission_approval",
+            "next": "Promote with a live held-permission Codex provider canary.",
+        }
+        if not passed:
+            payload["failure_code"] = canary_artifact.get("failure_code") or "codex_permission_prompt_failed"
+            payload["message"] = "Codex fake app-server permission prompt canary did not pass."
         package.write_json("assertions/permission_prompt.json", payload)
         return payload
 
@@ -5518,6 +5585,15 @@ def _derived_action_status(*, action: ActionDefinition, provider: str) -> dict[s
             "next": "Keep other providers unsupported unless they expose stable external-event semantics.",
         }
     if action.action_id == "permission_prompt":
+        if provider == "codex":
+            return {
+                "status": STATUS_PASS,
+                "evidence_level": "hermetic",
+                "proof_scope": "codex_fake_app_server_permission_approval",
+                "source": "engine/src/codex_app_server_canary.rs fake app-server approval request test",
+                "canary": "codex_fake_app_server_permission_approval",
+                "next": "Promote with a live held-permission Codex provider canary.",
+            }
         if provider == "opencode":
             return {
                 "status": STATUS_PASS,

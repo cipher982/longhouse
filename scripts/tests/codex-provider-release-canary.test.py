@@ -367,7 +367,15 @@ os.execv(command[0], command)
 def _fake_cargo(path: Path) -> Path:
     return _write_exe(
         path,
-        "#!/usr/bin/env python3\nprint('test canary_runs_against_fake_codex_app_server ... ok')\n",
+        "\n".join(
+            [
+                "#!/usr/bin/env python3",
+                "import sys",
+                "name = sys.argv[-1] if len(sys.argv) > 1 else 'unknown'",
+                "print(f'test {name} ... ok')",
+                "",
+            ]
+        ),
     )
 
 
@@ -468,6 +476,7 @@ def test_full_fake_canary_can_go_green() -> None:
             "interrupt",
             "launch_local",
             "launch_remote",
+            "permission_prompt",
             "reattach",
             "run_once",
             "send_input",
@@ -489,6 +498,11 @@ def test_full_fake_canary_can_go_green() -> None:
             == "managed_live_interrupt"
         )
         assert payload["operation_evidence"]["interrupt"]["level"] == "live_token"
+        assert (
+            payload["operation_evidence"]["permission_prompt"]["canary"]
+            == "codex_fake_app_server_permission_approval"
+        )
+        assert payload["operation_evidence"]["permission_prompt"]["level"] == "hermetic"
         assert (
             payload["operation_evidence"]["run_once"]["canary"]
             == "codex_real_tool_result_shape"

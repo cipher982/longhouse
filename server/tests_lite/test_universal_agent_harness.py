@@ -51,6 +51,54 @@ def _fake_bins(tmp_path: Path) -> dict[str, Path]:
     }
 
 
+def _fake_codex_permission_canary(args: dict[str, object]) -> dict[str, object]:
+    artifact_path = Path(str(args["artifact"]))
+    evidence_root = Path(str(args["evidence_root"]))
+    payload: dict[str, object] = {
+        "artifact_kind": "provider_release_canary",
+        "provider": "codex",
+        "provider_version": "codex 9.9.9",
+        "verdict": "green",
+        "canaries": {
+            "fake_app_server": {
+                "status": "pass",
+                "operation_evidence": {
+                    "permission_prompt": {
+                        "status": "pass",
+                        "level": "hermetic",
+                        "source": "fake codex permission prompt canary",
+                        "canary": "codex_fake_app_server_permission_approval",
+                        "next": "Promote with a live held-permission Codex provider canary.",
+                    }
+                },
+            }
+        },
+        "operation_evidence": {
+            "permission_prompt": {
+                "status": "pass",
+                "level": "hermetic",
+                "source": "fake codex permission prompt canary",
+                "canary": "codex_fake_app_server_permission_approval",
+                "next": "Promote with a live held-permission Codex provider canary.",
+            }
+        },
+        "evidence_root": str(evidence_root),
+        "artifact_path": str(artifact_path),
+    }
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text(json.dumps(payload), encoding="utf-8")
+    return payload
+
+
+def _fake_codex_permission_canary_only(original):
+    def fake_canary(args: dict[str, object]) -> dict[str, object]:
+        if args.get("run_fake_app_server"):
+            return _fake_codex_permission_canary(args)
+        return original(args)
+
+    return fake_canary
+
+
 def _proof_verdict_for_status(status: str) -> str:
     if status == "pass":
         return "green"
@@ -692,7 +740,10 @@ def test_action_matrix_emits_same_longhouse_actions_for_all_providers(tmp_path: 
         assert actions["pause_request_detect"]["category"] == "observe"
         assert actions["answer_pause_request"]["category"] == "control"
         assert actions["multi_turn_continuity"]["category"] == "control"
-        if result["provider"] == "opencode":
+        if result["provider"] == "codex":
+            assert actions["permission_prompt"]["status"] == "pass"
+            assert actions["permission_prompt"]["canary"] == "codex_fake_app_server_permission_approval"
+        elif result["provider"] == "opencode":
             assert actions["permission_prompt"]["status"] == "pass"
             assert actions["permission_prompt"]["canary"] == "opencode_bridge_permission_reply"
         elif result["provider"] == "antigravity":
@@ -847,7 +898,14 @@ def test_old_new_release_diff_compares_explicit_proof_artifacts(tmp_path: Path) 
     assert operation["level"] == "artifact_diff"
 
 
-def test_full_action_suite_uses_provider_scoped_old_new_artifacts(tmp_path: Path) -> None:
+def test_full_action_suite_uses_provider_scoped_old_new_artifacts(tmp_path: Path, monkeypatch) -> None:
+    from zerg.qa import codex_provider_release_canary
+
+    monkeypatch.setattr(
+        codex_provider_release_canary,
+        "run_codex_provider_release_canary",
+        _fake_codex_permission_canary_only(codex_provider_release_canary.run_codex_provider_release_canary),
+    )
     providers = ("claude", "codex")
     old_paths = {
         provider: _write_release_proof(
@@ -1004,7 +1062,14 @@ def test_control_surface_keeps_unsupported_and_live_token_rows_explicit(tmp_path
 
 
 @pytest.mark.timeout(30)
-def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path: Path) -> None:
+def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path: Path, monkeypatch) -> None:
+    from zerg.qa import codex_provider_release_canary
+
+    monkeypatch.setattr(
+        codex_provider_release_canary,
+        "run_codex_provider_release_canary",
+        _fake_codex_permission_canary_only(codex_provider_release_canary.run_codex_provider_release_canary),
+    )
     bins = _fake_bins(tmp_path)
     bins["opencode"] = _fake_opencode_server(tmp_path / "bin" / "opencode")
     payload = uah.run_harness(
@@ -1092,6 +1157,8 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
     ]
     assert execution_rows["permission_prompt"]["providers"]["claude"]["coverage_status"] == "blocked"
     assert execution_rows["permission_prompt"]["providers"]["claude"]["coverage_gap_kind"] == "missing_live_canary"
+    assert execution_rows["permission_prompt"]["providers"]["codex"]["coverage_status"] == "pass"
+    assert execution_rows["permission_prompt"]["providers"]["codex"]["coverage_gap_kind"] == "passed"
     assert execution_rows["permission_prompt"]["providers"]["opencode"]["coverage_status"] == "pass"
     assert execution_rows["permission_prompt"]["providers"]["opencode"]["scenario_ids"] == ["permission_prompt"]
     assert execution_rows["answer_pause_request"]["providers"]["claude"]["coverage_status"] == "pass"
@@ -1161,7 +1228,7 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
         assert coverage["launch_remote"]["coverage_kind"] == "executable_scenario"
         assert coverage["launch_remote"]["scenario_ids"] == ["launch_remote_projection"]
         assert coverage["pause_request_detect"]["coverage_status"] == "pass"
-        if result["provider"] == "opencode":
+        if result["provider"] in {"codex", "opencode"}:
             assert coverage["permission_prompt"]["coverage_status"] == "pass"
         elif result["provider"] == "antigravity":
             assert coverage["permission_prompt"]["coverage_status"] == "unsupported_gap"
@@ -2212,7 +2279,14 @@ def test_terminate_cleanup_respects_provider_contract(tmp_path: Path) -> None:
     assert antigravity["data"]["operation_evidence"]["terminate"]["status"] == "unsupported_gap"
 
 
-def test_remaining_surface_scenarios_emit_honest_results_for_all_providers(tmp_path: Path) -> None:
+def test_remaining_surface_scenarios_emit_honest_results_for_all_providers(tmp_path: Path, monkeypatch) -> None:
+    from zerg.qa import codex_provider_release_canary
+
+    monkeypatch.setattr(
+        codex_provider_release_canary,
+        "run_codex_provider_release_canary",
+        _fake_codex_permission_canary_only(codex_provider_release_canary.run_codex_provider_release_canary),
+    )
     payload = uah.run_harness(
         uah.HarnessOptions(
             providers=uah.SUPPORTED_PROVIDERS,
@@ -2236,7 +2310,16 @@ def test_remaining_surface_scenarios_emit_honest_results_for_all_providers(tmp_p
         assert multi["data"]["continuity_assertions"]["provider_session_id_stable"] is True
 
         permission = by_key[(provider, "permission_prompt")]
-        if provider == "opencode":
+        if provider == "codex":
+            assert permission["status"] == "pass"
+            assert permission["data"]["operation_evidence"]["permission_prompt"]["status"] == "pass"
+            assert permission["data"]["operation_evidence"]["permission_prompt"]["level"] == "hermetic"
+            assert (
+                permission["data"]["operation_evidence"]["permission_prompt"]["canary"]
+                == "codex_fake_app_server_permission_approval"
+            )
+            assert Path(permission["data"]["codex_canary_artifact_path"]).is_file()
+        elif provider == "opencode":
             assert permission["status"] == "pass"
             assert permission["data"]["operation_evidence"]["permission_prompt"]["status"] == "pass"
             assert permission["data"]["operation_evidence"]["permission_prompt"]["level"] == "hermetic"
@@ -3214,6 +3297,10 @@ def test_script_entrypoint_runs_all_provider_action_e2e(tmp_path: Path) -> None:
     assert support_rows["steer_active_turn"]["providers"]["codex"]["status"] == "pass"
     assert support_rows["steer_active_turn"]["providers"]["codex"]["canary"] == "codex_managed_local_steer_dispatch"
     assert support_rows["steer_active_turn"]["providers"]["opencode"]["status"] == "unsupported_gap"
+    assert support_rows["permission_prompt"]["providers"]["codex"]["status"] == "pass"
+    assert (
+        support_rows["permission_prompt"]["providers"]["codex"]["canary"] == "codex_fake_app_server_permission_approval"
+    )
     assert support_rows["permission_prompt"]["providers"]["opencode"]["status"] == "pass"
     assert support_rows["permission_prompt"]["providers"]["opencode"]["canary"] == "opencode_bridge_permission_reply"
     assert support_rows["permission_prompt"]["providers"]["antigravity"]["status"] == "unsupported_gap"

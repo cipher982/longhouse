@@ -161,6 +161,9 @@ provider limitations from remediable proof gaps.
 `execution_coverage_actionability.status` turns those counts into a conservative
 release-readiness summary: `covered`, `covered_with_expected_limits`,
 `needs_stronger_evidence`, or `regression_or_unknown`.
+In the current default fake/no-token smoke, Codex `permission_prompt` is covered
+by the hermetic `codex_fake_app_server_permission_approval` canary; live
+provider-held permission prompts remain a stronger future proof gate.
 
 OpenCode has the first real provider-safe universal e2e lane:
 
