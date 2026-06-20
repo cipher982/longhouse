@@ -274,6 +274,7 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
                 "by_requirement": {},
                 "by_provider": {},
             },
+            "execution_coverage_gap_kind_counts": {},
             "action_matrix_pass_percent": None,
         }
 
@@ -285,6 +286,7 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
     execution_total = 0
     executable_scenario_total = 0
     matrix_contract_total = 0
+    execution_gap_kind_counts: dict[str, int] = {}
     loaded_artifacts: list[str] = []
     errors: list[dict[str, str]] = []
     provider_bin_mode_counts: dict[str, int] = {}
@@ -362,6 +364,7 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
                     continue
                 coverage_status = str(cell.get("coverage_status") or "missing")
                 coverage_kind = str(cell.get("coverage_kind") or "unknown")
+                coverage_gap_kind = str(cell.get("coverage_gap_kind") or "unknown_gap")
                 required_evidence = str(row.get("required_evidence") or "unknown")
                 provider_key = str(provider)
                 totals = provider_execution_totals.setdefault(
@@ -371,6 +374,7 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
                         "pass": 0,
                         "coverage_status_counts": {},
                         "coverage_kind_counts": {},
+                        "coverage_gap_kind_counts": {},
                     },
                 )
                 totals["action_count"] += 1
@@ -380,6 +384,10 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
                 totals["coverage_kind_counts"][coverage_kind] = (
                     totals["coverage_kind_counts"].get(coverage_kind, 0) + 1
                 )
+                totals["coverage_gap_kind_counts"][coverage_gap_kind] = (
+                    totals["coverage_gap_kind_counts"].get(coverage_gap_kind, 0) + 1
+                )
+                increment(execution_gap_kind_counts, coverage_gap_kind)
                 execution_total += 1
                 if coverage_status == "pass":
                     totals["pass"] += 1
@@ -396,6 +404,7 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
                     required_bucket,
                     coverage_status=coverage_status,
                     coverage_kind=coverage_kind,
+                    coverage_gap_kind=coverage_gap_kind,
                 )
                 provider_required_bucket = (
                     provider_required_evidence_buckets.setdefault(
@@ -407,6 +416,7 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
                     provider_required_bucket,
                     coverage_status=coverage_status,
                     coverage_kind=coverage_kind,
+                    coverage_gap_kind=coverage_gap_kind,
                 )
         for provider, totals in provider_execution_totals.items():
             provider_entry = providers.setdefault(
@@ -428,6 +438,7 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
                 "action_count": action_count,
                 "coverage_status_counts": dict(totals["coverage_status_counts"]),
                 "coverage_kind_counts": dict(totals["coverage_kind_counts"]),
+                "coverage_gap_kind_counts": dict(totals["coverage_gap_kind_counts"]),
                 "pass_percent": pct(float(totals["pass"]), float(action_count)),
                 "executable_scenario_percent": pct(
                     float(executable_count),
@@ -477,6 +488,7 @@ def _action_matrix_rollup(universal_artifacts: list[Path]) -> dict[str, Any]:
         "providers": providers,
         "scenario_status_counts": scenario_status_counts,
         "required_evidence_rollup": required_evidence_rollup,
+        "execution_coverage_gap_kind_counts": execution_gap_kind_counts,
         "action_matrix_pass_percent": pct(action_pass, action_total)
         if action_total
         else None,

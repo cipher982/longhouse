@@ -224,10 +224,12 @@ def test_maturity_rollup_summarizes_universal_action_matrix() -> None:
                                     "opencode": {
                                         "coverage_kind": "executable_scenario",
                                         "coverage_status": "pass",
+                                        "coverage_gap_kind": "passed",
                                     },
                                     "claude": {
                                         "coverage_kind": "executable_scenario",
                                         "coverage_status": "blocked",
+                                        "coverage_gap_kind": "missing_live_canary",
                                     },
                                 },
                             },
@@ -238,10 +240,12 @@ def test_maturity_rollup_summarizes_universal_action_matrix() -> None:
                                     "opencode": {
                                         "coverage_kind": "matrix_contract",
                                         "coverage_status": "pass",
+                                        "coverage_gap_kind": "passed",
                                     },
                                     "claude": {
                                         "coverage_kind": "matrix_contract",
                                         "coverage_status": "unsupported_gap",
+                                        "coverage_gap_kind": "provider_contract_unsupported",
                                     },
                                 },
                             },
@@ -270,6 +274,11 @@ def test_maturity_rollup_summarizes_universal_action_matrix() -> None:
         assert payload["universal_harness"]["execution_coverage_pass_percent"] == 50.0
         assert payload["universal_harness"]["executable_scenario_percent"] == 50.0
         assert payload["universal_harness"]["matrix_contract_percent"] == 50.0
+        assert payload["universal_harness"]["execution_coverage_gap_kind_counts"] == {
+            "missing_live_canary": 1,
+            "passed": 2,
+            "provider_contract_unsupported": 1,
+        }
         assert payload["universal_harness"]["run_modes"] == {
             "fake_provider_bin_artifact_count": 1,
             "live_token_streaming_artifact_count": 0,
@@ -283,6 +292,7 @@ def test_maturity_rollup_summarizes_universal_action_matrix() -> None:
         ] == {
             "hermetic": {
                 "cell_count": 2,
+                "coverage_gap_kind_counts": {"missing_live_canary": 1, "passed": 1},
                 "coverage_kind_counts": {"executable_scenario": 2},
                 "coverage_status_counts": {"blocked": 1, "pass": 1},
                 "executable_scenario_percent": 100.0,
@@ -292,6 +302,10 @@ def test_maturity_rollup_summarizes_universal_action_matrix() -> None:
             },
             "live_token_required": {
                 "cell_count": 2,
+                "coverage_gap_kind_counts": {
+                    "passed": 1,
+                    "provider_contract_unsupported": 1,
+                },
                 "coverage_kind_counts": {"matrix_contract": 2},
                 "coverage_status_counts": {"pass": 1, "unsupported_gap": 1},
                 "executable_scenario_percent": 0.0,
@@ -310,6 +324,7 @@ def test_maturity_rollup_summarizes_universal_action_matrix() -> None:
             "execution_coverage"
         ] == {
             "action_count": 2,
+            "coverage_gap_kind_counts": {"passed": 2},
             "coverage_kind_counts": {
                 "executable_scenario": 1,
                 "matrix_contract": 1,

@@ -225,6 +225,12 @@ def test_provider_release_proof_universal_smoke_make_emits_all_provider_artifact
             ]
             > 0.0
         )
+        assert (
+            payload["maturity_rollup"]["universal_harness"][
+                "execution_coverage_gap_kind_counts"
+            ]["passed"]
+            > 0
+        )
         support_matrix = payload["provider_support_matrix"]
         assert support_matrix["action_count"] > 20
         assert support_matrix["missing_provider_actions"] == []

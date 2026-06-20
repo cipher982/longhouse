@@ -23,6 +23,7 @@ def new_execution_bucket() -> dict[str, Any]:
         "pass": 0,
         "coverage_status_counts": {},
         "coverage_kind_counts": {},
+        "coverage_gap_kind_counts": {},
     }
 
 
@@ -31,12 +32,14 @@ def record_execution_cell(
     *,
     coverage_status: str,
     coverage_kind: str,
+    coverage_gap_kind: str = "unknown_gap",
 ) -> None:
     bucket["cell_count"] += 1
     if coverage_status == PASS_STATUS:
         bucket["pass"] += 1
     increment(bucket["coverage_status_counts"], coverage_status)
     increment(bucket["coverage_kind_counts"], coverage_kind)
+    increment(bucket["coverage_gap_kind_counts"], coverage_gap_kind)
 
 
 def finalize_execution_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
@@ -49,6 +52,7 @@ def finalize_execution_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
     )
     return {
         "cell_count": cell_count,
+        "coverage_gap_kind_counts": dict(bucket["coverage_gap_kind_counts"]),
         "coverage_kind_counts": dict(bucket["coverage_kind_counts"]),
         "coverage_status_counts": dict(bucket["coverage_status_counts"]),
         "executable_scenario_percent": pct(executable_count, cell_count),

@@ -1165,6 +1165,7 @@ def _write_release_proof(
             "required_evidence": "hermetic",
             "coverage_kind": "executable_scenario",
             "coverage_status": status,
+            "coverage_gap_kind": "passed" if status == "pass" else "unexpected_failure",
             "failure_code": _proof_failure_for_status(status),
             "matrix_status": status,
             "matrix_support": True,
@@ -1179,6 +1180,7 @@ def _write_release_proof(
             "required_evidence": "live_no_token",
             "coverage_kind": "matrix_contract",
             "coverage_status": "blocked",
+            "coverage_gap_kind": "missing_coverage",
             "failure_code": "old_new_release_runner_missing",
             "matrix_status": "blocked",
             "matrix_failure_code": "old_new_release_runner_missing",
@@ -1201,6 +1203,10 @@ def _write_release_proof(
                 "executable_scenario": 1,
                 "matrix_contract": 1,
             },
+            "coverage_gap_kind_counts": {
+                "missing_coverage": 1,
+                "passed" if status == "pass" else "unexpected_failure": 1,
+            },
             "required_evidence_rollup": {
                 "hermetic": {
                     "cell_count": 1,
@@ -1208,6 +1214,9 @@ def _write_release_proof(
                     "pass_percent": 100.0 if status == "pass" else 0.0,
                     "coverage_status_counts": {status: 1},
                     "coverage_kind_counts": {"executable_scenario": 1},
+                    "coverage_gap_kind_counts": {
+                        "passed" if status == "pass" else "unexpected_failure": 1
+                    },
                 },
                 "live_no_token": {
                     "cell_count": 1,
@@ -1215,6 +1224,7 @@ def _write_release_proof(
                     "pass_percent": 0.0,
                     "coverage_status_counts": {"blocked": 1},
                     "coverage_kind_counts": {"matrix_contract": 1},
+                    "coverage_gap_kind_counts": {"missing_coverage": 1},
                 },
             },
             "execution_coverage_matrix_path": f"/tmp/{name}/volatile-execution-coverage.json",

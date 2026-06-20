@@ -345,6 +345,7 @@ def _normalize_source_artifact(artifact: dict[str, Any]) -> dict[str, Any]:
                 "action_count",
                 "coverage_status_counts",
                 "coverage_kind_counts",
+                "coverage_gap_kind_counts",
                 "required_evidence_rollup",
                 "execution_coverage_matrix_path",
             )
@@ -1166,6 +1167,7 @@ def _universal_provider_execution_coverage_summary(
     provider_actions: list[dict[str, Any]] = []
     coverage_statuses: list[str] = []
     coverage_kinds: list[str] = []
+    coverage_gap_kinds: list[str] = []
     required_evidence_buckets: dict[str, dict[str, Any]] = {}
     for row in actions:
         if not isinstance(row, dict):
@@ -1185,6 +1187,9 @@ def _universal_provider_execution_coverage_summary(
         coverage_kind = str(provider_cell.get("coverage_kind") or "")
         if coverage_kind:
             coverage_kinds.append(coverage_kind)
+        coverage_gap_kind = str(provider_cell.get("coverage_gap_kind") or "unknown_gap")
+        if coverage_gap_kind:
+            coverage_gap_kinds.append(coverage_gap_kind)
         # Today required_evidence is row-level; keep cell-level first so future
         # provider-specific overrides do not need a schema migration.
         required_evidence = str(
@@ -1200,6 +1205,7 @@ def _universal_provider_execution_coverage_summary(
             bucket,
             coverage_status=coverage_status or "unknown",
             coverage_kind=coverage_kind or "unknown",
+            coverage_gap_kind=coverage_gap_kind or "unknown_gap",
         )
         provider_actions.append(
             {
@@ -1218,6 +1224,7 @@ def _universal_provider_execution_coverage_summary(
         "action_count": len(provider_actions),
         "coverage_status_counts": _status_counts_from_strings(coverage_statuses),
         "coverage_kind_counts": _status_counts_from_strings(coverage_kinds),
+        "coverage_gap_kind_counts": _status_counts_from_strings(coverage_gap_kinds),
         "required_evidence_rollup": {
             key: finalize_execution_bucket(bucket)
             for key, bucket in sorted(required_evidence_buckets.items())

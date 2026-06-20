@@ -92,6 +92,18 @@ STATUSES = (
 )
 YELLOW_STATUSES = (STATUS_UNSUPPORTED_GAP, STATUS_BLOCKED, STATUS_FLAKY, STATUS_XFAIL_WITH_EXPIRY)
 
+COVERAGE_GAP_PASSED = "passed"
+COVERAGE_GAP_PROVIDER_CONTRACT_UNSUPPORTED = "provider_contract_unsupported"
+COVERAGE_GAP_NO_TOKEN_SAFETY_GATE = "no_token_safety_gate"
+COVERAGE_GAP_MISSING_LIVE_CANARY = "missing_live_canary"
+COVERAGE_GAP_MISSING_CREDENTIALS = "missing_credentials"
+COVERAGE_GAP_MISSING_COVERAGE = "missing_coverage"
+COVERAGE_GAP_NOT_APPLICABLE = "not_applicable"
+COVERAGE_GAP_FLAKY = "flaky"
+COVERAGE_GAP_XFAIL_WITH_EXPIRY = "xfail_with_expiry"
+COVERAGE_GAP_UNEXPECTED_FAILURE = "unexpected_failure"
+COVERAGE_GAP_UNKNOWN = "unknown_gap"
+
 MVP_METHODS = (
     "prepare",
     "probe",
@@ -5597,6 +5609,11 @@ def _full_action_suite_coverage(
                 "category": action.category,
                 "coverage_kind": coverage_kind,
                 "coverage_status": coverage_status,
+                "coverage_gap_kind": _coverage_gap_kind(
+                    coverage_status=coverage_status,
+                    failure_code=failure_code,
+                    matrix=matrix,
+                ),
                 "failure_code": failure_code,
                 "matrix_status": matrix.get("status") if matrix else None,
                 "matrix_failure_code": matrix.get("failure_code") if matrix else None,
@@ -5610,6 +5627,45 @@ def _full_action_suite_coverage(
             }
         )
     return coverage
+
+
+def _coverage_gap_kind(
+    *,
+    coverage_status: str,
+    failure_code: str | None,
+    matrix: Mapping[str, Any] | None,
+) -> str:
+    if coverage_status == STATUS_PASS:
+        return COVERAGE_GAP_PASSED
+    if coverage_status == "missing":
+        return COVERAGE_GAP_MISSING_COVERAGE
+    if coverage_status == STATUS_NOT_APPLICABLE:
+        return COVERAGE_GAP_NOT_APPLICABLE
+    if coverage_status == STATUS_FLAKY:
+        return COVERAGE_GAP_FLAKY
+    if coverage_status == STATUS_XFAIL_WITH_EXPIRY:
+        return COVERAGE_GAP_XFAIL_WITH_EXPIRY
+
+    code = str(failure_code or "")
+    if "credentials" in code:
+        return COVERAGE_GAP_MISSING_CREDENTIALS
+    if "runner_missing" in code or "baseline" in code or "proof_artifact_missing" in code or "proof_artifacts_required" in code:
+        return COVERAGE_GAP_MISSING_COVERAGE
+    if "canary_missing" in code:
+        return COVERAGE_GAP_MISSING_LIVE_CANARY
+    if "not_safe_no_token" in code:
+        return COVERAGE_GAP_NO_TOKEN_SAFETY_GATE
+
+    matrix_support = matrix.get("support") if matrix else None
+    if coverage_status == STATUS_UNSUPPORTED_GAP:
+        if matrix_support is False or code.endswith("_unsupported"):
+            return COVERAGE_GAP_PROVIDER_CONTRACT_UNSUPPORTED
+        return COVERAGE_GAP_UNKNOWN
+    if coverage_status == STATUS_BLOCKED:
+        return COVERAGE_GAP_MISSING_LIVE_CANARY
+    if coverage_status == STATUS_FAIL:
+        return COVERAGE_GAP_UNEXPECTED_FAILURE
+    return COVERAGE_GAP_UNKNOWN
 
 
 def _action_coverage_policy(action_id: str) -> str:
@@ -8046,6 +8102,7 @@ def provider_execution_coverage_matrix(
     missing_provider_actions: list[dict[str, str]] = []
     provider_statuses: dict[str, list[str]] = {provider: [] for provider in provider_list}
     provider_coverage_kinds: dict[str, list[str]] = {provider: [] for provider in provider_list}
+    provider_gap_kinds: dict[str, list[str]] = {provider: [] for provider in provider_list}
     for action in ACTION_DEFINITIONS:
         cells: dict[str, dict[str, Any]] = {}
         for provider in provider_list:
@@ -8053,20 +8110,25 @@ def provider_execution_coverage_matrix(
             if row is None:
                 cells[provider] = {
                     "coverage_status": "missing",
+                    "coverage_gap_kind": COVERAGE_GAP_MISSING_COVERAGE,
                     "failure_code": "full_action_suite_row_missing",
                 }
                 missing_provider_actions.append({"provider": provider, "action_id": action.action_id})
+                provider_gap_kinds.setdefault(provider, []).append(COVERAGE_GAP_MISSING_COVERAGE)
                 continue
 
             coverage_status = str(row.get("coverage_status") or STATUS_FAIL)
             coverage_kind = str(row.get("coverage_kind") or "")
+            coverage_gap_kind = str(row.get("coverage_gap_kind") or COVERAGE_GAP_UNKNOWN)
             provider_statuses.setdefault(provider, []).append(coverage_status)
             provider_coverage_kinds.setdefault(provider, []).append(coverage_kind)
+            provider_gap_kinds.setdefault(provider, []).append(coverage_gap_kind)
             cells[provider] = {
                 key: row.get(key)
                 for key in (
                     "coverage_kind",
                     "coverage_status",
+                    "coverage_gap_kind",
                     "failure_code",
                     "matrix_status",
                     "matrix_failure_code",
@@ -8082,11 +8144,14 @@ def provider_execution_coverage_matrix(
             }
         cell_statuses = []
         cell_coverage_kinds = []
+        cell_gap_kinds = []
         for cell in cells.values():
             if cell.get("coverage_status") in STATUSES:
                 cell_statuses.append(cell["coverage_status"])
             if cell.get("coverage_kind"):
                 cell_coverage_kinds.append(str(cell["coverage_kind"]))
+            if cell.get("coverage_gap_kind"):
+                cell_gap_kinds.append(str(cell["coverage_gap_kind"]))
         matrix_rows.append(
             {
                 "action_id": action.action_id,
@@ -8097,6 +8162,7 @@ def provider_execution_coverage_matrix(
                 "providers": cells,
                 "coverage_status_counts": _status_counts(cell_statuses),
                 "coverage_kind_counts": _value_counts(cell_coverage_kinds),
+                "coverage_gap_kind_counts": _value_counts(cell_gap_kinds),
             }
         )
 
@@ -8108,6 +8174,10 @@ def provider_execution_coverage_matrix(
     for provider, coverage_kinds in provider_coverage_kinds.items():
         if coverage_kinds:
             provider_coverage_kind_counts[provider] = _value_counts(coverage_kinds)
+    provider_gap_kind_counts = {}
+    for provider, gap_kinds in provider_gap_kinds.items():
+        if gap_kinds:
+            provider_gap_kind_counts[provider] = _value_counts(gap_kinds)
     return {
         "schema_version": SCHEMA_VERSION,
         "artifact_kind": "universal_agent_harness_provider_execution_coverage_matrix",
@@ -8119,6 +8189,7 @@ def provider_execution_coverage_matrix(
         "missing_provider_actions": missing_provider_actions,
         "provider_coverage_status_counts": provider_status_counts,
         "provider_coverage_kind_counts": provider_coverage_kind_counts,
+        "provider_coverage_gap_kind_counts": provider_gap_kind_counts,
         "actions": matrix_rows,
     }
 

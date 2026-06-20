@@ -523,6 +523,10 @@ separate ways:
   action/provider execution view from `full_action_suite`. They group cells by
   required evidence such as `hermetic`, `live_no_token`, `live_token`,
   `live_token_required`, and `artifact_diff`.
+- `coverage_gap_kind` and `execution_coverage_gap_kind_counts` classify
+  non-green execution cells, for example `provider_contract_unsupported`,
+  `missing_live_canary`, `no_token_safety_gate`, `missing_credentials`, and
+  `missing_coverage`. Use these fields before interpreting a raw pass percent.
 
 Smoke artifacts also report `run_modes`, including whether provider binaries
 were generated fakes or resolved from PATH/env and whether token-spending

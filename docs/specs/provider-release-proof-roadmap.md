@@ -433,6 +433,7 @@ evidence path is recorded and the relevant doc, test, or proof command exists.
 | H75 | Add explicit real-provider live-token smoke mode | Done | +0 | `provider-release-proof-universal-smoke.py` keeps CI fake/no-token by default, rejects accidental `live_token_streaming` with fake bins, and adds `--use-real-provider-bins --include-live-token-streaming` plus `make provider-release-proof-universal-live-smoke` for intentional token-spending release checks |
 | H76 | Summarize action and execution coverage drift in release-proof diffs | Done | +1 | `provider-release-proof-baseline.py` emits `action_drift` and `execution_coverage_drift` for accepted-baseline and explicit old/new comparisons, including rollup-only coverage drift and optional missing execution-coverage artifacts |
 | H77 | Add staged old/new binary manifest | Done | +1 | `provider-release-proof-old-new.py` writes `provider_release_proof_staging_manifest` with resolved paths, requested/observed versions, optional source URIs, executable bit, file sizes, SHA-256s, proof verdicts, and proof artifact paths for both staged binaries |
+| H78 | Classify execution coverage gap kinds | Done | +0 | `provider_execution_coverage_matrix`, release-proof provider slices, and maturity rollups now distinguish `provider_contract_unsupported`, `missing_live_canary`, `no_token_safety_gate`, `missing_credentials`, and `missing_coverage`, so a raw pass percent no longer makes expected provider limits look like remediable CI failures |
 
 ## Score Update Rules
 

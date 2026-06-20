@@ -219,6 +219,7 @@ def _write_release_proof(
             "required_evidence": "hermetic",
             "coverage_kind": "executable_scenario",
             "coverage_status": status,
+            "coverage_gap_kind": "passed" if status == "pass" else "unexpected_failure",
             "failure_code": _proof_failure_for_status(status),
             "matrix_status": status,
             "matrix_support": True,
@@ -233,6 +234,7 @@ def _write_release_proof(
             "required_evidence": "live_no_token",
             "coverage_kind": "matrix_contract",
             "coverage_status": "blocked",
+            "coverage_gap_kind": "missing_coverage",
             "failure_code": "old_new_release_runner_missing",
             "matrix_status": "blocked",
             "matrix_failure_code": "old_new_release_runner_missing",
@@ -255,6 +257,10 @@ def _write_release_proof(
                 "executable_scenario": 1,
                 "matrix_contract": 1,
             },
+            "coverage_gap_kind_counts": {
+                "missing_coverage": 1,
+                "passed" if status == "pass" else "unexpected_failure": 1,
+            },
             "required_evidence_rollup": {
                 "hermetic": {
                     "cell_count": 1,
@@ -262,6 +268,7 @@ def _write_release_proof(
                     "pass_percent": 100.0 if status == "pass" else 0.0,
                     "coverage_status_counts": {status: 1},
                     "coverage_kind_counts": {"executable_scenario": 1},
+                    "coverage_gap_kind_counts": {"passed" if status == "pass" else "unexpected_failure": 1},
                 },
                 "live_no_token": {
                     "cell_count": 1,
@@ -269,6 +276,7 @@ def _write_release_proof(
                     "pass_percent": 0.0,
                     "coverage_status_counts": {"blocked": 1},
                     "coverage_kind_counts": {"matrix_contract": 1},
+                    "coverage_gap_kind_counts": {"missing_coverage": 1},
                 },
             },
             "execution_coverage_matrix_path": f"/tmp/{name}/volatile-execution-coverage.json",
@@ -1068,6 +1076,14 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
     assert execution_rows["launch_remote"]["providers"]["claude"]["coverage_status"] == "pass"
     assert execution_rows["launch_remote"]["providers"]["claude"]["scenario_ids"] == ["launch_remote_projection"]
     assert execution_rows["launch_remote"]["providers"]["antigravity"]["coverage_status"] == "unsupported_gap"
+    assert (
+        execution_rows["launch_remote"]["providers"]["antigravity"]["coverage_gap_kind"]
+        == "provider_contract_unsupported"
+    )
+    assert execution_rows["run_once"]["coverage_gap_kind_counts"] == {
+        "no_token_safety_gate": 3,
+        "passed": 1,
+    }
     assert execution_rows["baseline_compare"]["providers"]["opencode"]["coverage_status"] == "pass"
     assert execution_rows["tool_call_result"]["providers"]["antigravity"]["coverage_kind"] == "executable_scenario"
     assert execution_rows["tool_call_result"]["providers"]["antigravity"]["coverage_status"] == "pass"
@@ -1075,6 +1091,7 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
         "tool_call_result_projection"
     ]
     assert execution_rows["permission_prompt"]["providers"]["claude"]["coverage_status"] == "blocked"
+    assert execution_rows["permission_prompt"]["providers"]["claude"]["coverage_gap_kind"] == "missing_live_canary"
     assert execution_rows["permission_prompt"]["providers"]["opencode"]["coverage_status"] == "pass"
     assert execution_rows["permission_prompt"]["providers"]["opencode"]["scenario_ids"] == ["permission_prompt"]
     assert execution_rows["answer_pause_request"]["providers"]["claude"]["coverage_status"] == "pass"
@@ -1082,6 +1099,12 @@ def test_full_action_suite_runs_same_abstract_surface_for_all_providers(tmp_path
     assert execution_matrix["provider_coverage_kind_counts"]["claude"]["executable_scenario"] > execution_matrix[
         "provider_coverage_kind_counts"
     ]["claude"].get("matrix_contract", 0)
+    assert execution_matrix["provider_coverage_gap_kind_counts"]["claude"] == {
+        "missing_live_canary": 1,
+        "missing_coverage": 1,
+        "no_token_safety_gate": 1,
+        "passed": len(uah.ACTIONS) - 3,
+    }
     for result in payload["results"]:
         assert result["scenario"] == "full_action_suite"
         assert result["status"] == "blocked"

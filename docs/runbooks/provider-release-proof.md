@@ -153,6 +153,11 @@ When this scenario is attached to a release proof, the proof writes
 execution matrix to distinguish scenario-backed proof from matrix-only contract
 coverage; `provider-release-proof-maturity.py --universal-artifact ...`
 summarizes both views without changing release safety by itself.
+Execution cells also include `coverage_gap_kind` and rollups such as
+`provider_coverage_gap_kind_counts`. These classify yellow cells as
+`provider_contract_unsupported`, `missing_live_canary`, `no_token_safety_gate`,
+`missing_credentials`, or `missing_coverage` so alerting can separate expected
+provider limitations from remediable proof gaps.
 
 OpenCode has the first real provider-safe universal e2e lane:
 
