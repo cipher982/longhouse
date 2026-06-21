@@ -10,14 +10,21 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-HOOK_SCRIPT = (
-    Path(__file__).resolve().parents[2] / "config" / "claude-hooks" / "scripts" / "permission_gate.py"
-)
+from zerg.services.shipper.hooks import PERMISSION_GATE_SCRIPT
+
+# Materialize the canonical embedded script (what install_hooks writes to
+# ~/.claude/hooks/longhouse-permission-gate.py) and run THAT as a subprocess, so
+# these tests exercise the exact bytes shipped to users.
+_HOOK_DIR = Path(tempfile.mkdtemp(prefix="lh-permission-gate-"))
+HOOK_SCRIPT = _HOOK_DIR / "longhouse-permission-gate.py"
+HOOK_SCRIPT.write_text(PERMISSION_GATE_SCRIPT)
+HOOK_SCRIPT.chmod(0o755)
 
 
 class _StubLonghouse:
@@ -94,6 +101,9 @@ class _StubLonghouse:
 
 def _run_hook(*, base_url: str | None, timeout_env: str = "3", extra_env: dict | None = None):
     env = {
+        # The canonical installed script is dormant by default; engage it (the
+        # launcher sets this in remote-approve mode). The disabled test overrides.
+        "LONGHOUSE_PERMISSION_HOOK_ENABLED": "1",
         "LONGHOUSE_HOOK_TOKEN": "zht_test",
         "LONGHOUSE_MANAGED_SESSION_ID": "11111111-1111-1111-1111-111111111111",
         "LONGHOUSE_PERMISSION_HOOK_TIMEOUT_S": timeout_env,

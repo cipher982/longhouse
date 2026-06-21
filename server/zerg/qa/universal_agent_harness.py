@@ -1872,16 +1872,14 @@ class UniversalProviderAdapter:
         from zerg.services.session_pause_requests import upsert_pause_request
         from zerg.services.session_runtime import runtime_key_for_session
 
-        hook_script = default_repo_root() / "config" / "claude-hooks" / "scripts" / "permission_gate.py"
-        if not hook_script.is_file():
-            payload = {
-                "status": STATUS_FAIL,
-                "scenario": "permission_prompt",
-                "failure_code": "claude_permission_gate_hook_missing",
-                "message": f"permission_gate.py hook not found at {hook_script}",
-            }
-            package.write_json("assertions/permission_prompt.json", payload)
-            return payload
+        # Materialize the canonical installed hook (the exact bytes install_hooks
+        # writes) and drive that, so the proof matches production.
+        from zerg.services.shipper.hooks import PERMISSION_GATE_SCRIPT
+
+        hook_script = package.path("hooks", "longhouse-permission-gate.py")
+        hook_script.parent.mkdir(parents=True, exist_ok=True)
+        hook_script.write_text(PERMISSION_GATE_SCRIPT)
+        hook_script.chmod(0o755)
 
         now = datetime(2026, 6, 19, 12, 0, tzinfo=UTC)
         session_uuid = uuid5(NAMESPACE_URL, f"claude-permission-prompt:{package.root}")
@@ -2015,6 +2013,7 @@ class UniversalProviderAdapter:
 
         hook_env = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "LONGHOUSE_PERMISSION_HOOK_ENABLED": "1",
             "LONGHOUSE_HOOK_URL": base_url,
             "LONGHOUSE_HOOK_TOKEN": "zht_universal_harness",
             "LONGHOUSE_MANAGED_SESSION_ID": session_id,
@@ -5465,7 +5464,7 @@ def _derived_action_status(*, action: ActionDefinition, provider: str) -> dict[s
                 "status": STATUS_PASS,
                 "evidence_level": "hermetic",
                 "proof_scope": "claude_pretooluse_permission_gate",
-                "source": "config/claude-hooks/scripts/permission_gate.py PreToolUse hook driving the real request/answer/decision loop",
+                "source": "longhouse-permission-gate.py PreToolUse hook driving the real request/answer/decision loop",
                 "canary": "claude_permission_gate_reply",
                 "next": "Promote with a live held-permission Claude session against a real provider binary.",
             }
