@@ -32,6 +32,7 @@ from zerg.database import get_db
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.services.session_pause_requests import PENDING_STATUS
+from zerg.services.session_pause_requests import REPLY_TRANSPORT_CLAUDE_PULL
 from zerg.services.session_pause_requests import make_pause_request_key
 from zerg.services.session_pause_requests import upsert_pause_request
 from zerg.services.session_runtime import runtime_key_for_session
@@ -45,10 +46,6 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 # legacy claude_hook placeholder filter in session_pause_requests.
 PERMISSION_GATE_SOURCE = "claude_permission_gate"
 PERMISSION_PROMPT_KIND = "permission_prompt"
-
-# How a resolved decision is delivered back to the provider. Claude's PreToolUse
-# hook PULLs (it long-polls the resolved row); codex/opencode PUSH (Phase 2+).
-REPLY_TRANSPORT_CLAUDE_PULL = "claude_pretooluse_pull"
 
 
 class PermissionRequestIn(UTCBaseModel):

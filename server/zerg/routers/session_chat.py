@@ -85,6 +85,7 @@ from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
 from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
 from zerg.services.session_pause_requests import PENDING_STATUS as PAUSE_PENDING_STATUS
 from zerg.services.session_pause_requests import get_pause_request_for_session
+from zerg.services.session_pause_requests import is_pull_reply_transport
 from zerg.services.session_pause_requests import list_pause_requests_for_session
 from zerg.services.session_pause_requests import load_active_pause_request_for_session
 from zerg.services.session_pause_requests import resolve_pause_request
@@ -414,19 +415,20 @@ def _list_pause_requests_response(
     return PauseRequestListResponse(requests=requests, total=len(requests))
 
 
-def _resolve_permission_prompt_in_place(
+def _resolve_pull_pause_request_in_place(
     *,
     db: Session,
     row,
     decision: str,
     response_message: str | None,
 ) -> PauseRequestResponseResponse:
-    """Resolve a Claude permission-prompt pause request without a live push.
+    """Resolve a PULL-transport pause request without a live push.
 
-    The blocking PreToolUse hook polls GET /agents/permission-decision, so the
-    answer only needs to be persisted: we map answer->allow / reject|cancel->deny
-    into permissionDecision and resolve the row. The hook reads it and returns the
-    decision to Claude.
+    The provider polls Longhouse for the resolved row (e.g. the Claude PreToolUse
+    permission hook polls GET /agents/permission-decision), so the answer only
+    needs to be persisted: we map answer->allow / reject|cancel->deny into
+    permissionDecision and resolve the row. The provider reads it and applies the
+    decision.
     """
     permission_decision = "allow" if decision == "answer" else "deny"
     status_value = "resolved" if decision == "answer" else "rejected"
@@ -501,11 +503,12 @@ async def _respond_to_pause_request(
 
     response_message = _pause_response_message(row=row, body=body)
 
-    # Claude permission prompts use a PULL transport: the blocking PreToolUse hook
-    # polls for the decision, so there is no live process to push a command to.
-    # Resolve the request in place and let the hook read permissionDecision.
-    if str(getattr(row, "kind", "") or "").strip() == "permission_prompt":
-        return _resolve_permission_prompt_in_place(
+    # Dispatch by the row's reply transport, not its kind. PULL transports (the
+    # Claude PreToolUse permission hook polls for the decision) have no live
+    # process to push to, so we resolve in place and let the provider read it.
+    # PUSH transports deliver the answer over managed control.
+    if is_pull_reply_transport(row):
+        return _resolve_pull_pause_request_in_place(
             db=db,
             row=row,
             decision=decision,

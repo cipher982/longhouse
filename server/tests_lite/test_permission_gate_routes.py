@@ -265,6 +265,59 @@ def test_reject_via_pause_route_maps_to_deny(monkeypatch, tmp_path):
         api_app.dependency_overrides.clear()
 
 
+def test_dispatch_keys_on_transport_not_kind(monkeypatch, tmp_path):
+    """A permission_prompt row WITHOUT a pull reply_transport must route to the
+    managed-control PUSH path, proving dispatch keys on transport, not kind."""
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_session(session_local)
+
+    pushed: list[dict] = []
+
+    async def _fake_push(**kwargs):
+        pushed.append(kwargs)
+        from zerg.services.managed_local_control import ManagedLocalSendResult
+
+        return ManagedLocalSendResult(ok=True, exit_code=0, response_data={"status": "resolved"})
+
+    monkeypatch.setattr(session_chat, "answer_pause_request_on_managed_local_session", _fake_push)
+
+    client, api_app = _make_client_with_user(session_local, user_id)
+    try:
+        # Seed a permission_prompt row but with a NON-pull (push) reply_transport.
+        from datetime import datetime
+        from datetime import timezone
+
+        from zerg.services.session_pause_requests import upsert_pause_request
+        from zerg.services.session_runtime import runtime_key_for_session
+
+        runtime_key = runtime_key_for_session("codex", str(session_id))
+        with session_local() as db:
+            row, _ = upsert_pause_request(
+                db,
+                session_id=session_id,
+                runtime_key=runtime_key,
+                provider="codex",
+                request_key=f"codex:{runtime_key}:perm-push",
+                occurred_at=datetime.now(timezone.utc),
+                provider_request_id="perm-push",
+                provider_ref={"source": "codex_app_server", "reply_transport": "managed_push"},
+                kind="permission_prompt",
+                can_respond=True,
+            )
+            db.commit()
+            pause_id = str(row.id)
+
+        resp = client.post(
+            f"/api/sessions/{session_id}/pause-requests/{pause_id}/response",
+            json={"decision": "answer"},
+        )
+        assert resp.status_code == 200, resp.text
+        # Even though kind==permission_prompt, the non-pull transport pushed.
+        assert pushed, "non-pull permission_prompt must dispatch over managed control"
+    finally:
+        api_app.dependency_overrides.clear()
+
+
 def test_permission_prompt_request_is_user_facing(tmp_path):
     """Answerable permission-gate requests must NOT be hidden by the legacy
     claude_hook placeholder filter."""

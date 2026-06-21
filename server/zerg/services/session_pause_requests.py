@@ -15,10 +15,31 @@ from zerg.models.agents import SessionPauseRequest
 from zerg.utils.time import normalize_utc
 
 PAUSE_KIND_STRUCTURED_QUESTION = "structured_question"
+PAUSE_KIND_PERMISSION_PROMPT = "permission_prompt"
 PENDING_STATUS = "pending"
 TERMINAL_STATUSES = {"resolved", "rejected", "failed", "expired"}
 ACTIVE_STATUSES = {PENDING_STATUS}
 QUESTION_PAYLOAD_KEYS = ("questions", "question", "prompt", "input", "schema")
+
+# How an answered pause request is delivered back to the provider. PULL = the
+# provider polls Longhouse for the resolved row (Claude PreToolUse hook); PUSH =
+# Longhouse pushes the decision to the running provider over managed control
+# (Codex app-server, OpenCode bridge). Carried in provider_ref.reply_transport.
+REPLY_TRANSPORT_CLAUDE_PULL = "claude_pretooluse_pull"
+REPLY_TRANSPORT_MANAGED_PUSH = "managed_push"
+PULL_REPLY_TRANSPORTS = {REPLY_TRANSPORT_CLAUDE_PULL}
+
+
+def reply_transport_for_row(row: "SessionPauseRequest") -> str | None:
+    """The provider_ref.reply_transport for a pause request, if set."""
+    ref = row.provider_ref_json if isinstance(row.provider_ref_json, dict) else {}
+    value = _clean_str(ref.get("reply_transport"))
+    return value
+
+
+def is_pull_reply_transport(row: "SessionPauseRequest") -> bool:
+    """True when the answer is delivered by the provider polling (resolve in place)."""
+    return reply_transport_for_row(row) in PULL_REPLY_TRANSPORTS
 
 
 def make_pause_request_key(
