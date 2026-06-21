@@ -138,6 +138,7 @@ from zerg.routers.oauth import router as oauth_router
 from zerg.routers.observability import router as observability_router
 from zerg.routers.ops import beacon_router as ops_beacon_router
 from zerg.routers.ops import router as ops_router
+from zerg.routers.permission_gate import router as permission_gate_router
 from zerg.routers.presence import router as presence_router
 from zerg.routers.reliability import router as reliability_router
 from zerg.routers.runners import router as runners_router
@@ -306,6 +307,7 @@ api_app.include_router(agents_backfill_router)
 api_app.include_router(agents_demo_router)
 api_app.include_router(heartbeat_router)
 api_app.include_router(presence_router)
+api_app.include_router(permission_gate_router)
 api_app.include_router(runtime_router)
 api_app.include_router(device_tokens_router)
 api_app.include_router(health_router)

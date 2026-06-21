@@ -67,6 +67,8 @@ _MANAGED_LOCAL_HOOK_ALLOWED_ROUTES = {
     ("GET", "/agents/sessions/startup-context"),
     ("POST", "/agents/ingest"),
     ("POST", "/agents/presence"),
+    ("POST", "/agents/permission-requests"),
+    ("GET", "/agents/permission-decision"),
 }
 
 
