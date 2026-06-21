@@ -9,6 +9,11 @@
             "command": "python3 $CLAUDE_HOOKS_DIR/scripts/tool_event.py",
             "timeout": 5,
             "async": true
+          },
+          {
+            "type": "command",
+            "command": "python3 $CLAUDE_HOOKS_DIR/scripts/permission_gate.py",
+            "timeout": 30
           }
         ]
       }
