@@ -3165,33 +3165,12 @@ class UniversalProviderAdapter:
         operation_evidence = claude_channel_control_operation_evidence(claude)
         raw_events = claude_channel_control_raw_events(claude)
         provider_session_id = _first_claude_control_session_id(claude) or self._session_id(package)
-        projection = self._write_session_projection(
+        projection, operation_evidence, db_ingest = self._project_ingest_and_merge(
             package,
+            operation_evidence=operation_evidence,
             raw_events=raw_events,
-            operations=operation_evidence,
             provider_session_id=provider_session_id,
         )
-        db_ingest = ingest_canonical_events_into_longhouse_db(
-            package=package,
-            provider=self.config.provider,
-            rows=raw_events,
-            provider_session_id=provider_session_id,
-        )
-        operation_evidence.update(
-            {
-                str(operation): dict(evidence)
-                for operation, evidence in dict(db_ingest.get("operation_evidence") or {}).items()
-                if isinstance(evidence, Mapping)
-            }
-        )
-        session_projection_path = package.path("longhouse", "session-projection.json")
-        try:
-            session_projection = json.loads(session_projection_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            session_projection = {}
-        if isinstance(session_projection, dict):
-            session_projection["operation_statuses"] = operation_evidence
-            package.write_json("longhouse/session-projection.json", session_projection)
 
         verdict = str(control_artifact.get("verdict") or "red")
         interrupt_status = str((operation_evidence.get("interrupt") or {}).get("status") or STATUS_FAIL)
@@ -3207,13 +3186,7 @@ class UniversalProviderAdapter:
             "source_artifact_kind": "provider_control_e2e_canary",
             "synthetic": False,
             "operation_evidence": operation_evidence,
-            "longhouse_ingest": {
-                "status": db_status,
-                "failure_code": db_ingest.get("failure_code"),
-                "db_snapshot_path": db_ingest.get("db_snapshot_path"),
-                "session_projection_path": db_ingest.get("session_projection_path"),
-                "timeline_projection_path": db_ingest.get("timeline_projection_path"),
-            },
+            "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
         }
         if verdict != "green" or interrupt_status != STATUS_PASS:
             failure_code = control_artifact.get("failure_code") or claude.get("failure_code")
@@ -3509,41 +3482,16 @@ class UniversalProviderAdapter:
             }
         )
         package.write_json("raw/provider-live-canary-inline.json", live_artifact)
-        operation_evidence = {
-            str(operation): dict(evidence)
-            for operation, evidence in dict(live_artifact.get("operation_evidence") or {}).items()
-            if isinstance(evidence, Mapping)
-        }
+        operation_evidence = self._operation_evidence_map(live_artifact.get("operation_evidence"))
         raw_events = opencode_provider_live_raw_events(live_artifact)
         live_session_projection = live_artifact.get("session_projection") or {}
         provider_session_id = str(live_session_projection.get("provider_session_id") or self._session_id(package))
-        projection = self._write_session_projection(
+        projection, operation_evidence, db_ingest = self._project_ingest_and_merge(
             package,
+            operation_evidence=operation_evidence,
             raw_events=raw_events,
-            operations=operation_evidence,
             provider_session_id=provider_session_id,
         )
-        db_ingest = ingest_canonical_events_into_longhouse_db(
-            package=package,
-            provider=self.config.provider,
-            rows=raw_events,
-            provider_session_id=provider_session_id,
-        )
-        operation_evidence.update(
-            {
-                str(operation): dict(evidence)
-                for operation, evidence in dict(db_ingest.get("operation_evidence") or {}).items()
-                if isinstance(evidence, Mapping)
-            }
-        )
-        session_projection_path = package.path("longhouse", "session-projection.json")
-        try:
-            session_projection = json.loads(session_projection_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            session_projection = {}
-        if isinstance(session_projection, dict):
-            session_projection["operation_statuses"] = operation_evidence
-            package.write_json("longhouse/session-projection.json", session_projection)
 
         live_verdict = str(live_artifact.get("verdict") or "red")
         interrupt_status = str((operation_evidence.get("interrupt") or {}).get("status") or STATUS_FAIL)
@@ -3560,13 +3508,7 @@ class UniversalProviderAdapter:
             "source_artifact_kind": live_artifact.get("artifact_kind"),
             "synthetic": False,
             "operation_evidence": operation_evidence,
-            "longhouse_ingest": {
-                "status": db_status,
-                "failure_code": db_ingest.get("failure_code"),
-                "db_snapshot_path": db_ingest.get("db_snapshot_path"),
-                "session_projection_path": db_ingest.get("session_projection_path"),
-                "timeline_projection_path": db_ingest.get("timeline_projection_path"),
-            },
+            "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
         }
         if live_verdict != "green" or interrupt_status != STATUS_PASS:
             payload["failure_code"] = live_artifact.get("failure_code") or "opencode_interrupt_cancel_failed"
@@ -3836,40 +3778,15 @@ class UniversalProviderAdapter:
                 source_artifact_kind=canary_artifact.get("artifact_kind"),
             )
 
-        operation_evidence = {
-            str(operation): dict(evidence)
-            for operation, evidence in dict(canary_artifact.get("operation_evidence") or {}).items()
-            if isinstance(evidence, Mapping)
-        }
+        operation_evidence = self._operation_evidence_map(canary_artifact.get("operation_evidence"))
         raw_events = codex_interrupt_cancel_raw_events(canary_artifact)
         provider_session_id = _first_codex_thread_id(canary_artifact) or self._session_id(package)
-        projection = self._write_session_projection(
+        projection, operation_evidence, db_ingest = self._project_ingest_and_merge(
             package,
+            operation_evidence=operation_evidence,
             raw_events=raw_events,
-            operations=operation_evidence,
             provider_session_id=provider_session_id,
         )
-        db_ingest = ingest_canonical_events_into_longhouse_db(
-            package=package,
-            provider=self.config.provider,
-            rows=raw_events,
-            provider_session_id=provider_session_id,
-        )
-        operation_evidence.update(
-            {
-                str(operation): dict(evidence)
-                for operation, evidence in dict(db_ingest.get("operation_evidence") or {}).items()
-                if isinstance(evidence, Mapping)
-            }
-        )
-        session_projection_path = package.path("longhouse", "session-projection.json")
-        try:
-            session_projection = json.loads(session_projection_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            session_projection = {}
-        if isinstance(session_projection, dict):
-            session_projection["operation_statuses"] = operation_evidence
-            package.write_json("longhouse/session-projection.json", session_projection)
 
         verdict = str(canary_artifact.get("verdict") or "red")
         interrupt_status = str((operation_evidence.get("interrupt") or {}).get("status") or STATUS_FAIL)
@@ -3886,13 +3803,7 @@ class UniversalProviderAdapter:
             "source_artifact_kind": canary_artifact.get("artifact_kind"),
             "synthetic": False,
             "operation_evidence": operation_evidence,
-            "longhouse_ingest": {
-                "status": db_status,
-                "failure_code": db_ingest.get("failure_code"),
-                "db_snapshot_path": db_ingest.get("db_snapshot_path"),
-                "session_projection_path": db_ingest.get("session_projection_path"),
-                "timeline_projection_path": db_ingest.get("timeline_projection_path"),
-            },
+            "longhouse_ingest": self._longhouse_ingest_block(db_ingest),
         }
         if verdict != "green" or interrupt_status != STATUS_PASS:
             payload["failure_code"] = canary_artifact.get("failure_code") or "codex_interrupt_cancel_failed"
@@ -5213,6 +5124,61 @@ class UniversalProviderAdapter:
             "session_projection_path": str(package.path("longhouse", "session-projection.json")),
             "timeline_projection_path": str(package.path("longhouse", "timeline-projection.json")),
             "operation_evidence": dict(operations),
+        }
+
+    @staticmethod
+    def _operation_evidence_map(source: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
+        """Coerce a canary/db-ingest ``operation_evidence`` blob into plain dicts."""
+        return {str(operation): dict(evidence) for operation, evidence in dict(source or {}).items() if isinstance(evidence, Mapping)}
+
+    def _project_ingest_and_merge(
+        self,
+        package: EvidencePackage,
+        *,
+        operation_evidence: dict[str, dict[str, Any]],
+        raw_events: list[dict[str, Any]],
+        provider_session_id: str | None,
+    ) -> tuple[dict[str, Any], dict[str, dict[str, Any]], dict[str, Any]]:
+        """Run the shared projection + Longhouse DB ingest tail.
+
+        Every provider control scenario writes the session projection, ingests the
+        same canonical events into the throwaway Longhouse DB, merges the ingest's
+        ``operation_evidence`` back over the canary's, and patches the on-disk
+        session projection with the merged statuses. Returns the projection summary,
+        the merged operation evidence, and the raw db-ingest result.
+        """
+        projection = self._write_session_projection(
+            package,
+            raw_events=raw_events,
+            operations=operation_evidence,
+            provider_session_id=provider_session_id,
+        )
+        db_ingest = ingest_canonical_events_into_longhouse_db(
+            package=package,
+            provider=self.config.provider,
+            rows=raw_events,
+            provider_session_id=provider_session_id,
+        )
+        operation_evidence.update(self._operation_evidence_map(db_ingest.get("operation_evidence")))
+        session_projection_path = package.path("longhouse", "session-projection.json")
+        try:
+            session_projection = json.loads(session_projection_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            session_projection = {}
+        if isinstance(session_projection, dict):
+            session_projection["operation_statuses"] = operation_evidence
+            package.write_json("longhouse/session-projection.json", session_projection)
+        return projection, operation_evidence, db_ingest
+
+    @staticmethod
+    def _longhouse_ingest_block(db_ingest: Mapping[str, Any]) -> dict[str, Any]:
+        """The ``longhouse_ingest`` payload sub-dict shared by control scenarios."""
+        return {
+            "status": str(db_ingest.get("status") or STATUS_FAIL),
+            "failure_code": db_ingest.get("failure_code"),
+            "db_snapshot_path": db_ingest.get("db_snapshot_path"),
+            "session_projection_path": db_ingest.get("session_projection_path"),
+            "timeline_projection_path": db_ingest.get("timeline_projection_path"),
         }
 
     def _resolve_binary(self) -> tuple[Path | None, str]:
