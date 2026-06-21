@@ -14,14 +14,14 @@ LineageKind = Literal["none", "task_child", "fork", "unknown", "agent_switch", "
 ProjectionKind = Literal["root", "subagent", "fork", "linked", "inline_event", "run_control"]
 Visibility = Literal["timeline", "hidden", "inline", "control"]
 CapabilityState = Literal["supported", "unsupported", "unknown", "experimental", "observed_only"]
-_EXPLICIT_LINEAGE_KINDS: frozenset[str] = frozenset({"none", "task_child", "fork", "unknown", "agent_switch", "async_prompt"})
+_EXPLICIT_LINEAGE_KINDS: frozenset[str] = frozenset({"task_child", "fork", "unknown", "agent_switch", "async_prompt"})
 
 
 def _frozen_metadata(value: Mapping[str, Any] | None) -> Mapping[str, Any]:
     return MappingProxyType(dict(value or {}))
 
 
-def source_path_looks_like_subagent(source_path: str | None) -> bool:
+def _source_path_looks_like_subagent(source_path: str | None) -> bool:
     if not source_path:
         return False
     return "/subagents/" in source_path.replace("\\", "/")
@@ -40,7 +40,7 @@ def classify_lineage_kind(
     if explicit in _EXPLICIT_LINEAGE_KINDS:
         return cast(LineageKind, explicit)
 
-    looks_like_subagent = source_path_looks_like_subagent(source_path)
+    looks_like_subagent = _source_path_looks_like_subagent(source_path)
     has_parent = bool(str(parent_provider_session_id or "").strip())
     if is_sidechain and (has_parent or looks_like_subagent):
         return "task_child"

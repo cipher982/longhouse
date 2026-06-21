@@ -99,7 +99,7 @@ def test_parent_alias_is_recorded_for_visible_lineage_and_task_children():
     ),
     [
         pytest.param("fork", False, None, None, "fork", id="explicit_fork"),
-        pytest.param("none", True, "parent", "/tmp/subagents/agent.jsonl", "none", id="explicit_none"),
+        pytest.param("none", True, "parent", "/tmp/subagents/agent.jsonl", "task_child", id="ignore_explicit_none"),
         pytest.param(None, True, "parent", None, "task_child", id="sidechain_parent"),
         pytest.param(None, True, None, "/tmp/project/subagents/agent.jsonl", "task_child", id="sidechain_path"),
         pytest.param(None, False, "parent", None, "unknown", id="parent_only"),
