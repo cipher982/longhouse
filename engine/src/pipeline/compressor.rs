@@ -78,6 +78,8 @@ pub struct IngestPayload<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_provider_session_id: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub lineage_kind: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub subagent_id: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub subagent_prompt_id: Option<&'a str>,
@@ -260,9 +262,10 @@ pub fn build_payload_with_source_lines<'a>(
         is_sidechain: metadata.is_sidechain
             || std::env::var("LONGHOUSE_IS_SIDECHAIN").as_deref() == Ok("1"),
         parent_provider_session_id: metadata.forked_from_session_id.as_deref(),
+        lineage_kind: metadata.lineage_kind.as_deref(),
         subagent_id: metadata.subagent_id.as_deref(),
         subagent_prompt_id: metadata.subagent_prompt_id.as_deref(),
-        subagent_tool_use_id: None,
+        subagent_tool_use_id: metadata.subagent_tool_use_id.as_deref(),
         workflow_run_id: metadata.workflow_run_id.as_deref(),
         attribution_agent: metadata.attribution_agent.as_deref(),
         attribution_skill: metadata.attribution_skill.as_deref(),
@@ -454,8 +457,10 @@ mod tests {
         let meta = SessionMetadata {
             session_id: "child-file-id".to_string(),
             forked_from_session_id: Some("parent-provider-id".to_string()),
+            lineage_kind: Some("task_child".to_string()),
             subagent_id: Some("agent-a0325d64b2dc7300f".to_string()),
             subagent_prompt_id: Some("be1331ba-91c3-4670-a113-7f1c63773df8".to_string()),
+            subagent_tool_use_id: Some("toolu_spawned_child".to_string()),
             is_sidechain: true,
             ..Default::default()
         };
@@ -467,11 +472,13 @@ mod tests {
         assert_eq!(value["provider_session_id"], "child-file-id");
         assert_eq!(value["is_sidechain"], true);
         assert_eq!(value["parent_provider_session_id"], "parent-provider-id");
+        assert_eq!(value["lineage_kind"], "task_child");
         assert_eq!(value["subagent_id"], "agent-a0325d64b2dc7300f");
         assert_eq!(
             value["subagent_prompt_id"],
             "be1331ba-91c3-4670-a113-7f1c63773df8"
         );
+        assert_eq!(value["subagent_tool_use_id"], "toolu_spawned_child");
     }
 
     #[test]

@@ -20,9 +20,8 @@ from sqlalchemy.orm import Session
 
 from zerg.data_plane import create_archive_store
 from zerg.models.agents import ArchiveChunk
-from zerg.models.agents import SessionThread
-from zerg.models.agents import SessionThreadAlias
 from zerg.services.archive_store import FilesystemArchiveStore
+from zerg.services.session_graph_projection import archive_owner_session_ids
 
 logger = logging.getLogger(__name__)
 
@@ -33,25 +32,10 @@ def archive_owning_session_ids(db: Session, session_id: UUID | str) -> set[str]:
     Workflow subagent relink (``_move_subagent_session_under_parent``) rewrites
     ``source_lines.session_id`` to the PARENT but leaves ``archive_chunks`` keyed
     by the subagent's ORIGINAL session id (and deletes the child AgentSession).
-    The original id is preserved as a ``longhouse_session_id`` alias on the child
-    subagent SessionThread. So a parent's full archive coverage spans its own id
-    plus those child-thread alias ids. Returns string ids.
+    The session graph projection owns that child-edge interpretation, so archive
+    export and reclaim use the same semantic graph as session detail.
     """
-    sid = str(session_id)
-    owners = {sid}
-    rows = (
-        db.query(SessionThreadAlias.alias_value)
-        .join(SessionThread, SessionThread.id == SessionThreadAlias.thread_id)
-        .filter(SessionThread.session_id == UUID(sid))
-        .filter(SessionThread.branch_kind == "subagent")
-        .filter(SessionThreadAlias.alias_kind == "longhouse_session_id")
-        .all()
-    )
-    for (value,) in rows:
-        normalized = str(value or "").strip()
-        if normalized:
-            owners.add(normalized)
-    return owners
+    return archive_owner_session_ids(db, UUID(str(session_id)))
 
 
 class ArchiveTranscriptUnavailable(Exception):

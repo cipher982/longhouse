@@ -85,8 +85,10 @@ pub struct SessionMetadata {
     pub session_id: String,
     pub provider_session_id: Option<String>,
     pub forked_from_session_id: Option<String>,
+    pub lineage_kind: Option<String>,
     pub subagent_id: Option<String>,
     pub subagent_prompt_id: Option<String>,
+    pub subagent_tool_use_id: Option<String>,
     /// Claude dynamic-workflow run id, derived from the
     /// `.../subagents/workflows/<run>/agent-*.jsonl` path segment.
     pub workflow_run_id: Option<String>,

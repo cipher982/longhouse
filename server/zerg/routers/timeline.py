@@ -144,7 +144,13 @@ def list_browser_machine_workspaces(
     current_user=Depends(get_current_browser_user),
 ) -> WorkspaceSuggestionsResponse:
     """Browser launch-picker workspaces. Same body shape as ``/api/agents/machines/{id}/workspaces``."""
-    entries = build_workspace_suggestions(db, owner_id=int(current_user.id), device_id=device_id, limit=limit, days_back=days_back)
+    entries = build_workspace_suggestions(
+        db,
+        owner_id=int(current_user.id),
+        device_id=device_id,
+        limit=limit,
+        days_back=days_back,
+    )
     return WorkspaceSuggestionsResponse(
         device_id=device_id,
         workspaces=[WorkspaceSuggestion(**entry.to_response()) for entry in entries],
@@ -530,6 +536,20 @@ def get_timeline_session_workflow_runs(
     store = AgentsStore(db)
     runs = store.list_workflow_runs_for_session(session_id)
     return {"session_id": str(session_id), "workflow_runs": runs}
+
+
+@router.get("/sessions/{session_id}/graph")
+def get_timeline_session_graph(
+    session_id: UUID,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_browser_user),
+) -> dict:
+    return _sessions_router.get_session_graph(
+        session_id=session_id,
+        db=db,
+        _auth=None,
+        _single=None,
+    )
 
 
 @router.get("/workflows/{workflow_run_id}")

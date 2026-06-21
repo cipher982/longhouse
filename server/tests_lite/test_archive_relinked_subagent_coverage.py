@@ -10,7 +10,7 @@ the reclaim would either refuse or drop bytes it can't see.
 """
 
 import os
-from uuid import UUID, uuid4
+from uuid import UUID
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -20,15 +20,13 @@ from sqlalchemy.orm import sessionmaker
 from zerg.database import Base
 from zerg.database import make_engine
 from zerg.models.agents import AgentSourceLine
-from zerg.models.agents import SessionThread
-from zerg.models.agents import SessionThreadAlias
 from zerg.services.agents.models import EventIngest
 from zerg.services.agents.models import SessionIngest
 from zerg.services.agents.store import AgentsStore
+from zerg.services.archive_reclaim_verifier import verify_session_archive_coverage
 from zerg.services.archive_store import ArchiveRecord
 from zerg.services.archive_store import FilesystemArchiveStore
 from zerg.services.archive_transcript import archive_owning_session_ids
-from zerg.services.archive_reclaim_verifier import verify_session_archive_coverage
 
 PARENT_ID = UUID("11111111-0000-0000-0000-0000000000aa")
 AGENT_ID = UUID("22222222-0000-0000-0000-0000000000bb")

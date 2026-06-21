@@ -20,25 +20,31 @@ from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import require_single_tenant
+from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.main import api_app
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSourceLine
+from zerg.models.agents import SessionEdge
 from zerg.models.agents import SessionEmbedding
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTask
 from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
-from zerg.services.agents.kernel_backfill import backfill_subagent_child_threads
 from zerg.services.agents import AgentsStore
 from zerg.services.agents import EventIngest
 from zerg.services.agents import SessionIngest
+from zerg.services.agents.kernel_backfill import backfill_subagent_child_threads
+from zerg.services.session_graph_projection import build_session_graph_projection
 
 PARENT_ID = UUID("f6a553e2-8aca-49c4-9823-3b3d8690fd2e")
 CHILD_ID = UUID("ddb1a69b-628e-5677-bba7-3fb76ba6ffc2")
 CODEX_PARENT_ID = UUID("019dd708-573a-7131-a4d9-9ee855520483")
 CODEX_CHILD_ID = UUID("019ddb6e-114f-7643-89db-86c31a2aa706")
+OPENCODE_PARENT_ID = UUID("019ee600-0000-7000-8000-000000000001")
+OPENCODE_CHILD_ID = UUID("019ee600-0000-7000-8000-000000000002")
+OPENCODE_FORK_ID = UUID("019ee600-0000-7000-8000-000000000003")
 NOW = datetime(2026, 6, 2, 0, 19, 31, tzinfo=timezone.utc)
 
 
@@ -127,6 +133,10 @@ def _thread_alias_values(db, thread_id):
         (row.alias_kind, row.alias_value)
         for row in db.query(SessionThreadAlias).filter(SessionThreadAlias.thread_id == thread_id).all()
     }
+
+
+def _edge_rows(db):
+    return db.query(SessionEdge).order_by(SessionEdge.edge_kind.asc(), SessionEdge.id.asc()).all()
 
 
 def test_claude_child_ingest_creates_child_thread_not_session(tmp_path):
@@ -249,6 +259,399 @@ def test_codex_fork_child_attaches_by_parent_provider_alias(tmp_path):
         assert child_thread.session_id == CODEX_PARENT_ID
         child_event = db.query(AgentEvent).filter(AgentEvent.content_text == "codex child work").one()
         assert child_event.thread_id == child_thread.id
+
+
+def test_opencode_task_child_attaches_by_parent_provider_alias(tmp_path):
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        store.ingest_session(
+            _root_payload(
+                session_id=OPENCODE_PARENT_ID,
+                provider="opencode",
+                provider_session_id="ses_parent",
+                project="longhouse",
+            )
+        )
+
+        result = store.ingest_session(
+            SessionIngest(
+                id=OPENCODE_CHILD_ID,
+                provider="opencode",
+                environment="production",
+                project="longhouse",
+                device_id="cinder",
+                cwd="/Users/davidrose/git/zerg/longhouse",
+                started_at=NOW,
+                provider_session_id="ses_child",
+                is_sidechain=True,
+                parent_provider_session_id="ses_parent",
+                subagent_id="explore",
+                subagent_tool_use_id="call_task",
+                attribution_agent="explore",
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="opencode child work",
+                        timestamp=NOW,
+                        source_path="/Users/davidrose/.local/share/opencode/opencode.db#opencode:ses_child",
+                        source_offset=0,
+                        raw_json='{"provider":"opencode","session_id":"ses_child"}',
+                    )
+                ],
+            )
+        )
+
+        assert result.session_id == OPENCODE_PARENT_ID
+        assert db.query(AgentSession).count() == 1
+        child_thread = db.query(SessionThread).filter(SessionThread.branch_kind == "subagent").one()
+        assert child_thread.session_id == OPENCODE_PARENT_ID
+        aliases = _thread_alias_values(db, child_thread.id)
+        assert ("provider_session_id", "ses_child") in aliases
+        assert ("subagent_id", "explore") in aliases
+        assert ("subagent_tool_use_id", "call_task") in aliases
+        assert ("forked_from_provider_session_id", "ses_parent") in aliases
+        assert ("claude_agent_id", "explore") not in aliases
+
+        child_event = db.query(AgentEvent).filter(AgentEvent.content_text == "opencode child work").one()
+        assert child_event.session_id == OPENCODE_PARENT_ID
+        assert child_event.thread_id == child_thread.id
+        edge = _edge_rows(db)[0]
+        assert edge.edge_kind == "task_child"
+        assert edge.visibility == "hidden"
+        assert edge.source_thread_id is not None
+        assert edge.target_thread_id == child_thread.id
+        assert edge.provider_edge_id == "call_task"
+        assert edge.metadata_json["child_provider_session_id"] == "ses_child"
+
+
+def test_unresolved_opencode_task_child_is_hidden_from_default_timeline(tmp_path):
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        result = store.ingest_session(
+            SessionIngest(
+                id=OPENCODE_CHILD_ID,
+                provider="opencode",
+                environment="production",
+                project="longhouse",
+                device_id="cinder",
+                cwd="/Users/davidrose/git/zerg/longhouse",
+                started_at=NOW,
+                provider_session_id="ses_child",
+                is_sidechain=True,
+                parent_provider_session_id="ses_parent",
+                subagent_id="explore",
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="orphan opencode child",
+                        timestamp=NOW,
+                        source_path="/Users/davidrose/.local/share/opencode/opencode.db#opencode:ses_child",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+
+        assert result.session_id == OPENCODE_CHILD_ID
+        primary = (
+            db.query(SessionThread)
+            .filter(SessionThread.session_id == OPENCODE_CHILD_ID, SessionThread.is_primary == 1)
+            .one()
+        )
+        assert primary.branch_kind == "subagent"
+        aliases = _thread_alias_values(db, primary.id)
+        assert ("forked_from_provider_session_id", "ses_parent") in aliases
+        assert ("subagent_id", "explore") in aliases
+        edge = _edge_rows(db)[0]
+        assert edge.edge_kind == "task_child"
+        assert edge.visibility == "hidden"
+        assert edge.source_thread_id is None
+        assert edge.target_thread_id == primary.id
+        assert edge.provider_edge_id == "ses_parent:ses_child"
+
+        total, rows = store.list_timeline_thread_page(hide_autonomous=True, include_test=True)
+        assert total == 0
+        assert rows == ()
+
+
+def test_opencode_task_child_relinks_when_parent_arrives_later(tmp_path):
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        store.ingest_session(
+            SessionIngest(
+                id=OPENCODE_CHILD_ID,
+                provider="opencode",
+                environment="production",
+                project="longhouse",
+                device_id="cinder",
+                cwd="/Users/davidrose/git/zerg/longhouse",
+                started_at=NOW,
+                provider_session_id="ses_child",
+                is_sidechain=True,
+                parent_provider_session_id="ses_parent",
+                subagent_id="explore",
+                attribution_agent="explore",
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="orphan then relinked",
+                        timestamp=NOW,
+                        source_path="/Users/davidrose/.local/share/opencode/opencode.db#opencode:ses_child",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+        assert db.query(AgentSession).count() == 1
+
+        parent_result = store.ingest_session(
+            _root_payload(
+                session_id=OPENCODE_PARENT_ID,
+                provider="opencode",
+                provider_session_id="ses_parent",
+                project="longhouse",
+            )
+        )
+
+        assert parent_result.session_id == OPENCODE_PARENT_ID
+        assert db.query(AgentSession).count() == 1
+        assert db.query(AgentSession).filter(AgentSession.id == OPENCODE_CHILD_ID).first() is None
+        child_thread = db.query(SessionThread).filter(SessionThread.branch_kind == "subagent").one()
+        assert child_thread.session_id == OPENCODE_PARENT_ID
+        aliases = _thread_alias_values(db, child_thread.id)
+        assert ("subagent_id", "explore") in aliases
+        assert ("forked_from_provider_session_id", "ses_parent") in aliases
+
+        child_event = db.query(AgentEvent).filter(AgentEvent.content_text == "orphan then relinked").one()
+        assert child_event.session_id == OPENCODE_PARENT_ID
+        assert child_event.thread_id == child_thread.id
+        edges = _edge_rows(db)
+        assert len(edges) == 1
+        assert edges[0].edge_kind == "task_child"
+        assert edges[0].source_thread_id is not None
+        assert edges[0].target_thread_id == child_thread.id
+        assert edges[0].metadata_json["child_provider_session_id"] == "ses_child"
+
+
+def test_opencode_fork_parentage_stays_visible_with_fork_thread_alias(tmp_path):
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        result = store.ingest_session(
+            SessionIngest(
+                id=OPENCODE_FORK_ID,
+                provider="opencode",
+                environment="production",
+                project="longhouse",
+                device_id="cinder",
+                cwd="/Users/davidrose/git/zerg/longhouse",
+                started_at=NOW,
+                provider_session_id="ses_fork",
+                parent_provider_session_id="ses_parent",
+                lineage_kind="fork",
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="forked opencode work",
+                        timestamp=NOW,
+                        source_path="/Users/davidrose/.local/share/opencode/opencode.db#opencode:ses_fork",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+
+        assert result.session_id == OPENCODE_FORK_ID
+        primary = (
+            db.query(SessionThread)
+            .filter(SessionThread.session_id == OPENCODE_FORK_ID, SessionThread.is_primary == 1)
+            .one()
+        )
+        assert primary.branch_kind == "fork"
+        aliases = _thread_alias_values(db, primary.id)
+        assert ("provider_session_id", "ses_fork") in aliases
+        assert ("forked_from_provider_session_id", "ses_parent") in aliases
+        edge = _edge_rows(db)[0]
+        assert edge.edge_kind == "fork"
+        assert edge.visibility == "timeline"
+        assert edge.target_thread_id == primary.id
+        assert edge.metadata_json["parent_provider_session_id"] == "ses_parent"
+
+        total, rows = store.list_timeline_thread_page(hide_autonomous=True, include_test=True)
+        assert total == 1
+        assert rows[0][1] == str(OPENCODE_FORK_ID)
+
+
+def test_opencode_unknown_parentage_stays_visible_without_fork_label(tmp_path):
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        result = store.ingest_session(
+            SessionIngest(
+                id=OPENCODE_FORK_ID,
+                provider="opencode",
+                environment="production",
+                project="longhouse",
+                device_id="cinder",
+                cwd="/Users/davidrose/git/zerg/longhouse",
+                started_at=NOW,
+                provider_session_id="ses_linked",
+                parent_provider_session_id="ses_parent",
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="linked opencode work",
+                        timestamp=NOW,
+                        source_path="/Users/davidrose/.local/share/opencode/opencode.db#opencode:ses_linked",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+
+        assert result.session_id == OPENCODE_FORK_ID
+        primary = (
+            db.query(SessionThread)
+            .filter(SessionThread.session_id == OPENCODE_FORK_ID, SessionThread.is_primary == 1)
+            .one()
+        )
+        assert primary.branch_kind == "root"
+        aliases = _thread_alias_values(db, primary.id)
+        assert ("provider_session_id", "ses_linked") in aliases
+        assert ("parent_provider_session_id", "ses_parent") in aliases
+        assert ("forked_from_provider_session_id", "ses_parent") not in aliases
+        edge = _edge_rows(db)[0]
+        assert edge.edge_kind == "unknown"
+        assert edge.visibility == "timeline"
+        assert edge.target_thread_id == primary.id
+        assert edge.metadata_json["parent_provider_session_id"] == "ses_parent"
+
+        total, rows = store.list_timeline_thread_page(hide_autonomous=True, include_test=True)
+        assert total == 1
+        assert rows[0][1] == str(OPENCODE_FORK_ID)
+
+
+def test_session_graph_projection_surfaces_child_fork_and_unknown_edges(tmp_path):
+    db_path = tmp_path / "session-graph.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(bind=engine)
+    factory = make_sessionmaker(engine)
+    linked_id = UUID("019ee600-0000-7000-8000-000000000004")
+
+    with factory() as db:
+        store = AgentsStore(db)
+        store.ingest_session(
+            _root_payload(
+                session_id=OPENCODE_PARENT_ID,
+                provider="opencode",
+                provider_session_id="ses_parent",
+                project="longhouse",
+            )
+        )
+        store.ingest_session(
+            SessionIngest(
+                id=OPENCODE_CHILD_ID,
+                provider="opencode",
+                environment="production",
+                project="longhouse",
+                device_id="cinder",
+                cwd="/Users/davidrose/git/zerg/longhouse",
+                started_at=NOW,
+                provider_session_id="ses_child",
+                is_sidechain=True,
+                parent_provider_session_id="ses_parent",
+                subagent_id="explore",
+                subagent_tool_use_id="call_task",
+                attribution_agent="explore",
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="opencode child work",
+                        timestamp=NOW,
+                        source_path="/Users/davidrose/.local/share/opencode/opencode.db#opencode:ses_child",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+        store.ingest_session(
+            SessionIngest(
+                id=OPENCODE_FORK_ID,
+                provider="opencode",
+                environment="production",
+                project="longhouse",
+                device_id="cinder",
+                cwd="/Users/davidrose/git/zerg/longhouse",
+                started_at=NOW,
+                provider_session_id="ses_fork",
+                parent_provider_session_id="ses_parent",
+                lineage_kind="fork",
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="forked opencode work",
+                        timestamp=NOW,
+                        source_path="/Users/davidrose/.local/share/opencode/opencode.db#opencode:ses_fork",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+        store.ingest_session(
+            SessionIngest(
+                id=linked_id,
+                provider="opencode",
+                environment="production",
+                project="longhouse",
+                device_id="cinder",
+                cwd="/Users/davidrose/git/zerg/longhouse",
+                started_at=NOW,
+                provider_session_id="ses_linked",
+                parent_provider_session_id="ses_parent",
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="linked opencode work",
+                        timestamp=NOW,
+                        source_path="/Users/davidrose/.local/share/opencode/opencode.db#opencode:ses_linked",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+        projection = build_session_graph_projection(db, OPENCODE_PARENT_ID)
+        db.commit()
+
+    assert projection["session_id"] == str(OPENCODE_PARENT_ID)
+    assert [edge["edge_kind"] for edge in projection["children"]] == ["task_child"]
+    assert projection["children"][0]["agent_id"] == "explore"
+    assert [edge["edge_kind"] for edge in projection["forks"]] == ["fork"]
+    assert [edge["edge_kind"] for edge in projection["linked"]] == ["unknown"]
+
+    def override_db():
+        db = factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    api_app.dependency_overrides[get_db] = override_db
+    api_app.dependency_overrides[verify_agents_token] = lambda: None
+    api_app.dependency_overrides[require_single_tenant] = lambda: None
+    try:
+        client = TestClient(api_app)
+        response = client.get(f"/agents/sessions/{OPENCODE_PARENT_ID}/graph")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["session_id"] == str(OPENCODE_PARENT_ID)
+        assert [edge["edge_kind"] for edge in body["children"]] == ["task_child"]
+        assert [edge["edge_kind"] for edge in body["forks"]] == ["fork"]
+        assert [edge["edge_kind"] for edge in body["linked"]] == ["unknown"]
+    finally:
+        api_app.dependency_overrides.clear()
 
 
 def test_unresolved_child_file_is_hidden_from_default_timeline(tmp_path):

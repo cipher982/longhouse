@@ -323,6 +323,12 @@ Production Sauron leaves this token-spending lane off by default.
 
 ### OpenCode
 
+The universal harness scenario `orchestration_capability_matrix` emits one
+evidence row per provider orchestration capability from
+`server/zerg/config/provider_orchestration_capabilities.json`, so release triage
+can see supported, unsupported, unknown, experimental, and observed-only cells
+without collapsing them into one provider verdict.
+
 | Surface | Covered | Evidence | Boundary | CI | Sauron release-watch | Baseline | Actionable today |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | install/stage exact version | partial | Sauron OpenCode release asset staging | real release asset | Sauron tests | yes | no | yes if staging fails |
