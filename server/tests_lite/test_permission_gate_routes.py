@@ -15,14 +15,19 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-1234")
 os.environ.setdefault("INTERNAL_API_SECRET", Fernet.generate_key().decode())
 
+from types import SimpleNamespace
+
 from zerg.database import get_db
 from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.dependencies.browser_route_auth import get_current_browser_route_user
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPauseRequest
 from zerg.models.enums import UserRole
 from zerg.models.user import User
+from zerg.routers import session_chat
+from zerg.services.session_pause_requests import is_user_facing_pause_request
 from zerg.services.session_pause_requests import resolve_pause_request
 
 
@@ -48,12 +53,21 @@ def _make_client(session_local):
     return TestClient(app, backend="asyncio"), api_app
 
 
+def _make_client_with_user(session_local, user_id):
+    client, api_app = _make_client(session_local)
+    api_app.dependency_overrides[get_current_browser_route_user] = lambda: SimpleNamespace(
+        id=user_id, email="perm@test.local", role=UserRole.USER.value
+    )
+    return client, api_app
+
+
 def _seed_session(session_local):
     session_id = uuid4()
     with session_local() as db:
         user = User(email=f"perm-{uuid4().hex[:6]}@test.local", role=UserRole.USER.value)
         db.add(user)
         db.flush()
+        user_id = user.id
         db.add(
             AgentSession(
                 id=session_id,
@@ -68,12 +82,12 @@ def _seed_session(session_local):
             )
         )
         db.commit()
-    return session_id
+    return session_id, user_id
 
 
 def test_register_then_poll_returns_decision_after_resolve(tmp_path):
     session_local = _make_db(tmp_path)
-    session_id = _seed_session(session_local)
+    session_id, _user_id = _seed_session(session_local)
     client, api_app = _make_client(session_local)
     try:
         tool_use_id = "toolu_abc123"
@@ -127,7 +141,7 @@ def test_register_then_poll_returns_decision_after_resolve(tmp_path):
 
 def test_poll_unknown_tool_use_id_is_pending(tmp_path):
     session_local = _make_db(tmp_path)
-    session_id = _seed_session(session_local)
+    session_id, _user_id = _seed_session(session_local)
     client, api_app = _make_client(session_local)
     try:
         poll = client.get(
@@ -156,7 +170,7 @@ def test_register_unknown_session_is_404(tmp_path):
 
 def test_deny_resolution_maps_to_deny_decision(tmp_path):
     session_local = _make_db(tmp_path)
-    session_id = _seed_session(session_local)
+    session_id, _user_id = _seed_session(session_local)
     client, api_app = _make_client(session_local)
     try:
         tool_use_id = "toolu_deny"
@@ -173,5 +187,96 @@ def test_deny_resolution_maps_to_deny_decision(tmp_path):
         )
         assert poll.json()["decision"] == "deny"
         assert poll.json()["resolved"] is True
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_answer_via_pause_route_resolves_in_place_without_push(monkeypatch, tmp_path):
+    """The full loop: register -> answer via the pause-response route (pull-mode,
+    no managed-control websocket push) -> hook poll returns allow."""
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_session(session_local)
+
+    pushed: list[dict] = []
+
+    async def _fail_if_pushed(**kwargs):
+        pushed.append(kwargs)
+        raise AssertionError("permission prompts must not push over managed-control")
+
+    monkeypatch.setattr(session_chat, "answer_pause_request_on_managed_local_session", _fail_if_pushed)
+
+    client, api_app = _make_client_with_user(session_local, user_id)
+    try:
+        tool_use_id = "toolu_loop"
+        ack = client.post(
+            "/api/agents/permission-requests",
+            json={"session_id": str(session_id), "tool_use_id": tool_use_id, "tool_name": "Bash"},
+        ).json()
+        pause_id = ack["pause_request_id"]
+
+        # Answer through the real browser pause-response route.
+        resp = client.post(
+            f"/api/sessions/{session_id}/pause-requests/{pause_id}/response",
+            json={"decision": "answer"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "resolved"
+        assert not pushed  # never dispatched a websocket command
+
+        # The hook poll now reads allow.
+        poll = client.get(
+            "/api/agents/permission-decision",
+            params={"session_id": str(session_id), "tool_use_id": tool_use_id},
+        )
+        assert poll.json() == {"decision": "allow", "reason": "Longhouse allow", "resolved": True}
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_reject_via_pause_route_maps_to_deny(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_session(session_local)
+
+    async def _fail_if_pushed(**kwargs):
+        raise AssertionError("permission prompts must not push over managed-control")
+
+    monkeypatch.setattr(session_chat, "answer_pause_request_on_managed_local_session", _fail_if_pushed)
+
+    client, api_app = _make_client_with_user(session_local, user_id)
+    try:
+        tool_use_id = "toolu_loop_deny"
+        ack = client.post(
+            "/api/agents/permission-requests",
+            json={"session_id": str(session_id), "tool_use_id": tool_use_id, "tool_name": "Bash"},
+        ).json()
+        resp = client.post(
+            f"/api/sessions/{session_id}/pause-requests/{ack['pause_request_id']}/response",
+            json={"decision": "reject"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "rejected"
+        poll = client.get(
+            "/api/agents/permission-decision",
+            params={"session_id": str(session_id), "tool_use_id": tool_use_id},
+        )
+        assert poll.json()["decision"] == "deny"
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_permission_prompt_request_is_user_facing(tmp_path):
+    """Answerable permission-gate requests must NOT be hidden by the legacy
+    claude_hook placeholder filter."""
+    session_local = _make_db(tmp_path)
+    session_id, _user_id = _seed_session(session_local)
+    client, api_app = _make_client(session_local)
+    try:
+        ack = client.post(
+            "/api/agents/permission-requests",
+            json={"session_id": str(session_id), "tool_use_id": "toolu_vis", "tool_name": "Bash"},
+        ).json()
+        with session_local() as db:
+            row = db.query(SessionPauseRequest).filter(SessionPauseRequest.request_key == ack["request_key"]).one()
+            assert is_user_facing_pause_request(row) is True
     finally:
         api_app.dependency_overrides.clear()

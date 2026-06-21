@@ -414,6 +414,45 @@ def _list_pause_requests_response(
     return PauseRequestListResponse(requests=requests, total=len(requests))
 
 
+def _resolve_permission_prompt_in_place(
+    *,
+    db: Session,
+    row,
+    decision: str,
+    response_message: str | None,
+) -> PauseRequestResponseResponse:
+    """Resolve a Claude permission-prompt pause request without a live push.
+
+    The blocking PreToolUse hook polls GET /agents/permission-decision, so the
+    answer only needs to be persisted: we map answer->allow / reject|cancel->deny
+    into permissionDecision and resolve the row. The hook reads it and returns the
+    decision to Claude.
+    """
+    permission_decision = "allow" if decision == "answer" else "deny"
+    status_value = "resolved" if decision == "answer" else "rejected"
+    response_payload = {
+        "permissionDecision": permission_decision,
+        "permissionDecisionReason": response_message or f"Longhouse {permission_decision}",
+        "decision": decision,
+    }
+    resolved = resolve_pause_request(
+        db,
+        pause_request_id=row.id,
+        status=status_value,
+        occurred_at=datetime.now(timezone.utc),
+        response_payload=response_payload,
+        response_text=response_message,
+    )
+    db.commit()
+    if resolved is None:
+        db.refresh(row)
+        resolved = row
+    return PauseRequestResponseResponse(
+        status=status_value,
+        pause_request=_pause_request_projection_or_empty(resolved),
+    )
+
+
 async def _respond_to_pause_request(
     *,
     source_session,
@@ -461,6 +500,17 @@ async def _respond_to_pause_request(
         )
 
     response_message = _pause_response_message(row=row, body=body)
+
+    # Claude permission prompts use a PULL transport: the blocking PreToolUse hook
+    # polls for the decision, so there is no live process to push a command to.
+    # Resolve the request in place and let the hook read permissionDecision.
+    if str(getattr(row, "kind", "") or "").strip() == "permission_prompt":
+        return _resolve_permission_prompt_in_place(
+            db=db,
+            row=row,
+            decision=decision,
+            response_message=response_message,
+        )
 
     result = await answer_pause_request_on_managed_local_session(
         db=db,

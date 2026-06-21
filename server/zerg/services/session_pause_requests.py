@@ -405,7 +405,12 @@ def is_user_facing_pause_request(row: SessionPauseRequest) -> bool:
     """Hide legacy hook-only placeholders from user-facing question surfaces."""
 
     ref = _mapping(row.provider_ref_json)
-    if _clean_str(ref.get("source")) == "claude_hook":
+    source = _clean_str(ref.get("source"))
+    # Answerable Claude permission prompts (PreToolUse gate) are real, user-facing
+    # decisions even though they originate from a hook. Always surface them.
+    if source == "claude_permission_gate" and bool(row.can_respond):
+        return True
+    if source == "claude_hook":
         return False
     request_key = _clean_str(row.request_key) or ""
     provider_request_id = _clean_str(row.provider_request_id) or ""
