@@ -46,12 +46,6 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 PERMISSION_GATE_SOURCE = "claude_permission_gate"
 PERMISSION_PROMPT_KIND = "permission_prompt"
 
-# Maps a resolved pause-request response decision to Claude's permissionDecision.
-_DECISION_BY_STATUS = {
-    "resolved": "allow",
-    "rejected": "deny",
-}
-
 
 class PermissionRequestIn(UTCBaseModel):
     """PreToolUse hook payload registering a held permission request."""
@@ -161,11 +155,33 @@ async def get_permission_decision(
     # Import locally to avoid a router-import cycle through session_pause_requests.
     from zerg.models.agents import SessionPauseRequest
 
-    row = db.query(SessionPauseRequest).filter(SessionPauseRequest.request_key == request_key).first()
-    if row is None or row.status == PENDING_STATUS:
+    session_uuid = _coerce_session_uuid(session_id)
+    row = (
+        db.query(SessionPauseRequest)
+        .filter(
+            SessionPauseRequest.request_key == request_key,
+            SessionPauseRequest.session_id == session_uuid,
+            SessionPauseRequest.kind == PERMISSION_PROMPT_KIND,
+        )
+        .first()
+    )
+    if row is None or not _is_permission_gate_row(row):
+        return PermissionDecisionOut(decision=None, resolved=False)
+    if row.status == PENDING_STATUS:
         return PermissionDecisionOut(decision=None, resolved=False)
 
+    # SECURITY: only an explicit allow grants allow. Any resolved-but-unannotated
+    # row (e.g. superseded, or resolved by a non-permission path) maps to deny —
+    # never let an absent/unknown decision become a silent allow.
     response_payload = row.response_payload_json if isinstance(row.response_payload_json, dict) else {}
-    decision = response_payload.get("permissionDecision") or _DECISION_BY_STATUS.get(row.status, "deny")
+    raw_decision = str(response_payload.get("permissionDecision") or "").strip().lower()
+    decision = "allow" if raw_decision == "allow" else "deny"
     reason = response_payload.get("permissionDecisionReason") or row.response_text
     return PermissionDecisionOut(decision=decision, reason=reason, resolved=True)
+
+
+def _is_permission_gate_row(row: object) -> bool:
+    """True only for rows this gate created (source=claude_permission_gate)."""
+    ref = getattr(row, "provider_ref_json", None)
+    source = (ref or {}).get("source") if isinstance(ref, dict) else None
+    return str(source or "").strip() == PERMISSION_GATE_SOURCE

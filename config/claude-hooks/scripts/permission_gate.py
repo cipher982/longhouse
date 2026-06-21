@@ -32,14 +32,39 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-_DEFAULT_TIMEOUT_S = 25.0
+# Keep the total hook budget safely under Claude's PreToolUse hook timeout (30s):
+# one register + one final poll can each take up to _REQUEST_TIMEOUT_S, so cap the
+# wait so register + waiting + a trailing request stays under the budget.
+_DEFAULT_TIMEOUT_S = 20.0
+_MAX_TIMEOUT_S = 20.0
 _POLL_INTERVAL_S = 0.5
 _REQUEST_TIMEOUT_S = 5.0
 
 
-def _exit_no_decision() -> None:
-    """Fail open: emit nothing, let Claude run its normal permission flow."""
+def _not_engaged() -> None:
+    """The gate is not engaged for this session (unconfigured/disabled).
+
+    Emit nothing and exit 0 so Claude proceeds with its own permission flow.
+    This is NOT a decision — it is the gate staying out of the way for sessions
+    that did not opt in.
+    """
     sys.exit(0)
+
+
+def _fail_decision() -> None:
+    """The gate IS engaged but could not obtain a decision (error/timeout).
+
+    Apply the configured fail-mode. Default is ``deny`` so an unreachable control
+    plane can never silently allow a tool. ``prompt`` falls back to Claude's
+    native permission prompt (only safe when the session is launched WITHOUT
+    --dangerously-skip-permissions). ``allow`` is an explicit, deliberate opt-out.
+    """
+    mode = str(os.environ.get("LONGHOUSE_PERMISSION_HOOK_FAILMODE", "deny")).strip().lower()
+    if mode == "prompt":
+        sys.exit(0)  # no decision -> Claude's native prompt
+    if mode == "allow":
+        _emit_decision("allow", "Longhouse gate fail-mode=allow")
+    _emit_decision("deny", "Longhouse permission gate could not reach a decision")
 
 
 def _emit_decision(decision: str, reason: str | None) -> None:
@@ -81,18 +106,19 @@ def _get_decision(url: str, token: str) -> dict | None:
 
 
 def main() -> None:
+    # --- Gate engaged? If not, stay out of the way (no decision). ---
     if not _enabled():
-        _exit_no_decision()
+        _not_engaged()
 
     base_url = str(os.environ.get("LONGHOUSE_HOOK_URL") or "").strip().rstrip("/")
     token = str(os.environ.get("LONGHOUSE_HOOK_TOKEN") or "").strip()
     if not base_url:
-        _exit_no_decision()
+        _not_engaged()
 
     try:
         hook_input = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
-        _exit_no_decision()
+        _not_engaged()
         return
 
     session_id = (
@@ -103,12 +129,17 @@ def main() -> None:
     tool_name = str(hook_input.get("tool_name") or "").strip()
     tool_input = hook_input.get("tool_input") if isinstance(hook_input.get("tool_input"), dict) else {}
     if not session_id or not tool_use_id:
-        _exit_no_decision()
+        _not_engaged()
 
     try:
         timeout_s = float(os.environ.get("LONGHOUSE_PERMISSION_HOOK_TIMEOUT_S", _DEFAULT_TIMEOUT_S))
     except (TypeError, ValueError):
         timeout_s = _DEFAULT_TIMEOUT_S
+    # Clamp to a finite budget under Claude's hook timeout — never hang the turn.
+    timeout_s = max(0.0, min(timeout_s, _MAX_TIMEOUT_S))
+
+    # --- From here the gate IS engaged: any failure applies the fail-mode, ---
+    # --- which defaults to deny (never silently allow). ---
 
     # 1. Register the held permission request.
     try:
@@ -123,36 +154,39 @@ def main() -> None:
             token,
         )
     except (urllib.error.URLError, OSError, ValueError):
-        _exit_no_decision()
+        _fail_decision()
         return
     if not registered:
-        _exit_no_decision()
+        _fail_decision()
 
-    # 2. Long-poll for the decision, fail open on timeout.
+    # 2. Long-poll for the decision.
     decision_url = f"{base_url}/api/agents/permission-decision?" + urllib.parse.urlencode(
         {"session_id": session_id, "tool_use_id": tool_use_id}
     )
-    deadline = time.monotonic() + max(0.0, timeout_s)
+    deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         try:
             result = _get_decision(decision_url, token)
         except (urllib.error.URLError, OSError, ValueError):
-            _exit_no_decision()
+            _fail_decision()
             return
         if result and result.get("resolved"):
             decision = str(result.get("decision") or "").strip().lower()
             if decision in {"allow", "deny", "ask"}:
                 _emit_decision(decision, result.get("reason"))
-            _exit_no_decision()
+            # Resolved but with an unrecognized decision → fail safe (deny).
+            _fail_decision()
         time.sleep(_POLL_INTERVAL_S)
 
-    # 3. No decision in time → fail open to Claude's native prompt.
-    _exit_no_decision()
+    # 3. No decision in time → apply fail-mode (default deny).
+    _fail_decision()
 
 
 if __name__ == "__main__":
     try:
         main()
     except Exception:
-        # Absolute backstop: never block Claude on an unexpected hook error.
+        # Absolute backstop: never crash the hook. An engaged gate that crashes
+        # should still not silently allow, but we cannot know engagement here, so
+        # exit 0 (no decision) only as a last resort against a truly broken hook.
         sys.exit(0)

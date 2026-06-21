@@ -137,31 +137,58 @@ def test_hook_emits_deny_when_resolved_deny():
     assert _parse_decision(result.stdout) == "deny"
 
 
-def test_hook_fails_open_on_timeout():
-    # Server always answers "pending" → hook should give up and emit nothing.
+def test_hook_engaged_timeout_defaults_to_deny():
+    # Engaged (registered ok) but server stays pending → fail-mode default = DENY.
+    # An unreachable/slow control plane must never silently allow a tool.
     with _StubLonghouse(decision=None, resolved=False) as stub:
         result = _run_hook(base_url=stub.base_url, timeout_env="1")
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == ""
+    assert _parse_decision(result.stdout) == "deny"
     assert stub.decision_polls >= 1  # it really polled before giving up
 
 
-def test_hook_fails_open_when_server_unreachable():
-    # Point at a closed port; registration fails → fail open, no decision.
+def test_hook_engaged_unreachable_defaults_to_deny():
+    # Registration itself fails (closed port). Gate was engaged (URL set) → DENY.
     result = _run_hook(base_url="http://127.0.0.1:1", timeout_env="2")
+    assert result.returncode == 0
+    assert _parse_decision(result.stdout) == "deny"
+
+
+def test_hook_failmode_prompt_emits_no_decision():
+    # Explicit prompt fail-mode falls back to Claude's native prompt (no output).
+    # Only safe for sessions launched WITHOUT --dangerously-skip-permissions.
+    with _StubLonghouse(decision=None, resolved=False) as stub:
+        result = _run_hook(
+            base_url=stub.base_url,
+            timeout_env="1",
+            extra_env={"LONGHOUSE_PERMISSION_HOOK_FAILMODE": "prompt"},
+        )
     assert result.returncode == 0
     assert result.stdout.strip() == ""
 
 
-def test_hook_fails_open_when_unconfigured():
+def test_hook_failmode_allow_is_explicit_opt_out():
+    with _StubLonghouse(decision=None, resolved=False) as stub:
+        result = _run_hook(
+            base_url=stub.base_url,
+            timeout_env="1",
+            extra_env={"LONGHOUSE_PERMISSION_HOOK_FAILMODE": "allow"},
+        )
+    assert result.returncode == 0
+    assert _parse_decision(result.stdout) == "allow"
+
+
+def test_hook_not_engaged_when_unconfigured():
+    # No URL → gate not engaged for this session → no decision (stay out of the way).
     result = _run_hook(base_url=None)
     assert result.returncode == 0
     assert result.stdout.strip() == ""
 
 
-def test_hook_disabled_via_env():
+def test_hook_not_engaged_when_disabled():
     with _StubLonghouse(decision="allow", resolved=True) as stub:
         result = _run_hook(base_url=stub.base_url, extra_env={"LONGHOUSE_PERMISSION_HOOK_ENABLED": "0"})
     assert result.returncode == 0
     assert result.stdout.strip() == ""
+    assert not stub.requests_seen  # never even registered
     assert not stub.requests_seen  # never even registered
