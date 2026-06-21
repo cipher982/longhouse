@@ -238,6 +238,10 @@ class ManagedLocalThisDeviceLaunchRequest(BaseModel):
         None,
         description="Optional allowlisted Claude launch env overrides to apply on the local runner",
     )
+    permission_mode: str = Field(
+        "bypass",
+        description="Managed permission policy: 'bypass' (autonomous, default) or 'remote_approve' (answer permission prompts via Longhouse)",
+    )
 
 
 class SessionChatError(BaseModel):
@@ -993,6 +997,7 @@ async def launch_managed_local_this_device(
             machine_name=machine_name,
             native_claude_channels_available=body.native_claude_channels_available,
             claude_launch_env=body.claude_launch_env,
+            permission_mode=body.permission_mode,
         )
         # Managed-local launch is a tiny user-facing write that must not wait
         # behind archive ingest/replay jobs already occupying the single writer.
