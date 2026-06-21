@@ -108,11 +108,21 @@ def coverage_actionability(gap_kind_counts: dict[str, int]) -> dict[str, Any]:
     else:
         status = "covered"
 
+    # Cells a provider genuinely cannot offer (provider_contract_unsupported,
+    # not_applicable) can never pass without faking them, so counting them in the
+    # denominator makes the raw pass_percent read lower than the real coverage.
+    # actionable_pass_percent excludes them: it is "of the cells that could pass
+    # in this run, how many did". Keep pass_percent (raw, all declared cells) for
+    # backwards-compatible consumers; surface actionable_pass_percent to humans.
+    actionable_cell_count = cell_count - expected_provider_limits
+
     return {
         "status": status,
         "cell_count": cell_count,
         "passed": passed,
         "pass_percent": pct(passed, cell_count),
+        "actionable_cell_count": actionable_cell_count,
+        "actionable_pass_percent": pct(passed, actionable_cell_count),
         "expected_provider_limit_cells": expected_provider_limits,
         "proof_gap_cells": proof_gaps,
         "regression_or_unknown_cells": regression_or_unknown + uncategorized,

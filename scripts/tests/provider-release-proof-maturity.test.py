@@ -282,6 +282,8 @@ def test_maturity_rollup_summarizes_universal_action_matrix() -> None:
         assert payload["universal_harness"]["execution_coverage_actionability"] == {
             "attention_required_cells": 1,
             "cell_count": 4,
+            "actionable_cell_count": 3,
+            "actionable_pass_percent": 66.7,
             "expected_provider_limit_cells": 1,
             "gap_kind_counts": {
                 "missing_live_canary": 1,
@@ -342,6 +344,8 @@ def test_maturity_rollup_summarizes_universal_action_matrix() -> None:
             "actionability": {
                 "attention_required_cells": 0,
                 "cell_count": 2,
+                "actionable_cell_count": 2,
+                "actionable_pass_percent": 100.0,
                 "expected_provider_limit_cells": 0,
                 "gap_kind_counts": {"passed": 2},
                 "pass_percent": 100.0,
