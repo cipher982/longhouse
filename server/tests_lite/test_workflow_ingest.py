@@ -163,6 +163,7 @@ def _agent_payload(
     parent_provider_session_id: str | None = str(PARENT_ID),
     agent_session_id: UUID = AGENT_ID,
     subagent_id: str = "a049eaf15e4dbcae3",
+    attribution_skill: str | None = "deep-research",
 ) -> SessionIngest:
     return SessionIngest(
         id=agent_session_id,
@@ -179,7 +180,7 @@ def _agent_payload(
         subagent_id=subagent_id,
         workflow_run_id=RUN,
         attribution_agent="workflow-subagent",
-        attribution_skill="deep-research",
+        attribution_skill=attribution_skill,
         events=[
             EventIngest(
                 role="user",
@@ -409,6 +410,8 @@ def test_workflow_run_id_and_attribution_stored_as_thread_aliases(tmp_path):
             (row.alias_kind, row.alias_value)
             for row in db.query(SessionThreadAlias).filter(SessionThreadAlias.thread_id == child.id).all()
         }
+        assert ("subagent_id", "a049eaf15e4dbcae3") in aliases
+        assert ("claude_agent_id", "a049eaf15e4dbcae3") in aliases
         assert ("workflow_run_id", RUN) in aliases
         assert ("workflow_attribution_agent", "workflow-subagent") in aliases
         assert ("workflow_attribution_skill", "deep-research") in aliases
@@ -421,7 +424,9 @@ def test_multiple_agents_in_run_are_distinct_threads_not_collapsed(tmp_path):
     with SessionLocal() as db:
         store = AgentsStore(db)
         store.ingest_session(_parent_payload())
-        store.ingest_session(_agent_payload(agent_session_id=AGENT_ID, subagent_id="a049eaf15e4dbcae3"))
+        store.ingest_session(
+            _agent_payload(agent_session_id=AGENT_ID, subagent_id="a049eaf15e4dbcae3", attribution_skill=None)
+        )
         store.ingest_session(
             _agent_payload(
                 agent_session_id=UUID("88888888-0000-0000-0000-0000000000cc"),

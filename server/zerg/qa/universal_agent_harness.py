@@ -31,6 +31,7 @@ from uuid import uuid5
 
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
+from zerg.provider_orchestration_capabilities import provider_orchestration_capabilities
 from zerg.qa.repo_root import default_repo_root
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import managed_provider_names
@@ -48,6 +49,8 @@ SCENARIOS = (
     "baseline_compare",
     "parse_ingest_project",
     "db_ingest_project",
+    "opencode_lineage_projection",
+    "orchestration_capability_matrix",
     "session_projection",
     "timeline_projection",
     "run_prompt_once",
@@ -5666,6 +5669,293 @@ def ingest_canonical_events_into_longhouse_db(
     return payload
 
 
+def opencode_lineage_projection(package: EvidencePackage) -> dict[str, Any]:
+    os.environ.setdefault("TESTING", "1")
+    os.environ.setdefault("DATABASE_URL", f"sqlite:///{package.path('longhouse', 'settings-bootstrap.sqlite')}")
+
+    from zerg.database import initialize_database
+    from zerg.database import make_engine
+    from zerg.database import make_sessionmaker
+    from zerg.models.agents import AgentEvent
+    from zerg.models.agents import AgentSession
+    from zerg.models.agents import SessionEdge
+    from zerg.models.agents import SessionThread
+    from zerg.models.agents import SessionThreadAlias
+    from zerg.services.agents import AgentsStore
+    from zerg.services.agents import EventIngest
+    from zerg.services.agents import SessionIngest
+
+    db_path = package.path("longhouse", "opencode-lineage.sqlite")
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    engine = make_engine(f"sqlite:///{db_path}")
+    initialize_database(engine)
+    session_factory = make_sessionmaker(engine)
+    started_at = datetime(2026, 6, 20, 12, 0, tzinfo=UTC)
+    parent_id = uuid5(NAMESPACE_URL, f"{package.root}:opencode-parent")
+    child_id = uuid5(NAMESPACE_URL, f"{package.root}:opencode-child")
+    orphan_id = uuid5(NAMESPACE_URL, f"{package.root}:opencode-orphan-child")
+    late_parent_id = uuid5(NAMESPACE_URL, f"{package.root}:opencode-late-parent")
+    fork_id = uuid5(NAMESPACE_URL, f"{package.root}:opencode-fork")
+
+    def event(text: str, session: str, offset: int) -> EventIngest:
+        return EventIngest(
+            role="user",
+            content_text=text,
+            timestamp=started_at + timedelta(seconds=offset),
+            source_path=f"{package.path('raw', 'opencode.db')}#opencode:{session}",
+            source_offset=offset,
+            raw_json=json.dumps({"provider": "opencode", "session_id": session, "text": text}, sort_keys=True),
+        )
+
+    with session_factory() as db:
+        store = AgentsStore(db)
+        store.ingest_session(
+            SessionIngest(
+                id=parent_id,
+                provider="opencode",
+                environment="test",
+                project="universal-agent-harness",
+                device_id="universal-harness",
+                cwd=str(package.path("workspace")),
+                started_at=started_at,
+                provider_session_id="ses_parent",
+                events=[event("opencode parent work", "ses_parent", 0)],
+            )
+        )
+        child_result = store.ingest_session(
+            SessionIngest(
+                id=child_id,
+                provider="opencode",
+                environment="test",
+                project="universal-agent-harness",
+                device_id="universal-harness",
+                cwd=str(package.path("workspace")),
+                started_at=started_at,
+                provider_session_id="ses_child",
+                is_sidechain=True,
+                parent_provider_session_id="ses_parent",
+                subagent_id="explore",
+                subagent_tool_use_id="call_task",
+                attribution_agent="explore",
+                events=[event("opencode child work", "ses_child", 1)],
+            )
+        )
+        store.ingest_session(
+            SessionIngest(
+                id=orphan_id,
+                provider="opencode",
+                environment="test",
+                project="universal-agent-harness",
+                device_id="universal-harness",
+                cwd=str(package.path("workspace")),
+                started_at=started_at,
+                provider_session_id="ses_orphan_child",
+                is_sidechain=True,
+                parent_provider_session_id="ses_late_parent",
+                subagent_id="scout",
+                attribution_agent="scout",
+                events=[event("opencode orphan child work", "ses_orphan_child", 2)],
+            )
+        )
+        late_parent_result = store.ingest_session(
+            SessionIngest(
+                id=late_parent_id,
+                provider="opencode",
+                environment="test",
+                project="universal-agent-harness",
+                device_id="universal-harness",
+                cwd=str(package.path("workspace")),
+                started_at=started_at,
+                provider_session_id="ses_late_parent",
+                events=[event("opencode late parent work", "ses_late_parent", 3)],
+            )
+        )
+        store.ingest_session(
+            SessionIngest(
+                id=fork_id,
+                provider="opencode",
+                environment="test",
+                project="universal-agent-harness",
+                device_id="universal-harness",
+                cwd=str(package.path("workspace")),
+                started_at=started_at,
+                provider_session_id="ses_fork",
+                parent_provider_session_id="ses_parent",
+                lineage_kind="fork",
+                events=[event("opencode fork work", "ses_fork", 4)],
+            )
+        )
+        db.commit()
+
+        sessions = db.query(AgentSession).order_by(AgentSession.started_at.asc(), AgentSession.id.asc()).all()
+        threads = db.query(SessionThread).order_by(SessionThread.created_at.asc(), SessionThread.id.asc()).all()
+        aliases = db.query(SessionThreadAlias).all()
+        edges = db.query(SessionEdge).order_by(SessionEdge.edge_kind.asc(), SessionEdge.id.asc()).all()
+        alias_values = {(row.thread_id, row.alias_kind, row.alias_value) for row in aliases}
+        child_thread = db.query(SessionThread).filter(SessionThread.session_id == parent_id, SessionThread.branch_kind == "subagent").one()
+        late_child_thread = (
+            db.query(SessionThread).filter(SessionThread.session_id == late_parent_id, SessionThread.branch_kind == "subagent").one()
+        )
+        fork_thread = db.query(SessionThread).filter(SessionThread.session_id == fork_id, SessionThread.branch_kind == "fork").one()
+        child_event = db.query(AgentEvent).filter(AgentEvent.content_text == "opencode child work").one()
+        orphan_event = db.query(AgentEvent).filter(AgentEvent.content_text == "opencode orphan child work").one()
+        visible_total, visible_rows = store.list_timeline_thread_page(hide_autonomous=True, include_test=True)
+
+    snapshot = {
+        "db_path": str(db_path),
+        "session_ids": [str(session.id) for session in sessions],
+        "thread_rows": [
+            {
+                "id": str(thread.id),
+                "session_id": str(thread.session_id),
+                "provider": thread.provider,
+                "branch_kind": thread.branch_kind,
+                "is_primary": bool(thread.is_primary),
+                "parent_thread_id": str(thread.parent_thread_id) if thread.parent_thread_id else None,
+            }
+            for thread in threads
+        ],
+        "alias_rows": [
+            {
+                "thread_id": str(row.thread_id),
+                "alias_kind": row.alias_kind,
+                "alias_value": row.alias_value,
+            }
+            for row in aliases
+        ],
+        "edge_rows": [
+            {
+                "id": str(row.id),
+                "edge_kind": row.edge_kind,
+                "visibility": row.visibility,
+                "source_thread_id": str(row.source_thread_id) if row.source_thread_id else None,
+                "target_thread_id": str(row.target_thread_id) if row.target_thread_id else None,
+                "provider_edge_id": row.provider_edge_id,
+                "metadata_json": row.metadata_json,
+            }
+            for row in edges
+        ],
+        "child_result_session_id": str(child_result.session_id),
+        "late_parent_result_session_id": str(late_parent_result.session_id),
+        "visible_timeline_total": visible_total,
+        "visible_timeline_session_ids": [row[1] for row in visible_rows],
+    }
+    snapshot_path = package.write_json("longhouse/opencode-lineage-projection.json", snapshot)
+    assertions = {
+        "resolved_child_attached_to_parent": child_result.session_id == parent_id
+        and child_event.session_id == parent_id
+        and child_event.thread_id == child_thread.id,
+        "child_aliases_preserved": (child_thread.id, "subagent_id", "explore") in alias_values
+        and (child_thread.id, "subagent_tool_use_id", "call_task") in alias_values
+        and (child_thread.id, "forked_from_provider_session_id", "ses_parent") in alias_values,
+        "orphan_child_relinked_when_parent_arrived": orphan_event.session_id == late_parent_id
+        and orphan_event.thread_id == late_child_thread.id
+        and db_path.exists(),
+        "fork_stayed_visible": fork_thread.is_primary == 1
+        and (fork_thread.id, "forked_from_provider_session_id", "ses_parent") in alias_values
+        and str(fork_id) in snapshot["visible_timeline_session_ids"],
+        "subagent_children_not_timeline_rows": str(child_id) not in snapshot["session_ids"]
+        and str(orphan_id) not in snapshot["session_ids"],
+        "lineage_edges_recorded": [row["edge_kind"] for row in snapshot["edge_rows"]].count("task_child") == 2
+        and "fork" in {row["edge_kind"] for row in snapshot["edge_rows"]},
+    }
+    status = STATUS_PASS if all(assertions.values()) else STATUS_FAIL
+    payload = {
+        "status": status,
+        "scenario": "opencode_lineage_projection",
+        "provider": "opencode",
+        "projection_path": str(snapshot_path),
+        "assertions": assertions,
+        "operation_evidence": {
+            "opencode_lineage_projection": {
+                "status": status,
+                "level": "hermetic",
+                "canary": "universal_opencode_lineage_projection",
+                "failure_code": None if status == STATUS_PASS else "opencode_lineage_projection_failed",
+            },
+            "db_ingest": {
+                "status": status,
+                "level": "hermetic",
+                "canary": "universal_opencode_lineage_projection",
+                "failure_code": None if status == STATUS_PASS else "opencode_lineage_projection_failed",
+            },
+        },
+    }
+    if status != STATUS_PASS:
+        payload["failure_code"] = "opencode_lineage_projection_failed"
+        payload["message"] = "OpenCode lineage projection assertions failed."
+    package.write_json("assertions/opencode_lineage_projection.json", payload)
+    return payload
+
+
+def orchestration_capability_matrix(package: EvidencePackage, provider: str) -> dict[str, Any]:
+    table = provider_orchestration_capabilities(provider)
+    if not table:
+        payload = {
+            "status": STATUS_FAIL,
+            "scenario": "orchestration_capability_matrix",
+            "provider": provider,
+            "failure_code": "orchestration_capability_matrix_missing_provider",
+            "message": f"No orchestration capability table exists for provider {provider}.",
+        }
+        package.write_json("assertions/orchestration_capability_matrix.json", payload)
+        return payload
+
+    verdict_by_state = {
+        "supported": "green",
+        "observed_only": "yellow",
+        "experimental": "yellow",
+        "unknown": "yellow",
+        "unsupported": "red",
+    }
+    status_by_state = {
+        "supported": STATUS_PASS,
+        "observed_only": STATUS_PASS,
+        "experimental": STATUS_PASS,
+        "unknown": STATUS_BLOCKED,
+        "unsupported": STATUS_UNSUPPORTED_GAP,
+    }
+    rows = []
+    operation_evidence = {}
+    for capability, entry in sorted(table.items()):
+        state = str(entry.get("state") or "unknown")
+        verdict = verdict_by_state.get(state, "yellow")
+        status = status_by_state.get(state, STATUS_BLOCKED)
+        key = f"orchestration_{capability}"
+        rows.append(
+            {
+                "capability": capability,
+                "state": state,
+                "verdict": verdict,
+                "source": entry.get("source"),
+            }
+        )
+        operation_evidence[key] = {
+            "status": status,
+            "level": "manifest",
+            "canary": "provider_orchestration_capabilities",
+            "failure_code": None if status == STATUS_PASS else f"{capability}_{state}",
+            "capability_state": state,
+            "verdict": verdict,
+        }
+
+    summary = {
+        "green": sum(1 for row in rows if row["verdict"] == "green"),
+        "yellow": sum(1 for row in rows if row["verdict"] == "yellow"),
+        "red": sum(1 for row in rows if row["verdict"] == "red"),
+    }
+    payload = {
+        "status": STATUS_PASS,
+        "scenario": "orchestration_capability_matrix",
+        "provider": provider,
+        "summary": summary,
+        "capabilities": rows,
+        "operation_evidence": operation_evidence,
+    }
+    package.write_json("assertions/orchestration_capability_matrix.json", payload)
+    return payload
+
+
 def _event_role(row: Mapping[str, Any]) -> str:
     role = str(row.get("role") or row.get("type") or "system").strip().lower()
     return role if role in {"user", "assistant", "tool", "system"} else "system"
@@ -7041,6 +7331,54 @@ def run_db_ingest_project(
     )
 
 
+def run_opencode_lineage_projection(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    if adapter.config.provider != "opencode":
+        payload = {
+            "status": STATUS_NOT_APPLICABLE,
+            "scenario": "opencode_lineage_projection",
+            "failure_code": "opencode_lineage_projection_provider_not_applicable",
+            "message": "OpenCode lineage projection only applies to the OpenCode provider.",
+            "operation_evidence": {
+                "opencode_lineage_projection": {
+                    "status": STATUS_NOT_APPLICABLE,
+                    "level": "none",
+                    "canary": "universal_opencode_lineage_projection",
+                    "failure_code": "opencode_lineage_projection_provider_not_applicable",
+                }
+            },
+        }
+        package.write_json("assertions/opencode_lineage_projection.json", payload)
+        adapter.cleanup(package)
+        return scenario_result(
+            provider=adapter.config.provider,
+            scenario="opencode_lineage_projection",
+            package=package,
+            payload=payload,
+        )
+
+    payload = opencode_lineage_projection(package)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="opencode_lineage_projection",
+        package=package,
+        payload=payload,
+    )
+
+
+def run_orchestration_capability_matrix(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
+    adapter.prepare(package)
+    payload = orchestration_capability_matrix(package, adapter.config.provider)
+    adapter.cleanup(package)
+    return scenario_result(
+        provider=adapter.config.provider,
+        scenario="orchestration_capability_matrix",
+        package=package,
+        payload=payload,
+    )
+
+
 def run_session_projection(adapter: AgentHarnessAdapter, package: EvidencePackage) -> ScenarioResult:
     adapter.prepare(package)
     payload = adapter.session_projection(package)
@@ -7514,6 +7852,8 @@ SCENARIO_RUNNERS = {
     "full_action_suite": run_full_action_suite,
     "parse_ingest_project": run_parse_ingest_project,
     "db_ingest_project": run_db_ingest_project,
+    "opencode_lineage_projection": run_opencode_lineage_projection,
+    "orchestration_capability_matrix": run_orchestration_capability_matrix,
     "session_projection": run_session_projection,
     "timeline_projection": run_timeline_projection,
     "run_prompt_once": run_prompt_once,

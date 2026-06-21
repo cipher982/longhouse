@@ -34,6 +34,7 @@ pub struct OpenCodeSessionCandidate {
 #[derive(Debug)]
 struct OpenCodeSessionRow {
     parent_id: Option<String>,
+    agent: Option<String>,
     project_worktree: Option<String>,
     project_name: Option<String>,
     directory: Option<String>,
@@ -66,6 +67,12 @@ struct OpenCodeSessionClassificationSidecar {
     environment: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+struct OpenCodeTaskChildEvidence {
+    agent: Option<String>,
+    tool_call_id: Option<String>,
+}
+
 pub fn is_opencode_database_path(path: &Path) -> bool {
     path.file_name()
         .and_then(|value| value.to_str())
@@ -94,6 +101,7 @@ pub fn managed_longhouse_session_id_for_opencode(provider_session_id: &str) -> O
 
 pub fn list_opencode_sessions(db_path: &Path) -> Result<Vec<OpenCodeSessionCandidate>> {
     let conn = open_readonly(db_path)?;
+    let has_agent_column = sqlite_column_exists(&conn, "session", "agent")?;
     let mut stmt = conn.prepare(
         r#"
         SELECT s.id,
@@ -119,7 +127,8 @@ pub fn list_opencode_sessions(db_path: &Path) -> Result<Vec<OpenCodeSessionCandi
     let mut sessions = Vec::new();
     for row in rows {
         let mut candidate = row?;
-        candidate.fingerprint = session_fingerprint(&conn, &candidate.provider_session_id)?;
+        candidate.fingerprint =
+            session_fingerprint(&conn, &candidate.provider_session_id, has_agent_column)?;
         sessions.push(candidate);
     }
     Ok(sessions)
@@ -208,7 +217,8 @@ fn managed_longhouse_session_id_for_opencode_from_roots(
 
 pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Result<ParseResult> {
     let conn = open_readonly(db_path)?;
-    let session = load_session(&conn, provider_session_id)?;
+    let mut session = load_session(&conn, provider_session_id)?;
+    session.agent = load_session_agent(&conn, provider_session_id)?;
     let messages = load_messages(&conn, provider_session_id)?;
     let parts = load_parts(&conn, provider_session_id)?;
     let messages_by_id: HashMap<&str, &OpenCodeMessageRow> = messages
@@ -274,6 +284,17 @@ pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Resu
         .map(|candidate| candidate.version)
         .unwrap_or_else(|| last_source_offset.saturating_add(1));
 
+    let task_child = match session.parent_id.as_deref() {
+        Some(parent_id) => opencode_task_child_evidence(&conn, parent_id, provider_session_id)?,
+        None => None,
+    };
+    let task_child_agent = task_child
+        .as_ref()
+        .and_then(|evidence| evidence.agent.as_deref())
+        .or(session.agent.as_deref())
+        .map(str::to_string);
+    let lineage_kind = opencode_lineage_kind(&session, task_child.is_some());
+
     Ok(ParseResult {
         events,
         source_lines,
@@ -282,11 +303,28 @@ pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Resu
             session_id: longhouse_session_id,
             provider_session_id: Some(provider_session_id.to_string()),
             forked_from_session_id: session.parent_id.clone(),
+            lineage_kind,
+            subagent_id: if task_child.is_some() {
+                task_child_agent
+                    .clone()
+                    .or_else(|| Some(provider_session_id.to_string()))
+            } else {
+                None
+            },
+            subagent_tool_use_id: task_child
+                .as_ref()
+                .and_then(|evidence| evidence.tool_call_id.clone()),
+            attribution_agent: if task_child.is_some() {
+                task_child_agent
+            } else {
+                None
+            },
             cwd: session.directory.clone(),
             project: project_label(&session),
             environment: opencode_session_environment_override(provider_session_id),
             version: session.version.clone(),
             started_at: Some(timestamp_from_ms(session.time_created)),
+            is_sidechain: task_child.is_some(),
             ..Default::default()
         },
         candidate_records,
@@ -339,6 +377,7 @@ fn load_session(conn: &Connection, provider_session_id: &str) -> Result<OpenCode
                 |row| {
                     Ok(OpenCodeSessionRow {
                         parent_id: row.get(0)?,
+                        agent: None,
                         project_worktree: row.get(1)?,
                         project_name: row.get(2)?,
                         directory: row.get(3)?,
@@ -362,6 +401,7 @@ fn load_session(conn: &Connection, provider_session_id: &str) -> Result<OpenCode
         |row| {
             Ok(OpenCodeSessionRow {
                 parent_id: row.get(0)?,
+                agent: None,
                 project_worktree: None,
                 project_name: None,
                 directory: row.get(1)?,
@@ -373,6 +413,24 @@ fn load_session(conn: &Connection, provider_session_id: &str) -> Result<OpenCode
         },
     )
     .with_context(|| format!("loading legacy OpenCode session {provider_session_id}"))
+}
+
+fn load_session_agent(conn: &Connection, provider_session_id: &str) -> Result<Option<String>> {
+    if !sqlite_column_exists(conn, "session", "agent")? {
+        return Ok(None);
+    }
+    let agent = conn
+        .query_row(
+            "SELECT agent FROM session WHERE id = ?1",
+            params![provider_session_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .with_context(|| format!("loading OpenCode session agent {provider_session_id}"))?;
+    Ok(agent
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string))
 }
 
 fn sqlite_table_exists(conn: &Connection, table: &str) -> Result<bool> {
@@ -776,6 +834,79 @@ fn raw_value_from_json(value: &Value) -> Option<Box<RawValue>> {
     RawValue::from_string(serde_json::to_string(value).ok()?).ok()
 }
 
+fn opencode_task_child_evidence(
+    conn: &Connection,
+    parent_provider_session_id: &str,
+    child_provider_session_id: &str,
+) -> Result<Option<OpenCodeTaskChildEvidence>> {
+    let parts = load_parts(conn, parent_provider_session_id)?;
+    for part in parts {
+        let part_data: Value = serde_json::from_str(&part.data)
+            .with_context(|| format!("parsing OpenCode parent task part {}", part.id))?;
+        if part_data.get("type").and_then(Value::as_str) != Some("tool") {
+            continue;
+        }
+        if part_data.get("tool").and_then(Value::as_str) != Some("task") {
+            continue;
+        }
+        let state = part_data.get("state").unwrap_or(&Value::Null);
+        let metadata = state
+            .get("metadata")
+            .or_else(|| part_data.get("metadata"))
+            .unwrap_or(&Value::Null);
+        let metadata_child_id = string_field(metadata, &["sessionId", "sessionID", "session_id"]);
+        let output_child_id = state
+            .get("output")
+            .and_then(Value::as_str)
+            .filter(|output| output.contains(&format!("<task id=\"{child_provider_session_id}\"")));
+        if metadata_child_id != Some(child_provider_session_id) && output_child_id.is_none() {
+            continue;
+        }
+        let input = state.get("input").unwrap_or(&Value::Null);
+        return Ok(Some(OpenCodeTaskChildEvidence {
+            agent: string_field(metadata, &["agent", "subagent_type", "subagentType"])
+                .or_else(|| string_field(input, &["subagent_type", "subagentType", "agent"]))
+                .map(str::to_string),
+            tool_call_id: part_data
+                .get("callID")
+                .and_then(Value::as_str)
+                .or_else(|| part_data.get("callId").and_then(Value::as_str))
+                .map(str::to_string),
+        }));
+    }
+    Ok(None)
+}
+
+fn opencode_lineage_kind(session: &OpenCodeSessionRow, is_task_child: bool) -> Option<String> {
+    if is_task_child {
+        return Some("task_child".to_string());
+    }
+    session.parent_id.as_ref()?;
+    if session
+        .title
+        .as_deref()
+        .map(str::to_lowercase)
+        .is_some_and(|title| title.contains("fork #"))
+    {
+        return Some("fork".to_string());
+    }
+    Some("unknown".to_string())
+}
+
+fn string_field<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
+    for key in keys {
+        if let Some(found) = value
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|found| !found.is_empty())
+        {
+            return Some(found);
+        }
+    }
+    None
+}
+
 fn stable_event_uuid(provider_session_id: &str, part_id: &str, suffix: &str) -> String {
     Uuid::new_v5(
         &Uuid::NAMESPACE_URL,
@@ -784,7 +915,11 @@ fn stable_event_uuid(provider_session_id: &str, part_id: &str, suffix: &str) -> 
     .to_string()
 }
 
-fn session_fingerprint(conn: &Connection, provider_session_id: &str) -> Result<String> {
+fn session_fingerprint(
+    conn: &Connection,
+    provider_session_id: &str,
+    has_agent_column: bool,
+) -> Result<String> {
     let mut hash = Fnv1a64::default();
     hash.update(provider_session_id.as_bytes());
 
@@ -807,6 +942,14 @@ fn session_fingerprint(conn: &Connection, provider_session_id: &str) -> Result<S
         hash.update_i64(time_updated);
         Ok::<(), rusqlite::Error>(())
     })?;
+    if has_agent_column {
+        let agent: Option<String> = conn.query_row(
+            "SELECT agent FROM session WHERE id = ?1",
+            params![provider_session_id],
+            |row| row.get(0),
+        )?;
+        hash.update_field(agent.as_deref().unwrap_or(""));
+    }
 
     let mut message_stmt = conn.prepare(
         r#"
@@ -1083,6 +1226,7 @@ mod tests {
     fn project_label_prefers_worktree_over_generic_opencode_path() {
         let session = OpenCodeSessionRow {
             parent_id: None,
+            agent: None,
             project_worktree: Some("/Users/davidrose/git/zerg/longhouse".to_string()),
             project_name: None,
             directory: Some("/Users/davidrose/git/zerg/longhouse".to_string()),
@@ -1099,6 +1243,7 @@ mod tests {
     fn project_label_prefers_worktree_over_project_name() {
         let session = OpenCodeSessionRow {
             parent_id: None,
+            agent: None,
             project_worktree: Some("/Users/davidrose/git/sauron/jobs".to_string()),
             project_name: Some("sauron".to_string()),
             directory: Some("/Users/davidrose/git/sauron/jobs".to_string()),
@@ -1320,6 +1465,31 @@ mod tests {
     }
 
     #[test]
+    fn opencode_session_fingerprint_includes_agent_column_when_present() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        create_fixture_db(&db_path);
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute("ALTER TABLE session ADD COLUMN agent text", [])
+            .unwrap();
+        conn.execute(
+            "UPDATE session SET agent = ?1 WHERE id = 'ses_test'",
+            ["build"],
+        )
+        .unwrap();
+
+        let before = session_fingerprint(&conn, "ses_test", true).unwrap();
+        conn.execute(
+            "UPDATE session SET agent = ?1 WHERE id = 'ses_test'",
+            ["explore"],
+        )
+        .unwrap();
+        let after = session_fingerprint(&conn, "ses_test", true).unwrap();
+
+        assert_ne!(before, after);
+    }
+
+    #[test]
     fn parse_opencode_session_keeps_native_parent_provider_id() {
         let temp = tempfile::tempdir().unwrap();
         let db_path = temp.path().join("opencode.db");
@@ -1336,6 +1506,123 @@ mod tests {
         assert_eq!(
             result.metadata.forked_from_session_id.as_deref(),
             Some("ses_parent")
+        );
+        assert_eq!(result.metadata.lineage_kind.as_deref(), Some("unknown"));
+        assert!(!result.metadata.is_sidechain);
+        assert_eq!(result.metadata.subagent_id, None);
+    }
+
+    #[test]
+    fn parse_opencode_session_marks_title_fork_lineage() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        create_fixture_db(&db_path);
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute(
+            "UPDATE session SET parent_id = ?1, title = ?2 WHERE id = 'ses_test'",
+            ["ses_parent", "Parent OpenCode work (fork #1)"],
+        )
+        .unwrap();
+
+        let result = parse_opencode_session(&db_path, "ses_test").unwrap();
+
+        assert_eq!(result.metadata.lineage_kind.as_deref(), Some("fork"));
+        assert!(!result.metadata.is_sidechain);
+    }
+
+    #[test]
+    fn parse_opencode_session_marks_task_child_sidechain_from_parent_tool_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("opencode.db");
+        create_fixture_db(&db_path);
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute("ALTER TABLE session ADD COLUMN agent text", [])
+            .unwrap();
+        conn.execute(
+            "UPDATE session SET parent_id = ?1, agent = ?2 WHERE id = 'ses_test'",
+            params!["ses_parent", "explore"],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO session (id, project_id, parent_id, directory, path, title, version, time_created, time_updated, agent)
+             VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                "ses_parent",
+                "proj_longhouse",
+                "/Users/davidrose/git/zerg/longhouse",
+                "Users/davidrose/git/zerg/longhouse",
+                "Parent OpenCode work",
+                "1.15.7",
+                1_779_000_000_000_i64,
+                1_779_000_001_000_i64,
+                "build",
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO message (id, session_id, time_created, time_updated, data)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                "msg_parent_task",
+                "ses_parent",
+                1_779_000_000_050_i64,
+                1_779_000_000_060_i64,
+                r#"{"role":"assistant"}"#,
+            ],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![
+                "prt_parent_task",
+                "msg_parent_task",
+                "ses_parent",
+                1_779_000_000_051_i64,
+                1_779_000_000_061_i64,
+                json!({
+                    "type": "tool",
+                    "callID": "call_task",
+                    "tool": "task",
+                    "state": {
+                        "status": "completed",
+                        "input": {
+                            "prompt": "inspect parser",
+                            "description": "Inspect parser",
+                            "subagent_type": "explore"
+                        },
+                        "title": "Inspect parser",
+                        "metadata": {
+                            "parentSessionId": "ses_parent",
+                            "sessionId": "ses_test",
+                            "background": true,
+                            "jobId": "ses_test"
+                        },
+                        "output": "<task id=\"ses_test\" state=\"completed\">done</task>",
+                        "time": {"start": 1_779_000_000_051_i64, "end": 1_779_000_000_061_i64}
+                    }
+                })
+                .to_string(),
+            ],
+        )
+        .unwrap();
+
+        let result = parse_opencode_session(&db_path, "ses_test").unwrap();
+
+        assert!(result.metadata.is_sidechain);
+        assert_eq!(result.metadata.lineage_kind.as_deref(), Some("task_child"));
+        assert_eq!(
+            result.metadata.forked_from_session_id.as_deref(),
+            Some("ses_parent")
+        );
+        assert_eq!(result.metadata.subagent_id.as_deref(), Some("explore"));
+        assert_eq!(
+            result.metadata.attribution_agent.as_deref(),
+            Some("explore")
+        );
+        assert_eq!(
+            result.metadata.subagent_tool_use_id.as_deref(),
+            Some("call_task")
         );
     }
 

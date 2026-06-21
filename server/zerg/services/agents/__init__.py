@@ -8,6 +8,13 @@ from .helpers import _infer_origin_label_from_ingest
 from .helpers import _infer_origin_label_from_session
 from .helpers import _normalize_utc_naive
 from .helpers import _should_replace_managed_local_placeholder_provider_session_id
+from .identity_resolver import ObservedActor
+from .identity_resolver import ObservedCapability
+from .identity_resolver import ObservedLineageEdge
+from .identity_resolver import ObservedRun
+from .identity_resolver import ObservedSession
+from .identity_resolver import SessionProjectionDecision
+from .identity_resolver import resolve_session_projection
 from .models import CompactionBoundary
 from .models import EventIngest
 from .models import IngestResult
@@ -31,6 +38,13 @@ __all__ = [
     "RewindSignal",
     "SessionProjectionItem",
     "SessionProjectionPage",
+    "ObservedActor",
+    "ObservedCapability",
+    "ObservedLineageEdge",
+    "ObservedRun",
+    "ObservedSession",
+    "SessionProjectionDecision",
+    "resolve_session_projection",
     "ensure_agents_schema",
     "_normalize_utc_naive",
     "_infer_execution_home_from_ingest",

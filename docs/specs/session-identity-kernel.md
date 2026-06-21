@@ -188,7 +188,7 @@ session_threads(
   provider,
   parent_thread_id,         -- null for root; set for subagents/branches; self-FK
   parent_event_id,          -- nullable; replaces AgentSession.branched_from_event_id
-  branch_kind,              -- root | subagent | continuation
+  branch_kind,              -- root | subagent | continuation | fork
   is_primary,               -- denormalized; matches sessions.primary_thread_id; defaults 0
   created_at,
   updated_at
@@ -202,7 +202,7 @@ session_thread_aliases(
   id,
   thread_id,
   provider,
-  alias_kind,               -- provider_session_id | longhouse_session_id | source_path | forked_from_provider_session_id
+  alias_kind,               -- provider_session_id | longhouse_session_id | source_path | parent_provider_session_id | forked_from_provider_session_id | subagent_id
   alias_value,
   first_seen_at,
   last_seen_at
@@ -266,6 +266,28 @@ session_launch_attempts(
   updated_at
 )
 ```
+
+```text
+session_edges(
+  id,
+  provider,
+  edge_kind,                -- task_child | fork | continuation | unknown | async_prompt | agent_switch
+  visibility,               -- timeline | hidden | inline | control
+  evidence_kind,            -- ingest | relink | parser | api | managed_control
+  source_session_id,
+  source_thread_id,
+  source_event_id,
+  target_session_id,
+  target_thread_id,
+  target_event_id,
+  provider_edge_id,
+  metadata_json
+)
+```
+
+Edges are semantic relationship evidence. Aliases remain compatibility lookup
+aids and provider/source identity breadcrumbs, but projection code should prefer
+edge rows as read paths migrate.
 
 That is the schema delta for this epic. Six tables, no hash chains, no
 generations, no segments, no leases.

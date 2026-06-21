@@ -1290,9 +1290,10 @@ class SessionInputAttachment(AgentsBase):
 # ---------------------------------------------------------------------------
 # Session identity kernel — see docs/specs/session-identity-kernel.md
 #
-# Six new tables that split AgentSession's overloaded responsibilities into:
+# Seven new tables that split AgentSession's overloaded responsibilities into:
 #   - Thread:        Longhouse-owned causal continuity (survives quit/resume)
 #   - ThreadAlias:   provider/source identity evidence
+#   - Edge:          provider-neutral relationship evidence between graph nodes
 #   - Run:           one provider CLI process invocation
 #   - Connection:    Longhouse's relationship to a run (control plane + state)
 #   - LaunchAttempt: pre-process launch lifecycle for remote launches
@@ -1340,7 +1341,7 @@ class SessionThread(AgentsBase):
         String(20),
         nullable=False,
         server_default=text("'root'"),
-    )  # root | subagent | continuation
+    )  # root | subagent | continuation | fork
 
     # Denormalized "is this the session's primary thread" — matches
     # sessions.primary_thread_id. Defaults 0 so subagent/continuation threads
@@ -1394,7 +1395,9 @@ class SessionThreadAlias(AgentsBase):
         String(48),
         nullable=False,
         index=True,
-    )  # provider_session_id | longhouse_session_id | source_path | forked_from_provider_session_id
+    )
+    # provider_session_id | longhouse_session_id | source_path |
+    # parent_provider_session_id | forked_from_provider_session_id
     alias_value = Column(String(1024), nullable=False)
     first_seen_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
     last_seen_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
@@ -1414,6 +1417,50 @@ class SessionThreadAlias(AgentsBase):
             "alias_value",
             unique=True,
         ),
+    )
+
+
+class SessionEdge(AgentsBase):
+    """Provider-neutral relationship evidence between session graph nodes.
+
+    Edges are semantic evidence. Aliases remain compatibility lookup aids, but
+    product projection should prefer these rows once the read paths are flipped.
+    """
+
+    __tablename__ = "session_edges"
+
+    id = Column(GUID(), primary_key=True, default=uuid4)
+    provider = Column(String(64), nullable=False, index=True)
+    edge_kind = Column(String(32), nullable=False, index=True)
+    visibility = Column(String(32), nullable=False, server_default=text("'timeline'"))
+    evidence_kind = Column(String(32), nullable=True)
+
+    _session_fk = "sessions.id" if AGENTS_SCHEMA is None else f"{AGENTS_SCHEMA}.sessions.id"
+    _thread_fk = "session_threads.id" if AGENTS_SCHEMA is None else f"{AGENTS_SCHEMA}.session_threads.id"
+
+    source_session_id = Column(GUID(), ForeignKey(_session_fk, ondelete="CASCADE"), nullable=True, index=True)
+    source_thread_id = Column(GUID(), ForeignKey(_thread_fk, ondelete="CASCADE"), nullable=True, index=True)
+    source_event_id = Column(Integer, nullable=True, index=True)
+
+    target_session_id = Column(GUID(), ForeignKey(_session_fk, ondelete="CASCADE"), nullable=True, index=True)
+    target_thread_id = Column(GUID(), ForeignKey(_thread_fk, ondelete="CASCADE"), nullable=True, index=True)
+    target_event_id = Column(Integer, nullable=True, index=True)
+
+    provider_edge_id = Column(String(255), nullable=True, index=True)
+    metadata_json = Column(JSON(), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    __table_args__ = (
+        Index("ix_session_edges_source", "provider", "source_session_id", "source_thread_id", "edge_kind"),
+        Index("ix_session_edges_target", "provider", "target_session_id", "target_thread_id", "edge_kind"),
+        Index("ix_session_edges_provider_edge", "provider", "edge_kind", "provider_edge_id"),
     )
 
 

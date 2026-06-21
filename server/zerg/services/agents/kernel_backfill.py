@@ -30,6 +30,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionConnection
+from zerg.models.agents import SessionEdge
 from zerg.models.agents import SessionEmbedding
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionLaunchAttempt
@@ -41,8 +42,9 @@ from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
 from zerg.models.agents import SessionTurn
 from zerg.models.agents import TimelineCard
-from zerg.services.agents.kernel_writes import ensure_subagent_thread
-from zerg.services.agents.kernel_writes import resolve_primary_thread_by_provider_session_id
+from zerg.services.agents.session_graph_writes import ensure_subagent_thread
+from zerg.services.agents.session_graph_writes import record_session_edge
+from zerg.services.agents.session_graph_writes import resolve_primary_thread_by_provider_session_id
 from zerg.services.raw_json_compression import decode_raw_json
 
 _CLAUDE_SUBAGENT_PARENT_RE = re.compile(
@@ -358,6 +360,7 @@ def _move_subagent_session_under_parent(
     raw_agent_id: str | None,
     raw_prompt_id: str | None,
     parent_provider_id: str,
+    child_provider_id: str | None = None,
     workflow_run_id: str | None = None,
     attribution_agent: str | None = None,
     attribution_skill: str | None = None,
@@ -370,6 +373,7 @@ def _move_subagent_session_under_parent(
     path so both behave identically.
     """
     child_session_id = child_session.id
+    child_provider_id = child_provider_id or str(child_session.id)
     counts = {
         "events_moved": 0,
         "source_lines_moved": 0,
@@ -382,6 +386,7 @@ def _move_subagent_session_under_parent(
         "embeddings_deleted": 0,
         "sessions_removed": 0,
     }
+    old_thread_ids = [row.id for row in db.query(SessionThread.id).filter(SessionThread.session_id == child_session_id).all()]
 
     child_thread = ensure_subagent_thread(
         db,
@@ -389,7 +394,7 @@ def _move_subagent_session_under_parent(
         provider=child_session.provider,
         source_path=source_path,
         child_longhouse_session_id=str(child_session.id),
-        child_provider_session_id=str(child_session.id),
+        child_provider_session_id=child_provider_id,
         subagent_id=raw_agent_id or _subagent_id_from_source_path(source_path),
         subagent_prompt_id=raw_prompt_id,
         workflow_run_id=workflow_run_id,
@@ -397,9 +402,29 @@ def _move_subagent_session_under_parent(
         attribution_skill=attribution_skill,
         parent_provider_session_id=parent_provider_id,
     )
+    if old_thread_ids:
+        db.query(SessionEdge).filter(SessionEdge.source_thread_id.in_(old_thread_ids)).delete(synchronize_session=False)
+        db.query(SessionEdge).filter(SessionEdge.target_thread_id.in_(old_thread_ids)).delete(synchronize_session=False)
+    record_session_edge(
+        db,
+        provider=child_session.provider,
+        edge_kind="task_child",
+        visibility="hidden",
+        evidence_kind="relink",
+        source_thread=parent_thread,
+        target_thread=child_thread,
+        provider_edge_id=f"{parent_provider_id}:{child_provider_id}",
+        metadata={
+            "parent_provider_session_id": parent_provider_id,
+            "child_provider_session_id": child_provider_id,
+            "subagent_id": raw_agent_id or _subagent_id_from_source_path(source_path),
+            "subagent_prompt_id": raw_prompt_id,
+            "workflow_run_id": workflow_run_id,
+            "attribution_agent": attribution_agent,
+            "attribution_skill": attribution_skill,
+        },
+    )
     parent_branch = _ensure_head_branch(db, parent_thread.session_id)
-
-    old_thread_ids = [row.id for row in db.query(SessionThread.id).filter(SessionThread.session_id == child_session_id).all()]
 
     result = db.execute(
         sql_update(AgentEvent)
@@ -463,6 +488,8 @@ def _move_subagent_session_under_parent(
             db.query(SessionEmbedding).filter(SessionEmbedding.session_id == child_session_id).delete(synchronize_session=False)
         )
         if old_thread_ids:
+            db.query(SessionEdge).filter(SessionEdge.source_thread_id.in_(old_thread_ids)).delete(synchronize_session=False)
+            db.query(SessionEdge).filter(SessionEdge.target_thread_id.in_(old_thread_ids)).delete(synchronize_session=False)
             db.query(SessionThreadAlias).filter(SessionThreadAlias.thread_id.in_(old_thread_ids)).delete(synchronize_session=False)
             db.query(SessionThread).filter(SessionThread.id.in_(old_thread_ids)).delete(synchronize_session=False)
         db.query(AgentSessionBranch).filter(AgentSessionBranch.session_id == child_session_id).delete(synchronize_session=False)
@@ -594,9 +621,10 @@ def relink_orphan_subagents_for_parent(
             child_session=child_session,
             parent_thread=parent_thread,
             source_path=source_path,
-            raw_agent_id=raw_agent_id or _subagent_id_from_source_path(source_path),
+            raw_agent_id=raw_agent_id or orphan_labels.get("subagent_id") or _subagent_id_from_source_path(source_path),
             raw_prompt_id=raw_prompt_id,
             parent_provider_id=parent_provider_session_id,
+            child_provider_id=orphan_labels.get("provider_session_id"),
             workflow_run_id=orphan_labels.get("workflow_run_id"),
             attribution_agent=orphan_labels.get("workflow_attribution_agent"),
             attribution_skill=orphan_labels.get("workflow_attribution_skill"),

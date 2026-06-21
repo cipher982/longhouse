@@ -1268,6 +1268,62 @@ def test_db_ingest_project_uses_real_longhouse_sqlite_for_all_providers(tmp_path
         assert "universal db ingest hello" in db_snapshot["export_jsonl"]
 
 
+def test_opencode_lineage_projection_uses_real_longhouse_sqlite(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("opencode",),
+            scenarios=("opencode_lineage_projection",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"opencode": _fake_bins(tmp_path)["opencode"]},
+        )
+    )
+
+    assert payload["verdict"] == "green"
+    result = payload["results"][0]
+    assert result["provider"] == "opencode"
+    assert result["scenario"] == "opencode_lineage_projection"
+    assert result["status"] == "pass"
+    assert result["data"]["operation_evidence"]["opencode_lineage_projection"]["status"] == "pass"
+    assert result["data"]["operation_evidence"]["db_ingest"]["status"] == "pass"
+    assert all(result["data"]["assertions"].values())
+
+    evidence_root = Path(result["evidence_root"])
+    projection = json.loads(
+        (evidence_root / "longhouse" / "opencode-lineage-projection.json").read_text(encoding="utf-8")
+    )
+    branch_kinds = [row["branch_kind"] for row in projection["thread_rows"]]
+    assert branch_kinds.count("subagent") == 2
+    assert "fork" in branch_kinds
+    edge_kinds = [row["edge_kind"] for row in projection["edge_rows"]]
+    assert edge_kinds.count("task_child") == 2
+    assert "fork" in edge_kinds
+    assert "subagent_id" in {row["alias_kind"] for row in projection["alias_rows"]}
+    assert "forked_from_provider_session_id" in {row["alias_kind"] for row in projection["alias_rows"]}
+
+
+def test_orchestration_capability_matrix_emits_per_capability_evidence(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=uah.SUPPORTED_PROVIDERS,
+            scenarios=("orchestration_capability_matrix",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins=_fake_bins(tmp_path),
+        )
+    )
+
+    assert payload["verdict"] == "green"
+    assert len(payload["results"]) == len(uah.SUPPORTED_PROVIDERS)
+    for result in payload["results"]:
+        assert result["scenario"] == "orchestration_capability_matrix"
+        assert result["status"] == "pass"
+        operation_evidence = result["data"]["operation_evidence"]
+        assert "orchestration_observe_transcript" in operation_evidence
+        assert "orchestration_background_task_status" in operation_evidence
+        assert all("verdict" in item for item in operation_evidence.values())
+        summary = result["data"]["summary"]
+        assert summary["green"] + summary["yellow"] + summary["red"] == 11
+
+
 def test_projection_scenarios_emit_comparable_artifacts_for_all_providers(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(

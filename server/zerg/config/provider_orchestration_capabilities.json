@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "capabilities": [
+    "observe_transcript",
+    "observe_child_sessions",
+    "classify_forks",
+    "classify_subagents",
+    "send_prompt",
+    "send_async_prompt",
+    "abort",
+    "reattach",
+    "fork",
+    "switch_actor",
+    "background_task_status"
+  ],
+  "states": ["supported", "unsupported", "unknown", "experimental", "observed_only"],
+  "providers": {
+    "claude": {
+      "observe_transcript": {"state": "supported", "source": "Claude JSONL ingest and channel transcript tests"},
+      "observe_child_sessions": {"state": "supported", "source": "subagent thread ingest and workflow ingest tests"},
+      "classify_forks": {"state": "unknown", "source": "No durable Claude fork evidence is normalized yet"},
+      "classify_subagents": {"state": "supported", "source": "Claude sidechain metadata and subagent source paths"},
+      "send_prompt": {"state": "supported", "source": "managed provider contract send_input"},
+      "send_async_prompt": {"state": "unknown", "source": "No separate async/no-reply Claude contract"},
+      "abort": {"state": "supported", "source": "managed provider contract interrupt"},
+      "reattach": {"state": "supported", "source": "managed provider contract reattach"},
+      "fork": {"state": "unknown", "source": "No Longhouse Claude fork control contract"},
+      "switch_actor": {"state": "unknown", "source": "No provider-neutral actor switch evidence is normalized yet"},
+      "background_task_status": {"state": "unknown", "source": "No provider-neutral background task status contract"}
+    },
+    "codex": {
+      "observe_transcript": {"state": "supported", "source": "Codex app-server and rollout transcript ingest tests"},
+      "observe_child_sessions": {"state": "unknown", "source": "Codex multi-agent/fork evidence is not normalized yet"},
+      "classify_forks": {"state": "unknown", "source": "Codex fork/thread evidence needs a resolver fixture"},
+      "classify_subagents": {"state": "unknown", "source": "Codex multi-agent mode evidence needs normalization"},
+      "send_prompt": {"state": "supported", "source": "managed provider contract send_input"},
+      "send_async_prompt": {"state": "unknown", "source": "No separate Codex async/no-reply contract"},
+      "abort": {"state": "supported", "source": "managed provider contract interrupt"},
+      "reattach": {"state": "supported", "source": "managed provider contract reattach"},
+      "fork": {"state": "unknown", "source": "No Longhouse Codex fork control contract"},
+      "switch_actor": {"state": "unknown", "source": "Codex multi-agent mode is tracked as policy until evidence is normalized"},
+      "background_task_status": {"state": "unknown", "source": "No provider-neutral background task status contract"}
+    },
+    "opencode": {
+      "observe_transcript": {"state": "supported", "source": "OpenCode SQLite parser and provider-live checks"},
+      "observe_child_sessions": {"state": "supported", "source": "OpenCode task child lineage parser and ingest tests"},
+      "classify_forks": {"state": "observed_only", "source": "Title-proven fork lineage is classified; API/CLI fork proof remains stronger"},
+      "classify_subagents": {"state": "supported", "source": "TaskTool metadata child-session evidence"},
+      "send_prompt": {"state": "supported", "source": "managed provider contract send_input"},
+      "send_async_prompt": {"state": "observed_only", "source": "provider-live prompt_async noReply delivery proof"},
+      "abort": {"state": "supported", "source": "managed provider contract interrupt"},
+      "reattach": {"state": "supported", "source": "managed provider contract reattach"},
+      "fork": {"state": "observed_only", "source": "Fork lineage is observed; Longhouse fork creation is not exposed"},
+      "switch_actor": {"state": "unknown", "source": "Agent switch evidence is not normalized into events yet"},
+      "background_task_status": {"state": "experimental", "source": "OpenCode background subagents are experimental and not restart-proofed"}
+    },
+    "antigravity": {
+      "observe_transcript": {"state": "supported", "source": "Antigravity legacy JSON parser and hook/inbox ingest tests"},
+      "observe_child_sessions": {"state": "unknown", "source": "No child-session evidence normalized yet"},
+      "classify_forks": {"state": "unknown", "source": "No fork evidence normalized yet"},
+      "classify_subagents": {"state": "unknown", "source": "No subagent evidence normalized yet"},
+      "send_prompt": {"state": "experimental", "source": "Hook/inbox send path exists but broader control contract is limited"},
+      "send_async_prompt": {"state": "unknown", "source": "No async/no-reply Antigravity contract"},
+      "abort": {"state": "unsupported", "source": "managed provider contract interrupt unsupported"},
+      "reattach": {"state": "unsupported", "source": "managed provider contract reattach unsupported"},
+      "fork": {"state": "unknown", "source": "No Longhouse Antigravity fork control contract"},
+      "switch_actor": {"state": "unknown", "source": "No provider-neutral actor switch evidence is normalized yet"},
+      "background_task_status": {"state": "unknown", "source": "No provider-neutral background task status contract"}
+    }
+  }
+}

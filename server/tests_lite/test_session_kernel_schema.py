@@ -18,6 +18,7 @@ from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionConnection
+from zerg.models.agents import SessionEdge
 from zerg.models.agents import SessionLaunchAttempt
 from zerg.models.agents import SessionRun
 from zerg.models.agents import SessionThread
@@ -39,6 +40,7 @@ def test_kernel_tables_exist(tmp_path):
     for name in (
         "session_threads",
         "session_thread_aliases",
+        "session_edges",
         "session_runs",
         "session_connections",
         "session_launch_attempts",
@@ -108,6 +110,17 @@ def test_kernel_roundtrip_minimal(tmp_path):
             alias_value="codex-thread-abc",
         )
         db.add(alias)
+        edge = SessionEdge(
+            provider="codex",
+            edge_kind="unknown",
+            visibility="timeline",
+            evidence_kind="test",
+            target_session_id=session.id,
+            target_thread_id=thread.id,
+            provider_edge_id="parent:codex-thread-abc",
+            metadata_json={"parent_provider_session_id": "parent"},
+        )
+        db.add(edge)
 
         run = SessionRun(
             thread_id=thread.id,
@@ -165,6 +178,10 @@ def test_kernel_roundtrip_minimal(tmp_path):
         assert loaded_thread.session_id == loaded_session.id
         assert loaded_thread.is_primary == 1
         assert db.query(SessionThreadAlias).count() == 1
+        loaded_edge = db.query(SessionEdge).first()
+        assert loaded_edge.target_thread_id == loaded_thread.id
+        assert loaded_edge.edge_kind == "unknown"
+        assert loaded_edge.metadata_json["parent_provider_session_id"] == "parent"
         loaded_run = db.query(SessionRun).first()
         assert loaded_run.thread_id == loaded_thread.id
         loaded_conn = db.query(SessionConnection).first()
@@ -185,6 +202,15 @@ def test_alias_lookup_index(tmp_path):
     insp = inspect(engine)
     indexes = {idx["name"] for idx in insp.get_indexes("session_thread_aliases")}
     assert "ix_thread_aliases_lookup" in indexes
+
+
+def test_edge_lookup_indexes(tmp_path):
+    engine = _engine(tmp_path)
+    insp = inspect(engine)
+    indexes = {idx["name"] for idx in insp.get_indexes("session_edges")}
+    assert "ix_session_edges_source" in indexes
+    assert "ix_session_edges_target" in indexes
+    assert "ix_session_edges_provider_edge" in indexes
 
 
 def test_launch_attempt_idempotency_index(tmp_path):
