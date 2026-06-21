@@ -9,12 +9,10 @@ See docs/specs/session-identity-kernel.md.
 
 from __future__ import annotations
 
-import asyncio
 from datetime import datetime
 from datetime import timezone
-from unittest.mock import MagicMock
 
-import pytest
+from sqlalchemy.orm import sessionmaker
 
 from zerg.database import Base
 from zerg.database import make_engine
@@ -22,7 +20,6 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionConnection
 from zerg.models.agents import SessionLaunchAttempt
 from zerg.models.agents import SessionRun
-from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
 from zerg.services.agents.kernel_writes import ensure_primary_thread
 from zerg.services.agents.kernel_writes import record_connection
@@ -30,7 +27,8 @@ from zerg.services.agents.kernel_writes import record_launch_attempt
 from zerg.services.agents.kernel_writes import record_run
 from zerg.services.agents.kernel_writes import record_thread_alias
 from zerg.services.agents.kernel_writes import update_launch_attempt
-from sqlalchemy.orm import sessionmaker
+from zerg.services.agents.session_graph_writes import ensure_primary_thread as graph_ensure_primary_thread
+from zerg.services.agents.session_graph_writes import record_thread_alias as graph_record_thread_alias
 
 
 def _session(tmp_path):
@@ -66,6 +64,11 @@ def _make_session_row(db, *, provider="codex"):
     db.add(row)
     db.flush()
     return row
+
+
+def test_kernel_writes_keeps_graph_write_compat_exports():
+    assert ensure_primary_thread is graph_ensure_primary_thread
+    assert record_thread_alias is graph_record_thread_alias
 
 
 def test_launch_attempt_idempotent_on_client_request_id(tmp_path):
@@ -201,8 +204,6 @@ def test_open_run_reused_by_external_adoption(tmp_path):
 
 def test_bridge_offline_does_not_create_phantom_run(tmp_path):
     """Negative bridge evidence must not fabricate a run for unknown sessions."""
-    from datetime import datetime as _dt
-    from datetime import timezone as _tz
 
     from zerg.models.agents import SessionConnection
     from zerg.models.agents import SessionRun

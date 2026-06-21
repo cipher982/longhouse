@@ -87,6 +87,10 @@ class SessionIngest(BaseModel):
         None,
         description="Provider session/thread id of the parent when this payload is a subagent/fork",
     )
+    lineage_kind: Optional[str] = Field(
+        None,
+        description="Provider-neutral lineage kind: task_child|fork|unknown|agent_switch|async_prompt",
+    )
     subagent_id: Optional[str] = Field(None, description="Provider-specific subagent id, e.g. Claude agentId")
     subagent_prompt_id: Optional[str] = Field(
         None,

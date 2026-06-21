@@ -40,6 +40,7 @@ from zerg.services.session_coordination import list_session_messages
 from zerg.services.session_coordination import load_session_tail
 from zerg.services.session_coordination import query_wall_sessions
 from zerg.services.session_coordination import serialize_session_message
+from zerg.services.session_graph_projection import build_session_graph_projection
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_listing import SessionListParams
 from zerg.services.session_listing import list_agent_sessions
@@ -487,6 +488,20 @@ def list_session_workflow_runs(
     store = AgentsStore(db)
     runs = store.list_workflow_runs_for_session(session_id)
     return {"session_id": str(session_id), "workflow_runs": runs}
+
+
+@router.get("/sessions/{session_id}/graph")
+def get_session_graph(
+    session_id: UUID,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict:
+    """Return provider-neutral child/fork/link graph context for a session."""
+    store = AgentsStore(db)
+    if store.get_session(session_id) is None:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+    return build_session_graph_projection(db, session_id)
 
 
 @router.get("/sessions/{session_id}/tail")

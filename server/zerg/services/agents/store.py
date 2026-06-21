@@ -37,14 +37,17 @@ from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionThread
-from zerg.models.agents import SessionThreadAlias
 from zerg.models.agents import TimelineCard
 from zerg.services.agents.compaction import classify_compaction_kind
+from zerg.services.agents.identity_resolver import ObservedLineageEdge
+from zerg.services.agents.identity_resolver import ObservedSession
+from zerg.services.agents.identity_resolver import resolve_session_projection
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
-from zerg.services.agents.kernel_writes import ensure_primary_thread
-from zerg.services.agents.kernel_writes import ensure_subagent_thread
-from zerg.services.agents.kernel_writes import record_thread_alias
-from zerg.services.agents.kernel_writes import resolve_primary_thread_by_provider_session_id
+from zerg.services.agents.session_graph_writes import ensure_primary_thread
+from zerg.services.agents.session_graph_writes import ensure_subagent_thread
+from zerg.services.agents.session_graph_writes import record_session_edge
+from zerg.services.agents.session_graph_writes import record_thread_alias
+from zerg.services.agents.session_graph_writes import resolve_primary_thread_by_provider_session_id
 from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 from zerg.services.archive_transcript import load_session_source_line_bytes
 from zerg.services.internal_sessions import internal_canary_session_clause
@@ -55,6 +58,8 @@ from zerg.services.raw_json_compression import CODEC_PLAIN
 from zerg.services.raw_json_compression import CODEC_ZSTD
 from zerg.services.raw_json_compression import compress_raw_json
 from zerg.services.raw_json_compression import decode_raw_json
+from zerg.services.session_graph_projection import workflow_run_projection
+from zerg.services.session_graph_projection import workflow_runs_for_session
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
 from zerg.services.session_observation_reducers import ProviderEventReduction
 from zerg.services.session_observation_reducers import reduce_provider_event_observation
@@ -1107,6 +1112,54 @@ class AgentsStore:
         normalized = source_path.replace("\\", "/")
         return "/subagents/" in normalized
 
+    def _lineage_kind_for_ingest(self, data: SessionIngest, source_path: str | None) -> str:
+        explicit = str(data.lineage_kind or "").strip()
+        if explicit in {"task_child", "fork", "unknown", "agent_switch", "async_prompt"}:
+            return explicit
+        looks_like_subagent = self._source_path_looks_like_subagent(source_path)
+        if data.is_sidechain and (data.parent_provider_session_id or looks_like_subagent):
+            return "task_child"
+        if data.parent_provider_session_id or looks_like_subagent:
+            return "unknown"
+        return "none"
+
+    def _record_lineage_edge_for_ingest(
+        self,
+        *,
+        provider: str,
+        edge_kind: str,
+        visibility: str,
+        source_thread: SessionThread | None,
+        target_thread: SessionThread,
+        data: SessionIngest,
+    ) -> None:
+        child_provider_id = data.provider_session_id or str(data.id or target_thread.session_id)
+        parent_provider_id = str(data.parent_provider_session_id or "").strip()
+        provider_edge_id = data.subagent_tool_use_id or (
+            f"{parent_provider_id}:{child_provider_id}" if parent_provider_id else child_provider_id
+        )
+        metadata = {
+            "parent_provider_session_id": parent_provider_id or None,
+            "child_provider_session_id": child_provider_id,
+            "subagent_id": data.subagent_id,
+            "subagent_prompt_id": data.subagent_prompt_id,
+            "subagent_tool_use_id": data.subagent_tool_use_id,
+            "workflow_run_id": data.workflow_run_id,
+            "attribution_agent": data.attribution_agent,
+            "attribution_skill": data.attribution_skill,
+        }
+        record_session_edge(
+            self.db,
+            provider=provider,
+            edge_kind=edge_kind,
+            visibility=visibility,
+            evidence_kind="ingest",
+            source_thread=source_thread,
+            target_thread=target_thread,
+            provider_edge_id=provider_edge_id,
+            metadata={key: value for key, value in metadata.items() if value},
+        )
+
     def _get_head_branch(self, session_id: UUID) -> AgentSessionBranch | None:
         """Return the current head branch for a session."""
         return (
@@ -1655,32 +1708,55 @@ class AgentsStore:
 
         resolved_child_thread = None
         existing = None
-        if data.is_sidechain and data.parent_provider_session_id:
+        lineage_kind = self._lineage_kind_for_ingest(data, primary_source_path)
+        observed_session = ObservedSession(
+            provider=data.provider,
+            provider_session_id=data.provider_session_id,
+            longhouse_session_id=str(session_id),
+            lineage=(
+                ObservedLineageEdge(
+                    provider=data.provider,
+                    kind=lineage_kind,
+                    parent_provider_session_id=data.parent_provider_session_id,
+                    child_provider_session_id=data.provider_session_id or str(session_id),
+                    parent_tool_call_id=data.subagent_tool_use_id,
+                    evidence_kind="ingest",
+                )
+                if lineage_kind != "none"
+                else None
+            ),
+        )
+        parent_thread = None
+        if data.parent_provider_session_id:
             parent_thread = resolve_primary_thread_by_provider_session_id(
                 self.db,
                 provider=data.provider,
                 provider_session_id=data.parent_provider_session_id,
             )
-            if parent_thread is not None:
-                parent_session = self.db.query(AgentSession).filter(AgentSession.id == parent_thread.session_id).first()
-                if parent_session is not None:
-                    existing = parent_session
-                    resolved_child_thread = ensure_subagent_thread(
-                        self.db,
-                        parent_thread=parent_thread,
-                        provider=data.provider,
-                        source_path=primary_source_path,
-                        child_longhouse_session_id=str(session_id),
-                        child_provider_session_id=data.provider_session_id or str(session_id),
-                        subagent_id=data.subagent_id,
-                        subagent_prompt_id=data.subagent_prompt_id,
-                        subagent_tool_use_id=data.subagent_tool_use_id,
-                        workflow_run_id=data.workflow_run_id,
-                        attribution_agent=data.attribution_agent,
-                        attribution_skill=data.attribution_skill,
-                        parent_provider_session_id=data.parent_provider_session_id,
-                    )
-                    session_id = parent_session.id
+        identity_projection = resolve_session_projection(
+            observed_session,
+            parent_thread_resolved=parent_thread is not None,
+        )
+        if identity_projection.attach_to_parent and parent_thread is not None:
+            parent_session = self.db.query(AgentSession).filter(AgentSession.id == parent_thread.session_id).first()
+            if parent_session is not None:
+                existing = parent_session
+                resolved_child_thread = ensure_subagent_thread(
+                    self.db,
+                    parent_thread=parent_thread,
+                    provider=data.provider,
+                    source_path=primary_source_path,
+                    child_longhouse_session_id=str(session_id),
+                    child_provider_session_id=data.provider_session_id or str(session_id),
+                    subagent_id=data.subagent_id,
+                    subagent_prompt_id=data.subagent_prompt_id,
+                    subagent_tool_use_id=data.subagent_tool_use_id,
+                    workflow_run_id=data.workflow_run_id,
+                    attribution_agent=data.attribution_agent,
+                    attribution_skill=data.attribution_skill,
+                    parent_provider_session_id=data.parent_provider_session_id,
+                )
+                session_id = parent_session.id
 
         if existing is None:
             existing = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
@@ -1725,8 +1801,16 @@ class AgentsStore:
         # any provider_session_id evidence as a thread alias. Reducers below
         # use observation.thread_id to stamp child rows.
         primary_thread = ensure_primary_thread(self.db, existing)
-        if resolved_child_thread is None and data.is_sidechain and self._source_path_looks_like_subagent(primary_source_path):
-            primary_thread.branch_kind = "subagent"
+        if resolved_child_thread is None and identity_projection.relink_later:
+            primary_thread.branch_kind = identity_projection.branch_kind or "subagent"
+            self._record_lineage_edge_for_ingest(
+                provider=existing.provider,
+                edge_kind="task_child",
+                visibility="hidden",
+                source_thread=parent_thread,
+                target_thread=primary_thread,
+                data=data,
+            )
             if data.parent_provider_session_id:
                 record_thread_alias(
                     self.db,
@@ -1746,6 +1830,9 @@ class AgentsStore:
             # Preserve workflow attribution on the orphan so relink can carry it
             # forward when the parent later arrives.
             for alias_kind, alias_value in (
+                ("subagent_id", data.subagent_id),
+                ("subagent_prompt_id", data.subagent_prompt_id),
+                ("subagent_tool_use_id", data.subagent_tool_use_id),
                 ("workflow_run_id", data.workflow_run_id),
                 ("workflow_attribution_agent", data.attribution_agent),
                 ("workflow_attribution_skill", data.attribution_skill),
@@ -1758,9 +1845,52 @@ class AgentsStore:
                         alias_kind=alias_kind,
                         alias_value=str(alias_value),
                     )
+        if resolved_child_thread is None and identity_projection.projection_kind == "fork" and data.parent_provider_session_id:
+            primary_thread.branch_kind = identity_projection.branch_kind or "fork"
+            self._record_lineage_edge_for_ingest(
+                provider=existing.provider,
+                edge_kind="fork",
+                visibility="timeline",
+                source_thread=parent_thread,
+                target_thread=primary_thread,
+                data=data,
+            )
+            record_thread_alias(
+                self.db,
+                thread=primary_thread,
+                provider=existing.provider,
+                alias_kind="forked_from_provider_session_id",
+                alias_value=str(data.parent_provider_session_id),
+            )
+        if resolved_child_thread is None and identity_projection.projection_kind == "linked" and data.parent_provider_session_id:
+            primary_thread.branch_kind = identity_projection.branch_kind or "root"
+            self._record_lineage_edge_for_ingest(
+                provider=existing.provider,
+                edge_kind="unknown",
+                visibility="timeline",
+                source_thread=parent_thread,
+                target_thread=primary_thread,
+                data=data,
+            )
+            record_thread_alias(
+                self.db,
+                thread=primary_thread,
+                provider=existing.provider,
+                alias_kind="parent_provider_session_id",
+                alias_value=str(data.parent_provider_session_id),
+            )
 
         thread = resolved_child_thread or primary_thread
         thread_id = thread.id
+        if resolved_child_thread is not None:
+            self._record_lineage_edge_for_ingest(
+                provider=existing.provider,
+                edge_kind="task_child",
+                visibility="hidden",
+                source_thread=parent_thread,
+                target_thread=resolved_child_thread,
+                data=data,
+            )
         if data.provider_session_id:
             record_thread_alias(
                 self.db,
@@ -2201,74 +2331,13 @@ class AgentsStore:
             },
         )
 
-    def get_workflow_run(self, workflow_run_id: str, *, provider: str = "claude") -> dict | None:
+    def get_workflow_run(self, workflow_run_id: str, *, provider: str | None = None) -> dict | None:
         """Return the subagent threads that belong to a dynamic-workflow run.
 
-        Resolves all threads tagged with the ``workflow_run_id`` alias, groups
-        them under their (single) parent session, and surfaces each agent's
-        attribution labels. Returns ``None`` when the run id is unknown.
+        Projection logic lives in ``session_graph_projection`` so routes and
+        stores do not independently reason from raw aliases.
         """
-        run_id = str(workflow_run_id or "").strip()
-        if not run_id:
-            return None
-
-        # provider predicate first so the (provider, alias_kind, alias_value)
-        # composite index drives the lookup.
-        thread_rows = (
-            self.db.query(SessionThread)
-            .join(SessionThreadAlias, SessionThreadAlias.thread_id == SessionThread.id)
-            .filter(SessionThreadAlias.provider == provider)
-            .filter(SessionThreadAlias.alias_kind == "workflow_run_id")
-            .filter(SessionThreadAlias.alias_value == run_id)
-            .order_by(SessionThread.created_at.asc(), SessionThread.id.asc())
-            .all()
-        )
-        if not thread_rows:
-            return None
-
-        # Distinct threads (a thread can match the alias more than once defensively).
-        thread_ids = []
-        seen_threads: set = set()
-        for thread in thread_rows:
-            if thread.id not in seen_threads:
-                seen_threads.add(thread.id)
-                thread_ids.append(thread.id)
-
-        # Batch-fetch all labels for these threads in one query (no N+1).
-        labels_by_thread: dict = {}
-        for row in self.db.query(SessionThreadAlias).filter(SessionThreadAlias.thread_id.in_(thread_ids)).all():
-            labels_by_thread.setdefault(row.thread_id, {})[row.alias_kind] = row.alias_value
-
-        agents: list[dict] = []
-        parent_session_ids: set = set()
-        skill = None
-        for thread in thread_rows:
-            if thread.id not in seen_threads:
-                continue
-            seen_threads.discard(thread.id)
-            parent_session_ids.add(str(thread.session_id))
-            labels = labels_by_thread.get(thread.id, {})
-            skill = skill or labels.get("workflow_attribution_skill")
-            agents.append(
-                {
-                    "thread_id": str(thread.id),
-                    "session_id": str(thread.session_id),
-                    "is_primary": bool(thread.is_primary),
-                    "branch_kind": thread.branch_kind,
-                    "agent_id": labels.get("claude_agent_id"),
-                    "attribution_agent": labels.get("workflow_attribution_agent"),
-                    "attribution_skill": labels.get("workflow_attribution_skill"),
-                    "source_path": labels.get("source_path"),
-                }
-            )
-
-        return {
-            "workflow_run_id": run_id,
-            "skill": skill,
-            "parent_session_id": next(iter(parent_session_ids)) if len(parent_session_ids) == 1 else None,
-            "agent_count": len(agents),
-            "agents": agents,
-        }
+        return workflow_run_projection(self.db, workflow_run_id, provider=provider)
 
     def list_workflow_runs_for_session(self, session_id: UUID) -> list[dict]:
         """List the dynamic-workflow runs whose subagent threads live under this
@@ -2277,37 +2346,7 @@ class AgentsStore:
         Used by the session detail UI to render each workflow run as one
         collapsible node instead of N loose subagent threads.
         """
-        # All workflow_run_id aliases on threads belonging to this session.
-        rows = (
-            self.db.query(SessionThreadAlias.alias_value, SessionThread.id)
-            .join(SessionThread, SessionThreadAlias.thread_id == SessionThread.id)
-            .filter(SessionThread.session_id == session_id)
-            .filter(SessionThreadAlias.alias_kind == "workflow_run_id")
-            .all()
-        )
-        run_to_threads: dict[str, set] = {}
-        for run_id, thread_id in rows:
-            if run_id:
-                run_to_threads.setdefault(run_id, set()).add(thread_id)
-        if not run_to_threads:
-            return []
-
-        # Skill label per run (first non-empty attribution_skill among its threads).
-        all_thread_ids = {tid for tids in run_to_threads.values() for tid in tids}
-        skill_by_thread: dict = {}
-        for tid, skill in (
-            self.db.query(SessionThreadAlias.thread_id, SessionThreadAlias.alias_value)
-            .filter(SessionThreadAlias.thread_id.in_(all_thread_ids))
-            .filter(SessionThreadAlias.alias_kind == "workflow_attribution_skill")
-            .all()
-        ):
-            skill_by_thread.setdefault(tid, skill)
-
-        runs: list[dict] = []
-        for run_id, thread_ids in sorted(run_to_threads.items()):
-            skill = next((skill_by_thread.get(tid) for tid in thread_ids if skill_by_thread.get(tid)), None)
-            runs.append({"workflow_run_id": run_id, "agent_count": len(thread_ids), "skill": skill})
-        return runs
+        return workflow_runs_for_session(self.db, session_id)
 
     def reconcile_derived_projections(self, session_id: UUID) -> bool:
         """Rebuild derived projections skipped by archive ingest."""
