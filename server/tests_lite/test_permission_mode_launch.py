@@ -59,3 +59,50 @@ def test_missing_permission_mode_defaults_to_bypass():
     assert cmd is not None
     assert "--dangerously-skip-permissions" in cmd
     assert "LONGHOUSE_PERMISSION_HOOK_ENABLED=0" in cmd
+
+
+def test_launch_response_mints_scoped_hook_token_only_for_remote_approve():
+    """remote_approve launches return a session-scoped zht_ hook token bound to
+    the session; bypass launches return none (gate dormant, device token rejected)."""
+    from uuid import uuid4
+
+    import zerg.services.session_chat_impl as impl
+    from zerg.auth.managed_local_hook_tokens import validate_managed_local_hook_token
+    from zerg.session_execution_home import ManagedSessionTransport
+
+    class _Caps:
+        live_control_available = True
+        host_reattach_available = True
+        execution_home = "managed_local"
+        managed_transport = ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE
+
+    sid = uuid4()
+    session = SimpleNamespace(
+        id=sid,
+        provider="claude",
+        provider_session_id="prov-1",
+        loop_mode="assist",
+        source_runner_id=None,
+        source_runner_name="cinder",
+        managed_session_name="lh-x",
+        project="proj",
+        device_id="cinder",
+        permission_mode="remote_approve",
+    )
+    result = SimpleNamespace(session=session, attach_command="zsh -lc 'exec claude'")
+
+    orig = impl.project_session_capabilities
+    impl.project_session_capabilities = lambda db, session_id: _Caps()
+    try:
+        resp = impl._managed_local_launch_response(None, result, owner_id=42)
+        assert resp.permission_mode == "remote_approve"
+        assert resp.hook_token and resp.hook_token.startswith("zht_")
+        decoded = validate_managed_local_hook_token(resp.hook_token)
+        assert decoded is not None and decoded.session_id == str(sid)
+
+        session.permission_mode = "bypass"
+        resp_bypass = impl._managed_local_launch_response(None, result, owner_id=42)
+        assert resp_bypass.permission_mode == "bypass"
+        assert resp_bypass.hook_token is None
+    finally:
+        impl.project_session_capabilities = orig

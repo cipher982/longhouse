@@ -25,6 +25,10 @@ class ManagedLocalLaunchResponse:
     attach_command: str
     source_runner_name: str
     managed_transport: str | None = None
+    permission_mode: str = "bypass"
+    # Session-scoped hook token for remote_approve launches; the launcher exports
+    # it as LONGHOUSE_HOOK_TOKEN so the permission gate authenticates per-session.
+    hook_token: str | None = None
 
 
 def load_api_credentials(

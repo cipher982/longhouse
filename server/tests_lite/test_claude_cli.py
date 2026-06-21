@@ -124,6 +124,7 @@ def test_launch_managed_local_from_api_uses_this_device_endpoint(monkeypatch, tm
                 "display_name": "Demo session",
                 "loop_mode": "assist",
                 "machine_name": "work-laptop",
+                "permission_mode": "bypass",
                 "native_claude_channels_available": False,
                 "claude_launch_env": {
                     "CLAUDE_CODE_USE_BEDROCK": "1",
@@ -304,7 +305,7 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
     runner = CliRunner()
     open_calls: list[str] = []
     prepare_calls: list[tuple[str, str, str, str | None]] = []
-    native_launch_calls: list[tuple[str, str, str, str, str]] = []
+    native_launch_calls: list[tuple] = []
     provider_home = tmp_path / ".claude"
 
     monkeypatch.setattr(
@@ -346,8 +347,8 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
     monkeypatch.setattr(
         claude_cli,
         "_run_native_claude_tui",
-        lambda *, session_id, provider_session_id, cwd, base_url, token: native_launch_calls.append(
-            (session_id, provider_session_id, str(cwd), base_url, token)
+        lambda *, session_id, provider_session_id, cwd, base_url, token, hook_token=None, permission_mode="bypass": native_launch_calls.append(
+            (session_id, provider_session_id, str(cwd), base_url, token, hook_token, permission_mode)
         )
         or 0,
     )
@@ -385,7 +386,7 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
     assert "The hearth banked" in result.output
     assert prepare_calls == [("https://longhouse.test", "zdt_test_token", str(tmp_path), str(provider_home))]
     assert native_launch_calls == [
-        ("session-123", "provider-123", str(tmp_path), "https://longhouse.test", "zdt_test_token")
+        ("session-123", "provider-123", str(tmp_path), "https://longhouse.test", "zdt_test_token", None, "bypass")
     ]
     assert open_calls == ["https://longhouse.test/timeline/session-123"]
     assert list_managed_session_contracts(tmp_path / ".longhouse") == []

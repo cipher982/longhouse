@@ -1023,7 +1023,7 @@ async def launch_managed_local_this_device(
         source="managed_local_launch",
     )
 
-    return _managed_local_launch_response(db, result)
+    return _managed_local_launch_response(db, result, owner_id=owner_id)
 
 
 @router.post("/launch", response_model=RemoteSessionLaunchResponse)
