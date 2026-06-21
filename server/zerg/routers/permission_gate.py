@@ -74,11 +74,27 @@ class PermissionDecisionOut(UTCBaseModel):
 
 
 def _enforce_session_scope(token: object, session_id: str) -> None:
-    if isinstance(token, ManagedLocalHookToken) and session_id != token.session_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Managed-local hook token does not match session",
-        )
+    """Require a session-scoped token whose session matches the target.
+
+    These endpoints act *as* a single managed session, so a machine-wide durable
+    device token must not be able to register/poll/resolve arbitrary sessions'
+    permission requests. Only a managed-local hook token bound to this session is
+    accepted (``None`` is the AUTH_DISABLED dev/test path).
+    """
+    if token is None:
+        return
+    if isinstance(token, ManagedLocalHookToken):
+        if session_id != token.session_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Managed-local hook token does not match session",
+            )
+        return
+    # A durable device token (or anything else) is not session-scoped.
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Permission-gate endpoints require a session-scoped hook token",
+    )
 
 
 def _coerce_session_uuid(session_id: str) -> UUID:
