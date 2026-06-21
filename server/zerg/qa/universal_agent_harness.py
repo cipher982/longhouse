@@ -1643,6 +1643,8 @@ class UniversalProviderAdapter:
             return self._run_opencode_permission_prompt(package)
         if self.config.provider == "codex":
             return self._run_codex_permission_prompt(package)
+        if self.config.provider == "claude":
+            return self._run_claude_permission_prompt(package)
         if self.config.provider == "antigravity":
             payload = self._unsupported_payload(
                 "permission_prompt",
@@ -1838,6 +1840,262 @@ class UniversalProviderAdapter:
         if not passed:
             payload["failure_code"] = "opencode_permission_reply_failed"
             payload["message"] = "OpenCode bridge permission-reply transport did not pass."
+        package.write_json("assertions/permission_prompt.json", payload)
+        return payload
+
+    def _run_claude_permission_prompt(self, package: EvidencePackage) -> dict[str, Any]:
+        """Prove the real Claude PreToolUse permission-gate loop end to end.
+
+        Unlike a hand-faked contract, this drives Longhouse's actual code: the
+        real ``permission_gate.py`` hook subprocess registers a held request and
+        polls, served by the real ``upsert_pause_request`` store on a throwaway
+        SQLite, and a background thread answers via the real pull-mode resolve
+        (``resolve_pause_request`` writing permissionDecision). The hook must then
+        emit ``permissionDecision: allow``.
+        """
+        import http.server as _http_server
+        import subprocess as _subprocess
+        import sys as _sys
+        import threading as _threading
+        import time as _time
+
+        os.environ.setdefault("TESTING", "1")
+        os.environ.setdefault("DATABASE_URL", f"sqlite:///{package.path('longhouse', 'settings-bootstrap.sqlite')}")
+
+        from zerg.database import initialize_database
+        from zerg.database import make_engine
+        from zerg.database import make_sessionmaker
+        from zerg.models.agents import AgentSession
+        from zerg.services.session_pause_requests import PENDING_STATUS
+        from zerg.services.session_pause_requests import make_pause_request_key
+        from zerg.services.session_pause_requests import resolve_pause_request
+        from zerg.services.session_pause_requests import upsert_pause_request
+        from zerg.services.session_runtime import runtime_key_for_session
+
+        hook_script = default_repo_root() / "config" / "claude-hooks" / "scripts" / "permission_gate.py"
+        if not hook_script.is_file():
+            payload = {
+                "status": STATUS_FAIL,
+                "scenario": "permission_prompt",
+                "failure_code": "claude_permission_gate_hook_missing",
+                "message": f"permission_gate.py hook not found at {hook_script}",
+            }
+            package.write_json("assertions/permission_prompt.json", payload)
+            return payload
+
+        now = datetime(2026, 6, 19, 12, 0, tzinfo=UTC)
+        session_uuid = uuid5(NAMESPACE_URL, f"claude-permission-prompt:{package.root}")
+        session_id = str(session_uuid)
+        tool_use_id = "toolu_universal_claude_perm"
+        db_path = package.path("longhouse", "claude-permission-gate.sqlite")
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        engine = make_engine(f"sqlite:///{db_path}")
+        initialize_database(engine)
+        session_factory = make_sessionmaker(engine)
+
+        runtime_key = runtime_key_for_session("claude", session_id)
+        request_key = make_pause_request_key(provider="claude", runtime_key=runtime_key, provider_request_id=tool_use_id)
+
+        with session_factory() as db:
+            db.add(
+                AgentSession(
+                    id=session_uuid,
+                    provider="claude",
+                    environment="test",
+                    project="universal-agent-harness",
+                    device_id="universal-harness",
+                    cwd=str(package.path("workspace")),
+                    started_at=now - timedelta(minutes=1),
+                    provider_session_id=f"claude-{tool_use_id}",
+                    execution_home="managed_local",
+                )
+            )
+            db.commit()
+
+        captured: dict[str, Any] = {"register_seen": False, "polls": 0}
+
+        # Local server backed by the REAL store functions — the same code the
+        # production permission-gate endpoints call.
+        def _register(body: dict[str, Any]) -> None:
+            with session_factory() as db:
+                upsert_pause_request(
+                    db,
+                    session_id=session_uuid,
+                    runtime_key=runtime_key,
+                    provider="claude",
+                    request_key=request_key,
+                    occurred_at=now,
+                    provider_request_id=str(body.get("tool_use_id") or tool_use_id),
+                    provider_ref={"source": "claude_permission_gate"},
+                    kind="permission_prompt",
+                    tool_name=str(body.get("tool_name") or ""),
+                    request_payload={"tool_name": body.get("tool_name"), "tool_input": body.get("tool_input") or {}},
+                    can_respond=True,
+                )
+                db.commit()
+
+        def _decision() -> dict[str, Any]:
+            from zerg.models.agents import SessionPauseRequest
+
+            with session_factory() as db:
+                row = db.query(SessionPauseRequest).filter(SessionPauseRequest.request_key == request_key).first()
+                if row is None or row.status == PENDING_STATUS:
+                    return {"decision": None, "reason": None, "resolved": False}
+                response_payload = row.response_payload_json if isinstance(row.response_payload_json, dict) else {}
+                return {
+                    "decision": response_payload.get("permissionDecision") or "deny",
+                    "reason": response_payload.get("permissionDecisionReason") or row.response_text,
+                    "resolved": True,
+                }
+
+        class Handler(_http_server.BaseHTTPRequestHandler):
+            def log_message(self, *_args: Any) -> None:
+                return
+
+            def _send(self, code: int, body: dict[str, Any]) -> None:
+                data = json.dumps(body).encode("utf-8")
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_POST(self) -> None:
+                if self.path == "/api/agents/permission-requests":
+                    length = int(self.headers.get("Content-Length") or "0")
+                    body = json.loads(self.rfile.read(length).decode("utf-8") or "{}") if length else {}
+                    _register(body)
+                    captured["register_seen"] = True
+                    self._send(200, {"pause_request_id": "p", "request_key": request_key, "status": "pending"})
+                else:
+                    self._send(404, {})
+
+            def do_GET(self) -> None:
+                if self.path.startswith("/api/agents/permission-decision"):
+                    captured["polls"] += 1
+                    self._send(200, _decision())
+                else:
+                    self._send(404, {})
+
+        server = _http_server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = _threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base_url = f"http://127.0.0.1:{server.server_address[1]}"
+
+        # Background answerer: resolve the request (allow) via the REAL pull-mode
+        # path once it has been registered, so the polling hook reads the decision.
+        stop = _threading.Event()
+
+        def _answer_when_registered() -> None:
+            for _ in range(200):
+                if stop.is_set():
+                    return
+                with session_factory() as db:
+                    from zerg.models.agents import SessionPauseRequest
+
+                    row = db.query(SessionPauseRequest).filter(SessionPauseRequest.request_key == request_key).first()
+                    if row is not None and row.status == PENDING_STATUS:
+                        resolve_pause_request(
+                            db,
+                            request_key=request_key,
+                            status="resolved",
+                            response_payload={
+                                "permissionDecision": "allow",
+                                "permissionDecisionReason": "Longhouse allow",
+                                "decision": "answer",
+                            },
+                            response_text="Longhouse allow",
+                        )
+                        db.commit()
+                        return
+                _time.sleep(0.05)
+
+        answerer = _threading.Thread(target=_answer_when_registered, daemon=True)
+        answerer.start()
+
+        hook_env = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "LONGHOUSE_HOOK_URL": base_url,
+            "LONGHOUSE_HOOK_TOKEN": "zht_universal_harness",
+            "LONGHOUSE_MANAGED_SESSION_ID": session_id,
+            "LONGHOUSE_PERMISSION_HOOK_TIMEOUT_S": "10",
+        }
+        hook_input = json.dumps(
+            {
+                "session_id": session_id,
+                "tool_use_id": tool_use_id,
+                "tool_name": "Bash",
+                "tool_input": {"command": "ls"},
+            }
+        )
+        hook_error: str | None = None
+        hook_stdout = ""
+        try:
+            completed = _subprocess.run(
+                [_sys.executable, str(hook_script)],
+                input=hook_input,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                env=hook_env,
+            )
+            hook_stdout = completed.stdout or ""
+        except Exception as exc:  # pragma: no cover - defensive
+            hook_error = f"{type(exc).__name__}: {exc}"
+        finally:
+            stop.set()
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+            answerer.join(timeout=5)
+
+        emitted_decision: str | None = None
+        stdout_clean = hook_stdout.strip()
+        if stdout_clean:
+            try:
+                emitted_decision = json.loads(stdout_clean)["hookSpecificOutput"]["permissionDecision"]
+            except (json.JSONDecodeError, KeyError, TypeError):
+                emitted_decision = None
+
+        assertions = {
+            "request_registered": bool(captured["register_seen"]),
+            "hook_polled_for_decision": captured["polls"] >= 1,
+            "hook_emitted_allow": emitted_decision == "allow",
+            "hook_no_error": hook_error is None,
+        }
+        passed = all(assertions.values())
+        raw_path = package.write_json(
+            "raw/claude-permission-gate.json",
+            {
+                "base_url": base_url,
+                "session_id": session_id,
+                "tool_use_id": tool_use_id,
+                "request_key": request_key,
+                "hook_stdout": hook_stdout,
+                "emitted_decision": emitted_decision,
+                "hook_error": hook_error,
+                "polls": captured["polls"],
+            },
+        )
+        operation_evidence = {
+            "permission_prompt": {
+                "status": STATUS_PASS if passed else STATUS_FAIL,
+                "level": "hermetic",
+                "canary": "claude_permission_gate_reply",
+                "failure_code": None if passed else "claude_permission_gate_failed",
+            }
+        }
+        payload = {
+            "status": STATUS_PASS if passed else STATUS_FAIL,
+            "scenario": "permission_prompt",
+            "assertions": assertions,
+            "raw_permission_gate_path": str(raw_path),
+            "operation_evidence": operation_evidence,
+            "proof_scope": "claude_pretooluse_permission_gate",
+        }
+        if not passed:
+            payload["failure_code"] = "claude_permission_gate_failed"
+            payload["message"] = "Claude PreToolUse permission-gate loop did not pass."
         package.write_json("assertions/permission_prompt.json", payload)
         return payload
 
@@ -5201,6 +5459,15 @@ def _derived_action_status(*, action: ActionDefinition, provider: str) -> dict[s
                 "source": "zerg.cli.opencode_bridge permission-reply against a held fake permission request",
                 "canary": "opencode_bridge_permission_reply",
                 "next": "Promote with a live held-permission OpenCode provider canary.",
+            }
+        if provider == "claude":
+            return {
+                "status": STATUS_PASS,
+                "evidence_level": "hermetic",
+                "proof_scope": "claude_pretooluse_permission_gate",
+                "source": "config/claude-hooks/scripts/permission_gate.py PreToolUse hook driving the real request/answer/decision loop",
+                "canary": "claude_permission_gate_reply",
+                "next": "Promote with a live held-permission Claude session against a real provider binary.",
             }
         return {
             "status": STATUS_BLOCKED,
