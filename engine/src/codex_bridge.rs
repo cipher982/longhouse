@@ -43,6 +43,7 @@ pub const LEGACY_LAUNCH_MODE_HEADLESS: &str = "headless";
 // lifecycle name directly.
 pub const PERSISTED_DETACHED_UI_LAUNCH_MODE: &str = LAUNCH_MODE_DETACHED_UI;
 const PAUSE_KIND_STRUCTURED_QUESTION: &str = "structured_question";
+const PAUSE_KIND_PERMISSION_PROMPT: &str = "permission_prompt";
 const BRIDGE_OPT_OUT_NOTIFICATION_METHODS: &[&str] = &[
     "item/plan/delta",
     "item/reasoning/summaryTextDelta",
@@ -107,6 +108,10 @@ pub struct BridgeStartConfig {
     /// Debug/canary flag. When true, structured user-input app-server
     /// requests are held open for Longhouse to answer over bridge IPC.
     pub hold_user_input_requests: bool,
+    /// Debug/canary flag. When true, permission-approval app-server requests
+    /// are held open for Longhouse to answer over bridge IPC instead of the
+    /// immediate auto-accept/decline fallback.
+    pub hold_permission_requests: bool,
     pub state_root: Option<PathBuf>,
     pub longhouse_home: Option<PathBuf>,
     pub log_file: Option<PathBuf>,
@@ -139,6 +144,10 @@ pub struct BridgeRunConfig {
     /// Debug/canary flag. Normal managed sessions start detection-only until
     /// the held-request path is proven by provider canaries.
     pub hold_user_input_requests: bool,
+    /// Debug/canary flag. When true, permission-approval requests are held
+    /// open for Longhouse to answer over bridge IPC instead of immediate
+    /// auto-accept/decline fallback.
+    pub hold_permission_requests: bool,
     pub longhouse_home: Option<PathBuf>,
     pub state_file: PathBuf,
     pub log_file: PathBuf,
@@ -778,6 +787,9 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
     }
     if config.hold_user_input_requests {
         child.arg("--hold-user-input-requests");
+    }
+    if config.hold_permission_requests {
+        child.arg("--hold-permission-requests");
     }
     if config.create_initial_thread {
         child.arg("--create-initial-thread");
@@ -2665,7 +2677,14 @@ async fn handle_server_request(
         emit_runtime_updates(config, context, vec![update]).await;
     }
 
-    let structured_request = if is_structured_pause_request_method(method) {
+    let pause_kind = if is_structured_pause_request_method(method) {
+        Some((PAUSE_KIND_STRUCTURED_QUESTION, config.hold_user_input_requests))
+    } else if is_permission_approval_method(method) {
+        Some((PAUSE_KIND_PERMISSION_PROMPT, config.hold_permission_requests))
+    } else {
+        None
+    };
+    let held_request = if let Some((kind, hold_enabled)) = pause_kind {
         let provider_request_id = provider_request_id_from_jsonrpc_id(&request_id);
         let pending = PendingProviderRequest {
             request_key: codex_pause_request_key(&context.state.session_id, &provider_request_id),
@@ -2674,13 +2693,13 @@ async fn handle_server_request(
             request_id: request_id.clone(),
             params: params.clone(),
         };
-        let can_respond = config.hold_user_input_requests && !config.auto_approve;
-        context.runtime.post_pause_request(&pending, can_respond);
+        let can_respond = hold_enabled && !config.auto_approve;
+        context.runtime.post_pause_request(&pending, kind, can_respond);
         Some((pending, can_respond))
     } else {
         None
     };
-    if let Some((pending, true)) = structured_request {
+    if let Some((pending, true)) = held_request {
         context
             .pending_pause_requests
             .lock()
@@ -2731,6 +2750,17 @@ fn is_structured_pause_request_method(method: &str) -> bool {
     )
 }
 
+fn is_permission_approval_method(method: &str) -> bool {
+    matches!(
+        method,
+        "item/commandExecution/requestApproval"
+            | "item/fileChange/requestApproval"
+            | "item/permissions/requestApproval"
+            | "applyPatchApproval"
+            | "execCommandApproval"
+    )
+}
+
 fn provider_request_id_from_jsonrpc_id(request_id: &Value) -> String {
     if let Some(value) = request_id.as_str() {
         return value.to_string();
@@ -2763,7 +2793,25 @@ fn pause_request_title(method: &str, params: &Value) -> String {
         }
         return "Question waiting".to_string();
     }
+    if is_permission_approval_method(method) {
+        return permission_approval_title(method, params);
+    }
     extract_string(params, &["message"]).unwrap_or_else(|| "Question waiting".to_string())
+}
+
+fn permission_approval_title(method: &str, params: &Value) -> String {
+    match method {
+        "item/commandExecution/requestApproval" | "execCommandApproval" => {
+            extract_string(params, &["command"])
+                .map(|cmd| format!("Run command: {cmd}"))
+                .unwrap_or_else(|| "Command approval required".to_string())
+        }
+        "item/fileChange/requestApproval" | "applyPatchApproval" => {
+            "File change approval required".to_string()
+        }
+        "item/permissions/requestApproval" => "Permission approval required".to_string(),
+        _ => "Approval required".to_string(),
+    }
 }
 
 fn pause_request_summary(method: &str, params: &Value) -> String {
@@ -2772,6 +2820,9 @@ fn pause_request_summary(method: &str, params: &Value) -> String {
             return format!("{server} needs your answer before the agent can continue.");
         }
     }
+    if is_permission_approval_method(method) {
+        return "The agent needs your approval before it can continue.".to_string();
+    }
     "The agent needs your answer before it can continue.".to_string()
 }
 
@@ -2779,6 +2830,19 @@ fn pause_request_payload(method: &str, params: &Value) -> Value {
     if method == "item/tool/requestUserInput" {
         return json!({
             "questions": params.get("questions").cloned().unwrap_or_else(|| json!([])),
+        });
+    }
+    if is_permission_approval_method(method) {
+        return json!({
+            "approval": {
+                "method": method,
+                "command": params.get("command").cloned().unwrap_or(Value::Null),
+                "cwd": params.get("cwd").cloned().unwrap_or(Value::Null),
+                "reason": params.get("reason").cloned().unwrap_or(Value::Null),
+                "permissions": params.get("permissions").cloned().unwrap_or(Value::Null),
+                "changes": params.get("changes").cloned().unwrap_or(Value::Null),
+                "grantRoot": params.get("grantRoot").cloned().unwrap_or(Value::Null),
+            },
         });
     }
     let mut question = serde_json::Map::new();
@@ -2807,6 +2871,16 @@ fn pause_provider_ref(pending: &PendingProviderRequest) -> Value {
         "item_id": extract_string(&pending.params, &["itemId"]),
         "server_name": extract_string(&pending.params, &["serverName"]),
     })
+}
+
+/// Map a Longhouse pause-answer decision onto allow/deny for permission
+/// approvals. Treat the affirmative aliases as "allow"; everything else
+/// (deny, decline, cancel, missing) is denial.
+fn pause_decision_allows(decision: &str) -> bool {
+    matches!(
+        decision,
+        "allow" | "accept" | "approve" | "approved" | "yes" | "answer"
+    )
 }
 
 fn build_provider_pause_response(
@@ -2854,6 +2928,37 @@ fn build_provider_pause_response(
                     json!({ "action": "decline", "content": Value::Null }),
                     "rejected",
                 ))
+            }
+        }
+        "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {
+            if pause_decision_allows(decision) {
+                Ok((json!({ "decision": "accept" }), "resolved"))
+            } else {
+                Ok((json!({ "decision": "decline" }), "rejected"))
+            }
+        }
+        "item/permissions/requestApproval" => {
+            if pause_decision_allows(decision) {
+                Ok((
+                    json!({
+                        "scope": "turn",
+                        "permissions": pending
+                            .params
+                            .get("permissions")
+                            .cloned()
+                            .unwrap_or_else(|| json!({})),
+                    }),
+                    "resolved",
+                ))
+            } else {
+                Ok((json!({ "scope": "turn", "permissions": {} }), "rejected"))
+            }
+        }
+        "applyPatchApproval" | "execCommandApproval" => {
+            if pause_decision_allows(decision) {
+                Ok((json!({ "decision": "Approved" }), "resolved"))
+            } else {
+                Ok((json!({ "decision": "Denied" }), "rejected"))
             }
         }
         other => bail!("unsupported pending pause request method: {other}"),
@@ -4290,7 +4395,12 @@ impl BridgeRuntimeSink {
         })]);
     }
 
-    fn post_pause_request(&self, pending: &PendingProviderRequest, can_respond: bool) {
+    fn post_pause_request(
+        &self,
+        pending: &PendingProviderRequest,
+        kind: &str,
+        can_respond: bool,
+    ) {
         let observed_at = Utc::now();
         self.post_runtime_events_background(vec![json!({
             "runtime_key": format!("codex:{}", self.session_id),
@@ -4313,7 +4423,7 @@ impl BridgeRuntimeSink {
                 "request_key": pending.request_key,
                 "provider_request_id": pending.provider_request_id,
                 "provider_ref": pause_provider_ref(pending),
-                "kind": PAUSE_KIND_STRUCTURED_QUESTION,
+                "kind": kind,
                 "title": pause_request_title(&pending.method, &pending.params),
                 "summary": pause_request_summary(&pending.method, &pending.params),
                 "request_payload": pause_request_payload(&pending.method, &pending.params),
@@ -5365,6 +5475,7 @@ mod tests {
             machine_name: Some("test-box".to_string()),
             auto_approve: true,
             hold_user_input_requests: false,
+            hold_permission_requests: false,
             longhouse_home: Some(temp.path().to_path_buf()),
             state_file: temp.path().join("bridge-state.json"),
             log_file: temp.path().join("bridge.log"),
@@ -8478,6 +8589,189 @@ mod tests {
             extract_string(&response, &["turn", "id"]).as_deref(),
             Some("turn-live")
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn held_permission_approval_can_be_answered_over_ipc() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<String>();
+        let (events_tx, events_rx) = mpsc::unbounded_channel();
+        let (runtime_tx, mut runtime_rx) = mpsc::unbounded_channel::<Vec<Value>>();
+        let temp = tempfile::tempdir().unwrap();
+
+        let client = RpcClient {
+            child: None,
+            child_pid: None,
+            child_pgid: None,
+            child_ws_url: None,
+            outbound: RpcOutbound::WebSocket(outbound_tx.clone()),
+            events_rx,
+            pending_methods: BTreeMap::new(),
+            next_request_id: 1,
+            ws_url: "ws://example.test".to_string(),
+        };
+        let mut context = make_test_context(&temp);
+        context.state.thread_id = Some("thr_test".to_string());
+        context.runtime.thread_id = Some("thr_test".to_string());
+        context.runtime.runtime_tx = Some(runtime_tx);
+        let responder = PauseRequestResponder {
+            pending: context.pending_pause_requests.clone(),
+            outbound: outbound_tx,
+            runtime: context.runtime.clone(),
+        };
+        let mut config = make_test_run_config(&temp);
+        config.auto_approve = false;
+        config.hold_permission_requests = true;
+
+        events_tx
+            .send(StreamEvent::Rpc(json!({
+                "id": "srv-approval-1",
+                "method": "item/commandExecution/requestApproval",
+                "params": {
+                    "threadId": "thr_test",
+                    "turnId": "turn-live",
+                    "itemId": "cmd-1",
+                    "command": "rm -rf build"
+                }
+            })))
+            .unwrap();
+
+        let task = tokio::spawn(async move {
+            let mut client = client;
+            let mut context = context;
+            send_request_with_runtime(
+                &mut client,
+                "turn/start",
+                json!({
+                    "threadId": "thr_test",
+                    "input": [{"type": "text", "text": "continue"}],
+                }),
+                &config,
+                &mut context,
+            )
+            .await
+        });
+
+        let turn_start_payload: Value =
+            serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+        assert_eq!(turn_start_payload["method"], "turn/start");
+
+        let pause_event = recv_runtime_event_kind(&mut runtime_rx, "pause_request").await;
+        let request_key = pause_event["payload"]["request_key"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(pause_event["payload"]["can_respond"], true);
+        assert_eq!(pause_event["payload"]["kind"], "permission_prompt");
+        assert_eq!(
+            pause_event["payload"]["request_payload"]["approval"]["command"],
+            "rm -rf build"
+        );
+
+        // The provider JSON-RPC response must NOT be sent immediately: the only
+        // thing on the wire so far is turn/start. Answering over IPC produces it.
+        let (mut ipc_client, ipc_server) = tokio::net::UnixStream::pair().unwrap();
+        let (ipc_tx, _ipc_rx) = mpsc::unbounded_channel();
+        let ipc_task = tokio::spawn(handle_ipc_connection(ipc_server, ipc_tx, Some(responder)));
+        let mut request = serde_json::to_vec(&json!({
+            "kind": "pause_response",
+            "request_key": request_key,
+            "decision": "allow",
+            "message": "Approved."
+        }))
+        .unwrap();
+        request.push(b'\n');
+        ipc_client.write_all(&request).await.unwrap();
+        ipc_client.shutdown().await.unwrap();
+
+        let provider_response: Value =
+            serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+        assert_eq!(provider_response["id"], "srv-approval-1");
+        assert_eq!(provider_response["result"], json!({ "decision": "accept" }));
+
+        let pause_resolution = recv_runtime_event_kind(&mut runtime_rx, "pause_resolution").await;
+        assert_eq!(pause_resolution["payload"]["status"], "resolved");
+        assert_eq!(
+            pause_resolution["payload"]["provider_request_id"],
+            "srv-approval-1"
+        );
+
+        let mut ipc_response = Vec::new();
+        ipc_client.read_to_end(&mut ipc_response).await.unwrap();
+        let ipc_response: Value = serde_json::from_slice(&ipc_response).unwrap();
+        assert_eq!(ipc_response["ok"], true);
+        assert_eq!(ipc_response["status"], "resolved");
+        ipc_task.await.unwrap().unwrap();
+
+        events_tx
+            .send(StreamEvent::Rpc(json!({
+                "id": 1,
+                "result": {
+                    "turn": {"id": "turn-live", "status": "inProgress"}
+                }
+            })))
+            .unwrap();
+        let response = task.await.unwrap().unwrap();
+        assert_eq!(
+            extract_string(&response, &["turn", "id"]).as_deref(),
+            Some("turn-live")
+        );
+    }
+
+    #[tokio::test]
+    async fn permission_approval_auto_accepts_immediately_without_hold() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<String>();
+        let (_events_tx, events_rx) = mpsc::unbounded_channel();
+        let (runtime_tx, mut runtime_rx) = mpsc::unbounded_channel::<Vec<Value>>();
+        let temp = tempfile::tempdir().unwrap();
+
+        let mut client = RpcClient {
+            child: None,
+            child_pid: None,
+            child_pgid: None,
+            child_ws_url: None,
+            outbound: RpcOutbound::WebSocket(outbound_tx),
+            events_rx,
+            pending_methods: BTreeMap::new(),
+            next_request_id: 1,
+            ws_url: "ws://example.test".to_string(),
+        };
+        let mut context = make_test_context(&temp);
+        context.runtime.runtime_tx = Some(runtime_tx);
+        let mut config = make_test_run_config(&temp);
+        // Zero-prompt remote-launch posture: auto_approve on, hold off.
+        config.auto_approve = true;
+        config.hold_permission_requests = false;
+
+        handle_server_request(
+            &config,
+            json!({
+                "id": 7,
+                "method": "item/commandExecution/requestApproval",
+                "params": {
+                    "threadId": "thr_test",
+                    "turnId": "turn-live",
+                    "itemId": "cmd-1",
+                    "command": "echo hi"
+                }
+            }),
+            &mut client,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        // Immediate auto-accept on the wire, no held pause request.
+        let response_payload: Value =
+            serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+        assert_eq!(response_payload["id"], 7);
+        assert_eq!(response_payload["result"], json!({ "decision": "accept" }));
+        assert!(context.pending_pause_requests.lock().await.is_empty());
+
+        // The emitted pause_request must advertise can_respond=false (detection only).
+        let pause_event = recv_runtime_event_kind(&mut runtime_rx, "pause_request").await;
+        assert_eq!(pause_event["payload"]["can_respond"], false);
+        assert_eq!(pause_event["payload"]["kind"], "permission_prompt");
     }
 
     #[tokio::test]

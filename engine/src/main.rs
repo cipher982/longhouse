@@ -533,6 +533,10 @@ enum CodexBridgeCommands {
         #[arg(long, hide = true)]
         hold_user_input_requests: bool,
 
+        /// Debug/canary: hold permission-approval requests for Longhouse response instead of immediate auto-accept/decline.
+        #[arg(long, hide = true)]
+        hold_permission_requests: bool,
+
         #[arg(long)]
         state_root: Option<PathBuf>,
 
@@ -607,6 +611,10 @@ enum CodexBridgeCommands {
         /// Debug/canary: hold structured user-input requests for Longhouse response instead of immediate fallback.
         #[arg(long, hide = true)]
         hold_user_input_requests: bool,
+
+        /// Debug/canary: hold permission-approval requests for Longhouse response instead of immediate auto-accept/decline.
+        #[arg(long, hide = true)]
+        hold_permission_requests: bool,
 
         #[arg(long)]
         longhouse_home: Option<PathBuf>,
@@ -1191,6 +1199,7 @@ fn main() -> anyhow::Result<()> {
                     machine_name,
                     auto_approve,
                     hold_user_input_requests,
+                    hold_permission_requests,
                     state_root,
                     longhouse_home,
                     isolation_root,
@@ -1222,6 +1231,7 @@ fn main() -> anyhow::Result<()> {
                         machine_name,
                         auto_approve,
                         hold_user_input_requests,
+                        hold_permission_requests,
                         state_root,
                         longhouse_home,
                         log_file,
@@ -1260,6 +1270,7 @@ fn main() -> anyhow::Result<()> {
                     machine_name,
                     auto_approve,
                     hold_user_input_requests,
+                    hold_permission_requests,
                     longhouse_home,
                     state_file,
                     log_file,
@@ -1284,6 +1295,7 @@ fn main() -> anyhow::Result<()> {
                         machine_name,
                         auto_approve,
                         hold_user_input_requests,
+                        hold_permission_requests,
                         longhouse_home,
                         state_file,
                         log_file,
