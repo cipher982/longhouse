@@ -151,10 +151,27 @@ export default {
           ])
         }
         if (type === "permission.asked") {
+          const requestID = (props && (props.id || props.requestID || props.permissionID)) || null
+          const toolName = (props && (props.tool || props.toolName)) || null
           await postEvents(ctx, [
             buildEvent(ctx, "phase_signal", "blocked", "permission", {
               eventID: event.id,
               opencodeSessionID: props.sessionID,
+              permission: props,
+            }),
+            // Also register an ANSWERABLE permission pause request so Longhouse
+            // (web/iOS) can allow/deny and push the decision back via the bridge.
+            buildEvent(ctx, "pause_request", null, toolName, {
+              eventID: event.id,
+              opencodeSessionID: props.sessionID,
+              request_id: requestID,
+              provider_request_id: requestID,
+              kind: "permission_prompt",
+              can_respond: requestID ? true : false,
+              provider_ref: { source: "opencode_bridge", reply_transport: "managed_push", opencode_request_id: requestID },
+              tool_name: toolName,
+              title: toolName ? ("Permission: " + toolName) : "Tool permission",
+              summary: toolName ? ("OpenCode wants to use " + toolName) : "OpenCode is requesting tool permission.",
               permission: props,
             }),
           ])
