@@ -109,7 +109,10 @@ def test_build_claude_channel_exec_command_defaults_to_bypass():
         claude_command="claude",
     )
     assert "--dangerously-skip-permissions" in command
-    assert "LONGHOUSE_PERMISSION_HOOK_ENABLED" not in command
+    # Bypass must explicitly force the gate OFF so an inherited env var from the
+    # parent shell cannot engage it.
+    assert "LONGHOUSE_PERMISSION_HOOK_ENABLED=0" in command
+    assert "LONGHOUSE_PERMISSION_HOOK_ENABLED=1" not in command
 
 
 def test_build_claude_channel_exec_command_remote_approve_drops_bypass_and_engages_gate():

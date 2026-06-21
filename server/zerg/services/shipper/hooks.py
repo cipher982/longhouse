@@ -488,8 +488,11 @@ def _merge_hook_entry_by_command(
     for entry in existing_entries:
         matches = any(command_substr in hook.get("command", "") for hook in entry.get("hooks", []))
         if matches:
-            result.append(new_entry)
-            updated = True
+            # Replace the first matching entry; drop any further duplicates so
+            # repeated/old installs converge to exactly one gate entry.
+            if not updated:
+                result.append(new_entry)
+                updated = True
         else:
             result.append(entry)
     if not updated:

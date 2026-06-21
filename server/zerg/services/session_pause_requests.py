@@ -37,9 +37,26 @@ def reply_transport_for_row(row: "SessionPauseRequest") -> str | None:
     return value
 
 
+def _provider_ref_source(row: "SessionPauseRequest") -> str | None:
+    ref = row.provider_ref_json if isinstance(row.provider_ref_json, dict) else {}
+    return _clean_str(ref.get("source"))
+
+
 def is_pull_reply_transport(row: "SessionPauseRequest") -> bool:
-    """True when the answer is delivered by the provider polling (resolve in place)."""
-    return reply_transport_for_row(row) in PULL_REPLY_TRANSPORTS
+    """True when the answer is delivered by the provider polling (resolve in place).
+
+    Explicit pull transport always wins. For backward compatibility, a
+    Claude permission-gate row (kind=permission_prompt, source=claude_permission_gate)
+    written before reply_transport existed defaults to PULL — it must never be
+    pushed over managed control (there is no live process to push to). Other rows
+    (e.g. structured_question) keep their historical PUSH default.
+    """
+    transport = reply_transport_for_row(row)
+    if transport in PULL_REPLY_TRANSPORTS:
+        return True
+    if transport is None and _clean_str(getattr(row, "kind", None)) == PAUSE_KIND_PERMISSION_PROMPT:
+        return _provider_ref_source(row) == "claude_permission_gate"
+    return False
 
 
 def make_pause_request_key(

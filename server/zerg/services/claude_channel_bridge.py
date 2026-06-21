@@ -235,10 +235,13 @@ def build_claude_channel_exec_command(
     ]
     if hook_url:
         inner.append(f"export LONGHOUSE_HOOK_URL={_quote(str(hook_url).strip())}")
-    # Engage the permission gate only in remote-approve mode. The gate stays
-    # dormant (and never gates a bypass session) unless explicitly enabled here.
+    # Engage the permission gate ONLY in remote-approve mode. In bypass mode we
+    # explicitly force it off so an inherited LONGHOUSE_PERMISSION_HOOK_ENABLED=1
+    # from the parent shell can never gate a bypass/autonomous session.
     if remote_approve:
         inner.append("export LONGHOUSE_PERMISSION_HOOK_ENABLED=1")
+    else:
+        inner.append("export LONGHOUSE_PERMISSION_HOOK_ENABLED=0")
     inner.append("exec " + " ".join(_quote(part) for part in command_bits))
     return f"zsh -lc {_quote('; '.join(inner))}"
 

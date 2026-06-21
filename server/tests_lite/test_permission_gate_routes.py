@@ -265,6 +265,54 @@ def test_reject_via_pause_route_maps_to_deny(monkeypatch, tmp_path):
         api_app.dependency_overrides.clear()
 
 
+def test_legacy_permission_gate_row_without_transport_resolves_in_place(monkeypatch, tmp_path):
+    """Backward-compat: a claude_permission_gate permission_prompt row written
+    before reply_transport existed must still resolve in place (pull), NOT push
+    over managed control (which would 502 on a claude session)."""
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_session(session_local)
+
+    async def _fail_if_pushed(**kwargs):
+        raise AssertionError("legacy permission_prompt row must not push")
+
+    monkeypatch.setattr(session_chat, "answer_pause_request_on_managed_local_session", _fail_if_pushed)
+
+    client, api_app = _make_client_with_user(session_local, user_id)
+    try:
+        from datetime import datetime
+        from datetime import timezone
+
+        from zerg.services.session_pause_requests import upsert_pause_request
+        from zerg.services.session_runtime import runtime_key_for_session
+
+        runtime_key = runtime_key_for_session("claude", str(session_id))
+        with session_local() as db:
+            row, _ = upsert_pause_request(
+                db,
+                session_id=session_id,
+                runtime_key=runtime_key,
+                provider="claude",
+                request_key=f"claude:{runtime_key}:legacy",
+                occurred_at=datetime.now(timezone.utc),
+                provider_request_id="legacy",
+                # NOTE: source set, but NO reply_transport (pre-Phase-1 row).
+                provider_ref={"source": "claude_permission_gate"},
+                kind="permission_prompt",
+                can_respond=True,
+            )
+            db.commit()
+            pause_id = str(row.id)
+
+        resp = client.post(
+            f"/api/sessions/{session_id}/pause-requests/{pause_id}/response",
+            json={"decision": "answer"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "resolved"
+    finally:
+        api_app.dependency_overrides.clear()
+
+
 def test_dispatch_keys_on_transport_not_kind(monkeypatch, tmp_path):
     """A permission_prompt row WITHOUT a pull reply_transport must route to the
     managed-control PUSH path, proving dispatch keys on transport, not kind."""
