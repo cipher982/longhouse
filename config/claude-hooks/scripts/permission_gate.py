@@ -84,14 +84,17 @@ def _enabled() -> bool:
     return raw not in {"0", "false", "no", "off"}
 
 
-def _post_json(url: str, body: dict, token: str) -> bool:
+def _post_json(url: str, body: dict, token: str) -> dict | None:
+    """POST and return the parsed JSON ack, or None on non-2xx."""
     data = json.dumps(body).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if token:
         headers["X-Agents-Token"] = token
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT_S) as resp:
-        return 200 <= resp.status < 300
+        if not (200 <= resp.status < 300):
+            return None
+        return json.loads(resp.read().decode("utf-8") or "{}")
 
 
 def _get_decision(url: str, token: str) -> dict | None:
@@ -143,7 +146,7 @@ def main() -> None:
 
     # 1. Register the held permission request.
     try:
-        registered = _post_json(
+        ack = _post_json(
             f"{base_url}/api/agents/permission-requests",
             {
                 "session_id": session_id,
@@ -156,13 +159,16 @@ def main() -> None:
     except (urllib.error.URLError, OSError, ValueError):
         _fail_decision()
         return
-    if not registered:
+    if not ack:
         _fail_decision()
 
-    # 2. Long-poll for the decision.
-    decision_url = f"{base_url}/api/agents/permission-decision?" + urllib.parse.urlencode(
-        {"session_id": session_id, "tool_use_id": tool_use_id}
-    )
+    # 2. Long-poll for the decision. Poll by the unique pause_request_id from the
+    # ack so concurrent/duplicate tool_use_ids resolve independently.
+    decision_params = {"session_id": session_id, "tool_use_id": tool_use_id}
+    pause_request_id = str((ack or {}).get("pause_request_id") or "").strip()
+    if pause_request_id:
+        decision_params["pause_request_id"] = pause_request_id
+    decision_url = f"{base_url}/api/agents/permission-decision?" + urllib.parse.urlencode(decision_params)
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         try:

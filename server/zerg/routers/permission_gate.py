@@ -46,6 +46,10 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 PERMISSION_GATE_SOURCE = "claude_permission_gate"
 PERMISSION_PROMPT_KIND = "permission_prompt"
 
+# How a resolved decision is delivered back to the provider. Claude's PreToolUse
+# hook PULLs (it long-polls the resolved row); codex/opencode PUSH (Phase 2+).
+REPLY_TRANSPORT_CLAUDE_PULL = "claude_pretooluse_pull"
+
 
 class PermissionRequestIn(UTCBaseModel):
     """PreToolUse hook payload registering a held permission request."""
@@ -121,7 +125,7 @@ async def register_permission_request(
         request_key=request_key,
         occurred_at=occurred_at,
         provider_request_id=payload.tool_use_id,
-        provider_ref={"source": PERMISSION_GATE_SOURCE},
+        provider_ref={"source": PERMISSION_GATE_SOURCE, "reply_transport": REPLY_TRANSPORT_CLAUDE_PULL},
         kind=PERMISSION_PROMPT_KIND,
         tool_name=tool_name,
         title=f"Permission: {tool_name}" if tool_name else "Tool permission",
@@ -137,34 +141,47 @@ async def register_permission_request(
 async def get_permission_decision(
     session_id: str,
     tool_use_id: str,
+    pause_request_id: Optional[str] = None,
     provider: str = "claude",
     db: Session = Depends(get_db),
     _token: object = Depends(verify_agents_token),
 ) -> PermissionDecisionOut:
-    """Return the resolved permission decision, or pending if not yet answered."""
+    """Return the resolved permission decision, or pending if not yet answered.
+
+    Polls by the unique pause_request_id returned at register when available, so
+    concurrent or repeated tool_use_ids resolve independently; falls back to the
+    (session, tool_use_id)-derived request_key only when no id was provided.
+    """
 
     _enforce_session_scope(_token, session_id)
-    normalized_provider = (provider or "claude").strip() or "claude"
-    runtime_key = runtime_key_for_session(normalized_provider, session_id)
-    request_key = make_pause_request_key(
-        provider=normalized_provider,
-        runtime_key=runtime_key,
-        provider_request_id=tool_use_id,
-    )
+    session_uuid = _coerce_session_uuid(session_id)
 
     # Import locally to avoid a router-import cycle through session_pause_requests.
     from zerg.models.agents import SessionPauseRequest
 
-    session_uuid = _coerce_session_uuid(session_id)
-    row = (
-        db.query(SessionPauseRequest)
-        .filter(
-            SessionPauseRequest.request_key == request_key,
-            SessionPauseRequest.session_id == session_uuid,
-            SessionPauseRequest.kind == PERMISSION_PROMPT_KIND,
-        )
-        .first()
+    query = db.query(SessionPauseRequest).filter(
+        SessionPauseRequest.session_id == session_uuid,
+        SessionPauseRequest.kind == PERMISSION_PROMPT_KIND,
     )
+    if pause_request_id:
+        try:
+            query = query.filter(SessionPauseRequest.id == UUID(pause_request_id))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid pause_request_id: {pause_request_id}",
+            ) from exc
+    else:
+        normalized_provider = (provider or "claude").strip() or "claude"
+        runtime_key = runtime_key_for_session(normalized_provider, session_id)
+        request_key = make_pause_request_key(
+            provider=normalized_provider,
+            runtime_key=runtime_key,
+            provider_request_id=tool_use_id,
+        )
+        query = query.filter(SessionPauseRequest.request_key == request_key)
+
+    row = query.first()
     if row is None or not _is_permission_gate_row(row):
         return PermissionDecisionOut(decision=None, resolved=False)
     if row.status == PENDING_STATUS:

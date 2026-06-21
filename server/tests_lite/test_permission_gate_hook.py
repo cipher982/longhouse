@@ -28,6 +28,7 @@ class _StubLonghouse:
         self._resolved = resolved
         self.requests_seen: list[dict] = []
         self.decision_polls = 0
+        self.last_decision_path = ""
         handler = self._build_handler()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -64,6 +65,7 @@ class _StubLonghouse:
             def do_GET(self):
                 if self.path.startswith("/api/agents/permission-decision"):
                     outer.decision_polls += 1
+                    outer.last_decision_path = self.path
                     self._reply(
                         200,
                         {
@@ -128,6 +130,8 @@ def test_hook_emits_allow_when_resolved_allow():
     assert result.returncode == 0, result.stderr
     assert _parse_decision(result.stdout) == "allow"
     assert stub.requests_seen and stub.requests_seen[0]["tool_use_id"] == "toolu_test"
+    # The hook polls by the unique pause_request_id from the register ack.
+    assert "pause_request_id=p1" in stub.last_decision_path
 
 
 def test_hook_emits_deny_when_resolved_deny():
