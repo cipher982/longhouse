@@ -8,15 +8,45 @@ from types import MappingProxyType
 from typing import Any
 from typing import Literal
 from typing import Mapping
+from typing import cast
 
 LineageKind = Literal["none", "task_child", "fork", "unknown", "agent_switch", "async_prompt"]
 ProjectionKind = Literal["root", "subagent", "fork", "linked", "inline_event", "run_control"]
 Visibility = Literal["timeline", "hidden", "inline", "control"]
 CapabilityState = Literal["supported", "unsupported", "unknown", "experimental", "observed_only"]
+_EXPLICIT_LINEAGE_KINDS: frozenset[str] = frozenset({"none", "task_child", "fork", "unknown", "agent_switch", "async_prompt"})
 
 
 def _frozen_metadata(value: Mapping[str, Any] | None) -> Mapping[str, Any]:
     return MappingProxyType(dict(value or {}))
+
+
+def source_path_looks_like_subagent(source_path: str | None) -> bool:
+    if not source_path:
+        return False
+    return "/subagents/" in source_path.replace("\\", "/")
+
+
+def classify_lineage_kind(
+    *,
+    explicit_kind: str | None = None,
+    is_sidechain: bool = False,
+    parent_provider_session_id: str | None = None,
+    source_path: str | None = None,
+) -> LineageKind:
+    """Classify raw provider lineage evidence before product projection."""
+
+    explicit = str(explicit_kind or "").strip()
+    if explicit in _EXPLICIT_LINEAGE_KINDS:
+        return cast(LineageKind, explicit)
+
+    looks_like_subagent = source_path_looks_like_subagent(source_path)
+    has_parent = bool(str(parent_provider_session_id or "").strip())
+    if is_sidechain and (has_parent or looks_like_subagent):
+        return "task_child"
+    if has_parent or looks_like_subagent:
+        return "unknown"
+    return "none"
 
 
 @dataclass(frozen=True)
@@ -49,6 +79,39 @@ class ObservedLineageEdge:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "metadata", _frozen_metadata(self.metadata))
+
+
+def observed_lineage_from_evidence(
+    *,
+    provider: str,
+    explicit_kind: str | None = None,
+    is_sidechain: bool = False,
+    source_path: str | None = None,
+    parent_provider_session_id: str | None = None,
+    child_provider_session_id: str | None = None,
+    parent_event_id: str | None = None,
+    parent_tool_call_id: str | None = None,
+    evidence_kind: str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> ObservedLineageEdge | None:
+    kind = classify_lineage_kind(
+        explicit_kind=explicit_kind,
+        is_sidechain=is_sidechain,
+        parent_provider_session_id=parent_provider_session_id,
+        source_path=source_path,
+    )
+    if kind == "none":
+        return None
+    return ObservedLineageEdge(
+        provider=provider,
+        kind=kind,
+        parent_provider_session_id=parent_provider_session_id,
+        child_provider_session_id=child_provider_session_id,
+        parent_event_id=parent_event_id,
+        parent_tool_call_id=parent_tool_call_id,
+        evidence_kind=evidence_kind,
+        metadata=metadata or {},
+    )
 
 
 @dataclass(frozen=True)

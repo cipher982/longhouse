@@ -14,7 +14,10 @@ from .identity_resolver import ObservedLineageEdge
 from .identity_resolver import ObservedRun
 from .identity_resolver import ObservedSession
 from .identity_resolver import SessionProjectionDecision
+from .identity_resolver import classify_lineage_kind
+from .identity_resolver import observed_lineage_from_evidence
 from .identity_resolver import resolve_session_projection
+from .identity_resolver import source_path_looks_like_subagent
 from .models import CompactionBoundary
 from .models import EventIngest
 from .models import IngestResult
@@ -44,7 +47,10 @@ __all__ = [
     "ObservedRun",
     "ObservedSession",
     "SessionProjectionDecision",
+    "classify_lineage_kind",
+    "observed_lineage_from_evidence",
     "resolve_session_projection",
+    "source_path_looks_like_subagent",
     "ensure_agents_schema",
     "_normalize_utc_naive",
     "_infer_execution_home_from_ingest",

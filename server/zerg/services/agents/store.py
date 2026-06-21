@@ -39,8 +39,8 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionThread
 from zerg.models.agents import TimelineCard
 from zerg.services.agents.compaction import classify_compaction_kind
-from zerg.services.agents.identity_resolver import ObservedLineageEdge
 from zerg.services.agents.identity_resolver import ObservedSession
+from zerg.services.agents.identity_resolver import observed_lineage_from_evidence
 from zerg.services.agents.identity_resolver import resolve_session_projection
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.agents.session_graph_writes import ensure_primary_thread
@@ -1105,24 +1105,6 @@ class AgentsStore:
                 return line_data.source_path
         return None
 
-    @staticmethod
-    def _source_path_looks_like_subagent(source_path: str | None) -> bool:
-        if not source_path:
-            return False
-        normalized = source_path.replace("\\", "/")
-        return "/subagents/" in normalized
-
-    def _lineage_kind_for_ingest(self, data: SessionIngest, source_path: str | None) -> str:
-        explicit = str(data.lineage_kind or "").strip()
-        if explicit in {"task_child", "fork", "unknown", "agent_switch", "async_prompt"}:
-            return explicit
-        looks_like_subagent = self._source_path_looks_like_subagent(source_path)
-        if data.is_sidechain and (data.parent_provider_session_id or looks_like_subagent):
-            return "task_child"
-        if data.parent_provider_session_id or looks_like_subagent:
-            return "unknown"
-        return "none"
-
     def _record_lineage_edge_for_ingest(
         self,
         *,
@@ -1708,30 +1690,29 @@ class AgentsStore:
 
         resolved_child_thread = None
         existing = None
-        lineage_kind = self._lineage_kind_for_ingest(data, primary_source_path)
+        observed_lineage = observed_lineage_from_evidence(
+            provider=data.provider,
+            explicit_kind=data.lineage_kind,
+            is_sidechain=data.is_sidechain,
+            source_path=primary_source_path,
+            parent_provider_session_id=data.parent_provider_session_id,
+            child_provider_session_id=data.provider_session_id or str(session_id),
+            parent_tool_call_id=data.subagent_tool_use_id,
+            evidence_kind="ingest",
+        )
         observed_session = ObservedSession(
             provider=data.provider,
             provider_session_id=data.provider_session_id,
             longhouse_session_id=str(session_id),
-            lineage=(
-                ObservedLineageEdge(
-                    provider=data.provider,
-                    kind=lineage_kind,
-                    parent_provider_session_id=data.parent_provider_session_id,
-                    child_provider_session_id=data.provider_session_id or str(session_id),
-                    parent_tool_call_id=data.subagent_tool_use_id,
-                    evidence_kind="ingest",
-                )
-                if lineage_kind != "none"
-                else None
-            ),
+            lineage=observed_lineage,
         )
         parent_thread = None
-        if data.parent_provider_session_id:
+        parent_provider_session_id = observed_lineage.parent_provider_session_id if observed_lineage else None
+        if parent_provider_session_id:
             parent_thread = resolve_primary_thread_by_provider_session_id(
                 self.db,
                 provider=data.provider,
-                provider_session_id=data.parent_provider_session_id,
+                provider_session_id=parent_provider_session_id,
             )
         identity_projection = resolve_session_projection(
             observed_session,
