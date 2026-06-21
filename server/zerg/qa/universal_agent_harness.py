@@ -1675,16 +1675,9 @@ class UniversalProviderAdapter:
         return payload
 
     def _run_codex_permission_prompt(self, package: EvidencePackage) -> dict[str, Any]:
-        binary, source = self._resolve_binary()
-        if binary is None:
-            payload = {
-                "status": STATUS_FAIL,
-                "failure_code": "provider_binary_not_found",
-                "message": "codex binary was not found for permission_prompt",
-                "binary_source": source,
-            }
-            package.write_json("assertions/permission_prompt.json", payload)
-            return payload
+        binary, binary_error = self._require_binary(package, "permission_prompt")
+        if binary_error is not None:
+            return binary_error
 
         from zerg.qa.codex_provider_release_canary import run_codex_provider_release_canary
 
@@ -3446,16 +3439,9 @@ class UniversalProviderAdapter:
         return payload
 
     def _run_opencode_interrupt_cancel(self, package: EvidencePackage) -> dict[str, Any]:
-        binary, source = self._resolve_binary()
-        if binary is None:
-            payload = {
-                "status": STATUS_FAIL,
-                "failure_code": "provider_binary_not_found",
-                "message": "opencode binary was not found for interrupt_cancel",
-                "binary_source": source,
-            }
-            package.write_json("assertions/interrupt_cancel.json", payload)
-            return payload
+        binary, binary_error = self._require_binary(package, "interrupt_cancel")
+        if binary_error is not None:
+            return binary_error
 
         from zerg.qa.provider_live_canary import run_provider_live_canary
 
@@ -3510,16 +3496,9 @@ class UniversalProviderAdapter:
         return payload
 
     def _run_opencode_resume_reattach(self, package: EvidencePackage) -> dict[str, Any]:
-        binary, source = self._resolve_binary()
-        if binary is None:
-            payload = {
-                "status": STATUS_FAIL,
-                "failure_code": "provider_binary_not_found",
-                "message": "opencode binary was not found for resume_reattach",
-                "binary_source": source,
-            }
-            package.write_json("assertions/resume_reattach.json", payload)
-            return payload
+        binary, binary_error = self._require_binary(package, "resume_reattach")
+        if binary_error is not None:
+            return binary_error
 
         from zerg.qa.provider_live_canary import run_provider_live_canary
 
@@ -3675,16 +3654,9 @@ class UniversalProviderAdapter:
         )
 
     def _run_codex_interrupt_cancel(self, package: EvidencePackage) -> dict[str, Any]:
-        binary, source = self._resolve_binary()
-        if binary is None:
-            payload = {
-                "status": STATUS_FAIL,
-                "failure_code": "provider_binary_not_found",
-                "message": "codex binary was not found for interrupt_cancel",
-                "binary_source": source,
-            }
-            package.write_json("assertions/interrupt_cancel.json", payload)
-            return payload
+        binary, binary_error = self._require_binary(package, "interrupt_cancel")
+        if binary_error is not None:
+            return binary_error
 
         from zerg.qa.codex_provider_release_canary import run_codex_provider_release_canary
 
@@ -3916,16 +3888,9 @@ class UniversalProviderAdapter:
         return payload
 
     def _run_codex_tool_call_result(self, package: EvidencePackage) -> dict[str, Any]:
-        binary, source = self._resolve_binary()
-        if binary is None:
-            payload = {
-                "status": STATUS_FAIL,
-                "failure_code": "provider_binary_not_found",
-                "message": "codex binary was not found for tool_call_result",
-                "binary_source": source,
-            }
-            package.write_json("assertions/tool_call_result.json", payload)
-            return payload
+        binary, binary_error = self._require_binary(package, "tool_call_result")
+        if binary_error is not None:
+            return binary_error
 
         from zerg.qa.codex_provider_release_canary import run_codex_provider_release_canary
 
@@ -3983,16 +3948,9 @@ class UniversalProviderAdapter:
         return payload
 
     def _run_opencode_tool_call_result(self, package: EvidencePackage) -> dict[str, Any]:
-        binary, source = self._resolve_binary()
-        if binary is None:
-            payload = {
-                "status": STATUS_FAIL,
-                "failure_code": "provider_binary_not_found",
-                "message": "opencode binary was not found for tool_call_result",
-                "binary_source": source,
-            }
-            package.write_json("assertions/tool_call_result.json", payload)
-            return payload
+        binary, binary_error = self._require_binary(package, "tool_call_result")
+        if binary_error is not None:
+            return binary_error
 
         control_evidence_root = package.path("raw", "provider-control-e2e-evidence")
         control_artifact_path = package.path("raw", "provider-control-e2e.json")
@@ -4048,16 +4006,9 @@ class UniversalProviderAdapter:
         return payload
 
     def _run_claude_live_token_streaming(self, package: EvidencePackage) -> dict[str, Any]:
-        binary, source = self._resolve_binary()
-        if binary is None:
-            payload = {
-                "status": STATUS_FAIL,
-                "failure_code": "provider_binary_not_found",
-                "message": "claude binary was not found for live_token_streaming",
-                "binary_source": source,
-            }
-            package.write_json("assertions/live_token_streaming.json", payload)
-            return payload
+        binary, binary_error = self._require_binary(package, "live_token_streaming")
+        if binary_error is not None:
+            return binary_error
 
         control_evidence_root = package.path("raw", "provider-control-e2e-evidence")
         control_artifact_path = package.path("raw", "provider-control-e2e.json")
@@ -4111,16 +4062,9 @@ class UniversalProviderAdapter:
         return payload
 
     def _run_codex_live_token_streaming(self, package: EvidencePackage) -> dict[str, Any]:
-        binary, source = self._resolve_binary()
-        if binary is None:
-            payload = {
-                "status": STATUS_FAIL,
-                "failure_code": "provider_binary_not_found",
-                "message": "codex binary was not found for live_token_streaming",
-                "binary_source": source,
-            }
-            package.write_json("assertions/live_token_streaming.json", payload)
-            return payload
+        binary, binary_error = self._require_binary(package, "live_token_streaming")
+        if binary_error is not None:
+            return binary_error
 
         from zerg.qa.codex_provider_release_canary import run_codex_provider_release_canary
 
@@ -4215,16 +4159,9 @@ class UniversalProviderAdapter:
         return payload
 
     def _run_opencode_live_token_streaming(self, package: EvidencePackage) -> dict[str, Any]:
-        binary, source = self._resolve_binary()
-        if binary is None:
-            payload = {
-                "status": STATUS_FAIL,
-                "failure_code": "provider_binary_not_found",
-                "message": "opencode binary was not found for live_token_streaming",
-                "binary_source": source,
-            }
-            package.write_json("assertions/live_token_streaming.json", payload)
-            return payload
+        binary, binary_error = self._require_binary(package, "live_token_streaming")
+        if binary_error is not None:
+            return binary_error
 
         control_evidence_root = package.path("raw", "provider-control-e2e-evidence")
         control_artifact_path = package.path("raw", "provider-control-e2e.json")
@@ -4286,16 +4223,9 @@ class UniversalProviderAdapter:
         return payload
 
     def _run_antigravity_live_token_streaming(self, package: EvidencePackage) -> dict[str, Any]:
-        binary, source = self._resolve_binary()
-        if binary is None:
-            payload = {
-                "status": STATUS_FAIL,
-                "failure_code": "provider_binary_not_found",
-                "message": "agy binary was not found for live_token_streaming",
-                "binary_source": source,
-            }
-            package.write_json("assertions/live_token_streaming.json", payload)
-            return payload
+        binary, binary_error = self._require_binary(package, "live_token_streaming")
+        if binary_error is not None:
+            return binary_error
 
         control_evidence_root = package.path("raw", "provider-control-e2e-evidence")
         control_artifact_path = package.path("raw", "provider-control-e2e.json")
@@ -4554,16 +4484,9 @@ class UniversalProviderAdapter:
         )
 
     def _run_antigravity_launch_managed_session(self, package: EvidencePackage) -> dict[str, Any]:
-        binary, source = self._resolve_binary()
-        if binary is None:
-            payload = {
-                "status": STATUS_FAIL,
-                "failure_code": "provider_binary_not_found",
-                "message": "agy binary was not found for launch_managed_session",
-                "binary_source": source,
-            }
-            package.write_json("assertions/launch_managed_session.json", payload)
-            return payload
+        binary, binary_error = self._require_binary(package, "launch_managed_session")
+        if binary_error is not None:
+            return binary_error
 
         from zerg.qa.provider_live_canary import run_provider_live_canary
 
@@ -4869,6 +4792,24 @@ class UniversalProviderAdapter:
             "session_projection_path": db_ingest.get("session_projection_path"),
             "timeline_projection_path": db_ingest.get("timeline_projection_path"),
         }
+
+    def _require_binary(self, package: EvidencePackage, scenario: str) -> tuple[Path | None, dict[str, Any] | None]:
+        """Resolve the provider binary or write+return the standard not-found payload.
+
+        Returns ``(binary, None)`` on success and ``(None, payload)`` when the binary
+        is missing, having already persisted ``assertions/<scenario>.json``.
+        """
+        binary, source = self._resolve_binary()
+        if binary is not None:
+            return binary, None
+        payload = {
+            "status": STATUS_FAIL,
+            "failure_code": "provider_binary_not_found",
+            "message": f"{self.config.binary_name} binary was not found for {scenario}",
+            "binary_source": source,
+        }
+        package.write_json(f"assertions/{scenario}.json", payload)
+        return None, payload
 
     def _resolve_binary(self) -> tuple[Path | None, str]:
         if self.provider_bin is not None:
