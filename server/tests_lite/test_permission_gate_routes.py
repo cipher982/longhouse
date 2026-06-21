@@ -286,9 +286,10 @@ def test_permission_prompt_request_is_user_facing(tmp_path):
         api_app.dependency_overrides.clear()
 
 
-def test_poll_by_pause_request_id_resolves_independently(tmp_path):
-    """Two pending prompts with the SAME tool_use_id must resolve independently
-    when polled by their distinct pause_request_id (no collapse)."""
+def test_same_tool_use_id_register_is_idempotent(tmp_path):
+    """A tool_use_id is unique per Claude tool invocation, so re-registering it
+    (a hook network retry) must return the SAME row, not orphan the first poll.
+    The poll-by-pause_request_id handle is what the hook uses to read its row."""
     session_local = _make_db(tmp_path)
     session_id, _user_id = _seed_session(session_local)
     client, api_app = _make_client(session_local)
@@ -298,9 +299,13 @@ def test_poll_by_pause_request_id_resolves_independently(tmp_path):
             "/api/agents/permission-requests",
             json={"session_id": str(session_id), "tool_use_id": tool_use_id, "tool_name": "Bash"},
         ).json()
-        # A second ask with the same tool_use_id reuses the same row (same key);
-        # the unique handle is pause_request_id. Resolve it to deny and confirm a
-        # poll by that id returns deny, not a stale/leaked allow.
+        ack2 = client.post(
+            "/api/agents/permission-requests",
+            json={"session_id": str(session_id), "tool_use_id": tool_use_id, "tool_name": "Bash"},
+        ).json()
+        # Idempotent: same invocation -> same pause request row.
+        assert ack1["pause_request_id"] == ack2["pause_request_id"]
+
         with session_local() as db:
             resolve_pause_request(
                 db,
@@ -318,6 +323,20 @@ def test_poll_by_pause_request_id_resolves_independently(tmp_path):
             },
         )
         assert poll.json() == {"decision": "deny", "reason": "no", "resolved": True}
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_register_rejects_empty_tool_use_id(tmp_path):
+    session_local = _make_db(tmp_path)
+    session_id, _user_id = _seed_session(session_local)
+    client, api_app = _make_client(session_local)
+    try:
+        resp = client.post(
+            "/api/agents/permission-requests",
+            json={"session_id": str(session_id), "tool_use_id": "", "tool_name": "Bash"},
+        )
+        assert resp.status_code == 400, resp.text
     finally:
         api_app.dependency_overrides.clear()
 

@@ -107,13 +107,20 @@ async def register_permission_request(
     if db.query(AgentSession.id).filter(AgentSession.id == session_uuid).first() is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session not found")
 
+    # tool_use_id is the idempotency key: re-registering the same id (a hook
+    # network retry) updates the same row, and a genuine re-ask re-pends it.
+    # An empty id would collapse unrelated asks onto a shared "unknown" key.
+    tool_use_id = (payload.tool_use_id or "").strip()
+    if not tool_use_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="tool_use_id is required")
+
     provider = (payload.provider or "claude").strip() or "claude"
     occurred_at = (payload.occurred_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
     runtime_key = runtime_key_for_session(provider, payload.session_id)
     request_key = make_pause_request_key(
         provider=provider,
         runtime_key=runtime_key,
-        provider_request_id=payload.tool_use_id,
+        provider_request_id=tool_use_id,
     )
     tool_name = (payload.tool_name or "").strip() or None
 
@@ -124,7 +131,7 @@ async def register_permission_request(
         provider=provider,
         request_key=request_key,
         occurred_at=occurred_at,
-        provider_request_id=payload.tool_use_id,
+        provider_request_id=tool_use_id,
         provider_ref={"source": PERMISSION_GATE_SOURCE, "reply_transport": REPLY_TRANSPORT_CLAUDE_PULL},
         kind=PERMISSION_PROMPT_KIND,
         tool_name=tool_name,

@@ -23,9 +23,10 @@ HOOK_SCRIPT = (
 class _StubLonghouse:
     """Minimal stand-in for the permission-request/decision endpoints."""
 
-    def __init__(self, *, decision: str | None, resolved: bool):
+    def __init__(self, *, decision: str | None, resolved: bool, ack_pause_request_id: str | None = "p1"):
         self._decision = decision
         self._resolved = resolved
+        self._ack_pause_request_id = ack_pause_request_id
         self.requests_seen: list[dict] = []
         self.decision_polls = 0
         self.last_decision_path = ""
@@ -58,7 +59,10 @@ class _StubLonghouse:
                 body = json.loads(self.rfile.read(length).decode("utf-8") or "{}") if length else {}
                 if self.path == "/api/agents/permission-requests":
                     outer.requests_seen.append(body)
-                    self._reply(200, {"pause_request_id": "p1", "request_key": "k1", "status": "pending"})
+                    ack = {"request_key": "k1", "status": "pending"}
+                    if outer._ack_pause_request_id is not None:
+                        ack["pause_request_id"] = outer._ack_pause_request_id
+                    self._reply(200, ack)
                 else:
                     self._reply(404, {})
 
@@ -187,6 +191,16 @@ def test_hook_not_engaged_when_unconfigured():
     result = _run_hook(base_url=None)
     assert result.returncode == 0
     assert result.stdout.strip() == ""
+
+
+def test_hook_denies_when_ack_missing_pause_request_id():
+    # A register ack without pause_request_id means we can't identify our row;
+    # the engaged gate must fail-deny, not fall back to a collapse-prone lookup.
+    with _StubLonghouse(decision="allow", resolved=True, ack_pause_request_id=None) as stub:
+        result = _run_hook(base_url=stub.base_url)
+    assert result.returncode == 0, result.stderr
+    assert _parse_decision(result.stdout) == "deny"
+    assert stub.decision_polls == 0  # never polled — failed at register
 
 
 def test_hook_not_engaged_when_disabled():

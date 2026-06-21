@@ -8,18 +8,26 @@ When Longhouse resolves the request (allow/deny), the hook returns the matching
 
 Environment (set by the managed Claude launcher):
   LONGHOUSE_HOOK_URL          Base URL for the Longhouse API.
-  LONGHOUSE_HOOK_TOKEN        Managed-local hook token (X-Agents-Token).
+  LONGHOUSE_HOOK_TOKEN        Session-scoped hook token (X-Agents-Token).
   LONGHOUSE_MANAGED_SESSION_ID  Longhouse session UUID (falls back to the hook's
                               own session_id field when absent).
   LONGHOUSE_PERMISSION_HOOK_TIMEOUT_S  Max seconds to wait for a decision
-                              (default 25; keep under Claude's hook timeout).
+                              (default 20, clamped <= 20; under Claude's 30s hook
+                              timeout).
   LONGHOUSE_PERMISSION_HOOK_ENABLED    Set to "0"/"false" to disable the gate.
+  LONGHOUSE_PERMISSION_HOOK_FAILMODE   deny (default) | prompt | allow — what to
+                              do when the gate is engaged but cannot reach a
+                              decision.
 
-SAFETY — this hook can gate a real tool execution, so it MUST fail open:
-  * If unconfigured, disabled, or anything goes wrong (network error, bad input,
-    timeout with no decision), it emits NO decision and exits 0. Claude then
-    falls back to its normal permission flow (the human is prompted) — it never
-    auto-allows and never hangs the terminal indefinitely.
+SAFETY — this hook can gate a real tool execution, so it must never silently
+allow. Two distinct situations:
+  * NOT ENGAGED (unconfigured / disabled / no session+tool ids): emit NO decision
+    and exit 0 — the gate stays out of the way and Claude runs its own flow.
+  * ENGAGED but cannot decide (register fail, poll error, timeout, malformed
+    response, unknown decision, uncaught bug): apply LONGHOUSE_PERMISSION_HOOK_FAILMODE,
+    default DENY. "prompt" falls back to Claude's native prompt (only safe when
+    the session was launched WITHOUT --dangerously-skip-permissions); "allow" is
+    an explicit opt-out. The wait is always bounded, so the turn never hangs.
 """
 
 from __future__ import annotations
@@ -35,6 +43,10 @@ import urllib.request
 # Keep the total hook budget safely under Claude's PreToolUse hook timeout (30s):
 # one register + one final poll can each take up to _REQUEST_TIMEOUT_S, so cap the
 # wait so register + waiting + a trailing request stays under the budget.
+# Set once the gate has committed to producing a decision, so the top-level
+# backstop knows whether an uncaught error must fail-deny vs stay out of the way.
+_ENGAGED = False
+
 _DEFAULT_TIMEOUT_S = 20.0
 _MAX_TIMEOUT_S = 20.0
 _POLL_INTERVAL_S = 0.5
@@ -141,8 +153,14 @@ def main() -> None:
     # Clamp to a finite budget under Claude's hook timeout — never hang the turn.
     timeout_s = max(0.0, min(timeout_s, _MAX_TIMEOUT_S))
 
-    # --- From here the gate IS engaged: any failure applies the fail-mode, ---
-    # --- which defaults to deny (never silently allow). ---
+    # --- From here the gate IS engaged: any failure (including an uncaught bug) ---
+    # --- applies the fail-mode, which defaults to deny (never silently allow). ---
+    global _ENGAGED
+    _ENGAGED = True
+
+    # One absolute deadline covers register + all polls so total wall time stays
+    # under timeout_s regardless of per-request latency.
+    deadline = time.monotonic() + timeout_s
 
     # 1. Register the held permission request.
     try:
@@ -159,24 +177,27 @@ def main() -> None:
     except (urllib.error.URLError, OSError, ValueError):
         _fail_decision()
         return
-    if not ack:
+    if not isinstance(ack, dict):
         _fail_decision()
+        return
 
-    # 2. Long-poll for the decision. Poll by the unique pause_request_id from the
-    # ack so concurrent/duplicate tool_use_ids resolve independently.
-    decision_params = {"session_id": session_id, "tool_use_id": tool_use_id}
-    pause_request_id = str((ack or {}).get("pause_request_id") or "").strip()
-    if pause_request_id:
-        decision_params["pause_request_id"] = pause_request_id
-    decision_url = f"{base_url}/api/agents/permission-decision?" + urllib.parse.urlencode(decision_params)
-    deadline = time.monotonic() + timeout_s
+    # 2. Long-poll by the unique pause_request_id from the ack. A missing id means
+    # we cannot safely identify our row → fail-deny rather than fall back to a
+    # collapse-prone key lookup.
+    pause_request_id = str(ack.get("pause_request_id") or "").strip()
+    if not pause_request_id:
+        _fail_decision()
+        return
+    decision_url = f"{base_url}/api/agents/permission-decision?" + urllib.parse.urlencode(
+        {"session_id": session_id, "tool_use_id": tool_use_id, "pause_request_id": pause_request_id}
+    )
     while time.monotonic() < deadline:
         try:
             result = _get_decision(decision_url, token)
         except (urllib.error.URLError, OSError, ValueError):
             _fail_decision()
             return
-        if result and result.get("resolved"):
+        if isinstance(result, dict) and result.get("resolved"):
             decision = str(result.get("decision") or "").strip().lower()
             if decision in {"allow", "deny", "ask"}:
                 _emit_decision(decision, result.get("reason"))
@@ -192,7 +213,9 @@ if __name__ == "__main__":
     try:
         main()
     except Exception:
-        # Absolute backstop: never crash the hook. An engaged gate that crashes
-        # should still not silently allow, but we cannot know engagement here, so
-        # exit 0 (no decision) only as a last resort against a truly broken hook.
+        # Backstop against an uncaught bug. If the gate had already engaged, fail
+        # to the configured mode (default deny) so a crash can't silently allow;
+        # otherwise stay out of the way.
+        if _ENGAGED:
+            _fail_decision()
         sys.exit(0)
