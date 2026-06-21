@@ -179,6 +179,17 @@ def wait_for_claude_channel_state(
     raise TimeoutError(f"Claude channel state at {state_path} did not become ready within {timeout_secs:.1f}s")
 
 
+# Claude managed permission policy.
+#  - "bypass" (default): launch with --dangerously-skip-permissions; the session
+#    never asks and the Longhouse permission gate stays dormant. This is the
+#    historical behavior and must remain the default.
+#  - "remote_approve": launch WITHOUT --dangerously-skip-permissions and enable
+#    the PreToolUse permission gate, so the session's permission prompts can be
+#    answered remotely through Longhouse.
+CLAUDE_PERMISSION_MODE_BYPASS = "bypass"
+CLAUDE_PERMISSION_MODE_REMOTE_APPROVE = "remote_approve"
+
+
 def build_claude_channel_exec_command(
     *,
     provider_session_id: str,
@@ -187,6 +198,7 @@ def build_claude_channel_exec_command(
     resume: bool,
     hook_url: str | None = None,
     claude_command: str = "claude",
+    permission_mode: str = CLAUDE_PERMISSION_MODE_BYPASS,
 ) -> str:
     """Build the native Claude launch/resume shell command for channel sessions."""
 
@@ -200,10 +212,14 @@ def build_claude_channel_exec_command(
     if not working_dir:
         raise ValueError("cwd must not be empty")
 
+    remote_approve = str(permission_mode or "").strip() == CLAUDE_PERMISSION_MODE_REMOTE_APPROVE
+
     target_flag = "--resume" if resume else "--session-id"
-    command_bits = [
-        claude_command,
-        "--dangerously-skip-permissions",
+    command_bits = [claude_command]
+    # Only bypass permissions when NOT routing approvals through Longhouse.
+    if not remote_approve:
+        command_bits.append("--dangerously-skip-permissions")
+    command_bits += [
         target_flag,
         provider_sid,
         CLAUDE_CHANNEL_DEVELOPMENT_FLAG,
@@ -219,6 +235,10 @@ def build_claude_channel_exec_command(
     ]
     if hook_url:
         inner.append(f"export LONGHOUSE_HOOK_URL={_quote(str(hook_url).strip())}")
+    # Engage the permission gate only in remote-approve mode. The gate stays
+    # dormant (and never gates a bypass session) unless explicitly enabled here.
+    if remote_approve:
+        inner.append("export LONGHOUSE_PERMISSION_HOOK_ENABLED=1")
     inner.append("exec " + " ".join(_quote(part) for part in command_bits))
     return f"zsh -lc {_quote('; '.join(inner))}"
 
