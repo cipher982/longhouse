@@ -5962,6 +5962,44 @@ def claude_provider_live_raw_events(artifact: Mapping[str, Any], *, provider_ses
     return rows
 
 
+def _op_entry(status: str, *, level: str, canary: str, failure_code: str | None) -> dict[str, Any]:
+    """One operation-evidence cell: pass/fail status, evidence level, source canary."""
+    return {
+        "status": status,
+        "level": level if status == STATUS_PASS else "none",
+        "canary": canary,
+        "failure_code": failure_code,
+    }
+
+
+def _seed_operation_evidence(source: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Copy a canary/artifact ``operation_evidence`` blob into plain mutable dicts."""
+    return {str(operation): dict(evidence) for operation, evidence in dict(source or {}).items() if isinstance(evidence, Mapping)}
+
+
+def _uniform_operation_evidence(
+    *,
+    passed: bool,
+    level: str,
+    canary: str,
+    default_failure_code: str,
+    operations: tuple[str, ...],
+    raw_failure_code: Any = None,
+    seed: Mapping[str, Any] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Build operation evidence where several operations share one status/level/canary.
+
+    ``seed`` optionally pre-populates from an upstream ``operation_evidence`` blob
+    before the uniform operations are layered on top.
+    """
+    status = STATUS_PASS if passed else STATUS_FAIL
+    failure_code = None if passed else str(raw_failure_code or default_failure_code)
+    evidence = _seed_operation_evidence(seed)
+    for operation in operations:
+        evidence[operation] = _op_entry(status, level=level, canary=canary, failure_code=failure_code)
+    return evidence
+
+
 def claude_provider_live_operation_evidence(artifact: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     operation_evidence = {
         str(operation): dict(evidence)
@@ -6545,176 +6583,90 @@ def antigravity_real_send_raw_events(canary: Mapping[str, Any]) -> list[dict[str
 
 
 def claude_channel_control_operation_evidence(canary: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-    status = STATUS_PASS if canary.get("status") == "pass" else STATUS_FAIL
-    if status == STATUS_PASS:
-        failure_code = None
-    else:
-        failure_code = str(canary.get("failure_code") or "claude_channel_control_failed")
-    return {
-        "send_input": {
-            "status": status,
-            "level": "live_no_token" if status == STATUS_PASS else "none",
-            "canary": "claude_channel_control",
-            "failure_code": failure_code,
-        },
-        "steer_active_turn": {
-            "status": status,
-            "level": "live_no_token" if status == STATUS_PASS else "none",
-            "canary": "claude_channel_control",
-            "failure_code": failure_code,
-        },
-        "interrupt": {
-            "status": status,
-            "level": "live_no_token" if status == STATUS_PASS else "none",
-            "canary": "claude_channel_control",
-            "failure_code": failure_code,
-        },
-    }
+    return _uniform_operation_evidence(
+        passed=canary.get("status") == "pass",
+        level="live_no_token",
+        canary="claude_channel_control",
+        default_failure_code="claude_channel_control_failed",
+        operations=("send_input", "steer_active_turn", "interrupt"),
+        raw_failure_code=canary.get("failure_code"),
+    )
 
 
 def claude_real_print_operation_evidence(canary: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-    operation_evidence = {
-        str(operation): dict(evidence)
-        for operation, evidence in dict(canary.get("operation_evidence") or {}).items()
-        if isinstance(evidence, Mapping)
-    }
-    status = STATUS_PASS if canary.get("status") == "pass" else STATUS_FAIL
-    if status == STATUS_PASS:
-        failure_code = None
-    else:
-        failure_code = str(canary.get("failure_code") or "claude_real_print_failed")
-    operation_evidence["run_once"] = {
-        "status": status,
-        "level": "live_token" if status == STATUS_PASS else "none",
-        "canary": "claude_real_print",
-        "failure_code": failure_code,
-    }
-    operation_evidence["live_token_behavior"] = {
-        "status": status,
-        "level": "live_token" if status == STATUS_PASS else "none",
-        "canary": "claude_real_print",
-        "failure_code": failure_code,
-    }
-    return operation_evidence
+    return _uniform_operation_evidence(
+        passed=canary.get("status") == "pass",
+        level="live_token",
+        canary="claude_real_print",
+        default_failure_code="claude_real_print_failed",
+        operations=("run_once", "live_token_behavior"),
+        raw_failure_code=canary.get("failure_code"),
+        seed=canary.get("operation_evidence"),
+    )
 
 
 def codex_live_token_streaming_operation_evidence(artifact: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-    operation_evidence = {
-        str(operation): dict(evidence)
-        for operation, evidence in dict(artifact.get("operation_evidence") or {}).items()
-        if isinstance(evidence, Mapping)
-    }
     live_send = dict(dict(artifact.get("canaries") or {}).get("managed_live_send") or {})
-    status = STATUS_PASS if live_send.get("status") == "pass" else STATUS_FAIL
-    if status == STATUS_PASS:
-        failure_code = None
-    else:
-        failure_code = str(live_send.get("failure_code") or "codex_live_token_streaming_failed")
-    operation_evidence["send_input"] = {
-        "status": status,
-        "level": "live_token" if status == STATUS_PASS else "none",
-        "canary": "managed_live_send",
-        "failure_code": failure_code,
-    }
-    operation_evidence["live_token_behavior"] = {
-        "status": status,
-        "level": "live_token" if status == STATUS_PASS else "none",
-        "canary": "managed_live_send",
-        "failure_code": failure_code,
-    }
-    return operation_evidence
+    return _uniform_operation_evidence(
+        passed=live_send.get("status") == "pass",
+        level="live_token",
+        canary="managed_live_send",
+        default_failure_code="codex_live_token_streaming_failed",
+        operations=("send_input", "live_token_behavior"),
+        raw_failure_code=live_send.get("failure_code"),
+        seed=artifact.get("operation_evidence"),
+    )
 
 
 def antigravity_real_send_operation_evidence(canary: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-    operation_evidence = {
-        str(operation): dict(evidence)
-        for operation, evidence in dict(canary.get("operation_evidence") or {}).items()
-        if isinstance(evidence, Mapping)
-    }
-    status = STATUS_PASS if canary.get("status") == "pass" else STATUS_FAIL
-    if status == STATUS_PASS:
-        failure_code = None
-    else:
-        failure_code = str(canary.get("failure_code") or "antigravity_real_agy_send_failed")
-    operation_evidence["send_input"] = {
-        "status": status,
-        "level": "live_token" if status == STATUS_PASS else "none",
-        "canary": "antigravity_real_agy_send",
-        "failure_code": failure_code,
-    }
-    operation_evidence["live_token_behavior"] = {
-        "status": status,
-        "level": "live_token" if status == STATUS_PASS else "none",
-        "canary": "antigravity_real_agy_send",
-        "failure_code": failure_code,
-    }
-    return operation_evidence
+    return _uniform_operation_evidence(
+        passed=canary.get("status") == "pass",
+        level="live_token",
+        canary="antigravity_real_agy_send",
+        default_failure_code="antigravity_real_agy_send_failed",
+        operations=("send_input", "live_token_behavior"),
+        raw_failure_code=canary.get("failure_code"),
+        seed=canary.get("operation_evidence"),
+    )
 
 
 def opencode_tool_call_result_operation_evidence(artifact: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     tool = _opencode_control_canary(artifact)
-    operation_evidence = {
-        str(operation): dict(evidence)
-        for operation, evidence in dict(tool.get("operation_evidence") or {}).items()
-        if isinstance(evidence, Mapping)
-    }
-    status = STATUS_PASS if tool.get("status") == "pass" else STATUS_FAIL
-    if status == STATUS_PASS:
-        failure_code = None
-    else:
-        failure_code = str(tool.get("failure_code") or "opencode_tool_call_result_failed")
-    operation_evidence["tool_call_result"] = {
-        "status": status,
-        "level": "live_token" if status == STATUS_PASS else "none",
-        "canary": "opencode_real_tool_result_shape",
-        "failure_code": failure_code,
-    }
-    return operation_evidence
+    return _uniform_operation_evidence(
+        passed=tool.get("status") == "pass",
+        level="live_token",
+        canary="opencode_real_tool_result_shape",
+        default_failure_code="opencode_tool_call_result_failed",
+        operations=("tool_call_result",),
+        raw_failure_code=tool.get("failure_code"),
+        seed=tool.get("operation_evidence"),
+    )
 
 
 def opencode_real_print_operation_evidence(artifact: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     canary = _opencode_control_canary(artifact)
-    operation_evidence = {
-        str(operation): dict(evidence)
-        for operation, evidence in dict(canary.get("operation_evidence") or {}).items()
-        if isinstance(evidence, Mapping)
-    }
-    status = STATUS_PASS if canary.get("status") == "pass" else STATUS_FAIL
-    if status == STATUS_PASS:
-        failure_code = None
-    else:
-        failure_code = str(canary.get("failure_code") or "opencode_real_print_failed")
-    operation_evidence["run_once"] = {
-        "status": status,
-        "level": "live_token" if status == STATUS_PASS else "none",
-        "canary": "opencode_real_print",
-        "failure_code": failure_code,
-    }
-    operation_evidence["live_token_behavior"] = {
-        "status": status,
-        "level": "live_token" if status == STATUS_PASS else "none",
-        "canary": "opencode_real_print",
-        "failure_code": failure_code,
-    }
-    return operation_evidence
+    return _uniform_operation_evidence(
+        passed=canary.get("status") == "pass",
+        level="live_token",
+        canary="opencode_real_print",
+        default_failure_code="opencode_real_print_failed",
+        operations=("run_once", "live_token_behavior"),
+        raw_failure_code=canary.get("failure_code"),
+        seed=canary.get("operation_evidence"),
+    )
 
 
 def codex_tool_call_result_operation_evidence(artifact: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-    operation_evidence = {
-        str(operation): dict(evidence)
-        for operation, evidence in dict(artifact.get("operation_evidence") or {}).items()
-        if isinstance(evidence, Mapping)
-    }
     tool = dict(dict(artifact.get("canaries") or {}).get("codex_real_tool_result_shape") or {})
-    status = STATUS_PASS if tool.get("status") == "pass" else STATUS_FAIL
-    failure_code = None if status == STATUS_PASS else str(tool.get("failure_code") or "codex_tool_call_result_failed")
-    operation_evidence["tool_call_result"] = {
-        "status": status,
-        "level": "live_token" if status == STATUS_PASS else "none",
-        "canary": "codex_real_tool_result_shape",
-        "failure_code": failure_code,
-    }
-    return operation_evidence
+    return _uniform_operation_evidence(
+        passed=tool.get("status") == "pass",
+        level="live_token",
+        canary="codex_real_tool_result_shape",
+        default_failure_code="codex_tool_call_result_failed",
+        operations=("tool_call_result",),
+        raw_failure_code=tool.get("failure_code"),
+        seed=artifact.get("operation_evidence"),
+    )
 
 
 def _codex_canary_credentials_gap(artifact: Mapping[str, Any], canary_names: tuple[str, ...]) -> list[str]:
