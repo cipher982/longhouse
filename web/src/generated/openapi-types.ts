@@ -3980,6 +3980,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/media/claims": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Media Claims
+         * @description Return which content-addressed media blobs this Runtime Host needs.
+         */
+        post: operations["create_media_claims_agents_media_claims_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/media/{sha256}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put Media Blob
+         * @description Upload a media blob once, keyed by sha256.
+         */
+        put: operations["put_media_blob_agents_media__sha256__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        /**
+         * Head Media Blob
+         * @description Cheap integrity probe for a media blob.
+         */
+        head: operations["head_media_blob_agents_media__sha256__head"];
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/media/{sha256}/blob": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Media Blob
+         * @description Fetch a media blob by sha256 over machine-token auth.
+         */
+        get: operations["get_media_blob_agents_media__sha256__blob_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/providers/action-coverage": {
         parameters: {
             query?: never;
@@ -7531,6 +7595,60 @@ export interface components {
             summary: components["schemas"]["ManagedTurnSummaryResponse"];
             /** Providers */
             providers: components["schemas"]["ManagedTurnProviderSummaryResponse"][];
+        };
+        /** MediaClaimItem */
+        MediaClaimItem: {
+            /** Sha256 */
+            sha256: string;
+            /** Mime Type */
+            mime_type?: string | null;
+            /** Byte Size */
+            byte_size?: number | null;
+            /** Session Id */
+            session_id?: string | null;
+            /** Event Id */
+            event_id?: number | null;
+            /** Source Path */
+            source_path?: string | null;
+            /** Source Offset */
+            source_offset?: number | null;
+            /** Source Line Hash */
+            source_line_hash?: string | null;
+            /** Json Pointer */
+            json_pointer?: string | null;
+            /** Provider */
+            provider?: string | null;
+            /** Original Kind */
+            original_kind?: string | null;
+        };
+        /** MediaClaimsRequest */
+        MediaClaimsRequest: {
+            /** Items */
+            items: components["schemas"]["MediaClaimItem"][];
+        };
+        /** MediaClaimsResponse */
+        MediaClaimsResponse: {
+            /** Needed */
+            needed: string[];
+            /** Present */
+            present: string[];
+            /** Rejected */
+            rejected: {
+                [key: string]: string;
+            }[];
+        };
+        /** MediaUploadResponse */
+        MediaUploadResponse: {
+            /** Sha256 */
+            sha256: string;
+            /** Mime Type */
+            mime_type: string;
+            /** Byte Size */
+            byte_size: number;
+            /** Created */
+            created: boolean;
+            /** Blob Url */
+            blob_url: string;
         };
         /** MessageCreate */
         MessageCreate: {
@@ -18997,6 +19115,134 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProviderLiveProofAcceptedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_media_claims_agents_media_claims_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MediaClaimsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaClaimsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    put_media_blob_agents_media__sha256__put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Longhouse-Session-Id"?: string | null;
+            };
+            path: {
+                sha256: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MediaUploadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    head_media_blob_agents_media__sha256__head: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sha256: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_media_blob_agents_media__sha256__blob_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sha256: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
