@@ -358,6 +358,60 @@ class AgentSourceLine(AgentsBase):
     )
 
 
+class MediaObject(AgentsBase):
+    """Content-addressed media blob discovered in session archives.
+
+    The filesystem owns bytes; this table records the integrity contract and
+    the relative path needed to fetch the blob without embedding it in source
+    lines, events, or ingest payloads.
+    """
+
+    __tablename__ = "media_objects"
+
+    sha256 = Column(String(64), primary_key=True)
+    mime_type = Column(String(64), nullable=False)
+    byte_size = Column(BigInteger, nullable=False)
+    width = Column(Integer, nullable=True)
+    height = Column(Integer, nullable=True)
+    storage_path = Column(Text, nullable=False)
+    thumbnail_sha256 = Column(String(64), nullable=True, index=True)
+    first_seen_session_id = Column(GUID(), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class SessionMediaRef(AgentsBase):
+    """Where a media object appeared in a provider session archive."""
+
+    __tablename__ = "session_media_refs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(GUID(), nullable=False, index=True)
+    event_id = Column(Integer, nullable=True, index=True)
+    source_path = Column(Text, nullable=True)
+    source_offset = Column(BigInteger, nullable=True)
+    source_line_hash = Column(String(64), nullable=True, index=True)
+    json_pointer = Column(Text, nullable=True)
+    provider = Column(String(50), nullable=True, index=True)
+    original_kind = Column(String(32), nullable=False)
+    media_sha256 = Column(String(64), nullable=False, index=True)
+    media_state = Column(String(32), nullable=False, server_default=text("'pending'"), index=True)
+    last_error = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id",
+            "source_path",
+            "source_offset",
+            "media_sha256",
+            name="uq_session_media_source_ref",
+        ),
+        Index("ix_session_media_refs_session_state", "session_id", "media_state", "created_at"),
+    )
+
+
 class ArchiveChunk(AgentsBase):
     """Sealed raw archive chunk manifest row.
 

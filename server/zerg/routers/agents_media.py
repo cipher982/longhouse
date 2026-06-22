@@ -1,0 +1,145 @@
+"""Agents API for archive media claims, upload, and blob fetch."""
+
+from __future__ import annotations
+
+from uuid import UUID
+
+from fastapi import APIRouter
+from fastapi import Depends
+from fastapi import HTTPException
+from fastapi import Request
+from fastapi import Response
+from fastapi import status
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from zerg.database import get_db
+from zerg.dependencies.agents_auth import require_single_tenant
+from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.models.agents import MediaObject
+from zerg.services.media_store import absolute_media_path
+from zerg.services.media_store import claim_media
+from zerg.services.media_store import is_valid_sha256
+from zerg.services.media_store import store_media_blob
+
+router = APIRouter(prefix="/agents/media", tags=["agents"])
+
+
+class MediaClaimItem(BaseModel):
+    sha256: str
+    mime_type: str | None = None
+    byte_size: int | None = None
+    session_id: UUID | None = None
+
+
+class MediaClaimsRequest(BaseModel):
+    items: list[MediaClaimItem]
+
+
+class MediaClaimsResponse(BaseModel):
+    needed: list[str]
+    present: list[str]
+    rejected: list[dict[str, str]]
+
+
+class MediaUploadResponse(BaseModel):
+    sha256: str
+    mime_type: str
+    byte_size: int
+    created: bool
+    blob_url: str
+
+
+def _content_type(request: Request) -> str:
+    return (request.headers.get("content-type") or "application/octet-stream").split(";", 1)[0].strip().lower()
+
+
+def _row_or_404(db: Session, sha256: str) -> MediaObject:
+    if not is_valid_sha256(sha256):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="media not found")
+    row = db.query(MediaObject).filter(MediaObject.sha256 == sha256).first()
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="media not found")
+    path = absolute_media_path(row)
+    if not path.is_file():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="media blob missing")
+    return row
+
+
+@router.post(
+    "/claims",
+    response_model=MediaClaimsResponse,
+    dependencies=[Depends(verify_agents_token), Depends(require_single_tenant)],
+)
+async def create_media_claims(request: MediaClaimsRequest, db: Session = Depends(get_db)) -> MediaClaimsResponse:
+    """Return which content-addressed media blobs this Runtime Host needs."""
+
+    if len(request.items) > 512:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="too many media claim items")
+    result = claim_media(db, [item.model_dump() for item in request.items])
+    return MediaClaimsResponse(needed=result.needed, present=result.present, rejected=result.rejected)
+
+
+@router.put(
+    "/{sha256}",
+    response_model=MediaUploadResponse,
+    dependencies=[Depends(verify_agents_token), Depends(require_single_tenant)],
+)
+async def put_media_blob(sha256: str, request: Request, db: Session = Depends(get_db)) -> MediaUploadResponse:
+    """Upload a media blob once, keyed by sha256."""
+
+    try:
+        stored = store_media_blob(
+            db,
+            sha256=sha256,
+            mime_type=_content_type(request),
+            data=await request.body(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    return MediaUploadResponse(
+        sha256=stored.sha256,
+        mime_type=stored.mime_type,
+        byte_size=stored.byte_size,
+        created=stored.created,
+        blob_url=f"/api/agents/media/{stored.sha256}/blob",
+    )
+
+
+@router.get(
+    "/{sha256}/blob",
+    dependencies=[Depends(verify_agents_token), Depends(require_single_tenant)],
+)
+async def get_media_blob(sha256: str, db: Session = Depends(get_db)) -> StreamingResponse:
+    """Fetch a media blob by sha256 over machine-token auth."""
+
+    row = _row_or_404(db, sha256)
+    path = absolute_media_path(row)
+    return StreamingResponse(
+        path.open("rb"),
+        media_type=row.mime_type,
+        headers={
+            "Content-Length": str(row.byte_size),
+            "X-Media-Sha256": row.sha256,
+        },
+    )
+
+
+@router.head(
+    "/{sha256}",
+    dependencies=[Depends(verify_agents_token), Depends(require_single_tenant)],
+)
+async def head_media_blob(sha256: str, db: Session = Depends(get_db)) -> Response:
+    """Cheap integrity probe for a media blob."""
+
+    row = _row_or_404(db, sha256)
+    return Response(
+        status_code=status.HTTP_200_OK,
+        media_type=row.mime_type,
+        headers={
+            "Content-Length": str(row.byte_size),
+            "X-Media-Sha256": row.sha256,
+        },
+    )
