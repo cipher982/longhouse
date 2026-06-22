@@ -22,7 +22,11 @@ from fastapi.testclient import TestClient
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
-os.environ["JWT_SECRET"] = "test-jwt-secret-permission-auth"
+# setdefault, NOT a hard set: hard-setting JWT_SECRET here clobbers the secret an
+# earlier-imported test module already signed cookies/tokens with, breaking those
+# tests in a full-suite run. Token mint + validate both happen in THIS module, so
+# any consistent secret works.
+os.environ.setdefault("JWT_SECRET", "test-jwt-secret-permission-auth")
 os.environ.setdefault("INTERNAL_API_SECRET", Fernet.generate_key().decode())
 
 from zerg.auth.managed_local_hook_tokens import issue_managed_local_hook_token
