@@ -172,30 +172,6 @@ def test_hook_engaged_unreachable_defaults_to_deny():
     assert _parse_decision(result.stdout) == "deny"
 
 
-def test_hook_failmode_prompt_emits_no_decision():
-    # Explicit prompt fail-mode falls back to Claude's native prompt (no output).
-    # Only safe for sessions launched WITHOUT --dangerously-skip-permissions.
-    with _StubLonghouse(decision=None, resolved=False) as stub:
-        result = _run_hook(
-            base_url=stub.base_url,
-            timeout_env="1",
-            extra_env={"LONGHOUSE_PERMISSION_HOOK_FAILMODE": "prompt"},
-        )
-    assert result.returncode == 0
-    assert result.stdout.strip() == ""
-
-
-def test_hook_failmode_allow_is_explicit_opt_out():
-    with _StubLonghouse(decision=None, resolved=False) as stub:
-        result = _run_hook(
-            base_url=stub.base_url,
-            timeout_env="1",
-            extra_env={"LONGHOUSE_PERMISSION_HOOK_FAILMODE": "allow"},
-        )
-    assert result.returncode == 0
-    assert _parse_decision(result.stdout) == "allow"
-
-
 def test_hook_not_engaged_when_unconfigured():
     # No URL → gate not engaged for this session → no decision (stay out of the way).
     result = _run_hook(base_url=None)

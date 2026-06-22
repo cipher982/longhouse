@@ -468,7 +468,7 @@ def _opencode_permission_request_id(row) -> str | None:
     return rid or None
 
 
-def _resolve_opencode_permission_via_bridge(
+async def _resolve_opencode_permission_via_bridge(
     *,
     db: Session,
     row,
@@ -479,15 +479,16 @@ def _resolve_opencode_permission_via_bridge(
     """Deliver an OpenCode permission decision through the bridge, then resolve.
 
     The runtime host shares the machine with the opencode bridge for managed-local
-    sessions, so we invoke opencode_bridge.permission_reply in-process (it resolves
-    bridge state from disk and POSTs to the local opencode server's
-    /permission/{id}/reply). answer->allow, reject|cancel->deny.
+    sessions, so we invoke opencode_bridge.permission_reply (it resolves bridge
+    state from disk and POSTs to the local opencode server's
+    /permission/{id}/reply). It does blocking I/O, so run it off the event loop.
+    answer->allow, reject|cancel->deny.
     """
     from zerg.cli import opencode_bridge
 
     bridge_decision = "allow" if decision == "answer" else "deny"
-    bridge_error: str | None = None
-    try:
+
+    def _reply() -> None:
         opencode_bridge.permission_reply(
             session_id=str(row.session_id),
             request_id=request_id,
@@ -496,6 +497,10 @@ def _resolve_opencode_permission_via_bridge(
             config_dir=None,
             wait_secs=0.0,
         )
+
+    bridge_error: str | None = None
+    try:
+        await asyncio.to_thread(_reply)
     except SystemExit as exc:  # typer.Exit on bridge failure
         if int(getattr(exc, "code", 0) or 0) != 0:
             bridge_error = f"opencode bridge permission-reply failed (exit {exc.code})"
@@ -598,7 +603,7 @@ async def _respond_to_pause_request(
     # via the bridge (not the engine websocket), then resolve.
     opencode_request_id = _opencode_permission_request_id(row)
     if opencode_request_id is not None:
-        return _resolve_opencode_permission_via_bridge(
+        return await _resolve_opencode_permission_via_bridge(
             db=db,
             row=row,
             decision=decision,

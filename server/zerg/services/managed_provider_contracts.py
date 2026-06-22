@@ -19,7 +19,6 @@ COMMAND_INTERRUPT = "session.interrupt"
 COMMAND_SEND_TEXT = "session.send_text"
 COMMAND_STEER_TEXT = "session.steer_text"
 COMMAND_ANSWER_PAUSE = "session.answer_pause"
-COMMAND_ANSWER_PERMISSION_PROMPT = "session.answer_permission_prompt"
 COMMAND_RUN_ONCE = "session.run_once"
 
 _MACHINE_CONTROL_OPERATION_BY_COMMAND = {
@@ -27,7 +26,6 @@ _MACHINE_CONTROL_OPERATION_BY_COMMAND = {
     COMMAND_INTERRUPT: "interrupt",
     COMMAND_STEER_TEXT: "steer",
     COMMAND_ANSWER_PAUSE: "answer_pause",
-    COMMAND_ANSWER_PERMISSION_PROMPT: "answer_permission",
     COMMAND_RUN_ONCE: "run_once",
 }
 

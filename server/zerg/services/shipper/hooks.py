@@ -279,12 +279,11 @@ Environment (set by the managed Claude launcher):
                               own session_id field when absent).
   LONGHOUSE_PERMISSION_HOOK_TIMEOUT_S  Max seconds to wait (default 20, clamp 20).
   LONGHOUSE_PERMISSION_HOOK_ENABLED    "1" engages the gate; absent/0 = dormant.
-  LONGHOUSE_PERMISSION_HOOK_FAILMODE   deny (default) | prompt | allow.
 
 SAFETY — never silently allow. NOT ENGAGED (disabled / unconfigured / no ids):
 emit nothing, exit 0. ENGAGED but cannot decide (register/poll error, timeout,
-malformed response, unknown decision, uncaught bug): apply failmode (default
-DENY). Wait is bounded so the turn never hangs.
+malformed response, unknown decision, uncaught bug): DENY. Wait is bounded so the
+turn never hangs.
 """
 
 from __future__ import annotations
@@ -309,11 +308,8 @@ def _not_engaged() -> None:
 
 
 def _fail_decision() -> None:
-    mode = str(os.environ.get("LONGHOUSE_PERMISSION_HOOK_FAILMODE", "deny")).strip().lower()
-    if mode == "prompt":
-        sys.exit(0)
-    if mode == "allow":
-        _emit_decision("allow", "Longhouse gate fail-mode=allow")
+    # Engaged but could not reach a decision -> deny. An unreachable control plane
+    # must never silently allow a tool. (No configurable fail mode: one safe path.)
     _emit_decision("deny", "Longhouse permission gate could not reach a decision")
 
 
