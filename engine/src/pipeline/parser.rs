@@ -25,6 +25,7 @@ use serde_json::value::RawValue;
 use uuid::Uuid;
 
 use crate::codex_source::parse_codex_subagent_source_str;
+use crate::media_redaction::redact_inline_image_data_urls_in_json_line;
 
 /// Threshold for switching from buffered read to mmap (1 MB).
 const MMAP_THRESHOLD: u64 = 1_048_576;
@@ -728,7 +729,8 @@ fn capture_text_source_lines(content: &str) -> Vec<ParsedSourceLine> {
     let mut offset = 0u64;
     for chunk in content.split_inclusive('\n') {
         let trimmed = chunk.strip_suffix('\n').unwrap_or(chunk);
-        let raw_line = trimmed.strip_suffix('\r').unwrap_or(trimmed).to_string();
+        let raw_line = trimmed.strip_suffix('\r').unwrap_or(trimmed);
+        let raw_line = redact_inline_image_data_urls_in_json_line(raw_line).into_owned();
         source_lines.push(ParsedSourceLine {
             source_offset: offset,
             raw_line,
@@ -1092,7 +1094,7 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
         if let Ok(line_str) = std::str::from_utf8(line_bytes) {
             source_lines.push(ParsedSourceLine {
                 source_offset: line_offset,
-                raw_line: line_str.to_string(),
+                raw_line: redact_inline_image_data_urls_in_json_line(line_str).into_owned(),
             });
         }
 
@@ -1123,7 +1125,8 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
 
         // Extract events — pass raw bytes, convert to string only when needed
         let line_str = std::str::from_utf8(line_bytes).unwrap_or("");
-        extract_events(&obj, session_id, line_offset, line_str, &mut events);
+        let redacted_line = redact_inline_image_data_urls_in_json_line(line_str);
+        extract_events(&obj, session_id, line_offset, &redacted_line, &mut events);
     }
 
     // Finalize metadata
@@ -1203,9 +1206,10 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
         let line_offset = current_offset;
         current_offset += bytes_read as u64;
 
+        let redacted_line = redact_inline_image_data_urls_in_json_line(&line).into_owned();
         source_lines.push(ParsedSourceLine {
             source_offset: line_offset,
-            raw_line: line.clone(),
+            raw_line: redacted_line.clone(),
         });
 
         let trimmed = line.trim();
@@ -1225,7 +1229,7 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
 
         collect_metadata(&obj, &mut metadata, &mut min_ts, &mut max_ts);
 
-        extract_events(&obj, session_id, line_offset, &line, &mut events);
+        extract_events(&obj, session_id, line_offset, &redacted_line, &mut events);
     }
 
     metadata.started_at = min_ts;
@@ -3697,6 +3701,35 @@ mod tests {
             result.events[0].content_text.as_deref(),
             Some("[image attached]")
         );
+    }
+
+    #[test]
+    fn test_codex_large_inline_image_source_line_is_redacted() {
+        let dir = tempfile::tempdir().unwrap();
+        let image_data = "A".repeat(4096);
+        let line = format!(
+            r#"{{"type":"response_item","timestamp":"2026-03-01T10:00:00Z","payload":{{"type":"message","role":"user","content":[{{"type":"input_image","image_url":"data:image/png;base64,{image_data}"}}]}}}}"#
+        );
+        let path = make_jsonl_file(
+            dir.path(),
+            "019c638d-0000-0000-0000-000000000012.jsonl",
+            &[&line],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.source_lines.len(), 1);
+        assert_eq!(result.events.len(), 1);
+
+        let source_line = &result.source_lines[0].raw_line;
+        assert!(source_line.contains("longhouse_media_ref:sha256="));
+        assert!(source_line.contains(";mime=data:image/png;"));
+        assert!(source_line.contains(";original_chars=4118"));
+        assert!(!source_line.contains(&image_data));
+        assert!(source_line.len() < 512);
+
+        let event_raw = result.events[0].raw_line.as_deref().unwrap_or("");
+        assert!(event_raw.contains("longhouse_media_ref:sha256="));
+        assert!(!event_raw.contains(&image_data));
     }
 
     #[test]

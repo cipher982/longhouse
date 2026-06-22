@@ -19,6 +19,7 @@ mod managed_bridge_scan;
 mod managed_claude_scan;
 mod managed_opencode_scan;
 mod managed_reaper;
+mod media_redaction;
 mod observability;
 mod opencode_db;
 mod outbox;

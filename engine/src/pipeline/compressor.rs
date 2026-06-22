@@ -738,4 +738,46 @@ mod tests {
     fn test_ship_unship_roundtrip_codex_fixture() {
         assert_fixture_roundtrip("codex");
     }
+
+    #[test]
+    fn test_large_inline_image_is_absent_from_compressed_source_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("019c638d-0000-0000-0000-000000000099.jsonl");
+        let image_data = "A".repeat(8192);
+        let line = format!(
+            r#"{{"type":"response_item","timestamp":"2026-03-01T10:00:00Z","payload":{{"type":"message","role":"user","content":[{{"type":"input_image","image_url":"data:image/png;base64,{image_data}"}}]}}}}"#
+        );
+        std::fs::write(&path, format!("{line}\n")).expect("write fixture");
+
+        let parsed =
+            crate::pipeline::parser::parse_session_file(&path, 0).expect("parse image fixture");
+        let source_path = path.to_string_lossy().to_string();
+        let compressed = build_and_compress_with_source_lines(
+            &parsed.metadata.session_id,
+            &parsed.events,
+            &parsed.metadata,
+            &source_path,
+            "codex",
+            Some(&parsed.source_lines),
+            None,
+            CompressionAlgo::Gzip,
+        )
+        .expect("compress payload");
+
+        let mut decoder = GzDecoder::new(&compressed[..]);
+        let mut json_str = String::new();
+        decoder
+            .read_to_string(&mut json_str)
+            .expect("decompress payload");
+
+        assert!(!json_str.contains(&image_data));
+        assert!(json_str.contains("longhouse_media_ref:sha256="));
+        assert!(
+            json_str.len() < 2_000,
+            "redacted ingest body should stay small, got {} bytes",
+            json_str.len()
+        );
+    }
 }

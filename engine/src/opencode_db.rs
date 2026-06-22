@@ -18,6 +18,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::config::get_longhouse_home;
+use crate::media_redaction::redact_inline_image_data_url;
 use crate::pipeline::parser::{ParseResult, ParsedEvent, ParsedSourceLine, Role, SessionMetadata};
 
 const SOURCE_OFFSET_SCALE: u64 = 1_000_000;
@@ -703,6 +704,28 @@ fn source_line_part_data(part_data: &Value) -> Value {
     else {
         return value;
     };
+    if let Some(redaction) = redact_inline_image_data_url(&url) {
+        object.insert("url".to_string(), Value::String(redaction.placeholder));
+        object.insert("url_truncated".to_string(), Value::Bool(true));
+        object.insert(
+            "url_original_chars".to_string(),
+            Value::Number(serde_json::Number::from(redaction.original_chars as u64)),
+        );
+        object.insert(
+            "url_media_sha256".to_string(),
+            Value::String(redaction.sha256),
+        );
+        object.insert(
+            "url_media_bytes".to_string(),
+            Value::Number(serde_json::Number::from(redaction.byte_size as u64)),
+        );
+        object.insert(
+            "url_media_mime_type".to_string(),
+            Value::String(redaction.mime_type),
+        );
+        return value;
+    }
+
     if url.len() <= MAX_SOURCE_FILE_URL_CHARS && !url.starts_with("data:") {
         return value;
     }
