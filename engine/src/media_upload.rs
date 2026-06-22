@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::pipeline::parser::ParsedMediaObject;
 use crate::shipping::client::ShipperClient;
@@ -58,6 +59,7 @@ pub async fn ensure_media_uploaded(
     if media_objects.is_empty() {
         return Ok(MediaUploadSummary::default());
     }
+    validate_session_uuid(session_id)?;
 
     let request = MediaClaimsRequest {
         items: media_objects
@@ -120,6 +122,12 @@ pub async fn ensure_media_uploaded(
     })
 }
 
+fn validate_session_uuid(session_id: &str) -> Result<()> {
+    Uuid::parse_str(session_id)
+        .with_context(|| format!("media upload session_id is not a UUID: {session_id}"))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -171,5 +179,11 @@ mod tests {
         assert_eq!(items[0]["source_offset"], 10);
         assert_eq!(items[1]["source_offset"], 20);
         assert_eq!(items[0]["original_kind"], "inline_data_url");
+    }
+
+    #[test]
+    fn validate_session_uuid_rejects_non_uuid() {
+        assert!(validate_session_uuid("session-1").is_err());
+        assert!(validate_session_uuid("019c638d-0000-0000-0000-000000000555").is_ok());
     }
 }

@@ -6672,6 +6672,50 @@ mod tests {
     }
 
     #[test]
+    fn test_media_upload_failure_leaves_archive_cursor_unchanged() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let image_data = "A".repeat(4096);
+        let line = format!(
+            r#"{{"type":"response_item","timestamp":"2026-03-01T10:00:00Z","payload":{{"type":"message","role":"user","content":[{{"type":"input_image","image_url":"data:image/png;base64,{image_data}"}}]}}}}"#
+        );
+        let path = dir
+            .path()
+            .join("019c638d-0000-0000-0000-000000000556.jsonl");
+        std::fs::write(&path, format!("{line}\n")).unwrap();
+        let path_str = path.to_string_lossy().to_string();
+
+        let prepared =
+            prepare_file_batches(&path, "codex", CompressionAlgo::Gzip, &conn, 512 * 1024, None)
+                .unwrap()
+                .expect("prepared media ship item");
+        let media = match &prepared.actions[0] {
+            PreparedAction::Ship(item) => item.media_objects[0].clone(),
+            _ => panic!("expected ship action"),
+        };
+        let claim_body = format!(
+            r#"{{"needed":["{}"],"present":[],"rejected":[]}}"#,
+            media.sha256
+        );
+        let (url, captured, handle) =
+            spawn_http_sequence_server(&[("200 OK", &claim_body), ("500 Internal Server Error", "upload down")]);
+        let client = make_test_client(&url);
+
+        let outcome = rt
+            .block_on(ship_prepared_file(prepared, &client, &conn, None, None))
+            .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(captured.lock().unwrap().len(), 2);
+        assert_eq!(outcome.events_shipped, 0);
+        assert!(!outcome.fully_processed);
+        let file_state = FileState::new(&conn);
+        assert_eq!(file_state.get_offset(&path_str).unwrap(), 0);
+        assert_eq!(file_state.get_queued_offset(&path_str).unwrap(), 0);
+    }
+
+    #[test]
     fn test_ship_trace_value_includes_coalesced_observation_window() {
         let item = ShipItem {
             path_str: "/tmp/session.jsonl".to_string(),
