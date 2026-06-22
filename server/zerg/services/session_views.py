@@ -759,7 +759,10 @@ class SessionResponse(UTCBaseModel):
     thread_head_session_id: str = Field(..., description="Current writable head session UUID")
     thread_continuation_count: int = Field(..., description="Number of concrete continuations in this logical thread")
     continued_from_session_id: Optional[str] = Field(None, description="Parent continuation session UUID")
-    continuation_kind: Optional[str] = Field(None, description="Continuation kind: local|cloud|runner")
+    continuation_kind: Optional[str] = Field(
+        None,
+        description="Kernel branch kind for non-root threads; null for root threads",
+    )
     origin_label: Optional[str] = Field(None, description="User-facing execution origin label")
     home_label: Optional[str] = Field(None, description="User-facing home label, e.g. On this Mac|Hosted|Moved to cloud")
     branched_from_event_id: Optional[int] = Field(None, description="Event id where this continuation branched")
@@ -1115,10 +1118,10 @@ class SessionProjectionItemResponse(UTCBaseModel):
     timestamp: datetime = Field(..., description="Timestamp used for item ordering and display")
     event: Optional[EventResponse] = Field(None, description="Present when kind=event")
     continued_from_session_id: Optional[str] = Field(None, description="Parent continuation session UUID for seams")
-    continuation_kind: Optional[str] = Field(None, description="Continuation kind for seam items")
+    continuation_kind: Optional[str] = Field(None, description="Kernel branch kind for seam items")
     origin_label: Optional[str] = Field(None, description="Origin label for seam items")
     parent_origin_label: Optional[str] = Field(None, description="Origin label for the parent segment")
-    parent_continuation_kind: Optional[str] = Field(None, description="Continuation kind for the parent segment")
+    parent_continuation_kind: Optional[str] = Field(None, description="Kernel branch kind for the parent segment")
     branched_from_event_id: Optional[int] = Field(None, description="Event id where the child continuation branched")
 
 

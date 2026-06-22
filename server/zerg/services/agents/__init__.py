@@ -1,11 +1,7 @@
 """Public exports for the agents service package."""
 
-from .helpers import _infer_continuation_kind_from_ingest
-from .helpers import _infer_continuation_kind_from_session
 from .helpers import _infer_execution_home_from_ingest
-from .helpers import _infer_execution_home_from_session
 from .helpers import _infer_origin_label_from_ingest
-from .helpers import _infer_origin_label_from_session
 from .helpers import _normalize_utc_naive
 from .helpers import _should_replace_managed_local_placeholder_provider_session_id
 from .identity_resolver import ObservedActor
@@ -52,10 +48,6 @@ __all__ = [
     "ensure_agents_schema",
     "_normalize_utc_naive",
     "_infer_execution_home_from_ingest",
-    "_infer_execution_home_from_session",
     "_should_replace_managed_local_placeholder_provider_session_id",
-    "_infer_continuation_kind_from_ingest",
     "_infer_origin_label_from_ingest",
-    "_infer_continuation_kind_from_session",
-    "_infer_origin_label_from_session",
 ]

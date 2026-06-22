@@ -72,7 +72,7 @@ class SessionIngest(BaseModel):
     )
     thread_root_session_id: Optional[UUID] = Field(None, description="Logical thread root session UUID")
     continued_from_session_id: Optional[UUID] = Field(None, description="Parent continuation session UUID")
-    continuation_kind: Optional[str] = Field(None, description="Continuation kind: local|cloud|runner")
+    continuation_kind: Optional[str] = Field(None, description="Legacy execution continuation kind: local|cloud|runner")
     origin_label: Optional[str] = Field(None, description="User-facing execution origin label, e.g. Cinder or Cloud")
     execution_home: Optional[str] = Field(
         None,

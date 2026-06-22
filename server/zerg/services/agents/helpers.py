@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 
 from zerg.models.agents import AgentSession
 from zerg.session_execution_home import SessionExecutionHome
-from zerg.session_execution_home import infer_continuation_kind
 from zerg.session_execution_home import infer_execution_home
 from zerg.session_execution_home import infer_origin_label
 
@@ -32,15 +31,6 @@ def _infer_execution_home_from_ingest(data: "SessionIngest") -> SessionExecution
     )
 
 
-def _infer_execution_home_from_session(session: AgentSession) -> SessionExecutionHome:
-    return infer_execution_home(
-        execution_home=None,
-        continuation_kind=None,
-        origin_label=None,
-        environment=getattr(session, "environment", None),
-    )
-
-
 _MANAGED_NATIVE_PROVIDER_SESSION_ID_PROVIDERS = {"codex", "antigravity"}
 
 
@@ -61,15 +51,6 @@ def _should_replace_managed_local_placeholder_provider_session_id(
     return True
 
 
-def _infer_continuation_kind_from_ingest(data: "SessionIngest") -> str:
-    return infer_continuation_kind(
-        continuation_kind=getattr(data, "continuation_kind", None),
-        execution_home=getattr(data, "execution_home", None),
-        origin_label=getattr(data, "origin_label", None),
-        environment=getattr(data, "environment", None),
-    )
-
-
 def _infer_origin_label_from_ingest(data: "SessionIngest") -> str:
     return infer_origin_label(
         origin_label=getattr(data, "origin_label", None),
@@ -77,23 +58,4 @@ def _infer_origin_label_from_ingest(data: "SessionIngest") -> str:
         device_id=getattr(data, "device_id", None),
         execution_home=getattr(data, "execution_home", None),
         continuation_kind=getattr(data, "continuation_kind", None),
-    )
-
-
-def _infer_continuation_kind_from_session(session: AgentSession) -> str:
-    return infer_continuation_kind(
-        continuation_kind=None,
-        execution_home=None,
-        origin_label=None,
-        environment=getattr(session, "environment", None),
-    )
-
-
-def _infer_origin_label_from_session(session: AgentSession) -> str:
-    return infer_origin_label(
-        origin_label=None,
-        environment=getattr(session, "environment", None),
-        device_id=getattr(session, "device_id", None),
-        execution_home=None,
-        continuation_kind=None,
     )

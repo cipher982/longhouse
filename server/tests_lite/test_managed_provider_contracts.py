@@ -20,6 +20,7 @@ from zerg.services.managed_provider_contracts import remote_launch_supported_pro
 from zerg.services.managed_provider_contracts import run_once_supported_providers
 from zerg.services.managed_provider_contracts import steer_control_planes
 from zerg.services.managed_provider_contracts import trusted_non_runner_control_planes
+from zerg.services.session_kernel_projection import direct_machine_control_planes
 from zerg.session_execution_home import ManagedSessionTransport
 
 
@@ -251,6 +252,15 @@ def test_control_plane_aliases_are_explicit_contract_not_scattered_literals():
     assert "opencode_process" not in trusted_non_runner_control_planes()
     assert "antigravity_process" not in trusted_non_runner_control_planes()
     assert "antigravity_hook_inbox" in trusted_non_runner_control_planes()
+
+
+def test_codex_exec_is_direct_one_shot_control_not_a_steer_alias():
+    assert contract_for_control_plane("codex_exec") is None
+    assert managed_transport_for_control_plane("codex_exec") is None
+    assert provider_for_control_plane("codex_exec") is None
+    assert "codex_exec" in direct_machine_control_planes()
+    assert "codex_exec" not in steer_control_planes()
+    assert "codex_exec" not in trusted_non_runner_control_planes()
 
 
 @pytest.mark.parametrize(

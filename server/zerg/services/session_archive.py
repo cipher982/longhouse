@@ -46,7 +46,10 @@ class SessionArchiveSessionResponse(UTCBaseModel):
     last_activity_at: Optional[datetime] = Field(None, description="Latest transcript activity timestamp")
     thread_root_session_id: str = Field(..., description="Logical thread root session UUID")
     continued_from_session_id: Optional[str] = Field(None, description="Parent continuation session UUID")
-    continuation_kind: Optional[str] = Field(None, description="Continuation kind: local|cloud|runner")
+    continuation_kind: Optional[str] = Field(
+        None,
+        description="Kernel branch kind for non-root threads; null for root threads",
+    )
     origin_label: Optional[str] = Field(None, description="User-facing execution origin label")
     execution_home: Optional[str] = Field(None, description="Execution home classification")
     managed_transport: Optional[str] = Field(None, description="Managed transport identifier")
