@@ -3047,10 +3047,22 @@ async fn replay_spool_entries(
                                 spool.advance_start(entry.id, item.new_offset)?;
                             }
                         }
-                        AttemptedShip::MediaUploadFailed { item: _, error } => {
-                            spool.mark_failed(entry.id, &error)?;
+                        AttemptedShip::MediaUploadFailed { item, error } => {
+                            let deferred = spool.defer_pending_for_path(
+                                &entry.file_path,
+                                &error,
+                                ARCHIVE_BACKPRESSURE_RETRY_DELAY,
+                            )?;
+                            tracing::warn!(
+                                path = %item.path_str,
+                                provider = %item.provider,
+                                session_id = %item.session_id,
+                                deferred,
+                                error = %error,
+                                "Deferred spool path after archive media upload failure"
+                            );
                             outcome.failed += 1;
-                            continue 'entry_loop;
+                            break 'entry_loop;
                         }
                     }
                 }
@@ -6698,8 +6710,10 @@ mod tests {
             r#"{{"needed":["{}"],"present":[],"rejected":[]}}"#,
             media.sha256
         );
-        let (url, captured, handle) =
-            spawn_http_sequence_server(&[("200 OK", &claim_body), ("500 Internal Server Error", "upload down")]);
+        let (url, captured, handle) = spawn_http_sequence_server(&[
+            ("200 OK", &claim_body),
+            ("500 Internal Server Error", "upload down"),
+        ]);
         let client = make_test_client(&url);
 
         let outcome = rt
@@ -6713,6 +6727,74 @@ mod tests {
         let file_state = FileState::new(&conn);
         assert_eq!(file_state.get_offset(&path_str).unwrap(), 0);
         assert_eq!(file_state.get_queued_offset(&path_str).unwrap(), 0);
+    }
+
+    #[test]
+    fn test_replay_media_upload_failure_defers_without_dead_letter_retry() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let image_data = "A".repeat(4096);
+        let session_id = "019c638d-0000-0000-0000-000000000557";
+        let line = format!(
+            r#"{{"type":"response_item","timestamp":"2026-03-01T10:00:00Z","payload":{{"type":"message","role":"user","content":[{{"type":"input_image","image_url":"data:image/png;base64,{image_data}"}}]}}}}"#
+        );
+        let path = dir.path().join(format!("{session_id}.jsonl"));
+        std::fs::write(&path, format!("{line}\n")).unwrap();
+        let path_str = path.to_string_lossy().to_string();
+
+        let prepared =
+            prepare_file_batches(&path, "codex", CompressionAlgo::Gzip, &conn, 512 * 1024, None)
+                .unwrap()
+                .expect("prepared media ship item");
+        let media = match &prepared.actions[0] {
+            PreparedAction::Ship(item) => item.media_objects[0].clone(),
+            _ => panic!("expected ship action"),
+        };
+        let end_offset = prepared.new_offset;
+        let claim_body = format!(
+            r#"{{"needed":["{}"],"present":[],"rejected":[]}}"#,
+            media.sha256
+        );
+        let spool = Spool::new(&conn);
+        spool
+            .enqueue("codex", &path_str, 0, end_offset, Some(session_id))
+            .unwrap();
+        let entry_id = spool.pending_entries_for_path(&path_str, 1).unwrap()[0].id;
+        let (url, captured, handle) =
+            spawn_http_sequence_server(&[("200 OK", &claim_body), ("500 Internal Server Error", "upload down")]);
+        let client = make_test_client(&url);
+
+        let replay = rt
+            .block_on(replay_spool_for_path_now_with_batch_bytes_and_parse_tracker(
+                &conn,
+                &client,
+                CompressionAlgo::Gzip,
+                &path,
+                10,
+                512 * 1024,
+                None,
+                None,
+            ))
+            .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(captured.lock().unwrap().len(), 2);
+        assert_eq!(replay.resolved, 0);
+        assert_eq!(replay.failed, 1);
+        assert_eq!(spool.pending_count().unwrap(), 1);
+        assert_eq!(spool.dead_count().unwrap(), 0);
+        let (retry_count, status, last_error): (i64, String, String) = conn
+            .query_row(
+                "SELECT retry_count, status, last_error FROM spool_queue WHERE id = ?1",
+                [entry_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(retry_count, 0);
+        assert_eq!(status, "pending");
+        assert!(last_error.contains("uploading archive media"));
+        assert_eq!(FileState::new(&conn).get_offset(&path_str).unwrap(), 0);
     }
 
     #[test]
