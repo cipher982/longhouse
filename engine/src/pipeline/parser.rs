@@ -25,7 +25,9 @@ use serde_json::value::RawValue;
 use uuid::Uuid;
 
 use crate::codex_source::parse_codex_subagent_source_str;
-use crate::media_redaction::redact_inline_image_data_urls_in_json_line;
+use crate::media_redaction::{
+    redact_inline_image_data_urls_with_media, InlineImageRedaction,
+};
 
 /// Threshold for switching from buffered read to mmap (1 MB).
 const MMAP_THRESHOLD: u64 = 1_048_576;
@@ -81,6 +83,19 @@ pub struct ParsedSourceLine {
     pub raw_line: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[allow(dead_code)] // Phase 2 media store/upload consumes this parser side channel.
+pub struct ParsedMediaObject {
+    pub source_offset: u64,
+    pub sha256: String,
+    pub mime_type: String,
+    pub byte_size: usize,
+    pub original_chars: usize,
+    pub original_line_sha256: String,
+    #[serde(skip_serializing)]
+    pub bytes: Vec<u8>,
+}
+
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct SessionMetadata {
     pub session_id: String,
@@ -113,6 +128,8 @@ pub struct SessionMetadata {
 pub struct ParseResult {
     pub events: Vec<ParsedEvent>,
     pub source_lines: Vec<ParsedSourceLine>,
+    #[allow(dead_code)] // Phase 2 media store/upload consumes this parser side channel.
+    pub media_objects: Vec<ParsedMediaObject>,
     pub last_good_offset: u64,
     pub metadata: SessionMetadata,
     /// Number of records that appeared to contain parseable content.
@@ -550,6 +567,7 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
         return Ok(ParseResult {
             events: Vec::new(),
             source_lines: Vec::new(),
+            media_objects: Vec::new(),
             last_good_offset: offset,
             candidate_records: 0,
             metadata: SessionMetadata {
@@ -720,31 +738,56 @@ fn codex_payload_parentage(payload: &CodexPayload) -> CodexPayloadParentage {
 /// therefore always parse from offset 0 and return `file_size` as
 /// `last_good_offset`.  The ingest backend deduplicates events by hash,
 /// so re-shipping an unchanged session is harmless.
-fn capture_text_source_lines(content: &str) -> Vec<ParsedSourceLine> {
+fn parsed_media_objects(
+    source_offset: u64,
+    original_line_sha256: &str,
+    media: Vec<InlineImageRedaction>,
+) -> Vec<ParsedMediaObject> {
+    media
+        .into_iter()
+        .map(|item| ParsedMediaObject {
+            source_offset,
+            sha256: item.sha256,
+            mime_type: item.mime_type,
+            byte_size: item.byte_size,
+            original_chars: item.original_chars,
+            original_line_sha256: original_line_sha256.to_string(),
+            bytes: item.bytes,
+        })
+        .collect()
+}
+
+fn capture_text_source_lines(content: &str) -> (Vec<ParsedSourceLine>, Vec<ParsedMediaObject>) {
     if content.is_empty() {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
 
     let mut source_lines = Vec::new();
+    let mut media_objects = Vec::new();
     let mut offset = 0u64;
     for chunk in content.split_inclusive('\n') {
         let trimmed = chunk.strip_suffix('\n').unwrap_or(chunk);
         let raw_line = trimmed.strip_suffix('\r').unwrap_or(trimmed);
-        let raw_line = redact_inline_image_data_urls_in_json_line(raw_line).into_owned();
+        let redacted = redact_inline_image_data_urls_with_media(raw_line);
+        media_objects.extend(parsed_media_objects(
+            offset,
+            &redacted.original_line_sha256,
+            redacted.media,
+        ));
         source_lines.push(ParsedSourceLine {
             source_offset: offset,
-            raw_line,
+            raw_line: redacted.raw_line,
         });
         offset += chunk.as_bytes().len() as u64;
     }
-    source_lines
+    (source_lines, media_objects)
 }
 
 fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read {}", path.display()))?;
     let file_size = content.len() as u64;
-    let source_lines = capture_text_source_lines(&content);
+    let (source_lines, media_objects) = capture_text_source_lines(&content);
 
     let session: GeminiSession = match serde_json::from_str(&content) {
         Ok(s) => s,
@@ -769,6 +812,7 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
                         return Ok(ParseResult {
                             events: Vec::new(),
                             source_lines: Vec::new(),
+                            media_objects: Vec::new(),
                             last_good_offset: file_size,
                             candidate_records: 0,
                             metadata: SessionMetadata {
@@ -783,6 +827,7 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
                 return Ok(ParseResult {
                     events: Vec::new(),
                     source_lines: Vec::new(),
+                    media_objects: Vec::new(),
                     last_good_offset: file_size,
                     candidate_records: 0,
                     metadata: SessionMetadata {
@@ -959,6 +1004,7 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
     Ok(ParseResult {
         events,
         source_lines,
+        media_objects,
         last_good_offset: file_size,
         candidate_records,
         metadata,
@@ -1056,6 +1102,7 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
         return Ok(ParseResult {
             events: Vec::new(),
             source_lines: Vec::new(),
+            media_objects: Vec::new(),
             last_good_offset: offset,
             candidate_records: 0,
             metadata: SessionMetadata {
@@ -1067,6 +1114,7 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
 
     let mut events = Vec::new();
     let mut source_lines = Vec::new();
+    let mut media_objects = Vec::new();
     let mut metadata = SessionMetadata::default();
     let mut min_ts: Option<DateTime<Utc>> = None;
     let mut max_ts: Option<DateTime<Utc>> = None;
@@ -1091,12 +1139,21 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
         let line_bytes = &data[line_start..line_end];
         pos = line_end + 1;
 
-        if let Ok(line_str) = std::str::from_utf8(line_bytes) {
+        let redacted_line = if let Ok(line_str) = std::str::from_utf8(line_bytes) {
+            let redacted = redact_inline_image_data_urls_with_media(line_str);
+            media_objects.extend(parsed_media_objects(
+                line_offset,
+                &redacted.original_line_sha256,
+                redacted.media,
+            ));
             source_lines.push(ParsedSourceLine {
                 source_offset: line_offset,
-                raw_line: redact_inline_image_data_urls_in_json_line(line_str).into_owned(),
+                raw_line: redacted.raw_line.clone(),
             });
-        }
+            redacted.raw_line
+        } else {
+            String::new()
+        };
 
         // Skip empty/whitespace lines
         let trimmed = trim_bytes(line_bytes);
@@ -1123,9 +1180,6 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
         // Collect metadata
         collect_metadata(&obj, &mut metadata, &mut min_ts, &mut max_ts);
 
-        // Extract events — pass raw bytes, convert to string only when needed
-        let line_str = std::str::from_utf8(line_bytes).unwrap_or("");
-        let redacted_line = redact_inline_image_data_urls_in_json_line(line_str);
         extract_events(&obj, session_id, line_offset, &redacted_line, &mut events);
     }
 
@@ -1148,6 +1202,7 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
     Ok(ParseResult {
         events,
         source_lines,
+        media_objects,
         last_good_offset,
         candidate_records: candidate_lines,
         metadata,
@@ -1171,6 +1226,7 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
 
     let mut events = Vec::new();
     let mut source_lines = Vec::new();
+    let mut media_objects = Vec::new();
     let mut metadata = SessionMetadata::default();
     let mut min_ts: Option<DateTime<Utc>> = None;
     let mut max_ts: Option<DateTime<Utc>> = None;
@@ -1206,7 +1262,13 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
         let line_offset = current_offset;
         current_offset += bytes_read as u64;
 
-        let redacted_line = redact_inline_image_data_urls_in_json_line(&line).into_owned();
+        let redacted = redact_inline_image_data_urls_with_media(&line);
+        media_objects.extend(parsed_media_objects(
+            line_offset,
+            &redacted.original_line_sha256,
+            redacted.media,
+        ));
+        let redacted_line = redacted.raw_line;
         source_lines.push(ParsedSourceLine {
             source_offset: line_offset,
             raw_line: redacted_line.clone(),
@@ -1250,6 +1312,7 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
     Ok(ParseResult {
         events,
         source_lines,
+        media_objects,
         last_good_offset: current_offset,
         candidate_records: candidate_lines,
         metadata,
@@ -2389,6 +2452,7 @@ fn trim_bytes(bytes: &[u8]) -> &[u8] {
 mod tests {
     use super::*;
     use serde_json::json;
+    use sha2::{Digest, Sha256};
     use std::io::Write;
 
     fn make_jsonl_file(dir: &Path, name: &str, lines: &[&str]) -> std::path::PathBuf {
@@ -3719,10 +3783,11 @@ mod tests {
         let result = parse_session_file(&path, 0).unwrap();
         assert_eq!(result.source_lines.len(), 1);
         assert_eq!(result.events.len(), 1);
+        assert_eq!(result.media_objects.len(), 1);
 
         let source_line = &result.source_lines[0].raw_line;
         assert!(source_line.contains("longhouse_media_ref:sha256="));
-        assert!(source_line.contains(";mime=data:image/png;"));
+        assert!(source_line.contains(";mime=image/png;"));
         assert!(source_line.contains(";original_chars=4118"));
         assert!(!source_line.contains(&image_data));
         assert!(source_line.len() < 512);
@@ -3730,6 +3795,17 @@ mod tests {
         let event_raw = result.events[0].raw_line.as_deref().unwrap_or("");
         assert!(event_raw.contains("longhouse_media_ref:sha256="));
         assert!(!event_raw.contains(&image_data));
+
+        let media = &result.media_objects[0];
+        assert_eq!(media.source_offset, 0);
+        assert_eq!(media.mime_type, "image/png");
+        assert_eq!(media.byte_size, 3072);
+        assert_eq!(media.original_chars, 4118);
+        assert_eq!(media.bytes, vec![0u8; 3072]);
+        assert_eq!(
+            media.original_line_sha256,
+            format!("{:x}", Sha256::digest(line.as_bytes()))
+        );
     }
 
     #[test]

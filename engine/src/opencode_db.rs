@@ -299,6 +299,7 @@ pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Resu
     Ok(ParseResult {
         events,
         source_lines,
+        media_objects: Vec::new(),
         last_good_offset: session_version.max(last_source_offset.saturating_add(1)),
         metadata: SessionMetadata {
             session_id: longhouse_session_id,

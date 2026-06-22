@@ -7,8 +7,6 @@
 //! content-addressed placeholder while preserving enough metadata to reconcile
 //! the original bytes through the media lane.
 
-use std::borrow::Cow;
-
 use base64::{engine::general_purpose, Engine as _};
 use sha2::{Digest, Sha256};
 
@@ -24,6 +22,14 @@ pub struct InlineImageRedaction {
     pub sha256: String,
     pub byte_size: usize,
     pub original_chars: usize,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RedactedJsonLine {
+    pub raw_line: String,
+    pub media: Vec<InlineImageRedaction>,
+    pub original_line_sha256: String,
 }
 
 pub fn redact_inline_image_data_url(value: &str) -> Option<InlineImageRedaction> {
@@ -33,7 +39,8 @@ pub fn redact_inline_image_data_url(value: &str) -> Option<InlineImageRedaction>
     if !value.starts_with(DATA_IMAGE_PREFIX) {
         return None;
     }
-    let (mime_type, data) = value.split_once(BASE64_MARKER)?;
+    let (mime_prefix, data) = value.split_once(BASE64_MARKER)?;
+    let mime_type = mime_prefix.strip_prefix("data:").unwrap_or(mime_prefix);
     let bytes = general_purpose::STANDARD.decode(data).ok()?;
     let sha256 = format!("{:x}", Sha256::digest(&bytes));
     let placeholder = format!(
@@ -47,17 +54,23 @@ pub fn redact_inline_image_data_url(value: &str) -> Option<InlineImageRedaction>
         sha256,
         byte_size: bytes.len(),
         original_chars: value.len(),
+        bytes,
     })
 }
 
-pub fn redact_inline_image_data_urls_in_json_line(raw: &str) -> Cow<'_, str> {
+pub fn redact_inline_image_data_urls_with_media(raw: &str) -> RedactedJsonLine {
+    let original_line_sha256 = format!("{:x}", Sha256::digest(raw.as_bytes()));
     if !raw.contains(DATA_IMAGE_PREFIX) {
-        return Cow::Borrowed(raw);
+        return RedactedJsonLine {
+            raw_line: raw.to_string(),
+            media: Vec::new(),
+            original_line_sha256,
+        };
     }
 
     let mut out = String::with_capacity(raw.len().min(4096));
     let mut cursor = 0usize;
-    let mut changed = false;
+    let mut media = Vec::new();
 
     while let Some(rel_start) = raw[cursor..].find(DATA_IMAGE_PREFIX) {
         let start = cursor + rel_start;
@@ -73,14 +86,22 @@ pub fn redact_inline_image_data_urls_in_json_line(raw: &str) -> Cow<'_, str> {
         out.push_str(&raw[cursor..start]);
         out.push_str(&redaction.placeholder);
         cursor = end;
-        changed = true;
+        media.push(redaction);
     }
 
-    if !changed {
-        return Cow::Borrowed(raw);
+    if media.is_empty() {
+        return RedactedJsonLine {
+            raw_line: raw.to_string(),
+            media,
+            original_line_sha256,
+        };
     }
     out.push_str(&raw[cursor..]);
-    Cow::Owned(out)
+    RedactedJsonLine {
+        raw_line: out,
+        media,
+        original_line_sha256,
+    }
 }
 
 fn find_json_string_end(raw: &str, start: usize) -> Option<usize> {
@@ -111,13 +132,14 @@ mod tests {
         let url = format!("data:image/png;base64,{data}");
         let redaction = redact_inline_image_data_url(&url).expect("redacts image url");
 
-        assert_eq!(redaction.mime_type, "data:image/png");
+        assert_eq!(redaction.mime_type, "image/png");
         assert_eq!(redaction.byte_size, 600);
+        assert_eq!(redaction.bytes, vec![7u8; 600]);
         assert_eq!(redaction.original_chars, url.len());
         assert!(redaction
             .placeholder
             .contains("longhouse_media_ref:sha256="));
-        assert!(redaction.placeholder.contains(";mime=data:image/png;"));
+        assert!(redaction.placeholder.contains(";mime=image/png;"));
         assert!(redaction.placeholder.contains(";bytes=600;"));
         assert!(redaction
             .placeholder
@@ -134,12 +156,17 @@ mod tests {
     fn redacts_data_url_inside_json_line_without_reordering_json() {
         let data = general_purpose::STANDARD.encode([3u8; 600]);
         let raw = format!(r#"{{"b":1,"image_url":"data:image/png;base64,{data}","a":2}}"#);
-        let redacted = redact_inline_image_data_urls_in_json_line(&raw);
+        let redacted = redact_inline_image_data_urls_with_media(&raw);
 
-        assert!(matches!(redacted, Cow::Owned(_)));
-        assert!(redacted.starts_with(r#"{"b":1,"image_url":"#));
-        assert!(redacted.ends_with(r#"","a":2}"#));
-        assert!(redacted.contains("longhouse_media_ref:sha256="));
-        assert!(!redacted.contains(&data));
+        assert_eq!(redacted.media.len(), 1);
+        assert_eq!(redacted.media[0].bytes, vec![3u8; 600]);
+        assert!(redacted.raw_line.starts_with(r#"{"b":1,"image_url":"#));
+        assert!(redacted.raw_line.ends_with(r#"","a":2}"#));
+        assert!(redacted.raw_line.contains("longhouse_media_ref:sha256="));
+        assert!(!redacted.raw_line.contains(&data));
+        assert_eq!(
+            redacted.original_line_sha256,
+            format!("{:x}", Sha256::digest(raw.as_bytes()))
+        );
     }
 }
