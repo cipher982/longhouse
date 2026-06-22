@@ -3624,6 +3624,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/timeline/sessions/{session_id}/graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Timeline Session Graph */
+        get: operations["get_timeline_session_graph_timeline_sessions__session_id__graph_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/timeline/workflows/{workflow_run_id}": {
         parameters: {
             query?: never;
@@ -4149,6 +4166,26 @@ export interface paths {
          *     {workflow_run_id, agent_count, skill}.
          */
         get: operations["list_session_workflow_runs_agents_sessions__session_id__workflows_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session Graph
+         * @description Return provider-neutral child/fork/link graph context for a session.
+         */
+        get: operations["get_session_graph_agents_sessions__session_id__graph_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4714,6 +4751,50 @@ export interface paths {
          * @description Upsert real-time presence state for a session.
          */
         post: operations["upsert_presence_agents_presence_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/permission-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register Permission Request
+         * @description Register a held Claude permission request from a PreToolUse hook.
+         */
+        post: operations["register_permission_request_agents_permission_requests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/permission-decision": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Permission Decision
+         * @description Return the resolved permission decision, or pending if not yet answered.
+         *
+         *     Polls by the unique pause_request_id returned at register when available, so
+         *     concurrent or repeated tool_use_ids resolve independently; falls back to the
+         *     (session, tool_use_id)-derived request_key only when no id was provided.
+         */
+        get: operations["get_permission_decision_agents_permission_decision_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -7276,6 +7357,13 @@ export interface components {
             managed_session_name: string;
             /** Attach Command */
             attach_command: string;
+            /**
+             * Permission Mode
+             * @default bypass
+             */
+            permission_mode: string;
+            /** Hook Token */
+            hook_token?: string | null;
         };
         /**
          * ManagedLocalThisDeviceLaunchRequest
@@ -7335,6 +7423,12 @@ export interface components {
             claude_launch_env?: {
                 [key: string]: string;
             } | null;
+            /**
+             * Permission Mode
+             * @description Managed permission policy: 'bypass' (autonomous, default) or 'remote_approve' (answer permission prompts via Longhouse)
+             * @default bypass
+             */
+            permission_mode: string;
         };
         /** ManagedSessionLeaseIn */
         ManagedSessionLeaseIn: {
@@ -7609,6 +7703,53 @@ export interface components {
             runs: number;
         };
         /**
+         * PermissionDecisionOut
+         * @description Decision the hook returns to Claude, or pending when unresolved.
+         */
+        PermissionDecisionOut: {
+            /** Decision */
+            decision?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Resolved
+             * @default false
+             */
+            resolved: boolean;
+        };
+        /** PermissionRequestAck */
+        PermissionRequestAck: {
+            /** Pause Request Id */
+            pause_request_id: string;
+            /** Request Key */
+            request_key: string;
+            /** Status */
+            status: string;
+        };
+        /**
+         * PermissionRequestIn
+         * @description PreToolUse hook payload registering a held permission request.
+         */
+        PermissionRequestIn: {
+            /** Session Id */
+            session_id: string;
+            /** Tool Use Id */
+            tool_use_id: string;
+            /** Tool Name */
+            tool_name?: string | null;
+            /** Tool Input */
+            tool_input?: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Provider
+             * @default claude
+             */
+            provider: string | null;
+            /** Occurred At */
+            occurred_at?: string | null;
+        };
+        /**
          * PhoneContactCreate
          * @description Schema for creating a phone contact.
          */
@@ -7877,6 +8018,17 @@ export interface components {
              * @description Optional provider-live process timeout. When omitted, the Machine Agent uses a no-token default.
              */
             timeout_secs?: number | null;
+            /**
+             * Run Live Token Contract
+             * @description Run the provider-specific live-token contract when the target Machine Agent supports it.
+             * @default false
+             */
+            run_live_token_contract: boolean;
+            /**
+             * Live Token Timeout Secs
+             * @description Optional timeout for the live-token contract portion of the proof.
+             */
+            live_token_timeout_secs?: number | null;
         };
         /** QueuedInputSummary */
         QueuedInputSummary: {
@@ -9737,9 +9889,9 @@ export interface components {
             /**
              * Kind
              * @description Pause request kind
-             * @constant
+             * @enum {string}
              */
-            kind: "structured_question";
+            kind: "structured_question" | "permission_prompt";
             /**
              * Status
              * @description Pause lifecycle status
@@ -18153,6 +18305,39 @@ export interface operations {
             };
         };
     };
+    get_timeline_session_graph_timeline_sessions__session_id__graph_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_timeline_workflow_run_timeline_workflows__workflow_run_id__get: {
         parameters: {
             query?: never;
@@ -19097,6 +19282,39 @@ export interface operations {
         };
     };
     list_session_workflow_runs_agents_sessions__session_id__workflows_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_session_graph_agents_sessions__session_id__graph_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -20176,6 +20394,73 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_permission_request_agents_permission_requests_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PermissionRequestIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionRequestAck"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_permission_decision_agents_permission_decision_get: {
+        parameters: {
+            query: {
+                session_id: string;
+                tool_use_id: string;
+                pause_request_id?: string | null;
+                provider?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PermissionDecisionOut"];
+                };
             };
             /** @description Validation Error */
             422: {

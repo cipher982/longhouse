@@ -72,6 +72,9 @@ export function SessionPauseRequestPanel({
   onRespond,
 }: SessionPauseRequestPanelProps) {
   const questions = useMemo(() => pauseRequest.questions ?? [], [pauseRequest.questions]);
+  // Permission prompts (tool allow/deny) reuse this panel but read as Allow/Deny
+  // rather than Send answer/Cancel, and need no free-text answer.
+  const isPermissionPrompt = pauseRequest.kind === "permission_prompt";
   const [draft, setDraft] = useState<AnswerDraft>(() => initialDraft(questions));
   const [fallbackMessage, setFallbackMessage] = useState("");
   const [submitting, setSubmitting] = useState<"answer" | "reject" | null>(null);
@@ -89,9 +92,12 @@ export function SessionPauseRequestPanel({
   const canAnswer =
     pauseRequest.can_respond &&
     !submitted &&
-    (questions.length > 0
-      ? questions.every((question, index) => answerHasValue(draft[questionKey(question, index)]))
-      : fallbackMessage.trim().length > 0);
+    // Permission prompts are pure allow/deny — no answer text required.
+    (isPermissionPrompt
+      ? true
+      : questions.length > 0
+        ? questions.every((question, index) => answerHasValue(draft[questionKey(question, index)]))
+        : fallbackMessage.trim().length > 0);
 
   const providerLabel = pauseRequest.provider
     ? pauseRequest.provider.slice(0, 1).toUpperCase() + pauseRequest.provider.slice(1)
@@ -165,8 +171,8 @@ export function SessionPauseRequestPanel({
       <div className="session-pause-panel__header">
         <MessageSquareIcon width={16} height={16} />
         <div className="session-pause-panel__title-block">
-          <span className="session-pause-panel__eyebrow">Needs answer</span>
-          <h2>{pauseRequest.title?.trim() || "Provider question"}</h2>
+          <span className="session-pause-panel__eyebrow">{isPermissionPrompt ? "Permission" : "Needs answer"}</span>
+          <h2>{pauseRequest.title?.trim() || (isPermissionPrompt ? "Tool permission" : "Provider question")}</h2>
           <p>{detail}</p>
         </div>
       </div>
@@ -232,7 +238,7 @@ export function SessionPauseRequestPanel({
             );
           })}
         </div>
-      ) : pauseRequest.can_respond ? (
+      ) : pauseRequest.can_respond && !isPermissionPrompt ? (
         <textarea
           className="session-pause-freeform"
           value={fallbackMessage}
@@ -256,7 +262,15 @@ export function SessionPauseRequestPanel({
               disabled={!canAnswer || submitting != null}
             >
               <CheckCircleIcon width={14} height={14} />
-              <span>{submitting === "answer" ? "Sending" : "Send answer"}</span>
+              <span>
+                {isPermissionPrompt
+                  ? submitting === "answer"
+                    ? "Allowing"
+                    : "Allow"
+                  : submitting === "answer"
+                    ? "Sending"
+                    : "Send answer"}
+              </span>
             </Button>
             <Button
               type="button"
@@ -266,7 +280,15 @@ export function SessionPauseRequestPanel({
               disabled={submitting != null || submitted}
             >
               <XIcon width={14} height={14} />
-              <span>{submitting === "reject" ? "Cancelling" : "Cancel"}</span>
+              <span>
+                {isPermissionPrompt
+                  ? submitting === "reject"
+                    ? "Denying"
+                    : "Deny"
+                  : submitting === "reject"
+                    ? "Cancelling"
+                    : "Cancel"}
+              </span>
             </Button>
           </>
         ) : (
