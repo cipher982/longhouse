@@ -15,14 +15,14 @@ def _expected_unsupported_operations(contract) -> list[str]:
 
 def _expected_live_operations(contract) -> list[str]:
     return [
-        support.split(".", 1)[1]
-        for support in contract.machine_control_supports
-        if support.split(".", 1)[1] not in {"run_once", "resume_run_once"}
+        operation
+        for operation in contract.machine_control_operations
+        if operation not in {"run_once", "resume_run_once"}
     ]
 
 
 def _expected_machine_operations(contract) -> list[str]:
-    return [support.split(".", 1)[1] for support in contract.machine_control_supports]
+    return list(contract.machine_control_operations)
 
 
 def test_support_state_provider_capability_axes_match_manifest_contracts() -> None:

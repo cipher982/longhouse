@@ -16,6 +16,7 @@
       "send_input": true,
       "interrupt": true,
       "steer_active_turn": true,
+      "answer_pause": true,
       "terminate": true,
       "tail_output": true,
       "runtime_phase": true,
@@ -56,6 +57,11 @@
           "level": "hermetic",
           "source": "engine codex_bridge turn/steer active-turn tests",
           "next": "promote with live token steer transcript canary"
+        },
+        "answer_pause": {
+          "level": "hermetic",
+          "source": "engine codex_bridge pause-answer command tests",
+          "next": "promote with live token pause-answer transcript canary"
         },
         "terminate": {
           "level": "hermetic",
@@ -102,6 +108,7 @@
       "send_input": true,
       "interrupt": true,
       "steer_active_turn": true,
+      "answer_pause": true,
       "terminate": true,
       "tail_output": true,
       "runtime_phase": true,
@@ -139,6 +146,11 @@
           "level": "live_token",
           "source": "make managed-claude-poc delayed intent=steer transcript assertion",
           "next": "promote to scheduled live token canary"
+        },
+        "answer_pause": {
+          "level": "hermetic",
+          "source": "Claude channel bridge pause-answer command tests",
+          "next": "promote with live token pause-answer transcript canary"
         },
         "terminate": {
           "level": "hermetic",
@@ -184,6 +196,7 @@
       "send_input": true,
       "interrupt": true,
       "steer_active_turn": false,
+      "answer_pause": false,
       "terminate": true,
       "tail_output": true,
       "runtime_phase": true,
@@ -223,6 +236,10 @@
           "level": "none",
           "source": "unsupported until OpenCode active-turn injection semantics are proven"
         },
+        "answer_pause": {
+          "level": "none",
+          "source": "unsupported until OpenCode pause-answer semantics are proven"
+        },
         "terminate": {
           "level": "hermetic",
           "source": "OpenCode server bridge stop/cleanup tests"
@@ -260,6 +277,7 @@
       "send_input": true,
       "interrupt": false,
       "steer_active_turn": false,
+      "answer_pause": false,
       "terminate": false,
       "tail_output": true,
       "runtime_phase": true,
@@ -295,6 +313,10 @@
         "steer_active_turn": {
           "level": "none",
           "source": "unsupported until bounded active-turn injection is proven"
+        },
+        "answer_pause": {
+          "level": "none",
+          "source": "unsupported until pause-answer semantics are proven"
         },
         "terminate": {
           "level": "none",

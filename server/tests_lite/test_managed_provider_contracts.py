@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from zerg.managed_provider_contract_manifest import _validate_machine_control_supports
 from zerg.managed_provider_contract_manifest import _validate_operation_evidence
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
@@ -33,6 +34,7 @@ def _manifest_item(provider: str = "test") -> dict:
         "send_input": True,
         "interrupt": True,
         "steer_active_turn": True,
+        "answer_pause": True,
         "terminate": True,
         "tail_output": True,
         "runtime_phase": True,
@@ -45,6 +47,7 @@ def _manifest_item(provider: str = "test") -> dict:
             "send_input": {"level": "hermetic", "source": "test"},
             "interrupt": {"level": "hermetic", "source": "test"},
             "steer_active_turn": {"level": "hermetic", "source": "test"},
+            "answer_pause": {"level": "hermetic", "source": "test"},
             "terminate": {"level": "hermetic", "source": "test"},
             "tail_output": {"level": "hermetic", "source": "test"},
             "runtime_phase": {"level": "hermetic", "source": "test"},
@@ -136,6 +139,7 @@ def test_codex_contract_is_current_remote_launch_engine_channel_provider():
     assert codex.send_input is True
     assert codex.interrupt is True
     assert codex.steer_active_turn is True
+    assert codex.answer_pause is True
     assert codex.machine_control_supports == (
         "codex.send",
         "codex.interrupt",
@@ -145,6 +149,16 @@ def test_codex_contract_is_current_remote_launch_engine_channel_provider():
         "codex.continue",
         "codex.run_once",
         "codex.resume_run_once",
+    )
+    assert codex.machine_control_operations == (
+        "send",
+        "interrupt",
+        "steer",
+        "answer_pause",
+        "launch",
+        "continue",
+        "run_once",
+        "resume_run_once",
     )
     assert remote_launch_supported_providers() == frozenset({"codex", "claude", "opencode"})
     assert run_once_supported_providers() == frozenset({"codex"})
@@ -176,6 +190,7 @@ def test_claude_contract_is_first_class_channel_control_provider():
     assert claude.send_input is True
     assert claude.interrupt is True
     assert claude.steer_active_turn is True
+    assert claude.answer_pause is True
     assert claude.operation_evidence_for("steer_active_turn")["level"] == "live_token"
     assert "scheduled live token canary" in claude.operation_evidence_for("steer_active_turn")["next"]
     assert claude.can_resume is True
@@ -198,6 +213,7 @@ def test_opencode_contract_is_server_bridge_control_provider_without_active_turn
     assert opencode.send_input is True
     assert opencode.interrupt is True
     assert opencode.steer_active_turn is False
+    assert opencode.answer_pause is False
     assert opencode.machine_control_supports == ("opencode.send", "opencode.interrupt", "opencode.launch")
     assert opencode.connection_capabilities == {
         "can_send_input": 1,
@@ -218,6 +234,7 @@ def test_antigravity_contract_is_hook_inbox_send_only():
     assert contract.send_input is True
     assert contract.interrupt is False
     assert contract.steer_active_turn is False
+    assert contract.answer_pause is False
     assert contract.tail_output is True
     assert contract.runtime_phase is True
     assert contract.transcript_binding is True
@@ -319,6 +336,39 @@ def test_machine_control_operations_by_provider_projects_live_supports():
 
 def test_machine_control_operations_by_provider_requires_connected_channel():
     assert machine_control_operations_by_provider(["codex.launch", "antigravity.send"], connected=False) == {}
+
+
+@pytest.mark.parametrize(
+    ("mutator", "message"),
+    [
+        (lambda item: item["machine_control_supports"].__setitem__(0, "send"), "must be provider.operation"),
+        (lambda item: item["machine_control_supports"].__setitem__(0, "other.send"), "must use provider prefix test"),
+        (lambda item: item["machine_control_supports"].__setitem__(0, "test.made_up"), "unknown operation 'made_up'"),
+        (
+            lambda item: (
+                item.__setitem__("answer_pause", False),
+                item["machine_control_supports"].append("test.answer_pause"),
+            ),
+            "requires answer_pause=true",
+        ),
+        (
+            lambda item: (
+                item.__setitem__("run_once", True),
+                item.__setitem__("can_resume", False),
+                item["machine_control_supports"].append("test.resume_run_once"),
+            ),
+            "requires can_resume=true",
+        ),
+    ],
+)
+def test_machine_control_support_validation_rejects_non_executable_tokens(mutator, message):
+    item = _manifest_item()
+    item["can_resume"] = True
+    item["machine_control_supports"] = ["test.send"]
+    mutator(item)
+
+    with pytest.raises(ValueError, match=message):
+        _validate_machine_control_supports(item)
 
 
 def test_provider_cli_discovery_contract_comes_from_managed_provider_manifest():

@@ -27,6 +27,7 @@ CONTRACT_OPERATIONS = (
     "send_input",
     "interrupt",
     "steer_active_turn",
+    "answer_pause",
     "terminate",
     "tail_output",
     "runtime_phase",
