@@ -20,10 +20,11 @@ use tokio::task;
 use crate::discovery::{self, ProviderConfig};
 use crate::error_tracker::{ConsecutiveErrorTracker, RecentIssueTracker};
 use crate::flight::FlightRecorder;
+use crate::media_upload;
 use crate::opencode_db;
 use crate::pipeline::batcher::{self, PlannedRangeAction, ShipRange};
 use crate::pipeline::compressor::{self, CompressionAlgo};
-use crate::pipeline::parser::{self, ParseResult};
+use crate::pipeline::parser::{self, ParseResult, ParsedMediaObject};
 use crate::shipping::client::{ShipResult, ShipperClient};
 use crate::shipping_stats::{
     RecentShipStatsTracker, ShipAttemptOutcome, ShipLane, ShipStageTimings,
@@ -290,6 +291,25 @@ pub(crate) async fn ship_opencode_database(
         )?;
         let compressed_len = compressed.len() as u64;
         let result = if compressed_len <= max_batch_bytes {
+            if let Err(error) = media_upload::ensure_media_uploaded(
+                client,
+                &longhouse_session_id,
+                "opencode",
+                &candidate.source_key,
+                &parse_result.media_objects,
+                Some(ARCHIVE_INGEST_TIMEOUT),
+            )
+            .await
+            {
+                tracing::warn!(
+                    path = %candidate.source_key,
+                    provider = "opencode",
+                    provider_session_id = %candidate.provider_session_id,
+                    error = %error,
+                    "OpenCode SQLite media upload failed; leaving cursor unchanged for next scan"
+                );
+                continue;
+            }
             client.ship(compressed).await
         } else {
             ShipResult::PayloadTooLarge(format!(
@@ -541,6 +561,7 @@ pub fn prepare_file(
             .iter()
             .map(|line| line.source_offset)
             .collect(),
+        media_objects: parse_result.media_objects.clone(),
         compressed,
     }))
 }
@@ -939,6 +960,19 @@ fn event_only_ship_offsets(parse_result: &ParseResult, range: &ShipRange) -> (u6
     )
 }
 
+fn media_objects_for_offset_range(
+    parse_result: &ParseResult,
+    start_offset: u64,
+    end_offset: u64,
+) -> Vec<ParsedMediaObject> {
+    parse_result
+        .media_objects
+        .iter()
+        .filter(|media| media.source_offset >= start_offset && media.source_offset < end_offset)
+        .cloned()
+        .collect()
+}
+
 fn prepare_whole_document_action(
     parse_result: &ParseResult,
     path_str: &str,
@@ -971,6 +1005,7 @@ fn prepare_whole_document_action(
             event_count: parse_result.events.len(),
             session_id: payload_session_id.to_string(),
             source_line_offsets: Vec::new(),
+            media_objects: media_objects_for_offset_range(parse_result, start_offset, end_offset),
             compressed,
         })]);
     }
@@ -1042,6 +1077,11 @@ fn materialize_ship_range(
                     .collect(),
                     SourceLineMode::EventOnly => Vec::new(),
                 },
+                media_objects: media_objects_for_offset_range(
+                    parse_result,
+                    item_offset,
+                    item_new_offset,
+                ),
                 compressed,
             })],
             rewind_hint.is_some(),
@@ -1644,6 +1684,36 @@ async fn attempt_ship(
         remove_json_field(&mut header_record, "request_timeout_ms");
         serde_json::to_string(&header_record).ok()
     });
+    if !item.media_objects.is_empty() {
+        match media_upload::ensure_media_uploaded(
+            client,
+            &item.session_id,
+            &item.provider,
+            &item.path_str,
+            &item.media_objects,
+            request_timeout,
+        )
+        .await
+        {
+            Ok(summary) => {
+                tracing::debug!(
+                    path = %item.path_str,
+                    provider = %item.provider,
+                    session_id = %item.session_id,
+                    media_claimed = summary.claimed,
+                    media_present = summary.already_present,
+                    media_uploaded = summary.uploaded,
+                    "Archive media ready before ingest"
+                );
+            }
+            Err(err) => {
+                return AttemptedShip::MediaUploadFailed {
+                    item,
+                    error: err.to_string(),
+                };
+            }
+        }
+    }
     let payload = std::mem::take(&mut item.compressed);
     let attempt_started = std::time::Instant::now();
     let client_for_task = client.clone();
@@ -2447,6 +2517,17 @@ pub async fn ship_prepared_file_with_trace(
                         }
                         outcome.dead_lettered += 1;
                     }
+                    AttemptedShip::MediaUploadFailed { item, error } => {
+                        tracing::warn!(
+                            path = %item.path_str,
+                            provider = %item.provider,
+                            session_id = %item.session_id,
+                            error = %error,
+                            "Archive media upload failed; leaving cursor unchanged for reparse"
+                        );
+                        outcome.fully_processed = false;
+                        return Ok(outcome);
+                    }
                 }
             }
         }
@@ -2965,6 +3046,11 @@ async fn replay_spool_entries(
                             } else {
                                 spool.advance_start(entry.id, item.new_offset)?;
                             }
+                        }
+                        AttemptedShip::MediaUploadFailed { item: _, error } => {
+                            spool.mark_failed(entry.id, &error)?;
+                            outcome.failed += 1;
+                            continue 'entry_loop;
                         }
                     }
                 }
@@ -6508,6 +6594,7 @@ mod tests {
             event_count: 2,
             session_id: "session-1".to_string(),
             source_line_offsets: Vec::new(),
+            media_objects: Vec::new(),
             compressed: b"secret transcript payload".to_vec(),
         };
 
@@ -6520,6 +6607,71 @@ mod tests {
     }
 
     #[test]
+    fn test_ship_prepared_file_uploads_media_before_ingest() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let image_data = "A".repeat(4096);
+        let line = format!(
+            r#"{{"type":"response_item","timestamp":"2026-03-01T10:00:00Z","payload":{{"type":"message","role":"user","content":[{{"type":"input_image","image_url":"data:image/png;base64,{image_data}"}}]}}}}"#
+        );
+        let path = dir
+            .path()
+            .join("019c638d-0000-0000-0000-000000000555.jsonl");
+        std::fs::write(&path, format!("{line}\n")).unwrap();
+
+        let prepared = prepare_file_batches(
+            &path,
+            "codex",
+            CompressionAlgo::Gzip,
+            &conn,
+            512 * 1024,
+            None,
+        )
+        .unwrap()
+        .expect("prepared media ship item");
+        let media = match &prepared.actions[0] {
+            PreparedAction::Ship(item) => {
+                assert_eq!(item.media_objects.len(), 1);
+                item.media_objects[0].clone()
+            }
+            _ => panic!("expected ship action"),
+        };
+        let claim_body = format!(
+            r#"{{"needed":["{}"],"present":[],"rejected":[]}}"#,
+            media.sha256
+        );
+        let (url, captured, handle) = spawn_http_sequence_server(&[
+            ("200 OK", &claim_body),
+            ("200 OK", "{}"),
+            ("200 OK", "{}"),
+        ]);
+        let client = make_test_client(&url);
+
+        let outcome = rt
+            .block_on(ship_prepared_file(prepared, &client, &conn, None, None))
+            .unwrap();
+        handle.join().unwrap();
+        assert_eq!(outcome.events_shipped, 1);
+        assert!(outcome.fully_processed);
+
+        let bodies = captured.lock().unwrap();
+        assert_eq!(bodies.len(), 3);
+        let claim: serde_json::Value = serde_json::from_slice(&bodies[0]).unwrap();
+        assert_eq!(claim["items"][0]["sha256"], media.sha256);
+        assert_eq!(claim["items"][0]["mime_type"], "image/png");
+        assert_eq!(claim["items"][0]["source_offset"], 0);
+        assert_eq!(claim["items"][0]["provider"], "codex");
+        assert_eq!(bodies[1], media.bytes);
+
+        let mut decoder = GzDecoder::new(&bodies[2][..]);
+        let mut ingest_json = String::new();
+        decoder.read_to_string(&mut ingest_json).unwrap();
+        assert!(ingest_json.contains("longhouse_media_ref:sha256="));
+        assert!(!ingest_json.contains(&image_data));
+    }
+
+    #[test]
     fn test_ship_trace_value_includes_coalesced_observation_window() {
         let item = ShipItem {
             path_str: "/tmp/session.jsonl".to_string(),
@@ -6529,6 +6681,7 @@ mod tests {
             event_count: 2,
             session_id: "session-1".to_string(),
             source_line_offsets: Vec::new(),
+            media_objects: Vec::new(),
             compressed: Vec::new(),
         };
         let mut trace = make_ship_trace("live_transcript");

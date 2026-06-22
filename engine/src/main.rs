@@ -20,6 +20,7 @@ mod managed_claude_scan;
 mod managed_opencode_scan;
 mod managed_reaper;
 mod media_redaction;
+mod media_upload;
 mod observability;
 mod opencode_db;
 mod outbox;

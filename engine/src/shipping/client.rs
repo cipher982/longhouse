@@ -272,6 +272,63 @@ impl ShipperClient {
         Ok(())
     }
 
+    /// POST JSON and decode a JSON response with an optional request timeout.
+    pub async fn post_json_decode_with_timeout<T: DeserializeOwned>(
+        &self,
+        path_suffix: &str,
+        body: Vec<u8>,
+        request_timeout: Option<Duration>,
+    ) -> Result<T> {
+        let url = self.ingest_url.replace("/api/agents/ingest", path_suffix);
+        let mut request = self
+            .client
+            .post(&url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header(reqwest::header::CONTENT_ENCODING, "identity")
+            .body(body);
+        if let Some(request_timeout) = request_timeout {
+            request = request.timeout(request_timeout);
+        }
+        let resp = request.send().await.context("POST failed")?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("POST returned {status}: {body}");
+        }
+        resp.json::<T>().await.context("POST returned invalid JSON")
+    }
+
+    /// PUT raw bytes to a machine-authenticated route.
+    pub async fn put_bytes_with_timeout(
+        &self,
+        path_suffix: &str,
+        content_type: &str,
+        headers: Vec<(String, String)>,
+        body: Vec<u8>,
+        request_timeout: Option<Duration>,
+    ) -> Result<()> {
+        let url = self.ingest_url.replace("/api/agents/ingest", path_suffix);
+        let mut request = self
+            .client
+            .put(&url)
+            .header(reqwest::header::CONTENT_TYPE, content_type)
+            .header(reqwest::header::CONTENT_ENCODING, "identity")
+            .body(body);
+        for (name, value) in headers {
+            request = request.header(name, value);
+        }
+        if let Some(request_timeout) = request_timeout {
+            request = request.timeout(request_timeout);
+        }
+        let resp = request.send().await.context("PUT failed")?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("PUT returned {status}: {body}");
+        }
+        Ok(())
+    }
+
     /// GET a small JSON response with an optional request-level timeout.
     pub async fn get_json_with_timeout<T: DeserializeOwned>(
         &self,

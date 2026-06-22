@@ -3,6 +3,7 @@
 use std::path::Path;
 use std::time::Duration;
 
+use crate::pipeline::parser::ParsedMediaObject;
 use crate::text::truncate_head_chars;
 
 /// Result of parsing + compressing a single file.
@@ -14,6 +15,7 @@ pub struct ShipItem {
     pub event_count: usize,
     pub session_id: String,
     pub source_line_offsets: Vec<u64>,
+    pub media_objects: Vec<ParsedMediaObject>,
     pub compressed: Vec<u8>,
 }
 
@@ -221,6 +223,10 @@ pub(crate) enum AttemptedShip {
         item: ShipItem,
         status_code: u16,
         body: String,
+    },
+    MediaUploadFailed {
+        item: ShipItem,
+        error: String,
     },
 }
 
