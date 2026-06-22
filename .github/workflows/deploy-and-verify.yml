@@ -138,7 +138,7 @@ jobs:
           DEPLOY_HOST: ${{ secrets.DEPLOY_COOLIFY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_SSH_USER }}
           RUNTIME_HOST: ${{ secrets.DEPLOY_RUNTIME_HOST }}
-          RUNTIME_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          RUNTIME_USER: ${{ secrets.DEPLOY_RUNTIME_USER || 'zerg' }}
         run: ./scripts/ci/setup-deploy-ssh.sh
 
       - name: Log in to GHCR
