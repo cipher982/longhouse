@@ -3980,6 +3980,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/providers/action-coverage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Provider Action Coverage */
+        get: operations["list_provider_action_coverage_agents_providers_action_coverage_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/sessions/semantic": {
         parameters: {
             query?: never;
@@ -7345,7 +7362,7 @@ export interface components {
             /** Provider */
             provider: string;
             /** Provider Session Id */
-            provider_session_id: string;
+            provider_session_id?: string | null;
             execution_home: components["schemas"]["SessionExecutionHome"];
             managed_transport: components["schemas"]["ManagedSessionTransport"];
             loop_mode: components["schemas"]["SessionLoopMode"];
@@ -7963,6 +7980,57 @@ export interface components {
             render_p95_ms_ok: number;
             /** Render P95 Ms Failing */
             render_p95_ms_failing: number;
+        };
+        /** ProviderActionCoverageItemResponse */
+        ProviderActionCoverageItemResponse: {
+            /** Id */
+            id: string;
+            /** Product Label */
+            product_label: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "supported" | "read_only" | "unknown" | "unsupported";
+            /** Reason Code */
+            reason_code: string;
+            /** Reason */
+            reason: string;
+            /** Proof Refs */
+            proof_refs: components["schemas"]["ProviderActionProofRefResponse"][];
+        };
+        /** ProviderActionCoverageProviderResponse */
+        ProviderActionCoverageProviderResponse: {
+            /** Provider */
+            provider: string;
+            /** Actions */
+            actions: {
+                [key: string]: components["schemas"]["ProviderActionCoverageItemResponse"];
+            };
+            /** Summary */
+            summary: {
+                [key: string]: number;
+            };
+        };
+        /** ProviderActionCoverageResponse */
+        ProviderActionCoverageResponse: {
+            /** Schema Version */
+            schema_version: number;
+            /** Source */
+            source: string;
+            /** States */
+            states: ("supported" | "read_only" | "unknown" | "unsupported")[];
+            /** Providers */
+            providers: {
+                [key: string]: components["schemas"]["ProviderActionCoverageProviderResponse"];
+            };
+        };
+        /** ProviderActionProofRefResponse */
+        ProviderActionProofRefResponse: {
+            /** Scenario */
+            scenario: string;
+            /** Assertion */
+            assertion: string;
         };
         /** ProviderLiveProofAcceptedResponse */
         ProviderLiveProofAcceptedResponse: {
@@ -9371,7 +9439,7 @@ export interface components {
             continued_from_session_id?: string | null;
             /**
              * Continuation Kind
-             * @description Continuation kind: local|cloud|runner
+             * @description Kernel branch kind for non-root threads; null for root threads
              */
             continuation_kind?: string | null;
             /**
@@ -10022,7 +10090,7 @@ export interface components {
             continued_from_session_id?: string | null;
             /**
              * Continuation Kind
-             * @description Continuation kind for seam items
+             * @description Kernel branch kind for seam items
              */
             continuation_kind?: string | null;
             /**
@@ -10037,7 +10105,7 @@ export interface components {
             parent_origin_label?: string | null;
             /**
              * Parent Continuation Kind
-             * @description Continuation kind for the parent segment
+             * @description Kernel branch kind for the parent segment
              */
             parent_continuation_kind?: string | null;
             /**
@@ -10305,7 +10373,7 @@ export interface components {
             continued_from_session_id?: string | null;
             /**
              * Continuation Kind
-             * @description Continuation kind: local|cloud|runner
+             * @description Kernel branch kind for non-root threads; null for root threads
              */
             continuation_kind?: string | null;
             /**
@@ -18929,6 +18997,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProviderLiveProofAcceptedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_provider_action_coverage_agents_providers_action_coverage_get: {
+        parameters: {
+            query?: {
+                /** @description Filter to one managed provider */
+                provider?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderActionCoverageResponse"];
                 };
             };
             /** @description Validation Error */

@@ -9,6 +9,7 @@ from fastapi import Query
 
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
+from zerg.schemas.provider_action_coverage import ProviderActionCoverageResponse
 from zerg.services.managed_provider_contracts import managed_provider_names
 from zerg.services.provider_action_coverage import ActionCoverageState
 from zerg.services.provider_action_coverage import derive_provider_action_coverage
@@ -17,12 +18,12 @@ from zerg.services.provider_action_coverage import serialize_provider_action_cov
 router = APIRouter(prefix="/agents/providers", tags=["agents"])
 
 
-@router.get("/action-coverage")
+@router.get("/action-coverage", response_model=ProviderActionCoverageResponse)
 def list_provider_action_coverage(
     provider: str | None = Query(None, description="Filter to one managed provider"),
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
-) -> dict[str, object]:
+) -> ProviderActionCoverageResponse:
     providers = _requested_providers(provider)
     rows = {}
     for provider_name in providers:
@@ -36,12 +37,12 @@ def list_provider_action_coverage(
             },
         }
 
-    return {
-        "schema_version": 1,
-        "source": "zerg.services.provider_action_coverage",
-        "states": [state.value for state in ActionCoverageState],
-        "providers": rows,
-    }
+    return ProviderActionCoverageResponse(
+        schema_version=1,
+        source="zerg.services.provider_action_coverage",
+        states=[state.value for state in ActionCoverageState],
+        providers=rows,
+    )
 
 
 def _requested_providers(provider: str | None) -> list[str]:
