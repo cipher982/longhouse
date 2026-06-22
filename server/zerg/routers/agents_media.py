@@ -6,6 +6,7 @@ from uuid import UUID
 
 from fastapi import APIRouter
 from fastapi import Depends
+from fastapi import Header
 from fastapi import HTTPException
 from fastapi import Request
 from fastapi import Response
@@ -31,6 +32,13 @@ class MediaClaimItem(BaseModel):
     mime_type: str | None = None
     byte_size: int | None = None
     session_id: UUID | None = None
+    event_id: int | None = None
+    source_path: str | None = None
+    source_offset: int | None = None
+    source_line_hash: str | None = None
+    json_pointer: str | None = None
+    provider: str | None = None
+    original_kind: str | None = None
 
 
 class MediaClaimsRequest(BaseModel):
@@ -86,7 +94,12 @@ async def create_media_claims(request: MediaClaimsRequest, db: Session = Depends
     response_model=MediaUploadResponse,
     dependencies=[Depends(verify_agents_token), Depends(require_single_tenant)],
 )
-async def put_media_blob(sha256: str, request: Request, db: Session = Depends(get_db)) -> MediaUploadResponse:
+async def put_media_blob(
+    sha256: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    first_seen_session_id: UUID | None = Header(default=None, alias="X-Longhouse-Session-Id"),
+) -> MediaUploadResponse:
     """Upload a media blob once, keyed by sha256."""
 
     try:
@@ -95,6 +108,7 @@ async def put_media_blob(sha256: str, request: Request, db: Session = Depends(ge
             sha256=sha256,
             mime_type=_content_type(request),
             data=await request.body(),
+            first_seen_session_id=first_seen_session_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

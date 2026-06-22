@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from zerg.config import get_settings
 from zerg.models.agents import MediaObject
+from zerg.models.agents import SessionMediaRef
 
 logger = logging.getLogger(__name__)
 
@@ -77,19 +78,96 @@ def media_row_is_present(row: MediaObject | None) -> bool:
     return path.is_file() and path.stat().st_size == int(row.byte_size)
 
 
+def _ref_query(db: Session, *, item: dict, sha256: str):
+    return db.query(SessionMediaRef).filter(
+        SessionMediaRef.session_id == item.get("session_id"),
+        SessionMediaRef.media_sha256 == sha256,
+        SessionMediaRef.source_path == item.get("source_path"),
+        SessionMediaRef.source_offset == item.get("source_offset"),
+        SessionMediaRef.source_line_hash == item.get("source_line_hash"),
+        SessionMediaRef.json_pointer == item.get("json_pointer"),
+    )
+
+
+def upsert_media_ref(db: Session, *, item: dict, media_state: str) -> bool:
+    """Record where a media object appeared in an archived source line."""
+
+    session_id = item.get("session_id")
+    if session_id is None:
+        return False
+
+    sha256 = validate_sha256(str(item.get("sha256") or ""))
+    source_offset = item.get("source_offset")
+    if source_offset is not None:
+        source_offset = int(source_offset)
+        item["source_offset"] = source_offset
+
+    row = _ref_query(db, item=item, sha256=sha256).first()
+    changed = False
+    if row is None:
+        row = SessionMediaRef(
+            session_id=session_id,
+            event_id=item.get("event_id"),
+            source_path=item.get("source_path"),
+            source_offset=source_offset,
+            source_line_hash=item.get("source_line_hash"),
+            json_pointer=item.get("json_pointer"),
+            provider=item.get("provider"),
+            original_kind=item.get("original_kind") or "inline_data_url",
+            media_sha256=sha256,
+            media_state=media_state,
+        )
+        db.add(row)
+        return True
+
+    if row.media_state != "present" and media_state == "present":
+        row.media_state = "present"
+        row.last_error = None
+        changed = True
+    if row.provider is None and item.get("provider"):
+        row.provider = item.get("provider")
+        changed = True
+    if row.original_kind != (item.get("original_kind") or row.original_kind):
+        row.original_kind = item.get("original_kind") or row.original_kind
+        changed = True
+    return changed
+
+
+def mark_media_refs_present(db: Session, sha256: str) -> bool:
+    """Mark all refs for a now-present blob as available."""
+
+    digest = validate_sha256(sha256)
+    rows = db.query(SessionMediaRef).filter(SessionMediaRef.media_sha256 == digest).all()
+    changed = False
+    for row in rows:
+        if row.media_state != "present" or row.last_error is not None:
+            row.media_state = "present"
+            row.last_error = None
+            changed = True
+    return changed
+
+
+def _first_seen_from_refs(db: Session, sha256: str) -> UUID | None:
+    ref = (
+        db.query(SessionMediaRef)
+        .filter(SessionMediaRef.media_sha256 == sha256)
+        .order_by(SessionMediaRef.created_at.asc(), SessionMediaRef.id.asc())
+        .first()
+    )
+    return ref.session_id if ref is not None else None
+
+
 def claim_media(db: Session, items: list[dict]) -> MediaClaimResult:
     """Return which requested sha256 objects are missing from the server."""
 
     needed: list[str] = []
     present: list[str] = []
     rejected: list[dict[str, str]] = []
-    seen: set[str] = set()
+    seen_response: set[str] = set()
+    refs_changed = False
 
     for item in items:
         raw_sha = str(item.get("sha256") or "").strip().lower()
-        if raw_sha in seen:
-            continue
-        seen.add(raw_sha)
 
         if not is_valid_sha256(raw_sha):
             rejected.append({"sha256": raw_sha, "reason": "invalid_sha256"})
@@ -112,10 +190,25 @@ def claim_media(db: Session, items: list[dict]) -> MediaClaimResult:
             continue
 
         row = db.query(MediaObject).filter(MediaObject.sha256 == raw_sha).first()
-        if media_row_is_present(row):
+        is_present = media_row_is_present(row)
+        refs_changed = (
+            upsert_media_ref(
+                db,
+                item={**item, "sha256": raw_sha},
+                media_state="present" if is_present else "pending",
+            )
+            or refs_changed
+        )
+        if raw_sha in seen_response:
+            continue
+        seen_response.add(raw_sha)
+        if is_present:
             present.append(raw_sha)
         else:
             needed.append(raw_sha)
+
+    if refs_changed:
+        db.commit()
 
     return MediaClaimResult(needed=needed, present=present, rejected=rejected)
 
@@ -147,6 +240,14 @@ def store_media_blob(
 
     existing = db.query(MediaObject).filter(MediaObject.sha256 == digest).first()
     if media_row_is_present(existing):
+        changed = False
+        if existing.first_seen_session_id is None and first_seen_session_id is not None:
+            existing.first_seen_session_id = first_seen_session_id
+            changed = True
+        changed = mark_media_refs_present(db, digest) or changed
+        if changed:
+            db.commit()
+            db.refresh(existing)
         return StoredMediaObject(
             sha256=digest,
             mime_type=existing.mime_type,
@@ -173,6 +274,9 @@ def store_media_blob(
     row.storage_path = str(relative)
     if row.first_seen_session_id is None and first_seen_session_id is not None:
         row.first_seen_session_id = first_seen_session_id
+    elif row.first_seen_session_id is None:
+        row.first_seen_session_id = _first_seen_from_refs(db, digest)
+    mark_media_refs_present(db, digest)
     db.add(row)
 
     try:
