@@ -84,8 +84,6 @@ def _ref_query(db: Session, *, item: dict, sha256: str):
         SessionMediaRef.media_sha256 == sha256,
         SessionMediaRef.source_path == item.get("source_path"),
         SessionMediaRef.source_offset == item.get("source_offset"),
-        SessionMediaRef.source_line_hash == item.get("source_line_hash"),
-        SessionMediaRef.json_pointer == item.get("json_pointer"),
     )
 
 
@@ -123,6 +121,15 @@ def upsert_media_ref(db: Session, *, item: dict, media_state: str) -> bool:
     if row.media_state != "present" and media_state == "present":
         row.media_state = "present"
         row.last_error = None
+        changed = True
+    if item.get("event_id") is not None and row.event_id != item.get("event_id"):
+        row.event_id = item.get("event_id")
+        changed = True
+    if item.get("source_line_hash") and row.source_line_hash != item.get("source_line_hash"):
+        row.source_line_hash = item.get("source_line_hash")
+        changed = True
+    if item.get("json_pointer") and row.json_pointer != item.get("json_pointer"):
+        row.json_pointer = item.get("json_pointer")
         changed = True
     if row.provider is None and item.get("provider"):
         row.provider = item.get("provider")

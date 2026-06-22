@@ -159,6 +159,49 @@ def test_media_claim_registers_ref_and_upload_marks_present(tmp_path, monkeypatc
         cleanup()
 
 
+def test_media_claim_reuses_same_source_ref_when_pointer_changes(tmp_path, monkeypatch):
+    factory, _blob_root, cleanup = _setup_app(tmp_path, monkeypatch)
+    client = TestClient(api_app)
+    session_id = uuid4()
+    digest = hashlib.sha256(b"same-source").hexdigest()
+
+    def _claim(line_hash: str, pointer: str):
+        return client.post(
+            "/agents/media/claims",
+            json={
+                "items": [
+                    {
+                        "sha256": digest,
+                        "mime_type": "image/png",
+                        "byte_size": 11,
+                        "session_id": str(session_id),
+                        "source_path": "/tmp/provider.jsonl",
+                        "source_offset": 7,
+                        "source_line_hash": line_hash,
+                        "json_pointer": pointer,
+                    }
+                ]
+            },
+        )
+
+    try:
+        first_hash = hashlib.sha256(b"first").hexdigest()
+        second_hash = hashlib.sha256(b"second").hexdigest()
+        first = _claim(first_hash, "/old")
+        assert first.status_code == 200, first.text
+
+        second = _claim(second_hash, "/new")
+        assert second.status_code == 200, second.text
+
+        with factory() as db:
+            refs = db.query(SessionMediaRef).filter(SessionMediaRef.media_sha256 == digest).all()
+            assert len(refs) == 1
+            assert refs[0].source_line_hash == second_hash
+            assert refs[0].json_pointer == "/new"
+    finally:
+        cleanup()
+
+
 def test_media_upload_rejects_hash_mismatch(tmp_path, monkeypatch):
     _factory, _blob_root, cleanup = _setup_app(tmp_path, monkeypatch)
     client = TestClient(api_app)
