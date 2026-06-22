@@ -95,3 +95,145 @@ def test_opencode_permission_asked_becomes_answerable_push_pause_request(tmp_pat
         # OpenCode answers PUSH over the bridge — must NOT resolve in place.
         assert is_pull_reply_transport(row) is False
         assert (row.provider_ref_json or {}).get("reply_transport") == "managed_push"
+
+
+def _seed_opencode_session(db, *, request_id="perm-xyz"):
+    from uuid import uuid4
+
+    from zerg.models.enums import UserRole
+    from zerg.models.user import User
+    from zerg.services.session_pause_requests import upsert_pause_request
+    from zerg.services.session_runtime import runtime_key_for_session
+
+    user = User(email=f"oc-{uuid4().hex[:6]}@t.local", role=UserRole.USER.value)
+    db.add(user)
+    db.flush()
+    sid = uuid4()
+    db.add(
+        AgentSession(
+            id=sid,
+            provider="opencode",
+            environment="test",
+            project="oc-perm",
+            device_id="cinder",
+            cwd="/tmp/oc",
+            started_at=datetime.now(timezone.utc),
+            execution_home="managed_local",
+        )
+    )
+    rk = runtime_key_for_session("opencode", str(sid))
+    row, _ = upsert_pause_request(
+        db,
+        session_id=sid,
+        runtime_key=rk,
+        provider="opencode",
+        request_key=f"opencode:{rk}:{request_id}",
+        occurred_at=datetime.now(timezone.utc),
+        provider_request_id=request_id,
+        provider_ref={"source": "opencode_bridge", "reply_transport": "managed_push", "opencode_request_id": request_id},
+        kind="permission_prompt",
+        can_respond=True,
+    )
+    db.commit()
+    return sid, user.id, row.id
+
+
+def test_opencode_permission_answer_pushes_via_bridge(monkeypatch, tmp_path):
+    """Answering an opencode permission prompt delivers the decision through the
+    bridge permission_reply (not the engine websocket) and resolves the row."""
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+    from zerg.cli import opencode_bridge
+    from zerg.database import get_db
+    from zerg.dependencies.agents_auth import require_single_tenant
+    from zerg.dependencies.browser_route_auth import get_current_browser_route_user
+    from zerg.models.enums import UserRole
+
+    SF = _make_db(tmp_path)
+    with SF() as db:
+        sid, owner_id, pause_id = _seed_opencode_session(db)
+
+    calls: list[dict] = []
+
+    def _fake_reply(*, session_id, request_id, decision, state_root, config_dir, wait_secs):
+        calls.append({"session_id": session_id, "request_id": request_id, "decision": decision})
+
+    monkeypatch.setattr(opencode_bridge, "permission_reply", _fake_reply)
+
+    from zerg.main import api_app
+    from zerg.main import app
+
+    def _override_db():
+        db = SF()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    api_app.dependency_overrides[get_db] = _override_db
+    api_app.dependency_overrides[get_current_browser_route_user] = lambda: SimpleNamespace(
+        id=owner_id, email="oc@test.local", role=UserRole.USER.value
+    )
+    api_app.dependency_overrides[require_single_tenant] = lambda: None
+    client = TestClient(app, backend="asyncio")
+    try:
+        resp = client.post(
+            f"/api/sessions/{sid}/pause-requests/{pause_id}/response",
+            json={"decision": "answer"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "resolved"
+        # The decision went out over the bridge as allow.
+        assert calls == [{"session_id": str(sid), "request_id": "perm-xyz", "decision": "allow"}]
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_opencode_permission_deny_pushes_deny(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+    from zerg.cli import opencode_bridge
+    from zerg.database import get_db
+    from zerg.dependencies.agents_auth import require_single_tenant
+    from zerg.dependencies.browser_route_auth import get_current_browser_route_user
+    from zerg.models.enums import UserRole
+
+    SF = _make_db(tmp_path)
+    with SF() as db:
+        sid, owner_id, pause_id = _seed_opencode_session(db, request_id="perm-deny")
+
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        opencode_bridge,
+        "permission_reply",
+        lambda **kw: calls.append({"request_id": kw["request_id"], "decision": kw["decision"]}),
+    )
+
+    from zerg.main import api_app
+    from zerg.main import app
+
+    def _override_db():
+        db = SF()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    api_app.dependency_overrides[get_db] = _override_db
+    api_app.dependency_overrides[get_current_browser_route_user] = lambda: SimpleNamespace(
+        id=owner_id, email="oc@test.local", role=UserRole.USER.value
+    )
+    api_app.dependency_overrides[require_single_tenant] = lambda: None
+    client = TestClient(app, backend="asyncio")
+    try:
+        resp = client.post(
+            f"/api/sessions/{sid}/pause-requests/{pause_id}/response",
+            json={"decision": "reject"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "rejected"
+        assert calls == [{"request_id": "perm-deny", "decision": "deny"}]
+    finally:
+        api_app.dependency_overrides.clear()

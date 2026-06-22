@@ -459,6 +459,81 @@ def _resolve_pull_pause_request_in_place(
     )
 
 
+def _opencode_permission_request_id(row) -> str | None:
+    """The opencode permission id to reply to, for an opencode_bridge perm row."""
+    ref = row.provider_ref_json if isinstance(row.provider_ref_json, dict) else {}
+    if str(ref.get("source") or "").strip() != "opencode_bridge":
+        return None
+    rid = str(ref.get("opencode_request_id") or row.provider_request_id or "").strip()
+    return rid or None
+
+
+def _resolve_opencode_permission_via_bridge(
+    *,
+    db: Session,
+    row,
+    decision: str,
+    response_message: str | None,
+    request_id: str,
+) -> PauseRequestResponseResponse:
+    """Deliver an OpenCode permission decision through the bridge, then resolve.
+
+    The runtime host shares the machine with the opencode bridge for managed-local
+    sessions, so we invoke opencode_bridge.permission_reply in-process (it resolves
+    bridge state from disk and POSTs to the local opencode server's
+    /permission/{id}/reply). answer->allow, reject|cancel->deny.
+    """
+    from zerg.cli import opencode_bridge
+
+    bridge_decision = "allow" if decision == "answer" else "deny"
+    bridge_error: str | None = None
+    try:
+        opencode_bridge.permission_reply(
+            session_id=str(row.session_id),
+            request_id=request_id,
+            decision=bridge_decision,
+            state_root=None,
+            config_dir=None,
+            wait_secs=0.0,
+        )
+    except SystemExit as exc:  # typer.Exit on bridge failure
+        if int(getattr(exc, "code", 0) or 0) != 0:
+            bridge_error = f"opencode bridge permission-reply failed (exit {exc.code})"
+    except Exception as exc:  # pragma: no cover - defensive
+        bridge_error = f"{type(exc).__name__}: {exc}"
+
+    if bridge_error is not None:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": "opencode_permission_reply_failed",
+                "error_code": "opencode_permission_reply_failed",
+                "message": bridge_error,
+                "pause_request_id": str(row.id),
+                "retryable": True,
+                "refetch_required": True,
+            },
+        )
+
+    status_value = "resolved" if decision == "answer" else "rejected"
+    resolved = resolve_pause_request(
+        db,
+        pause_request_id=row.id,
+        status=status_value,
+        occurred_at=datetime.now(timezone.utc),
+        response_payload={"permissionDecision": bridge_decision, "decision": decision, "transport": "opencode_bridge"},
+        response_text=response_message,
+    )
+    db.commit()
+    if resolved is None:
+        db.refresh(row)
+        resolved = row
+    return PauseRequestResponseResponse(
+        status=status_value,
+        pause_request=_pause_request_projection_or_empty(resolved),
+    )
+
+
 async def _respond_to_pause_request(
     *,
     source_session,
@@ -517,6 +592,18 @@ async def _respond_to_pause_request(
             row=row,
             decision=decision,
             response_message=response_message,
+        )
+
+    # OpenCode permission prompts push the decision to the local opencode server
+    # via the bridge (not the engine websocket), then resolve.
+    opencode_request_id = _opencode_permission_request_id(row)
+    if opencode_request_id is not None:
+        return _resolve_opencode_permission_via_bridge(
+            db=db,
+            row=row,
+            decision=decision,
+            response_message=response_message,
+            request_id=opencode_request_id,
         )
 
     result = await answer_pause_request_on_managed_local_session(
