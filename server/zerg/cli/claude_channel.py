@@ -376,6 +376,16 @@ def launch(
         "--resume",
         help="Resume an existing Claude session by id instead of creating a new one.",
     ),
+    permission_mode: str = typer.Option(
+        "bypass",
+        "--permission-mode",
+        help="bypass (autonomous, default) or remote_approve (answer permission prompts via Longhouse).",
+    ),
+    hook_token: str | None = typer.Option(
+        None,
+        "--hook-token",
+        help="Session-scoped hook token for the permission gate (required for remote_approve).",
+    ),
 ) -> None:
     """Launch a detached Claude channel session for the Machine Agent control path."""
 
@@ -392,6 +402,8 @@ def launch(
             config_dir=claude_dir,
             wait_ready_secs=wait_ready_secs,
             resume=resume,
+            permission_mode=permission_mode,
+            hook_token=hook_token,
         )
     except Exception as exc:
         typer.echo(

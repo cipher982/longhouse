@@ -418,6 +418,8 @@ def _launch_detached_native_claude_channel(
     config_dir: Path | None = None,
     wait_ready_secs: float = 20.0,
     resume: bool = False,
+    hook_token: str | None = None,
+    permission_mode: str = "bypass",
 ) -> dict:
     _ensure_native_claude_prereqs(
         base_url=base_url,
@@ -432,12 +434,15 @@ def _launch_detached_native_claude_channel(
         resume=resume,
         hook_url=base_url,
         claude_command=_resolve_claude_command(),
+        permission_mode=permission_mode,
     )
     log_path = _remote_launch_log_path(session_id=session_id, config_dir=config_dir)
     process: subprocess.Popen | None = None
     try:
         pty_command = _build_detached_claude_pty_command(command, log_path)
-        env = _claude_subprocess_env(LONGHOUSE_HOOK_TOKEN=token)
+        # In remote-approve mode the permission gate authenticates as this session
+        # via the session-scoped hook token; otherwise the durable device token.
+        env = _claude_subprocess_env(LONGHOUSE_HOOK_TOKEN=hook_token or token)
         process = subprocess.Popen(
             pty_command,
             cwd=str(cwd),
