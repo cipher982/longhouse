@@ -81,22 +81,11 @@ def _seed_session(
         git_repo="git@github.com:cipher982/longhouse.git",
         git_branch="main",
         started_at=datetime.now(timezone.utc),
-        provider_session_id=str(session_id),
-        thread_root_session_id=session_id,
-        continuation_kind="local",
-        origin_label=device_id,
-        user_messages=1,
+                                        user_messages=1,
         assistant_messages=1,
         tool_calls=0,
-        is_writable_head=1,
-        is_sidechain=0,
-        loop_mode="assist",
-        execution_home=execution_home,
-        managed_transport=managed_transport,
-        source_runner_id=source_runner_id,
-        source_runner_name=source_runner_name,
-        managed_session_name=f"lh-{session_id.hex[:8]}",
-    )
+                        loop_mode="assist",
+                                            )
     db.add(session)
     if execution_home == "managed_local" and source_runner_id is not None:
         db.merge(User(id=1, email="test-owner@example.com"))

@@ -363,14 +363,10 @@ def test_heartbeat_resolved_sessions_materialize_managed_control(tmp_path):
                     environment="laptop",
                     started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
                     last_activity_at=datetime(2026, 5, 5, 11, 59, tzinfo=timezone.utc),
-                    provider_session_id="thread-codex",
-                    execution_home="managed_local",
-                    managed_transport="codex_app_server",
-                    user_messages=1,
+                                                                                user_messages=1,
                     assistant_messages=1,
                     tool_calls=0,
-                    is_writable_head=1,
-                )
+                                    )
             )
             db.commit()
 
@@ -438,27 +434,19 @@ def test_heartbeat_resolved_sessions_ignore_legacy_session_identity(tmp_path):
                         provider="codex",
                         environment="laptop",
                         started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
-                        provider_session_id="thread-codex",
-                        execution_home="managed_local",
-                        managed_transport="codex_app_server",
-                        user_messages=1,
+                                                                                                user_messages=1,
                         assistant_messages=1,
                         tool_calls=0,
-                        is_writable_head=1,
-                    ),
+                                            ),
                     AgentSession(
                         id=legacy_session_id,
                         provider="claude",
                         environment="laptop",
                         started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
-                        provider_session_id="thread-legacy",
-                        execution_home="managed_local",
-                        managed_transport="claude_channel_bridge",
-                        user_messages=1,
+                                                                                                user_messages=1,
                         assistant_messages=1,
                         tool_calls=0,
-                        is_writable_head=1,
-                    ),
+                                            ),
                 ]
             )
             db.commit()
@@ -530,14 +518,10 @@ def test_heartbeat_resolved_managed_unknown_state_does_not_attach(tmp_path):
                     provider="codex",
                     environment="laptop",
                     started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
-                    provider_session_id="thread-codex",
-                    execution_home="managed_local",
-                    managed_transport="codex_app_server",
-                    user_messages=1,
+                                                                                user_messages=1,
                     assistant_messages=1,
                     tool_calls=0,
-                    is_writable_head=1,
-                )
+                                    )
             )
             db.commit()
 
@@ -592,14 +576,10 @@ def test_heartbeat_legacy_managed_sessions_still_materialize_control(tmp_path):
                     provider="claude",
                     environment="laptop",
                     started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
-                    provider_session_id="thread-claude",
-                    execution_home="managed_local",
-                    managed_transport="claude_channel_bridge",
-                    user_messages=1,
+                                                                                user_messages=1,
                     assistant_messages=1,
                     tool_calls=0,
-                    is_writable_head=1,
-                )
+                                    )
             )
             db.commit()
 
@@ -667,14 +647,10 @@ def test_heartbeat_empty_resolved_sessions_detaches_missing_managed_control(tmp_
                 provider="codex",
                 environment="laptop",
                 started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
-                provider_session_id="thread-codex",
-                execution_home="managed_local",
-                managed_transport="codex_app_server",
-                user_messages=1,
+                                                                user_messages=1,
                 assistant_messages=1,
                 tool_calls=0,
-                is_writable_head=1,
-            )
+                            )
             db.add(session)
             db.flush()
             _thread, _run, connection = seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
@@ -713,15 +689,11 @@ def test_heartbeat_resolved_opencode_server_bridge_keeps_live_control(tmp_path):
                 provider="opencode",
                 environment="laptop",
                 started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
-                provider_session_id="opencode-native-session",
-                execution_home="managed_local",
-                managed_transport="opencode_server_bridge",
-                device_id="testclient",
+                                                                device_id="testclient",
                 user_messages=1,
                 assistant_messages=1,
                 tool_calls=0,
-                is_writable_head=1,
-            )
+                            )
             db.add(session)
             db.flush()
             _thread, _run, connection = seed_managed_kernel_rows(
@@ -805,15 +777,11 @@ def test_heartbeat_repeated_opencode_digest_repairs_live_send_capabilities(monke
                 provider="opencode",
                 environment="laptop",
                 started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
-                provider_session_id="opencode-native-session",
-                execution_home="managed_local",
-                managed_transport="opencode_server_bridge",
-                device_id="testclient",
+                                                                device_id="testclient",
                 user_messages=1,
                 assistant_messages=1,
                 tool_calls=0,
-                is_writable_head=1,
-            )
+                            )
             db.add(session)
             db.flush()
             _thread, _run, connection = seed_managed_kernel_rows(
@@ -918,27 +886,19 @@ def test_heartbeat_empty_resolved_sessions_does_not_detach_other_device_control(
                 provider="codex",
                 environment="laptop",
                 started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
-                provider_session_id="thread-codex-a",
-                execution_home="managed_local",
-                managed_transport="codex_app_server",
-                user_messages=1,
+                                                                user_messages=1,
                 assistant_messages=1,
                 tool_calls=0,
-                is_writable_head=1,
-            )
+                            )
             other_session = AgentSession(
                 id=other_session_id,
                 provider="codex",
                 environment="desktop",
                 started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
-                provider_session_id="thread-codex-b",
-                execution_home="managed_local",
-                managed_transport="codex_app_server",
-                user_messages=1,
+                                                                user_messages=1,
                 assistant_messages=1,
                 tool_calls=0,
-                is_writable_head=1,
-            )
+                            )
             db.add_all([first_session, other_session])
             db.flush()
             _thread, _run, first_connection = seed_managed_kernel_rows(db, first_session, control_plane="codex_bridge")
@@ -981,14 +941,10 @@ def test_heartbeat_empty_resolved_sessions_does_not_detach_unknown_device_contro
                 provider="codex",
                 environment="laptop",
                 started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
-                provider_session_id="thread-codex",
-                execution_home="managed_local",
-                managed_transport="codex_app_server",
-                user_messages=1,
+                                                                user_messages=1,
                 assistant_messages=1,
                 tool_calls=0,
-                is_writable_head=1,
-            )
+                            )
             db.add(session)
             db.flush()
             seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
@@ -1034,14 +990,10 @@ def test_heartbeat_repeated_sessions_digest_refreshes_health_without_snapshot_wo
                 provider="codex",
                 environment="laptop",
                 started_at=datetime(2026, 5, 5, 10, 0, tzinfo=timezone.utc),
-                provider_session_id="thread-codex",
-                execution_home="managed_local",
-                managed_transport="codex_app_server",
-                user_messages=1,
+                                                                user_messages=1,
                 assistant_messages=1,
                 tool_calls=0,
-                is_writable_head=1,
-            )
+                            )
             db.add(session)
             db.flush()
             _thread, _run, connection = seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
@@ -1115,14 +1067,10 @@ def test_heartbeat_missing_managed_detach_can_be_disabled(monkeypatch, tmp_path)
                 provider="codex",
                 environment="laptop",
                 started_at=datetime(2026, 5, 5, 11, 0, tzinfo=timezone.utc),
-                provider_session_id="thread-codex",
-                execution_home="managed_local",
-                managed_transport="codex_app_server",
-                user_messages=1,
+                                                                user_messages=1,
                 assistant_messages=1,
                 tool_calls=0,
-                is_writable_head=1,
-            )
+                            )
             db.add(session)
             db.flush()
             _thread, _run, connection = seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
@@ -1151,7 +1099,7 @@ def test_heartbeat_empty_resolved_sessions_closes_stale_unmanaged_session(tmp_pa
     SessionLocal = _make_db(tmp_path)
     client, api_app_ref = _make_client(SessionLocal)
     session_id = uuid4()
-    provider_session_id = str(session_id)
+    provider_session_id = "codex-thread-gone"
     now = datetime.now(timezone.utc)
 
     try:
@@ -1162,14 +1110,23 @@ def test_heartbeat_empty_resolved_sessions_closes_stale_unmanaged_session(tmp_pa
                 environment="laptop",
                 started_at=now - timedelta(minutes=20),
                 last_activity_at=now - timedelta(minutes=10),
-                provider_session_id=provider_session_id,
-                execution_home="unmanaged_local",
-                user_messages=1,
+                                                user_messages=1,
                 assistant_messages=1,
                 tool_calls=0,
-                is_writable_head=1,
             )
             db.add(session)
+            db.flush()
+            from zerg.services.agents.kernel_writes import ensure_primary_thread
+            from zerg.services.agents.kernel_writes import record_thread_alias
+
+            thread = ensure_primary_thread(db, session)
+            record_thread_alias(
+                db,
+                thread=thread,
+                provider="codex",
+                alias_kind="provider_session_id",
+                alias_value=provider_session_id,
+            )
             db.commit()
             ingest_runtime_events(
                 db,

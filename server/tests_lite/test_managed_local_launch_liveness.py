@@ -227,10 +227,7 @@ def test_i4_observe_only_with_send_bit_is_not_live(tmp_path):
             device_id="cinder",
             cwd="/Users/example/git/zerg",
             started_at=datetime.now(timezone.utc),
-            provider_session_id=str(uuid4()),
-            thread_root_session_id=None,
-            continuation_kind="local",
-            user_messages=0,
+                                                user_messages=0,
             assistant_messages=0,
             tool_calls=0,
         )

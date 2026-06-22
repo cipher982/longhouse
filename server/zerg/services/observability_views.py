@@ -17,6 +17,7 @@ from zerg.schemas.observability import SlowTurnMachineResponse
 from zerg.schemas.observability import SlowTurnsListResponse
 from zerg.schemas.observability import TurnLatencyPercentilesResponse
 from zerg.services.agent_heartbeat_health import MachineTransportHealthSummary
+from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.session_turns import ManagedCompletedTurnSummary
 from zerg.services.session_views import build_session_turn_timing_response
 from zerg.utils.time import utc_now
@@ -93,6 +94,7 @@ def build_machine_health_status_counts_response(
 
 
 def build_slow_turn_item_response(item: ManagedCompletedTurnSummary) -> SlowTurnItemResponse:
+    contract = contract_for_provider(item.session.provider)
     return SlowTurnItemResponse(
         turn_id=int(item.turn.id),
         session_id=str(item.session.id),
@@ -101,7 +103,7 @@ def build_slow_turn_item_response(item: ManagedCompletedTurnSummary) -> SlowTurn
         project=item.session.project,
         device_id=item.session.device_id,
         device_name=item.session.device_name,
-        managed_transport=item.session.managed_transport,
+        managed_transport=(contract.managed_transport.value if contract is not None else None),
         state=item.turn.state,
         terminal_phase=item.turn.terminal_phase,
         error_code=item.turn.error_code,

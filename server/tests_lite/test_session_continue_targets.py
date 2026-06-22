@@ -24,6 +24,7 @@ from zerg.services.agents.kernel_writes import record_run
 from zerg.services.agents.kernel_writes import record_thread_alias
 from zerg.services.agents.kernel_writes import upsert_connection_for_run
 from zerg.services.session_continue_targets import resolve_native_continue_target
+from zerg.services.session_kernel_projection import project_provider_session_id
 
 
 def _make_db(tmp_path):
@@ -46,15 +47,10 @@ def _session(db, *, provider="claude"):
         started_at=now,
         ended_at=now,
         last_activity_at=now,
-        thread_root_session_id=sid,
-        continuation_kind="local",
-        origin_label="cinder",
-        user_messages=1,
+                                user_messages=1,
         assistant_messages=1,
         tool_calls=0,
-        is_writable_head=1,
-        is_sidechain=0,
-    )
+                    )
     db.add(s)
     db.flush()
     return s
@@ -97,7 +93,7 @@ def test_managed_claude_resumes_by_alias_when_present(tmp_path):
         assert res.provider_resume_id == "provider-xyz"
 
 
-def test_managed_claude_falls_back_to_session_id_without_alias(tmp_path):
+def test_managed_claude_requires_provider_alias_for_native_continue(tmp_path):
     SessionLocal = _make_db(tmp_path)
     with SessionLocal() as db:
         s = _session(db)
@@ -110,9 +106,24 @@ def test_managed_claude_falls_back_to_session_id_without_alias(tmp_path):
         )
         db.commit()
         res = resolve_native_continue_target(db, s)
-        assert res is not None
-        assert res.adoption_mode == "managed_resume"
-        assert res.provider_resume_id == str(s.id)
+        assert res is None
+
+
+def test_managed_claude_rejects_session_id_provider_alias(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    with SessionLocal() as db:
+        s = _session(db)
+        thread = ensure_primary_thread(db, s)
+        _alias(db, thread, "claude", "provider_session_id", str(s.id))
+        run = record_run(db, thread=thread, provider="claude", host_id="cinder", cwd="/Users/me/repo")
+        upsert_connection_for_run(
+            db, run=run, control_plane="claude_channel_bridge", acquisition_kind="spawned_control",
+            state="released", external_name="cinder", can_send_input=0, can_interrupt=0,
+            can_terminate=0, can_tail_output=0, can_resume=1,
+        )
+        db.commit()
+        assert project_provider_session_id(db, s) is None
+        assert resolve_native_continue_target(db, s) is None
 
 
 def test_unmanaged_claude_adoptable_with_alias_and_transcript(tmp_path):
@@ -202,4 +213,5 @@ def test_codex_rejected_when_provider_id_equals_session_id(tmp_path):
         _alias(db, thread, "codex", "provider_session_id", str(s.id))
         _source_line(db, s, thread, "/x/codex.jsonl")
         db.commit()
+        assert project_provider_session_id(db, s) is None
         assert resolve_native_continue_target(db, s) is None

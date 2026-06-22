@@ -21,7 +21,7 @@ from zerg.services.shipper import load_token
 @dataclass(frozen=True)
 class ManagedLocalLaunchResponse:
     session_id: str
-    provider_session_id: str
+    provider_session_id: str | None
     attach_command: str
     source_runner_name: str
     managed_transport: str | None = None

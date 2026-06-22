@@ -260,7 +260,7 @@ def _ingest_workspace_session(
 
     session_ingest = SessionIngest(
         provider="claude",
-        provider_session_id=metadata.session_id or f"commis-{job_id}",
+        provider_session_id=metadata.session_id,
         started_at=metadata.started_at or job_started_at,
         ended_at=metadata.ended_at,
         cwd=str(workspace_path),

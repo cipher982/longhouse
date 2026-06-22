@@ -18,6 +18,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
+from zerg.services.session_kernel_projection import project_session_lineage_fields
 from zerg.services.session_views import format_age
 
 STARTUP_CONTEXT_DEFAULT_LIMIT = 5
@@ -96,7 +97,7 @@ def load_startup_context_items(
     items: list[StartupContextItem] = []
     seen_threads: set[str] = set()
     for session in rows:
-        thread_root_session_id = str(session.thread_root_session_id or session.id)
+        thread_root_session_id = project_session_lineage_fields(db, session).thread_root_session_id
         if thread_root_session_id in seen_threads:
             continue
 

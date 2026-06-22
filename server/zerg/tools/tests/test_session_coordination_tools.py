@@ -18,6 +18,10 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionMessage
 from zerg.models.agents import SessionRuntimeState
+from zerg.services.agents.session_graph_writes import ensure_primary_thread
+from zerg.services.agents.session_graph_writes import record_thread_alias
+from zerg.services.session_hot_cards import upsert_timeline_card_from_session
+from zerg.services.session_kernel_projection import project_provider_session_id
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
 from zerg.tools.builtin import session_coordination_tools
@@ -70,19 +74,38 @@ def _seed_session(
         git_branch=git_branch,
         started_at=now,
         last_activity_at=now,
-        provider_session_id=str(session_id),
-        thread_root_session_id=session_id,
-        continuation_kind="local",
-        origin_label=device_id,
         user_messages=1,
         assistant_messages=1,
         tool_calls=0,
-        is_writable_head=1,
-        is_sidechain=0,
         loop_mode="assist",
-        execution_home=execution_home,
     )
+    provider_session_id = f"provider-{session_id}"
     db.add(session)
+    db.flush()
+    thread = ensure_primary_thread(db, session)
+    record_thread_alias(
+        db,
+        thread=thread,
+        provider=session.provider,
+        alias_kind="longhouse_session_id",
+        alias_value=str(session_id),
+    )
+    record_thread_alias(
+        db,
+        thread=thread,
+        provider=session.provider,
+        alias_kind="provider_session_id",
+        alias_value=provider_session_id,
+    )
+    if execution_home:
+        record_thread_alias(
+            db,
+            thread=thread,
+            provider=session.provider,
+            alias_kind="execution_home",
+            alias_value=execution_home,
+        )
+    upsert_timeline_card_from_session(db, session)
     db.commit()
     db.refresh(session)
     return session
@@ -114,7 +137,8 @@ def _seed_event(
 
 def _seed_presence(db, *, session: AgentSession, state: str) -> None:
     now = datetime.now(timezone.utc)
-    runtime_key = runtime_key_for_session(str(session.provider or "claude"), str(session.id))
+    provider_session_id = project_provider_session_id(db, session) or str(session.id)
+    runtime_key = runtime_key_for_session(str(session.provider or "claude"), provider_session_id)
     freshness_ms = phase_freshness_ms(state) or int(timedelta(minutes=5).total_seconds() * 1000)
     freshness_expires_at = now + timedelta(milliseconds=freshness_ms)
     existing = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).first()

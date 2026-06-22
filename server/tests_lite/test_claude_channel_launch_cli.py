@@ -52,11 +52,25 @@ def test_launch_without_resume_passes_resume_false(monkeypatch, tmp_path):
     result, captured = _invoke_launch(monkeypatch, tmp_path, [])
     assert result.exit_code == 0, result.output
     assert captured["resume"] is False
+    assert captured["provider_session_id"]
+    assert captured["provider_session_id"] != _SESSION_ID
 
 
 def test_launch_with_resume_flag_passes_resume_true(monkeypatch, tmp_path):
-    result, captured = _invoke_launch(monkeypatch, tmp_path, ["--resume"])
+    result, captured = _invoke_launch(
+        monkeypatch,
+        tmp_path,
+        ["--provider-session-id", "provider-123", "--resume"],
+    )
     assert result.exit_code == 0, result.output
     assert captured["resume"] is True
     # The longhouse session id is always passed through unchanged.
     assert captured["session_id"] == _SESSION_ID
+    assert captured["provider_session_id"] == "provider-123"
+
+
+def test_launch_with_resume_requires_provider_session_id(monkeypatch, tmp_path):
+    result, captured = _invoke_launch(monkeypatch, tmp_path, ["--resume"])
+    assert result.exit_code == 1
+    assert "--provider-session-id is required with --resume" in result.output
+    assert captured == {}

@@ -41,15 +41,15 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.models.device_token import DeviceToken
 from zerg.observability import get_tracer
 from zerg.observability import set_span_attributes
+from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.managed_control_state import mark_missing_managed_control_leases
 from zerg.services.managed_control_state import refresh_managed_control_lease_health
 from zerg.services.managed_control_state import upsert_managed_control_leases
+from zerg.services.session_kernel_projection import project_provider_session_id
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.write_serializer import get_write_serializer
-from zerg.session_execution_home import ManagedSessionTransport
-from zerg.session_execution_home import SessionExecutionHome
 from zerg.utils.time import UTCBaseModel
 from zerg.utils.time import normalize_utc
 
@@ -332,22 +332,25 @@ def _unmanaged_bindings_from_resolved_sessions(
     return bindings
 
 
-def _is_managed_codex_session(session: AgentSession | None) -> bool:
+def _is_managed_codex_session(db: Session, session: AgentSession | None) -> bool:
     if session is None:
         return False
     if str(session.provider or "").strip().lower() != "codex":
         return False
-    execution_home = str(getattr(session, "execution_home", "") or "").strip()
-    managed_transport = str(getattr(session, "managed_transport", "") or "").strip()
-    return execution_home == SessionExecutionHome.MANAGED_LOCAL.value or managed_transport == ManagedSessionTransport.CODEX_APP_SERVER.value
+    capabilities = project_session_capabilities(db, session_id=session.id)
+    transport = capabilities.managed_transport
+    return bool(
+        capabilities.live_control_available
+        or capabilities.host_reattach_available
+        or (transport is not None and transport.value == "codex_app_server")
+    )
 
 
-def _is_managed_session(session: AgentSession | None) -> bool:
+def _is_managed_session(db: Session, session: AgentSession | None) -> bool:
     if session is None:
         return False
-    execution_home = str(getattr(session, "execution_home", "") or "").strip()
-    managed_transport = str(getattr(session, "managed_transport", "") or "").strip()
-    return execution_home == SessionExecutionHome.MANAGED_LOCAL.value or bool(managed_transport)
+    capabilities = project_session_capabilities(db, session_id=session.id)
+    return bool(capabilities.live_control_available or capabilities.host_reattach_available or capabilities.managed_transport is not None)
 
 
 def _runtime_events_for_managed_leases(
@@ -494,7 +497,7 @@ def _runtime_events_for_missing_managed_leases(
 
     events: list[RuntimeEventIngest] = []
     for state, session in rows:
-        if not _is_managed_session(session):
+        if not _is_managed_session(db, session):
             continue
         provider = (state.provider or session.provider or "").strip().lower()
         session_id = state.session_id
@@ -640,14 +643,15 @@ def _runtime_events_for_missing_unbound_unmanaged_sessions(
 
     events: list[RuntimeEventIngest] = []
     for state, session in rows:
-        if _is_managed_session(session):
+        if _is_managed_session(db, session):
             continue
         provider = str(session.provider or state.provider or "").strip().lower()
-        if not str(session.provider_session_id or "").strip():
+        provider_session_id = project_provider_session_id(db, session)
+        if not str(provider_session_id or "").strip():
             continue
         session_key = _normalize_unmanaged_provider_session_id(
             provider,
-            str(session.provider_session_id or "").strip(),
+            str(provider_session_id or "").strip(),
         )
         if not provider or not session_key:
             continue
@@ -981,7 +985,7 @@ async def ingest_heartbeat(
                         continue
                     session = write_db.query(AgentSession).filter(AgentSession.id == lease.session_id).first()
                     if (
-                        _is_managed_codex_session(session)
+                        _is_managed_codex_session(write_db, session)
                         and session.ended_at is not None
                         and not _has_final_managed_codex_terminal(write_db, lease.session_id)
                     ):

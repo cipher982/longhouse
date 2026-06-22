@@ -46,6 +46,7 @@ from zerg.services.agents.session_graph_writes import ensure_subagent_thread
 from zerg.services.agents.session_graph_writes import record_session_edge
 from zerg.services.agents.session_graph_writes import resolve_primary_thread_by_provider_session_id
 from zerg.services.raw_json_compression import decode_raw_json
+from zerg.services.session_kernel_projection import project_provider_session_id
 
 _CLAUDE_SUBAGENT_PARENT_RE = re.compile(
     r"/(?P<parent>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/subagents/"
@@ -210,32 +211,6 @@ def backfill_root_threads(db: Session) -> dict[str, int]:
             session.primary_thread_id = thread.id
             primary_pointers_set += 1
 
-        # If the legacy AgentSession carries a provider_session_id, mirror it
-        # as an alias so Phase 2/4 resolver paths can find the thread without
-        # consulting AgentSession directly.
-        legacy_provider_id = getattr(session, "provider_session_id", None)
-        if legacy_provider_id:
-            existing = (
-                db.query(SessionThreadAlias)
-                .filter(
-                    SessionThreadAlias.thread_id == thread.id,
-                    SessionThreadAlias.provider == session.provider,
-                    SessionThreadAlias.alias_kind == "provider_session_id",
-                    SessionThreadAlias.alias_value == legacy_provider_id,
-                )
-                .one_or_none()
-            )
-            if existing is None:
-                db.add(
-                    SessionThreadAlias(
-                        thread_id=thread.id,
-                        provider=session.provider,
-                        alias_kind="provider_session_id",
-                        alias_value=legacy_provider_id,
-                    )
-                )
-                aliases_created += 1
-
     db.flush()
     return {
         "sessions_seen": sessions_seen,
@@ -373,7 +348,8 @@ def _move_subagent_session_under_parent(
     path so both behave identically.
     """
     child_session_id = child_session.id
-    child_provider_id = child_provider_id or str(child_session.id)
+    child_provider_id = str(child_provider_id or "").strip()
+    child_edge_id = child_provider_id or str(child_session.id)
     counts = {
         "events_moved": 0,
         "source_lines_moved": 0,
@@ -394,7 +370,7 @@ def _move_subagent_session_under_parent(
         provider=child_session.provider,
         source_path=source_path,
         child_longhouse_session_id=str(child_session.id),
-        child_provider_session_id=child_provider_id,
+        child_provider_session_id=child_provider_id or None,
         subagent_id=raw_agent_id or _subagent_id_from_source_path(source_path),
         subagent_prompt_id=raw_prompt_id,
         workflow_run_id=workflow_run_id,
@@ -413,10 +389,10 @@ def _move_subagent_session_under_parent(
         evidence_kind="relink",
         source_thread=parent_thread,
         target_thread=child_thread,
-        provider_edge_id=f"{parent_provider_id}:{child_provider_id}",
+        provider_edge_id=f"{parent_provider_id}:{child_edge_id}",
         metadata={
             "parent_provider_session_id": parent_provider_id,
-            "child_provider_session_id": child_provider_id,
+            "child_provider_session_id": child_provider_id or None,
             "subagent_id": raw_agent_id or _subagent_id_from_source_path(source_path),
             "subagent_prompt_id": raw_prompt_id,
             "workflow_run_id": workflow_run_id,
@@ -699,6 +675,7 @@ def backfill_subagent_child_threads(db: Session) -> dict[str, int]:
             raw_agent_id=raw_agent_id,
             raw_prompt_id=raw_prompt_id,
             parent_provider_id=parent_provider_id,
+            child_provider_id=project_provider_session_id(db, child_session),
         )
         totals["candidates_resolved"] += 1
         for key, value in counts.items():

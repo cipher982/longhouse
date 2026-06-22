@@ -6,11 +6,12 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentSession
 from zerg.models.models import Runner
 from zerg.services.runner_connection_manager import get_runner_connection_manager
+from zerg.services.session_kernel_projection import project_session_control_fields
 
 
 def managed_runner_host_state(db: Session, session: AgentSession) -> str | None:
     """Return the current runner connection state for a managed session."""
-    runner_id = getattr(session, "source_runner_id", None)
+    runner_id = project_session_control_fields(db, session).source_runner_id
     if runner_id is None:
         return None
 

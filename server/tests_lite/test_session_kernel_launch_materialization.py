@@ -52,15 +52,10 @@ def _make_session_row(db, *, provider="codex"):
         device_id="laptop-1",
         cwd="/tmp/proj",
         started_at=datetime.now(timezone.utc),
-        provider_session_id=str(sid),
-        thread_root_session_id=sid,
-        continuation_kind="local",
-        user_messages=0,
+                                user_messages=0,
         assistant_messages=0,
         tool_calls=0,
-        is_writable_head=1,
-        is_sidechain=0,
-    )
+                    )
     db.add(row)
     db.flush()
     return row

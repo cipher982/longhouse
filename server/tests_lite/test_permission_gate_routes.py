@@ -77,9 +77,7 @@ def _seed_session(session_local):
                 device_id="cinder",
                 cwd="/tmp/perm-gate",
                 started_at=datetime.now(timezone.utc),
-                provider_session_id=f"claude-{uuid4().hex[:8]}",
-                execution_home="managed_local",
-            )
+                                            )
         )
         db.commit()
     return session_id, user_id

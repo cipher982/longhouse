@@ -27,6 +27,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.device_token import DeviceToken
 from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
+from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
@@ -41,6 +42,8 @@ from zerg.services.session_coordination import load_session_tail
 from zerg.services.session_coordination import query_wall_sessions
 from zerg.services.session_coordination import serialize_session_message
 from zerg.services.session_graph_projection import build_session_graph_projection
+from zerg.services.session_kernel_projection import project_provider_session_id
+from zerg.services.session_kernel_projection import project_session_lineage_fields
 from zerg.services.session_listing import SessionListingError
 from zerg.services.session_listing import SessionListParams
 from zerg.services.session_listing import list_agent_sessions
@@ -126,6 +129,22 @@ def _parse_message_session_header(request: Request) -> UUID | None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"{_CURRENT_SESSION_HEADER} must be a valid UUID",
         ) from exc
+
+
+def _build_projection_seam_response(*, db: Session, item) -> SessionProjectionItemResponse:
+    item_lineage = project_session_lineage_fields(db, item.session)
+    parent_lineage = project_session_lineage_fields(db, item.parent_session) if item.parent_session else None
+    return SessionProjectionItemResponse(
+        kind="seam",
+        session_id=str(item.session.id),
+        timestamp=item.session.started_at,
+        continued_from_session_id=item_lineage.continued_from_session_id,
+        continuation_kind=item_lineage.continuation_kind,
+        origin_label=item_lineage.origin_label,
+        parent_origin_label=(parent_lineage.origin_label if parent_lineage else None),
+        parent_continuation_kind=(parent_lineage.continuation_kind if parent_lineage else None),
+        branched_from_event_id=item_lineage.branched_from_event_id,
+    )
 
 
 def _resolve_message_actor_session(
@@ -284,7 +303,7 @@ def list_archive_manifest(
             anchor_on_activity=True,
         )
         return SessionArchiveManifestResponse(
-            sessions=[build_session_archive_manifest_item(session) for session in sessions],
+            sessions=[build_session_archive_manifest_item(db, session) for session in sessions],
             total=total,
         )
     except HTTPException:
@@ -545,7 +564,7 @@ async def get_session_turns(
             detail=f"Session {session_id} not found",
         )
 
-    if session.managed_transport:
+    if project_session_capabilities(db, session_id=session.id).managed_transport is not None:
         await execute_session_turn_write(
             db_bind=db.get_bind(),
             label="session-turn-terminal",
@@ -902,7 +921,7 @@ def get_session_thread(
         if effective_owner_id is None:
             effective_owner_id = _owner_id_from_agents_auth(db, _auth)
         result = SessionThreadResponse(
-            root_session_id=str(session.thread_root_session_id or session.id),
+            root_session_id=project_session_lineage_fields(db, session).thread_root_session_id,
             head_session_id=str(head.id if head else session.id),
             sessions=[
                 build_session_response(
@@ -1154,24 +1173,10 @@ def get_session_projection(
                 )
                 continue
 
-            items.append(
-                SessionProjectionItemResponse(
-                    kind="seam",
-                    session_id=str(item.session.id),
-                    timestamp=item.session.started_at,
-                    continued_from_session_id=(
-                        str(item.session.continued_from_session_id) if item.session.continued_from_session_id else None
-                    ),
-                    continuation_kind=item.session.continuation_kind,
-                    origin_label=item.session.origin_label,
-                    parent_origin_label=(item.parent_session.origin_label if item.parent_session else None),
-                    parent_continuation_kind=(item.parent_session.continuation_kind if item.parent_session else None),
-                    branched_from_event_id=item.session.branched_from_event_id,
-                )
-            )
+            items.append(_build_projection_seam_response(db=db, item=item))
 
         result = SessionProjectionResponse(
-            root_session_id=str(session.thread_root_session_id or session.id),
+            root_session_id=project_session_lineage_fields(db, session).thread_root_session_id,
             focus_session_id=str(session.id),
             head_session_id=str(head.id if head else session.id),
             path_session_ids=[str(path_session.id) for path_session in projection.path_sessions],
@@ -1245,16 +1250,17 @@ def export_session(
 
     jsonl_bytes, session = result
 
-    provider_session_id = session.provider_session_id or str(session.id)
+    provider_session_id = project_provider_session_id(db, session)
 
     headers = {
         "Content-Disposition": f"attachment; filename={session_id}.jsonl",
         "X-Session-CWD": session.cwd or "",
-        "X-Provider-Session-ID": provider_session_id,
         "X-Session-Provider": session.provider,
         "X-Session-Project": session.project or "",
         "X-Session-Branch-Mode": branch_mode,
     }
+    if provider_session_id:
+        headers["X-Provider-Session-ID"] = provider_session_id
 
     return Response(
         content=jsonl_bytes,

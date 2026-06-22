@@ -58,9 +58,7 @@ def _seed_session(
         git_repo=None,
         git_branch="main",
         started_at=datetime.now(timezone.utc),
-        provider_session_id=sid,
-        thread_root_session_id=sid,
-        user_messages=1,
+                        user_messages=1,
         assistant_messages=1,
         tool_calls=0,
     )

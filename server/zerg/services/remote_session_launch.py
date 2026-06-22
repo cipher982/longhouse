@@ -49,6 +49,7 @@ from zerg.services.managed_provider_contracts import remote_launch_supported_pro
 from zerg.services.managed_provider_contracts import require_contract_for_provider
 from zerg.services.managed_provider_contracts import run_once_supported_providers
 from zerg.services.session_continue_targets import resolve_native_continue_target
+from zerg.services.session_kernel_projection import is_synthetic_provider_session_id
 from zerg.services.session_launch_lifecycle import DEFAULT_REMOTE_EXECUTION_LIFETIME
 from zerg.services.session_launch_lifecycle import RemoteExecutionLifetime
 from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
@@ -56,8 +57,6 @@ from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
 from zerg.services.session_launch_lifecycle import normalize_remote_execution_lifetime
 from zerg.services.session_launch_lifecycle import normalize_remote_launch_error_code
 from zerg.services.session_launch_lifecycle import project_remote_launch_lifecycle
-from zerg.session_execution_home import ManagedSessionTransport
-from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_loop_mode import SessionLoopMode
 
 logger = logging.getLogger(__name__)
@@ -169,7 +168,7 @@ def _attach_live_launch_run(
 ) -> None:
     thread = ensure_primary_thread(db, session)
     now = datetime.now(timezone.utc)
-    if provider_thread_id:
+    if provider_thread_id and not is_synthetic_provider_session_id(session, provider_thread_id):
         record_thread_alias(
             db,
             thread=thread,
@@ -353,7 +352,7 @@ def _result_resume_thread_id(message: Mapping | None) -> str | None:
     result = message.get("result") if isinstance(message, Mapping) else None
     if not isinstance(result, dict):
         return None
-    value = result.get("thread_id")
+    value = result.get("provider_session_id") or result.get("thread_id")
     return str(value).strip() if value else None
 
 
@@ -526,35 +525,16 @@ async def launch_remote_session(
         git_branch=params.git_branch,
         started_at=now,
         ended_at=None,
-        provider_session_id=str(session_uuid),
-        thread_root_session_id=session_uuid,
-        continued_from_session_id=None,
-        continuation_kind="local",
-        origin_label=info.machine_name or device_id,
         user_messages=0,
         assistant_messages=0,
         tool_calls=0,
-        is_writable_head=1,
-        is_sidechain=0,
         loop_mode=SessionLoopMode.ASSIST.value,
-        execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
-        managed_transport=ManagedSessionTransport.for_provider(provider).value,
-        source_runner_id=None,
-        source_runner_name=info.machine_name or device_id,
-        managed_session_name=display_name,
     )
     db.add(session)
     db.flush()
 
     # Phase 2 dual-write: materialize kernel rows alongside legacy launch_*.
     primary_thread = ensure_primary_thread(db, session)
-    record_thread_alias(
-        db,
-        thread=primary_thread,
-        provider=provider,
-        alias_kind="provider_session_id",
-        alias_value=str(session_uuid),
-    )
     launch_attempt = record_launch_attempt(
         db,
         session=session,
@@ -847,8 +827,6 @@ async def continue_remote_session(
     session.device_id = device_id
     session.device_name = info.machine_name or device_id
     session.cwd = cwd
-    session.origin_label = info.machine_name or device_id
-    session.source_runner_name = info.machine_name or device_id
     db.commit()
     db.refresh(session)
 
@@ -858,7 +836,7 @@ async def continue_remote_session(
         "git_repo": session.git_repo,
         "git_branch": session.git_branch,
         "project": session.project,
-        "display_name": session.managed_session_name or session.project,
+        "display_name": session.project,
         "mode": "continue",
         "resume": {
             "thread_id": provider_thread_id,

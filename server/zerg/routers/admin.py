@@ -34,7 +34,9 @@ from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.schemas.usage import AdminUserDetailResponse
 from zerg.schemas.usage import AdminUsersResponse
+from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.runner_connection_manager import get_runner_connection_manager
+from zerg.services.session_kernel_projection import project_session_control_fields
 from zerg.services.session_launch_lifecycle import project_remote_launch_lifecycle
 
 # Usage service
@@ -532,6 +534,16 @@ class ConfigureTestSessionRuntimeRequest(BaseModel):
     clear_ended_at: bool = True
 
 
+_TEST_TRANSPORT_CONTROL_PLANES = {
+    "claude_channel_bridge": "claude_channel_bridge",
+    "codex_app_server": "codex_app_server",
+    "opencode_server_bridge": "opencode_server_bridge",
+    "opencode_process": "opencode_process",
+    "antigravity_hook_inbox": "antigravity_hook_inbox",
+    "antigravity_process": "antigravity_process",
+}
+
+
 @router.get("/debug/db-schema")
 async def debug_db_schema(
     db: Session = Depends(get_db),
@@ -598,32 +610,32 @@ async def configure_test_session_runtime(
     if session is None:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
 
-    session.execution_home = request.execution_home
     if request.execution_home == "managed_local":
-        session.managed_transport = request.managed_transport or session.managed_transport or "codex_app_server"
-        session.source_runner_id = request.source_runner_id if request.source_runner_id is not None else 1
-        session.source_runner_name = request.source_runner_name or session.source_runner_name or "E2E Runner"
-        session.managed_session_name = request.managed_session_name or session.managed_session_name or f"e2e-{session_id[:8]}"
+        managed_transport = request.managed_transport or "codex_app_server"
+        control_plane = _TEST_TRANSPORT_CONTROL_PLANES[managed_transport]
+        source_runner_id = request.source_runner_id if request.source_runner_id is not None else 1
+        source_runner_name = request.source_runner_name or "E2E Runner"
+        managed_session_name = request.managed_session_name or f"e2e-{session_id[:8]}"
         try:
             owner_id = int(getattr(current_user, "id", 1) or 1)
         except (TypeError, ValueError):
             owner_id = 1
         if db.query(User).filter(User.id == owner_id).first() is None:
             db.add(User(id=owner_id, email=f"test-admin-{owner_id}@example.com"))
-        runner_id = int(session.source_runner_id)
+        runner_id = int(source_runner_id)
         runner = db.query(Runner).filter(Runner.id == runner_id).first()
         if runner is None:
             runner = Runner(
                 id=runner_id,
                 owner_id=owner_id,
-                name=session.source_runner_name,
+                name=source_runner_name,
                 status="online",
                 auth_secret_hash="test",
             )
             db.add(runner)
         else:
             runner.owner_id = owner_id
-            runner.name = session.source_runner_name
+            runner.name = source_runner_name
             runner.status = "online"
         get_runner_connection_manager().register(owner_id, runner_id, SimpleNamespace())
         if request.clear_ended_at:
@@ -636,10 +648,11 @@ async def configure_test_session_runtime(
         conn = upsert_connection_for_run(
             db,
             run=run,
-            control_plane="codex_app_server",
+            control_plane=control_plane,
             acquisition_kind="spawned_control",
             state="attached",
-            external_name=session.managed_session_name,
+            external_name=managed_session_name,
+            device_id=source_runner_name,
             can_send_input=1,
             can_interrupt=1,
             can_terminate=1,
@@ -649,24 +662,21 @@ async def configure_test_session_runtime(
         # Stamp health so the capability projection's freshness clamp treats
         # this admin/test-configured runtime as live without a heartbeat.
         conn.last_health_at = datetime.now(timezone.utc)
-    else:
-        session.managed_transport = request.managed_transport
-        session.source_runner_id = request.source_runner_id
-        session.source_runner_name = request.source_runner_name
-        session.managed_session_name = request.managed_session_name
     session.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(session)
+    capabilities = project_session_capabilities(db, session_id=session.id)
+    control_projection = project_session_control_fields(db, session, capabilities=capabilities)
 
     logger.info("Configured test runtime for session %s by admin %s", session_id, getattr(current_user, "id", None))
 
     return {
         "session_id": str(session.id),
-        "execution_home": session.execution_home,
-        "managed_transport": session.managed_transport,
-        "source_runner_id": session.source_runner_id,
-        "source_runner_name": session.source_runner_name,
-        "managed_session_name": session.managed_session_name,
+        "execution_home": capabilities.execution_home.value,
+        "managed_transport": capabilities.managed_transport.value if capabilities.managed_transport else None,
+        "source_runner_id": control_projection.source_runner_id,
+        "source_runner_name": control_projection.source_runner_name,
+        "managed_session_name": control_projection.managed_session_name,
         "ended_at": session.ended_at.isoformat() if session.ended_at else None,
     }
 

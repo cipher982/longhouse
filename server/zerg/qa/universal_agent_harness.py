@@ -36,6 +36,46 @@ from zerg.qa.repo_root import default_repo_root
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import managed_provider_names
 
+
+def _seed_managed_kernel_rows(db: Any, session: Any, *, control_plane: str) -> None:
+    from zerg.services.agents.kernel_writes import ensure_primary_thread
+    from zerg.services.agents.kernel_writes import record_run
+    from zerg.services.agents.kernel_writes import upsert_connection_for_run
+
+    thread = ensure_primary_thread(db, session)
+    run = record_run(
+        db,
+        thread=thread,
+        provider=session.provider,
+        host_id=getattr(session, "device_id", None),
+        cwd=getattr(session, "cwd", None),
+        launch_origin="longhouse_spawned",
+    )
+    upsert_connection_for_run(
+        db,
+        run=run,
+        control_plane=control_plane,
+        acquisition_kind="spawned_control",
+        state="attached",
+        external_name=getattr(session, "device_id", None),
+        device_id=getattr(session, "device_id", None),
+        can_send_input=1,
+        can_interrupt=1,
+        can_terminate=0,
+        can_tail_output=1,
+        can_resume=0,
+    )
+
+
+def _project_managed_transport(db: Any, session: Any) -> str | None:
+    if db is None or session is None:
+        return None
+    from zerg.services.agents.kernel_capabilities import project_session_capabilities
+
+    transport = project_session_capabilities(db, session_id=session.id).managed_transport
+    return transport.value if transport is not None else None
+
+
 SCHEMA_VERSION = 1
 ARTIFACT_KIND = "universal_agent_harness_run"
 SUPPORTED_PROVIDERS = ("claude", "codex", "opencode", "antigravity")
@@ -1906,8 +1946,6 @@ class UniversalProviderAdapter:
                     device_id="universal-harness",
                     cwd=str(package.path("workspace")),
                     started_at=now - timedelta(minutes=1),
-                    provider_session_id=f"claude-{tool_use_id}",
-                    execution_home="managed_local",
                 )
             )
             db.commit()
@@ -2668,7 +2706,6 @@ class UniversalProviderAdapter:
         from zerg.services.session_runtime import RuntimeEventIngest
         from zerg.services.session_runtime import ingest_runtime_events
         from zerg.session_execution_home import ManagedSessionTransport
-        from zerg.session_execution_home import SessionExecutionHome
 
         scenario = "answer_pause_request" if answer else "pause_request_detect"
         can_respond = _provider_answer_pause_supported(self.config.provider)
@@ -2694,14 +2731,13 @@ class UniversalProviderAdapter:
                 last_activity_at=now,
                 user_messages=1,
                 assistant_messages=0,
-                execution_home=SessionExecutionHome.MANAGED_LOCAL.value if managed_transport else None,
-                managed_transport=managed_transport,
-                provider_session_id=f"{self.config.provider}-pause-answer-session" if managed_transport else None,
-                managed_session_name=f"{self.config.provider}-pause-answer-proof" if managed_transport else None,
             )
             db.add(session)
             db.flush()
             db.refresh(session)
+            contract = contract_for_provider(self.config.provider)
+            if managed_transport and contract is not None:
+                _seed_managed_kernel_rows(db, session, control_plane=contract.control_plane)
             runtime_key = f"{self.config.provider}:{session.id}:pause-request"
             question_payload = {
                 "questions": [
@@ -2805,7 +2841,7 @@ class UniversalProviderAdapter:
                                 "commis_id": kwargs.get("commis_id"),
                                 "run_id": kwargs.get("run_id"),
                                 "provider": getattr(kwargs.get("session"), "provider", None),
-                                "managed_transport": getattr(kwargs.get("session"), "managed_transport", None),
+                                "managed_transport": _project_managed_transport(kwargs.get("db"), kwargs.get("session")),
                             }
                         )
                         return SimpleNamespace(
@@ -3554,7 +3590,6 @@ class UniversalProviderAdapter:
         from zerg.models.agents import AgentSession
         from zerg.services import managed_local_control as control
         from zerg.session_execution_home import ManagedSessionTransport
-        from zerg.session_execution_home import SessionExecutionHome
 
         db_path = package.path("longhouse", "codex-steer-dispatch.sqlite")
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3586,7 +3621,7 @@ class UniversalProviderAdapter:
                     "commis_id": kwargs.get("commis_id"),
                     "run_id": kwargs.get("run_id"),
                     "provider": getattr(kwargs.get("session"), "provider", None),
-                    "managed_transport": getattr(kwargs.get("session"), "managed_transport", None),
+                    "managed_transport": _project_managed_transport(kwargs.get("db"), kwargs.get("session")),
                 }
             )
             return SimpleNamespace(
@@ -3610,15 +3645,14 @@ class UniversalProviderAdapter:
                     cwd=str(package.path("workspace")),
                     started_at=now - timedelta(minutes=5),
                     last_activity_at=now,
-                    provider_session_id="codex-steer-transport-session",
                     user_messages=1,
                     assistant_messages=1,
-                    execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
-                    managed_transport=ManagedSessionTransport.CODEX_APP_SERVER.value,
-                    managed_session_name="codex-steer-transport-proof",
                 )
                 db.add(session)
                 db.flush()
+                contract = contract_for_provider("codex")
+                if contract is not None:
+                    _seed_managed_kernel_rows(db, session, control_plane=contract.control_plane)
                 result = asyncio.run(
                     control.steer_text_to_managed_local_session(
                         db=db,
@@ -4001,7 +4035,6 @@ class UniversalProviderAdapter:
         from zerg.models.agents import AgentSession
         from zerg.services import managed_local_control as control
         from zerg.session_execution_home import ManagedSessionTransport
-        from zerg.session_execution_home import SessionExecutionHome
 
         db_path = package.path("longhouse", "codex-interrupt-dispatch.sqlite")
         db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -4022,7 +4055,7 @@ class UniversalProviderAdapter:
                     "commis_id": kwargs.get("commis_id"),
                     "run_id": kwargs.get("run_id"),
                     "provider": getattr(kwargs.get("session"), "provider", None),
-                    "managed_transport": getattr(kwargs.get("session"), "managed_transport", None),
+                    "managed_transport": _project_managed_transport(kwargs.get("db"), kwargs.get("session")),
                 }
             )
             return SimpleNamespace(
@@ -4046,15 +4079,14 @@ class UniversalProviderAdapter:
                     cwd=str(package.path("workspace")),
                     started_at=now - timedelta(minutes=5),
                     last_activity_at=now,
-                    provider_session_id="codex-interrupt-transport-session",
                     user_messages=1,
                     assistant_messages=1,
-                    execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
-                    managed_transport=ManagedSessionTransport.CODEX_APP_SERVER.value,
-                    managed_session_name="codex-interrupt-transport-proof",
                 )
                 db.add(session)
                 db.flush()
+                contract = contract_for_provider("codex")
+                if contract is not None:
+                    _seed_managed_kernel_rows(db, session, control_plane=contract.control_plane)
                 result = asyncio.run(
                     control.interrupt_managed_local_session(
                         db=db,

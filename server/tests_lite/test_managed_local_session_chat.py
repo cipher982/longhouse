@@ -38,7 +38,6 @@ from zerg.services.session_runtime import runtime_key_for_session
 from zerg.services.session_turns import create_session_turn
 from zerg.services.session_turns import mark_session_turn_send_accepted
 from zerg.session_execution_home import ManagedSessionTransport
-from zerg.session_execution_home import SessionExecutionHome
 
 
 def _make_db(tmp_path):
@@ -125,26 +124,11 @@ def _seed_managed_local_session(db, *, runner: Runner, provider: str = "claude")
         git_repo="git@github.com:cipher982/longhouse.git",
         git_branch="main",
         started_at=datetime.now(timezone.utc),
-        provider_session_id=str(uuid4()),
-        thread_root_session_id=session_id,
-        continuation_kind="local",
-        origin_label=runner.name,
-        user_messages=1,
+                                        user_messages=1,
         assistant_messages=1,
         tool_calls=0,
-        is_writable_head=1,
-        is_sidechain=0,
-        loop_mode="assist",
-        execution_home="managed_local",
-        managed_transport=(
-            ManagedSessionTransport.CODEX_APP_SERVER.value
-            if provider == "codex"
-            else ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
-        ),
-        source_runner_id=runner.id,
-        source_runner_name=runner.name,
-        managed_session_name="lh-hiring-chat-1234",
-    )
+                        loop_mode="assist",
+                                            )
     db.add(session)
     db.commit()
     db.refresh(session)
@@ -255,7 +239,7 @@ def test_managed_local_claude_dispatch_returns_json_ack(monkeypatch, tmp_path):
             calls.append({
                 "owner_id": owner_id,
                 "session_id": str(session.id),
-                "runner_id": session.source_runner_id,
+                "runner_id": runner.id,
                 "text": text,
                 "verify_turn_started": verify_turn_started,
                 "verification_timeout_secs": verification_timeout_secs,
@@ -423,9 +407,6 @@ def test_managed_local_draft_reply_requires_live_control(tmp_path):
     with session_local() as db:
         user, runner = _seed_user_and_runner(db)
         source_session = _seed_managed_local_session(db, runner=runner, provider="codex")
-        source_session.execution_home = SessionExecutionHome.UNMANAGED_LOCAL.value
-        source_session.managed_transport = None
-        source_session.source_runner_id = None
         # Session-identity-kernel cleanup: live-control truth lives on
         # session_connections + session_runs; clearing legacy attrs alone
         # leaves the kernel row claiming the session is steerable. Drop the

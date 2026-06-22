@@ -54,13 +54,11 @@ from zerg.services.session_input_attachments import get_attachment
 from zerg.services.session_input_attachments import list_attachments_for_input
 from zerg.services.session_input_attachments import store_attachment_blob
 from zerg.services.session_inputs import INPUT_INTENT_AUTO
-from zerg.services.session_inputs import INPUT_INTENT_STEER
-from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
-from zerg.services.session_inputs import INPUT_STATUS_FAILED
 from zerg.services.session_inputs import create_session_input
 from zerg.services.session_inputs import mark_delivered
 from zerg.services.session_inputs import mark_failed
+from zerg.services.session_kernel_projection import session_lock_scope_id
 
 logger = logging.getLogger(__name__)
 
@@ -86,10 +84,7 @@ def _attachment_ref_for_engine(
         "id": str(stored.id),
         "mime_type": stored.mime_type,
         "sha256": stored.sha256,
-        "blob_url": (
-            f"/api/agents/sessions/{session_id}"
-            f"/inputs/{input_id}/attachments/{stored.id}/blob"
-        ),
+        "blob_url": (f"/api/agents/sessions/{session_id}" f"/inputs/{input_id}/attachments/{stored.id}/blob"),
     }
 
 
@@ -181,10 +176,7 @@ async def create_session_input_with_attachments(
             _record_outcome("rejected_oversize")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    f"attachment {upload.filename!r} exceeds "
-                    f"{MAX_ATTACHMENT_BYTES // 1024 // 1024}MB"
-                ),
+                detail=(f"attachment {upload.filename!r} exceeds " f"{MAX_ATTACHMENT_BYTES // 1024 // 1024}MB"),
             )
         upload_payloads.append((upload, data))
 
@@ -200,7 +192,7 @@ async def create_session_input_with_attachments(
         raise
 
     capabilities = current_session_capabilities(db, source_session, owner_id=current_user.id)
-    transport = (capabilities.managed_transport.value if capabilities.managed_transport else "")
+    transport = capabilities.managed_transport.value if capabilities.managed_transport else ""
     if transport != "codex_app_server":
         _record_outcome("rejected_capability")
         raise HTTPException(
@@ -210,7 +202,7 @@ async def create_session_input_with_attachments(
 
     request_id = (client_request_id or "").strip() or uuid.uuid4().hex
     delivery_request_id = uuid.uuid4().hex
-    lock_scope_id = str(source_session.thread_root_session_id or source_session.id)
+    lock_scope_id = session_lock_scope_id(source_session.id)
 
     # We acquire the dispatch lock before persisting anything so a second
     # request for the same session can't race the blob writes.

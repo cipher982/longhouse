@@ -9,18 +9,19 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
+from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
 from zerg.services.write_serializer import get_write_serializer
-from zerg.session_execution_home import SessionExecutionHome
 
 MANAGED_LOCAL_RUNTIME_SOURCE = "managed_local_transport"
 
 
-def _is_managed_local_session(session: AgentSession) -> bool:
-    return str(getattr(session, "execution_home", "") or "").strip() == SessionExecutionHome.MANAGED_LOCAL.value
+def _is_managed_local_session(db: Session, session: AgentSession) -> bool:
+    capabilities = project_session_capabilities(db, session_id=session.id)
+    return bool(capabilities.live_control_available or capabilities.host_reattach_available)
 
 
 def _emit_managed_local_phase_signal(
@@ -31,8 +32,9 @@ def _emit_managed_local_phase_signal(
     dedupe_key: str,
     occurred_at: datetime | None = None,
 ) -> None:
-    if not _is_managed_local_session(session):
+    if not _is_managed_local_session(db, session):
         return
+    capabilities = project_session_capabilities(db, session_id=session.id)
 
     signal_at = occurred_at or datetime.now(timezone.utc)
     runtime_key = runtime_key_for_session(str(session.provider or "claude"), str(session.id))
@@ -43,7 +45,7 @@ def _emit_managed_local_phase_signal(
                 runtime_key=runtime_key,
                 session_id=session.id,
                 provider=str(session.provider or "claude"),
-                device_id=str(session.device_id or session.source_runner_name or "") or None,
+                device_id=str(session.device_id or "") or None,
                 source=MANAGED_LOCAL_RUNTIME_SOURCE,
                 kind="phase_signal",
                 phase=phase,
@@ -51,7 +53,7 @@ def _emit_managed_local_phase_signal(
                 occurred_at=signal_at,
                 freshness_ms=phase_freshness_ms(phase),
                 dedupe_key=dedupe_key,
-                payload={"managed_transport": getattr(session, "managed_transport", None)},
+                payload={"managed_transport": (capabilities.managed_transport.value if capabilities.managed_transport else None)},
             )
         ],
     )

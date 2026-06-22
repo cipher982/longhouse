@@ -28,8 +28,7 @@ def test_agents_models_roundtrip_sqlite(tmp_path):
             git_branch=None,
             started_at=datetime(2026, 1, 31, tzinfo=timezone.utc),
             ended_at=None,
-            provider_session_id="session-1",
-        )
+                    )
         db.add(session)
         db.flush()
 

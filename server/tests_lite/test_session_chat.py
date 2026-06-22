@@ -269,16 +269,11 @@ def _seed_kernel_session(session_local, *, provider: str, with_kernel_rows: bool
             environment="dev",
             project="zerg",
             started_at=datetime.now(timezone.utc),
-            provider_session_id="provider-session",
-            thread_root_session_id=sid,
-            user_messages=0,
+                                    user_messages=0,
             assistant_messages=0,
             tool_calls=0,
             loop_mode="assist",
-            source_runner_id=1,
-            source_runner_name="cinder",
-            managed_session_name="lh-test",
-        )
+                                            )
         db.add(session)
         db.commit()
         db.refresh(session)

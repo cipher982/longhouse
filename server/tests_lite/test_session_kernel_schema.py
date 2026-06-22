@@ -83,8 +83,7 @@ def test_kernel_roundtrip_minimal(tmp_path):
             project="zerg",
             device_id="dev-machine",
             started_at=now,
-            provider_session_id="s1",
-        )
+                    )
         db.add(session)
         db.flush()
 

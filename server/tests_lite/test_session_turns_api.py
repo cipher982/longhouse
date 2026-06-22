@@ -59,8 +59,7 @@ def _seed_session(db, *, managed_transport: str | None = None) -> AgentSession:
         user_messages=3,
         assistant_messages=3,
         tool_calls=1,
-        managed_transport=managed_transport,
-    )
+            )
     db.add(session)
     db.flush()
 

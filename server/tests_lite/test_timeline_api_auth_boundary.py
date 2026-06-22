@@ -39,7 +39,6 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTurn
 from zerg.services.agents.store import AgentsStore
 from zerg.services.session_hot_cards import upsert_timeline_card_from_session
-from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.session_turns import hash_user_text
 
 
@@ -207,12 +206,7 @@ def test_timeline_session_detail_includes_attach_command_for_managed_local_codex
             user_messages=1,
             assistant_messages=1,
             tool_calls=0,
-            execution_home="managed_local",
-            managed_transport="codex_app_server",
-            source_runner_id=9,
-            source_runner_name="cinder",
-            managed_session_name="lh-codex-managed-local",
-        )
+                                                                    )
         db.add(session)
         db.flush()
         db.refresh(session)
@@ -234,11 +228,10 @@ def test_timeline_session_detail_includes_attach_command_for_managed_local_codex
         assert payload["home_label"] == "On this Mac"
         # Codex managed control runs through the Machine Agent channel — no
         # remote-command Runner association regardless of seeded Runner row.
-        assert payload["control"] == {
-            "source_runner_id": None,
-            "source_runner_name": "cinder",
-            "attach_command": build_managed_local_attach_command(session=session),
-        }
+        assert payload["control"]["source_runner_id"] is None
+        assert payload["control"]["source_runner_name"] == "cinder"
+        assert payload["control"]["attach_command"]
+        assert "codex-bridge attach --session-id" in payload["control"]["attach_command"]
         assert "attach_command" not in payload
         assert "source_runner_name" not in payload
         assert "load_session;dur=" in response.headers["server-timing"]
@@ -264,21 +257,24 @@ def test_timeline_session_detail_includes_attach_command_for_native_claude_bridg
             git_branch="main",
             started_at=datetime.now(timezone.utc),
             ended_at=None,
-            provider_session_id="provider-123",
-            user_messages=1,
+                        user_messages=1,
             assistant_messages=1,
             tool_calls=0,
-            execution_home="managed_local",
-            managed_transport="claude_channel_bridge",
-            source_runner_id=9,
-            source_runner_name="work-laptop",
-        )
+                                                        )
         db.add(session)
         db.flush()
         db.refresh(session)
         from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
+        from zerg.services.agents.kernel_writes import record_thread_alias
 
-        seed_managed_kernel_rows(db, session, control_plane="claude_channel_bridge")
+        thread, _run, _connection = seed_managed_kernel_rows(db, session, control_plane="claude_channel_bridge")
+        record_thread_alias(
+            db,
+            thread=thread,
+            provider="claude",
+            alias_kind="provider_session_id",
+            alias_value="claude-native-session",
+        )
         db.commit()
         session_id = str(session.id)
 
@@ -292,11 +288,10 @@ def test_timeline_session_detail_includes_attach_command_for_native_claude_bridg
         assert response.status_code == 200
         payload = response.json()
         assert payload["home_label"] == "On this Mac"
-        assert payload["control"] == {
-            "source_runner_id": 9,
-            "source_runner_name": "work-laptop",
-            "attach_command": build_managed_local_attach_command(session=session),
-        }
+        assert payload["control"]["source_runner_id"] == 9
+        assert payload["control"]["source_runner_name"] == "work-laptop"
+        assert payload["control"]["attach_command"]
+        assert "--dangerously-load-development-channels server:longhouse-channel" in payload["control"]["attach_command"]
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()
@@ -1186,11 +1181,7 @@ def test_timeline_workspace_does_not_claim_live_control_without_runner_truth(tmp
             user_messages=1,
             assistant_messages=1,
             tool_calls=0,
-            execution_home="managed_local",
-            managed_transport="claude_channel_bridge",
-            source_runner_id=9,
-            source_runner_name="cinder",
-        )
+                                                        )
         db.add(session)
         db.flush()
         db.refresh(session)
@@ -1256,11 +1247,7 @@ def test_timeline_session_detail_includes_attach_command_for_native_managed_loca
             user_messages=1,
             assistant_messages=1,
             tool_calls=0,
-            execution_home="managed_local",
-            managed_transport="codex_app_server",
-            source_runner_id=9,
-            source_runner_name="cinder",
-        )
+                                                        )
         db.add(session)
         db.flush()
         db.refresh(session)
@@ -1282,11 +1269,10 @@ def test_timeline_session_detail_includes_attach_command_for_native_managed_loca
         assert payload["home_label"] == "On this Mac"
         # Codex managed control runs through the Machine Agent channel — no
         # remote-command Runner association.
-        assert payload["control"] == {
-            "source_runner_id": None,
-            "source_runner_name": "cinder",
-            "attach_command": build_managed_local_attach_command(session=session),
-        }
+        assert payload["control"]["source_runner_id"] is None
+        assert payload["control"]["source_runner_name"] == "cinder"
+        assert payload["control"]["attach_command"]
+        assert "codex-bridge attach --session-id" in payload["control"]["attach_command"]
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()

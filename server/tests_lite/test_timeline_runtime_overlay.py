@@ -93,18 +93,12 @@ def _seed_session(
         project=project,
         started_at=started_at,
         ended_at=ended_at,
-        continuation_kind=continuation_kind,
-        origin_label=origin_label,
-        user_messages=user_messages,
+                        user_messages=user_messages,
         assistant_messages=assistant_messages,
         tool_calls=tool_calls,
         summary="Timeline runtime test",
         summary_title="Timeline runtime test",
-        execution_home=execution_home,
-        managed_transport=managed_transport,
-        source_runner_id=source_runner_id,
-        managed_session_name=managed_session_name,
-    )
+                                    )
     db.add(session)
     db.flush()
     db.refresh(session)
@@ -673,7 +667,7 @@ def test_bridge_transcript_preview_is_timeline_card_only(tmp_path):
     try:
         cards = build_timeline_cards_from_thread_rows(
             db=db,
-            thread_rows=((str(session.thread_root_session_id or session.id), str(session.id), now),),
+            thread_rows=((str(session.id), str(session.id), now),),
         )
     finally:
         db.close()
@@ -797,7 +791,7 @@ def test_timeline_cards_read_projection_not_large_observation_history(tmp_path):
         try:
             cards = build_timeline_cards_from_thread_rows(
                 db=db,
-                thread_rows=((str(session.thread_root_session_id or session.id), str(session.id), now),),
+                thread_rows=((str(session.id), str(session.id), now),),
             )
         finally:
             elapsed = monotonic() - started
@@ -1159,7 +1153,7 @@ def test_sessions_list_hides_bridge_transcript_preview_after_durable_activity_ca
     try:
         cards = build_timeline_cards_from_thread_rows(
             db=db,
-            thread_rows=((str(session.thread_root_session_id or session.id), str(session.id), now),),
+            thread_rows=((str(session.id), str(session.id), now),),
         )
     finally:
         db.close()
@@ -1190,7 +1184,7 @@ def test_timeline_cards_mark_old_unsuperseded_bridge_transcript_stale(tmp_path):
 
         cards = build_timeline_cards_from_thread_rows(
             db=db,
-            thread_rows=((str(session.thread_root_session_id or session.id), str(session.id), now),),
+            thread_rows=((str(session.id), str(session.id), now),),
         )
     finally:
         db.close()
@@ -1228,7 +1222,7 @@ def test_timeline_cards_mark_preview_stale_when_durable_activity_is_newer(tmp_pa
 
         cards = build_timeline_cards_from_thread_rows(
             db=db,
-            thread_rows=((str(session.thread_root_session_id or session.id), str(session.id), now),),
+            thread_rows=((str(session.id), str(session.id), now),),
         )
     finally:
         db.close()

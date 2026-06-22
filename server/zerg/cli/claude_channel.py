@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import anyio
 import httpx
@@ -381,7 +382,23 @@ def launch(
 
     from zerg.cli.claude import _launch_detached_native_claude_channel
 
-    normalized_provider_session_id = str(provider_session_id or session_id).strip()
+    normalized_provider_session_id = str(provider_session_id or "").strip()
+    if not normalized_provider_session_id and resume:
+        typer.echo(
+            json.dumps(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "provider_launch_failed",
+                        "message": "--provider-session-id is required with --resume",
+                    },
+                }
+            ),
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if not normalized_provider_session_id:
+        normalized_provider_session_id = str(uuid4())
     try:
         result = _launch_detached_native_claude_channel(
             session_id=session_id,

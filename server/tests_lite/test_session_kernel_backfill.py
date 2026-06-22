@@ -32,14 +32,14 @@ def _engine(tmp_path):
 
 
 def _make_session(db, *, provider="codex", provider_session_id=None, project="zerg"):
+    del provider_session_id
     s = AgentSession(
         provider=provider,
         environment="test",
         project=project,
         device_id="dev",
         started_at=datetime(2026, 5, 21, tzinfo=timezone.utc),
-        provider_session_id=provider_session_id,
-    )
+            )
     db.add(s)
     db.flush()
     return s
@@ -60,10 +60,9 @@ def test_backfill_creates_one_thread_per_session(tmp_path):
         assert report["sessions_seen"] == 3
         assert report["threads_created"] == 3
         assert report["primary_pointers_set"] == 3
-        # Session-identity-kernel cleanup: ``provider_session_id`` is no
-        # longer a real column. Each session synthesizes one as ``str(self.id)``,
-        # so the backfill mirrors an alias for every session.
-        assert report["aliases_created"] == 3
+        # ``provider_session_id`` is no longer a real AgentSession column. The
+        # backfill must not invent provider aliases just to preserve old shape.
+        assert report["aliases_created"] == 0
 
         # Each session has exactly one primary thread, pointed at by the
         # session row.
@@ -78,8 +77,7 @@ def test_backfill_creates_one_thread_per_session(tmp_path):
             assert t.provider == s.provider
             assert t.branch_kind == "root"
 
-        # Every session now gets a synthesized provider_session_id alias.
-        assert db.query(SessionThreadAlias).count() == 3
+        assert db.query(SessionThreadAlias).count() == 0
 
 
 def test_backfill_is_idempotent(tmp_path):
@@ -105,7 +103,7 @@ def test_backfill_is_idempotent(tmp_path):
         assert third["aliases_created"] == 0
 
         assert db.query(SessionThread).count() == 2
-        assert db.query(SessionThreadAlias).count() == 2
+        assert db.query(SessionThreadAlias).count() == 0
 
 
 def test_backfill_handles_new_sessions_after_first_run(tmp_path):
@@ -130,10 +128,10 @@ def test_backfill_handles_new_sessions_after_first_run(tmp_path):
         report = backfill_root_threads(db)
         db.commit()
         assert report["threads_created"] == 2
-        assert report["aliases_created"] == 2
+        assert report["aliases_created"] == 0
 
         assert db.query(SessionThread).count() == 3
-        assert db.query(SessionThreadAlias).count() == 3
+        assert db.query(SessionThreadAlias).count() == 0
         # Every session row has a primary_thread_id set.
         for s in db.query(AgentSession).all():
             assert s.primary_thread_id is not None
@@ -203,7 +201,7 @@ def test_backfill_same_provider_session_id_on_different_sessions(tmp_path):
         backfill_root_threads(db)
         db.commit()
 
-        assert db.query(SessionThreadAlias).count() == 2
+        assert db.query(SessionThreadAlias).count() == 0
 
 
 def test_backfill_order_independent_final_state(tmp_path):
@@ -246,10 +244,9 @@ def test_backfill_order_independent_final_state(tmp_path):
         b_aliases = db.query(SessionThreadAlias).count()
 
     assert a_threads == b_threads == 3
-    # Session-identity-kernel cleanup: every session synthesizes a
-    # provider_session_id (= str(self.id)), so the backfill mirrors three
-    # aliases regardless of interleaving.
-    assert a_aliases == b_aliases == 3
+    # Without a real legacy provider id column, the backfill converges without
+    # fabricating provider aliases.
+    assert a_aliases == b_aliases == 0
 
 
 def test_backfill_child_thread_ids_stamps_legacy_rows(tmp_path):
@@ -387,4 +384,4 @@ def test_backfill_does_not_duplicate_aliases(tmp_path):
         backfill_root_threads(db)
         db.commit()
 
-        assert db.query(SessionThreadAlias).count() == 1
+        assert db.query(SessionThreadAlias).count() == 0

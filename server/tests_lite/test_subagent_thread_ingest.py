@@ -139,6 +139,40 @@ def _edge_rows(db):
     return db.query(SessionEdge).order_by(SessionEdge.edge_kind.asc(), SessionEdge.id.asc()).all()
 
 
+def test_root_ingest_without_provider_session_id_does_not_create_provider_alias(tmp_path):
+    SessionLocal = _session_factory(tmp_path)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        store.ingest_session(
+            SessionIngest(
+                id=PARENT_ID,
+                provider="claude",
+                environment="production",
+                project="cipher982",
+                device_id="cinder",
+                cwd="/Users/davidrose/git/cipher982",
+                started_at=NOW,
+                provider_session_id=None,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="root without provider id",
+                        timestamp=NOW,
+                        source_path=f"/Users/davidrose/.claude/projects/project/{PARENT_ID}.jsonl",
+                        source_offset=0,
+                        raw_json='{"type":"user","message":{"content":"root without provider id"}}',
+                    )
+                ],
+            )
+        )
+
+        primary = db.query(SessionThread).filter(SessionThread.session_id == PARENT_ID, SessionThread.is_primary == 1).one()
+        aliases = _thread_alias_values(db, primary.id)
+        assert ("longhouse_session_id", str(PARENT_ID)) in aliases
+        assert ("provider_session_id", str(PARENT_ID)) not in aliases
+        assert not [alias for alias in aliases if alias[0] == "provider_session_id"]
+
+
 def test_claude_child_ingest_creates_child_thread_not_session(tmp_path):
     SessionLocal = _session_factory(tmp_path)
     with SessionLocal() as db:

@@ -21,6 +21,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionObservation
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents import AgentsStore
+from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_ANSWER_PAUSE
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_COMMAND_INTERRUPT
@@ -34,7 +35,6 @@ from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
 from zerg.services.session_runtime import runtime_event_from_observation
 from zerg.session_execution_home import ManagedSessionTransport
-from zerg.session_execution_home import SessionExecutionHome
 from zerg.utils.time import normalize_utc
 
 logger = logging.getLogger(__name__)
@@ -58,6 +58,13 @@ _MANAGED_LOCAL_RUNTIME_PHASE_SOURCES = frozenset(
     }
 )
 _MANAGED_LOCAL_ACTIVE_HOOK_PHASES = frozenset({"thinking", "running"})
+
+
+def _is_managed_local_session(db: Session, session: AgentSession) -> bool:
+    capabilities = project_session_capabilities(db, session_id=session.id)
+    return bool(capabilities.live_control_available or capabilities.host_reattach_available)
+
+
 _MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS = {
     "idle": MANAGED_LOCAL_CONTROL_STATUS_COMPLETED,
     "needs_user": MANAGED_LOCAL_CONTROL_STATUS_NEEDS_USER,
@@ -554,7 +561,7 @@ async def interrupt_managed_local_session(
     has confirmed the turn stopped.
     """
 
-    if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
+    if not _is_managed_local_session(db, session):
         return ManagedLocalInterruptResult(ok=False, error="Session is not managed_local")
     transport_error = _managed_control_transport_error(
         session,
@@ -610,7 +617,7 @@ async def send_text_to_managed_local_session(
 ) -> ManagedLocalSendResult:
     """Send text into a managed-local session through Machine Agent control."""
 
-    if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
+    if not _is_managed_local_session(db, session):
         return ManagedLocalSendResult(ok=False, error="Session is not managed_local")
     transport_error = _managed_control_transport_error(
         session,
@@ -620,7 +627,8 @@ async def send_text_to_managed_local_session(
     if transport_error is not None:
         return ManagedLocalSendResult(ok=False, error=transport_error)
 
-    transport = str(getattr(session, "managed_transport", "") or "").strip()
+    capabilities = project_session_capabilities(db, session_id=session.id)
+    transport = capabilities.managed_transport.value if capabilities.managed_transport is not None else ""
     effective_verify = bool(verify_turn_started)
 
     baseline_event_id = get_managed_local_latest_event_id(db=db, session_id=session.id)
@@ -737,7 +745,7 @@ async def steer_text_to_managed_local_session(
     structured 409.
     """
 
-    if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
+    if not _is_managed_local_session(db, session):
         return ManagedLocalSendResult(ok=False, error="Session is not managed_local")
     transport_error = _managed_control_transport_error(
         session,
@@ -813,7 +821,7 @@ async def answer_pause_request_on_managed_local_session(
 ) -> ManagedLocalSendResult:
     """Send a provider-native answer for a held structured pause request."""
 
-    if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
+    if not _is_managed_local_session(db, session):
         return ManagedLocalSendResult(ok=False, error="Session is not managed_local")
     transport_error = _managed_control_transport_error(
         session,

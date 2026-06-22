@@ -9,8 +9,7 @@ the button appears but the launch rejects, or vice versa.
 
 Key identity fact: the provider resume id comes from the
 ``provider_session_id`` thread alias (the real provider identity ingested from
-transcript metadata), NOT ``AgentSession.provider_session_id`` (a compatibility
-shim that just returns ``str(session.id)``).
+transcript metadata), never the Longhouse session UUID.
 
 Adoption modes:
   - ``managed_resume``: the session was already managed by Longhouse (proven by a
@@ -33,6 +32,7 @@ from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
 from zerg.services.agents.kernel_capabilities import thread_ever_had_managed_control
 from zerg.services.managed_provider_contracts import continue_supported_providers
+from zerg.services.session_kernel_projection import is_synthetic_provider_session_id
 
 AdoptionMode = Literal["managed_resume", "adopt_unmanaged"]
 
@@ -131,18 +131,20 @@ def resolve_native_continue_target(db: Session, session: AgentSession) -> Native
         return None
 
     provider_alias = _latest_alias(db, thread=thread, provider=session.provider, alias_kind="provider_session_id")
+    if is_synthetic_provider_session_id(session, provider_alias):
+        provider_alias = ""
 
     if provider == "claude":
         # Managed claude: control-acquisition connection proves Longhouse owned
-        # the session. Resume id is the provider alias when present (real
-        # provider identity), else the longhouse id (legacy managed launch pinned
-        # `claude --session-id <session.id>` without recording an alias).
+        # the session. Resume id must be a real provider alias; Longhouse ids are
+        # not provider-native resume ids.
         if thread_ever_had_managed_control(db, thread_id=thread.id):
+            if not provider_alias:
+                return None
             alias_source = _latest_alias(db, thread=thread, provider=session.provider, alias_kind="source_path")
-            resume_id = provider_alias or str(session.id)
             return NativeContinueTargetResolution(
                 thread=thread,
-                provider_resume_id=resume_id,
+                provider_resume_id=provider_alias,
                 source_path=alias_source or None,
                 adoption_mode="managed_resume",
             )

@@ -136,6 +136,40 @@ def test_launch_managed_local_from_api_uses_this_device_endpoint(monkeypatch, tm
     ]
 
 
+def test_launch_managed_local_from_api_preserves_missing_provider_session_id(monkeypatch, tmp_path):
+    fake_client = _FakeClient(
+        response=_FakeResponse(
+            status_code=200,
+            json_data={
+                "session_id": "session-123",
+                "provider_session_id": None,
+                "attach_command": "",
+                "source_runner_name": "work-laptop",
+                "managed_transport": "claude_channel_bridge",
+            },
+        )
+    )
+
+    monkeypatch.setattr(claude_cli, "_infer_git_context", lambda cwd: (None, None))
+    monkeypatch.setattr(claude_cli.httpx, "Client", lambda timeout: fake_client)
+
+    result = claude_cli._launch_managed_local_from_api(
+        url="https://longhouse.test",
+        token="zdt_test_token",
+        cwd=tmp_path,
+        project=None,
+        loop_mode=SessionLoopMode.ASSIST,
+        name=None,
+        machine_name="work-laptop",
+        native_claude_channels_available=True,
+        claude_launch_env={},
+    )
+
+    assert result.session_id == "session-123"
+    assert result.provider_session_id is None
+    assert result.attach_command == ""
+
+
 def test_launch_managed_local_from_api_timeout_says_no_provider_started(monkeypatch, tmp_path, capsys):
     class TimeoutClient:
         def __enter__(self):
@@ -390,6 +424,53 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
     assert open_calls == ["https://longhouse.test/timeline/session-123"]
     assert list_managed_session_contracts(tmp_path / ".longhouse") == []
     assert not (provider_home / "managed-local" / "contracts").exists()
+
+
+def test_claude_command_refuses_native_attach_without_provider_session_id(monkeypatch, tmp_path):
+    runner = CliRunner()
+    native_launch_calls: list[tuple[str, str | None]] = []
+    provider_home = tmp_path / ".claude"
+
+    monkeypatch.setattr(
+        claude_cli,
+        "_load_api_credentials",
+        lambda **_kwargs: ("https://longhouse.test", "zdt_test_token"),
+    )
+    monkeypatch.setattr(claude_cli, "_detect_native_claude_channels_available", lambda: (True, "ok"))
+    monkeypatch.setattr(claude_cli, "_ensure_managed_launch_preflight", lambda **_kwargs: None)
+    monkeypatch.setattr(claude_cli, "get_machine_name_label", lambda: "work-laptop")
+    monkeypatch.setattr(claude_cli, "_collect_claude_launch_env", lambda: {})
+    monkeypatch.setattr(claude_cli, "_ensure_native_claude_prereqs", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        claude_cli,
+        "_launch_managed_local_from_api",
+        lambda **_kwargs: claude_cli.ManagedLocalLaunchResponse(
+            session_id="session-123",
+            provider_session_id=None,
+            attach_command="",
+            source_runner_name="work-laptop",
+            managed_transport="claude_channel_bridge",
+        ),
+    )
+    monkeypatch.setattr(claude_cli, "_interactive_stdio", lambda: True)
+    monkeypatch.setattr(
+        claude_cli,
+        "_run_native_claude_tui",
+        lambda *, session_id, provider_session_id, **_kwargs: native_launch_calls.append(
+            (session_id, provider_session_id)
+        )
+        or 0,
+    )
+
+    result = runner.invoke(
+        app,
+        ["claude", "--cwd", str(tmp_path), "--config-dir", str(provider_home)],
+    )
+
+    assert result.exit_code == claude_cli.EXIT_SETUP_FAILED
+    assert "provider reports a real session id" in result.output
+    assert native_launch_calls == []
+    assert list_managed_session_contracts(tmp_path / ".longhouse") == []
 
 
 def test_claude_no_attach_does_not_record_unlaunched_provider_contract(monkeypatch, tmp_path):

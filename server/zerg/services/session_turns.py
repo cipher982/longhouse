@@ -27,6 +27,7 @@ from zerg.models.agents import SessionTurn
 from zerg.services.agent_heartbeat_health import DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS
 from zerg.services.agent_heartbeat_health import MachineTransportHealthSummary
 from zerg.services.agent_heartbeat_health import load_machine_transport_health_map
+from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.provisional_events import durable_transcript_event_predicate
 from zerg.services.session_observations import OBS_KIND_RUNTIME_SIGNAL
@@ -249,7 +250,7 @@ def materialize_managed_transcript_turns(
     incremental: bool = False,
 ) -> int:
     session = db.query(AgentSession).filter(AgentSession.id == session_id).one_or_none()
-    if session is None or not str(getattr(session, "managed_transport", "") or "").strip():
+    if session is None or project_session_capabilities(db, session_id=session_id).managed_transport is None:
         return 0
 
     session_last_activity = normalize_utc(getattr(session, "last_activity_at", None)) or normalize_utc(getattr(session, "started_at", None))
@@ -366,7 +367,7 @@ def materialize_pending_managed_transcript_turn(
     """
 
     session = db.query(AgentSession).filter(AgentSession.id == session_id).one_or_none()
-    if session is None or not str(getattr(session, "managed_transport", "") or "").strip():
+    if session is None or project_session_capabilities(db, session_id=session_id).managed_transport is None:
         return False
 
     existing_pending = (

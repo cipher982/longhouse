@@ -54,9 +54,7 @@ def _seed_managed_codex_session(db, *, started_at: datetime) -> AgentSession:
         cwd="/tmp/project",
         started_at=started_at,
         last_activity_at=started_at,
-        execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
-        managed_transport="codex_app_server",
-    )
+                    )
     db.add(session)
     db.commit()
     db.refresh(session)

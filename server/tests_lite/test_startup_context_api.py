@@ -57,17 +57,13 @@ def _seed_session(
         git_branch="main",
         started_at=started_at,
         last_activity_at=last_activity_at,
-        provider_session_id=str(session_id),
-        thread_root_session_id=root_id,
-        user_messages=user_messages,
+                        user_messages=user_messages,
         assistant_messages=1,
         tool_calls=0,
         summary=summary,
         summary_title=summary_title,
-        is_sidechain=is_sidechain,
-        user_state=user_state,
-        is_writable_head=is_writable_head,
-    )
+                user_state=user_state,
+            )
     db.add(session)
     db.commit()
     db.refresh(session)

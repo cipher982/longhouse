@@ -18,6 +18,7 @@ use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message;
+use uuid::Uuid;
 
 use crate::build_identity;
 use crate::codex_bridge::{
@@ -886,10 +887,8 @@ async fn execute_command(
             let resume_target = payload_resume_target(&payload)?;
 
             if provider == "claude" {
-                // Claude resumes by id: the managed launch pinned
-                // `claude --session-id <longhouse-uuid>`, so the resume target's
-                // thread_id is that same id. No transcript path is needed
-                // (unlike codex) — `claude --resume <id>` reads the local store.
+                // Claude resumes by provider id. No transcript path is needed
+                // (unlike codex) because `claude --resume <id>` reads the local store.
                 // Preflight (claude-scoped on purpose): if the server passed a
                 // transcript path (the adopt-unmanaged continue case), fail
                 // honestly with transcript_not_found when it's gone, instead of a
@@ -1719,14 +1718,15 @@ fn normalize_provider_version(raw: &str) -> Option<String> {
 /// session. Pure + side-effect free so the resume wiring is unit-testable.
 ///
 /// On resume the provider session id is the id claude should re-open
-/// (`claude --resume <id>`); on a fresh launch it mirrors the longhouse id.
+/// (`claude --resume <id>`); on a fresh launch it is a distinct id that Claude
+/// will own via `claude --session-id <id>`.
 fn claude_channel_launch_args(
     session_id: &str,
     cwd: &Path,
     api_url: &str,
-    resume_provider_session_id: Option<&str>,
+    provider_session_id: &str,
+    resume: bool,
 ) -> Vec<String> {
-    let provider_session_id = resume_provider_session_id.unwrap_or(session_id);
     let mut args = vec![
         "claude-channel".to_string(),
         "launch".to_string(),
@@ -1741,7 +1741,7 @@ fn claude_channel_launch_args(
         "--wait-ready-secs".to_string(),
         LAUNCH_START_TIMEOUT_SECS.to_string(),
     ];
-    if resume_provider_session_id.is_some() {
+    if resume {
         args.push("--resume".to_string());
     }
     args
@@ -1754,14 +1754,14 @@ async fn launch_claude_channel_session(
     api_token: String,
     resume_provider_session_id: Option<String>,
 ) -> std::result::Result<Value, CommandError> {
-    let provider_session_id = resume_provider_session_id
-        .clone()
-        .unwrap_or_else(|| session_id.clone());
+    let resume = resume_provider_session_id.is_some();
+    let provider_session_id = resume_provider_session_id.unwrap_or_else(|| Uuid::new_v4().to_string());
     let args = claude_channel_launch_args(
         &session_id,
         &cwd,
         &api_url,
-        resume_provider_session_id.as_deref(),
+        &provider_session_id,
+        resume,
     );
     let output = run_longhouse_command(
         args,
@@ -1854,8 +1854,10 @@ async fn launch_opencode_server_session(
         "transport": "opencode_server_bridge",
         "provider_session_id": payload
             .get("provider_session_id")
-            .and_then(Value::as_str)
-            .unwrap_or(&session_id),
+            .and_then(Value::as_str),
+        "thread_id": payload
+            .get("provider_session_id")
+            .and_then(Value::as_str),
         "server_url": payload.get("server_url").cloned().unwrap_or(Value::Null),
         "pid": payload.get("pid").cloned().unwrap_or(Value::Null),
         "log_path": payload.get("log_path").cloned().unwrap_or(Value::Null),
@@ -2250,16 +2252,17 @@ mod tests {
             "sess-123",
             Path::new("/Users/me/git/zeta"),
             "https://example.test",
-            None,
+            "provider-456",
+            false,
         );
-        // Fresh launch pins the provider session id to the longhouse id and
+        // Fresh launch uses a provider id distinct from the Longhouse id and
         // does NOT pass --resume.
         assert!(!args.iter().any(|a| a == "--resume"));
         let provider_idx = args
             .iter()
             .position(|a| a == "--provider-session-id")
             .unwrap();
-        assert_eq!(args[provider_idx + 1], "sess-123");
+        assert_eq!(args[provider_idx + 1], "provider-456");
     }
 
     #[test]
@@ -2271,14 +2274,15 @@ mod tests {
             "sess-123",
             Path::new("/Users/me/git/zeta"),
             "https://example.test",
-            Some("sess-123"),
+            "provider-456",
+            true,
         );
         assert!(args.iter().any(|a| a == "--resume"));
         let provider_idx = args
             .iter()
             .position(|a| a == "--provider-session-id")
             .unwrap();
-        assert_eq!(args[provider_idx + 1], "sess-123");
+        assert_eq!(args[provider_idx + 1], "provider-456");
         // --session-id is always the longhouse id.
         let session_idx = args.iter().position(|a| a == "--session-id").unwrap();
         assert_eq!(args[session_idx + 1], "sess-123");

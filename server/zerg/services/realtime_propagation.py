@@ -24,6 +24,7 @@ from zerg.schemas.observability import RealtimePropagationSessionReportResponse
 from zerg.schemas.observability import RealtimePropagationSessionResponse
 from zerg.schemas.observability import RealtimePropagationShipTraceResponse
 from zerg.schemas.observability import RealtimePropagationStageResponse
+from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.client_render_observations import ClientRenderObservation
 from zerg.services.client_render_observations import list_client_render_observations
 from zerg.services.session_observations import OBS_KIND_PROVIDER_EVENT
@@ -146,6 +147,7 @@ def build_realtime_propagation_session_report(
     ]
 
     gaps = _build_report_gaps(event_reports)
+    capabilities = project_session_capabilities(db, session_id=session.id)
     return RealtimePropagationSessionReportResponse(
         generated_at=utc_now(),
         session=RealtimePropagationSessionResponse(
@@ -154,8 +156,8 @@ def build_realtime_propagation_session_report(
             project=session.project,
             device_id=session.device_id,
             device_name=session.device_name,
-            managed_transport=session.managed_transport,
-            execution_home=session.execution_home,
+            managed_transport=(capabilities.managed_transport.value if capabilities.managed_transport else None),
+            execution_home=capabilities.execution_home.value,
             started_at=session.started_at,
             last_activity_at=session.last_activity_at,
         ),
@@ -300,11 +302,7 @@ def _build_event_report(
         source_offset=event.source_offset,
         event_uuid=event.event_uuid,
         event_origin=event.event_origin,
-        provider_observation=(
-            _build_observation_ref(provider_observation.row)
-            if provider_observation is not None
-            else None
-        ),
+        provider_observation=(_build_observation_ref(provider_observation.row) if provider_observation is not None else None),
         ship_trace=ship_trace_response,
         server_fanout=_build_server_fanout_response(server_fanout) if server_fanout is not None else None,
         client_renders=render_responses,
@@ -312,9 +310,7 @@ def _build_event_report(
         total_provider_to_first_render_ms=total_provider_to_first_render_ms,
         measured_total_ms=measured_total_ms,
         unaccounted_ms=unaccounted_ms,
-        client_clock_skew_ms=(
-            _int_or_none(first_render.observation.payload.get("clock_skew_ms")) if first_render is not None else None
-        ),
+        client_clock_skew_ms=(_int_or_none(first_render.observation.payload.get("clock_skew_ms")) if first_render is not None else None),
         bottleneck=bottleneck,
         stages=stages,
         gaps=gaps,
@@ -328,10 +324,7 @@ def _match_provider_observation(
     candidates: list[tuple[int, datetime, int, _ObservationPayload]] = []
     for item in observations:
         payload = item.payload
-        if event.event_uuid and (
-            payload.get("event_uuid") == event.event_uuid
-            or item.row.source_cursor == event.event_uuid
-        ):
+        if event.event_uuid and (payload.get("event_uuid") == event.event_uuid or item.row.source_cursor == event.event_uuid):
             candidates.append((0, _sort_dt(item.row.observed_at), int(item.row.id), item))
             continue
         if event.source_offset is not None and item.row.source_offset == event.source_offset:
@@ -453,9 +446,7 @@ def _build_stages(
     )
     client_rendered = normalize_utc(first_render.observation.row.observed_at) if first_render else None
     clock_skew_ms = _int_or_none(first_render.observation.payload.get("clock_skew_ms")) if first_render else None
-    render_note = (
-        "Includes server fanout, client receive, API refresh, and render until those probes are split."
-    )
+    render_note = "Includes server fanout, client receive, API refresh, and render until those probes are split."
     if clock_skew_ms not in (None, 0):
         render_note = f"{render_note} Client render time is corrected by clock_skew_ms={clock_skew_ms}."
 
@@ -561,9 +552,7 @@ def _stage(
     note: str | None = None,
 ) -> RealtimePropagationStageResponse:
     duration_ms = _duration_ms(started_at, ended_at)
-    resolved_confidence: Literal["observed", "derived", "missing"] = (
-        confidence if duration_ms is not None else "missing"
-    )
+    resolved_confidence: Literal["observed", "derived", "missing"] = confidence if duration_ms is not None else "missing"
     resolved_note = note
     if duration_ms is not None and duration_ms < 0:
         duration_ms = 0

@@ -48,6 +48,7 @@ from zerg.services.session_inputs import INPUT_STATUS_DELIVERING
 from zerg.services.session_inputs import INPUT_STATUS_FAILED
 from zerg.services.session_inputs import INPUT_STATUS_QUEUED
 from zerg.services.session_inputs import create_session_input
+from zerg.services.session_kernel_projection import project_session_control_fields
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
 
@@ -144,11 +145,6 @@ def _seed_live_session(session_local):
         )
         session = store.get_session(session_id)
         assert session is not None
-        session.execution_home = "managed_local"
-        session.managed_transport = "claude_channel_bridge"
-        session.source_runner_id = 1
-        session.source_runner_name = "cinder"
-        session.managed_session_name = "lh-input"
         seed_managed_kernel_rows(db, session, control_plane="claude_channel_bridge")
         runner = Runner(
             id=1,
@@ -273,10 +269,7 @@ def _seed_machine_control_session(
     with session_local() as db:
         session = db.query(AgentSession).filter_by(id=session_id).one()
         session.provider = provider
-        session.managed_transport = managed_transport or control_plane
         session.device_id = device_id
-        session.source_runner_id = None
-        session.source_runner_name = None
         db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).delete(
             synchronize_session=False
         )
@@ -527,7 +520,7 @@ def test_antigravity_auto_input_routes_through_machine_control(monkeypatch, tmp_
 
         with session_local() as db:
             session = db.query(AgentSession).filter_by(id=session_id).one()
-            assert session.source_runner_id is None
+            assert project_session_control_fields(db, session).source_runner_id is None
             row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
             assert row.status == INPUT_STATUS_DELIVERED
             assert row.client_request_id == "agy-send-1"
@@ -596,7 +589,7 @@ def _assert_provider_auto_input_routes_through_machine_control(
 
         with session_local() as db:
             session = db.query(AgentSession).filter_by(id=session_id).one()
-            assert session.source_runner_id is None
+            assert project_session_control_fields(db, session).source_runner_id is None
             row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
             assert row.status == INPUT_STATUS_DELIVERED
             assert row.client_request_id == f"{provider}-send-1"
@@ -1437,7 +1430,7 @@ def test_codex_steer_intent_routes_through_machine_control(monkeypatch, tmp_path
 
         with session_local() as db:
             session = db.query(AgentSession).filter_by(id=session_id).one()
-            assert session.source_runner_id is None
+            assert project_session_control_fields(db, session).source_runner_id is None
             row = db.query(SessionInput).filter(SessionInput.session_id == session_id).one()
             assert row.status == INPUT_STATUS_DELIVERED
             assert row.intent == "steer"

@@ -12,7 +12,6 @@ from zerg.models.agents import AgentSession
 from zerg.services.machine_control_channel import get_machine_control_channel_registry
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import machine_control_capability_for_command
-from zerg.session_execution_home import SessionExecutionHome
 
 MANAGED_CONTROL_COMMAND_INTERRUPT = "session.interrupt"
 MANAGED_CONTROL_COMMAND_SEND_TEXT = "session.send_text"
@@ -46,8 +45,15 @@ def _session_uses_engine_control(
         return False
     provider = str(getattr(session, "provider", "") or "").strip().lower()
     contract = contract_for_provider(provider)
-    transport = str(getattr(session, "managed_transport", "") or "").strip()
-    if contract is not None and transport and transport != contract.managed_transport.value:
+    if contract is None:
+        return False
+    # Minimal non-ORM fixtures may still provide a transport for dispatcher
+    # unit tests. Real AgentSession rows derive transport from the provider
+    # contract and machine-control capability.
+    transport = ""
+    if not isinstance(session, AgentSession):
+        transport = str(getattr(session, "managed_transport", "") or "").strip()
+    if transport and transport != contract.managed_transport.value:
         return False
     capability = machine_control_capability_for_command(provider, command_type)
     device_id = _session_device_id(session)
@@ -73,8 +79,6 @@ def select_managed_control_transport(
     """
 
     if session is None:
-        return None
-    if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
         return None
     if _session_uses_engine_control(session, owner_id=owner_id, command_type=command_type):
         return MANAGED_CONTROL_TRANSPORT_ENGINE_CHANNEL

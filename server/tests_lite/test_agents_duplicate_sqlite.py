@@ -407,18 +407,10 @@ def test_duplicate_ingest_replaces_managed_local_placeholder_provider_session_id
             cwd="/tmp/zerg",
             started_at=base_time,
             ended_at=base_time,
-            provider_session_id=str(session_id),
-            thread_root_session_id=session_id,
-            continuation_kind="local",
-            origin_label="cinder",
-            execution_home="managed_local",
-            managed_transport=managed_transport,
-            user_messages=0,
+                                                                                    user_messages=0,
             assistant_messages=0,
             tool_calls=0,
-            is_writable_head=1,
-            is_sidechain=0,
-        )
+                                )
         db.add(launched)
         db.commit()
 

@@ -28,6 +28,7 @@ from zerg.models.notification_client_presence import NotificationClientPresence
 from zerg.models.notification_event import NotificationEvent
 from zerg.models.user import User
 from zerg.services.agents.kernel_capabilities import project_session_capabilities
+from zerg.services.session_kernel_projection import project_session_control_fields
 from zerg.services.session_pause_requests import PAUSE_KIND_STRUCTURED_QUESTION
 from zerg.services.session_pause_requests import load_active_pause_request_for_session
 from zerg.services.session_pause_requests import serialize_pause_request_projection
@@ -432,7 +433,7 @@ def prepare_session_attention_push(
     provider = _clean_label(getattr(session, "provider", None))
     project = _clean_label(getattr(session, "project", None))
     tool_name = _clean_label(current_tool_name)
-    title = _session_title(session)
+    title = _session_title(session, db=db)
     summary = str(getattr(session, "summary", "") or "").strip() or title
     alert_title = _attention_alert_title(state=current_state, provider=provider)
     alert_body = _attention_alert_body(state=current_state, project=project, title=title, tool_name=tool_name)
@@ -512,7 +513,7 @@ def prepare_session_needs_answer_push(
 
     provider = _clean_label(getattr(session, "provider", None))
     project = _clean_label(getattr(session, "project", None))
-    title = _session_title(session)
+    title = _session_title(session, db=db)
     summary = str(getattr(session, "summary", "") or "").strip() or title
     pause_title = _clean_label(getattr(pause_request, "title", None))
     pause_title = pause_title or _clean_label(getattr(pause_request, "summary", None))
@@ -575,7 +576,7 @@ def prepare_session_blocked_reminder_push(
     provider = _clean_label(getattr(session, "provider", None))
     project = _clean_label(getattr(session, "project", None))
     tool_name = _clean_label(current_tool_name)
-    title = _session_title(session)
+    title = _session_title(session, db=db)
     summary = str(getattr(session, "summary", "") or "").strip() or title
     collapse_id = _collapse_id("lh-attn-reminder", str(session.id))
     stamp_state = "blocked:reminded"
@@ -753,7 +754,7 @@ def prepare_long_run_waiting_push(
 
     provider = _clean_label(getattr(session, "provider", None))
     project = _clean_label(getattr(session, "project", None))
-    title = _session_title(session)
+    title = _session_title(session, db=db)
     summary = str(getattr(session, "summary", "") or "").strip() or title
     collapse_id = _collapse_id("lh-attn-longrun", str(session.id))
     state_key = f"needs_user:{execution_started_at.isoformat()}"
@@ -965,7 +966,7 @@ def prepare_session_live_activity_pushes(
     presence_state = runtime_display.state or str(current_state or getattr(session, "status", None) or "unknown")
     active_tool = runtime_display.compact_tool_label or str(current_tool_name or "").strip() or None
     display_phase = runtime_display.phase_label or _live_activity_display_phase(presence_state, active_tool)
-    title = _session_title(session)
+    title = _session_title(session, db=db)
     project = _session_project(session)
     is_attention = runtime_display.needs_attention
     state_hash = _live_activity_state_hash(
@@ -1469,10 +1470,11 @@ def _live_activity_display_phase(presence_state: str, active_tool: str | None) -
             return "Unknown"
 
 
-def _session_title(session: AgentSession) -> str:
+def _session_title(session: AgentSession, *, db: Session | None = None) -> str:
+    managed_session_name = project_session_control_fields(db, session).managed_session_name if db is not None else None
     return (
         str(getattr(session, "summary_title", "") or "").strip()
-        or str(getattr(session, "managed_session_name", "") or "").strip()
+        or str(managed_session_name or "").strip()
         or str(getattr(session, "project", "") or "").strip()
         or str(getattr(session, "provider", "") or "").strip()
         or "Longhouse session"

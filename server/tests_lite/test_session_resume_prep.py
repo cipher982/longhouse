@@ -162,6 +162,7 @@ def test_ship_session_to_zerg_uses_local_ingest_when_db_provided(tmp_path, monke
         )
 
         store = AgentsStore(db)
+        branched_from_event_id = store.get_latest_event_id(source_session_id)
         target = store.create_continuation_session(
             source_session_id,
             continuation_kind="cloud",
@@ -169,15 +170,10 @@ def test_ship_session_to_zerg_uses_local_ingest_when_db_provided(tmp_path, monke
             environment="Cloud",
             device_id="zerg-commis-cloud",
             provider_session_id=provider_session_id,
-            branched_from_event_id=store.get_latest_event_id(source_session_id),
+            branched_from_event_id=branched_from_event_id,
         )
         db.commit()
 
-        # Session-identity-kernel cleanup: continuation lineage columns were
-        # removed; thread_root/continued_from now derive (root = self.id,
-        # continued_from = None). Coerce defensively so we don't pass the
-        # literal string "None" to a UUID validator.
-        continued_from = target.continued_from_session_id
         shipped = asyncio.run(
             ship_session_to_zerg(
                 workspace_path=workspace,
@@ -185,11 +181,11 @@ def test_ship_session_to_zerg_uses_local_ingest_when_db_provided(tmp_path, monke
                 commis_id="local-ship",
                 db=db,
                 session_id=str(target.id),
-                thread_root_session_id=str(target.thread_root_session_id or target.id),
-                continued_from_session_id=str(continued_from) if continued_from else None,
+                thread_root_session_id=str(target.id),
+                continued_from_session_id=None,
                 continuation_kind="cloud",
                 origin_label="Cloud",
-                branched_from_event_id=target.branched_from_event_id,
+                branched_from_event_id=branched_from_event_id,
             )
         )
 

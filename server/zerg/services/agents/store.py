@@ -411,15 +411,19 @@ class AgentsStore:
         return False
 
     def _get_source_continuation_base(self, session: AgentSession, data: SessionIngest) -> AgentSession:
+        from zerg.services.session_kernel_projection import project_provider_session_id
+
         thread_sessions = self._get_thread_sessions(session)
         desired_kind = _infer_continuation_kind_from_ingest(data)
         desired_origin = _infer_origin_label_from_ingest(data)
-        provider_session_id = data.provider_session_id or session.provider_session_id
+        provider_session_id = data.provider_session_id or project_provider_session_id(self.db, session)
+        if not provider_session_id:
+            return session
 
         candidates = [
             item
             for item in thread_sessions
-            if (item.provider_session_id or provider_session_id) == provider_session_id
+            if project_provider_session_id(self.db, item) == provider_session_id
             and _infer_continuation_kind_from_session(item) == desired_kind
             and _infer_origin_label_from_session(item) == desired_origin
         ]
@@ -428,7 +432,6 @@ class AgentsStore:
         return max(
             candidates,
             key=lambda item: (
-                1 if item.is_writable_head else 0,
                 item.started_at,
                 item.created_at,
                 str(item.id),
@@ -679,8 +682,8 @@ class AgentsStore:
             if should_update_environment:
                 session.environment = incoming_environment
 
-        if not normalize_session_label(session.origin_label):
-            session.origin_label = _infer_origin_label_from_ingest(data)
+        if not normalize_session_label(session.device_id):
+            session.device_id = _infer_origin_label_from_ingest(data)
 
     def rebuild_fts(self) -> None:
         """Rebuild the FTS5 index when available (SQLite only)."""
@@ -1115,14 +1118,13 @@ class AgentsStore:
         target_thread: SessionThread,
         data: SessionIngest,
     ) -> None:
-        child_provider_id = data.provider_session_id or str(data.id or target_thread.session_id)
+        child_provider_id = str(data.provider_session_id or "").strip()
+        child_edge_id = child_provider_id or str(data.id or target_thread.session_id)
         parent_provider_id = str(data.parent_provider_session_id or "").strip()
-        provider_edge_id = data.subagent_tool_use_id or (
-            f"{parent_provider_id}:{child_provider_id}" if parent_provider_id else child_provider_id
-        )
+        provider_edge_id = data.subagent_tool_use_id or (f"{parent_provider_id}:{child_edge_id}" if parent_provider_id else child_edge_id)
         metadata = {
             "parent_provider_session_id": parent_provider_id or None,
-            "child_provider_session_id": child_provider_id,
+            "child_provider_session_id": child_provider_id or None,
             "subagent_id": data.subagent_id,
             "subagent_prompt_id": data.subagent_prompt_id,
             "subagent_tool_use_id": data.subagent_tool_use_id,
@@ -1696,7 +1698,7 @@ class AgentsStore:
             is_sidechain=data.is_sidechain,
             source_path=primary_source_path,
             parent_provider_session_id=data.parent_provider_session_id,
-            child_provider_session_id=data.provider_session_id or str(session_id),
+            child_provider_session_id=data.provider_session_id,
             parent_tool_call_id=data.subagent_tool_use_id,
             evidence_kind="ingest",
         )
@@ -1728,7 +1730,7 @@ class AgentsStore:
                     provider=data.provider,
                     source_path=primary_source_path,
                     child_longhouse_session_id=str(session_id),
-                    child_provider_session_id=data.provider_session_id or str(session_id),
+                    child_provider_session_id=data.provider_session_id,
                     subagent_id=data.subagent_id,
                     subagent_prompt_id=data.subagent_prompt_id,
                     subagent_tool_use_id=data.subagent_tool_use_id,
@@ -1782,6 +1784,13 @@ class AgentsStore:
         # any provider_session_id evidence as a thread alias. Reducers below
         # use observation.thread_id to stamp child rows.
         primary_thread = ensure_primary_thread(self.db, existing)
+        record_thread_alias(
+            self.db,
+            thread=primary_thread,
+            provider=existing.provider,
+            alias_kind="longhouse_session_id",
+            alias_value=str(existing.id),
+        )
         if resolved_child_thread is None and identity_projection.relink_later:
             primary_thread.branch_kind = identity_projection.branch_kind or "subagent"
             self._record_lineage_edge_for_ingest(
@@ -2270,11 +2279,11 @@ class AgentsStore:
         # it and are still standalone orphans pointing at this provider session.
         # Workflows fan out many agents concurrently with the parent, so an agent
         # file frequently lands first. Scoped to this one parent — no global scan.
-        if not data.is_sidechain:
+        if not data.is_sidechain and data.provider_session_id:
             try:
                 from zerg.services.agents.kernel_backfill import relink_orphan_subagents_for_parent
 
-                parent_provider_session_id = data.provider_session_id or str(session_id)
+                parent_provider_session_id = data.provider_session_id
                 relink_summary = relink_orphan_subagents_for_parent(
                     self.db,
                     provider=data.provider,

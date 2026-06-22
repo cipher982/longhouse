@@ -309,9 +309,11 @@ def _launch_managed_local_from_api(
         raise typer.Exit(code=EXIT_SETUP_FAILED)
 
     body = response.json()
+    raw_provider_session_id = body.get("provider_session_id")
+    provider_session_id = str(raw_provider_session_id).strip() if raw_provider_session_id else None
     return ManagedLocalLaunchResponse(
         session_id=str(body["session_id"]),
-        provider_session_id=str(body["provider_session_id"]),
+        provider_session_id=provider_session_id,
         attach_command=str(body["attach_command"]),
         source_runner_name=str(body.get("source_runner_name") or machine_name),
         managed_transport=str(body.get("managed_transport") or "") or None,
@@ -576,6 +578,12 @@ def _finalize_native_claude_launch(
     if not _interactive_stdio():
         typer.secho("Skipping native launch because stdin/stdout are not TTYs.", fg=typer.colors.YELLOW)
         return
+    if not result.provider_session_id:
+        typer.secho(
+            "Longhouse cannot attach native Claude until the provider reports a real session id.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=EXIT_SETUP_FAILED)
 
     launch_ui.progress("Launching Claude…")
     try:

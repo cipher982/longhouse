@@ -38,10 +38,6 @@ def _control_overlay_attached(session: AgentSession, control_overlay, *, now: da
     overlay_session_id = _normalized(getattr(control_overlay, "session_id", None))
     if overlay_session_id and session_id and overlay_session_id != session_id:
         return False
-    transport = _normalized(getattr(control_overlay, "transport", None))
-    session_transport = _normalized(getattr(session, "managed_transport", None))
-    if transport and session_transport and transport != session_transport:
-        return False
     control_state = _normalized(getattr(control_overlay, "control_state", None)).lower()
     lease_state = _normalized(getattr(control_overlay, "lease_state", None)).lower()
     if control_state not in {"online", "attached"} and lease_state != "attached":
@@ -67,8 +63,6 @@ def engine_session_control_attached(
     grant live control.
     """
 
-    if str(getattr(session, "launch_state", "") or "").strip() == "live":
-        return True
     runtime_source = str(getattr(runtime_overlay, "runtime_source", "") or "").strip()
     if runtime_source in _ENGINE_ATTACHED_RUNTIME_SOURCES:
         return True

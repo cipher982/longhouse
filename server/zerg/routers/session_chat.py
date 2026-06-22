@@ -78,6 +78,7 @@ from zerg.services.session_inputs import get_session_input
 from zerg.services.session_inputs import list_recent_inputs
 from zerg.services.session_inputs import mark_failed as _mark_input_failed
 from zerg.services.session_inputs import retry_failed_input
+from zerg.services.session_kernel_projection import session_lock_scope_id
 from zerg.services.session_launch_lifecycle import DEFAULT_REMOTE_CONTINUE_MESSAGE_LIFETIME
 from zerg.services.session_launch_lifecycle import DEFAULT_REMOTE_SESSION_LAUNCH_LIFETIME
 from zerg.services.session_launch_lifecycle import RemoteExecutionLifetime
@@ -315,7 +316,7 @@ async def _interrupt_live_session_response(
     """Dispatch managed-local interrupt through the single control service."""
     from zerg.services.managed_local_control import interrupt_managed_local_session
 
-    lock_scope_id = str(source_session.thread_root_session_id or source_session.id)
+    lock_scope_id = session_lock_scope_id(source_session.id)
 
     try:
         result = await interrupt_managed_local_session(
@@ -1507,7 +1508,7 @@ async def _create_session_input_response(
         )
 
     # Auto: try to send now; if the session is locked, persist as queued.
-    lock_scope_id = str(source_session.thread_root_session_id or source_session.id)
+    lock_scope_id = session_lock_scope_id(source_session.id)
     lock = await session_lock_manager.acquire(
         session_id=lock_scope_id,
         holder=delivery_request_id,

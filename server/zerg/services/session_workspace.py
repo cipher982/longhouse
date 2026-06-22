@@ -15,6 +15,7 @@ from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import project_capabilities_bulk
 from zerg.services.managed_control_state import load_managed_control_state_map
 from zerg.services.provisional_events import load_active_provisional_preview_map
+from zerg.services.session_kernel_projection import project_session_lineage_fields
 from zerg.services.session_pause_requests import load_active_pause_request_map
 from zerg.services.session_pause_requests import serialize_pause_request_projection
 from zerg.services.session_runtime import load_runtime_state_map
@@ -86,9 +87,7 @@ def build_session_workspace(
         thread_sessions = [session]
 
     with timing.span("load_head"):
-        head = next((item for item in thread_sessions if bool(item.is_writable_head)), None)
-        if head is None:
-            head = store.get_thread_head(session)
+        head = store.get_thread_head(session) or session
 
     thread_session_ids = [item.id for item in thread_sessions]
     with timing.span("load_activity"):
@@ -191,7 +190,7 @@ def build_session_workspace(
         return SessionWorkspaceResponse(
             session=session_response,
             thread=SessionThreadResponse(
-                root_session_id=str(session.thread_root_session_id or session.id),
+                root_session_id=project_session_lineage_fields(db, session).thread_root_session_id,
                 head_session_id=str(head.id if head else session.id),
                 sessions=[thread_response_map.get(str(item.id), session_response) for item in thread_sessions],
             ),
@@ -235,9 +234,7 @@ def build_session_mobile_tail(
         thread_sessions = [session]
 
     with timing.span("load_head"):
-        head = next((item for item in thread_sessions if bool(item.is_writable_head)), None)
-        if head is None:
-            head = store.get_thread_head(session)
+        head = store.get_thread_head(session) or session
 
     thread_session_ids = [item.id for item in thread_sessions]
     with timing.span("load_activity"):
@@ -462,21 +459,14 @@ def _build_projection_response(
             continue
 
         projection_items.append(
-            SessionProjectionItemResponse(
-                kind="seam",
-                session_id=str(item.session.id),
-                timestamp=item.session.started_at,
-                continued_from_session_id=(str(item.session.continued_from_session_id) if item.session.continued_from_session_id else None),
-                continuation_kind=item.session.continuation_kind,
-                origin_label=item.session.origin_label,
-                parent_origin_label=(item.parent_session.origin_label if item.parent_session else None),
-                parent_continuation_kind=(item.parent_session.continuation_kind if item.parent_session else None),
-                branched_from_event_id=item.session.branched_from_event_id,
+            _build_projection_seam_response(
+                db=store.db,
+                item=item,
             )
         )
 
     return SessionProjectionResponse(
-        root_session_id=str(session.thread_root_session_id or session.id),
+        root_session_id=project_session_lineage_fields(store.db, session).thread_root_session_id,
         focus_session_id=str(session.id),
         head_session_id=str(head.id if head else session.id),
         path_session_ids=[str(path_session.id) for path_session in projection.path_sessions],
@@ -485,4 +475,20 @@ def _build_projection_response(
         page_offset=projection.page_offset,
         branch_mode=projection.branch_mode,
         abandoned_events=projection.abandoned_events,
+    )
+
+
+def _build_projection_seam_response(*, db: Session, item) -> SessionProjectionItemResponse:
+    item_lineage = project_session_lineage_fields(db, item.session)
+    parent_lineage = project_session_lineage_fields(db, item.parent_session) if item.parent_session else None
+    return SessionProjectionItemResponse(
+        kind="seam",
+        session_id=str(item.session.id),
+        timestamp=item.session.started_at,
+        continued_from_session_id=item_lineage.continued_from_session_id,
+        continuation_kind=item_lineage.continuation_kind,
+        origin_label=item_lineage.origin_label,
+        parent_origin_label=(parent_lineage.origin_label if parent_lineage else None),
+        parent_continuation_kind=(parent_lineage.continuation_kind if parent_lineage else None),
+        branched_from_event_id=item_lineage.branched_from_event_id,
     )

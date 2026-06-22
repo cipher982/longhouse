@@ -43,8 +43,7 @@ def _seed(factory, user_state="active", provider_session_id=None):
         assistant_messages=2,
         tool_calls=0,
         user_state=user_state,
-        provider_session_id=provider_session_id,
-    )
+            )
     db.add(s)
     db.flush()
     upsert_timeline_card_from_session(db, s)

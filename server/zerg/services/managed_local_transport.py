@@ -71,8 +71,8 @@ def _build_longhouse_cli_shell_command(
 def build_managed_local_attach_command(*, session: AgentSession, db: Session | None = None) -> str | None:
     from sqlalchemy.orm import object_session
 
-    from zerg.models.agents import SessionThreadAlias
     from zerg.services.agents.kernel_capabilities import project_session_capabilities
+    from zerg.services.session_kernel_projection import project_provider_session_id
 
     try:
         session_db = db or object_session(session)
@@ -89,8 +89,10 @@ def build_managed_local_attach_command(*, session: AgentSession, db: Session | N
         control_plane = (caps.control_plane or "").strip()
         resolved_transport = managed_transport_for_control_plane(control_plane)
         transport = resolved_transport.value if resolved_transport is not None else None
-    else:
+    elif not isinstance(session, AgentSession):
         transport = getattr(session, "managed_transport", None)
+    else:
+        transport = None
 
     if transport == ManagedSessionTransport.CODEX_APP_SERVER.value:
         return _build_engine_bridge_shell_command(
@@ -124,21 +126,17 @@ def build_managed_local_attach_command(*, session: AgentSession, db: Session | N
     if transport != ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value:
         return None
 
-    # For claude channel bridge: provider_session_id from kernel alias
-    # when DB available, else from the attribute.
-    provider_session_id = None
-    if session_db is not None and getattr(session, "primary_thread_id", None) is not None:
-        alias = (
-            session_db.query(SessionThreadAlias)
-            .filter(
-                SessionThreadAlias.thread_id == session.primary_thread_id,
-                SessionThreadAlias.alias_kind == "provider_session_id",
-            )
-            .first()
-        )
-        provider_session_id = alias.alias_value if alias else None
-    if not provider_session_id:
-        provider_session_id = getattr(session, "provider_session_id", None) or session_id
+    if session_db is not None:
+        provider_session_id = project_provider_session_id(session_db, session)
+        if not provider_session_id:
+            return None
+    elif not isinstance(session, AgentSession):
+        # Minimal non-ORM fixtures can still provide the native provider id.
+        provider_session_id = getattr(session, "provider_session_id", None)
+        if not provider_session_id:
+            return None
+    else:
+        return None
 
     cwd = str(getattr(session, "cwd", "") or "").strip()
     if not cwd:

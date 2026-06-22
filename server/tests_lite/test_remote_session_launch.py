@@ -38,6 +38,7 @@ from zerg.services.agents.kernel_writes import ensure_primary_thread  # noqa: E4
 from zerg.services.agents.kernel_writes import record_run  # noqa: E402
 from zerg.services.agents.kernel_writes import record_thread_alias  # noqa: E402
 from zerg.services.agents.kernel_writes import upsert_connection_for_run  # noqa: E402
+from zerg.services.agents.kernel_capabilities import project_session_capabilities  # noqa: E402
 from zerg.services.live_session_dispatch import supports_live_text_dispatch_metadata  # noqa: E402
 from zerg.services.machine_control_channel import MachineControlChannelRegistry  # noqa: E402
 from zerg.services.machine_control_channel import MachineControlCommandResponse  # noqa: E402
@@ -50,6 +51,7 @@ from zerg.services.remote_session_launch import continue_remote_session  # noqa:
 from zerg.services.remote_session_launch import launch_remote_session  # noqa: E402
 from zerg.services.remote_session_launch import reap_orphaned_launches  # noqa: E402
 from zerg.services.remote_session_launch import reconcile_launch_from_command_result  # noqa: E402
+from zerg.services.session_kernel_projection import project_session_control_fields  # noqa: E402
 from zerg.services.session_runtime import RuntimeEventIngest  # noqa: E402
 from zerg.services.session_runtime import ingest_runtime_events  # noqa: E402
 from zerg.services.session_workspace import build_session_workspace  # noqa: E402
@@ -64,6 +66,11 @@ def _latest_attempt(db, session_id):
         .order_by(SessionLaunchAttempt.created_at.desc(), SessionLaunchAttempt.id.desc())
         .one()
     )
+
+
+def _project_control(db, session):
+    capabilities = project_session_capabilities(db, session_id=session.id)
+    return capabilities, project_session_control_fields(db, session, capabilities=capabilities)
 
 
 def test_remote_launch_derived_project_ignores_generic_workspace():
@@ -145,16 +152,10 @@ def _seed_continuable_codex_session(
         started_at=now,
         ended_at=now if ended else None,
         last_activity_at=now,
-        thread_root_session_id=sid,
-        continued_from_session_id=None,
-        continuation_kind="local",
-        origin_label=device_id,
-        user_messages=1,
+                                        user_messages=1,
         assistant_messages=1,
         tool_calls=0,
-        is_writable_head=1,
-        is_sidechain=0,
-    )
+                    )
     db.add(session)
     db.flush()
     thread = ensure_primary_thread(db, session)
@@ -197,14 +198,14 @@ def _seed_continuable_claude_session(
     db,
     *,
     session_id=None,
+    provider_thread_id: str | None = None,
     device_id: str | None = "cinder",
     ended: bool = True,
 ):
     """Seed a closed managed claude session.
 
-    Claude pins ``claude --session-id <longhouse-uuid>`` at launch, so the
-    provider session id alias equals the session id and there is NO transcript
-    source_path alias — the resume target is the id alone.
+    The provider session id is distinct from the Longhouse id and there is NO
+    transcript source_path alias — the resume target is the provider id alone.
     """
 
     now = datetime.now(timezone.utc)
@@ -222,26 +223,20 @@ def _seed_continuable_claude_session(
         started_at=now,
         ended_at=now if ended else None,
         last_activity_at=now,
-        thread_root_session_id=sid,
-        continued_from_session_id=None,
-        continuation_kind="local",
-        origin_label=device_id,
-        user_messages=1,
+                                        user_messages=1,
         assistant_messages=1,
         tool_calls=0,
-        is_writable_head=1,
-        is_sidechain=0,
-    )
+                    )
     db.add(session)
     db.flush()
     thread = ensure_primary_thread(db, session)
-    # Managed claude records its provider session id == the longhouse id.
+    provider_thread_id = provider_thread_id or f"claude-provider-{sid}"
     record_thread_alias(
         db,
         thread=thread,
         provider="claude",
         alias_kind="provider_session_id",
-        alias_value=str(sid),
+        alias_value=provider_thread_id,
     )
     # ...and a control-acquisition connection — the sound managed fingerprint.
     # The session is closed, so the connection is released (as it would be after
@@ -300,16 +295,10 @@ def _seed_imported_claude_session(
         started_at=now,
         ended_at=now if ended else None,
         last_activity_at=now,
-        thread_root_session_id=sid,
-        continued_from_session_id=None,
-        continuation_kind="local",
-        origin_label=device_id,
-        user_messages=1,
+                                        user_messages=1,
         assistant_messages=1,
         tool_calls=0,
-        is_writable_head=1,
-        is_sidechain=0,
-    )
+                    )
     db.add(session)
     db.flush()
     thread = ensure_primary_thread(db, session)
@@ -409,7 +398,9 @@ def test_happy_path_inserts_live_session(tmp_path):
         assert row.provider == "codex"
         assert row.cwd == "/Users/me/repo"
         assert row.device_id == "cinder"
-        assert row.source_runner_id is None
+        capabilities, control = _project_control(db, row)
+        assert capabilities.managed_transport.value == "codex_app_server"
+        assert control.source_runner_id is None
 
     # verify we dispatched a session.launch with the pre-allocated id
     assert len(registry.sent) == 1
@@ -951,8 +942,9 @@ def test_happy_path_inserts_live_claude_channel_session(tmp_path):
         assert row is not None
         connection = db.query(SessionConnection).one()
         assert row.provider == "claude"
-        assert row.managed_transport == "claude_channel_bridge"
-        assert row.source_runner_id is None
+        capabilities, control = _project_control(db, row)
+        assert capabilities.managed_transport.value == "claude_channel_bridge"
+        assert control.source_runner_id is None
         assert connection.control_plane == "claude_channel_bridge"
         assert connection.can_send_input == 1
         assert connection.can_interrupt == 1
@@ -992,8 +984,9 @@ def test_happy_path_inserts_live_opencode_server_bridge_session(tmp_path):
         assert row is not None
         connection = db.query(SessionConnection).one()
         assert row.provider == "opencode"
-        assert row.managed_transport == "opencode_server_bridge"
-        assert row.source_runner_id is None
+        capabilities, control = _project_control(db, row)
+        assert capabilities.managed_transport.value == "opencode_server_bridge"
+        assert control.source_runner_id is None
         assert connection.control_plane == "opencode_server_bridge"
         assert connection.can_send_input == 1
         assert connection.can_interrupt == 1
@@ -1653,8 +1646,9 @@ def test_launched_codex_workspace_exposes_live_engine_control(tmp_path):
             )
             workspace = build_session_workspace(db=db, session_id=result.session_id, owner_id=OWNER_ID)
             launched = db.get(AgentSession, result.session_id)
-            assert launched.execution_home == "managed_local"
-            assert launched.managed_transport == "codex_app_server"
+            capabilities = project_session_capabilities(db, session_id=launched.id)
+            assert capabilities.execution_home.value == "managed_local"
+            assert capabilities.managed_transport.value == "codex_app_server"
             assert supports_live_text_dispatch_metadata(launched, db=db, owner_id=OWNER_ID) is True
     finally:
         asyncio.run(global_registry.clear_for_tests())
@@ -1785,6 +1779,7 @@ def test_continue_claude_session_resumes_by_id_with_null_thread_path(tmp_path):
 
     with SessionLocal() as db:
         session_id = _seed_continuable_claude_session(db)
+        provider_id = f"claude-provider-{session_id}"
 
     with SessionLocal() as db:
         result = asyncio.run(
@@ -1806,10 +1801,9 @@ def test_continue_claude_session_resumes_by_id_with_null_thread_path(tmp_path):
     assert sent["command_type"] == "session.launch"
     assert sent["payload"]["provider"] == "claude"
     assert sent["payload"]["mode"] == "continue"
-    # Claude resumes by id; the id IS the longhouse session id and there is no
-    # transcript path.
+    # Claude resumes by provider id; there is no transcript path.
     assert sent["payload"]["resume"] == {
-        "thread_id": str(session_id),
+        "thread_id": provider_id,
         "thread_path": None,
     }
 
@@ -1986,8 +1980,8 @@ def test_continue_rejects_unmanaged_claude_without_alias_or_transcript(tmp_path)
 
 def test_adopted_control_claude_session_is_continuable(tmp_path):
     """A claude session Longhouse ADOPTED (adopted_control) is managed and
-    continuable — adopted sessions are keyed by the provider's own id which
-    becomes session.id, so `claude --resume <session.id>` is correct."""
+    continuable — the connection proves ownership and the provider alias
+    supplies the native resume id."""
 
     SessionLocal = _make_db(tmp_path)
     _seed_user_and_device(SessionLocal)
@@ -2006,20 +2000,16 @@ def test_adopted_control_claude_session_is_continuable(tmp_path):
             started_at=now,
             ended_at=now,
             last_activity_at=now,
-            thread_root_session_id=sid,
-            continuation_kind="local",
-            origin_label="cinder",
-            user_messages=1,
+                                                user_messages=1,
             assistant_messages=1,
             tool_calls=0,
-            is_writable_head=1,
-            is_sidechain=0,
-        )
+                                )
         db.add(session)
         db.flush()
         thread = ensure_primary_thread(db, session)
+        provider_id = f"claude-provider-{sid}"
         record_thread_alias(
-            db, thread=thread, provider="claude", alias_kind="provider_session_id", alias_value=str(sid)
+            db, thread=thread, provider="claude", alias_kind="provider_session_id", alias_value=provider_id
         )
         run = record_run(db, thread=thread, provider="claude", host_id="cinder", cwd="/Users/me/repo")
         upsert_connection_for_run(
@@ -2081,6 +2071,7 @@ def test_late_continue_claude_reconciliation_attaches_new_run(tmp_path):
     _register_online(registry, owner_id=OWNER_ID, device_id="cinder", supports=("claude.continue",))
     with SessionLocal() as db:
         session_id = _seed_continuable_claude_session(db)
+        provider_id = f"claude-provider-{session_id}"
         result = asyncio.run(
             continue_remote_session(
                 db,
@@ -2096,7 +2087,7 @@ def test_late_continue_claude_reconciliation_attaches_new_run(tmp_path):
     command_id = registry.sent[-1]["command_id"]
     assert command_id.startswith("continue-")
 
-    # Late success: the engine echoes thread_id == the claude session id.
+    # Late success: the engine echoes the claude provider id.
     with SessionLocal() as db:
         reconciled = reconcile_launch_from_command_result(
             db,
@@ -2106,7 +2097,7 @@ def test_late_continue_claude_reconciliation_attaches_new_run(tmp_path):
                 "ok": True,
                 "result": {
                     "session_id": str(session_id),
-                    "thread_id": str(session_id),
+                    "thread_id": provider_id,
                 },
             },
         )
@@ -2337,16 +2328,10 @@ def test_continue_rejects_missing_resume_identity(tmp_path):
                 cwd="/Users/me/repo",
                 started_at=now,
                 ended_at=now,
-                thread_root_session_id=sid,
-                continued_from_session_id=None,
-                continuation_kind="local",
-                origin_label="cinder",
-                user_messages=0,
+                                                                                user_messages=0,
                 assistant_messages=0,
                 tool_calls=0,
-                is_writable_head=1,
-                is_sidechain=0,
-            )
+                                            )
         )
         db.commit()
         with pytest.raises(RemoteLaunchError) as excinfo:
@@ -2550,16 +2535,10 @@ def test_reap_orphaned_launches_expires_stale_rows(tmp_path):
             device_id="cinder",
             cwd="/Users/me/repo",
             started_at=past,
-            thread_root_session_id=sid,
-            continued_from_session_id=None,
-            continuation_kind="local",
-            origin_label="cinder",
-            user_messages=0,
+                                                            user_messages=0,
             assistant_messages=0,
             tool_calls=0,
-            is_writable_head=1,
-            is_sidechain=0,
-        )
+                                )
         db.add(session)
         db.flush()
         db.add(
@@ -2625,16 +2604,10 @@ def test_admin_launch_debug_lists_non_live_rows(tmp_path):
                 device_id="cinder",
                 cwd="/Users/me/repo",
                 started_at=now,
-                thread_root_session_id=sid,
-                continued_from_session_id=None,
-                continuation_kind="local",
-                origin_label="cinder",
-                user_messages=0,
+                                                                                user_messages=0,
                 assistant_messages=0,
                 tool_calls=0,
-                is_writable_head=1,
-                is_sidechain=0,
-            )
+                                            )
             db.add(session)
             db.flush()
             thread = ensure_primary_thread(db, session)
@@ -2664,16 +2637,10 @@ def test_admin_launch_debug_lists_non_live_rows(tmp_path):
                 device_id="cinder",
                 cwd="/Users/me/repo",
                 started_at=now,
-                thread_root_session_id=test_sid,
-                continued_from_session_id=None,
-                continuation_kind="local",
-                origin_label="cinder",
-                user_messages=0,
+                                                                                user_messages=0,
                 assistant_messages=0,
                 tool_calls=0,
-                is_writable_head=1,
-                is_sidechain=0,
-            )
+                                            )
         )
         db.flush()
         db.add(

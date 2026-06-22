@@ -15,6 +15,9 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.services.agents import AgentsStore
+from zerg.services.agents.kernel_capabilities import project_session_capabilities
+from zerg.services.session_kernel_projection import project_provider_session_id
+from zerg.services.session_kernel_projection import project_session_lineage_fields
 from zerg.utils.time import UTCBaseModel
 
 BUNDLE_VERSION = 1
@@ -100,6 +103,8 @@ def build_session_archive_bundle(
 
     jsonl_bytes, session = result
     payload_sha, encoded_payload = _encode_jsonl_payload(jsonl_bytes)
+    lineage_projection = project_session_lineage_fields(db, session)
+    capabilities = project_session_capabilities(db, session_id=session.id)
 
     return SessionArchiveBundleResponse(
         bundle_version=BUNDLE_VERSION,
@@ -107,7 +112,7 @@ def build_session_archive_bundle(
         session=SessionArchiveSessionResponse(
             id=str(session.id),
             provider=session.provider,
-            provider_session_id=session.provider_session_id,
+            provider_session_id=project_provider_session_id(db, session),
             project=session.project,
             device_id=session.device_id,
             device_name=session.device_name,
@@ -117,18 +122,18 @@ def build_session_archive_bundle(
             started_at=session.started_at,
             ended_at=session.ended_at,
             last_activity_at=session.last_activity_at,
-            thread_root_session_id=str(session.thread_root_session_id or session.id),
-            continued_from_session_id=(str(session.continued_from_session_id) if session.continued_from_session_id is not None else None),
-            continuation_kind=session.continuation_kind,
-            origin_label=session.origin_label,
-            execution_home=session.execution_home,
-            managed_transport=session.managed_transport,
+            thread_root_session_id=lineage_projection.thread_root_session_id,
+            continued_from_session_id=lineage_projection.continued_from_session_id,
+            continuation_kind=lineage_projection.continuation_kind,
+            origin_label=lineage_projection.origin_label,
+            execution_home=capabilities.execution_home.value,
+            managed_transport=(capabilities.managed_transport.value if capabilities.managed_transport else None),
             summary_title=session.summary_title,
             summary=session.summary,
             transcript_revision=int(getattr(session, "transcript_revision", 0) or 0),
             summary_revision=int(getattr(session, "summary_revision", 0) or 0),
             embedding_revision=int(getattr(session, "embedding_revision", 0) or 0),
-            is_sidechain=bool(getattr(session, "is_sidechain", 0)),
+            is_sidechain=lineage_projection.is_sidechain,
         ),
         archive=SessionArchivePayloadResponse(
             format="jsonl",
@@ -140,7 +145,8 @@ def build_session_archive_bundle(
     )
 
 
-def build_session_archive_manifest_item(session) -> SessionArchiveManifestItemResponse:
+def build_session_archive_manifest_item(db: Session, session) -> SessionArchiveManifestItemResponse:
+    lineage_projection = project_session_lineage_fields(db, session)
     return SessionArchiveManifestItemResponse(
         id=str(session.id),
         started_at=session.started_at,
@@ -148,7 +154,7 @@ def build_session_archive_manifest_item(session) -> SessionArchiveManifestItemRe
         transcript_revision=int(getattr(session, "transcript_revision", 0) or 0),
         provider=session.provider,
         project=session.project,
-        is_sidechain=bool(getattr(session, "is_sidechain", 0)),
+        is_sidechain=lineage_projection.is_sidechain,
     )
 
 

@@ -748,15 +748,12 @@ def test_list_timeline_sessions_default_cards_open_writable_head_and_keep_thread
             project="threaded-default",
             started_at=now - timedelta(days=6),
             ended_at=now - timedelta(days=6),
-            thread_root_session_id=root.id,
-            continued_from_session_id=root.id,
-            user_messages=2,
+                                    user_messages=2,
             assistant_messages=2,
             tool_calls=1,
             summary="Writable head summary",
             summary_title="Writable head",
-            is_writable_head=1,
-        )
+                    )
         db.add(head)
         db.commit()
         db.refresh(head)
@@ -900,15 +897,12 @@ def test_list_timeline_sessions_query_path_stays_raw_session_hits(tmp_path):
             project="threaded-search",
             started_at=now - timedelta(hours=1),
             ended_at=now - timedelta(hours=1),
-            thread_root_session_id=root.id,
-            continued_from_session_id=root.id,
-            user_messages=2,
+                                    user_messages=2,
             assistant_messages=2,
             tool_calls=1,
             summary="Head session",
             summary_title="Head session",
-            is_writable_head=1,
-        )
+                    )
         db.add(head)
         db.commit()
         db.refresh(head)

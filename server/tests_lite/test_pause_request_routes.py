@@ -107,13 +107,7 @@ def _seed_codex_session(session_local):
             device_id="cinder",
             cwd="/tmp/pause-routes",
             started_at=datetime.now(timezone.utc) - timedelta(minutes=1),
-            provider_session_id=f"codex-{uuid4().hex[:8]}",
-            execution_home="managed_local",
-            managed_transport="codex_app_server",
-            source_runner_id=1,
-            source_runner_name="cinder",
-            managed_session_name="lh-pause-routes",
-        )
+                                                                                )
         db.add(session)
         seed_managed_kernel_rows(db, session, control_plane="codex_bridge")
         runner = Runner(

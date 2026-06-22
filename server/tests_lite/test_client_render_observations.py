@@ -39,8 +39,7 @@ def _seed_session(db) -> AgentSession:
         environment="test",
         project="zerg",
         device_id="cinder",
-        provider_session_id=str(uuid4()),
-        started_at=PINNED_NOW,
+                started_at=PINNED_NOW,
     )
     db.add(session)
     db.commit()

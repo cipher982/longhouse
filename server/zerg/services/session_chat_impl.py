@@ -65,6 +65,10 @@ from zerg.services.managed_local_event_polling import get_session_turn_snapshot_
 from zerg.services.managed_local_event_polling import hydrate_turn_events_from_snapshot
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_current_control import current_session_capabilities
+from zerg.services.session_kernel_projection import project_provider_session_id
+from zerg.services.session_kernel_projection import project_session_control_fields
+from zerg.services.session_kernel_projection import project_session_lineage_fields
+from zerg.services.session_kernel_projection import session_lock_scope_id
 from zerg.services.session_runtime import EXPLICIT_CLOSED_TERMINAL_STATES
 from zerg.services.session_runtime import UNVERIFIED_TERMINAL_STATES
 from zerg.services.session_turns import SESSION_TURN_ERROR_SEND_FAILED
@@ -142,7 +146,7 @@ class ManagedLocalSessionLaunchResponse(BaseModel):
 
     session_id: str
     provider: str
-    provider_session_id: str
+    provider_session_id: str | None = None
     execution_home: SessionExecutionHome
     managed_transport: ManagedSessionTransport
     loop_mode: SessionLoopMode
@@ -190,16 +194,18 @@ def _managed_local_launch_response(db: Session, result) -> ManagedLocalSessionLa
         raise RuntimeError("Managed local launch response requires a kernel-managed session")
     if capabilities.managed_transport is None:
         raise RuntimeError("Managed local launch response is missing managed transport metadata")
+    control_projection = project_session_control_fields(db, session, capabilities=capabilities)
+    provider_session_id = project_provider_session_id(db, session)
     return ManagedLocalSessionLaunchResponse(
         session_id=str(session.id),
         provider=session.provider or "claude",
-        provider_session_id=session.provider_session_id or str(session.id),
+        provider_session_id=provider_session_id,
         execution_home=capabilities.execution_home,
         managed_transport=capabilities.managed_transport,
         loop_mode=coerce_session_loop_mode(session.loop_mode),
-        source_runner_id=getattr(session, "source_runner_id", None),
-        source_runner_name=session.source_runner_name or "",
-        managed_session_name=session.managed_session_name or "",
+        source_runner_id=control_projection.source_runner_id,
+        source_runner_name=control_projection.source_runner_name or "",
+        managed_session_name=control_projection.managed_session_name or "",
         attach_command=result.attach_command,
     )
 
@@ -640,7 +646,7 @@ async def _drain_next_queued_input(
             logger.info("Drain aborted: session %s no longer supports live control", session_id)
             return
 
-        lock_scope = lock_scope_id or str(source_session.thread_root_session_id or source_session.id)
+        lock_scope = lock_scope_id or session_lock_scope_id(source_session.id)
         drain_request_id = f"drain-{uuid4().hex}"
         lock = await session_lock_manager.acquire(
             session_id=lock_scope,
@@ -1168,11 +1174,11 @@ def _lock_scope_id_for_session(db: Session, session_id: str) -> str:
     session = AgentsStore(db).get_session(session_uuid)
     if session is None:
         return session_id
-    return str(session.thread_root_session_id or session.id)
+    return session_lock_scope_id(session.id)
 
 
 async def _acquire_session_lock_or_raise(*, source_session, request_id: str) -> str:
-    lock_scope_id = str(source_session.thread_root_session_id or source_session.id)
+    lock_scope_id = session_lock_scope_id(source_session.id)
     lock = await session_lock_manager.acquire(
         session_id=lock_scope_id,
         holder=request_id,
@@ -1220,6 +1226,8 @@ async def _stream_managed_local_output(
     capabilities = current_session_capabilities(db, source_session, owner_id=owner_id)
     if not capabilities.live_control_available:
         raise RuntimeError("Managed local session is missing live runner metadata")
+    lineage_projection = project_session_lineage_fields(db, source_session)
+    control_projection = project_session_control_fields(db, source_session, capabilities=capabilities)
 
     yield SSEEvent(
         event="system",
@@ -1228,15 +1236,13 @@ async def _stream_managed_local_output(
                 "type": "session_started",
                 "session_id": str(source_session.id),
                 "source_session_id": str(source_session.id),
-                "thread_root_session_id": str(source_session.thread_root_session_id or source_session.id),
-                "continued_from_session_id": (
-                    str(source_session.continued_from_session_id) if source_session.continued_from_session_id else None
-                ),
+                "thread_root_session_id": lineage_projection.thread_root_session_id,
+                "continued_from_session_id": lineage_projection.continued_from_session_id,
                 "created_branch": False,
-                "provider_session_id": source_session.provider_session_id,
+                "provider_session_id": project_provider_session_id(db, source_session),
                 "execution_home": capabilities.execution_home.value,
-                "origin_label": source_session.origin_label,
-                "runner_name": source_session.source_runner_name,
+                "origin_label": lineage_projection.origin_label,
+                "runner_name": control_projection.source_runner_name,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
         ),

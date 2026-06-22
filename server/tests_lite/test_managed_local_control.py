@@ -37,6 +37,7 @@ from zerg.services.session_observations import record_runtime_observation
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.session_execution_home import ManagedSessionTransport
+from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 
 
 def _make_db(tmp_path):
@@ -51,6 +52,16 @@ def _managed_transport_for_provider(provider: str) -> str:
     if provider == "opencode":
         return ManagedSessionTransport.OPENCODE_SERVER_BRIDGE.value
     return ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
+
+
+def _control_plane_for_provider(provider: str) -> str:
+    if provider == "codex":
+        return "codex_bridge"
+    if provider == "opencode":
+        return "opencode_server_bridge"
+    if provider == "antigravity":
+        return "antigravity_hook_inbox"
+    return "claude_channel_bridge"
 
 
 def _seed_user_runner_and_session(db, *, provider: str = "claude"):
@@ -80,19 +91,20 @@ def _seed_user_runner_and_session(db, *, provider: str = "claude"):
         device_id=runner.name,
         cwd="/Users/example/git/zerg",
         started_at=datetime.now(timezone.utc),
-        provider_session_id=str(uuid4()),
-        thread_root_session_id=None,
-        continuation_kind="local",
-        origin_label=runner.name,
-        user_messages=0,
+                                        user_messages=0,
         assistant_messages=0,
         tool_calls=0,
-        execution_home="managed_local",
-        managed_transport=_managed_transport_for_provider(provider),
-        managed_session_name="lh-zerg-managed-local",
-        loop_mode="assist",
+                                loop_mode="assist",
     )
     db.add(session)
+    db.flush()
+    seed_managed_kernel_rows(
+        db,
+        session,
+        control_plane=_control_plane_for_provider(provider),
+        can_terminate=True,
+        can_resume=True,
+    )
     db.commit()
     db.refresh(session)
     return user, runner, session

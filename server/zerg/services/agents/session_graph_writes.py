@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import Optional
 from uuid import NAMESPACE_URL
-from uuid import UUID
 from uuid import uuid5
 
 from sqlalchemy.exc import IntegrityError
@@ -144,16 +143,6 @@ def resolve_primary_thread_by_provider_session_id(
     provider_session_id = str(provider_session_id or "").strip()
     if not provider_session_id:
         return None
-
-    try:
-        session_uuid = UUID(provider_session_id)
-    except ValueError:
-        session_uuid = None
-
-    if session_uuid is not None:
-        session = db.query(AgentSession).filter(AgentSession.id == session_uuid).one_or_none()
-        if session is not None:
-            return ensure_primary_thread(db, session)
 
     return (
         db.query(SessionThread)
