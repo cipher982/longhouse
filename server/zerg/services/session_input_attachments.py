@@ -27,6 +27,8 @@ from sqlalchemy.orm import Session
 from zerg.config import get_settings
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionInputAttachment
+from zerg.services.media_store import store_media_blob
+from zerg.services.media_store import upsert_media_ref
 from zerg.services.session_inputs import INPUT_STATUS_DELIVERED
 from zerg.services.session_inputs import INPUT_STATUS_FAILED
 
@@ -98,6 +100,13 @@ def store_attachment_blob(
     blob_path = _blob_path_for(session_input.session_id, attach_id)
     blob_path.parent.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256(data).hexdigest()
+    store_media_blob(
+        db,
+        sha256=digest,
+        mime_type=mime_type,
+        data=data,
+        first_seen_session_id=session_input.session_id,
+    )
     # Atomic write so a crash mid-write never leaves a half-blob with a row
     # claiming integrity over it.
     tmp_path = blob_path.with_suffix(".tmp")
@@ -118,6 +127,19 @@ def store_attachment_blob(
         original_byte_size=original_byte_size,
     )
     db.add(row)
+    upsert_media_ref(
+        db,
+        item={
+            "sha256": digest,
+            "session_id": session_input.session_id,
+            "source_path": f"session_input:{int(session_input.id)}",
+            "source_offset": 0,
+            "json_pointer": f"/attachments/{attach_id}",
+            "provider": "longhouse",
+            "original_kind": "attachment",
+        },
+        media_state="present",
+    )
     try:
         db.commit()
     except Exception:
@@ -144,11 +166,7 @@ def list_attachments_for_input(db: Session, session_input_id: int) -> list[Store
 
 
 def get_attachment(db: Session, attachment_id: UUID) -> SessionInputAttachment | None:
-    return (
-        db.query(SessionInputAttachment)
-        .filter(SessionInputAttachment.id == attachment_id)
-        .first()
-    )
+    return db.query(SessionInputAttachment).filter(SessionInputAttachment.id == attachment_id).first()
 
 
 def absolute_blob_path(row: SessionInputAttachment) -> Path:

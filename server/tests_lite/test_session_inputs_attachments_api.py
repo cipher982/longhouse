@@ -35,8 +35,10 @@ from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.browser_route_auth import get_current_browser_route_user
+from zerg.models.agents import MediaObject
 from zerg.models.agents import SessionInput
 from zerg.models.agents import SessionInputAttachment
+from zerg.models.agents import SessionMediaRef
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
@@ -279,6 +281,7 @@ def _stub_dispatch(monkeypatch):
 
 def _set_blob_root(monkeypatch, tmp_path):
     monkeypatch.setenv("LONGHOUSE_ATTACHMENT_BLOB_ROOT", str(tmp_path / "blobs"))
+    monkeypatch.setenv("LONGHOUSE_MEDIA_BLOB_ROOT", str(tmp_path / "media"))
 
 
 def test_multipart_upload_succeeds_on_codex(monkeypatch, tmp_path):
@@ -324,6 +327,17 @@ def test_multipart_upload_succeeds_on_codex(monkeypatch, tmp_path):
             assert len(attach.sha256) == 64
             assert ref["id"] == str(attach.id)
             assert ref["sha256"] == attach.sha256
+            media = db.query(MediaObject).filter(MediaObject.sha256 == attach.sha256).one()
+            assert media.mime_type == "image/png"
+            assert media.byte_size == len(_PNG_BYTES)
+            assert media.first_seen_session_id == session_id
+            assert (tmp_path / "media" / media.storage_path).read_bytes() == _PNG_BYTES
+            media_ref = db.query(SessionMediaRef).filter(SessionMediaRef.media_sha256 == attach.sha256).one()
+            assert media_ref.session_id == session_id
+            assert media_ref.media_state == "present"
+            assert media_ref.original_kind == "attachment"
+            assert media_ref.source_path == f"session_input:{row.id}"
+            assert media_ref.json_pointer == f"/attachments/{attach.id}"
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
         api_app_ref.dependency_overrides = {}
@@ -584,6 +598,8 @@ def test_cleanup_stale_blobs_removes_terminal_aged_rows(monkeypatch, tmp_path):
                 db.query(SessionInputAttachment).filter(SessionInputAttachment.session_input_id == input_id).count()
                 == 0
             )
+            media = db.query(MediaObject).filter(MediaObject.sha256 == attach.sha256).one()
+            assert (tmp_path / "media" / media.storage_path).exists()
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
         api_app_ref.dependency_overrides = {}
