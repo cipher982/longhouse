@@ -6552,8 +6552,6 @@ def _provider_action_coverage_table(provider: str) -> dict[str, dict[str, str]]:
         action_id: {
             "state": str(info.get("state") or "unknown"),
             "source": str(info.get("reason") or ""),
-            "reason_code": str(info.get("reason_code") or ""),
-            "product_label": str(info.get("product_label") or ""),
         }
         for action_id, info in coverage.items()
     }

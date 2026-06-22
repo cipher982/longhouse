@@ -289,6 +289,7 @@ def _action_coverage(provider: str, *, release_info: Mapping[str, Any]) -> dict[
     coverage = serialize_provider_action_coverage(derive_provider_action_coverage(provider))
     raw = release_info.get("provider_action_coverage")
     if isinstance(raw, Mapping):
+        # Release proof is the freshest evidence; local derivation keeps the full vocabulary present.
         coverage.update({str(action_id): dict(info) for action_id, info in raw.items() if isinstance(info, Mapping)})
     return coverage
 
