@@ -163,6 +163,8 @@ jobs:
         run: docker manifest inspect "${{ needs.gate.outputs.runtime_image_ref }}" >/dev/null
 
       - name: Deploy public demo runtime
+        env:
+          RUNTIME_HOST: runtime-host
         run: |
           ./scripts/ops/runtime-deploy.sh \
             longhouse-demo \
