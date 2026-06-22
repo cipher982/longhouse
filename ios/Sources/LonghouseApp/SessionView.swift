@@ -791,10 +791,10 @@ private struct SessionPauseRequestCard: View {
                     .foregroundStyle(.orange)
                     .frame(width: 18, height: 18)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Needs answer")
+                    Text(isPermissionPrompt ? "Permission" : "Needs answer")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.orange)
-                    Text(pauseRequest.title?.nonEmptyTrimmed ?? "Provider question")
+                    Text(pauseRequest.title?.nonEmptyTrimmed ?? (isPermissionPrompt ? "Tool permission" : "Provider question"))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(2)
@@ -809,7 +809,7 @@ private struct SessionPauseRequestCard: View {
                 }
             }
 
-            if pauseRequest.questions.isEmpty {
+            if pauseRequest.questions.isEmpty && !isPermissionPrompt {
                 if pauseRequest.canRespond {
                     TextField("Answer", text: $fallbackText, axis: .vertical)
                         .lineLimit(1...4)
@@ -947,7 +947,7 @@ private struct SessionPauseRequestCard: View {
                         if isResponding {
                             ProgressView().controlSize(.mini)
                         } else {
-                            Label("Send answer", systemImage: "checkmark.circle")
+                            Label(isPermissionPrompt ? "Allow" : "Send answer", systemImage: "checkmark.circle")
                         }
                     }
                     .buttonStyle(.borderedProminent)
@@ -959,7 +959,7 @@ private struct SessionPauseRequestCard: View {
                 Button {
                     Task { await cancelRequest() }
                 } label: {
-                    Label("Cancel", systemImage: "xmark.circle")
+                    Label(isPermissionPrompt ? "Deny" : "Cancel", systemImage: "xmark.circle")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -1077,7 +1077,16 @@ private struct SessionPauseRequestCard: View {
         isResponding || submitted || !pauseRequest.canRespond
     }
 
+    // Permission prompts (tool allow/deny) reuse this card but read as Allow/Deny
+    // and need no answer text.
+    private var isPermissionPrompt: Bool {
+        pauseRequest.kind == "permission_prompt"
+    }
+
     private var canSubmitAnswer: Bool {
+        if isPermissionPrompt {
+            return true
+        }
         if pauseRequest.questions.isEmpty {
             return !fallbackText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
