@@ -31,10 +31,11 @@ from uuid import uuid5
 
 from zerg.provider_cli_contract import PROVIDER_CLI_BINARY_BY_PROVIDER
 from zerg.provider_cli_contract import PROVIDER_CLI_ENV_BY_PROVIDER
-from zerg.provider_orchestration_capabilities import provider_orchestration_capabilities
 from zerg.qa.repo_root import default_repo_root
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import managed_provider_names
+from zerg.services.provider_action_coverage import derive_provider_action_coverage
+from zerg.services.provider_action_coverage import serialize_provider_action_coverage
 
 
 def _seed_managed_kernel_rows(db: Any, session: Any, *, control_plane: str) -> None:
@@ -2868,7 +2869,10 @@ class UniversalProviderAdapter:
                                 "commis_id": kwargs.get("commis_id"),
                                 "run_id": kwargs.get("run_id"),
                                 "provider": getattr(kwargs.get("session"), "provider", None),
-                                "managed_transport": _project_managed_transport(kwargs.get("db"), kwargs.get("session")),
+                                "managed_transport": _project_managed_transport(
+                                    kwargs.get("db"),
+                                    kwargs.get("session"),
+                                ),
                             }
                         )
                         return SimpleNamespace(
@@ -5061,7 +5065,7 @@ class UniversalProviderAdapter:
     @staticmethod
     def _operation_evidence_map(source: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
         """Coerce a canary/db-ingest ``operation_evidence`` blob into plain dicts."""
-        return {str(operation): dict(evidence) for operation, evidence in dict(source or {}).items() if isinstance(evidence, Mapping)}
+        return {str(operation): dict(evidence) for operation, evidence in dict(source or {}).items() if isinstance(evidence, Mapping)}  # noqa: E501
 
     def _project_ingest_and_merge(
         self,
@@ -5650,7 +5654,7 @@ def _coverage_gap_kind(
     code = str(failure_code or "")
     if "credentials" in code:
         return COVERAGE_GAP_MISSING_CREDENTIALS
-    if "runner_missing" in code or "baseline" in code or "proof_artifact_missing" in code or "proof_artifacts_required" in code:
+    if "runner_missing" in code or "baseline" in code or "proof_artifact_missing" in code or "proof_artifacts_required" in code:  # noqa: E501
         return COVERAGE_GAP_MISSING_COVERAGE
     if "canary_missing" in code:
         return COVERAGE_GAP_MISSING_LIVE_CANARY
@@ -6118,11 +6122,11 @@ def opencode_lineage_projection(package: EvidencePackage) -> dict[str, Any]:
         aliases = db.query(SessionThreadAlias).all()
         edges = db.query(SessionEdge).order_by(SessionEdge.edge_kind.asc(), SessionEdge.id.asc()).all()
         alias_values = {(row.thread_id, row.alias_kind, row.alias_value) for row in aliases}
-        child_thread = db.query(SessionThread).filter(SessionThread.session_id == parent_id, SessionThread.branch_kind == "subagent").one()
+        child_thread = db.query(SessionThread).filter(SessionThread.session_id == parent_id, SessionThread.branch_kind == "subagent").one()  # noqa: E501
         late_child_thread = (
-            db.query(SessionThread).filter(SessionThread.session_id == late_parent_id, SessionThread.branch_kind == "subagent").one()
+            db.query(SessionThread).filter(SessionThread.session_id == late_parent_id, SessionThread.branch_kind == "subagent").one()  # noqa: E501
         )
-        fork_thread = db.query(SessionThread).filter(SessionThread.session_id == fork_id, SessionThread.branch_kind == "fork").one()
+        fork_thread = db.query(SessionThread).filter(SessionThread.session_id == fork_id, SessionThread.branch_kind == "fork").one()  # noqa: E501
         child_event = db.query(AgentEvent).filter(AgentEvent.content_text == "opencode child work").one()
         orphan_event = db.query(AgentEvent).filter(AgentEvent.content_text == "opencode orphan child work").one()
         visible_total, visible_rows = store.list_timeline_thread_page(hide_autonomous=True, include_test=True)
@@ -6360,7 +6364,7 @@ def opencode_orchestration_projection(package: EvidencePackage) -> dict[str, Any
         nested_thread = thread_for_provider_session("ses_nested")
         fork_thread = thread_for_provider_session("ses_fork")
         child_events = db.query(AgentEvent).filter(AgentEvent.content_text.like("opencode%general subagent work")).all()
-        nested_event = db.query(AgentEvent).filter(AgentEvent.content_text == "opencode nested explore subagent work").one()
+        nested_event = db.query(AgentEvent).filter(AgentEvent.content_text == "opencode nested explore subagent work").one()  # noqa: E501
         sessions = db.query(AgentSession).order_by(AgentSession.started_at.asc(), AgentSession.id.asc()).all()
         threads = db.query(SessionThread).order_by(SessionThread.created_at.asc(), SessionThread.id.asc()).all()
         aliases = db.query(SessionThreadAlias).all()
@@ -6368,7 +6372,7 @@ def opencode_orchestration_projection(package: EvidencePackage) -> dict[str, Any
         graph_projection = build_session_graph_projection(db, parent_id)
         visible_total, visible_rows = store.list_timeline_thread_page(hide_autonomous=True, include_test=True)
 
-    opencode_matrix = provider_orchestration_capabilities("opencode")
+    opencode_matrix = _provider_action_coverage_table("opencode")
     capability_states = {capability: entry.get("state") for capability, entry in opencode_matrix.items()}
     snapshot = {
         "db_path": str(db_path),
@@ -6408,20 +6412,20 @@ def opencode_orchestration_projection(package: EvidencePackage) -> dict[str, Any
         "capability_states": capability_states,
     }
     snapshot_path = package.write_json("longhouse/opencode-orchestration-projection.json", snapshot)
-    edge_lookup = {(row["source_thread_id"], row["target_thread_id"], row["edge_kind"]) for row in snapshot["edge_rows"]}
+    edge_lookup = {(row["source_thread_id"], row["target_thread_id"], row["edge_kind"]) for row in snapshot["edge_rows"]}  # noqa: E501
     child_thread_id = str(child_thread.id)
     nested_thread_id = str(nested_thread.id)
     assertions = {
-        "task_child_attached_to_primary_parent": child_thread.parent_thread_id == parent_thread.id and child_thread.session_id == parent_id,
-        "task_id_resume_reused_child_thread": len(child_events) == 2 and {event.thread_id for event in child_events} == {child_thread.id},
+        "task_child_attached_to_primary_parent": child_thread.parent_thread_id == parent_thread.id and child_thread.session_id == parent_id,  # noqa: E501
+        "task_id_resume_reused_child_thread": len(child_events) == 2 and {event.thread_id for event in child_events} == {child_thread.id},  # noqa: E501
         "nested_subagent_attached_to_subagent_parent": nested_thread.parent_thread_id == child_thread.id
         and nested_event.thread_id == nested_thread.id,
-        "nested_edge_preserves_subagent_parent_thread": (child_thread_id, nested_thread_id, "task_child") in edge_lookup,
+        "nested_edge_preserves_subagent_parent_thread": (child_thread_id, nested_thread_id, "task_child") in edge_lookup,  # noqa: E501
         "fork_remains_timeline_visible": fork_thread.is_primary == 1
         and fork_thread.branch_kind == "fork"
         and str(fork_id) in snapshot["visible_timeline_session_ids"],
         "rich_capability_gaps_are_declared": capability_states.get("switch_actor") == "unknown"
-        and capability_states.get("background_task_status") == "experimental",
+        and capability_states.get("background_task_status") == "unknown",
     }
     status = STATUS_PASS if all(assertions.values()) else STATUS_FAIL
     operation_evidence = {
@@ -6429,13 +6433,13 @@ def opencode_orchestration_projection(package: EvidencePackage) -> dict[str, Any
             "status": STATUS_PASS if assertions["task_child_attached_to_primary_parent"] else STATUS_FAIL,
             "level": "hermetic",
             "canary": "universal_opencode_orchestration_projection",
-            "failure_code": None if assertions["task_child_attached_to_primary_parent"] else "opencode_subagent_projection_failed",
+            "failure_code": None if assertions["task_child_attached_to_primary_parent"] else "opencode_subagent_projection_failed",  # noqa: E501
         },
         "opencode_task_id_resume_projection": {
             "status": STATUS_PASS if assertions["task_id_resume_reused_child_thread"] else STATUS_FAIL,
             "level": "hermetic",
             "canary": "universal_opencode_orchestration_projection",
-            "failure_code": None if assertions["task_id_resume_reused_child_thread"] else "opencode_task_id_resume_projection_failed",
+            "failure_code": None if assertions["task_id_resume_reused_child_thread"] else "opencode_task_id_resume_projection_failed",  # noqa: E501
         },
         "opencode_nested_subagent_projection": {
             "status": STATUS_PASS if assertions["nested_subagent_attached_to_subagent_parent"] else STATUS_FAIL,
@@ -6453,9 +6457,9 @@ def opencode_orchestration_projection(package: EvidencePackage) -> dict[str, Any
         },
         "opencode_rich_gap_manifest": {
             "status": STATUS_PASS if assertions["rich_capability_gaps_are_declared"] else STATUS_FAIL,
-            "level": "manifest",
-            "canary": "provider_orchestration_capabilities",
-            "failure_code": None if assertions["rich_capability_gaps_are_declared"] else "opencode_rich_gap_manifest_failed",
+            "level": "derived",
+            "canary": "provider_action_coverage",
+            "failure_code": None if assertions["rich_capability_gaps_are_declared"] else "opencode_rich_gap_manifest_failed",  # noqa: E501
             "switch_actor_state": capability_states.get("switch_actor"),
             "background_task_status_state": capability_states.get("background_task_status"),
         },
@@ -6477,7 +6481,7 @@ def opencode_orchestration_projection(package: EvidencePackage) -> dict[str, Any
 
 
 def orchestration_capability_matrix(package: EvidencePackage, provider: str) -> dict[str, Any]:
-    table = provider_orchestration_capabilities(provider)
+    table = _provider_action_coverage_table(provider)
     if not table:
         payload = {
             "status": STATUS_FAIL,
@@ -6491,15 +6495,13 @@ def orchestration_capability_matrix(package: EvidencePackage, provider: str) -> 
 
     verdict_by_state = {
         "supported": "green",
-        "observed_only": "yellow",
-        "experimental": "yellow",
+        "read_only": "yellow",
         "unknown": "yellow",
         "unsupported": "red",
     }
     status_by_state = {
         "supported": STATUS_PASS,
-        "observed_only": STATUS_PASS,
-        "experimental": STATUS_PASS,
+        "read_only": STATUS_PASS,
         "unknown": STATUS_BLOCKED,
         "unsupported": STATUS_UNSUPPORTED_GAP,
     }
@@ -6520,8 +6522,8 @@ def orchestration_capability_matrix(package: EvidencePackage, provider: str) -> 
         )
         operation_evidence[key] = {
             "status": status,
-            "level": "manifest",
-            "canary": "provider_orchestration_capabilities",
+            "level": "derived",
+            "canary": "provider_action_coverage",
             "failure_code": None if status == STATUS_PASS else f"{capability}_{state}",
             "capability_state": state,
             "verdict": verdict,
@@ -6542,6 +6544,19 @@ def orchestration_capability_matrix(package: EvidencePackage, provider: str) -> 
     }
     package.write_json("assertions/orchestration_capability_matrix.json", payload)
     return payload
+
+
+def _provider_action_coverage_table(provider: str) -> dict[str, dict[str, str]]:
+    coverage = serialize_provider_action_coverage(derive_provider_action_coverage(provider))
+    return {
+        action_id: {
+            "state": str(info.get("state") or "unknown"),
+            "source": str(info.get("reason") or ""),
+            "reason_code": str(info.get("reason_code") or ""),
+            "product_label": str(info.get("product_label") or ""),
+        }
+        for action_id, info in coverage.items()
+    }
 
 
 def _event_role(row: Mapping[str, Any]) -> str:
@@ -6793,7 +6808,7 @@ def _op_entry(status: str, *, level: str, canary: str, failure_code: str | None)
 
 def _seed_operation_evidence(source: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
     """Copy a canary/artifact ``operation_evidence`` blob into plain mutable dicts."""
-    return {str(operation): dict(evidence) for operation, evidence in dict(source or {}).items() if isinstance(evidence, Mapping)}
+    return {str(operation): dict(evidence) for operation, evidence in dict(source or {}).items() if isinstance(evidence, Mapping)}  # noqa: E501
 
 
 def _uniform_operation_evidence(

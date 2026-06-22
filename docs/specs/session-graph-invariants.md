@@ -71,15 +71,13 @@ Control follows the execution owner, not the visual projection.
 - Fork visibility does not imply provider-level fork creation support.
 - Async or no-reply prompts are run/control transactions until provider proof
   shows they create steerable active turns.
-- Capability labels must distinguish supported, unsupported, unknown,
-  experimental, and observed-only behavior.
+- Capability labels must distinguish supported, read-only, unsupported, and
+  unknown behavior.
 
-The provider orchestration truth table lives at
-`server/zerg/config/provider_orchestration_capabilities.json`. It covers
-features that are broader than the managed-provider transport contract:
-transcript observation, child-session observation, fork/subagent
-classification, async prompt behavior, actor switching, and background task
-status.
+Provider action coverage is derived by
+`server/zerg/services/provider_action_coverage.py`. Humans author action
+questions and proof requirements there; support states are computed from
+managed-provider contracts and executable harness/release-proof artifacts.
 
 ## Semantic Resolver Cases
 

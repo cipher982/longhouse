@@ -13,7 +13,7 @@ from typing import cast
 LineageKind = Literal["none", "task_child", "fork", "unknown", "agent_switch", "async_prompt"]
 ProjectionKind = Literal["root", "subagent", "fork", "linked", "inline_event", "run_control"]
 Visibility = Literal["timeline", "hidden", "inline", "control"]
-CapabilityState = Literal["supported", "unsupported", "unknown", "experimental", "observed_only"]
+CapabilityState = Literal["supported", "read_only", "unsupported", "unknown"]
 _EXPLICIT_LINEAGE_KINDS: frozenset[str] = frozenset({"task_child", "fork", "unknown", "agent_switch", "async_prompt"})
 
 

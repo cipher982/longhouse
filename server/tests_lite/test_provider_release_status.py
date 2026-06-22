@@ -341,6 +341,86 @@ def test_collects_operation_evidence_from_provider_status_artifact(monkeypatch, 
     }
 
 
+def test_release_status_derives_provider_action_coverage_from_artifact_evidence(monkeypatch, tmp_path: Path) -> None:
+    status_file = tmp_path / "opencode.json"
+    status_file.write_text(
+        json.dumps(
+            {
+                "provider": "opencode",
+                "schema_version": prs.PROVIDER_STATUS_SCHEMA_VERSION,
+                "provider_version": "1.16.2",
+                "verdict": "green",
+                "generated_at": _fresh_generated_at(),
+                "operation_evidence": {
+                    "universal_opencode_subagent_projection": {"status": "pass", "level": "hermetic"},
+                    "universal_opencode_nested_subagent_projection": {"status": "pass", "level": "hermetic"},
+                    "universal_opencode_fork_projection": {"status": "pass", "level": "hermetic"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(prs.PROVIDER_RELEASE_STATUS_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(
+        prs.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="1.16.2\n", stderr=""),
+    )
+
+    status = prs.collect_provider_release_status({"opencode": {"path": "/opt/homebrew/bin/opencode"}})
+
+    coverage = status["statuses"]["opencode"]["provider_action_coverage"]
+    assert coverage["send_prompt"]["state"] == "supported"
+    assert coverage["classify_subagents"]["state"] == "supported"
+    assert coverage["fork"]["state"] == "read_only"
+    assert coverage["background_task_status"]["state"] == "unknown"
+
+
+def test_release_status_preserves_serialized_provider_action_coverage(monkeypatch, tmp_path: Path) -> None:
+    status_file = tmp_path / "opencode.json"
+    status_file.write_text(
+        json.dumps(
+            {
+                "provider": "opencode",
+                "schema_version": prs.PROVIDER_STATUS_SCHEMA_VERSION,
+                "provider_version": "1.16.2",
+                "verdict": "green",
+                "generated_at": _fresh_generated_at(),
+                "provider_action_coverage": {
+                    "background_task_status": {
+                        "id": "background_task_status",
+                        "product_label": "Background task status",
+                        "state": "unknown",
+                        "reason_code": "proof_requirement_undeclared",
+                        "reason": "No proof requirement is declared.",
+                        "proof_refs": [],
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv(prs.PROVIDER_RELEASE_STATUS_DIR_ENV, str(tmp_path))
+    monkeypatch.setattr(
+        prs.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="1.16.2\n", stderr=""),
+    )
+
+    status = prs.collect_provider_release_status({"opencode": {"path": "/opt/homebrew/bin/opencode"}})
+
+    assert status["statuses"]["opencode"]["provider_action_coverage"] == {
+        "background_task_status": {
+            "id": "background_task_status",
+            "product_label": "Background task status",
+            "state": "unknown",
+            "reason_code": "proof_requirement_undeclared",
+            "reason": "No proof requirement is declared.",
+            "proof_refs": [],
+        }
+    }
+
+
 def test_reads_provider_status_user_config_file_when_env_absent(monkeypatch, tmp_path: Path) -> None:
     artifact_dir = tmp_path / "artifacts"
     artifact_dir.mkdir()
@@ -372,7 +452,9 @@ def test_reads_provider_status_user_config_file_when_env_absent(monkeypatch, tmp
 
 
 def test_accepts_external_provider_status_url_envelope(monkeypatch) -> None:
-    monkeypatch.setenv(prs.PROVIDER_RELEASE_STATUS_URL_ENV, "https://release-status.example/provider-release-status/{provider}")
+    monkeypatch.setenv(
+        prs.PROVIDER_RELEASE_STATUS_URL_ENV, "https://release-status.example/provider-release-status/{provider}"
+    )
     monkeypatch.setattr(
         prs,
         "_read_json_url",

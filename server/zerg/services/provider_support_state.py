@@ -17,6 +17,8 @@ from collections.abc import Mapping
 from typing import Any
 
 from zerg.services.managed_provider_contracts import all_managed_provider_contracts
+from zerg.services.provider_action_coverage import derive_provider_action_coverage
+from zerg.services.provider_action_coverage import serialize_provider_action_coverage
 
 SCHEMA_VERSION = 1
 CONTRACT_OPERATIONS = (
@@ -74,6 +76,7 @@ def collect_provider_support_state(
             live_control_operations=live_control_operations,
         )
         operations = _operation_states(contract, release_info=release_info, live_proof_info=live_proof_info)
+        action_coverage = _action_coverage(provider, release_info=release_info)
         version_readiness = _version_readiness(release_info)
         proof = _proof_summary(operations, live_proof_info=live_proof_info)
         provider_state = _provider_state(
@@ -100,6 +103,10 @@ def collect_provider_support_state(
             "capabilities": {
                 "supported_operations": _operation_names_by_support(operations, supported=True),
                 "unsupported_operations": _operation_names_by_support(operations, supported=False),
+                "supported_actions": _action_names_by_state(action_coverage, "supported"),
+                "read_only_actions": _action_names_by_state(action_coverage, "read_only"),
+                "unknown_actions": _action_names_by_state(action_coverage, "unknown"),
+                "unsupported_actions": _action_names_by_state(action_coverage, "unsupported"),
                 "machine_control_supports": list(contract.machine_control_supports),
                 "machine_control_operations": list(machine_control_operations),
                 "live_control_operations": list(live_control_operations),
@@ -113,6 +120,7 @@ def collect_provider_support_state(
             },
             "proof": proof,
             "operations": operations,
+            "action_coverage": action_coverage,
             "version_readiness": version_readiness,
             "live_proof": _live_proof_summary(live_proof_info),
         }
@@ -275,6 +283,18 @@ def _evidence_state(evidence: Mapping[str, Any], *, origin: str) -> str:
 
 def _operation_names_by_support(operations: Mapping[str, Mapping[str, Any]], *, supported: bool) -> list[str]:
     return [operation for operation, info in operations.items() if bool(info.get("supported")) == supported]
+
+
+def _action_coverage(provider: str, *, release_info: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    coverage = serialize_provider_action_coverage(derive_provider_action_coverage(provider))
+    raw = release_info.get("provider_action_coverage")
+    if isinstance(raw, Mapping):
+        coverage.update({str(action_id): dict(info) for action_id, info in raw.items() if isinstance(info, Mapping)})
+    return coverage
+
+
+def _action_names_by_state(action_coverage: Mapping[str, Mapping[str, Any]], state: str) -> list[str]:
+    return [action_id for action_id, info in action_coverage.items() if str(info.get("state") or "") == state]
 
 
 def _expected_live_control_operations(expected_supports: tuple[str, ...]) -> tuple[str, ...]:

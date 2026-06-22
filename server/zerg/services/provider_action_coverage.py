@@ -66,9 +66,39 @@ OPENCODE_ORCHESTRATION_PROJECTION = "opencode_orchestration_projection"
 
 ACTION_QUESTIONS: tuple[ActionQuestion, ...] = (
     ActionQuestion(
+        id="observe_transcript",
+        product_label="Observe transcript",
+        contract_operation="transcript_binding",
+    ),
+    ActionQuestion(
+        id="observe_child_sessions",
+        product_label="Observe child sessions",
+        support_requires=(
+            ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "task_child_attached_to_primary_parent"),
+            ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "nested_subagent_attached_to_subagent_parent"),
+        ),
+    ),
+    ActionQuestion(
+        id="classify_forks",
+        product_label="Classify forks",
+        observe_requires=(ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "fork_remains_timeline_visible"),),
+    ),
+    ActionQuestion(
+        id="classify_subagents",
+        product_label="Classify subagents",
+        support_requires=(
+            ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "task_child_attached_to_primary_parent"),
+            ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "nested_subagent_attached_to_subagent_parent"),
+        ),
+    ),
+    ActionQuestion(
         id="send_prompt",
         product_label="Send prompt",
         contract_operation="send_input",
+    ),
+    ActionQuestion(
+        id="send_async_prompt",
+        product_label="Send async prompt",
     ),
     ActionQuestion(
         id="abort",
@@ -81,29 +111,29 @@ ACTION_QUESTIONS: tuple[ActionQuestion, ...] = (
         contract_operation="reattach",
     ),
     ActionQuestion(
-        id="classify_subagents",
-        product_label="Subagent threads",
-        support_requires=(
-            ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "task_child_attached_to_primary_parent"),
-            ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "nested_subagent_attached_to_subagent_parent"),
-        ),
+        id="fork",
+        product_label="Create fork",
+        observe_requires=(ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "fork_remains_timeline_visible"),),
     ),
     ActionQuestion(
-        id="fork",
-        product_label="Forks",
-        observe_requires=(ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "fork_remains_timeline_visible"),),
+        id="switch_actor",
+        product_label="Switch active actor",
+    ),
+    ActionQuestion(
+        id="background_task_status",
+        product_label="Background task status",
     ),
 )
 
 _OPERATION_EVIDENCE_PROOFS: Mapping[str, tuple[ProofRef, ...]] = {
-    "opencode_subagent_projection": (ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "task_child_attached_to_primary_parent"),),
-    "universal_opencode_subagent_projection": (ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "task_child_attached_to_primary_parent"),),
-    "opencode_nested_subagent_projection": (ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "nested_subagent_attached_to_subagent_parent"),),
+    "opencode_subagent_projection": (ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "task_child_attached_to_primary_parent"),),  # noqa: E501
+    "universal_opencode_subagent_projection": (ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "task_child_attached_to_primary_parent"),),  # noqa: E501
+    "opencode_nested_subagent_projection": (ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "nested_subagent_attached_to_subagent_parent"),),  # noqa: E501
     "universal_opencode_nested_subagent_projection": (
         ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "nested_subagent_attached_to_subagent_parent"),
     ),
     "opencode_fork_projection": (ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "fork_remains_timeline_visible"),),
-    "universal_opencode_fork_projection": (ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "fork_remains_timeline_visible"),),
+    "universal_opencode_fork_projection": (ProofRef(OPENCODE_ORCHESTRATION_PROJECTION, "fork_remains_timeline_visible"),),  # noqa: E501
 }
 
 
@@ -185,6 +215,28 @@ def derive_provider_action_coverage_from_artifact(
         provider or _artifact_provider(artifact),
         proof_results=provider_action_proof_results_from_artifact(artifact),
     )
+
+
+def serialize_provider_action_coverage(coverage: Mapping[str, ActionCoverage]) -> dict[str, dict[str, Any]]:
+    """Return a stable JSON shape for API, release, and harness consumers."""
+
+    return {
+        action_id: {
+            "id": item.id,
+            "product_label": item.product_label,
+            "state": item.state.value,
+            "reason_code": item.reason_code.value,
+            "reason": item.reason,
+            "proof_refs": [
+                {
+                    "scenario": ref.scenario,
+                    "assertion": ref.assertion,
+                }
+                for ref in item.proof_refs
+            ],
+        }
+        for action_id, item in coverage.items()
+    }
 
 
 def provider_action_proof_results_from_artifact(

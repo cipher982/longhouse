@@ -6,15 +6,31 @@ from zerg.services.provider_action_coverage import ActionCoverageState
 from zerg.services.provider_action_coverage import derive_provider_action_coverage
 from zerg.services.provider_action_coverage import derive_provider_action_coverage_from_artifact
 from zerg.services.provider_action_coverage import provider_action_proof_results_from_artifact
+from zerg.services.provider_action_coverage import serialize_provider_action_coverage
 
 
 def test_contract_operations_are_derived_from_managed_provider_contracts():
     coverage = derive_provider_action_coverage("opencode")
 
+    assert set(coverage) == {
+        "observe_transcript",
+        "observe_child_sessions",
+        "classify_forks",
+        "classify_subagents",
+        "send_prompt",
+        "send_async_prompt",
+        "abort",
+        "reattach",
+        "fork",
+        "switch_actor",
+        "background_task_status",
+    }
+    assert coverage["observe_transcript"].state == ActionCoverageState.SUPPORTED
     assert coverage["send_prompt"].state == ActionCoverageState.SUPPORTED
     assert coverage["send_prompt"].reason_code == ActionCoverageReasonCode.CONTRACT_PROVEN
     assert coverage["abort"].state == ActionCoverageState.SUPPORTED
     assert coverage["reattach"].state == ActionCoverageState.SUPPORTED
+    assert coverage["send_async_prompt"].state == ActionCoverageState.UNKNOWN
 
 
 def test_contract_false_operation_derives_unsupported_without_manual_matrix_cell():
@@ -45,6 +61,7 @@ def test_opencode_subagent_support_is_derived_from_required_harness_assertions()
     )
 
     assert coverage["classify_subagents"].state == ActionCoverageState.SUPPORTED
+    assert coverage["observe_child_sessions"].state == ActionCoverageState.SUPPORTED
     assert coverage["classify_subagents"].reason_code == ActionCoverageReasonCode.REQUIRED_PROOF_PASSED
 
 
@@ -84,6 +101,7 @@ def test_observed_fork_without_control_derives_read_only():
     )
 
     assert coverage["fork"].state == ActionCoverageState.READ_ONLY
+    assert coverage["classify_forks"].state == ActionCoverageState.READ_ONLY
     assert coverage["fork"].reason_code == ActionCoverageReasonCode.OBSERVATION_PROOF_PASSED
 
 
@@ -162,3 +180,32 @@ def test_nested_normalized_operation_evidence_is_accepted_without_file_io():
 
     assert proofs[OPENCODE_ORCHESTRATION_PROJECTION]["assertions"]["fork_remains_timeline_visible"] is True
     assert coverage["fork"].state == ActionCoverageState.READ_ONLY
+
+
+def test_serialized_coverage_has_stable_product_shape():
+    coverage = derive_provider_action_coverage(
+        "opencode",
+        proof_results={
+            OPENCODE_ORCHESTRATION_PROJECTION: {
+                "assertions": {
+                    "fork_remains_timeline_visible": True,
+                }
+            }
+        },
+    )
+
+    serialized = serialize_provider_action_coverage(coverage)
+
+    assert serialized["fork"] == {
+        "id": "fork",
+        "product_label": "Create fork",
+        "state": "read_only",
+        "reason_code": "observation_proof_passed",
+        "reason": "Observation proof passed, but no Longhouse control contract exists.",
+        "proof_refs": [
+            {
+                "scenario": OPENCODE_ORCHESTRATION_PROJECTION,
+                "assertion": "fork_remains_timeline_visible",
+            }
+        ],
+    }

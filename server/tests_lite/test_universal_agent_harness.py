@@ -1316,7 +1316,7 @@ def test_opencode_orchestration_projection_uses_real_longhouse_sqlite(tmp_path: 
     assert all(result["data"]["assertions"].values())
     assert result["data"]["operation_evidence"]["opencode_nested_subagent_projection"]["status"] == "pass"
     assert result["data"]["operation_evidence"]["opencode_task_id_resume_projection"]["status"] == "pass"
-    assert result["data"]["capability_states"]["background_task_status"] == "experimental"
+    assert result["data"]["capability_states"]["background_task_status"] == "unknown"
     assert result["data"]["capability_states"]["switch_actor"] == "unknown"
 
     evidence_root = Path(result["evidence_root"])
@@ -1351,6 +1351,7 @@ def test_orchestration_capability_matrix_emits_per_capability_evidence(tmp_path:
         assert "orchestration_observe_transcript" in operation_evidence
         assert "orchestration_background_task_status" in operation_evidence
         assert all("verdict" in item for item in operation_evidence.values())
+        assert all(item["canary"] == "provider_action_coverage" for item in operation_evidence.values())
         summary = result["data"]["summary"]
         assert summary["green"] + summary["yellow"] + summary["red"] == 11
 

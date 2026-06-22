@@ -324,10 +324,12 @@ Production Sauron leaves this token-spending lane off by default.
 ### OpenCode
 
 The universal harness scenario `orchestration_capability_matrix` emits one
-evidence row per provider orchestration capability from
-`server/zerg/config/provider_orchestration_capabilities.json`, so release triage
-can see supported, unsupported, unknown, experimental, and observed-only cells
-without collapsing them into one provider verdict.
+evidence row per provider action coverage question derived by
+`server/zerg/services/provider_action_coverage.py`, so release triage can see
+supported, read-only, unsupported, and unknown cells without collapsing them
+into one provider verdict. Humans author the questions and proof requirements;
+the states come from managed-provider contracts plus harness/release-proof
+artifacts.
 
 | Surface | Covered | Evidence | Boundary | CI | Sauron release-watch | Baseline | Actionable today |
 | --- | --- | --- | --- | --- | --- | --- | --- |

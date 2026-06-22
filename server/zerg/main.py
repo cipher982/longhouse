@@ -113,6 +113,7 @@ from zerg.routers.agents_ingest import router as agents_ingest_router
 from zerg.routers.agents_machine_presence import router as agents_machine_presence_router
 from zerg.routers.agents_machines import router as agents_machines_router
 from zerg.routers.agents_media import router as agents_media_router
+from zerg.routers.agents_providers import router as agents_providers_router
 from zerg.routers.agents_search import router as agents_search_router
 from zerg.routers.agents_sessions import router as agents_sessions_router
 from zerg.routers.agents_turns import router as agents_turns_router
@@ -302,6 +303,7 @@ api_app.include_router(agents_ingest_router)
 api_app.include_router(agents_machine_presence_router)
 api_app.include_router(agents_machines_router)
 api_app.include_router(agents_media_router)
+api_app.include_router(agents_providers_router)
 api_app.include_router(agents_search_router)
 api_app.include_router(agents_sessions_router)
 api_app.include_router(agents_turns_router)

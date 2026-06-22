@@ -4,6 +4,8 @@ from zerg.services.managed_provider_contracts import all_managed_provider_contra
 from zerg.services.provider_support_state import CONTRACT_OPERATIONS
 from zerg.services.provider_support_state import collect_provider_support_state
 
+CLAUDE_LIVE_CONTROL_OPERATIONS = ["send", "interrupt", "steer", "answer_pause", "launch", "continue"]
+
 
 def _expected_supported_operations(contract) -> list[str]:
     return [operation for operation in CONTRACT_OPERATIONS if bool(getattr(contract, operation))]
@@ -47,6 +49,8 @@ def test_support_state_provider_capability_axes_match_manifest_contracts() -> No
         capabilities = support["providers"][contract.provider]["capabilities"]
         assert capabilities["supported_operations"] == _expected_supported_operations(contract)
         assert capabilities["unsupported_operations"] == _expected_unsupported_operations(contract)
+        assert "observe_transcript" in capabilities["supported_actions"]
+        assert "switch_actor" in capabilities["unknown_actions"]
         assert capabilities["machine_control_supports"] == list(contract.machine_control_supports)
         assert capabilities["machine_control_operations"] == _expected_machine_operations(contract)
         assert capabilities["live_control_operations"] == _expected_live_operations(contract)
@@ -96,6 +100,53 @@ def test_support_state_separates_candidate_release_from_local_readiness() -> Non
     ]
     assert codex["capabilities"]["missing_live_control_operations"] == []
     assert codex["proof"]["state"] == "mixed"
+
+
+def test_support_state_uses_release_derived_action_coverage() -> None:
+    support = collect_provider_support_state(
+        provider_clis={"opencode": {"path": "/opt/homebrew/bin/opencode", "source": "PATH"}},
+        provider_release_status={
+            "statuses": {
+                "opencode": {
+                    "status": "ok",
+                    "risk": "none",
+                    "provider_action_coverage": {
+                        "classify_subagents": {
+                            "id": "classify_subagents",
+                            "product_label": "Classify subagents",
+                            "state": "supported",
+                            "reason_code": "required_proof_passed",
+                            "reason": "Required harness assertions passed.",
+                            "proof_refs": [
+                                {
+                                    "scenario": "opencode_orchestration_projection",
+                                    "assertion": "task_child_attached_to_primary_parent",
+                                }
+                            ],
+                        },
+                        "fork": {
+                            "id": "fork",
+                            "product_label": "Create fork",
+                            "state": "read_only",
+                            "reason_code": "observation_proof_passed",
+                            "reason": "Observation proof passed, but no Longhouse control contract exists.",
+                            "proof_refs": [],
+                        },
+                    },
+                }
+            }
+        },
+        control_channel={
+            "status": "connected",
+            "control_operations_by_provider": {"opencode": ["send", "interrupt", "launch"]},
+        },
+    )
+
+    opencode = support["providers"]["opencode"]
+    assert opencode["action_coverage"]["classify_subagents"]["state"] == "supported"
+    assert "classify_subagents" in opencode["capabilities"]["supported_actions"]
+    assert "send_prompt" in opencode["capabilities"]["supported_actions"]
+    assert opencode["capabilities"]["read_only_actions"] == ["fork"]
 
 
 def test_support_state_keeps_one_shot_support_out_of_live_control_readiness() -> None:
@@ -223,7 +274,7 @@ def test_support_state_applies_release_operation_evidence_demotions() -> None:
         },
         control_channel={
             "status": "connected",
-            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "answer_pause", "launch", "continue"]},
+            "control_operations_by_provider": {"claude": CLAUDE_LIVE_CONTROL_OPERATIONS},
         },
     )
 
@@ -320,7 +371,7 @@ def test_support_state_promotes_operation_proof_from_release_evidence() -> None:
         },
         control_channel={
             "status": "connected",
-            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "answer_pause", "launch", "continue"]},
+            "control_operations_by_provider": {"claude": CLAUDE_LIVE_CONTROL_OPERATIONS},
         },
     )
 
@@ -355,7 +406,7 @@ def test_support_state_promotes_matching_local_live_proof_without_release_artifa
         },
         control_channel={
             "status": "connected",
-            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "answer_pause", "launch", "continue"]},
+            "control_operations_by_provider": {"claude": CLAUDE_LIVE_CONTROL_OPERATIONS},
         },
     )
 
@@ -393,7 +444,7 @@ def test_support_state_does_not_promote_mismatched_local_live_proof() -> None:
         },
         control_channel={
             "status": "connected",
-            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "answer_pause", "launch", "continue"]},
+            "control_operations_by_provider": {"claude": CLAUDE_LIVE_CONTROL_OPERATIONS},
         },
     )
 
@@ -441,7 +492,7 @@ def test_support_state_keeps_stronger_passing_release_proof_over_local_live_proo
         },
         control_channel={
             "status": "connected",
-            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "answer_pause", "launch", "continue"]},
+            "control_operations_by_provider": {"claude": CLAUDE_LIVE_CONTROL_OPERATIONS},
         },
     )
 
@@ -563,7 +614,7 @@ def test_support_state_does_not_attach_global_live_failure_to_passing_operation(
         },
         control_channel={
             "status": "connected",
-            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "answer_pause", "launch", "continue"]},
+            "control_operations_by_provider": {"claude": CLAUDE_LIVE_CONTROL_OPERATIONS},
         },
     )
 
@@ -593,7 +644,7 @@ def test_support_state_surfaces_red_matching_local_live_proof_without_operation_
         },
         control_channel={
             "status": "connected",
-            "control_operations_by_provider": {"claude": ["send", "interrupt", "steer", "answer_pause", "launch", "continue"]},
+            "control_operations_by_provider": {"claude": CLAUDE_LIVE_CONTROL_OPERATIONS},
         },
     )
 

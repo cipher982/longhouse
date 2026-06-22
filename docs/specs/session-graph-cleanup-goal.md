@@ -73,8 +73,8 @@ Success criteria:
   task child, fork, unknown parentage, orphan relink, agent switch, async prompt.
 - OpenCode ingest uses normalized lineage evidence before choosing child/fork
   projection behavior.
-- Capability truth table records supported, unsupported, unknown, experimental,
-  and observed-only states per provider.
+- Provider action coverage records supported, read-only, unsupported, and
+  unknown states by deriving from provider contracts plus executable proof.
 - Release-watch harness emits capability-level evidence rather than one blob
   verdict per provider.
 

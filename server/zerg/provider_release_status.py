@@ -22,6 +22,8 @@ from urllib.request import Request
 from urllib.request import urlopen
 
 from zerg.services.managed_provider_contracts import managed_provider_names
+from zerg.services.provider_action_coverage import derive_provider_action_coverage_from_artifact
+from zerg.services.provider_action_coverage import serialize_provider_action_coverage
 
 PROVIDER_RELEASE_STATUS_DIR_ENV = "LONGHOUSE_PROVIDER_RELEASE_STATUS_DIR"
 PROVIDER_RELEASE_STATUS_URL_ENV = "LONGHOUSE_PROVIDER_RELEASE_STATUS_URL"
@@ -246,6 +248,27 @@ def _normalize_operation_evidence(raw: Any) -> dict[str, dict[str, Any]]:
     return evidence
 
 
+def _normalize_provider_action_coverage(provider: str, artifact: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    raw = artifact.get("provider_action_coverage")
+    if isinstance(raw, dict):
+        coverage: dict[str, dict[str, Any]] = {}
+        for action_id, raw_info in raw.items():
+            if not isinstance(action_id, str) or not action_id.strip() or not isinstance(raw_info, dict):
+                continue
+            info = {
+                key: value
+                for key, value in raw_info.items()
+                if key in {"id", "product_label", "state", "reason_code", "reason", "proof_refs"}
+            }
+            if info:
+                coverage[action_id.strip()] = info
+        if coverage:
+            return coverage
+
+    coverage = derive_provider_action_coverage_from_artifact(artifact, provider=provider)
+    return serialize_provider_action_coverage(coverage)
+
+
 def _provider_version_from_cli(path: str | None) -> tuple[str | None, str | None]:
     if not path:
         return None, "provider CLI path missing"
@@ -361,6 +384,7 @@ def _status_for_provider(provider: str, provider_cli: dict[str, Any]) -> dict[st
         "generated_at_age_seconds": generated_at_age_seconds,
         "freshness_status": freshness_status,
         "operation_evidence": _normalize_operation_evidence(artifact.get("operation_evidence")),
+        "provider_action_coverage": _normalize_provider_action_coverage(provider, artifact),
         "evidence_root": artifact.get("evidence_root"),
         "source": source,
     }
