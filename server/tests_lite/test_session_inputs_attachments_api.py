@@ -8,6 +8,7 @@ GET /agents/sessions/.../attachments/{aid}/blob path.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import os
 from datetime import datetime
@@ -16,6 +17,7 @@ from datetime import timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
@@ -558,6 +560,44 @@ def test_machine_blob_fetch_404_on_session_mismatch(monkeypatch, tmp_path):
     finally:
         asyncio.run(session_lock_manager.release(str(session_id)))
         api_app_ref.dependency_overrides = {}
+
+
+def test_attachment_store_commit_failure_rolls_back_media_rows(monkeypatch, tmp_path):
+    _set_blob_root(monkeypatch, tmp_path)
+    session_local = _make_db(tmp_path)
+    session_id, user_id = _seed_codex_session(session_local)
+
+    with session_local() as db:
+        row = create_session_input(
+            db,
+            session_id=session_id,
+            text="look at this",
+            owner_id=user_id,
+            intent="auto",
+            status="delivering",
+            client_request_id="commit-failure",
+            delivery_request_id="commit-failure-delivery",
+        )
+
+        def fail_commit():
+            raise RuntimeError("commit failed")
+
+        monkeypatch.setattr(db, "commit", fail_commit)
+        with pytest.raises(RuntimeError, match="commit failed"):
+            store_attachment_blob(
+                db,
+                session_input=row,
+                mime_type="image/png",
+                data=_PNG_BYTES,
+                original_filename="a.png",
+                original_byte_size=len(_PNG_BYTES),
+            )
+
+        digest = hashlib.sha256(_PNG_BYTES).hexdigest()
+        assert db.query(SessionInputAttachment).filter(SessionInputAttachment.session_input_id == row.id).count() == 0
+        assert db.query(MediaObject).filter(MediaObject.sha256 == digest).count() == 0
+        assert db.query(SessionMediaRef).filter(SessionMediaRef.media_sha256 == digest).count() == 0
+        assert list((tmp_path / "blobs").rglob("*.bin")) == []
 
 
 def test_cleanup_stale_blobs_removes_terminal_aged_rows(monkeypatch, tmp_path):

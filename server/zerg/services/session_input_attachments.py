@@ -106,6 +106,7 @@ def store_attachment_blob(
         mime_type=mime_type,
         data=data,
         first_seen_session_id=session_input.session_id,
+        commit=False,
     )
     # Atomic write so a crash mid-write never leaves a half-blob with a row
     # claiming integrity over it.

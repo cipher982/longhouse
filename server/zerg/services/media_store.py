@@ -229,6 +229,7 @@ def store_media_blob(
     first_seen_session_id: UUID | None = None,
     width: int | None = None,
     height: int | None = None,
+    commit: bool = True,
 ) -> StoredMediaObject:
     """Persist media bytes once and upsert their content-addressed row."""
 
@@ -252,7 +253,7 @@ def store_media_blob(
             existing.first_seen_session_id = first_seen_session_id
             changed = True
         changed = mark_media_refs_present(db, digest) or changed
-        if changed:
+        if changed and commit:
             db.commit()
             db.refresh(existing)
         return StoredMediaObject(
@@ -286,25 +287,26 @@ def store_media_blob(
     mark_media_refs_present(db, digest)
     db.add(row)
 
-    try:
-        db.commit()
-    except IntegrityError:
-        db.rollback()
-        winner = db.query(MediaObject).filter(MediaObject.sha256 == digest).first()
-        if media_row_is_present(winner):
-            return StoredMediaObject(
-                sha256=digest,
-                mime_type=winner.mime_type,
-                byte_size=int(winner.byte_size),
-                blob_path=absolute_media_path(winner),
-                created=False,
-            )
-        raise
-    except Exception:
-        db.rollback()
-        logger.warning("media store: database commit failed after writing %s", blob_path, exc_info=True)
-        raise
-    db.refresh(row)
+    if commit:
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            winner = db.query(MediaObject).filter(MediaObject.sha256 == digest).first()
+            if media_row_is_present(winner):
+                return StoredMediaObject(
+                    sha256=digest,
+                    mime_type=winner.mime_type,
+                    byte_size=int(winner.byte_size),
+                    blob_path=absolute_media_path(winner),
+                    created=False,
+                )
+            raise
+        except Exception:
+            db.rollback()
+            logger.warning("media store: database commit failed after writing %s", blob_path, exc_info=True)
+            raise
+        db.refresh(row)
 
     return StoredMediaObject(
         sha256=row.sha256,
