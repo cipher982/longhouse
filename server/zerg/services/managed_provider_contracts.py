@@ -37,6 +37,7 @@ class ManagedProviderContract:
     managed_transport: ManagedSessionTransport
     control_plane: str
     control_plane_aliases: tuple[str, ...] = ()
+    requires_longhouse_cli: bool = True
     launch_local: bool = True
     launch_remote: bool = False
     run_once: bool = False
@@ -110,6 +111,7 @@ def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderCont
         managed_transport=ManagedSessionTransport(str(item["managed_transport"])),
         control_plane=str(item["control_plane"]),
         control_plane_aliases=tuple(str(value) for value in item.get("control_plane_aliases") or ()),
+        requires_longhouse_cli=bool(item.get("requires_longhouse_cli", True)),
         launch_local=bool(item.get("launch_local", True)),
         launch_remote=bool(item.get("launch_remote", False)),
         run_once=bool(item.get("run_once", False)),
@@ -135,7 +137,22 @@ def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderCont
 _CONTRACTS: tuple[ManagedProviderContract, ...] = tuple(_contract_from_manifest_item(item) for item in managed_provider_contract_items())
 
 _BY_PROVIDER = {contract.provider: contract for contract in _CONTRACTS}
-_BY_CONTROL_PLANE = {control_plane: contract for contract in _CONTRACTS for control_plane in contract.control_planes}
+
+
+def _contracts_by_control_plane(contracts: tuple[ManagedProviderContract, ...]) -> dict[str, ManagedProviderContract]:
+    by_control_plane: dict[str, ManagedProviderContract] = {}
+    for contract in contracts:
+        for control_plane in contract.control_planes:
+            existing = by_control_plane.get(control_plane)
+            if existing is not None:
+                raise ValueError(
+                    f"managed provider control_plane {control_plane!r} is claimed by both {existing.provider} and {contract.provider}"
+                )
+            by_control_plane[control_plane] = contract
+    return by_control_plane
+
+
+_BY_CONTROL_PLANE = _contracts_by_control_plane(_CONTRACTS)
 _LEGACY_CONTROL_PLANE_PROVIDERS = {
     "opencode_process": "opencode",
     "antigravity_process": "antigravity",

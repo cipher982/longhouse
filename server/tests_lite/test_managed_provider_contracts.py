@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from zerg.managed_provider_contract_manifest import _validate_machine_control_supports
@@ -11,6 +13,7 @@ from zerg.services.managed_provider_contracts import continue_supported_provider
 from zerg.services.managed_provider_contracts import contract_for_control_plane
 from zerg.services.managed_provider_contracts import contract_for_provider
 from zerg.services.managed_provider_contracts import control_plane_for_provider
+from zerg.services.managed_provider_contracts import _contracts_by_control_plane
 from zerg.services.managed_provider_contracts import machine_control_capability_for_command
 from zerg.services.managed_provider_contracts import machine_control_launch_capability_by_provider
 from zerg.services.managed_provider_contracts import machine_control_operations_by_provider
@@ -65,6 +68,42 @@ def test_managed_provider_contract_matrix_covers_launch_scope_providers():
 def test_provider_cli_catalog_matches_managed_provider_contracts():
     assert set(PROVIDER_CLI_BINARY_BY_PROVIDER) == managed_provider_names()
     assert set(PROVIDER_CLI_ENV_BY_PROVIDER) == managed_provider_names()
+
+
+def test_provider_identity_contracts_are_manifest_backed():
+    assert {
+        contract.provider: contract.requires_longhouse_cli
+        for contract in all_managed_provider_contracts()
+    } == {
+        "codex": False,
+        "claude": True,
+        "opencode": True,
+        "antigravity": True,
+    }
+    assert sorted(
+        control_plane
+        for contract in all_managed_provider_contracts()
+        for control_plane in contract.control_planes
+    ) == sorted(
+        {
+            "codex_bridge",
+            "codex_app_server",
+            "claude_channel_bridge",
+            "opencode_server_bridge",
+            "antigravity_hook_inbox",
+        }
+    )
+
+
+def test_control_plane_index_rejects_contract_collisions():
+    codex = contract_for_provider("codex")
+    claude = contract_for_provider("claude")
+
+    assert codex is not None and claude is not None
+    duplicate_claude = replace(claude, control_plane=codex.control_plane, control_plane_aliases=())
+
+    with pytest.raises(ValueError, match="claimed by both codex and claude"):
+        _contracts_by_control_plane((codex, duplicate_claude))
 
 
 @pytest.mark.parametrize(
