@@ -98,6 +98,39 @@ def test_build_claude_channel_exec_command_uses_development_channel_flag():
     assert "LONGHOUSE_CHANNEL_CWD=/tmp/demo" in command
 
 
+def test_build_claude_channel_exec_command_defaults_to_bypass():
+    # Default (bypass) must keep --dangerously-skip-permissions and NOT engage the
+    # permission gate — this is the historical autonomous behavior.
+    command = build_claude_channel_exec_command(
+        provider_session_id="provider-123",
+        longhouse_session_id="11111111-1111-1111-1111-111111111111",
+        cwd="/tmp/demo",
+        resume=False,
+        claude_command="claude",
+    )
+    assert "--dangerously-skip-permissions" in command
+    # Bypass must explicitly force the gate OFF so an inherited env var from the
+    # parent shell cannot engage it.
+    assert "LONGHOUSE_PERMISSION_HOOK_ENABLED=0" in command
+    assert "LONGHOUSE_PERMISSION_HOOK_ENABLED=1" not in command
+
+
+def test_build_claude_channel_exec_command_remote_approve_drops_bypass_and_engages_gate():
+    from zerg.services.claude_channel_bridge import CLAUDE_PERMISSION_MODE_REMOTE_APPROVE
+
+    command = build_claude_channel_exec_command(
+        provider_session_id="provider-123",
+        longhouse_session_id="11111111-1111-1111-1111-111111111111",
+        cwd="/tmp/demo",
+        resume=False,
+        claude_command="claude",
+        permission_mode=CLAUDE_PERMISSION_MODE_REMOTE_APPROVE,
+    )
+    # Remote-approve must NOT bypass permissions, and must engage the gate.
+    assert "--dangerously-skip-permissions" not in command
+    assert "LONGHOUSE_PERMISSION_HOOK_ENABLED=1" in command
+
+
 def test_build_claude_channel_exec_command_fresh_uses_session_id_flag():
     command = build_claude_channel_exec_command(
         provider_session_id="11111111-1111-1111-1111-111111111111",

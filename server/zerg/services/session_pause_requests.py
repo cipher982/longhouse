@@ -15,10 +15,48 @@ from zerg.models.agents import SessionPauseRequest
 from zerg.utils.time import normalize_utc
 
 PAUSE_KIND_STRUCTURED_QUESTION = "structured_question"
+PAUSE_KIND_PERMISSION_PROMPT = "permission_prompt"
 PENDING_STATUS = "pending"
 TERMINAL_STATUSES = {"resolved", "rejected", "failed", "expired"}
 ACTIVE_STATUSES = {PENDING_STATUS}
 QUESTION_PAYLOAD_KEYS = ("questions", "question", "prompt", "input", "schema")
+
+# How an answered pause request is delivered back to the provider. PULL = the
+# provider polls Longhouse for the resolved row (Claude PreToolUse hook); PUSH =
+# Longhouse pushes the decision to the running provider over managed control
+# (Codex app-server, OpenCode bridge). Carried in provider_ref.reply_transport.
+REPLY_TRANSPORT_CLAUDE_PULL = "claude_pretooluse_pull"
+REPLY_TRANSPORT_MANAGED_PUSH = "managed_push"
+PULL_REPLY_TRANSPORTS = {REPLY_TRANSPORT_CLAUDE_PULL}
+
+
+def reply_transport_for_row(row: "SessionPauseRequest") -> str | None:
+    """The provider_ref.reply_transport for a pause request, if set."""
+    ref = row.provider_ref_json if isinstance(row.provider_ref_json, dict) else {}
+    value = _clean_str(ref.get("reply_transport"))
+    return value
+
+
+def _provider_ref_source(row: "SessionPauseRequest") -> str | None:
+    ref = row.provider_ref_json if isinstance(row.provider_ref_json, dict) else {}
+    return _clean_str(ref.get("source"))
+
+
+def is_pull_reply_transport(row: "SessionPauseRequest") -> bool:
+    """True when the answer is delivered by the provider polling (resolve in place).
+
+    Explicit pull transport always wins. For backward compatibility, a
+    Claude permission-gate row (kind=permission_prompt, source=claude_permission_gate)
+    written before reply_transport existed defaults to PULL — it must never be
+    pushed over managed control (there is no live process to push to). Other rows
+    (e.g. structured_question) keep their historical PUSH default.
+    """
+    transport = reply_transport_for_row(row)
+    if transport in PULL_REPLY_TRANSPORTS:
+        return True
+    if transport is None and _clean_str(getattr(row, "kind", None)) == PAUSE_KIND_PERMISSION_PROMPT:
+        return _provider_ref_source(row) == "claude_permission_gate"
+    return False
 
 
 def make_pause_request_key(

@@ -9,7 +9,6 @@ os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from typer.testing import CliRunner
-
 from zerg.cli.claude_channel import app
 
 _SESSION_ID = "11111111-1111-1111-1111-111111111111"
@@ -74,3 +73,21 @@ def test_launch_with_resume_requires_provider_session_id(monkeypatch, tmp_path):
     assert result.exit_code == 1
     assert "--provider-session-id is required with --resume" in result.output
     assert captured == {}
+
+
+def test_launch_defaults_to_bypass_no_hook_token(monkeypatch, tmp_path):
+    result, captured = _invoke_launch(monkeypatch, tmp_path, [])
+    assert result.exit_code == 0, result.output
+    assert captured["permission_mode"] == "bypass"
+    assert captured["hook_token"] is None
+
+
+def test_launch_remote_approve_threads_mode_and_hook_token(monkeypatch, tmp_path):
+    result, captured = _invoke_launch(
+        monkeypatch,
+        tmp_path,
+        ["--permission-mode", "remote_approve", "--hook-token", "zht_detached"],
+    )
+    assert result.exit_code == 0, result.output
+    assert captured["permission_mode"] == "remote_approve"
+    assert captured["hook_token"] == "zht_detached"

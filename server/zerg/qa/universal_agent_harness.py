@@ -1906,22 +1906,15 @@ class UniversalProviderAdapter:
         from zerg.database import make_engine
         from zerg.database import make_sessionmaker
         from zerg.models.agents import AgentSession
-        from zerg.services.session_pause_requests import PENDING_STATUS
-        from zerg.services.session_pause_requests import make_pause_request_key
-        from zerg.services.session_pause_requests import resolve_pause_request
-        from zerg.services.session_pause_requests import upsert_pause_request
-        from zerg.services.session_runtime import runtime_key_for_session
 
-        hook_script = default_repo_root() / "config" / "claude-hooks" / "scripts" / "permission_gate.py"
-        if not hook_script.is_file():
-            payload = {
-                "status": STATUS_FAIL,
-                "scenario": "permission_prompt",
-                "failure_code": "claude_permission_gate_hook_missing",
-                "message": f"permission_gate.py hook not found at {hook_script}",
-            }
-            package.write_json("assertions/permission_prompt.json", payload)
-            return payload
+        # Materialize the canonical installed hook (the exact bytes install_hooks
+        # writes) and drive that, so the proof matches production.
+        from zerg.services.shipper.hooks import PERMISSION_GATE_SCRIPT
+
+        hook_script = package.path("hooks", "longhouse-permission-gate.py")
+        hook_script.parent.mkdir(parents=True, exist_ok=True)
+        hook_script.write_text(PERMISSION_GATE_SCRIPT)
+        hook_script.chmod(0o755)
 
         now = datetime(2026, 6, 19, 12, 0, tzinfo=UTC)
         session_uuid = uuid5(NAMESPACE_URL, f"claude-permission-prompt:{package.root}")
@@ -1932,9 +1925,6 @@ class UniversalProviderAdapter:
         engine = make_engine(f"sqlite:///{db_path}")
         initialize_database(engine)
         session_factory = make_sessionmaker(engine)
-
-        runtime_key = runtime_key_for_session("claude", session_id)
-        request_key = make_pause_request_key(provider="claude", runtime_key=runtime_key, provider_request_id=tool_use_id)
 
         with session_factory() as db:
             db.add(
@@ -1950,41 +1940,51 @@ class UniversalProviderAdapter:
             )
             db.commit()
 
-        captured: dict[str, Any] = {"register_seen": False, "polls": 0}
+        captured: dict[str, Any] = {"register_seen": False, "polls": 0, "ack": None}
 
-        # Local server backed by the REAL store functions — the same code the
-        # production permission-gate endpoints call.
-        def _register(body: dict[str, Any]) -> None:
+        # The stub socket exists only because the hook is a real subprocess that
+        # needs a URL. Its handlers delegate to the REAL endpoint coroutines +
+        # the REAL pause-response route, authenticated by a real session-scoped
+        # ManagedLocalHookToken — so the genuine auth-scope, _is_permission_gate_row
+        # filter, explicit-allow decision logic, and answer route all execute.
+        import asyncio as _asyncio
+
+        from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
+        from zerg.routers.permission_gate import PermissionRequestIn
+        from zerg.routers.permission_gate import get_permission_decision
+        from zerg.routers.permission_gate import register_permission_request
+
+        scoped_token = ManagedLocalHookToken(session_id=session_id, owner_id=1, device_id="universal-harness")
+
+        def _register(body: dict[str, Any]) -> dict[str, Any]:
             with session_factory() as db:
-                upsert_pause_request(
-                    db,
-                    session_id=session_uuid,
-                    runtime_key=runtime_key,
-                    provider="claude",
-                    request_key=request_key,
-                    occurred_at=now,
-                    provider_request_id=str(body.get("tool_use_id") or tool_use_id),
-                    provider_ref={"source": "claude_permission_gate"},
-                    kind="permission_prompt",
-                    tool_name=str(body.get("tool_name") or ""),
-                    request_payload={"tool_name": body.get("tool_name"), "tool_input": body.get("tool_input") or {}},
-                    can_respond=True,
+                ack = _asyncio.run(
+                    register_permission_request(
+                        payload=PermissionRequestIn(
+                            session_id=session_id,
+                            tool_use_id=str(body.get("tool_use_id") or tool_use_id),
+                            tool_name=str(body.get("tool_name") or ""),
+                            tool_input=body.get("tool_input") or {},
+                        ),
+                        db=db,
+                        _token=scoped_token,
+                    )
                 )
                 db.commit()
+                return {"pause_request_id": ack.pause_request_id, "request_key": ack.request_key, "status": ack.status}
 
-        def _decision() -> dict[str, Any]:
-            from zerg.models.agents import SessionPauseRequest
-
+        def _decision(query: dict[str, str]) -> dict[str, Any]:
             with session_factory() as db:
-                row = db.query(SessionPauseRequest).filter(SessionPauseRequest.request_key == request_key).first()
-                if row is None or row.status == PENDING_STATUS:
-                    return {"decision": None, "reason": None, "resolved": False}
-                response_payload = row.response_payload_json if isinstance(row.response_payload_json, dict) else {}
-                return {
-                    "decision": response_payload.get("permissionDecision") or "deny",
-                    "reason": response_payload.get("permissionDecisionReason") or row.response_text,
-                    "resolved": True,
-                }
+                out = _asyncio.run(
+                    get_permission_decision(
+                        session_id=session_id,
+                        tool_use_id=query.get("tool_use_id", tool_use_id),
+                        pause_request_id=query.get("pause_request_id"),
+                        db=db,
+                        _token=scoped_token,
+                    )
+                )
+                return {"decision": out.decision, "reason": out.reason, "resolved": out.resolved}
 
         class Handler(_http_server.BaseHTTPRequestHandler):
             def log_message(self, *_args: Any) -> None:
@@ -2002,16 +2002,21 @@ class UniversalProviderAdapter:
                 if self.path == "/api/agents/permission-requests":
                     length = int(self.headers.get("Content-Length") or "0")
                     body = json.loads(self.rfile.read(length).decode("utf-8") or "{}") if length else {}
-                    _register(body)
+                    ack = _register(body)
                     captured["register_seen"] = True
-                    self._send(200, {"pause_request_id": "p", "request_key": request_key, "status": "pending"})
+                    captured["ack"] = ack
+                    self._send(200, ack)
                 else:
                     self._send(404, {})
 
             def do_GET(self) -> None:
                 if self.path.startswith("/api/agents/permission-decision"):
                     captured["polls"] += 1
-                    self._send(200, _decision())
+                    from urllib.parse import parse_qs
+                    from urllib.parse import urlparse
+
+                    q = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+                    self._send(200, _decision(q))
                 else:
                     self._send(404, {})
 
@@ -2020,30 +2025,49 @@ class UniversalProviderAdapter:
         thread.start()
         base_url = f"http://127.0.0.1:{server.server_address[1]}"
 
-        # Background answerer: resolve the request (allow) via the REAL pull-mode
-        # path once it has been registered, so the polling hook reads the decision.
+        # Background answerer: once the hook has registered the request, answer it
+        # through the REAL pause-response route (_respond_to_pause_request), which
+        # runs the genuine transport dispatch -> pull resolve-in-place. The polling
+        # hook then reads the decision.
         stop = _threading.Event()
+        answer_result: dict[str, Any] = {"answered": False, "status": None}
 
         def _answer_when_registered() -> None:
+            import asyncio as _aio
+
+            from zerg.models.agents import SessionPauseRequest
+            from zerg.routers.session_chat import PauseRequestResponseRequest
+            from zerg.routers.session_chat import _respond_to_pause_request
+            from zerg.services.session_pause_requests import PENDING_STATUS as _PENDING
+
             for _ in range(200):
                 if stop.is_set():
                     return
                 with session_factory() as db:
-                    from zerg.models.agents import SessionPauseRequest
-
-                    row = db.query(SessionPauseRequest).filter(SessionPauseRequest.request_key == request_key).first()
-                    if row is not None and row.status == PENDING_STATUS:
-                        resolve_pause_request(
-                            db,
-                            request_key=request_key,
-                            status="resolved",
-                            response_payload={
-                                "permissionDecision": "allow",
-                                "permissionDecisionReason": "Longhouse allow",
-                                "decision": "answer",
-                            },
-                            response_text="Longhouse allow",
+                    row = (
+                        db.query(SessionPauseRequest)
+                        .filter(
+                            SessionPauseRequest.session_id == session_uuid,
+                            SessionPauseRequest.kind == "permission_prompt",
                         )
+                        .first()
+                    )
+                    if row is not None and row.status == _PENDING:
+                        source_session = db.query(AgentSession).filter(AgentSession.id == session_uuid).first()
+                        try:
+                            resp = _aio.run(
+                                _respond_to_pause_request(
+                                    source_session=source_session,
+                                    owner_id=1,
+                                    pause_request_id=str(row.id),
+                                    body=PauseRequestResponseRequest(decision="answer"),
+                                    db=db,
+                                )
+                            )
+                            answer_result["answered"] = True
+                            answer_result["status"] = getattr(resp, "status", None)
+                        except Exception as exc:  # pragma: no cover - defensive
+                            answer_result["error"] = f"{type(exc).__name__}: {exc}"
                         db.commit()
                         return
                 _time.sleep(0.05)
@@ -2053,6 +2077,7 @@ class UniversalProviderAdapter:
 
         hook_env = {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "LONGHOUSE_PERMISSION_HOOK_ENABLED": "1",
             "LONGHOUSE_HOOK_URL": base_url,
             "LONGHOUSE_HOOK_TOKEN": "zht_universal_harness",
             "LONGHOUSE_MANAGED_SESSION_ID": session_id,
@@ -2096,8 +2121,9 @@ class UniversalProviderAdapter:
                 emitted_decision = None
 
         assertions = {
-            "request_registered": bool(captured["register_seen"]),
+            "request_registered_via_real_endpoint": bool(captured["register_seen"]),
             "hook_polled_for_decision": captured["polls"] >= 1,
+            "answered_via_real_pause_route": bool(answer_result.get("answered")),
             "hook_emitted_allow": emitted_decision == "allow",
             "hook_no_error": hook_error is None,
         }
@@ -2108,7 +2134,7 @@ class UniversalProviderAdapter:
                 "base_url": base_url,
                 "session_id": session_id,
                 "tool_use_id": tool_use_id,
-                "request_key": request_key,
+                "answer_result": answer_result,
                 "hook_stdout": hook_stdout,
                 "emitted_decision": emitted_decision,
                 "hook_error": hook_error,
@@ -5497,7 +5523,7 @@ def _derived_action_status(*, action: ActionDefinition, provider: str) -> dict[s
                 "status": STATUS_PASS,
                 "evidence_level": "hermetic",
                 "proof_scope": "claude_pretooluse_permission_gate",
-                "source": "config/claude-hooks/scripts/permission_gate.py PreToolUse hook driving the real request/answer/decision loop",
+                "source": "longhouse-permission-gate.py PreToolUse hook driving the real request/answer/decision loop",
                 "canary": "claude_permission_gate_reply",
                 "next": "Promote with a live held-permission Claude session against a real provider binary.",
             }

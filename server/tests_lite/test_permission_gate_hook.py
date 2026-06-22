@@ -10,24 +10,33 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 
-HOOK_SCRIPT = (
-    Path(__file__).resolve().parents[2] / "config" / "claude-hooks" / "scripts" / "permission_gate.py"
-)
+from zerg.services.shipper.hooks import PERMISSION_GATE_SCRIPT
+
+# Materialize the canonical embedded script (what install_hooks writes to
+# ~/.claude/hooks/longhouse-permission-gate.py) and run THAT as a subprocess, so
+# these tests exercise the exact bytes shipped to users.
+_HOOK_DIR = Path(tempfile.mkdtemp(prefix="lh-permission-gate-"))
+HOOK_SCRIPT = _HOOK_DIR / "longhouse-permission-gate.py"
+HOOK_SCRIPT.write_text(PERMISSION_GATE_SCRIPT)
+HOOK_SCRIPT.chmod(0o755)
 
 
 class _StubLonghouse:
     """Minimal stand-in for the permission-request/decision endpoints."""
 
-    def __init__(self, *, decision: str | None, resolved: bool):
+    def __init__(self, *, decision: str | None, resolved: bool, ack_pause_request_id: str | None = "p1"):
         self._decision = decision
         self._resolved = resolved
+        self._ack_pause_request_id = ack_pause_request_id
         self.requests_seen: list[dict] = []
         self.decision_polls = 0
+        self.last_decision_path = ""
         handler = self._build_handler()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -57,13 +66,17 @@ class _StubLonghouse:
                 body = json.loads(self.rfile.read(length).decode("utf-8") or "{}") if length else {}
                 if self.path == "/api/agents/permission-requests":
                     outer.requests_seen.append(body)
-                    self._reply(200, {"pause_request_id": "p1", "request_key": "k1", "status": "pending"})
+                    ack = {"request_key": "k1", "status": "pending"}
+                    if outer._ack_pause_request_id is not None:
+                        ack["pause_request_id"] = outer._ack_pause_request_id
+                    self._reply(200, ack)
                 else:
                     self._reply(404, {})
 
             def do_GET(self):
                 if self.path.startswith("/api/agents/permission-decision"):
                     outer.decision_polls += 1
+                    outer.last_decision_path = self.path
                     self._reply(
                         200,
                         {
@@ -88,6 +101,9 @@ class _StubLonghouse:
 
 def _run_hook(*, base_url: str | None, timeout_env: str = "3", extra_env: dict | None = None):
     env = {
+        # The canonical installed script is dormant by default; engage it (the
+        # launcher sets this in remote-approve mode). The disabled test overrides.
+        "LONGHOUSE_PERMISSION_HOOK_ENABLED": "1",
         "LONGHOUSE_HOOK_TOKEN": "zht_test",
         "LONGHOUSE_MANAGED_SESSION_ID": "11111111-1111-1111-1111-111111111111",
         "LONGHOUSE_PERMISSION_HOOK_TIMEOUT_S": timeout_env,
@@ -128,6 +144,8 @@ def test_hook_emits_allow_when_resolved_allow():
     assert result.returncode == 0, result.stderr
     assert _parse_decision(result.stdout) == "allow"
     assert stub.requests_seen and stub.requests_seen[0]["tool_use_id"] == "toolu_test"
+    # The hook polls by the unique pause_request_id from the register ack.
+    assert "pause_request_id=p1" in stub.last_decision_path
 
 
 def test_hook_emits_deny_when_resolved_deny():
@@ -137,31 +155,44 @@ def test_hook_emits_deny_when_resolved_deny():
     assert _parse_decision(result.stdout) == "deny"
 
 
-def test_hook_fails_open_on_timeout():
-    # Server always answers "pending" → hook should give up and emit nothing.
+def test_hook_engaged_timeout_defaults_to_deny():
+    # Engaged (registered ok) but server stays pending → fail-mode default = DENY.
+    # An unreachable/slow control plane must never silently allow a tool.
     with _StubLonghouse(decision=None, resolved=False) as stub:
         result = _run_hook(base_url=stub.base_url, timeout_env="1")
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == ""
+    assert _parse_decision(result.stdout) == "deny"
     assert stub.decision_polls >= 1  # it really polled before giving up
 
 
-def test_hook_fails_open_when_server_unreachable():
-    # Point at a closed port; registration fails → fail open, no decision.
+def test_hook_engaged_unreachable_defaults_to_deny():
+    # Registration itself fails (closed port). Gate was engaged (URL set) → DENY.
     result = _run_hook(base_url="http://127.0.0.1:1", timeout_env="2")
     assert result.returncode == 0
-    assert result.stdout.strip() == ""
+    assert _parse_decision(result.stdout) == "deny"
 
 
-def test_hook_fails_open_when_unconfigured():
+def test_hook_not_engaged_when_unconfigured():
+    # No URL → gate not engaged for this session → no decision (stay out of the way).
     result = _run_hook(base_url=None)
     assert result.returncode == 0
     assert result.stdout.strip() == ""
 
 
-def test_hook_disabled_via_env():
+def test_hook_denies_when_ack_missing_pause_request_id():
+    # A register ack without pause_request_id means we can't identify our row;
+    # the engaged gate must fail-deny, not fall back to a collapse-prone lookup.
+    with _StubLonghouse(decision="allow", resolved=True, ack_pause_request_id=None) as stub:
+        result = _run_hook(base_url=stub.base_url)
+    assert result.returncode == 0, result.stderr
+    assert _parse_decision(result.stdout) == "deny"
+    assert stub.decision_polls == 0  # never polled — failed at register
+
+
+def test_hook_not_engaged_when_disabled():
     with _StubLonghouse(decision="allow", resolved=True) as stub:
         result = _run_hook(base_url=stub.base_url, extra_env={"LONGHOUSE_PERMISSION_HOOK_ENABLED": "0"})
     assert result.returncode == 0
     assert result.stdout.strip() == ""
+    assert not stub.requests_seen  # never even registered
     assert not stub.requests_seen  # never even registered

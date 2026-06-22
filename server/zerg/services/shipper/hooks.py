@@ -256,6 +256,175 @@ exit 0
 # user hooks that happen to mention "longhouse" in a description.
 _HOOK_MARKER = "longhouse-"
 
+# ---------------------------------------------------------------------------
+# Claude PreToolUse permission-gate hook (Python)
+# ---------------------------------------------------------------------------
+# Canonical source: this constant is what gets installed to
+# ~/.claude/hooks/longhouse-permission-gate.py. It is ALWAYS installed but stays
+# dormant unless the managed launcher exports LONGHOUSE_PERMISSION_HOOK_ENABLED=1
+# (remote-approve mode), so a bypass/autonomous session is never gated.
+# server/tests_lite/test_permission_gate_hook.py loads this same constant.
+PERMISSION_GATE_SCRIPT = r'''#!/usr/bin/env python3
+"""Claude Code PreToolUse hook: route tool-permission decisions through Longhouse.
+
+When a managed Claude session (launched in remote-approve mode) is about to use
+a tool, this hook registers a held permission request with Longhouse and blocks
+while long-polling for a decision, then returns the matching permissionDecision
+to Claude.
+
+Environment (set by the managed Claude launcher):
+  LONGHOUSE_HOOK_URL          Base URL for the Longhouse API.
+  LONGHOUSE_HOOK_TOKEN        Session-scoped hook token (X-Agents-Token).
+  LONGHOUSE_MANAGED_SESSION_ID  Longhouse session UUID (falls back to the hook's
+                              own session_id field when absent).
+  LONGHOUSE_PERMISSION_HOOK_TIMEOUT_S  Max seconds to wait (default 20, clamp 20).
+  LONGHOUSE_PERMISSION_HOOK_ENABLED    "1" engages the gate; absent/0 = dormant.
+
+SAFETY — never silently allow. NOT ENGAGED (disabled / unconfigured / no ids):
+emit nothing, exit 0. ENGAGED but cannot decide (register/poll error, timeout,
+malformed response, unknown decision, uncaught bug): DENY. Wait is bounded so the
+turn never hangs.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+_ENGAGED = False
+_DEFAULT_TIMEOUT_S = 20.0
+_MAX_TIMEOUT_S = 20.0
+_POLL_INTERVAL_S = 0.5
+_REQUEST_TIMEOUT_S = 5.0
+
+
+def _not_engaged() -> None:
+    sys.exit(0)
+
+
+def _fail_decision() -> None:
+    # Engaged but could not reach a decision -> deny. An unreachable control plane
+    # must never silently allow a tool. (No configurable fail mode: one safe path.)
+    _emit_decision("deny", "Longhouse permission gate could not reach a decision")
+
+
+def _emit_decision(decision: str, reason: str | None) -> None:
+    payload = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": decision,
+            "permissionDecisionReason": reason or ("Longhouse " + decision),
+        }
+    }
+    sys.stdout.write(json.dumps(payload))
+    sys.exit(0)
+
+
+def _enabled() -> bool:
+    raw = str(os.environ.get("LONGHOUSE_PERMISSION_HOOK_ENABLED", "0")).strip().lower()
+    return raw not in {"0", "false", "no", "off", ""}
+
+
+def _post_json(url, body, token):
+    data = json.dumps(body).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["X-Agents-Token"] = token
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT_S) as resp:
+        if not (200 <= resp.status < 300):
+            return None
+        return json.loads(resp.read().decode("utf-8") or "{}")
+
+
+def _get_decision(url, token):
+    headers = {}
+    if token:
+        headers["X-Agents-Token"] = token
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    with urllib.request.urlopen(req, timeout=_REQUEST_TIMEOUT_S) as resp:
+        if not (200 <= resp.status < 300):
+            return None
+        return json.loads(resp.read().decode("utf-8") or "{}")
+
+
+def main() -> None:
+    if not _enabled():
+        _not_engaged()
+    base_url = str(os.environ.get("LONGHOUSE_HOOK_URL") or "").strip().rstrip("/")
+    token = str(os.environ.get("LONGHOUSE_HOOK_TOKEN") or "").strip()
+    if not base_url:
+        _not_engaged()
+    try:
+        hook_input = json.load(sys.stdin)
+    except (json.JSONDecodeError, ValueError):
+        _not_engaged()
+        return
+    session_id = (
+        str(os.environ.get("LONGHOUSE_MANAGED_SESSION_ID") or "").strip()
+        or str(hook_input.get("session_id") or "").strip()
+    )
+    tool_use_id = str(hook_input.get("tool_use_id") or "").strip()
+    tool_name = str(hook_input.get("tool_name") or "").strip()
+    tool_input = hook_input.get("tool_input") if isinstance(hook_input.get("tool_input"), dict) else {}
+    if not session_id or not tool_use_id:
+        _not_engaged()
+    try:
+        timeout_s = float(os.environ.get("LONGHOUSE_PERMISSION_HOOK_TIMEOUT_S", _DEFAULT_TIMEOUT_S))
+    except (TypeError, ValueError):
+        timeout_s = _DEFAULT_TIMEOUT_S
+    timeout_s = max(0.0, min(timeout_s, _MAX_TIMEOUT_S))
+    global _ENGAGED
+    _ENGAGED = True
+    deadline = time.monotonic() + timeout_s
+    try:
+        ack = _post_json(
+            base_url + "/api/agents/permission-requests",
+            {"session_id": session_id, "tool_use_id": tool_use_id, "tool_name": tool_name, "tool_input": tool_input},
+            token,
+        )
+    except (urllib.error.URLError, OSError, ValueError):
+        _fail_decision()
+        return
+    if not isinstance(ack, dict):
+        _fail_decision()
+        return
+    pause_request_id = str(ack.get("pause_request_id") or "").strip()
+    if not pause_request_id:
+        _fail_decision()
+        return
+    decision_url = base_url + "/api/agents/permission-decision?" + urllib.parse.urlencode(
+        {"session_id": session_id, "tool_use_id": tool_use_id, "pause_request_id": pause_request_id}
+    )
+    while time.monotonic() < deadline:
+        try:
+            result = _get_decision(decision_url, token)
+        except (urllib.error.URLError, OSError, ValueError):
+            _fail_decision()
+            return
+        if isinstance(result, dict) and result.get("resolved"):
+            decision = str(result.get("decision") or "").strip().lower()
+            if decision in {"allow", "deny", "ask"}:
+                _emit_decision(decision, result.get("reason"))
+            _fail_decision()
+        time.sleep(_POLL_INTERVAL_S)
+    _fail_decision()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        if _ENGAGED:
+            _fail_decision()
+        sys.exit(0)
+'''
+
 
 def _make_hook_entries(hooks_dir: Path) -> tuple[dict, dict]:
     """Build hook entry dicts with resolved script paths.
@@ -297,14 +466,48 @@ def _resolve_claude_dir(claude_dir: str | None = None) -> Path:
     return Path.home() / ".claude"
 
 
-def _is_longhouse_hook(entry: dict) -> bool:
-    """Return True if a hook entry belongs to Longhouse.
+def _merge_hook_entry_by_command(
+    existing_entries: list[dict],
+    new_entry: dict,
+    command_substr: str,
+) -> list[dict]:
+    """Upsert a hook entry identified by a specific command substring.
 
-    Checks whether any inner hook's ``command`` field contains the
-    marker string so we can update it in place.
+    Unlike _merge_hooks_for_event (which replaces ANY Longhouse hook), this only
+    replaces the entry whose command contains ``command_substr``, leaving other
+    Longhouse hooks (e.g. the lifecycle longhouse-hook.sh) on the same event
+    untouched. Used so the permission-gate hook coexists with the lifecycle hook
+    on PreToolUse.
+    """
+    updated = False
+    result: list[dict] = []
+    for entry in existing_entries:
+        matches = any(command_substr in hook.get("command", "") for hook in entry.get("hooks", []))
+        if matches:
+            # Replace the first matching entry; drop any further duplicates so
+            # repeated/old installs converge to exactly one gate entry.
+            if not updated:
+                result.append(new_entry)
+                updated = True
+        else:
+            result.append(entry)
+    if not updated:
+        result.append(new_entry)
+    return result
+
+
+def _is_longhouse_hook(entry: dict) -> bool:
+    """Return True if a hook entry is the Longhouse lifecycle hook.
+
+    Checks whether any inner hook's ``command`` field contains the marker so we
+    can update it in place. The permission-gate hook is intentionally EXCLUDED:
+    it is a separate entry upserted by _merge_hook_entry_by_command, so the
+    lifecycle merge must not replace it.
     """
     for hook in entry.get("hooks", []):
         cmd = hook.get("command", "")
+        if "longhouse-permission-gate" in cmd:
+            continue
         if _HOOK_MARKER in cmd:
             return True
     return False
@@ -454,6 +657,14 @@ def install_hooks(
     hook_script.chmod(stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
     actions.append(f"Wrote {hook_script}")
 
+    # Permission-gate hook (Python). Always installed but dormant unless the
+    # launcher exports LONGHOUSE_PERMISSION_HOOK_ENABLED=1 (remote-approve mode),
+    # so a bypass/autonomous session is never gated.
+    permission_gate_script = hooks_dir / "longhouse-permission-gate.py"
+    permission_gate_script.write_text(PERMISSION_GATE_SCRIPT)
+    permission_gate_script.chmod(stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
+    actions.append(f"Wrote {permission_gate_script}")
+
     # Remove deprecated standalone hook scripts (superseded by longhouse-hook.sh).
     for deprecated in ("longhouse-ship.sh", "longhouse-presence.sh", "longhouse-session-start.sh"):
         deprecated_path = hooks_dir / deprecated
@@ -489,6 +700,24 @@ def install_hooks(
         raw = hooks_obj.get(event, [])
         event_list = raw if isinstance(raw, list) else []
         hooks_obj[event] = _merge_hooks_for_event(event_list, lifecycle_entry)
+
+    # PreToolUse additionally carries the permission-gate hook as its OWN entry
+    # (distinct script), upserted by script name so it coexists with the lifecycle
+    # hook rather than replacing it. It is sync and gets a longer timeout because
+    # it may block on a remote decision (the script self-clamps under Claude's
+    # hook budget and is dormant unless LONGHOUSE_PERMISSION_HOOK_ENABLED=1).
+    permission_gate_entry = {
+        "hooks": [
+            {
+                "type": "command",
+                "command": str(permission_gate_script),
+                "async": False,
+                "timeout": 30,
+            }
+        ],
+    }
+    pre_list = hooks_obj.get("PreToolUse", [])
+    hooks_obj["PreToolUse"] = _merge_hook_entry_by_command(pre_list, permission_gate_entry, "longhouse-permission-gate.py")
 
     # ------------------------------------------------------------------
     # 5. Write settings back

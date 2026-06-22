@@ -32,6 +32,7 @@ from zerg.database import get_db
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.services.session_pause_requests import PENDING_STATUS
+from zerg.services.session_pause_requests import REPLY_TRANSPORT_CLAUDE_PULL
 from zerg.services.session_pause_requests import make_pause_request_key
 from zerg.services.session_pause_requests import upsert_pause_request
 from zerg.services.session_runtime import runtime_key_for_session
@@ -45,12 +46,6 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 # legacy claude_hook placeholder filter in session_pause_requests.
 PERMISSION_GATE_SOURCE = "claude_permission_gate"
 PERMISSION_PROMPT_KIND = "permission_prompt"
-
-# Maps a resolved pause-request response decision to Claude's permissionDecision.
-_DECISION_BY_STATUS = {
-    "resolved": "allow",
-    "rejected": "deny",
-}
 
 
 class PermissionRequestIn(UTCBaseModel):
@@ -79,11 +74,27 @@ class PermissionDecisionOut(UTCBaseModel):
 
 
 def _enforce_session_scope(token: object, session_id: str) -> None:
-    if isinstance(token, ManagedLocalHookToken) and session_id != token.session_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Managed-local hook token does not match session",
-        )
+    """Require a session-scoped token whose session matches the target.
+
+    These endpoints act *as* a single managed session, so a machine-wide durable
+    device token must not be able to register/poll/resolve arbitrary sessions'
+    permission requests. Only a managed-local hook token bound to this session is
+    accepted (``None`` is the AUTH_DISABLED dev/test path).
+    """
+    if token is None:
+        return
+    if isinstance(token, ManagedLocalHookToken):
+        if session_id != token.session_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Managed-local hook token does not match session",
+            )
+        return
+    # A durable device token (or anything else) is not session-scoped.
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Permission-gate endpoints require a session-scoped hook token",
+    )
 
 
 def _coerce_session_uuid(session_id: str) -> UUID:
@@ -109,13 +120,20 @@ async def register_permission_request(
     if db.query(AgentSession.id).filter(AgentSession.id == session_uuid).first() is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="session not found")
 
+    # tool_use_id is the idempotency key: re-registering the same id (a hook
+    # network retry) updates the same row, and a genuine re-ask re-pends it.
+    # An empty id would collapse unrelated asks onto a shared "unknown" key.
+    tool_use_id = (payload.tool_use_id or "").strip()
+    if not tool_use_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="tool_use_id is required")
+
     provider = (payload.provider or "claude").strip() or "claude"
     occurred_at = (payload.occurred_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
     runtime_key = runtime_key_for_session(provider, payload.session_id)
     request_key = make_pause_request_key(
         provider=provider,
         runtime_key=runtime_key,
-        provider_request_id=payload.tool_use_id,
+        provider_request_id=tool_use_id,
     )
     tool_name = (payload.tool_name or "").strip() or None
 
@@ -126,8 +144,8 @@ async def register_permission_request(
         provider=provider,
         request_key=request_key,
         occurred_at=occurred_at,
-        provider_request_id=payload.tool_use_id,
-        provider_ref={"source": PERMISSION_GATE_SOURCE},
+        provider_request_id=tool_use_id,
+        provider_ref={"source": PERMISSION_GATE_SOURCE, "reply_transport": REPLY_TRANSPORT_CLAUDE_PULL},
         kind=PERMISSION_PROMPT_KIND,
         tool_name=tool_name,
         title=f"Permission: {tool_name}" if tool_name else "Tool permission",
@@ -143,29 +161,64 @@ async def register_permission_request(
 async def get_permission_decision(
     session_id: str,
     tool_use_id: str,
+    pause_request_id: Optional[str] = None,
     provider: str = "claude",
     db: Session = Depends(get_db),
     _token: object = Depends(verify_agents_token),
 ) -> PermissionDecisionOut:
-    """Return the resolved permission decision, or pending if not yet answered."""
+    """Return the resolved permission decision, or pending if not yet answered.
+
+    Polls by the unique pause_request_id returned at register when available, so
+    concurrent or repeated tool_use_ids resolve independently; falls back to the
+    (session, tool_use_id)-derived request_key only when no id was provided.
+    """
 
     _enforce_session_scope(_token, session_id)
-    normalized_provider = (provider or "claude").strip() or "claude"
-    runtime_key = runtime_key_for_session(normalized_provider, session_id)
-    request_key = make_pause_request_key(
-        provider=normalized_provider,
-        runtime_key=runtime_key,
-        provider_request_id=tool_use_id,
-    )
+    session_uuid = _coerce_session_uuid(session_id)
 
     # Import locally to avoid a router-import cycle through session_pause_requests.
     from zerg.models.agents import SessionPauseRequest
 
-    row = db.query(SessionPauseRequest).filter(SessionPauseRequest.request_key == request_key).first()
-    if row is None or row.status == PENDING_STATUS:
+    query = db.query(SessionPauseRequest).filter(
+        SessionPauseRequest.session_id == session_uuid,
+        SessionPauseRequest.kind == PERMISSION_PROMPT_KIND,
+    )
+    if pause_request_id:
+        try:
+            query = query.filter(SessionPauseRequest.id == UUID(pause_request_id))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid pause_request_id: {pause_request_id}",
+            ) from exc
+    else:
+        normalized_provider = (provider or "claude").strip() or "claude"
+        runtime_key = runtime_key_for_session(normalized_provider, session_id)
+        request_key = make_pause_request_key(
+            provider=normalized_provider,
+            runtime_key=runtime_key,
+            provider_request_id=tool_use_id,
+        )
+        query = query.filter(SessionPauseRequest.request_key == request_key)
+
+    row = query.first()
+    if row is None or not _is_permission_gate_row(row):
+        return PermissionDecisionOut(decision=None, resolved=False)
+    if row.status == PENDING_STATUS:
         return PermissionDecisionOut(decision=None, resolved=False)
 
+    # SECURITY: only an explicit allow grants allow. Any resolved-but-unannotated
+    # row (e.g. superseded, or resolved by a non-permission path) maps to deny —
+    # never let an absent/unknown decision become a silent allow.
     response_payload = row.response_payload_json if isinstance(row.response_payload_json, dict) else {}
-    decision = response_payload.get("permissionDecision") or _DECISION_BY_STATUS.get(row.status, "deny")
+    raw_decision = str(response_payload.get("permissionDecision") or "").strip().lower()
+    decision = "allow" if raw_decision == "allow" else "deny"
     reason = response_payload.get("permissionDecisionReason") or row.response_text
     return PermissionDecisionOut(decision=decision, reason=reason, resolved=True)
+
+
+def _is_permission_gate_row(row: object) -> bool:
+    """True only for rows this gate created (source=claude_permission_gate)."""
+    ref = getattr(row, "provider_ref_json", None)
+    source = (ref or {}).get("source") if isinstance(ref, dict) else None
+    return str(source or "").strip() == PERMISSION_GATE_SOURCE

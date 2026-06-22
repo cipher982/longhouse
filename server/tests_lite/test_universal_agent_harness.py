@@ -2397,8 +2397,9 @@ def test_remaining_surface_scenarios_emit_honest_results_for_all_providers(tmp_p
                 == "claude_permission_gate_reply"
             )
             assert permission["data"]["assertions"] == {
-                "request_registered": True,
+                "request_registered_via_real_endpoint": True,
                 "hook_polled_for_decision": True,
+                "answered_via_real_pause_route": True,
                 "hook_emitted_allow": True,
                 "hook_no_error": True,
             }

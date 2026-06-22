@@ -206,6 +206,7 @@ def build_managed_local_launch_payload(
     machine_name: str,
     native_claude_channels_available: bool | None = None,
     claude_launch_env: dict[str, str] | None = None,
+    permission_mode: str = "bypass",
 ) -> dict:
     """Build the exact JSON body posted to /api/sessions/managed-local/this-device.
 
@@ -222,6 +223,7 @@ def build_managed_local_launch_payload(
         "display_name": name,
         "loop_mode": loop_mode.value,
         "machine_name": machine_name,
+        "permission_mode": permission_mode,
     }
     if provider == "claude":
         payload["native_claude_channels_available"] = native_claude_channels_available
@@ -242,6 +244,7 @@ def _launch_managed_local_from_api(
     native_claude_channels_available: bool | None = None,
     claude_launch_env: dict[str, str] | None = None,
     provider: str = "claude",
+    permission_mode: str = "bypass",
     verbose: bool = False,
 ) -> ManagedLocalLaunchResponse:
     payload = build_managed_local_launch_payload(
@@ -253,6 +256,7 @@ def _launch_managed_local_from_api(
         machine_name=machine_name,
         native_claude_channels_available=native_claude_channels_available,
         claude_launch_env=claude_launch_env,
+        permission_mode=permission_mode,
     )
 
     launch_url = f"{url.rstrip('/')}/api/sessions/managed-local/this-device"
@@ -317,6 +321,8 @@ def _launch_managed_local_from_api(
         attach_command=str(body["attach_command"]),
         source_runner_name=str(body.get("source_runner_name") or machine_name),
         managed_transport=str(body.get("managed_transport") or "") or None,
+        permission_mode=str(body.get("permission_mode") or "bypass"),
+        hook_token=(str(body["hook_token"]) if body.get("hook_token") else None),
     )
 
 
@@ -346,6 +352,8 @@ def _run_native_claude_tui(
     cwd: Path,
     base_url: str,
     token: str,
+    hook_token: str | None = None,
+    permission_mode: str = "bypass",
 ) -> int:
     command = build_claude_channel_exec_command(
         provider_session_id=provider_session_id,
@@ -354,8 +362,12 @@ def _run_native_claude_tui(
         resume=False,
         hook_url=base_url,
         claude_command=_resolve_claude_command(),
+        permission_mode=permission_mode,
     )
-    env = _claude_subprocess_env(LONGHOUSE_HOOK_TOKEN=token)
+    # In remote-approve mode the permission gate authenticates as this session
+    # using the server-minted session-scoped hook token (the gate rejects the
+    # durable device token). Other hooks keep using the device token.
+    env = _claude_subprocess_env(LONGHOUSE_HOOK_TOKEN=hook_token or token)
     completed = subprocess.run(shlex.split(command), check=False, cwd=str(cwd), env=env)
     exit_code = int(completed.returncode)
     _post_claude_terminal_signal(
@@ -408,6 +420,8 @@ def _launch_detached_native_claude_channel(
     config_dir: Path | None = None,
     wait_ready_secs: float = 20.0,
     resume: bool = False,
+    hook_token: str | None = None,
+    permission_mode: str = "bypass",
 ) -> dict:
     _ensure_native_claude_prereqs(
         base_url=base_url,
@@ -422,12 +436,15 @@ def _launch_detached_native_claude_channel(
         resume=resume,
         hook_url=base_url,
         claude_command=_resolve_claude_command(),
+        permission_mode=permission_mode,
     )
     log_path = _remote_launch_log_path(session_id=session_id, config_dir=config_dir)
     process: subprocess.Popen | None = None
     try:
         pty_command = _build_detached_claude_pty_command(command, log_path)
-        env = _claude_subprocess_env(LONGHOUSE_HOOK_TOKEN=token)
+        # In remote-approve mode the permission gate authenticates as this session
+        # via the session-scoped hook token; otherwise the durable device token.
+        env = _claude_subprocess_env(LONGHOUSE_HOOK_TOKEN=hook_token or token)
         process = subprocess.Popen(
             pty_command,
             cwd=str(cwd),
@@ -611,6 +628,8 @@ def _finalize_native_claude_launch(
             cwd=cwd,
             base_url=base_url,
             token=token,
+            hook_token=result.hook_token,
+            permission_mode=result.permission_mode,
         )
     finally:
         remove_managed_provider_contract(
@@ -643,6 +662,12 @@ def claude(
         help="Loop mode to store on the Longhouse session.",
     ),
     name: str | None = typer.Option(None, "--name", help="Optional display name for the Claude session."),
+    remote_approve: bool = typer.Option(
+        False,
+        "--remote-approve/--no-remote-approve",
+        help="Pause on tool permission prompts and answer them from Longhouse (web/iOS) "
+        "instead of running with --dangerously-skip-permissions. Default is autonomous bypass.",
+    ),
     attach: bool = typer.Option(
         True,
         "--attach/--no-attach",
@@ -741,6 +766,7 @@ def claude(
         native_claude_channels_available=native_claude_channels_available,
         claude_launch_env=claude_launch_env,
         provider="claude",
+        permission_mode="remote_approve" if remote_approve else "bypass",
         verbose=verbose,
     )
     if force_flag_capable_path and _result_uses_native_claude_bridge(result):

@@ -86,6 +86,7 @@ from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
 from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
 from zerg.services.session_pause_requests import PENDING_STATUS as PAUSE_PENDING_STATUS
 from zerg.services.session_pause_requests import get_pause_request_for_session
+from zerg.services.session_pause_requests import is_pull_reply_transport
 from zerg.services.session_pause_requests import list_pause_requests_for_session
 from zerg.services.session_pause_requests import load_active_pause_request_for_session
 from zerg.services.session_pause_requests import resolve_pause_request
@@ -237,6 +238,10 @@ class ManagedLocalThisDeviceLaunchRequest(BaseModel):
     claude_launch_env: dict[str, str] | None = Field(
         None,
         description="Optional allowlisted Claude launch env overrides to apply on the local runner",
+    )
+    permission_mode: str = Field(
+        "bypass",
+        description="Managed permission policy: 'bypass' (autonomous, default) or 'remote_approve' (answer permission prompts via Longhouse)",
     )
 
 
@@ -415,19 +420,20 @@ def _list_pause_requests_response(
     return PauseRequestListResponse(requests=requests, total=len(requests))
 
 
-def _resolve_permission_prompt_in_place(
+def _resolve_pull_pause_request_in_place(
     *,
     db: Session,
     row,
     decision: str,
     response_message: str | None,
 ) -> PauseRequestResponseResponse:
-    """Resolve a Claude permission-prompt pause request without a live push.
+    """Resolve a PULL-transport pause request without a live push.
 
-    The blocking PreToolUse hook polls GET /agents/permission-decision, so the
-    answer only needs to be persisted: we map answer->allow / reject|cancel->deny
-    into permissionDecision and resolve the row. The hook reads it and returns the
-    decision to Claude.
+    The provider polls Longhouse for the resolved row (e.g. the Claude PreToolUse
+    permission hook polls GET /agents/permission-decision), so the answer only
+    needs to be persisted: we map answer->allow / reject|cancel->deny into
+    permissionDecision and resolve the row. The provider reads it and applies the
+    decision.
     """
     permission_decision = "allow" if decision == "answer" else "deny"
     status_value = "resolved" if decision == "answer" else "rejected"
@@ -442,6 +448,86 @@ def _resolve_permission_prompt_in_place(
         status=status_value,
         occurred_at=datetime.now(timezone.utc),
         response_payload=response_payload,
+        response_text=response_message,
+    )
+    db.commit()
+    if resolved is None:
+        db.refresh(row)
+        resolved = row
+    return PauseRequestResponseResponse(
+        status=status_value,
+        pause_request=_pause_request_projection_or_empty(resolved),
+    )
+
+
+def _opencode_permission_request_id(row) -> str | None:
+    """The opencode permission id to reply to, for an opencode_bridge perm row."""
+    ref = row.provider_ref_json if isinstance(row.provider_ref_json, dict) else {}
+    if str(ref.get("source") or "").strip() != "opencode_bridge":
+        return None
+    rid = str(ref.get("opencode_request_id") or row.provider_request_id or "").strip()
+    return rid or None
+
+
+async def _resolve_opencode_permission_via_bridge(
+    *,
+    db: Session,
+    row,
+    decision: str,
+    response_message: str | None,
+    request_id: str,
+) -> PauseRequestResponseResponse:
+    """Deliver an OpenCode permission decision through the bridge, then resolve.
+
+    The runtime host shares the machine with the opencode bridge for managed-local
+    sessions, so we invoke opencode_bridge.permission_reply (it resolves bridge
+    state from disk and POSTs to the local opencode server's
+    /permission/{id}/reply). It does blocking I/O, so run it off the event loop.
+    answer->allow, reject|cancel->deny.
+    """
+    from zerg.cli import opencode_bridge
+
+    bridge_decision = "allow" if decision == "answer" else "deny"
+
+    def _reply() -> None:
+        opencode_bridge.permission_reply(
+            session_id=str(row.session_id),
+            request_id=request_id,
+            decision=bridge_decision,
+            state_root=None,
+            config_dir=None,
+            wait_secs=0.0,
+        )
+
+    bridge_error: str | None = None
+    try:
+        await asyncio.to_thread(_reply)
+    except SystemExit as exc:  # typer.Exit on bridge failure
+        if int(getattr(exc, "code", 0) or 0) != 0:
+            bridge_error = f"opencode bridge permission-reply failed (exit {exc.code})"
+    except Exception as exc:  # pragma: no cover - defensive
+        bridge_error = f"{type(exc).__name__}: {exc}"
+
+    if bridge_error is not None:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "code": "opencode_permission_reply_failed",
+                "error_code": "opencode_permission_reply_failed",
+                "message": bridge_error,
+                "pause_request_id": str(row.id),
+                "retryable": True,
+                "refetch_required": True,
+            },
+        )
+
+    status_value = "resolved" if decision == "answer" else "rejected"
+    resolved = resolve_pause_request(
+        db,
+        pause_request_id=row.id,
+        status=status_value,
+        occurred_at=datetime.now(timezone.utc),
+        response_payload={"permissionDecision": bridge_decision, "decision": decision, "transport": "opencode_bridge"},
         response_text=response_message,
     )
     db.commit()
@@ -502,15 +588,28 @@ async def _respond_to_pause_request(
 
     response_message = _pause_response_message(row=row, body=body)
 
-    # Claude permission prompts use a PULL transport: the blocking PreToolUse hook
-    # polls for the decision, so there is no live process to push a command to.
-    # Resolve the request in place and let the hook read permissionDecision.
-    if str(getattr(row, "kind", "") or "").strip() == "permission_prompt":
-        return _resolve_permission_prompt_in_place(
+    # Dispatch by the row's reply transport, not its kind. PULL transports (the
+    # Claude PreToolUse permission hook polls for the decision) have no live
+    # process to push to, so we resolve in place and let the provider read it.
+    # PUSH transports deliver the answer over managed control.
+    if is_pull_reply_transport(row):
+        return _resolve_pull_pause_request_in_place(
             db=db,
             row=row,
             decision=decision,
             response_message=response_message,
+        )
+
+    # OpenCode permission prompts push the decision to the local opencode server
+    # via the bridge (not the engine websocket), then resolve.
+    opencode_request_id = _opencode_permission_request_id(row)
+    if opencode_request_id is not None:
+        return await _resolve_opencode_permission_via_bridge(
+            db=db,
+            row=row,
+            decision=decision,
+            response_message=response_message,
+            request_id=opencode_request_id,
         )
 
     result = await answer_pause_request_on_managed_local_session(
@@ -991,6 +1090,7 @@ async def launch_managed_local_this_device(
             machine_name=machine_name,
             native_claude_channels_available=body.native_claude_channels_available,
             claude_launch_env=body.claude_launch_env,
+            permission_mode=body.permission_mode,
         )
         # Managed-local launch is a tiny user-facing write that must not wait
         # behind archive ingest/replay jobs already occupying the single writer.
@@ -1016,7 +1116,7 @@ async def launch_managed_local_this_device(
         source="managed_local_launch",
     )
 
-    return _managed_local_launch_response(db, result)
+    return _managed_local_launch_response(db, result, owner_id=owner_id)
 
 
 @router.post("/launch", response_model=RemoteSessionLaunchResponse)

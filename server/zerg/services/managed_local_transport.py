@@ -144,11 +144,13 @@ def build_managed_local_attach_command(*, session: AgentSession, db: Session | N
         # so the attach command builder can still be exercised.
         cwd = "."
 
+    permission_mode = str(getattr(session, "permission_mode", "") or "bypass").strip() or "bypass"
     return build_claude_channel_exec_command(
         provider_session_id=provider_session_id,
         longhouse_session_id=session_id,
         cwd=cwd,
         resume=False,
+        permission_mode=permission_mode,
     )
 
 

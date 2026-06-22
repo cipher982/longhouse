@@ -942,6 +942,7 @@ async fn execute_command(
                 machine_name: Some(config.machine_name.clone()),
                 auto_approve: false,
                 hold_user_input_requests: false,
+                hold_permission_requests: false,
                 state_root: None,
                 longhouse_home: None,
                 log_file: None,

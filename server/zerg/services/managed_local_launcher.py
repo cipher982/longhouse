@@ -66,6 +66,7 @@ class ManagedLocalLaunchParams:
     native_claude_channels_available: bool | None = None
     claude_launch_env: dict[str, str] | None = None
     require_runner_ready: bool = False
+    permission_mode: str = "bypass"
 
 
 @dataclass(frozen=True)
@@ -197,6 +198,7 @@ def launch_managed_local_session_sync(db: Session, params: ManagedLocalLaunchPar
         assistant_messages=0,
         tool_calls=0,
         loop_mode=coerce_session_loop_mode(params.loop_mode).value,
+        permission_mode="remote_approve" if str(params.permission_mode).strip() == "remote_approve" else "bypass",
     )
     db.add(session)
     db.flush()

@@ -154,6 +154,11 @@ class ManagedLocalSessionLaunchResponse(BaseModel):
     source_runner_name: str
     managed_session_name: str
     attach_command: str
+    permission_mode: str = "bypass"
+    # Session-scoped hook token, only present for remote_approve launches. The CLI
+    # exports it as LONGHOUSE_HOOK_TOKEN so the permission gate authenticates as
+    # this session (the permission-gate endpoints reject durable device tokens).
+    hook_token: str | None = None
 
 
 class SessionDraftReplyResponse(BaseModel):
@@ -184,7 +189,7 @@ def _resolve_agents_owner_id(db: Session, device_token: DeviceToken | None) -> i
     return int(owner[0])
 
 
-def _managed_local_launch_response(db: Session, result) -> ManagedLocalSessionLaunchResponse:
+def _managed_local_launch_response(db: Session, result, *, owner_id: int | None = None) -> ManagedLocalSessionLaunchResponse:
     session = result.session
     capabilities = project_session_capabilities(db, session_id=session.id)
     # The kernel projection is the truth: a launch response is only valid if
@@ -196,6 +201,20 @@ def _managed_local_launch_response(db: Session, result) -> ManagedLocalSessionLa
         raise RuntimeError("Managed local launch response is missing managed transport metadata")
     control_projection = project_session_control_fields(db, session, capabilities=capabilities)
     provider_session_id = project_provider_session_id(db, session)
+    permission_mode = str(getattr(session, "permission_mode", "") or "bypass").strip() or "bypass"
+    # Mint a session-scoped hook token ONLY for remote_approve launches, so the
+    # permission gate can authenticate as this exact session (the gate endpoints
+    # reject durable device tokens). Bypass launches never get one.
+    hook_token: str | None = None
+    if permission_mode == "remote_approve" and owner_id is not None:
+        from zerg.auth.managed_local_hook_tokens import issue_managed_local_hook_token
+
+        hook_token = issue_managed_local_hook_token(
+            owner_id=owner_id,
+            session_id=str(session.id),
+            project=getattr(session, "project", None),
+            device_id=getattr(session, "device_id", None),
+        )
     return ManagedLocalSessionLaunchResponse(
         session_id=str(session.id),
         provider=session.provider or "claude",
@@ -207,6 +226,8 @@ def _managed_local_launch_response(db: Session, result) -> ManagedLocalSessionLa
         source_runner_name=control_projection.source_runner_name or "",
         managed_session_name=control_projection.managed_session_name or "",
         attach_command=result.attach_command,
+        permission_mode=permission_mode,
+        hook_token=hook_token,
     )
 
 
