@@ -15,11 +15,16 @@ use rusqlite::{params, Connection, OpenFlags};
 use serde::Deserialize;
 use serde_json::value::RawValue;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::config::get_longhouse_home;
-use crate::media_redaction::redact_inline_image_data_url;
-use crate::pipeline::parser::{ParseResult, ParsedEvent, ParsedSourceLine, Role, SessionMetadata};
+use crate::media_redaction::{
+    redact_inline_image_data_url, redact_inline_image_data_urls_with_media, InlineImageRedaction,
+};
+use crate::pipeline::parser::{
+    ParseResult, ParsedEvent, ParsedMediaObject, ParsedSourceLine, Role, SessionMetadata,
+};
 
 const SOURCE_OFFSET_SCALE: u64 = 1_000_000;
 const MAX_SOURCE_FILE_URL_CHARS: usize = 512;
@@ -230,6 +235,7 @@ pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Resu
     let longhouse_session_id = longhouse_session_id_for_opencode(provider_session_id);
     let mut events = Vec::new();
     let mut source_lines = Vec::new();
+    let mut media_objects = Vec::new();
     let mut candidate_records = 0usize;
     let mut last_source_offset = 0u64;
 
@@ -242,19 +248,36 @@ pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Resu
             .with_context(|| format!("parsing OpenCode message {}", message.id))?;
         let part_data: Value = serde_json::from_str(&part.data)
             .with_context(|| format!("parsing OpenCode part {}", part.id))?;
-        let source_part_data = source_line_part_data(&part_data);
+        let (source_part_data, mut part_media) = source_line_part_data(&part_data);
         let source_offset = source_offset_for_part(part, part_index);
         last_source_offset = last_source_offset.max(source_offset);
+        let original_source_raw = serde_json::to_string(&json!({
+            "provider": "opencode",
+            "session_id": provider_session_id,
+            "message_id": message.id,
+            "part_id": part.id,
+            "message": message_data.clone(),
+            "part": part_data.clone(),
+        }))?;
+        let original_line_sha256 = format!("{:x}", Sha256::digest(original_source_raw.as_bytes()));
+        let source_raw = serde_json::to_string(&json!({
+            "provider": "opencode",
+            "session_id": provider_session_id,
+            "message_id": message.id,
+            "part_id": part.id,
+            "message": message_data.clone(),
+            "part": source_part_data,
+        }))?;
+        let redacted_source_raw = redact_inline_image_data_urls_with_media(&source_raw);
+        part_media.extend(redacted_source_raw.media);
+        media_objects.extend(parsed_media_objects_from_redactions(
+            source_offset,
+            &original_line_sha256,
+            part_media,
+        ));
         source_lines.push(ParsedSourceLine {
             source_offset,
-            raw_line: serde_json::to_string(&json!({
-                "provider": "opencode",
-                "session_id": provider_session_id,
-                "message_id": message.id,
-                "part_id": part.id,
-                "message": message_data,
-                "part": source_part_data,
-            }))?,
+            raw_line: redacted_source_raw.raw_line,
         });
 
         let role = message_data
@@ -299,7 +322,7 @@ pub fn parse_opencode_session(db_path: &Path, provider_session_id: &str) -> Resu
     Ok(ParseResult {
         events,
         source_lines,
-        media_objects: Vec::new(),
+        media_objects,
         last_good_offset: session_version.max(last_source_offset.saturating_add(1)),
         metadata: SessionMetadata {
             session_id: longhouse_session_id,
@@ -690,23 +713,45 @@ fn patch_part_text(part_data: &Value) -> Option<String> {
     Some(format!("Patch: {}{}", shown.join(", "), suffix))
 }
 
-fn source_line_part_data(part_data: &Value) -> Value {
+fn parsed_media_objects_from_redactions(
+    source_offset: u64,
+    original_line_sha256: &str,
+    media: Vec<InlineImageRedaction>,
+) -> Vec<ParsedMediaObject> {
+    media
+        .into_iter()
+        .map(|item| ParsedMediaObject {
+            source_offset,
+            sha256: item.sha256,
+            mime_type: item.mime_type,
+            byte_size: item.byte_size,
+            original_chars: item.original_chars,
+            original_line_sha256: original_line_sha256.to_string(),
+            bytes: item.bytes,
+        })
+        .collect()
+}
+
+fn source_line_part_data(part_data: &Value) -> (Value, Vec<InlineImageRedaction>) {
     let mut value = part_data.clone();
     if value.get("type").and_then(Value::as_str) != Some("file") {
-        return value;
+        return (value, Vec::new());
     }
     let Some(object) = value.as_object_mut() else {
-        return value;
+        return (value, Vec::new());
     };
     let Some(url) = object
         .get("url")
         .and_then(Value::as_str)
         .map(str::to_string)
     else {
-        return value;
+        return (value, Vec::new());
     };
     if let Some(redaction) = redact_inline_image_data_url(&url) {
-        object.insert("url".to_string(), Value::String(redaction.placeholder));
+        object.insert(
+            "url".to_string(),
+            Value::String(redaction.placeholder.clone()),
+        );
         object.insert("url_truncated".to_string(), Value::Bool(true));
         object.insert(
             "url_original_chars".to_string(),
@@ -714,7 +759,7 @@ fn source_line_part_data(part_data: &Value) -> Value {
         );
         object.insert(
             "url_media_sha256".to_string(),
-            Value::String(redaction.sha256),
+            Value::String(redaction.sha256.clone()),
         );
         object.insert(
             "url_media_bytes".to_string(),
@@ -722,13 +767,13 @@ fn source_line_part_data(part_data: &Value) -> Value {
         );
         object.insert(
             "url_media_mime_type".to_string(),
-            Value::String(redaction.mime_type),
+            Value::String(redaction.mime_type.clone()),
         );
-        return value;
+        return (value, vec![redaction]);
     }
 
     if url.len() <= MAX_SOURCE_FILE_URL_CHARS && !url.starts_with("data:") {
-        return value;
+        return (value, Vec::new());
     }
 
     let mut preview = url
@@ -742,7 +787,7 @@ fn source_line_part_data(part_data: &Value) -> Value {
         "url_original_chars".to_string(),
         Value::Number(serde_json::Number::from(url.len() as u64)),
     );
-    value
+    (value, Vec::new())
 }
 
 fn project_label(session: &OpenCodeSessionRow) -> Option<String> {
@@ -1447,6 +1492,12 @@ mod tests {
             .raw_line
             .contains("\"url_original_chars\":922"));
         assert!(!file_source_line.raw_line.contains(&"A".repeat(900)));
+        assert_eq!(result.media_objects.len(), 1);
+        assert_eq!(result.media_objects[0].source_offset, file_source_line.source_offset);
+        assert_eq!(result.media_objects[0].mime_type, "image/png");
+        assert_eq!(result.media_objects[0].byte_size, 675);
+        assert_eq!(result.media_objects[0].original_chars, 922);
+        assert_eq!(result.media_objects[0].bytes, vec![0u8; 675]);
     }
 
     #[test]
