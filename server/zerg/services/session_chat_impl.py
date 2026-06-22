@@ -42,7 +42,6 @@ from zerg.observability import get_tracer
 from zerg.observability import mark_span_error
 from zerg.observability import set_span_attributes
 from zerg.services.agents import AgentsStore
-from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.managed_control_dispatcher import MANAGED_CONTROL_UNAVAILABLE_ERROR
 from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_COMPLETED
 from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_FAILED
@@ -65,9 +64,7 @@ from zerg.services.managed_local_event_polling import get_session_turn_snapshot_
 from zerg.services.managed_local_event_polling import hydrate_turn_events_from_snapshot
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_current_control import current_session_capabilities
-from zerg.services.session_kernel_projection import project_provider_session_id
-from zerg.services.session_kernel_projection import project_session_control_fields
-from zerg.services.session_kernel_projection import project_session_lineage_fields
+from zerg.services.session_kernel_projection import project_session_kernel_fields
 from zerg.services.session_kernel_projection import session_lock_scope_id
 from zerg.services.session_runtime import EXPLICIT_CLOSED_TERMINAL_STATES
 from zerg.services.session_runtime import UNVERIFIED_TERMINAL_STATES
@@ -186,7 +183,8 @@ def _resolve_agents_owner_id(db: Session, device_token: DeviceToken | None) -> i
 
 def _managed_local_launch_response(db: Session, result) -> ManagedLocalSessionLaunchResponse:
     session = result.session
-    capabilities = project_session_capabilities(db, session_id=session.id)
+    kernel_projection = project_session_kernel_fields(db, session)
+    capabilities = kernel_projection.capabilities
     # The kernel projection is the truth: a launch response is only valid if
     # the kernel rows actually grant managed control. ``execution_home`` /
     # ``managed_transport`` columns are no longer authoritative.
@@ -194,12 +192,11 @@ def _managed_local_launch_response(db: Session, result) -> ManagedLocalSessionLa
         raise RuntimeError("Managed local launch response requires a kernel-managed session")
     if capabilities.managed_transport is None:
         raise RuntimeError("Managed local launch response is missing managed transport metadata")
-    control_projection = project_session_control_fields(db, session, capabilities=capabilities)
-    provider_session_id = project_provider_session_id(db, session)
+    control_projection = kernel_projection.control
     return ManagedLocalSessionLaunchResponse(
         session_id=str(session.id),
         provider=session.provider or "claude",
-        provider_session_id=provider_session_id,
+        provider_session_id=kernel_projection.provider_session_id,
         execution_home=capabilities.execution_home,
         managed_transport=capabilities.managed_transport,
         loop_mode=coerce_session_loop_mode(session.loop_mode),
@@ -1226,8 +1223,9 @@ async def _stream_managed_local_output(
     capabilities = current_session_capabilities(db, source_session, owner_id=owner_id)
     if not capabilities.live_control_available:
         raise RuntimeError("Managed local session is missing live runner metadata")
-    lineage_projection = project_session_lineage_fields(db, source_session)
-    control_projection = project_session_control_fields(db, source_session, capabilities=capabilities)
+    kernel_projection = project_session_kernel_fields(db, source_session, capabilities=capabilities)
+    lineage_projection = kernel_projection.lineage
+    control_projection = kernel_projection.control
 
     yield SSEEvent(
         event="system",
@@ -1239,7 +1237,7 @@ async def _stream_managed_local_output(
                 "thread_root_session_id": lineage_projection.thread_root_session_id,
                 "continued_from_session_id": lineage_projection.continued_from_session_id,
                 "created_branch": False,
-                "provider_session_id": project_provider_session_id(db, source_session),
+                "provider_session_id": kernel_projection.provider_session_id,
                 "execution_home": capabilities.execution_home.value,
                 "origin_label": lineage_projection.origin_label,
                 "runner_name": control_projection.source_runner_name,

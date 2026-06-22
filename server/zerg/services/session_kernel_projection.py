@@ -46,6 +46,14 @@ class SessionControlProjection:
     managed_session_name: str | None
 
 
+@dataclass(frozen=True)
+class SessionKernelProjection:
+    capabilities: KernelSessionCapabilities
+    lineage: SessionLineageProjection
+    control: SessionControlProjection
+    provider_session_id: str | None
+
+
 def session_lock_scope_id(session_id: UUID | str) -> str:
     """Return the lock scope for a session.
 
@@ -67,6 +75,10 @@ def is_synthetic_provider_session_id(session: AgentSession, value: str | None) -
 def project_provider_session_id(db: Session, session: AgentSession) -> str | None:
     """Return the provider-native id alias for a session when one is known."""
     thread = _primary_thread(db, session)
+    return _provider_session_id_for_thread(db, session=session, thread=thread)
+
+
+def _provider_session_id_for_thread(db: Session, *, session: AgentSession, thread: SessionThread | None) -> str | None:
     if thread is None:
         return None
     alias = (
@@ -87,6 +99,10 @@ def project_provider_session_id(db: Session, session: AgentSession) -> str | Non
 
 def project_session_lineage_fields(db: Session, session: AgentSession) -> SessionLineageProjection:
     thread = _primary_thread(db, session)
+    return _lineage_for_thread(db, session=session, thread=thread)
+
+
+def _lineage_for_thread(db: Session, *, session: AgentSession, thread: SessionThread | None) -> SessionLineageProjection:
     source_session_id = _source_session_id_for_thread(db, thread=thread, session=session)
     return SessionLineageProjection(
         thread_root_session_id=str(session.id),
@@ -127,6 +143,24 @@ def project_session_control_fields(
         source_runner_id=source_runner_id,
         source_runner_name=source_runner_name,
         managed_session_name=managed_session_name,
+    )
+
+
+def project_session_kernel_fields(
+    db: Session,
+    session: AgentSession,
+    *,
+    capabilities: KernelSessionCapabilities | None = None,
+) -> SessionKernelProjection:
+    """Return the common read projection used by session response surfaces."""
+
+    thread = _primary_thread(db, session)
+    resolved_capabilities = capabilities or project_session_capabilities(db, session_id=session.id)
+    return SessionKernelProjection(
+        capabilities=resolved_capabilities,
+        lineage=_lineage_for_thread(db, session=session, thread=thread),
+        control=project_session_control_fields(db, session, capabilities=resolved_capabilities),
+        provider_session_id=_provider_session_id_for_thread(db, session=session, thread=thread),
     )
 
 

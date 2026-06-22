@@ -29,7 +29,6 @@ from zerg.models.agents import SessionLaunchAttempt
 from zerg.models.agents import SessionTurn
 from zerg.services.agents import AgentsStore
 from zerg.services.agents.kernel_capabilities import KernelSessionCapabilities
-from zerg.services.agents.kernel_capabilities import project_session_capabilities
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.managed_control_state import CONTROL_SOURCE_RUNNER_CONNECTION
 from zerg.services.managed_control_state import engine_channel_control_overlay
@@ -44,8 +43,9 @@ from zerg.services.session_capabilities import build_session_capability_display
 from zerg.services.session_continue_targets import resolve_native_continue_target
 from zerg.services.session_current_control import engine_control_online
 from zerg.services.session_current_control import engine_session_control_attached
+from zerg.services.session_kernel_projection import SessionControlProjection
 from zerg.services.session_kernel_projection import project_session_control_fields
-from zerg.services.session_kernel_projection import project_session_lineage_fields
+from zerg.services.session_kernel_projection import project_session_kernel_fields
 from zerg.services.session_launch_lifecycle import RemoteExecutionLifetime
 from zerg.services.session_launch_lifecycle import RemoteLaunchErrorCode
 from zerg.services.session_launch_lifecycle import RemoteLaunchLifecycleState
@@ -474,12 +474,13 @@ def build_session_control_response(
     *,
     db,
     capability_flags=None,
+    control_projection: SessionControlProjection | None = None,
 ) -> SessionControlResponse | None:
     if session is None:
         return None
     if capability_flags is None:
         raise RuntimeError("capability_flags is required; the kernel adapter must build them")
-    control_projection = project_session_control_fields(db, session, capabilities=capability_flags)
+    control_projection = control_projection or project_session_control_fields(db, session, capabilities=capability_flags)
     source_runner_name = control_projection.source_runner_name
     attach_command = build_attach_command(session) if capability_flags.host_reattach_available else None
     if control_projection.source_runner_id is None and source_runner_name is None and attach_command is None:
@@ -1369,9 +1370,9 @@ def build_session_response(
 ) -> SessionResponse:
     cache = thread_cache if thread_cache is not None else {}
     thread_head_session_id, thread_continuation_count = get_thread_meta(store, session, cache)
-    if kernel_capabilities is None:
-        kernel_capabilities = project_session_capabilities(store.db, session_id=session.id)
-    capability_flags = kernel_capabilities
+    kernel_projection = project_session_kernel_fields(store.db, session, capabilities=kernel_capabilities)
+    resolved_kernel_capabilities = kernel_projection.capabilities
+    capability_flags = resolved_kernel_capabilities
     is_engine_control_online = engine_control_online(session, owner_id)
     current_now = datetime.now(timezone.utc)
     display_last_activity_at = last_activity_at or session.ended_at or session.started_at
@@ -1395,9 +1396,9 @@ def build_session_response(
     if is_engine_session_attached:
         binding_host_state = "online"
         control_overlay = engine_channel_control_overlay(session, seen_at=current_now)
-    elif (capability_flags.live_control_available or capability_flags.host_reattach_available) and project_session_control_fields(
-        store.db, session, capabilities=capability_flags
-    ).source_runner_id is not None:
+    elif (
+        capability_flags.live_control_available or capability_flags.host_reattach_available
+    ) and kernel_projection.control.source_runner_id is not None:
         binding_host_state = managed_runner_host_state(store.db, session) or binding_host_state
         if binding_host_state == "online" and control_overlay is None:
             control_overlay = live_transport_control_overlay(
@@ -1452,7 +1453,7 @@ def build_session_response(
     launch_lifecycle = project_remote_launch_lifecycle(effective_launch_attempt)
     continue_target = _native_continue_target(store.db, session)
     continue_targets = [continue_target] if continue_target is not None else []
-    lineage_projection = project_session_lineage_fields(store.db, session)
+    lineage_projection = kernel_projection.lineage
     return SessionResponse(
         id=str(session.id),
         provider=session.provider,
@@ -1510,13 +1511,18 @@ def build_session_response(
         branched_from_event_id=lineage_projection.branched_from_event_id,
         is_writable_head=lineage_projection.is_writable_head,
         is_sidechain=lineage_projection.is_sidechain,
-        control=build_session_control_response(session, db=store.db, capability_flags=effective_capability_flags),
+        control=build_session_control_response(
+            session,
+            db=store.db,
+            capability_flags=effective_capability_flags,
+            control_projection=kernel_projection.control,
+        ),
         capabilities=build_session_capabilities_response(
             session=session,
             capability_flags=capability_flags,
             runtime_display=runtime_display,
             runtime_facts=runtime_facts,
-            kernel_capabilities=kernel_capabilities,
+            kernel_capabilities=resolved_kernel_capabilities,
             can_continue=continue_target is not None,
             continue_targets=continue_targets,
         ),
@@ -1618,9 +1624,9 @@ def build_active_session_response(
     kernel_capabilities=None,
     pause_request: dict[str, Any] | None = None,
 ) -> ActiveSessionResponse:
-    if kernel_capabilities is None:
-        kernel_capabilities = project_session_capabilities(store.db, session_id=session.id)
-    capability_flags = kernel_capabilities
+    kernel_projection = project_session_kernel_fields(store.db, session, capabilities=kernel_capabilities)
+    resolved_kernel_capabilities = kernel_projection.capabilities
+    capability_flags = resolved_kernel_capabilities
     _started = (
         session.started_at.replace(tzinfo=timezone.utc) if session.started_at and session.started_at.tzinfo is None else session.started_at
     )
@@ -1694,13 +1700,18 @@ def build_active_session_response(
         confidence=runtime_overlay.confidence,
         user_state=session.user_state or "active",
         home_label=capability_flags.home_label,
-        control=build_session_control_response(session, db=store.db, capability_flags=effective_capability_flags),
+        control=build_session_control_response(
+            session,
+            db=store.db,
+            capability_flags=effective_capability_flags,
+            control_projection=kernel_projection.control,
+        ),
         capabilities=build_session_capabilities_response(
             session=session,
             capability_flags=capability_flags,
             runtime_display=runtime_display,
             runtime_facts=runtime_facts,
-            kernel_capabilities=kernel_capabilities,
+            kernel_capabilities=resolved_kernel_capabilities,
             can_continue=continue_target is not None,
             continue_targets=continue_targets,
         ),

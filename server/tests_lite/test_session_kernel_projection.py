@@ -11,7 +11,9 @@ from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.services.agents.session_graph_writes import ensure_primary_thread
 from zerg.services.agents.session_graph_writes import record_session_edge
+from zerg.services.agents.session_graph_writes import record_thread_alias
 from zerg.services.session_kernel_projection import project_session_control_fields
+from zerg.services.session_kernel_projection import project_session_kernel_fields
 from zerg.services.session_kernel_projection import project_session_lineage_fields
 from tests_lite._kernel_test_helpers import seed_managed_kernel_rows
 
@@ -112,3 +114,60 @@ def test_lineage_projection_reads_kernel_edge_and_branch_kind(tmp_path):
         assert lineage.continued_from_session_id == str(source.id)
         assert lineage.continuation_kind == "fork"
         assert lineage.branched_from_event_id is None
+
+
+def test_kernel_projection_returns_single_session_read_model(tmp_path):
+    Session = _make_db(tmp_path)
+
+    with Session() as db:
+        source = _seed_session(db, device_id="cinder")
+        target = _seed_session(db, device_id="cinder-fork")
+        source_thread = ensure_primary_thread(db, source)
+        target_thread = ensure_primary_thread(db, target)
+        target_thread.parent_thread_id = source_thread.id
+        target_thread.branch_kind = "fork"
+        record_session_edge(
+            db,
+            provider="codex",
+            edge_kind="fork",
+            visibility="timeline",
+            evidence_kind="test",
+            source_thread=source_thread,
+            target_thread=target_thread,
+        )
+        record_thread_alias(
+            db,
+            thread=target_thread,
+            provider="codex",
+            alias_kind="provider_session_id",
+            alias_value="codex-native-thread",
+        )
+        db.add(User(id=1, email="projection-owner@test.local"))
+        db.add(
+            Runner(
+                owner_id=1,
+                name="cinder-fork",
+                auth_secret_hash="test-hash",
+            )
+        )
+        seed_managed_kernel_rows(
+            db,
+            target,
+            control_plane="codex_exec",
+            can_send_input=True,
+            can_interrupt=True,
+            can_terminate=False,
+            can_tail_output=True,
+            can_resume=True,
+        )
+        db.commit()
+
+        projection = project_session_kernel_fields(db, target)
+
+        assert projection.provider_session_id == "codex-native-thread"
+        assert projection.lineage.continued_from_session_id == str(source.id)
+        assert projection.lineage.continuation_kind == "fork"
+        assert projection.capabilities.live_control_available is True
+        assert projection.capabilities.host_reattach_available is True
+        assert projection.control.source_runner_id is None
+        assert projection.control.source_runner_name == "cinder-fork"
