@@ -15,8 +15,7 @@ from pydantic import Field
 from sqlalchemy.orm import Session
 
 from zerg.services.agents import AgentsStore
-from zerg.services.agents.kernel_capabilities import project_session_capabilities
-from zerg.services.session_kernel_projection import project_provider_session_id
+from zerg.services.session_kernel_projection import project_session_kernel_fields
 from zerg.services.session_kernel_projection import project_session_lineage_fields
 from zerg.utils.time import UTCBaseModel
 
@@ -46,7 +45,10 @@ class SessionArchiveSessionResponse(UTCBaseModel):
     last_activity_at: Optional[datetime] = Field(None, description="Latest transcript activity timestamp")
     thread_root_session_id: str = Field(..., description="Logical thread root session UUID")
     continued_from_session_id: Optional[str] = Field(None, description="Parent continuation session UUID")
-    continuation_kind: Optional[str] = Field(None, description="Continuation kind: local|cloud|runner")
+    continuation_kind: Optional[str] = Field(
+        None,
+        description="Kernel branch kind for non-root threads; null for root threads",
+    )
     origin_label: Optional[str] = Field(None, description="User-facing execution origin label")
     execution_home: Optional[str] = Field(None, description="Execution home classification")
     managed_transport: Optional[str] = Field(None, description="Managed transport identifier")
@@ -103,8 +105,9 @@ def build_session_archive_bundle(
 
     jsonl_bytes, session = result
     payload_sha, encoded_payload = _encode_jsonl_payload(jsonl_bytes)
-    lineage_projection = project_session_lineage_fields(db, session)
-    capabilities = project_session_capabilities(db, session_id=session.id)
+    kernel_projection = project_session_kernel_fields(db, session)
+    lineage_projection = kernel_projection.lineage
+    capabilities = kernel_projection.capabilities
 
     return SessionArchiveBundleResponse(
         bundle_version=BUNDLE_VERSION,
@@ -112,7 +115,7 @@ def build_session_archive_bundle(
         session=SessionArchiveSessionResponse(
             id=str(session.id),
             provider=session.provider,
-            provider_session_id=project_provider_session_id(db, session),
+            provider_session_id=kernel_projection.provider_session_id,
             project=session.project,
             device_id=session.device_id,
             device_name=session.device_name,

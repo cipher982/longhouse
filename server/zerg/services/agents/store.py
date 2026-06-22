@@ -47,7 +47,7 @@ from zerg.services.agents.session_graph_writes import ensure_primary_thread
 from zerg.services.agents.session_graph_writes import ensure_subagent_thread
 from zerg.services.agents.session_graph_writes import record_session_edge
 from zerg.services.agents.session_graph_writes import record_thread_alias
-from zerg.services.agents.session_graph_writes import resolve_primary_thread_by_provider_session_id
+from zerg.services.agents.session_graph_writes import resolve_thread_by_provider_session_id
 from zerg.services.archive_transcript import ArchiveTranscriptUnavailable
 from zerg.services.archive_transcript import load_session_source_line_bytes
 from zerg.services.internal_sessions import internal_canary_session_clause
@@ -69,11 +69,8 @@ from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_execution_home import is_generic_environment_label
 from zerg.session_execution_home import normalize_session_label
 
-from .helpers import _infer_continuation_kind_from_ingest
-from .helpers import _infer_continuation_kind_from_session
 from .helpers import _infer_execution_home_from_ingest
 from .helpers import _infer_origin_label_from_ingest
-from .helpers import _infer_origin_label_from_session
 from .helpers import _normalize_utc_naive
 from .models import CompactionBoundary
 from .models import EventIngest
@@ -414,19 +411,11 @@ class AgentsStore:
         from zerg.services.session_kernel_projection import project_provider_session_id
 
         thread_sessions = self._get_thread_sessions(session)
-        desired_kind = _infer_continuation_kind_from_ingest(data)
-        desired_origin = _infer_origin_label_from_ingest(data)
         provider_session_id = data.provider_session_id or project_provider_session_id(self.db, session)
         if not provider_session_id:
             return session
 
-        candidates = [
-            item
-            for item in thread_sessions
-            if project_provider_session_id(self.db, item) == provider_session_id
-            and _infer_continuation_kind_from_session(item) == desired_kind
-            and _infer_origin_label_from_session(item) == desired_origin
-        ]
+        candidates = [item for item in thread_sessions if project_provider_session_id(self.db, item) == provider_session_id]
         if not candidates:
             return session
         return max(
@@ -1711,7 +1700,7 @@ class AgentsStore:
         parent_thread = None
         parent_provider_session_id = observed_lineage.parent_provider_session_id if observed_lineage else None
         if parent_provider_session_id:
-            parent_thread = resolve_primary_thread_by_provider_session_id(
+            parent_thread = resolve_thread_by_provider_session_id(
                 self.db,
                 provider=data.provider,
                 provider_session_id=parent_provider_session_id,

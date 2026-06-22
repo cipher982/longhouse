@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionConnection
+from zerg.models.agents import SessionEdge
 from zerg.models.agents import SessionThread
 from zerg.models.agents import SessionThreadAlias
 from zerg.models.models import Runner
@@ -20,6 +21,7 @@ _DIRECT_MACHINE_CONTROL_PLANES = frozenset(
     {
         "codex_bridge",
         "codex_app_server",
+        "codex_exec",
         "antigravity_hook_inbox",
         "antigravity_process",
     }
@@ -30,7 +32,7 @@ _DIRECT_MACHINE_CONTROL_PLANES = frozenset(
 class SessionLineageProjection:
     thread_root_session_id: str
     continued_from_session_id: str | None
-    continuation_kind: str
+    continuation_kind: str | None
     origin_label: str
     branched_from_event_id: int | None
     is_writable_head: bool
@@ -42,6 +44,14 @@ class SessionControlProjection:
     source_runner_id: int | None
     source_runner_name: str | None
     managed_session_name: str | None
+
+
+@dataclass(frozen=True)
+class SessionKernelProjection:
+    capabilities: KernelSessionCapabilities
+    lineage: SessionLineageProjection
+    control: SessionControlProjection
+    provider_session_id: str | None
 
 
 def session_lock_scope_id(session_id: UUID | str) -> str:
@@ -65,6 +75,10 @@ def is_synthetic_provider_session_id(session: AgentSession, value: str | None) -
 def project_provider_session_id(db: Session, session: AgentSession) -> str | None:
     """Return the provider-native id alias for a session when one is known."""
     thread = _primary_thread(db, session)
+    return _provider_session_id_for_thread(db, session=session, thread=thread)
+
+
+def _provider_session_id_for_thread(db: Session, *, session: AgentSession, thread: SessionThread | None) -> str | None:
     if thread is None:
         return None
     alias = (
@@ -85,10 +99,15 @@ def project_provider_session_id(db: Session, session: AgentSession) -> str | Non
 
 def project_session_lineage_fields(db: Session, session: AgentSession) -> SessionLineageProjection:
     thread = _primary_thread(db, session)
+    return _lineage_for_thread(db, session=session, thread=thread)
+
+
+def _lineage_for_thread(db: Session, *, session: AgentSession, thread: SessionThread | None) -> SessionLineageProjection:
+    source_session_id = _source_session_id_for_thread(db, thread=thread, session=session)
     return SessionLineageProjection(
         thread_root_session_id=str(session.id),
-        continued_from_session_id=None,
-        continuation_kind="local",
+        continued_from_session_id=source_session_id,
+        continuation_kind=_continuation_kind_for_thread(thread),
         origin_label=infer_origin_label(
             origin_label=None,
             environment=session.environment,
@@ -127,6 +146,24 @@ def project_session_control_fields(
     )
 
 
+def project_session_kernel_fields(
+    db: Session,
+    session: AgentSession,
+    *,
+    capabilities: KernelSessionCapabilities | None = None,
+) -> SessionKernelProjection:
+    """Return the common read projection used by session response surfaces."""
+
+    thread = _primary_thread(db, session)
+    resolved_capabilities = capabilities or project_session_capabilities(db, session_id=session.id)
+    return SessionKernelProjection(
+        capabilities=resolved_capabilities,
+        lineage=_lineage_for_thread(db, session=session, thread=thread),
+        control=project_session_control_fields(db, session, capabilities=resolved_capabilities),
+        provider_session_id=_provider_session_id_for_thread(db, session=session, thread=thread),
+    )
+
+
 def _primary_thread(db: Session, session: AgentSession) -> SessionThread | None:
     thread_id = getattr(session, "primary_thread_id", None)
     query = db.query(SessionThread).filter(SessionThread.session_id == session.id)
@@ -146,10 +183,46 @@ def _connection_by_id(db: Session, connection_id: int | None) -> SessionConnecti
 def _source_runner_id_for_device(db: Session, *, device_id: str | None, control_plane: str | None) -> int | None:
     if not device_id:
         return None
-    if (control_plane or "").strip() in _DIRECT_MACHINE_CONTROL_PLANES:
+    if is_direct_machine_control_plane(control_plane):
         return None
     runner = db.query(Runner).filter(Runner.name == device_id).first()
     return int(runner.id) if runner is not None else None
+
+
+def direct_machine_control_planes() -> frozenset[str]:
+    """Return connection control planes that are local-machine direct paths."""
+
+    return _DIRECT_MACHINE_CONTROL_PLANES
+
+
+def is_direct_machine_control_plane(control_plane: str | None) -> bool:
+    return (control_plane or "").strip() in _DIRECT_MACHINE_CONTROL_PLANES
+
+
+def _source_session_id_for_thread(db: Session, *, thread: SessionThread | None, session: AgentSession) -> str | None:
+    if thread is None:
+        return None
+    edge = (
+        db.query(SessionEdge)
+        .filter(SessionEdge.target_thread_id == thread.id)
+        .filter(SessionEdge.source_session_id.isnot(None))
+        .order_by(SessionEdge.updated_at.desc(), SessionEdge.created_at.desc())
+        .first()
+    )
+    if edge is None or edge.source_session_id is None:
+        return None
+    if str(edge.source_session_id) == str(session.id):
+        return None
+    return str(edge.source_session_id)
+
+
+def _continuation_kind_for_thread(thread: SessionThread | None) -> str | None:
+    if thread is None:
+        return None
+    branch_kind = _clean_str(thread.branch_kind)
+    if branch_kind and branch_kind != "root":
+        return branch_kind
+    return None
 
 
 def _clean_str(value: str | None) -> str | None:

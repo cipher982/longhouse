@@ -68,12 +68,14 @@ def test_launch_response_mints_scoped_hook_token_only_for_remote_approve():
 
     import zerg.services.session_chat_impl as impl
     from zerg.auth.managed_local_hook_tokens import validate_managed_local_hook_token
+    from zerg.services.session_kernel_projection import SessionKernelProjection
+    from zerg.session_execution_home import SessionExecutionHome
     from zerg.session_execution_home import ManagedSessionTransport
 
     class _Caps:
         live_control_available = True
         host_reattach_available = True
-        execution_home = "managed_local"
+        execution_home = SessionExecutionHome.MANAGED_LOCAL
         managed_transport = ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE
         connection_id = None
 
@@ -95,14 +97,13 @@ def test_launch_response_mints_scoped_hook_token_only_for_remote_approve():
     # The subject of this test is the hook_token minting logic. Stub the control
     # projections the response builder calls so we don't reproduce their internals.
     control_stub = SimpleNamespace(source_runner_id=None, source_runner_name="cinder", managed_session_name="lh-x")
-    saved = {
-        "caps": impl.project_session_capabilities,
-        "control": impl.project_session_control_fields,
-        "psid": impl.project_provider_session_id,
-    }
-    impl.project_session_capabilities = lambda db, session_id: _Caps()
-    impl.project_session_control_fields = lambda db, session, capabilities=None: control_stub
-    impl.project_provider_session_id = lambda db, session: "prov-1"
+    saved = impl.project_session_kernel_fields
+    impl.project_session_kernel_fields = lambda db, session: SessionKernelProjection(
+        capabilities=_Caps(),
+        lineage=SimpleNamespace(),
+        control=control_stub,
+        provider_session_id="prov-1",
+    )
     try:
         resp = impl._managed_local_launch_response(None, result, owner_id=42)
         assert resp.permission_mode == "remote_approve"
@@ -115,6 +116,4 @@ def test_launch_response_mints_scoped_hook_token_only_for_remote_approve():
         assert resp_bypass.permission_mode == "bypass"
         assert resp_bypass.hook_token is None
     finally:
-        impl.project_session_capabilities = saved["caps"]
-        impl.project_session_control_fields = saved["control"]
-        impl.project_provider_session_id = saved["psid"]
+        impl.project_session_kernel_fields = saved

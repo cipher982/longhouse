@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from dataclasses import field
 
+from zerg.managed_provider_contract_manifest import MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX
 from zerg.managed_provider_contract_manifest import managed_provider_contract_items
 from zerg.session_execution_home import ManagedSessionTransport
 
@@ -21,7 +22,7 @@ COMMAND_STEER_TEXT = "session.steer_text"
 COMMAND_ANSWER_PAUSE = "session.answer_pause"
 COMMAND_RUN_ONCE = "session.run_once"
 
-_MACHINE_CONTROL_OPERATION_BY_COMMAND = {
+_MACHINE_CONTROL_SUFFIX_BY_COMMAND = {
     COMMAND_SEND_TEXT: "send",
     COMMAND_INTERRUPT: "interrupt",
     COMMAND_STEER_TEXT: "steer",
@@ -36,6 +37,7 @@ class ManagedProviderContract:
     managed_transport: ManagedSessionTransport
     control_plane: str
     control_plane_aliases: tuple[str, ...] = ()
+    requires_longhouse_cli: bool = True
     launch_local: bool = True
     launch_remote: bool = False
     run_once: bool = False
@@ -43,6 +45,7 @@ class ManagedProviderContract:
     send_input: bool = False
     interrupt: bool = False
     steer_active_turn: bool = False
+    answer_pause: bool = False
     terminate: bool = False
     tail_output: bool = True
     runtime_phase: bool = True
@@ -73,6 +76,34 @@ class ManagedProviderContract:
     def operation_evidence_for(self, operation: str) -> Mapping[str, str]:
         return self.operation_evidence.get(operation, {})
 
+    def supports_contract_operation(self, operation: str) -> bool:
+        return bool(getattr(self, operation, False))
+
+    def machine_control_operation_for_support(self, support: str) -> str | None:
+        provider, separator, operation = str(support or "").strip().partition(".")
+        if separator != "." or provider != self.provider:
+            return None
+        contract_operation = MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX.get(operation)
+        if contract_operation is None or not self.supports_contract_operation(contract_operation):
+            return None
+        return operation if support in self.machine_control_supports else None
+
+    def machine_control_capability_for_operation(self, operation: str) -> str | None:
+        operation = str(operation or "").strip()
+        contract_operation = MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX.get(operation)
+        if contract_operation is None or not self.supports_contract_operation(contract_operation):
+            return None
+        capability = f"{self.provider}.{operation}"
+        return capability if capability in self.machine_control_supports else None
+
+    @property
+    def machine_control_operations(self) -> tuple[str, ...]:
+        return tuple(
+            operation
+            for support in self.machine_control_supports
+            if (operation := self.machine_control_operation_for_support(support)) is not None
+        )
+
 
 def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderContract:
     return ManagedProviderContract(
@@ -80,6 +111,7 @@ def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderCont
         managed_transport=ManagedSessionTransport(str(item["managed_transport"])),
         control_plane=str(item["control_plane"]),
         control_plane_aliases=tuple(str(value) for value in item.get("control_plane_aliases") or ()),
+        requires_longhouse_cli=bool(item.get("requires_longhouse_cli", True)),
         launch_local=bool(item.get("launch_local", True)),
         launch_remote=bool(item.get("launch_remote", False)),
         run_once=bool(item.get("run_once", False)),
@@ -87,6 +119,7 @@ def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderCont
         send_input=bool(item.get("send_input", False)),
         interrupt=bool(item.get("interrupt", False)),
         steer_active_turn=bool(item.get("steer_active_turn", False)),
+        answer_pause=bool(item.get("answer_pause", False)),
         terminate=bool(item.get("terminate", False)),
         tail_output=bool(item.get("tail_output", True)),
         runtime_phase=bool(item.get("runtime_phase", True)),
@@ -104,7 +137,22 @@ def _contract_from_manifest_item(item: dict[str, object]) -> ManagedProviderCont
 _CONTRACTS: tuple[ManagedProviderContract, ...] = tuple(_contract_from_manifest_item(item) for item in managed_provider_contract_items())
 
 _BY_PROVIDER = {contract.provider: contract for contract in _CONTRACTS}
-_BY_CONTROL_PLANE = {control_plane: contract for contract in _CONTRACTS for control_plane in contract.control_planes}
+
+
+def _contracts_by_control_plane(contracts: tuple[ManagedProviderContract, ...]) -> dict[str, ManagedProviderContract]:
+    by_control_plane: dict[str, ManagedProviderContract] = {}
+    for contract in contracts:
+        for control_plane in contract.control_planes:
+            existing = by_control_plane.get(control_plane)
+            if existing is not None:
+                raise ValueError(
+                    f"managed provider control_plane {control_plane!r} is claimed by both {existing.provider} and {contract.provider}"
+                )
+            by_control_plane[control_plane] = contract
+    return by_control_plane
+
+
+_BY_CONTROL_PLANE = _contracts_by_control_plane(_CONTRACTS)
 _LEGACY_CONTROL_PLANE_PROVIDERS = {
     "opencode_process": "opencode",
     "antigravity_process": "antigravity",
@@ -182,9 +230,9 @@ def continue_supported_providers() -> frozenset[str]:
 
 def machine_control_launch_capability_by_provider() -> dict[str, str]:
     return {
-        contract.provider: f"{contract.provider}.launch"
+        contract.provider: capability
         for contract in _CONTRACTS
-        if f"{contract.provider}.launch" in contract.machine_control_supports
+        if (capability := contract.machine_control_capability_for_operation("launch")) is not None
     }
 
 
@@ -207,9 +255,9 @@ def machine_control_operations_by_provider(
     operations_by_provider: dict[str, tuple[str, ...]] = {}
     for contract in _CONTRACTS:
         operations = tuple(
-            capability.split(".", 1)[1]
+            operation
             for capability in contract.machine_control_supports
-            if capability in support_set and "." in capability
+            if capability in support_set and (operation := contract.machine_control_operation_for_support(capability)) is not None
         )
         if operations:
             operations_by_provider[contract.provider] = operations
@@ -230,8 +278,7 @@ def trusted_non_runner_control_planes() -> frozenset[str]:
 
 def machine_control_capability_for_command(provider: str | None, command_type: str | None) -> str | None:
     contract = contract_for_provider(provider)
-    operation = _MACHINE_CONTROL_OPERATION_BY_COMMAND.get(str(command_type or "").strip())
+    operation = _MACHINE_CONTROL_SUFFIX_BY_COMMAND.get(str(command_type or "").strip())
     if contract is None or operation is None:
         return None
-    capability = f"{contract.provider}.{operation}"
-    return capability if capability in contract.machine_control_supports else None
+    return contract.machine_control_capability_for_operation(operation)

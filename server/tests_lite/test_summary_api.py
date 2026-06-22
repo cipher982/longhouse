@@ -126,7 +126,7 @@ def test_list_sessions_includes_summary(tmp_path):
         assert session["thread_root_session_id"] == session["id"]
         assert session["thread_head_session_id"] == session["id"]
         assert session["thread_continuation_count"] == 1
-        assert session["continuation_kind"] == "local"
+        assert session["continuation_kind"] is None
         assert session["origin_label"] == "work-macbook"
         assert session["is_writable_head"] is True
 
@@ -378,7 +378,7 @@ def test_get_session_includes_summary(tmp_path):
         assert data["thread_root_session_id"] == session_id
         assert data["thread_head_session_id"] == session_id
         assert data["thread_continuation_count"] == 1
-        assert data["continuation_kind"] == "local"
+        assert data["continuation_kind"] is None
         assert data["origin_label"] == "work-laptop"
         assert data["is_writable_head"] is True
 

@@ -512,6 +512,7 @@ def test_launch_managed_local_from_api_sets_codex_provider(monkeypatch, tmp_path
                 "display_name": "Demo session",
                 "loop_mode": "autopilot",
                 "machine_name": "work-laptop",
+                "permission_mode": "bypass",
             },
         }
     ]

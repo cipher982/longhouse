@@ -1298,6 +1298,40 @@ def test_opencode_lineage_projection_uses_real_longhouse_sqlite(tmp_path: Path) 
     assert "forked_from_provider_session_id" in {row["alias_kind"] for row in projection["alias_rows"]}
 
 
+def test_opencode_orchestration_projection_uses_real_longhouse_sqlite(tmp_path: Path) -> None:
+    payload = uah.run_harness(
+        uah.HarnessOptions(
+            providers=("opencode",),
+            scenarios=("opencode_orchestration_projection",),
+            evidence_root=tmp_path / "evidence",
+            provider_bins={"opencode": _fake_bins(tmp_path)["opencode"]},
+        )
+    )
+
+    assert payload["verdict"] == "green"
+    result = payload["results"][0]
+    assert result["provider"] == "opencode"
+    assert result["scenario"] == "opencode_orchestration_projection"
+    assert result["status"] == "pass"
+    assert all(result["data"]["assertions"].values())
+    assert result["data"]["operation_evidence"]["opencode_nested_subagent_projection"]["status"] == "pass"
+    assert result["data"]["operation_evidence"]["opencode_task_id_resume_projection"]["status"] == "pass"
+    assert result["data"]["capability_states"]["background_task_status"] == "experimental"
+    assert result["data"]["capability_states"]["switch_actor"] == "unknown"
+
+    evidence_root = Path(result["evidence_root"])
+    projection = json.loads(
+        (evidence_root / "longhouse" / "opencode-orchestration-projection.json").read_text(encoding="utf-8")
+    )
+    edge_rows = projection["edge_rows"]
+    assert [row["edge_kind"] for row in edge_rows].count("task_child") == 2
+    nested_edges = [row for row in edge_rows if row["provider_edge_id"] == "task_nested"]
+    assert len(nested_edges) == 1
+    assert nested_edges[0]["source_thread_id"] is not None
+    assert nested_edges[0]["source_thread_id"] != nested_edges[0]["target_thread_id"]
+    assert "ses_fork" in {row["alias_value"] for row in projection["alias_rows"]}
+
+
 def test_orchestration_capability_matrix_emits_per_capability_evidence(tmp_path: Path) -> None:
     payload = uah.run_harness(
         uah.HarnessOptions(

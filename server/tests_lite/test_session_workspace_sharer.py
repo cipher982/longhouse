@@ -82,12 +82,14 @@ def _seed_session(db) -> str:
 def _issue_session_cookie(user_id: int = 1) -> str:
     return _encode_jwt(
         {"sub": str(user_id), "exp": int(time.time()) + 300},
-        auth_deps.JWT_SECRET,
+        auth_deps.get_settings().jwt_secret,
     )
 
 
 def _make_client(session_local) -> "TestClient":
     from fastapi.testclient import TestClient
+
+    api_app.dependency_overrides.clear()
 
     def override_db():
         with session_local() as db:

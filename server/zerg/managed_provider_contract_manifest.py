@@ -20,6 +20,7 @@ _REQUIRED_BOOL_FIELDS = (
     "send_input",
     "interrupt",
     "steer_active_turn",
+    "answer_pause",
     "terminate",
     "tail_output",
     "runtime_phase",
@@ -35,11 +36,27 @@ _OPERATION_EVIDENCE_FIELDS = (
     "send_input",
     "interrupt",
     "steer_active_turn",
+    "answer_pause",
     "terminate",
     "tail_output",
     "runtime_phase",
     "transcript_binding",
 )
+MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX = {
+    "send": "send_input",
+    "interrupt": "interrupt",
+    "steer": "steer_active_turn",
+    "answer_pause": "answer_pause",
+    # Machine-control launch/continue are remote-channel operations; local
+    # launch is a separate CLI path and never appears in machine supports[].
+    "launch": "launch_remote",
+    "continue": "can_resume",
+    "run_once": "run_once",
+    "resume_run_once": "run_once",
+}
+_MACHINE_CONTROL_SUPPORT_EXTRA_REQUIREMENTS = {
+    "resume_run_once": ("can_resume",),
+}
 _OPERATION_EVIDENCE_LEVELS = frozenset(
     {
         "none",
@@ -104,6 +121,30 @@ def _validate_operation_evidence(item: dict[str, Any]) -> None:
             raise ValueError(f"managed provider contract {provider}: operation_evidence.{field}.next must be a non-empty string")
 
 
+def _validate_machine_control_supports(item: dict[str, Any]) -> None:
+    provider = str(item.get("provider") or "<unknown>")
+    for support in item.get("machine_control_supports") or ():
+        prefix, separator, suffix = str(support).partition(".")
+        if separator != "." or not prefix or not suffix:
+            raise ValueError(f"managed provider contract {provider}: machine_control_supports entry {support!r} must be provider.operation")
+        if prefix != provider:
+            raise ValueError(
+                f"managed provider contract {provider}: machine_control_supports entry {support!r} must use provider prefix {provider}"
+            )
+        operation = MACHINE_CONTROL_SUPPORT_OPERATION_BY_SUFFIX.get(suffix)
+        if operation is None:
+            raise ValueError(
+                f"managed provider contract {provider}: machine_control_supports entry {support!r} has unknown operation {suffix!r}"
+            )
+        if item.get(operation) is not True:
+            raise ValueError(f"managed provider contract {provider}: machine_control_supports entry {support!r} requires {operation}=true")
+        for extra_operation in _MACHINE_CONTROL_SUPPORT_EXTRA_REQUIREMENTS.get(suffix, ()):
+            if item.get(extra_operation) is not True:
+                raise ValueError(
+                    f"managed provider contract {provider}: machine_control_supports entry {support!r} requires {extra_operation}=true"
+                )
+
+
 @lru_cache(maxsize=1)
 def managed_provider_contract_manifest() -> dict[str, Any]:
     contract_path = Path(__file__).resolve().parent / "config" / "managed_provider_contracts.json"
@@ -133,5 +174,6 @@ def managed_provider_contract_items() -> tuple[dict[str, Any], ...]:
         for field in _STRING_LIST_FIELDS:
             _validate_string_list_field(item, field)
         _validate_operation_evidence(item)
+        _validate_machine_control_supports(item)
         items.append(dict(item))
     return tuple(items)

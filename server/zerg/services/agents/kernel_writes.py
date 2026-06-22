@@ -31,6 +31,7 @@ from zerg.services.agents.session_graph_writes import ensure_thread_id_for_sessi
 from zerg.services.agents.session_graph_writes import record_session_edge
 from zerg.services.agents.session_graph_writes import record_thread_alias
 from zerg.services.agents.session_graph_writes import resolve_primary_thread_by_provider_session_id
+from zerg.services.agents.session_graph_writes import resolve_thread_by_provider_session_id
 from zerg.services.agents.session_graph_writes import resolve_thread_id_for_session
 
 __all__ = [
@@ -40,6 +41,7 @@ __all__ = [
     "record_session_edge",
     "record_thread_alias",
     "resolve_primary_thread_by_provider_session_id",
+    "resolve_thread_by_provider_session_id",
     "resolve_thread_id_for_session",
 ]
 

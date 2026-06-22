@@ -44,7 +44,7 @@ from zerg.models.agents import SessionTurn
 from zerg.models.agents import TimelineCard
 from zerg.services.agents.session_graph_writes import ensure_subagent_thread
 from zerg.services.agents.session_graph_writes import record_session_edge
-from zerg.services.agents.session_graph_writes import resolve_primary_thread_by_provider_session_id
+from zerg.services.agents.session_graph_writes import resolve_thread_by_provider_session_id
 from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.session_kernel_projection import project_provider_session_id
 
@@ -546,7 +546,7 @@ def relink_orphan_subagents_for_parent(
     if not parent_provider_session_id:
         return summary
 
-    parent_thread = resolve_primary_thread_by_provider_session_id(db, provider=provider, provider_session_id=parent_provider_session_id)
+    parent_thread = resolve_thread_by_provider_session_id(db, provider=provider, provider_session_id=parent_provider_session_id)
     if parent_thread is None:
         return summary
 
@@ -659,7 +659,7 @@ def backfill_subagent_child_threads(db: Session) -> dict[str, int]:
         if not parent_provider_id or str(parent_provider_id) == str(child_session_id):
             continue
 
-        parent_thread = resolve_primary_thread_by_provider_session_id(
+        parent_thread = resolve_thread_by_provider_session_id(
             db,
             provider=child_session.provider,
             provider_session_id=parent_provider_id,
