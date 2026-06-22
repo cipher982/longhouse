@@ -60,6 +60,7 @@ DEFAULT_UNIVERSAL_SCENARIOS = (
     "baseline_compare",
     "session_projection",
     "timeline_projection",
+    "opencode_orchestration_projection",
     "run_prompt_once",
     "launch_managed_session",
     "send_receive",
@@ -406,6 +407,7 @@ def _provider_action_coverage_artifact(
                 "id": item.id,
                 "product_label": item.product_label,
                 "state": item.state.value,
+                "reason_code": item.reason_code.value,
                 "reason": item.reason,
                 "proof_refs": [
                     {

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from zerg.services.provider_action_coverage import OPENCODE_ORCHESTRATION_PROJECTION
+from zerg.services.provider_action_coverage import ActionCoverageReasonCode
 from zerg.services.provider_action_coverage import ActionCoverageState
 from zerg.services.provider_action_coverage import derive_provider_action_coverage
 from zerg.services.provider_action_coverage import derive_provider_action_coverage_from_artifact
@@ -11,6 +12,7 @@ def test_contract_operations_are_derived_from_managed_provider_contracts():
     coverage = derive_provider_action_coverage("opencode")
 
     assert coverage["send_prompt"].state == ActionCoverageState.SUPPORTED
+    assert coverage["send_prompt"].reason_code == ActionCoverageReasonCode.CONTRACT_PROVEN
     assert coverage["abort"].state == ActionCoverageState.SUPPORTED
     assert coverage["reattach"].state == ActionCoverageState.SUPPORTED
 
@@ -19,6 +21,7 @@ def test_contract_false_operation_derives_unsupported_without_manual_matrix_cell
     coverage = derive_provider_action_coverage("antigravity")
 
     assert coverage["abort"].state == ActionCoverageState.UNSUPPORTED
+    assert coverage["abort"].reason_code == ActionCoverageReasonCode.CONTRACT_UNSUPPORTED
     assert coverage["reattach"].state == ActionCoverageState.UNSUPPORTED
 
 
@@ -42,12 +45,14 @@ def test_opencode_subagent_support_is_derived_from_required_harness_assertions()
     )
 
     assert coverage["classify_subagents"].state == ActionCoverageState.SUPPORTED
+    assert coverage["classify_subagents"].reason_code == ActionCoverageReasonCode.REQUIRED_PROOF_PASSED
 
 
 def test_missing_subagent_proof_derives_unknown_instead_of_stale_supported():
     coverage = derive_provider_action_coverage("opencode", proof_results={})
 
     assert coverage["classify_subagents"].state == ActionCoverageState.UNKNOWN
+    assert coverage["classify_subagents"].reason_code == ActionCoverageReasonCode.REQUIRED_PROOF_MISSING
 
 
 def test_partial_subagent_proof_derives_unknown():
@@ -79,6 +84,7 @@ def test_observed_fork_without_control_derives_read_only():
     )
 
     assert coverage["fork"].state == ActionCoverageState.READ_ONLY
+    assert coverage["fork"].reason_code == ActionCoverageReasonCode.OBSERVATION_PROOF_PASSED
 
 
 def test_universal_harness_artifact_results_feed_derived_coverage():

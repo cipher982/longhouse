@@ -23,6 +23,20 @@ class ActionCoverageState(StrEnum):
     UNSUPPORTED = "unsupported"
 
 
+class ActionCoverageReasonCode(StrEnum):
+    CONTRACT_MISSING = "contract_missing"
+    CONTRACT_UNSUPPORTED = "contract_unsupported"
+    CONTRACT_PROOF_MISSING = "contract_proof_missing"
+    CONTRACT_PROVEN = "contract_proven"
+    PROVIDER_PROOF_UNDECLARED = "provider_proof_undeclared"
+    REQUIRED_PROOF_PASSED = "required_proof_passed"
+    REQUIRED_PROOF_MISSING = "required_proof_missing"
+    OBSERVATION_PROOF_UNDECLARED = "observation_proof_undeclared"
+    OBSERVATION_PROOF_PASSED = "observation_proof_passed"
+    OBSERVATION_PROOF_MISSING = "observation_proof_missing"
+    PROOF_REQUIREMENT_UNDECLARED = "proof_requirement_undeclared"
+
+
 @dataclass(frozen=True)
 class ProofRef:
     scenario: str
@@ -43,6 +57,7 @@ class ActionCoverage:
     id: str
     product_label: str
     state: ActionCoverageState
+    reason_code: ActionCoverageReasonCode
     proof_refs: tuple[ProofRef, ...]
     reason: str
 
@@ -109,7 +124,7 @@ def derive_provider_action_coverage(
     coverage: dict[str, ActionCoverage] = {}
     for question in ACTION_QUESTIONS:
         if question.contract_operation is not None:
-            state, reason = _state_from_contract_operation(
+            state, reason_code, reason = _state_from_contract_operation(
                 provider=normalized_provider,
                 operation=question.contract_operation,
             )
@@ -117,27 +132,34 @@ def derive_provider_action_coverage(
         elif question.support_requires:
             if normalized_provider != "opencode":
                 state = ActionCoverageState.UNKNOWN
+                reason_code = ActionCoverageReasonCode.PROVIDER_PROOF_UNDECLARED
                 reason = "No provider-specific proof requirement is declared."
             elif _all_proofs_pass(question.support_requires, proofs):
                 state = ActionCoverageState.SUPPORTED
+                reason_code = ActionCoverageReasonCode.REQUIRED_PROOF_PASSED
                 reason = "Required harness assertions passed."
             else:
                 state = ActionCoverageState.UNKNOWN
+                reason_code = ActionCoverageReasonCode.REQUIRED_PROOF_MISSING
                 reason = "Required harness assertions are missing or not passing."
             proof_refs = question.support_requires
         elif question.observe_requires:
             if normalized_provider != "opencode":
                 state = ActionCoverageState.UNKNOWN
+                reason_code = ActionCoverageReasonCode.OBSERVATION_PROOF_UNDECLARED
                 reason = "No provider-specific observation proof is declared."
             elif _all_proofs_pass(question.observe_requires, proofs):
                 state = ActionCoverageState.READ_ONLY
+                reason_code = ActionCoverageReasonCode.OBSERVATION_PROOF_PASSED
                 reason = "Observation proof passed, but no Longhouse control contract exists."
             else:
                 state = ActionCoverageState.UNKNOWN
+                reason_code = ActionCoverageReasonCode.OBSERVATION_PROOF_MISSING
                 reason = "Observation proof is missing or not passing."
             proof_refs = question.observe_requires
         else:
             state = ActionCoverageState.UNKNOWN
+            reason_code = ActionCoverageReasonCode.PROOF_REQUIREMENT_UNDECLARED
             reason = "No proof requirement is declared."
             proof_refs = ()
 
@@ -145,6 +167,7 @@ def derive_provider_action_coverage(
             id=question.id,
             product_label=question.product_label,
             state=state,
+            reason_code=reason_code,
             proof_refs=proof_refs,
             reason=reason,
         )
@@ -190,16 +213,36 @@ def provider_action_proof_results_from_artifact(
     return proofs
 
 
-def _state_from_contract_operation(*, provider: str, operation: str) -> tuple[ActionCoverageState, str]:
+def _state_from_contract_operation(
+    *,
+    provider: str,
+    operation: str,
+) -> tuple[ActionCoverageState, ActionCoverageReasonCode, str]:
     contract = contract_for_provider(provider)
     if contract is None:
-        return ActionCoverageState.UNKNOWN, "No managed provider contract exists for provider."
+        return (
+            ActionCoverageState.UNKNOWN,
+            ActionCoverageReasonCode.CONTRACT_MISSING,
+            "No managed provider contract exists for provider.",
+        )
     if not contract.supports_contract_operation(operation):
-        return ActionCoverageState.UNSUPPORTED, f"Managed provider contract declares {operation}=false."
+        return (
+            ActionCoverageState.UNSUPPORTED,
+            ActionCoverageReasonCode.CONTRACT_UNSUPPORTED,
+            f"Managed provider contract declares {operation}=false.",
+        )
     evidence = contract.operation_evidence_for(operation)
     if str(evidence.get("level") or "none") == "none":
-        return ActionCoverageState.UNKNOWN, f"Managed provider contract lacks proof evidence for {operation}."
-    return ActionCoverageState.SUPPORTED, f"Managed provider contract declares and proves {operation}."
+        return (
+            ActionCoverageState.UNKNOWN,
+            ActionCoverageReasonCode.CONTRACT_PROOF_MISSING,
+            f"Managed provider contract lacks proof evidence for {operation}.",
+        )
+    return (
+        ActionCoverageState.SUPPORTED,
+        ActionCoverageReasonCode.CONTRACT_PROVEN,
+        f"Managed provider contract declares and proves {operation}.",
+    )
 
 
 def _all_proofs_pass(refs: tuple[ProofRef, ...], proofs: Mapping[str, Mapping[str, Any]]) -> bool:

@@ -28,6 +28,12 @@ def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def test_default_universal_scenarios_include_opencode_orchestration_projection() -> None:
+    source = CANARY.read_text(encoding="utf-8")
+
+    assert '"opencode_orchestration_projection",' in source
+
+
 @contextlib.contextmanager
 def _fake_claude_machine_live_server(*, mode: str = "success"):
     requests: list[dict] = []
@@ -655,6 +661,10 @@ def test_opencode_release_proof_normalizes_source_canary() -> None:
         assert payload["canaries"]["source_canary"]["status"] == "pass"
         assert payload["operation_evidence"]["send_input"]["status"] == "pass"
         assert payload["provider_action_coverage"]["send_prompt"]["state"] == "supported"
+        assert (
+            payload["provider_action_coverage"]["send_prompt"]["reason_code"]
+            == "contract_proven"
+        )
         assert payload["provider_action_coverage"]["classify_subagents"]["state"] == "unknown"
         assert payload["normalized"]["canaries"]["server_contract"]["status"] == "pass"
         assert Path(payload["artifacts"]["normalized_contract"]).exists()
@@ -678,6 +688,10 @@ def test_opencode_release_proof_normalizes_source_canary() -> None:
         assert (
             provider_action_coverage["actions"]["send_prompt"]["state"]
             == "supported"
+        )
+        assert (
+            provider_action_coverage["actions"]["send_prompt"]["reason_code"]
+            == "contract_proven"
         )
         assert session_projection["status"] == "captured"
         assert (
